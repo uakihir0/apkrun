@@ -48,7 +48,7 @@ Stored in the package settings ([package-store.md](package-store.md) §2.4). The
 | `integrations.sharedFolders` | `off`, `readOnly`, `readWrite` | `off` | the app may open files in the Mac folders of §6.4 through the Android file picker |
 | `integrations.microphone` | `true`, `false` | `false` | the app may record from the Mac microphone (§8.2) |
 
-`wrapper.json` `integration` carries initial values with the same names, without the `integrations.` prefix ([wrapper.md](wrapper.md) §3). 's `"files": true` is `integrations.files`.
+The `integration` object in `wrapper.json` carries the same initial values without the `integrations.` prefix ([wrapper.md](wrapper.md) §3). Its `"files": true` value maps to `integrations.files`.
 
 ### 2.2 Global settings
 

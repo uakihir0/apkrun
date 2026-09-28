@@ -364,11 +364,11 @@ public struct ReplyEnvelope<Result: Codable & Sendable>: Codable, Sendable {
 
 ```swift
 @objc public protocol RuntimeEventSink {
-    func deliver(_ batch: Data, reply: @escaping -> Void) // [EventEnvelope], topic events; the reply is the ack (§16.2)
+    func deliver(_ batch: Data, reply: @escaping () -> Void) // [EventEnvelope], topic events; the reply is the ack (§16.2)
     func sessionEvent(_ event: Data) // SessionEvent, own session only (§6.3)
     func frameReady(generation: UInt32, surfaceIndex: UInt8, frameSeq: UInt64, presentationTime: UInt64)
     func surfacesReplaced(_ set: Data, surfaces: [IOSurface])
-    func streamEvent(_ event: Data, reply: @escaping -> Void) // StreamEnvelope; the reply is the ack (§16.4)
+    func streamEvent(_ event: Data, reply: @escaping () -> Void) // StreamEnvelope; the reply is the ack (§16.4)
 }
 ```
 
@@ -1189,7 +1189,7 @@ public struct PackageSummary: Codable, Sendable {
     public var managed: Bool // false: installed in Android by something else, no record
     public var installer: Installer //.apkrun,.external
     public var updateAuthority: UpdateAuthority //.apkrun,.googlePlay,.external,.manual
-    public var updateChoice: UpdateChoice? // for authority.apkrun and.manual (update-system.md §2.3)
+    public var updateChoice: UpdateChoice? // for .apkrun and .manual authority (update-system.md §2.3)
     public var wrapperStatus: WrapperStatus? // nil = no Mac app
     public var iconDigest: SHA256Digest?
     public var wrapperError: WireError? // only in the result of installImported with createWrapper
@@ -1373,7 +1373,7 @@ public struct UpdatePackageRequest: Codable, Sendable {
 }
 
 public struct UpdateNowOptions: Codable, Sendable {
-    public var closeRunningApp: Bool // true: the session ends with.updating and reopens after; false: wait until the app quits
+    public var closeRunningApp: Bool // true: the session ends with .updating and reopens after; false: wait until the app quits
     public var files: [ImportSourceFile]? // a manual update from files (apkrun update --file)
 }
 
@@ -1416,7 +1416,7 @@ public struct UpdateHistoryEntry: Codable, Sendable { // one line of Updates/his
 }
 ```
 
-- `ProviderSpec.spec` accepts the legacy aliases only on the CLI. The CLI translates `--update auto|notify|manual` and `--update-provider direct --update-url <url>` before it calls ([../02-design/update-system.md](../02-design/update-system.md) §11.3).
+- `ProviderSpec.spec` accepts alternate flag spellings only on the CLI. The CLI translates `--update auto|notify|manual` and `--update-provider direct --update-url <url>` before calling UpdateCore ([../02-design/update-system.md](../02-design/update-system.md) §11.3).
 - `setUpdatePolicy` validates the provider configuration. For F-Droid and GitHub it makes one test request. A failure writes nothing.
 - `ProviderSpec.token` goes only from the client to apkrund. apkrund stores it in the Keychain (service `io.apkrun.provider.github`) and never returns it, logs it, or writes it to `settings.json` (update-system §4.6). A request without `token` keeps a stored token for the same repository, and `""` deletes it. Replies show only `ProviderSummary.hasToken`.
 - The choices `.automatic` and `.notifyOnly` need a provider. Without one, `setUpdatePolicy` returns `update.providerNotConfigured`.

@@ -10,7 +10,7 @@
 
 HelloText runs in a normal Mac window and responds to the mouse and the keyboard (gate G4). Then two apps run at the same time in two windows, each on its own Android display, and input reaches only the app of the focused window (gate G5).
 
-Input is injected by the Guest Agent inside Android, not by a host virtio-input device (D-16, [../../01-architecture/decisions/0013-input-via-guest-injection.md](../../01-architecture/decisions/0013-input-via-guest-injection.md)). The path is `NSEvent → InputCore → GuestProtocol → Guest Agent → Android input injection`. So the protocol comes first (#033, moved from M4 by D-24), then a development Guest Agent reached through an ADB forward (#072, D-25). The vsock transport and the rest of the agent stay in #034.
+Input is injected by the Guest Agent inside Android, not by a host virtio-input device ([ADR-0013](../../01-architecture/decisions/0013-input-via-guest-injection.md)). The path is `NSEvent → InputCore → GuestProtocol → Guest Agent → Android input injection`. Task #033 delivers the protocol before input task #024; task #072 bootstraps a development Guest Agent reached through an ADB forward. The vsock transport and the rest of the agent are in #034.
 
 RuntimeCore gets the package operations of #027 through `PackageStore` and an ADB-backed store channel. `DisplayPool` then maps app sessions to the scanouts 1–15 of the virtio-gpu device (#028). Retina density and resize come with #067.
 
@@ -797,7 +797,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Acceptance criteria
 
-- [ ] The lifecycle available → allocated → attached → releasing → available is implemented as `free` → `attaching` → `allocated` → `releasing` → `free`, with `faulted` (D-08).
+- [ ] The lifecycle available → allocated → attached → releasing → available is implemented as `free` → `attaching` → `allocated` → `releasing` → `free`, with `faulted` ([display-and-windowing.md](../../02-design/display-and-windowing.md) §3.2).
 - [ ] Each allocation is associated with the package and window identity through its `SessionID`.
 - [ ] Displays are reused without stale scanouts or conflicting IDs: 50 cycles pass.
 - [ ] Every slot is `free` at the end of the run.

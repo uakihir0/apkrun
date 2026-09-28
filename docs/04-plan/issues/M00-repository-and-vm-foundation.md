@@ -167,7 +167,7 @@ Out of scope:
      Check: the golden tests for `version`, `version --json`, `--version`, and `--help` pass.
 4. **apkrund.** `Daemon/apkrund/main.swift` is a thin main. All future logic lives in RuntimeHost ([../../05-development/build-system.md](../../05-development/build-system.md) §2.1).
    - `apkrund --version` prints `apkrund 0.1.0 (1)` and exits 0.
-   - Without arguments, it installs `DispatchSource` signal handlers for `SIGTERM` and `SIGINT`, calls `dispatchMain`, and exits 0 when a signal arrives. It does nothing else in M0.
+   - Without arguments, it installs `DispatchSource` signal handlers for `SIGTERM` and `SIGINT`, calls `dispatchMain()`, and exits 0 when a signal arrives. It does nothing else in M0.
 
      Check: `apkrund & sleep 1; kill -TERM $!; wait $!` returns 0.
 5. **Apps.**
@@ -362,7 +362,7 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
 5. **Performance markers (§4.1).**
    - `PerfMarker` constants for the §4.2 catalogue.
    - `Perf.mark` emits an `OSSignposter` event in category `pointsOfInterest` and appends to `PerfTimeline`, a ring of 2,000 markers with the operation context.
-   - `Perf.interval` is generic and async: `static func interval<T>(_ name: StaticString, _ body: async throws -> T) async rethrows -> T`. It creates a signpost interval only.
+   - `Perf.interval` is generic and async: `static func interval<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T`. It creates a signpost interval only.
    - The clock is `ContinuousClock`.
    - `PerfRecordWriter` comes with #070.
 

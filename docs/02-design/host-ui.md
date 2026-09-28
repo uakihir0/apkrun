@@ -238,7 +238,7 @@ Packages installed in Android that APKRun does not manage (preinstalled apps, ap
 ### 5.5 Empty state and drops
 
 - No apps: a large drop zone with "Add your first Android app", **Add App…**, and a link "Where do I get APK files?" to the user guide.
-- Drops on the drop zone, anywhere in the list, or on the Dock icon start the add flow (§6). Unsupported files are refused with "APKRun can add.apk,.apks,.xapk, and.apkm files."
+- Drops on the drop zone, anywhere in the list, or on the Dock icon start the add flow (§6). Unsupported files are refused with "APKRun can add .apk, .apks, .xapk, and .apkm files."
 
 ---
 

@@ -121,7 +121,7 @@ A risk is something that could make a planned design fail or cost much more than
 ### R-09 No Google Mobile Services
 
 - **Risk (accepted).** Many apps need Google Play services for sign-in, push (FCM), maps, or Play Integrity. They fail or lose features. Apps that rely only on FCM get no push while they are not running ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5).
-- **Mitigation.** Clear scope ([../00-product/scope.md](../00-product/scope.md) §3); the compatibility database (#090) labels apps; the FCM limit is stated next to FR-INT-03 ([traceability.md](traceability.md) §3).
+- **Mitigation.** Clear scope ([../00-product/scope.md](../00-product/scope.md) §3); the compatibility database (#090) labels apps; the FCM limit is stated in the FR-INT-03 row ([traceability.md](traceability.md) §2).
 - **Never.** Integrity bypass. Google Play is only considered as the isolated post-v1 track #097.
 - **Result.** Accepted.
 

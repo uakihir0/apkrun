@@ -197,7 +197,7 @@ The candidate then passes the whole pipeline V0–V6 ([../02-design/update-syste
 |---|---|---|---|---|
 | `url` | string | yes | absolute `https` URL, at most 2048 characters, no user info. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` | the manifest URL |
 
-- CLI spec: `direct:<https-url>`. The legacy alias `--update-provider direct --update-url <url>` means the same ([../02-design/update-system.md](../02-design/update-system.md) §11.3).
+- CLI spec: `direct:<https-url>`. The alternate flags `--update-provider direct --update-url <url>` mean the same ([../02-design/update-system.md](../02-design/update-system.md) §11.3).
 - `setUpdatePolicy` refuses a configuration that breaks these rules before it is stored. A stored configuration that breaks them (for example a release build reading a debug record) makes every check fail with `providerNotConfigured`.
 
 ## 9. Versioning rules

@@ -630,11 +630,11 @@ public struct ADBForwardGuestTransport: GuestTransport { /* §13.2 */ }
 
 public actor GuestConnection {
     public init(endpoint: GuestEndpoint, transport: any GuestTransport, token: SessionToken?)
-    public func open async throws -> GuestHello // handshake, §5
+    public func open() async throws -> GuestHello // handshake, §5
     public func send<Op: GuestOperation>(_ op: Op, timeout: Duration?) async throws -> Op.Result
     public func send(frame: GPEnvelope) async throws // input and bulk streams
     public nonisolated var events: AsyncStream<GPEvent> { get }
-    public func close async
+    public func close() async
 }
 ```
 

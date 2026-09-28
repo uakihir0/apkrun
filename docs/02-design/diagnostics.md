@@ -231,7 +231,7 @@ Unified logging (`os_log`) is the primary sink. Every host process logs only thr
 ### 3.2 The facade and privacy
 
 ```swift
-let log = APKLogger(.store, category:.transaction)
+let log = APKLogger(.store, category: .transaction)
 log.info("commit \(txn,.public) \(packageID,.public) \(fromCode,.public)→\(toCode,.public)")
 log.error("import failed for \(fileName,.private)", error: failure) // adds err=store.<code>
 ```
@@ -295,9 +295,9 @@ public struct PerfMarker: RawRepresentable, Hashable, Sendable { public let rawV
 
 public enum Perf {
     public static func mark(_ marker: PerfMarker,
-        at time: ContinuousClock.Instant =.now,
+        at time: ContinuousClock.Instant = .now,
         _ attributes: [String: PerfValue] = [:])
-    public static func interval<T>(_ name: StaticString, _ body: async throws -> T) async rethrows -> T // signpost only
+    public static func interval<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T // signpost only
 }
 ```
 

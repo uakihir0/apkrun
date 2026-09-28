@@ -367,7 +367,7 @@ Cuttlefish under crosvm gives the guest composite disks whose GPT partition name
 Design rules:
 
 1. **Names mirror Cuttlefish's `os_composite`.** A/B partitions exist only as `_a` (slot `_a` is fixed by bootconfig). Single partitions keep their plain names.
-2. **Read-only system disk.** Everything Android never writes in normal operation goes into `os.img`, attached read-only. This is what 's "read-only base" becomes.
+2. **Read-only system disk.** Everything Android never writes in normal operation goes into `os.img`, attached read-only. This is APKRun's read-only base disk.
 3. **Writable state split by lifetime.** `persistent.img` holds small writable partitions that belong to the instance (misc, metadata, frp). `userdata.img` holds `/data`. Both are per-instance clones (§5).
 4. **Partition size = image size, exactly.** AVB hash footers sit in the last 64 bytes of a *partition*. A partition larger than its image would move the footer away from where libavb looks. `super` is sized to the unsparsed logical size recorded in its sparse header, because liblp checks the block device size.
 5. **Partitions not needed on VZ are left out.** `uboot_env`, the persistent `bootconfig` partition, and the persistent vbmeta (AVB persistent values) serve U-Boot only. `android_esp` serves EFI boot only. `pvmfw_a` and `vvmtruststore` serve protected VMs (`hypervisor.vm.supported=0`). `hibernation` is unused. Each omission is confirmed in #011 against the reference `ls -l /dev/block/by-name` and the fstab. If an omitted partition turns out to be required, it is added blank.
@@ -708,21 +708,21 @@ public struct InstalledImage: Sendable {
 public actor ImageStore {
     public init(paths: APKRunPaths, trust: ImageTrustStore, diagnostics: Diagnostics)
     public var state: RuntimeImageState { get } // state-machines.md §7
-    public func current throws -> InstalledImage
-    public func previous -> InstalledImage?
+    public func current() throws -> InstalledImage
+    public func previous() -> InstalledImage?
     public func install(from source: ImageSource) async throws -> InstalledImage //.directory(URL) (dev) |.archive(URL) (#058; feed checks #087)
     public func verify(_ image: InstalledImage, depth: VerificationDepth) async throws //.quick |.full
     public func setCurrent(_ version: ImageVersion) async throws // moves `previous`
-    public func garbageCollect async throws // keeps current + previous
+    public func garbageCollect() async throws // keeps current + previous
 }
 
 public actor InstanceStore {
-    public func load throws -> InstanceConfiguration?
+    public func load() throws -> InstanceConfiguration?
     public func provision(image: InstalledImage, sizing: InstanceSizing) async throws -> InstanceConfiguration // §5.1
     public func resetAndroid(image: InstalledImage) async throws // recreate disks from templates
     public func createRecoveryPoint(reason: RecoveryReason) async throws -> RecoveryPoint
     public func restore(_ point: RecoveryPoint) async throws
-    public func recoveryPoints -> [RecoveryPoint]
+    public func recoveryPoints() -> [RecoveryPoint]
 }
 
 public struct AndroidBootPlanner: Sendable {
@@ -971,7 +971,7 @@ T2 test with two bundles built from the same base: A, and B = A with `androidboo
 
 ## 13. Deviations from standard Cuttlefish
 
-#013 requires documenting every deviation. This table is the summary. Its IDs use the prefix `CF-` to distinguish Cuttlefish-specific differences from the `D-NN` design decisions in [../04-plan/traceability.md](../04-plan/traceability.md) §3. `Images/reference/<buildId>/expected-differences.yaml` is the detailed, machine-checked list (§8.4).
+#013 requires documenting every deviation. This table is the summary. Its IDs use the prefix `CF-` to identify Cuttlefish-specific differences. `Images/reference/<buildId>/expected-differences.yaml` is the detailed, machine-checked list (§8.4).
 
 | # | Deviation | Reason | Section |
 |---|---|---|---|

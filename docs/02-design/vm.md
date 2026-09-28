@@ -73,12 +73,12 @@ public actor VMController {
     public var state: VMState { get }
     public nonisolated let stateUpdates: AsyncStream<VMState>
 
-    public func start async throws
-    public func pause async throws
-    public func resume async throws
-    public func stop async throws // forced stop (VZ stop)
-    public func requestGuestStop async throws // VZ requestStop (power-button event); see §9.3
-    public func reset async throws // failed → stopped only; see §9.6
+    public func start() async throws
+    public func pause() async throws
+    public func resume() async throws
+    public func stop() async throws // forced stop (VZ stop)
+    public func requestGuestStop() async throws // VZ requestStop (power-button event); see §9.3
+    public func reset() async throws // failed → stopped only; see §9.6
 
     public func connect(vsockPort: UInt32, timeout: Duration) async throws -> VsockConnection
     public nonisolated func console(_ role: ConsoleRole) -> ConsoleChannel // read stream + optional writer

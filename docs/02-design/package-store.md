@@ -84,7 +84,7 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
 
 ### 2.3 Package record
 
-`metadata.json` holds a `PackageRecord`. The field-by-field reference, with the JSON schema, is [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md). 's fields are kept by name.
+`metadata.json` holds a `PackageRecord`. The field-by-field reference, with the JSON schema, is [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md). The record keeps these field names unchanged.
 
 ```swift
 public struct PackageRecord: Codable, Sendable, Equatable {
@@ -362,7 +362,7 @@ Every change to Android or to the artifact slots is a transaction in `Packages/j
 
 JSON Lines, append-only, one object per line:
 
-```json
+```jsonl
 {"v":1,"seq":41,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:03.120Z","op":"begin","kind":"update","package":"com.example.app","dir":"com.example.app","from":44,"to":45,"setDigest":"sha256:9f2c…"}
 {"v":1,"seq":42,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:03.410Z","op":"step","step":"guestCommitRequested","androidSession":1873}
 {"v":1,"seq":43,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:09.002Z","op":"step","step":"guestInstalled","versionCode":45}
@@ -464,7 +464,7 @@ public protocol StoreRuntimeAccess: Sendable {
     /// and hands over the channel for the current image.
     func withStoreAgent<T: Sendable>(_ reason: StoreOperationReason, operation: OperationID,
         _ body: @Sendable (any StoreAgentChannel) async throws -> T) async throws -> T
-    func guestFacts async -> GuestFacts? // SDK, ABIs, install floor, userdataGeneration
+    func guestFacts() async -> GuestFacts? // SDK, ABIs, install floor, userdataGeneration
     func hasOpenSession(_ package: PackageID) async -> Bool // any AppSession except ended; the check of §7.2 (#038)
     func endSessions(for package: PackageID, reason: SessionEndReason) async
 }
@@ -510,9 +510,9 @@ state: installing → installed
 
 | Authority | `claimsUpdateOwnership` | Why |
 |---|---|---|
-| `apkrun` | true | FR-UPD-06,: other installers may not update the package silently |
+| `apkrun` | true | Other installers may not update the package silently |
 | `manual` | true | APKRun is still the only installer. It installs only when the user supplies the APK |
-| `googlePlay` | false |: never compete with Play for ownership |
+| `googlePlay` | false | Never compete with Play for ownership |
 | `external` | false | another installer owns updates |
 
 - The default authority for a file import is `manual`. It becomes `apkrun` when the user attaches an update provider, either in the Add sheet (when the provider is detected, for example an F-Droid package ID match) or later in the package's settings ([update-system.md](update-system.md) §2).

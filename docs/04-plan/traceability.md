@@ -5,12 +5,12 @@
 | Status | Baseline |
 | Related | [roadmap.md](roadmap.md), [issues/README.md](issues/README.md), [test-strategy.md](test-strategy.md), [risks.md](risks.md), [open-questions.md](open-questions.md) |
 
-This document connects each requirement to its implementation tasks, design sections, and verification. It also records cross-document design decisions and planning additions that affect the task sequence.
+This document connects each requirement to its implementation tasks, design sections, and verification. It also summarizes tasks #061–#097.
 
 ## 1. Maintenance rules
 
 - A pull request that adds, removes, or renames a requirement, a task, or a design section updates this file in the same pull request.
-- Record a cross-document design clarification under the next free `D-NN` in §3. If it changes an architectural decision, add an ADR ([../01-architecture/decisions/README.md](../01-architecture/decisions/README.md)).
+- Keep design clarifications in their canonical product, architecture, or design documents. If a clarification changes an architectural decision, add an ADR ([../01-architecture/decisions/README.md](../01-architecture/decisions/README.md)).
 - The Tasks column lists the tasks that deliver the requirement by its target version. These are the tasks whose entries name the requirement in their Requirements row, before any `Constraints:` part. A task that only keeps a requirement names it under `Constraints:` and is not listed here.
 - Tasks after `later:` extend or re-verify a requirement after its target version: hardening, polish, and post-v1 tracks. They do not gate that version ([roadmap.md](roadmap.md) §3).
 - “Verified by” names the test tiers in [test-strategy.md](test-strategy.md) and the task whose acceptance tests cover the requirement. Individual tests are listed in the milestone files ([issues/README.md](issues/README.md)).
@@ -125,7 +125,7 @@ The requirement text, priority, and target version are in [../00-product/require
 | ID | Tasks | Design | Verified by |
 |---|---|---|---|
 | FR-WRP-01 | #045, #046, #075 | [wrapper.md](../02-design/wrapper.md) §6, §12 | T1 generation; G8 |
-| FR-WRP-02 | #075, #089 | [wrapper.md](../02-design/wrapper.md) §12.2; [cli.md](../02-design/cli.md) §4.4 | T0 argument parsing (with legacy aliases, D-07) |
+| FR-WRP-02 | #075, #089 | [wrapper.md](../02-design/wrapper.md) §12.2; [cli.md](../02-design/cli.md) §4.4 | T0 argument parsing (with alternate flag spellings) |
 | FR-WRP-03 | #045, #048 | [wrapper.md](../02-design/wrapper.md) §3; [wrapper-json.md](../03-reference/wrapper-json.md) | T0 schema: no version-specific keys |
 | FR-WRP-04 | #049 | [wrapper.md](../02-design/wrapper.md) §9; ADR-0009 | T2 hashes and cdhash before and after an update; G9 |
 | FR-WRP-05 | #045 | [wrapper.md](../02-design/wrapper.md) §4.1 | T0 `BundleIDMapper` |
@@ -144,10 +144,10 @@ The requirement text, priority, and target version are in [../00-product/require
 |---|---|---|---|
 | FR-INT-01 | #053 | [desktop-integration.md](../02-design/desktop-integration.md) §4 | T0 loop prevention; T2 HelloClipboard |
 | FR-INT-02 | #080 | [desktop-integration.md](../02-design/desktop-integration.md) §4.4 | T2 |
-| FR-INT-03 | #054 | [desktop-integration.md](../02-design/desktop-integration.md) §5 (FCM limit, D-21) | T2 HelloNotification |
+| FR-INT-03 | #054 | [desktop-integration.md](../02-design/desktop-integration.md) §5 (FCM limit) | T2 HelloNotification |
 | FR-INT-04 | #081 | [desktop-integration.md](../02-design/desktop-integration.md) §7 | T2 HelloLinks |
 | FR-INT-05 | #082 | [desktop-integration.md](../02-design/desktop-integration.md) §6.1, §6.4; [security-model.md](../01-architecture/security-model.md) §6 | T1 path confinement; fuzzing (#091) |
-| FR-INT-06 | #082 | [desktop-integration.md](../02-design/desktop-integration.md) §6.2–§6.4 (D-20) | T2 HelloFiles |
+| FR-INT-06 | #082 | [desktop-integration.md](../02-design/desktop-integration.md) §6.2–§6.4 | T2 HelloFiles |
 | FR-INT-07 | #083 | [desktop-integration.md](../02-design/desktop-integration.md) §8.1; [vm.md](../02-design/vm.md) §11 | T2 HelloAudio; T3 listening check |
 | FR-INT-08 | #084 | [desktop-integration.md](../02-design/desktop-integration.md) §8.2 | T3 manual permission check (OQ-29) |
 | FR-INT-09 | #085 | [desktop-integration.md](../02-design/desktop-integration.md) §9 | T2 locale and time zone change |
@@ -222,60 +222,11 @@ The requirement text, priority, and target version are in [../00-product/require
 ---
 
 
-## 3. Design decisions
+## 3. Tasks #061–#097
 
-These entries summarize current decisions that affect multiple parts of the specification. Their identifiers are stable references used in design documents and task entries.
+The task entries and milestone files define the scope, dependencies, acceptance criteria, and milestone assignments for tasks #061–#097.
 
-### 3.1 Naming and formats
-
-| ID | Current decision | Rationale | Canonical specification |
-|---|---|---|---|
-| D-01 | Use `io.apkrun.*` for host and guest identifiers. | One reverse-DNS root keeps names consistent; domain ownership is tracked in OQ-01. | [modules.md](../01-architecture/modules.md) §5 |
-| D-02 | Name the Android boot marker `BOOT_COMPLETED`. | Use one naming scheme for lifecycle markers. | [diagnostics.md](../02-design/diagnostics.md) §4.2 |
-| D-03 | Map underscores to hyphens in bundle IDs and append a stable hash suffix for uppercase package IDs. | Bundle IDs cannot contain underscores and compare case-insensitively. | [wrapper.md](../02-design/wrapper.md) §4.1 |
-| D-04 | Version APKRun builds and wrapper formats independently; never put the Android app version in a wrapper. | Sparkle and compatibility checks need ordered versions while wrappers remain stable. | [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1; [wrapper.md](../02-design/wrapper.md) §2.1 |
-| D-05 | `wrapper.json` includes launcher API, provider, and desktop integration settings. | Portable and distribution apps need these settings and policy inputs. | [wrapper.md](../02-design/wrapper.md) §3; [wrapper-json.md](../03-reference/wrapper-json.md) |
-| D-06 | Store user settings with the package; `wrapper.json` contains initial values only. | Generated apps stay unchanged after an app update. | ADR-0009 |
-| D-07 | Use `--updates` and `--provider` consistently for install and wrap; accept the documented legacy aliases. | One command vocabulary simplifies the CLI. | [wrapper.md](../02-design/wrapper.md) §12.2; [update-system.md](../02-design/update-system.md) §11.3 |
-| D-08 | Model DisplayPool slots as `free`, `attaching`, `allocated`, `releasing`, and `faulted`. | One explicit state model defines ownership and recovery. | [display-and-windowing.md](../02-design/display-and-windowing.md) §3.2 |
-| D-09 | Keep the RiftVM analysis at `docs/02-design/riftvm-analysis.md`. | The analysis belongs in the repository’s documented design tree. | [graphics.md](../02-design/graphics.md) §2.2 |
-
-### 3.2 Architecture
-
-| ID | Current decision | Rationale | Canonical specification |
-|---|---|---|---|
-| D-10 | The launcher stays alive, owns its app window, and displays frames from apkrund through shared IOSurfaces. | Dock identity, app menus, focus, and window lifecycle belong to the app process. | ADR-0006; [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1 |
-| D-11 | Build the launcher for arm64 only. | APKRun supports Apple silicon only. | [wrapper.md](../02-design/wrapper.md) §5.1 |
-| D-12 | Support RuntimeAPI majors N and N−1 and offer older launchers a refresh. | Existing apps must keep working across APKRun updates. | [wrapper.md](../02-design/wrapper.md) §5.3; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.2 |
-| D-13 | APKRun.app, the menu bar, the CLI, and app launchers call RuntimeClient; they do not own the VM. | The GUI must not own the runtime lifecycle. | ADR-0012; [modules.md](../01-architecture/modules.md) §3 |
-| D-14 | Use separate modules for diagnostics, virtio devices, input, windowing, guest protocol, images, and runtime API/client/host. | Each subsystem needs a clear owner and allowed dependency edges. | ADR-0012; [modules.md](../01-architecture/modules.md) §2 |
-| D-15 | Run the Guest Agent and Store Agent as Kotlin services behind the native `apkrun_vsockd` bridge. | Android APIs are Java APIs; the native vsock surface stays small. | ADR-0008; [guest-components.md](../02-design/guest-components.md) §10 |
-| D-16 | Inject production input through the Guest Agent over vsock; do not add a host virtio-input device. | The supported custom virtio API lacks the callback needed for virtio-input. | ADR-0013; R-01 |
-| D-17 | Boot directly with `VZLinuxBootLoader` and generated bootconfig; retain U-Boot EFI as fallback. | Direct boot reduces moving parts on Virtualization.framework. | ADR-0015; R-11 |
-| D-18 | Use read-only `os.img` plus writable `persistent.img` and `userdata.img` GPT disks. | Android does not write its system partitions, so an overlay layer is unnecessary. | [filesystem-layout.md](../01-architecture/filesystem-layout.md) §1; [android-image.md](../02-design/android-image.md) §4.2 |
-| D-19 | Keep `scripts/inventory-cuttlefish.py` as the entry point and place shared logic in `apkrun_image`. | The tools share inventory and image-handling code. | [android-image.md](../02-design/android-image.md) §1.2 |
-| D-20 | Deliver dropped files to Android as shares (`ACTION_SEND`), not as synthetic Android drag events. | Android has no API to inject an external drag at the drop position. | [desktop-integration.md](../02-design/desktop-integration.md) §6.2 |
-| D-21 | Forward Android notifications to macOS; apps relying only on FCM do not receive pushes while stopped. | Google Play services are outside the supported image. | [desktop-integration.md](../02-design/desktop-integration.md) §5.3; R-09 |
-| D-22 | Update APKRun itself as one signed APKRun.app bundle using Sparkle 2. | One signed and notarized unit avoids a second host installer. | ADR-0016; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.1 |
-| D-23 | Use ADB for development and host-initiated vsock for production guest control. | The same protocol works over both transports. | [guest-protocol.md](../02-design/guest-protocol.md) §13.2 |
-
-### 3.3 Planning and sequencing
-
-| ID | Current decision | Rationale | Canonical specification |
-|---|---|---|---|
-| D-24 | Complete #033 in M3 before input task #024. | Input depends on the Guest Agent and its protocol. | ADR-0013; §4 |
-| D-25 | Add #072, Guest Agent bootstrap, before #024. | Input injection needs a running agent. | §4; ADR-0013 |
-| D-26 | Schedule DirectProvider (#050) in M6. | The v0.3 Definition of Done includes a direct update source. | [roadmap.md](roadmap.md) §3.3; §4 |
-| D-27 | Schedule clipboard task #053 in M4. | Basic clipboard support is part of the v0.2 outcome. | [roadmap.md](roadmap.md) §3.2; §4 |
-| D-28 | Schedule icon task #055 and Finder/Dock/Spotlight task #056 in M7. | These are part of the v0.4 wrapper outcome. | [roadmap.md](roadmap.md) §3.4; §4 |
-| D-29 | Extend the implementation plan through #097 and add milestone M12 for v1.0. | The task plan covers every v1 requirement and release activity. | [issues/README.md](issues/README.md); [roadmap.md](roadmap.md) |
-| D-30 | Organize work into milestones M0–M12, with post-v1 tracks after them. | Milestones provide the planning and release checkpoints. | [roadmap.md](roadmap.md) §1.2 |
-
-## 4. Plan additions
-
-Tasks #061–#097 extend the implementation plan. The task index and milestone files remain the source of truth for their scope and acceptance criteria.
-
-| Task | Added capability | Drivers |
+| Task | Capability | Drivers |
 |---|---|---|
 | #061 | Diagnostics foundation | Typed errors, structured logging, health types, and performance markers |
 | #062 | CI and module dependency checks | NFR-DEV-01, NFR-DEV-02 |
@@ -315,4 +266,4 @@ Tasks #061–#097 extend the implementation plan. The task index and milestone f
 | #096 | Vulkan track | Post-v1 evaluation |
 | #097 | Google Play update authority | Post-v1 evaluation |
 
-Task sequencing decisions are recorded under D-24–D-28. The final milestone assignment for each task is in [issues/README.md](issues/README.md) §3 and its milestone file.
+The task index and milestone files are authoritative for sequencing and final milestone assignments.

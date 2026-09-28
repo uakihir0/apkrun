@@ -12,16 +12,16 @@ Each task below uses the entry format of [README.md](README.md) §2. Titles, dep
 
 An Android app becomes an ordinary Mac app. `apkrun wrap` or the add flow creates a thin, locally signed `.app` for an installed package. It opens from Finder, the Dock, and Spotlight, shows the app in its own native window, and never needs a terminal (M7, gate G8). The same wrapper keeps working, byte for byte unchanged, while APKRun updates the Android app behind it (gate G9). APKRun.app gets the home and store UI, the add flow, per-app settings, and the wrapper lifecycle ([../roadmap.md](../roadmap.md) §3.4).
 
-v0.4 is the first public demo. The demo is the flow on a clean Mac with no terminal.: nobody declares the product concept validated before G9 passes.
+v0.4 is the first public demo: the end-to-end flow runs on a clean Mac without terminal use. Do not declare the product concept validated until G9 passes.
 
-These design decisions hold for every task below:
+These rules apply to every task below:
 
-- The launcher stays running and owns the window. apkrund renders into shared IOSurfaces (D-10, ADR-0006 [0006-wrapper-owned-window-iosurface.md](../../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)). had the launcher exit after the launch request.
-- The launcher is arm64 only (D-11). #044 asked for a universal launcher.
-- The wrapper endpoint serves RuntimeAPI majors N and N−1 (D-12).
-- Settings live in the package store. `wrapper.json` holds initial values only (D-06, ADR-0009 [0009-thin-immutable-wrappers.md](../../01-architecture/decisions/0009-thin-immutable-wrappers.md)). and §74 kept the settings in the wrapper.
-- Bundle IDs map `_` to `-`, and IDs with uppercase letters get a `-h<8 hex>` suffix (D-03). `wrapper.json` carries the runtime, provider, and integration settings described in [wrapper.md](../../02-design/wrapper.md) §3 (D-05). The CLI uses `--updates` and `--provider`, and accepts the documented legacy aliases (D-07).
-- The design says "Hello.app". Here it is `HelloText.app` for G8 and `HelloUpdate.app` for G9. The fixture's label decides the name ([../test-strategy.md](../test-strategy.md) §4.9).
+- The launcher stays running and owns the window. apkrund renders into shared IOSurfaces (ADR-0006, [0006-wrapper-owned-window-iosurface.md](../../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)).
+- The launcher is arm64 only, matching the Apple silicon host requirement.
+- The wrapper endpoint serves RuntimeAPI majors N and N−1 ([wrapper.md](../../02-design/wrapper.md) §5.3).
+- Settings live in the package store. `wrapper.json` holds initial values only (ADR-0009, [0009-thin-immutable-wrappers.md](../../01-architecture/decisions/0009-thin-immutable-wrappers.md)).
+- Bundle IDs map `_` to `-`, and IDs with uppercase letters get a `-h<8 hex>` suffix ([wrapper.md](../../02-design/wrapper.md) §4.1). `wrapper.json` carries the runtime, provider, and integration settings described in [wrapper.md](../../02-design/wrapper.md) §3. The CLI uses `--updates` and `--provider`, plus the documented alternate flag spellings.
+- Use `HelloText.app` for G8 and `HelloUpdate.app` for G9; the fixture's label determines the app name ([../test-strategy.md](../test-strategy.md) §4.9).
 - The user-facing term is "Mac app", never "wrapper" ([host-ui.md](../../02-design/host-ui.md) §13.1).
 
 ## Exit criteria
@@ -89,7 +89,7 @@ A wrapper that was put together by hand opens HelloText in its own window. The s
 
 - `WrapperIdentity`: reads the Info.plist keys of [wrapper.md](../../02-design/wrapper.md) §2.1 and `Resources/wrapper.json` (§3), with schema validation ([wrapper-json.md](../../03-reference/wrapper-json.md)). `WrapperDocument` is the Codable model of `wrapper.json`, with the §3 encoding rules.
 - The launcher startup of §5.2, steps 1–7, on top of the #068 session window.
-- The `.wrapper(bundleID)` endpoint in RuntimeClient and apkrund. The compatibility rules of §5.3. apkrund's wrapper endpoint also serves the previous RuntimeAPI major (D-12).
+- The `.wrapper(bundleID)` endpoint in RuntimeClient and apkrund. The compatibility rules of §5.3 include support for the previous RuntimeAPI major.
 - Wrapper authorization in apkrund: a wrapper connection may open sessions for its registered `packageId` only ([runtime-daemon.md](../../02-design/runtime-daemon.md) §7.1, NFR-SEC-07).
 - The approval of unknown wrappers (§7.3): broker `requestApproval`, `WrapperApprovalService` (static checks, signer summary, limits, denied entries), `.control` `decideApproval`, and the `wrappers` events `approvalRequested` and `approvalResolved`.
 - A first `WrapperRegistry` (§7.2) with `active` entries, `approval: user`, the `denied` list, and atomic writes. #045 adds `pending`, recovery, `generated` entries, and corrupt-file handling.
@@ -142,10 +142,10 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.8):
 
 - [ ] A manually constructed wrapper launches HelloText: `scripts/dev/make-wrapper.sh` builds `HelloText.app`, `apkrun wrapper approve` registers it, and `open HelloText.app` shows HelloText in the launcher's window.
 - [ ] The launcher takes its package from Info.plist and `wrapper.json`. A mismatched `application.packageId` shows screen D.
-- [ ] The launcher connects on `.wrapper(bundleID)` and calls `openSession`. The launcher process stays running and owns the window (D-10).
+- [ ] The launcher connects on `.wrapper(bundleID)` and calls `openSession`. The launcher process stays running and owns the window (ADR-0006).
 - [ ] (FR-WRP-09) Screen R appears with `APKRUN_LAUNCHER_TEST_NO_RUNTIME=1`. Screen S appears when apkrund is not registered and retries every 2 s for 60 s. Screen V appears with `runtime.minimumVersion` set to `99.0`. Screen L appears for a launcher two RuntimeAPI majors behind. Each screen has its primary action and **Quit**.
-- [ ] A launcher one RuntimeAPI major behind still opens its app (D-12, NFR-CMP-02).
-- [ ] The executable in the wrapper is a byte copy of the generic launcher's executable with a new signature (FR-WRP-06). `lipo -archs` prints `arm64` only (D-11).
+- [ ] A launcher one RuntimeAPI major behind still opens its app (NFR-CMP-02).
+- [ ] The executable in the wrapper is a byte copy of the generic launcher's executable with a new signature (FR-WRP-06). `lipo -archs` prints `arm64` only.
 - [ ] A wrapper connection can open sessions only for its own package. A modified copy and a re-signed binary are refused and need approval (NFR-SEC-07).
 - [ ] An unknown wrapper shows screen A while it waits for approval. Don't Allow gives "APKRun did not allow ‹App› to open." and a 24 h denied entry.
 - [ ] A translocated wrapper shows screen T and asks for no approval.
@@ -224,7 +224,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.8):
 ### Acceptance criteria
 
 - [ ] The generated bundle contains `Contents/MacOS/APKRunLauncher`, `Contents/Resources/wrapper.json`, `Contents/Resources/AppIcon.icns`, and `Contents/Info.plist`, and nothing that §2 does not list.
-- [ ] The bundle ID mapping is defined and implemented: `io.apkrun.android.<mapped package>` with `_` → `-` and the uppercase suffix (FR-WRP-05, D-03). `io.apkrun.fixture.odd_name` maps to `io.apkrun.android.io.apkrun.fixture.odd-name`.
+- [ ] The bundle ID mapping is defined and implemented: `io.apkrun.android.<mapped package>` with `_` → `-` and the uppercase suffix (FR-WRP-05). `io.apkrun.fixture.odd_name` maps to `io.apkrun.android.io.apkrun.fixture.odd-name`.
 - [ ] The generated bundle passes structural validation and can be opened by Finder (`NSWorkspace.open`). `mdls -name kMDItemContentType` reports `com.apple.application-bundle`.
 - [ ] Generating twice gives byte-identical trees (§6.5). If `codesign` or `iconutil` is not deterministic, the test excludes the affected file, and the reason is recorded in [wrapper.md](../../02-design/wrapper.md) §18.
 - [ ] `wrapper.json` holds no versionCode, versionName, APK path, or digest (FR-WRP-03).
@@ -323,7 +323,7 @@ The design steps are [wrapper.md](../../02-design/wrapper.md) §15 #046, steps 1
 
 ### Goal
 
-Double-clicking `HelloText.app` in Finder shows an interactive HelloText window, with the runtime warm or stopped, and no terminal is involved. The flow is `HelloText.app` → APKRunLauncher → XPC → apkrund → DisplayPool → Android activity → the launcher's NSWindow. The window belongs to the launcher, not to apkrund (D-10). This task closes gate G8.
+Double-clicking `HelloText.app` in Finder shows an interactive HelloText window, with the runtime warm or stopped, and no terminal is involved. The flow is `HelloText.app` → APKRunLauncher → XPC → apkrund → DisplayPool → Android activity → the launcher's NSWindow. The window belongs to the launcher, not to apkrund (ADR-0006). This task closes gate G8.
 
 ### Scope
 
@@ -368,7 +368,7 @@ The design steps are [wrapper.md](../../02-design/wrapper.md) §15 #047, steps 1
 
 - [ ] Double-clicking `HelloText.app` in Finder displays an interactive HelloText window: pointer clicks are logged as `click <n>`, and typed text arrives exactly.
 - [ ] No terminal interaction is required. No Terminal window opens, and no process other than the wrapper and apkrund is started.
-- [ ] The window is the launcher's NSWindow, fed through XPC by apkrund and DisplayPool from the Android activity (D-10).
+- [ ] The window is the launcher's NSWindow, fed through XPC by apkrund and DisplayPool from the Android activity (ADR-0006).
 - [ ] The same works from the Dock after "Keep in Dock", with the runtime stopped (the placeholder, then the app) and warm.
 - [ ] G8 condition 1: `apkrun wrap` with HelloText produces `HelloText.app` with the bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`, ad-hoc signed, which passes `codesign --verify --strict` ([../roadmap.md](../roadmap.md) §2).
 - [ ] G8 condition 3: no terminal interaction is needed, and the Finder and Dock launches work with the runtime stopped before the click and with it warm.
@@ -673,13 +673,13 @@ The design steps are [update-system.md](../../02-design/update-system.md) §15 #
 
 ### Goal
 
-`apkrun wrap app.apk` installs an APK and creates its Mac app in one command. The command follows the import/install table of [wrapper.md](../../02-design/wrapper.md) §12.2, accepts the documented legacy aliases, and works in scripts with `--yes` and `--json`.
+`apkrun wrap app.apk` installs an APK and creates its Mac app in one command. The command follows the import/install table of [wrapper.md](../../02-design/wrapper.md) §12.2, accepts the documented alternate flag spellings, and works in scripts with `--yes` and `--json`.
 
 ### Scope
 
 - The full `apkrun wrap <file.apk…|package>` syntax of [wrapper.md](../../02-design/wrapper.md) §12.2, except `--portable` (#089) and `--distribution` (#088).
 - The import/install table (7 rows) for files, with the preview and the question for the "not installed" row.
-- `--updates automatic|notify|manual`, `--provider <spec>`, and the aliases `--update auto`, `--updates auto`, and `--update-provider <type> --update-url <url>`. They apply only when this command installs the package, and as the initial values in `wrapper.json`. For an installed package they are rejected with a hint to use `apkrun update policy`.
+- `--updates automatic|notify|manual`, `--provider <spec>`, and the alternate flag spellings `--update auto`, `--updates auto`, and `--update-provider <type> --update-url <url>`. They apply only when this command installs the package, and as the initial values in `wrapper.json`. For an installed package they are rejected with a hint to use `apkrun update policy`.
 - `--name`, `--icon`, `--window-size`, `--resizable` / `--no-resizable`, `--output`, `--replace`, `--open`, `--yes`, and `--json`.
 - Client-side placement for `destinationNotAccessible` (§6.3), if #056 did not already add it.
 - `apkrun install <file>… --wrap [--output <dir>]` ([cli.md](../../02-design/cli.md) §4.2).
@@ -806,7 +806,7 @@ The design steps are [wrapper.md](../../02-design/wrapper.md) §15 #076, steps 1
 
 - [ ] Moving a wrapper to another folder and renaming it is followed: the state is `moved`, then `valid` (FR-WRP-12).
 - [ ] Moving a wrapper to the Trash gives `missing`, and putting it back gives `valid` (FR-WRP-12).
-- [ ] Editing `wrapper.json` inside a wrapper gives `signatureInvalid` in `apkrun wrapper verify --deep` (the design says `doctor --deep`, which comes with #059).
+- [ ] Editing `wrapper.json` inside a wrapper gives `signatureInvalid` in `apkrun wrapper verify --deep`. `doctor --deep` is a separate diagnostics command introduced by #059.
 - [ ] Changing the name and the icon on the app page regenerates the wrapper with the same bundle ID. The Dock pin still works, and the registry has the new cdhash (FR-WRP-13, C04-5).
 - [ ] Uninstalling with "Also move the Mac app to the Trash" leaves the wrapper in the Trash. Without it, the wrapper stays and shows `unknownPackage`.
 - [ ] (store) Uninstalling with "Keep app data" and reinstalling the same APK brings back the data written before (FR-PKG-07).
@@ -872,7 +872,7 @@ The design steps are [host-ui.md](../../02-design/host-ui.md) §14 #077, steps 1
 
 1. **Wrapper list (design step 1).** Add `listWrappers` → `[WrapperSummary]` on `.control` with the quick checks of [wrapper.md](../../02-design/wrapper.md) §9.1 (1–3 and 5) and the 60 s cache. #076 replaces the check body with the full validator and adds `statusChanged`. Until then, `WrapperListModel` reloads when the main window becomes key and every 60 s. Check: a T2 test trashes a wrapper, and `listWrappers` reports `missing` within 60 s.
 2. **Models (design step 1).** Implement `PackageListModel`, `PackageDetailModel`, `UpdatesModel`, `SessionsModel`, `WrapperListModel`, and `OperationCenter` as `@Observable` main-actor models fed by `RuntimeClient` requests and topics (`packages`, `updates`, `sessions`, `wrappers`). On a reconnect every model reloads. While apkrund is unreachable, show the banner with **Restart Service** (re-registers the agent) and **Troubleshooting…**. Views never call XPC. Check: the T0 reconnection tests pass.
-3. **Main window (design step 2).** Build the `NavigationSplitView`, the runtime header for the M7 states (§5.2), and the rows (icon from `packageIcon` at 64 px or the host preview, display name, "Android version ‹versionName›", update mode, status line). The status line picks the first matching row of §5.3: 1 broken (**Repair…**), 2 installing and similar with progress, 3 update failed or rolled back (**Details**), 4 waiting (**Update Now**), 5 available (**Update Now**), 6 wrapper state not `valid`, 7 refresh reasons (**Update Mac App**), 8 otherwise (**Open**, **Settings**). Add the running dot, the context menu (**Open**, **Show Mac App in Finder**, **Check for Updates**, **Settings…**, **Uninstall…**), **Open** through `launch(packageID)`, **Other Android Apps** (**Open**, **Manage with APKRun** through `adoptPackage`), the empty state, drops ("APKRun can add.apk,.apks,.xapk, and.apkm files." for other files), search, sort (Name, Recently Used, Recently Updated), and ⌘O. The buttons of rows 1, 6, and 7 and **Uninstall…** call the #076 actions. Whichever of #076 and #077 merges second connects them. Check: the T0 status-priority tests pass.
+3. **Main window (design step 2).** Build the `NavigationSplitView`, the runtime header for the M7 states (§5.2), and the rows (icon from `packageIcon` at 64 px or the host preview, display name, "Android version ‹versionName›", update mode, status line). The status line picks the first matching row of §5.3: 1 broken (**Repair…**), 2 installing and similar with progress, 3 update failed or rolled back (**Details**), 4 waiting (**Update Now**), 5 available (**Update Now**), 6 wrapper state not `valid`, 7 refresh reasons (**Update Mac App**), 8 otherwise (**Open**, **Settings**). Add the running dot, the context menu (**Open**, **Show Mac App in Finder**, **Check for Updates**, **Settings…**, **Uninstall…**), **Open** through `launch(packageID)`, **Other Android Apps** (**Open**, **Manage with APKRun** through `adoptPackage`), the empty state, drops ("APKRun can add .apk, .apks, .xapk, and .apkm files." for other files), search, sort (Name, Recently Used, Recently Updated), and ⌘O. The buttons of rows 1, 6, and 7 and **Uninstall…** call the #076 actions. Whichever of #076 and #077 merges second connects them. Check: the T0 status-priority tests pass.
 4. **URL routing (design step 3).** Handle `apkrun://home`, `package/<id>`, `package/<id>/<section>`, `updates`, `settings/<pane>`, `setup`, and `report[?package=<id>]` (§3.1). URLs only navigate. An invalid or unknown package ID shows home with "‹id› isn't installed in APKRun.", and unknown routes, including `report` until #060, open home. Check: the T0 routing tests pass.
 5. **Acceptance (design step 4).** Run the T2 tests below. Check: every acceptance criterion is checked.
 
@@ -943,7 +943,7 @@ Out of scope:
 
 The design steps are [host-ui.md](../../02-design/host-ui.md) §14 #078, steps 1–3. Design step 1 is split into steps 1–3 here.
 
-1. **Document types and entry points (design step 1).** Declare `.apk` as `com.android.package-archive` (imported, conforms to `public.zip-archive` and `public.data`, Viewer, `Default`) and `io.apkrun.apks`, `io.apkrun.xapk`, and `io.apkrun.apkm` (exported, Viewer, `Owner`). Route document opens, drops, and **Add App…** into one `AddFlowModel` that calls `beginImport` with file handles. Unsupported files are refused with "APKRun can add.apk,.apks,.xapk, and.apkm files." Check: double-clicking `HelloText.apk` in Finder opens the sheet.
+1. **Document types and entry points (design step 1).** Declare `.apk` as `com.android.package-archive` (imported, conforms to `public.zip-archive` and `public.data`, Viewer, `Default`) and `io.apkrun.apks`, `io.apkrun.xapk`, and `io.apkrun.apkm` (exported, Viewer, `Owner`). Route document opens, drops, and **Add App…** into one `AddFlowModel` that calls `beginImport` with file handles. Unsupported files are refused with "APKRun can add .apk, .apks, .xapk, and .apkm files." Check: double-clicking `HelloText.apk` in Finder opens the sheet.
 2. **Review stage and relations (design step 1).** Show the §6.1 elements from `ImportPreview`: name and icon (host preview), package and `versionName (versionCode)`, the signer digest with the ⓘ popover, warnings as yellow rows (blocking problems replace **Install** with the reason), and **Details** (files, sizes, excluded splits, permissions). Implement each relation row of §6.1. `update(from:)` is gentle: when the app is open, "‹App› will update when you quit it" with **Quit and Update**. Refused relations show the store's message with **Done** only. Check: the T0 relation tests and the T1 XCUITest pass.
 3. **Installing and Done (design step 1).** **Install** calls `installImported(ticket, options)` with `InstallOptions.createWrapper` when the toggle is on. RuntimeHost runs the wrapper generation after the store commits. The sheet shows "Starting Android…" (when the runtime was stopped), "Installing in Android…", and "Creating Mac app…". An install failure shows the catalog message, and **Try Again** keeps the ticket. A wrapper failure after a successful install shows "‹App› was installed, but the Mac app couldn't be created: ‹reason›" with **Try Again**, and `destinationNotAccessible` offers **Choose Another Location…** (a Save panel) and then `placeStagedWrapper`. The sheet can be closed while installing, and the work continues in `OperationCenter`. Done shows **Open ‹App›**, **Show in Finder**, and **Done**. Check: a T2 test with the toggle on produces `~/Applications/HelloText.app`.
 4. **Update choices and Mac app options (design step 2).** Without an update source, only **Manual** is enabled, with "Choose an update source to turn on automatic updates" and **Choose…** (the provider picker for Local, Direct, F-Droid, and GitHub specs of [update-system.md](../../02-design/update-system.md) §4). A detected provider is shown as a suggestion that is off until the user turns it on ([update-system.md](../../02-design/update-system.md) §4.7). The Mac app name field starts with the host label, and the file name follows [wrapper.md](../../02-design/wrapper.md) §4.3. The location pop-up starts at `wrappers.defaultLocation` (`ask` selects nothing and requires a choice). If #056 recorded that the Apps view does not list other folders, **Other…** says so (OQ-22). Check: the T0 model tests for the options pass.
@@ -968,7 +968,7 @@ The design steps are [host-ui.md](../../02-design/host-ui.md) §14 #078, steps 1
 
 ### Notes
 
-- [host-ui.md](../../02-design/host-ui.md) §14 #078 cites "#078", which does not exist. The sources are, and §125.
+- The add-flow and settings requirements are tracked under #078 and #079 in this milestone.
 - **Pitfall:** the GUI passes file handles, never paths ([package-store.md](../../02-design/package-store.md) §4.1). A security-scoped URL from a drop must be opened in the app process before the handle is sent.
 
 ---
@@ -1052,7 +1052,7 @@ The design steps are [host-ui.md](../../02-design/host-ui.md) §14 #079, steps 1
 - [ ] The Settings window has the General, Updates, Runtime, and Advanced panes, the Privacy switches and defaults, and the Storage disk-use summary. Each control writes its key, and the default location sets where the next Mac app is created.
 - [ ] **Developer mode** turns on only after its confirmation, and **Install Command-Line Tool…** shows the command without running it.
 - [ ] Changing the name or icon offers **Update Mac App**, and the wrapper is changed only when the user clicks it (ADR-0009).
-- [ ] No setting is written to the wrapper bundle. Settings live in `Packages/<id>/settings.json` (D-06).
+- [ ] No setting is written to the wrapper bundle. Settings live in `Packages/<id>/settings.json` (ADR-0009).
 - [ ] "Always on top" floats the open window at once, and has no effect in full screen (OQ-09).
 - [ ] **Compatibility** window mode applies at the next session, and the status bar decision is recorded (FR-DSP-06, OQ-35).
 - [ ] `apkrun settings` round-trips every key, and invalid values exit 64 with the allowed values.
@@ -1060,7 +1060,7 @@ The design steps are [host-ui.md](../../02-design/host-ui.md) §14 #079, steps 1
 ### Notes
 
 - **Record:** the OQ-09 and OQ-35 decisions in [../open-questions.md](../open-questions.md), [display-and-windowing.md](../../02-design/display-and-windowing.md), and [host-ui.md](../../02-design/host-ui.md).
-- kept per-app settings in `wrapper.json`. The design keeps them in the store and uses `wrapper.json` only for initial values (D-06).
+- Per-app settings live in the package store; `wrapper.json` holds initial values only (ADR-0009).
 - `apkrun settings set update.mode` changes only the mode. The UI uses `setUpdatePolicy`, which writes the authority, the provider, and the mode together ([../../03-reference/configuration.md](../../03-reference/configuration.md) §3.1).
 - **Pitfall:** the input keys apply only at the next session ([../../03-reference/configuration.md](../../03-reference/configuration.md) §3.1), and `WindowPrefs` carries only `resizable`, `alwaysOnTop`, and `zoom` ([../../03-reference/runtime-api.md](../../03-reference/runtime-api.md)). A key that is live but not in `WindowPrefs` (`window.closeBehavior`) is read when the window closes. Show the next-session note exactly for the keys that configuration.md marks as next session.
 

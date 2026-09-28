@@ -154,7 +154,7 @@ public struct VirtioElement: ~Copyable {
     public func copyReadable(maxBytes: Int) throws(VirtioFailure) -> [UInt8] // one snapshot of guest data
     public mutating func write(_ bytes: UnsafeRawBufferPointer) throws(VirtioFailure)
     public consuming func complete // returnToQueue, exactly once
-    public consuming func deferCompletion -> PendingElement // completion later (fenced commands)
+    public consuming func deferCompletion() -> PendingElement // completion later (fenced commands)
 }
 ```
 
@@ -434,7 +434,7 @@ public final class SurfacePool: Sendable {
     public let generation: UInt64 // increases on every reallocation
     public let pixelSize: PixelSize
     public var surfaces: [IOSurface] { get } // sent to the wrapper once per generation
-    func acquireForRender -> Int? // render thread
+    func acquireForRender() -> Int? // render thread
     func markReady(_ index: Int, sequence: UInt64)
     public func consumerDisplayed(upTo sequence: UInt64) // from the wrapper's frameDisplayed (display-and-windowing.md §5)
 }

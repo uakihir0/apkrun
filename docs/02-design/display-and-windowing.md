@@ -117,7 +117,7 @@ public actor DisplayPool {
     public func acquire(for session: SessionID, configuration: DisplayConfiguration) async throws(RuntimeFailure) -> DisplayLease
     public func reconfigure(_ lease: DisplayLease, geometry: DisplayGeometry) async throws(RuntimeFailure) -> DisplayLease
     public func release(_ lease: DisplayLease) async // never throws; faults are recorded
-    public func snapshot -> [DisplaySlotSnapshot] // diagnostics, `apkrun info --displays`
+    public func snapshot() -> [DisplaySlotSnapshot] // diagnostics, `apkrun info --displays`
     public nonisolated var events: AsyncStream<DisplayPoolEvent> { get } // slot state changes, faults
 }
 
@@ -132,7 +132,7 @@ public protocol DisplayControlChannel: Sendable { // implemented over GuestProto
 
 ### 3.2 Slot states
 
-The states are defined in [../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4 (`free`, `attaching`, `allocated(SessionID)`, `releasing`, `faulted`). The #028 names map to them as follows (recorded in [../04-plan/traceability.md](../04-plan/traceability.md)):
+The states are defined in [../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4 (`free`, `attaching`, `allocated(SessionID)`, `releasing`, `faulted`). The #028 names map to them as follows:
 
 | #028 | This design | Meaning |
 |---|---|---|
@@ -154,7 +154,7 @@ Attaches are **serialized** (one `attaching` slot at a time). This makes the sca
 3. `ScanoutController.configure(scanout, mode)`. GraphicsCore writes the new EDID and raises the display event.
 4. Wait for `GuestDisplayEvent.added(displayID, info)` where `info.productInfo` matches the scanout (EDID manufacturer `APK`, product code = scanout index; exposed to Android apps through `Display.getDeviceProductInfo`, API 31). The timeout is 5 s ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4). If the product info is missing, the pool falls back to "the only display added while this slot is attaching". It logs that fallback once per boot.
 5. Check that `info.mode` equals the requested pixel size. A mismatch is logged, and the lease uses Android's actual size.
-6. `setDisplayPolicy(displayID, density:, imePolicy:.local)` (§4).
+6. `setDisplayPolicy(displayID, density:, imePolicy: .local)` (§4).
 7. Allocate a new `SurfacePool` at the pixel size (a new pool per lease, never reused across sessions) and `ScanoutController.attach(pool, to: scanout)`.
 8. Mark the slot `allocated(session)` and return the lease. The wrapper receives the pool's surfaces in the `SessionDescriptor`.
 

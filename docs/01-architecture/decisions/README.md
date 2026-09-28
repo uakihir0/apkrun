@@ -47,4 +47,3 @@ An ADR records one significant decision: its context, the decision, the alternat
 | [0015](0015-direct-kernel-boot.md) | Direct kernel boot without a bootloader | Accepted |
 | [0016](0016-sparkle-host-updates.md) | Sparkle 2 for APKRun updates, coordinated with apkrund | Accepted |
 | [0017](0017-zipfoundation-zip-reading.md) | ZIPFoundation for reading ZIP archives | Accepted |
-| [0018](0018-retire-original-planning-notes.md) | Retire original planning notes | Accepted |

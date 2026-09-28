@@ -72,7 +72,7 @@ Follow the Swift API Design Guidelines. In addition:
 | Booleans | read as an assertion | `isRunning`, `hasCapability`, `shouldRetry` |
 | Constants | `static let` in the owning type or in a caseless `enum`; no `k` prefix | `ProtocolVersion.supportedMajors` |
 | Quantities | typed where Swift has a type: `Duration` for durations, `ContinuousClock.Instant` for times. Plain integers for sizes end in `Bytes` | `timeout: Duration`, `maximumFrameBytes` |
-| Async functions | no `Async` suffix | `func start async throws` |
+| Async functions | no `Async` suffix | `func start() async throws` |
 | Test fakes | `Fake<Protocol>` in `<Module>TestSupport` (§11) | `FakeStoreAgentChannel` |
 | Identifiers and names outside Swift | the `io.apkrun` scheme of [../01-architecture/modules.md](../01-architecture/modules.md) §5 | `io.apkrun.fixture.hellotext` |
 
@@ -138,12 +138,12 @@ A new component with shared mutable state gets one owner: an actor, a serial que
 
 ### 4.2 Rules
 
-1. **No blocking on actor executors or the main actor.** No semaphores, no `DispatchQueue.sync` onto another queue, no `Thread.sleep`, no `Process.waitUntilExit`, no synchronous network I/O, and no file I/O of unbounded size. Blocking work runs on a dedicated queue or thread and is bridged with a checked continuation.
+1. **No blocking on actor executors or the main actor.** No semaphores, no `DispatchQueue.sync` onto another queue, no `Thread.sleep`, no `Process.waitUntilExit()`, no synchronous network I/O, and no file I/O of unbounded size. Blocking work runs on a dedicated queue or thread and is bridged with a checked continuation.
 2. **Continuations** are `withCheckedContinuation` or `withCheckedThrowingContinuation`, and each is resumed exactly once on every path. The unsafe variants need a `// PERF:` marker with a measurement (§12).
 3. **Reentrancy.** After every `await` inside an actor, check the state again before you act on it. State changes go through the state machine's `transition(to:)`, which logs at `info` and publishes `RuntimeEvent.stateChanged` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md)).
 4. **Never infer state** from whether a reference is `nil`. Use the state enum ([../../AGENTS.md](../../AGENTS.md) §6.2).
 5. **Structured tasks.** Prefer child tasks (`async let`, task groups). An unstructured `Task { }` is stored by its owner and cancelled when the owner stops. `Task.detached` is not used, because it drops the task-local `OperationContext` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.4).
-6. **Cancellation.** Long operations call `try Task.checkCancellation` between steps, and they clean up (temporary files, sessions, leases) on every exit path.
+6. **Cancellation.** Long operations call `try Task.checkCancellation()` between steps, and they clean up (temporary files, sessions, leases) on every exit path.
 7. **Clocks.** Use `ContinuousClock` for durations, deadlines, and markers. `Date` is only for wall-clock timestamps in files and the UI. Code with timeouts or schedules takes an injected `any Clock<Duration>`, so tests can use the manual clock ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2).
 8. **Sendable data.** DTOs and messages are `Sendable` value types. A class that crosses isolation domains is either immutable and `final`, or an actor.
 9. **C callbacks** (`gb_callbacks`, §7) arrive on the render thread. The Swift trampoline only copies the values into the completion ring or hands them to the logger. It never awaits and never calls into an actor synchronously.

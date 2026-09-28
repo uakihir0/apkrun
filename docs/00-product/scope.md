@@ -38,7 +38,7 @@
 
 ## 3. Not guaranteed in v1 (initial non-goals)
 
-Merged from and. **Do not add support for any of these unless an issue explicitly asks for it.**
+The following are outside the v1 scope. **Do not add support for any of them unless an issue explicitly asks for it.**
 
 | Non-goal | Reason |
 |---|---|

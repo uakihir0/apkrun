@@ -26,7 +26,7 @@ See the options above. A guest `uinput` virtual device (RiftVM's approach) was c
 - Input depends on the Guest Agent being up. Before M5 it runs via ADB (`app_process`), so dev builds need ADB.
 - Latency: XPC + vsock + agent add a few milliseconds. The budget is NSEvent received → injected into the guest, p95 ≤ 16 ms (NFR-PERF-03).
 - Injected events carry `SOURCE_TOUCHSCREEN`/`SOURCE_MOUSE`/`SOURCE_KEYBOARD` as chosen per mapping (mouse as touch by default, hover and right-click as mouse; [../../02-design/input.md](../../02-design/input.md) §4).
-- #072 is scheduled before #024. The GuestProtocol basics (#033) are pulled forward accordingly ([../../04-plan/traceability.md](../../04-plan/traceability.md) §3).
+- The milestone plan schedules protocol task #033 and Guest Agent bootstrap #072 before input task #024 ([../../04-plan/issues/M03-input-and-basic-runtime.md](../../04-plan/issues/M03-input-and-basic-runtime.md)).
 
 ## Verification
 

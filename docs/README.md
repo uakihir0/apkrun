@@ -30,7 +30,7 @@ This directory is the specification of APKRun. Code implements what these docume
 | [state-machines.md](01-architecture/state-machines.md) | VM, runtime, session, DisplayPool, install, and update state machines |
 | [filesystem-layout.md](01-architecture/filesystem-layout.md) | Every host path APKRun reads or writes, and the guest disks |
 | [security-model.md](01-architecture/security-model.md) | Trust boundaries, signing, XPC authorization, guest capabilities |
-| [decisions/](01-architecture/decisions/README.md) | Architecture decision records ADR-0001 to ADR-0018 |
+| [decisions/](01-architecture/decisions/README.md) | Accepted architecture decision records |
 
 ### 1.3 Design (`02-design/`)
 
@@ -80,7 +80,7 @@ Exact formats. Code and tests are written against these documents.
 | [test-strategy.md](04-plan/test-strategy.md) | Test tiers T0–T3, fixture apps, CI and lab runs, gate tests |
 | [risks.md](04-plan/risks.md) | Technical and project risks, with mitigation, fallback, and the task that settles each |
 | [open-questions.md](04-plan/open-questions.md) | Undecided items, each with a working default |
-| [traceability.md](04-plan/traceability.md) | Requirements → tasks → design → verification; documented design decisions |
+| [traceability.md](04-plan/traceability.md) | Requirements → tasks → design → verification |
 
 ### 1.6 Development (`05-development/`)
 
@@ -138,7 +138,6 @@ User-facing guides, in English. Unlike the rest of `docs/`, they describe behavi
   | `R-NN` | risk | [risks.md](04-plan/risks.md) |
   | `OQ-NN` | open question | [open-questions.md](04-plan/open-questions.md) |
   | `ADR-NNNN` | architecture decision | [decisions/](01-architecture/decisions/README.md) |
-  | `D-NN` | documented design decision | [traceability.md](04-plan/traceability.md) §3 |
   | `CF-NN` | deviation from standard Cuttlefish | [android-image.md](02-design/android-image.md) §13 |
   | `SR-NN` | security review item | [security-model.md](01-architecture/security-model.md) §9 |
   | `T0`–`T3` | test tier | [test-strategy.md](04-plan/test-strategy.md) |
@@ -154,8 +153,8 @@ User-facing guides, in English. Unlike the rest of `docs/`, they describe behavi
 | Change | Also update |
 |---|---|
 | A requirement | [requirements.md](00-product/requirements.md) and [traceability.md](04-plan/traceability.md) §2 |
-| A task (added, split, moved, dependencies) | the milestone file, [issues/README.md](04-plan/issues/README.md) §3, [roadmap.md](04-plan/roadmap.md) §1.2 when the milestone changes, and [traceability.md](04-plan/traceability.md) §4 |
+| A task (added, split, moved, dependencies) | the milestone file, [issues/README.md](04-plan/issues/README.md) §3, [roadmap.md](04-plan/roadmap.md) §1.2 when the milestone changes, and [traceability.md](04-plan/traceability.md) §3 |
 | An architectural decision | a new ADR, then the affected architecture and design documents |
 | A persisted format | the reference document, its version number, and the migration described in the design |
 | A risk or question settled | [risks.md](04-plan/risks.md) or [open-questions.md](04-plan/open-questions.md), and the design documents that named the default |
-| A design clarification that affects multiple documents | [traceability.md](04-plan/traceability.md) §3; add an ADR when required by [decisions/README.md](01-architecture/decisions/README.md) |
+| A design clarification that affects multiple documents | the canonical design documents; add an ADR when required by [decisions/README.md](01-architecture/decisions/README.md) |

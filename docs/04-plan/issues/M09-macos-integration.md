@@ -8,7 +8,7 @@
 
 ## Milestone goal
 
-Android apps behave like Mac apps at the edges. Their notifications appear in Notification Center under the Mac app's name, and a click brings the app back. Images and formatted text move through the clipboard. Links open in the Mac browser. Files can be dropped into an app and saved from it to the Mac, and Android apps can open files in folders the user shared. Android follows the Mac's language, region, time zone, and clock. A menu bar item shows the runtime, the running apps, and the updates ( "Notifications", "Clipboard", "File integration"; ).
+Android apps behave like Mac apps at the edges. Their notifications appear in Notification Center under the Mac app's name, and a click brings the app back. Images and formatted text move through the clipboard. Links open in the Mac browser. Files can be dropped into an app and saved from it to the Mac, and Android apps can open files in folders the user shared. Android follows the Mac's language, region, time zone, and clock. A menu bar item shows the runtime, the running apps, and pending updates.
 
 Every integration goes Guest Agent → `IntegrationPolicy` → host, and each one can be turned off per app and globally (NFR-SEC-03, [../../01-architecture/security-model.md](../../01-architecture/security-model.md) §6). Content never appears in logs (NFR-SEC-05). Notifications, links, and files need the custom image ([desktop-integration.md](../../02-design/desktop-integration.md) §2.4).
 
@@ -19,7 +19,7 @@ Every integration goes Guest Agent → `IntegrationPolicy` → host, and each on
 - [ ] The T0 and T1 suites pass on `main`. The T2 verifications of [desktop-integration.md](../../02-design/desktop-integration.md) §5.5, §6.5, §7.3, and §9 pass with the fixtures on a custom image that contains this milestone's Guest Agent.
 - [ ] R-19 (the #054 part) and R-22 are not `open` in [../risks.md](../risks.md). #080 follows the R-21 result recorded by #053.
 - [ ] The *verify* items of [guest-components.md](../../02-design/guest-components.md) §5 for this milestone are recorded in that table: the notification click on the requested display (#054) and `SET_TIME_ZONE` as shell (#085). The `Browser2` check (#081) and the shared-folder throughput (#082) are recorded in [desktop-integration.md](../../02-design/desktop-integration.md) §7.1 and §6.5.
-- [ ] [../traceability.md](../traceability.md) still records the Firebase Cloud Messaging limit next to FR-INT-03 (D-21), and the app settings text of [desktop-integration.md](../../02-design/desktop-integration.md) §5.3 ("Runtime state") ships.
+- [ ] The FR-INT-03 row in [../traceability.md](../traceability.md) records the Firebase Cloud Messaging limit, and the app settings text of [desktop-integration.md](../../02-design/desktop-integration.md) §5.3 ("Runtime state") ships.
 - [ ] The perf harness numbers are recorded for the milestone, including the notification latency and the provider throughput. No integration adds work to the launch path (NFR-PERF-01), and any regression is explained ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §9.4).
 - [ ] [desktop-integration.md](../../02-design/desktop-integration.md) and [host-ui.md](../../02-design/host-ui.md) describe what was built. The v0.5 items "Notifications", "Clipboard", and "File integration" are marked delivered in [../roadmap.md](../roadmap.md) §3.5. v0.5 is checked and tagged after M11.
 
@@ -62,7 +62,7 @@ An Android notification from a managed app appears as a macOS notification of th
 Out of scope:
 
 - Replies from the Mac (remote input), images in notifications, time-sensitive and critical alerts, and media controls (post-v1, [desktop-integration.md](../../02-design/desktop-integration.md) §16).
-- Google push services. Apps that rely only on Firebase Cloud Messaging get no push while they are not running (D-21, R-09).
+- Google Play services are not included. Apps that rely only on Firebase Cloud Messaging do not receive pushes while they are not running (R-09).
 - The development-mode (stock image) agent. The listener stays disabled there ([guest-components.md](../../02-design/guest-components.md) §4.1).
 - The wrapper refresh itself (#076). This task only checks that authorization survives it.
 
@@ -299,7 +299,7 @@ The user can drop files on an app's window, and the app receives them as a share
 Out of scope:
 
 - A directory share (virtio-fs). It is not used ([desktop-integration.md](../../02-design/desktop-integration.md) §6.1).
-- Drops of folders or promised files, drops at a position (`DragEvent`), and a folder chooser for many saved items (post-v1). A drop arrives as a share (D-20).
+- Drops of folders or promised files, drops at a position (`DragEvent`), and a folder chooser for many saved items are post-v1. A drop arrives as a share.
 - Fuzzing the host operations (#091). This task provides the malicious-agent test build that #091 extends.
 
 ### Deliverables

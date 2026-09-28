@@ -24,7 +24,7 @@ A **portable wrapper** additionally embeds a bootstrap APK set for first import 
 ## Consequences
 
 - Wrapper identity is stable across app updates (Dock position, notification permissions).
-- User settings live in the package store, not in wrapper.json (a deviation from; wrapper.json holds defaults only).
+- User settings live in the package store, not in `wrapper.json`; the file holds initial defaults only.
 - Wrappers depend on APKRun being installed. The launcher explains this when it isn't.
 
 ## Verification

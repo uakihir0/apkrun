@@ -12,13 +12,13 @@ APKRun runs Android ARM64 apps on Apple silicon Macs as ordinary, automatically 
 
 ```text
 Android APK
-  ↓
+    ↓
 APKRun (package store, updates, wrapper generator)
-  ↓
+    ↓
 Thin Mac app wrapper (/Applications/App.app)
-  ↓
+    ↓
 apkrund (per-user LaunchAgent, owns the VM)
-  ↓
+    ↓
 Android ARM64 guest (AOSP Cuttlefish based) on Virtualization.framework
 ```
 
@@ -84,8 +84,8 @@ The order is fixed:
 
 ```text
 Linux VM → Android boot → ADB → APK install → virtio-gpu → Android rendering → input
-  → single native window → multi-display → apkrund → Guest Agent → custom Android image
-  → store → automatic updates → Mac wrapper → desktop integration → Vulkan → optional Google integration
+→ single native window → multi-display → apkrund → Guest Agent → custom Android image
+→ store → automatic updates → Mac wrapper → desktop integration → Vulkan → optional Google integration
 ```
 
 Do not skip ahead because a later task looks easier or more interesting. The gates G1–G9 and their pass conditions are in [docs/04-plan/roadmap.md](docs/04-plan/roadmap.md) §2.

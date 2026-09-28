@@ -67,7 +67,7 @@ The update mode applies only to `apkrun` packages. It is stored in `settings.jso
 
 ### 2.3 What the UI shows
 
-  and FR-UPD-09 describe three choices per app. They map onto authority and mode:
+FR-UPD-08 and FR-UPD-09 describe three choices per app. They map onto authority and mode:
 
 | UI choice ("Updates") | Authority | `update.mode` | Provider |
 |---|---|---|---|
@@ -138,7 +138,7 @@ A staged update waits until the runtime is running for some other reason (§7.1)
 
 ### 4.1 Protocol
 
-'s protocol, with the context each provider needs:
+Each provider implements the shared protocol and receives the context it needs:
 
 ```swift
 public protocol UpdateProvider: Sendable {

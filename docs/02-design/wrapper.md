@@ -134,7 +134,7 @@ The field-by-field reference with the JSON schema is [../03-reference/wrapper-js
 Rules:
 
 - **Nothing version-specific.** No versionCode, versionName, APK path, or digest (FR-WRP-03). The only exception is `bootstrap/bootstrap.json` in portable wrappers, which describes the embedded copy, not the installed app (§10).
-- **Initial values only.** `window`, `updates`, and `integration` are copied into the package settings when the package gets its first record on this Mac (a bootstrap import, or an approval of a wrapper whose package already exists without settings). After that, the package settings in the store win ([package-store.md](package-store.md) §2.4, ADR-0009). The `integration` values of a wrapper made on another Mac are capped by this Mac's `integrations.defaults.*`, so such a wrapper cannot turn on the microphone or shared folders by itself ([../03-reference/configuration.md](../03-reference/configuration.md) §3.3). Changing a setting never rewrites `wrapper.json`. This behavior is recorded in [../04-plan/traceability.md](../04-plan/traceability.md).
+- **Initial values only.** `window`, `updates`, and `integration` are copied into the package settings when the package gets its first record on this Mac (a bootstrap import, or an approval of a wrapper whose package already exists without settings). After that, the package settings in the store win ([package-store.md](package-store.md) §2.4, ADR-0009). The `integration` values of a wrapper made on another Mac are capped by this Mac's `integrations.defaults.*`, so such a wrapper cannot turn on the microphone or shared folders by itself ([../03-reference/configuration.md](../03-reference/configuration.md) §3.3). Changing a setting never rewrites `wrapper.json`.
 - `integration` uses the keys of [desktop-integration.md](desktop-integration.md) §2.1 without the `integrations.` prefix (`clipboard`, `notifications`, `links`, `files`, `sharedFolders`, `microphone`). Keys that are absent get the defaults of Settings → Privacy. Unknown keys are ignored.
 - `window.mode`: `standard` maps to `secondaryDisplay`, and `compatibility` maps to `primaryDisplayCompatibility` ([display-and-windowing.md](display-and-windowing.md) §8).
 - `runtime.minimumVersion` is the lowest APKRun version the launcher works with (a build constant, `LauncherBuild.minimumRuntimeVersion`), not the version that generated the wrapper. It matters for portable and distribution wrappers opened on a Mac with an older APKRun (FR-WRP-09).
@@ -202,7 +202,7 @@ The bundle file name is `<name>.app`, where `<name>` comes from the display name
 
 The wrapper copy is a byte copy of the generic launcher's executable (`APKRunLauncher.app/Contents/MacOS/APKRunLauncher`) that gets a new signature. The executable is **the template**. There is no separate template file. FR-WRP-06 ("every wrapper uses the same `APKRunLauncher` executable") holds: the code is identical, and only the code signature differs.
 
-- arm64 only. APKRun supports Apple silicon only ([../00-product/scope.md](../00-product/scope.md)), so #044's "universal launcher" is a deviation recorded in [../04-plan/traceability.md](../04-plan/traceability.md).
+- arm64 only. APKRun supports Apple silicon only ([../00-product/scope.md](../00-product/scope.md)). The generic launcher and every wrapper use the same arm64 executable.
 - Hardened Runtime. Swift packages are statically linked. The launcher links only system frameworks (AppKit, QuartzCore, IOSurface, Security, UserNotifications), so library validation never matters for it. A CI check (`scripts/check-launcher.sh`, #068) fails the build if `otool -L` lists anything outside `/System/Library` and `/usr/lib`, if `lipo -archs` is not `arm64`, or if the minimum OS is not 27.0.
 - The generic launcher has `LSMultipleInstancesProhibited = false`. apkrund opens one instance per package (`createsNewApplicationInstance = true`). It sets the Dock icon from `packageIcon` at run time and uses the package display name as the window title.
 
@@ -869,7 +869,7 @@ apkrun wrapper verify <path> [--deep] [--json]
 apkrun wrapper approve <path> [--yes]
 ```
 
-- legacy aliases are accepted as aliases: `--update auto` and `--updates auto` = `--updates automatic`, and `--update-provider direct --update-url <url>` = `--provider direct:<url>` ([update-system.md](update-system.md) §11.3). `--updates` and `--provider` apply only when this command installs the package, or as the initial values in `wrapper.json`. For an installed package they are rejected with a hint to use `apkrun update policy`.
+- Alternate flag spellings are accepted: `--update auto` and `--updates auto` = `--updates automatic`, and `--update-provider direct --update-url <url>` = `--provider direct:<url>` ([update-system.md](update-system.md) §11.3). `--updates` and `--provider` apply only when this command installs the package, or as the initial values in `wrapper.json`. For an installed package they are rejected with a hint to use `apkrun update policy`.
 - `--window-size` and `--resizable` set `wrapper.json` defaults and, when this command installs the package, the initial package settings.
 - `--output` defaults to `~/Applications`. A directory that apkrund may not access is handled by the CLI as in §6.3.
 - `--open` opens the wrapper after it is created.
@@ -1028,7 +1028,7 @@ Specified in [update-system.md](update-system.md) §15 #049. The wrapper side pr
 
 ### #075 `apkrun wrap` CLI (M7)
 
-1. The commands of §12.2 with the import/install table, the legacy aliases, `--json`, and the CLI's client-side placement (§6.3). This task owns `apkrun wrap`, `apkrun install --wrap`, and `apkrun wrapper verify` and `info`. `wrapper approve` is #044's, and `wrapper list`, `refresh`, and `remove` are #076's.
+1. The commands of §12.2 with the import/install table, alternate flag spellings, `--json`, and the CLI's client-side placement (§6.3). This task owns `apkrun wrap`, `apkrun install --wrap`, and `apkrun wrapper verify` and `info`. `wrapper approve` is #044's, and `wrapper list`, `refresh`, and `remove` are #076's.
 2. Acceptance: `apkrun wrap app.apk` asks and then installs and wraps; `--install --output ~/Applications` does it without asking; `--updates auto --update-provider direct --update-url <url>` results in a package with authority `apkrun`, mode `automatic`, and a Direct provider. A second `apkrun wrap` for the same package fails with `wrapperExists`, and `--replace` refreshes it.
 
 ### #076 Wrapper lifecycle (M7)

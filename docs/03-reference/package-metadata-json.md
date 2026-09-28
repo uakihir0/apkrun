@@ -194,7 +194,7 @@ An adopted package ([../02-design/package-store.md](../02-design/package-store.m
 
 ### 2.2 Top-level fields
 
-The field names are those of [../02-design/package-store.md](../02-design/package-store.md) §2.3, which keeps 's names.
+The field names match the package record defined in [../02-design/package-store.md](../02-design/package-store.md) §2.3.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
@@ -377,7 +377,7 @@ CLI spec `local:<path>`. The CLI makes the path absolute and creates the bookmar
 |---|---|---|---|---|
 | `url` | string | yes | absolute `https` URL, at most 2048 characters, no user info. Debug builds also accept `http://127.0.0.1[:port]` and `http://localhost[:port]` | the manifest URL |
 
-CLI spec `direct:<https-url>`, and the legacy alias `--update-provider direct --update-url <url>`.
+CLI spec `direct:<https-url>`, and the alternate flags `--update-provider direct --update-url <url>`.
 
 **F-Droid** (`type: fdroid`, #051, [../02-design/update-system.md](../02-design/update-system.md) §4.5):
 

@@ -15,16 +15,16 @@ This is the one test strategy for APKRun. The design documents list what each mo
 |---|---|---|
 | P1 | Every module with logic has unit tests (T0). Pure logic is tested at T0, never only at T2. | |
 | P2 | Integration tests use a real Android guest. A behavior that crosses the host/guest boundary is verified at T2 against a real image. Tests with fakes alone never close such a task. | |
-| P3 | Hardware acceptance runs on a real Apple Silicon Mac. T2 and T3 run on bare-metal Apple Silicon Macs with macOS 27, never in a VM and never on Intel. |, [../00-product/scope.md](../00-product/scope.md) §1 |
+| P3 | Hardware acceptance runs on a real Apple Silicon Mac. T2 and T3 run on bare-metal Apple Silicon Macs with macOS 27, never in a VM and never on Intel. | [../00-product/scope.md](../00-product/scope.md) §1 |
 | P4 | Graphics is not complete on mocks. A graphics task is done only when its T2 test with a real guest and Metal passes. T1 replay tests do not replace it. | |
-| P5 | Fixtures first. T2 and T3 behavior checks use the controlled fixture apps (§4). A failing third-party APK is investigated only after the fixture that covers the same feature passes. |, NFR-CMP-01 |
+| P5 | Fixtures first. T2 and T3 behavior checks use the controlled fixture apps (§4). A failing third-party APK is investigated only after the fixture that covers the same feature passes. | NFR-CMP-01 |
 | P6 | Measure before optimizing. Performance work starts from a harness result (§7.1) and ends with a new one. | |
-| P7 | Done means tested. A task is done when the tests of every tier in its Tests section pass, with logging, error handling, documentation, and the manual checks it lists. |, [issues/README.md](issues/README.md) §4 |
-| P8 | A skipped or quarantined test, or a test-only workaround, carries a TODO, a reason, and a tracking issue. |, NFR-DEV-04 |
+| P7 | Done means tested. A task is done when the tests of every tier in its Tests section pass, with logging, error handling, documentation, and the manual checks it lists. | [issues/README.md](issues/README.md) §4 |
+| P8 | A skipped or quarantined test, or a test-only workaround, carries a TODO, a reason, and a tracking issue. | NFR-DEV-04 |
 | P9 | Only gate checks validate. Nobody declares the core architecture validated before G3 passes, or the product concept validated before G9 passes. | |
 | P10 | Lowest tier. A test lives in the lowest tier that can fail for the reason under test (§2.6). | this plan |
 | P11 | No sleeps for synchronization. Tests wait for markers (`APKRUN-TEST:` lines, boot and perf markers, `APKRUN-FIXTURE` events) with a timeout. | this plan |
-| P12 | Experiments are not tests. CI does not run `Experiments/`, and no test imports it. |, NFR-DEV-05 |
+| P12 | Experiments are not tests. CI does not run `Experiments/`, and no test imports it. | NFR-DEV-05 |
 | P13 | Security rules are tested negatively. Every policy has a test that tries the forbidden action and expects a refusal (§7.2). | |
 | P14 | Tests use the product paths. They drive `RuntimeService`, RuntimeCore, or the CLI, not raw `adb shell` or `pm` commands, except for the allowlist in §3.3. | [../02-design/package-store.md](../02-design/package-store.md) §15 #027 |
 | P15 | Test hooks exist only in Debug builds (and in `ReleaseUpdateTest` where listed). A release check proves they are absent (§3.3). | [../02-design/diagnostics.md](../02-design/diagnostics.md) §12 |

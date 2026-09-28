@@ -55,10 +55,15 @@ This page is the complete command set. Subsystem documents show the commands the
 | stderr | progress, warnings, errors, and prompts |
 
 - Human output adapts to the terminal width and uses color only when stdout is a TTY and `NO_COLOR` is not set (`--no-color` forces it off).
-- `--json` prints one JSON document on stdout and nothing else there:
+- `--json` prints exactly one JSON document on stdout and nothing else there. A successful command returns the operation's result DTO in this envelope; the placeholder fields are omitted:
 
   ```json
-  { "schemaVersion": 1, "result": { … } }
+  { "schemaVersion": 1, "result": { "…": "…" } }
+  ```
+
+  An error returns the same envelope with an `error` object:
+
+  ```json
   { "schemaVersion": 1, "error": { "code": "store.downgradeRefused", "message": "…", "remediation": "…", "operationID": "…" } }
   ```
 
@@ -154,10 +159,10 @@ Operations that return an `OperationHandle` ([runtime-daemon.md](runtime-daemon.
 
 | Command | Task | Behavior |
 |---|---|---|
-| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The documented legacy aliases (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options (D-07 in [../04-plan/traceability.md](../04-plan/traceability.md) §3.1, [update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. Already installed with the same version: exits 0 with "already installed" |
+| `apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic\|notify\|manual] [--wrap [--output <dir>]]` | #027 **E**, #073, #037 (`--provider`, `--updates`), #075 (`--wrap`) | imports the files as one package ([package-store.md](package-store.md) §4), prints the preview (name, package, version, signer digest, size, warnings, relation), asks, and installs. `--provider` sets authority `apkrun` with the mode `automatic`, or `notifyOnly` with `--updates notify`. `--updates manual` sets authority `manual` (`InstallOptions.authority`) and keeps a given provider unused. Without either flag, the defaults of [update-system.md](update-system.md) §2.4 apply. The alternate flag spellings (`--update auto\|notify\|manual`, `--update-provider direct --update-url <url>`) map to the current options ([update-system.md](update-system.md) §11.3). `--wrap` also creates the Mac app (as `apkrun wrap`). Refused relations (downgrade, other signer) exit 5 with the store's message. Already installed with the same version: exits 0 with "already installed" |
 | `apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]` | #027 **E**, #076 | [package-store.md](package-store.md) §8. The Mac app goes to the Trash unless `--keep-wrapper`. `--forget` removes the record without Android (when Android cannot start) |
 | `apkrun list [--all] [--json]` | #027 **E** | managed packages: name, package, version, update choice, status, Mac app. `--all` adds unmanaged packages (`managed = false`) |
-| `apkrun info <package> [--json]` | #027 **E** |: name, package, version (`versionName (versionCode)`), update authority, update source, Mac app path and status, runtime status, installed/updated dates, signer digest, settings summary, and `compatibility` when the compatibility database has an entry for the installed version (#090, [diagnostics.md](diagnostics.md) §10.3) |
+| `apkrun info <package> [--json]` | #027 **E** | name, package, version (`versionName (versionCode)`), update authority, update source, Mac app path and status, runtime status, installed/updated dates, signer digest, settings summary, and `compatibility` when the compatibility database has an entry for the installed version (#090, [diagnostics.md](diagnostics.md) §10.3) |
 | `apkrun inspect <file>… [--json]` | #073, #090 | `inspectFile`: the host preview only ([package-store.md](package-store.md) §4.3, §11.1), with `compatibility` when the database has an entry (#090). Needs apkrund but never starts Android, and nothing is installed |
 | `apkrun launch <package> [--json]` | #032 | `launch(packageID)` ([runtime-daemon.md](runtime-daemon.md) §7.2). Opens the Mac app (or the generic launcher) and returns when the session is `running`, printing the first-frame time |
 | `apkrun stop <package>` | #032 | `terminate(packageID)`: closes the window and force-stops the app |
@@ -185,7 +190,7 @@ The syntax is in [update-system.md](update-system.md) §11.3. CLI-owned details:
 
 ### 4.4 Mac apps (wrappers)
 
-The syntax, the import/install table, and the legacy aliases are in [wrapper.md](wrapper.md) §12.2 (`apkrun wrap`, `apkrun wrapper list|info|refresh|remove|verify|approve`). CLI-owned details:
+The syntax, the import/install table, and the alternate flag spellings are in [wrapper.md](wrapper.md) §12.2 (`apkrun wrap`, `apkrun wrapper list|info|refresh|remove|verify|approve`). CLI-owned details:
 
 - `apkrun wrap` prints the bundle path on success. With `--json`, the `WrapperInfo` DTO.
 - The CLI resolves `--output` and checks that it exists and is a directory. When apkrund reports `destinationNotAccessible`, the CLI places the staged wrapper itself ([wrapper.md](wrapper.md) §6.3), because the CLI runs with the user's own file access.

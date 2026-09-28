@@ -253,9 +253,9 @@ stop(reason, force)
 0. refuse with RuntimeFailure.busy(activities) if assertions other than.backgroundTask are held
 and force == false (the GUI asks "Android is installing ‹App›. Stop anyway?")
 1. state: → stopping(reason); new ensureReady callers wait (§3.1)
-2. SessionRegistry.endAll(.runtimeStopped): wrappers receive stateChanged(.ended) and close
-(reasons.hostUpdate and.migration end them with.runtimeUpdating instead: the wrapper shows screen U
-and reopens, runtime-maintenance.md §3.5, §4.7)
+2. `SessionRegistry.endAll(.runtimeStopped)`: wrappers receive `stateChanged(.ended)` and close.
+   For a host update or image migration, the reason is `.runtimeUpdating` instead; the wrapper
+   shows screen U and reopens ([runtime-maintenance.md](runtime-maintenance.md) §3.5, §4.7).
 3. suspended? → VMController.resume first (Android can only shut down while running)
 4. Guest Agent Shutdown (20 s, guest-protocol.md §7.1) → Android runs its shutdown sequence
 5. wait for guestDidStop (20 s total from step 4)

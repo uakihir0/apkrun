@@ -16,7 +16,7 @@ These design decisions hold for every task below:
 
 - AOSP is never built on macOS. Every image build runs on the Linux x86-64 builder in the pinned container ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §5, [../../05-development/build-system.md](../../05-development/build-system.md) §9). Developers drive it from the Mac with `scripts/aosp/remote-build.sh`. The built `*-img-*.zip` goes through the same pipeline as the stock image, starting with inventory ([../../02-design/android-image.md](../../02-design/android-image.md) §3–§10).
 - The product inherits Cuttlefish's `vsoc_arm64_only` phone product and changes only what §11.2 of [../../02-design/android-image.md](../../02-design/android-image.md) lists. It does not change the kernel, the partition layout, or fstab, so the stock image stays a valid development target (R-14). "Do not aggressively remove services" (#035): a HAL or service is disabled only with evidence from #095.
-- The agents are Kotlin apps plus the Rust bridge `apkrun_vsockd`, not a native `guestd` (D-15, see [../traceability.md](../traceability.md) §3.2). Their identities are `io.apkrun.guest` and `io.apkrun.store` (D-01).
+- The agents are Kotlin apps plus the Rust bridge `apkrun_vsockd`, not a native `guestd` ([guest-components.md](../../02-design/guest-components.md) §10). Their identities are `io.apkrun.guest` and `io.apkrun.store` ([modules.md](../../01-architecture/modules.md) §5).
 - The agents are identified by package name plus the platform signature (`seinfo=platform`). Only `apkrun_vsockd` (and adbd in developer mode) may use vsock, only `apkrun_vsockd` may connect to the agents' sockets, and the agents check `SO_PEERCRED` too ([../../01-architecture/security-model.md](../../01-architecture/security-model.md) §4). ADB is off unless the user turns developer mode on.
 - SELinux rules are developed in permissive mode for the new domains only, and only in `userdebug` development builds. No `user` build contains a `permissive` statement, and CI checks that (R-13).
 
@@ -262,7 +262,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.6):
 
 - [ ] The host installs HelloText through the Store Agent without `adb install`: with ADB disabled in the image, `apkrun install HelloText.apk --yes` succeeds, and the `adb` process counter stays at zero (#036, FR-PKG-01).
 - [ ] Install, update, uninstall, and metadata work through the Store Agent over vsock, and the metadata comes from Android's `PackageManager` (#036, FR-PKG-02).
-- [ ] `apkrun info io.apkrun.fixture.hellotext` and `GetPackageMetadata` report `io.apkrun.store` as the installer of record (#036, D-01).
+- [ ] `apkrun info io.apkrun.fixture.hellotext` and `GetPackageMetadata` report `io.apkrun.store` as the installer of record (#036).
 - [ ] A hash mismatch and a signer mismatch are refused by the Store Agent, and nothing is installed ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §11.3).
 - [ ] After a Store Agent handshake and after `PackageChanged`, the package store matches Android's package list (reconciliation v1, [../../02-design/package-store.md](../../02-design/package-store.md) §9).
 

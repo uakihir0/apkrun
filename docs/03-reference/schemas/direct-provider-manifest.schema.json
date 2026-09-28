@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:apkrun:schema:direct-provider-manifest:1",
+  "title": "APKRun Direct provider manifest, schema version 1",
+  "description": "Structure of the manifest that a distributor publishes over HTTPS for the APKRun DirectProvider. This schema is normative for structure. docs/03-reference/direct-provider-manifest.md is normative for semantics (URL resolution, size sums, uniqueness, error mapping). Unknown properties are allowed and ignored by readers.",
+  "type": "object",
+  "required": ["schemaVersion", "packageId", "versionCode", "artifacts"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Format version of this manifest. Only 1 is defined.",
+      "const": 1
+    },
+    "packageId": {
+      "description": "Android package name. Must equal the installed package (checked by the reader).",
+      "$ref": "#/$defs/packageId"
+    },
+    "versionCode": {
+      "description": "Android longVersionCode of the release (versionCodeMajor in the high 32 bits).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "versionName": {
+      "description": "Android versionName, for display only.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "artifacts": {
+      "description": "The files of the release: one base APK with optional splits, or one .apks container alone.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/artifact" },
+      "oneOf": [
+        {
+          "description": "Exactly one base APK, any number of splits, no container.",
+          "contains": { "$ref": "#/$defs/typeIsApk" },
+          "minContains": 1,
+          "maxContains": 1,
+          "not": { "contains": { "$ref": "#/$defs/typeIsApks" } }
+        },
+        {
+          "description": "Exactly one .apks container and nothing else.",
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/typeIsApks" }
+        }
+      ]
+    },
+    "signingCertificates": {
+      "description": "SHA-256 digests of the DER signing certificates of the release's signer set. Compared with the downloaded APK after the download (V5).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/certificateDigest" }
+    },
+    "minSdk": {
+      "description": "Declared minSdkVersion of the release. A pre-filter only; the APK decides (I8).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "releaseNotes": {
+      "description": "Plain text release notes. Never rendered as HTML. At most 16 KiB of UTF-8 (the reader also checks the byte length).",
+      "type": "string",
+      "maxLength": 16384
+    },
+    "publishedAt": {
+      "description": "Release time, RFC 3339 with a time zone.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
+    },
+    "sha256Hex": {
+      "description": "SHA-256 of a file as 64 hex digits. Readers normalize to lower case.",
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{64}$"
+    },
+    "certificateDigest": {
+      "description": "SHA-256 of a DER certificate in the APKRun digest form.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "splitName": {
+      "description": "Android split name, for example config.arm64_v8a or feature_camera.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*$"
+    },
+    "typeIsApk": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "apk" } }
+    },
+    "typeIsApks": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "apks" } }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["type", "url", "sha256"],
+      "properties": {
+        "type": {
+          "description": "apk = the base APK, split = one split APK, apks = a bundletool .apks container.",
+          "enum": ["apk", "split", "apks"]
+        },
+        "url": {
+          "description": "Absolute https URL, or a reference relative to the manifest URL. Must be https after resolution.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "format": "uri-reference"
+        },
+        "sha256": { "$ref": "#/$defs/sha256Hex" },
+        "size": {
+          "description": "Size in bytes. Optional. When present, a download that grows beyond it is stopped.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "splitName": { "$ref": "#/$defs/splitName" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "split" } } },
+          "then": { "required": ["splitName"] },
+          "else": { "not": { "required": ["splitName"] } }
+        },
+        {
+          "if": { "required": ["type"], "properties": { "type": { "enum": ["apk", "split"] } } },
+          "then": { "properties": { "size": { "maximum": 2147483648 } } }
+        }
+      ]
+    }
+  }
+}

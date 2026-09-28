@@ -1,0 +1,402 @@
+# Coding Conventions
+
+| Field | Value |
+|---|---|
+| Status | Baseline |
+| Related | [build-system.md](build-system.md), [workflow.md](workflow.md), [legal-and-licensing.md](legal-and-licensing.md), [../01-architecture/modules.md](../01-architecture/modules.md), [../02-design/diagnostics.md](../02-design/diagnostics.md), [../03-reference/error-catalog.md](../03-reference/error-catalog.md), [../04-plan/test-strategy.md](../04-plan/test-strategy.md) |
+| Tasks | #020, #033, #061, #062, #091, and every task that writes code |
+
+This guide holds the rules for writing code in APKRun: Swift, the C/Objective-C bridge, Kotlin, Rust, Python, and shell. Most rules have a CI check ([build-system.md](build-system.md) §3). The rest are checked in review ([workflow.md](workflow.md) §6).
+
+---
+
+## 1. Scope and precedence
+
+- The rules apply to all code in the repository: `Packages/`, `Apps/`, `Daemon/`, `CLI/`, `Guest/`, `Images/tools/`, `scripts/`, and `Tests/`.
+- Upstream code under `ThirdParty/` keeps its upstream style. Our changes to it are patches ([build-system.md](build-system.md) §6.2).
+- `Experiments/` needs only §13 (security) and the no-secrets rule. Production targets never import it ([workflow.md](workflow.md) §12).
+- When rules conflict, this order wins: [../../AGENTS.md](../../AGENTS.md), then the design documents, then this guide, then tool defaults. If this guide contradicts a design document, fix this guide in the same pull request.
+- A rule that turns out to be wrong is changed here first, with the check that enforces it, and only then in code.
+
+---
+
+## 2. Formatting and linters
+
+| Language | Formatter | Linter | Configuration | Check (in `scripts/check-format.sh` or the named job) |
+|---|---|---|---|---|
+| Swift | `swift format` from the pinned Xcode toolchain | `swift format lint --strict` | `.swift-format` (production code), `.swift-format-tests` (test targets), both at the root | `lint` job |
+| C and Objective-C (GraphicsBridge only) | none | compiler warnings, as errors in CI | `Package.swift` C settings, `GCC_TREAT_WARNINGS_AS_ERRORS` ([build-system.md](build-system.md) §2.5) | `build` job |
+| Kotlin | ktfmt, `--kotlinlang-style`, through the ktfmt Gradle plugin | the Kotlin compiler with `allWarningsAsErrors = true` in CI | `Guest/build.gradle.kts`; plugin version in `Guest/gradle/libs.versions.toml` | `./gradlew -p Guest ktfmtCheck` in the `lint` job |
+| Rust | `cargo fmt` (rustfmt from the pinned toolchain) | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` (defaults, edition 2021) | `cargo fmt --check` in `lint`; clippy in `test-linux` |
+| Python | `ruff format` | `ruff check` | `ruff.toml` at the root: `target-version = "py312"`, line length 100, rule sets `E`, `F`, `W`, `I`, `B`, `UP`, `ANN` | `ruff format --check` in `lint`; `ruff check` in `test-linux` |
+| Protobuf | none | `buf lint` (DEFAULT, `ENUM_ZERO_VALUE_SUFFIX = _UNSPECIFIED`), `buf breaking` | `Packages/GuestProtocol/proto/buf.yaml` | `lint` job (§6.1) |
+| JSON files with a schema | none | JSON Schema validation | the `*.schema.json` next to each file | `test-linux` job |
+
+Swift formatting settings:
+
+| Setting | Value |
+|---|---|
+| Indentation | 4 spaces |
+| Line length | 120 |
+| Rules on in `.swift-format` | the default rules plus `NeverForceUnwrap`, `NeverUseForceTry`, `NeverUseImplicitlyUnwrappedOptionals`, `AllPublicDeclarationsHaveDocumentation`, `OrderedImports`, `FileScopedDeclarationPrivacy` |
+| `.swift-format-tests` | the same file with the first four rules off |
+
+- `check-format.sh` runs `swift format lint --strict --configuration.swift-format` over production code and the same with `.swift-format-tests` over `Packages/*/Tests/`, `Apps/*/Tests/`, `Apps/*/UITests/`, `CLI/apkrun/Tests/`, and `Tests/`.
+- Warnings are errors in CI for every language. Locally they stay warnings, so work in progress still builds.
+- Format before you commit. `scripts/check-format.sh --fix` runs every formatter in place.
+- Generated code (`Generated/`, `ErrorCatalog.generated.swift`) is excluded from formatting and linting.
+
+---
+
+## 3. Swift: layout, naming, access control, dependencies
+
+### 3.1 Files and layout
+
+- Module sources live in `Packages/<Module>/Sources/<Module>/`. Group files in subdirectories named for what they contain (`Scanout/`, `Transactions/`).
+- No dumping grounds, as directories or as files: no `Common/`, `Utils/`, `Helpers/`, `Misc/`, `Utils.swift`, `Helpers.swift`, or `Extensions.swift`. A shared abstraction needs a named owner module ([../01-architecture/modules.md](../01-architecture/modules.md)).
+- One main type per file, and the file carries its name (`VMController.swift`). A protocol conformance that needs more than a few lines goes into `<Type>+<Protocol>.swift`.
+- Inside a type, the order is: stored properties, initializers, the public API, then internal and private members. Use `// MARK: -` to separate groups.
+- Generated files start with `// Code generated by <tool>. DO NOT EDIT.` and are never changed by hand ([build-system.md](build-system.md) §4).
+
+### 3.2 Naming
+
+Follow the Swift API Design Guidelines. In addition:
+
+| Thing | Rule | Examples |
+|---|---|---|
+| Names from the design documents | use them as written; do not rename them in code | `DisplayPool`, `SessionRegistry`, `InputRouter`, `AndroidImageManifest`, `SelfUpdateController` |
+| Error types | `<Area>Failure`, one per error domain ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.1) | `GraphicsFailure`, `StoreFailure` |
+| State types | `<Thing>State`, an explicit enum ([../01-architecture/state-machines.md](../01-architecture/state-machines.md)) | `VMState`, `RuntimeState` |
+| Protocols | a role or a capability; no `Protocol` or `I` prefix or suffix. Implementations say how they work | `StoreAgentChannel` → `ADBStoreAgentChannel` |
+| Acronyms | all capitals, or all lowercase at the start of a name | `packageID`, `vmState`, `apkURL`, `XPCListener` |
+| Booleans | read as an assertion | `isRunning`, `hasCapability`, `shouldRetry` |
+| Constants | `static let` in the owning type or in a caseless `enum`; no `k` prefix | `ProtocolVersion.supportedMajors` |
+| Quantities | typed where Swift has a type: `Duration` for durations, `ContinuousClock.Instant` for times. Plain integers for sizes end in `Bytes` | `timeout: Duration`, `maximumFrameBytes` |
+| Async functions | no `Async` suffix | `func start async throws` |
+| Test fakes | `Fake<Protocol>` in `<Module>TestSupport` (§11) | `FakeStoreAgentChannel` |
+| Identifiers and names outside Swift | the `io.apkrun` scheme of [../01-architecture/modules.md](../01-architecture/modules.md) §5 | `io.apkrun.fixture.hellotext` |
+
+User-facing text never appears as a string literal in code. It comes from the String Catalogs (`Localizable.xcstrings`) or from the error catalog (§5.1), in English and Japanese.
+
+### 3.3 Access control
+
+- The default is `internal`. A declaration becomes `public` only when another module uses it, and the dependency graph allows that module to import this one.
+- `package` access is for entry points that only test-support targets and tests of other modules use (for example fuzz entry functions, [build-system.md](build-system.md) §15.2).
+- `@testable import` is allowed only in the module's own test targets.
+- Classes are `final` unless they subclass an AppKit class that requires it. `open` is not used.
+- `private` is preferred over `fileprivate`.
+- Every `public` declaration has a `///` comment. For a type with shared state, the comment says who owns that state (§4).
+- Types that cross XPC live only in RuntimeAPI, as `Codable` DTOs (§6.2).
+
+### 3.4 Dependencies and imports
+
+- A module imports only what [../01-architecture/modules.md](../01-architecture/modules.md) §3 allows. `scripts/check-module-deps.sh` rejects any other edge. A new edge needs an accepted ADR before the check is changed.
+- Client executables (APKRun.app, APKRunMenuBar, APKRunLauncher, the CLI) never import RuntimeCore. The exception is the CLI built with `APKRUN_EMBEDDED_RUNTIME` ([../../AGENTS.md](../../AGENTS.md) §6.1).
+- Third-party code is used only where the graph names it:
+  - `import SwiftProtobuf` appears only in GuestProtocol. Other modules use the generated `GP` types and the framing API of GuestProtocol.
+  - virglrenderer, libepoxy, and ANGLE are reached only through GraphicsBridge (§7).
+  - `import Sparkle` appears only in APKRun.app.
+  - swift-argument-parser is used only by the CLI.
+- RuntimeAPI imports only Foundation and IOSurface.
+- `@preconcurrency import` is allowed only for Apple frameworks that lack Sendable annotations. A comment names the framework and the types involved.
+
+### 3.5 Safety
+
+| Construct | Rule |
+|---|---|
+| `!` (force unwrap), `try!`, `as!`, implicitly unwrapped optionals | not in production code (`.swift-format`). Tests may use them |
+| `fatalError`, `precondition`, `preconditionFailure` | programming errors only. Anything caused by input, the guest, the host, or the network is a typed error ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.1). The message names the broken invariant |
+| `assert`, `assertionFailure` | debug checks that also have a release behavior. Example: an invalid state transition is an `assertionFailure` in Debug and a `…Failure.invalidTransition` fault in Release ([../01-architecture/state-machines.md](../01-architecture/state-machines.md)) |
+| `try?` | only when failure is expected and harmless. A comment says why |
+| `Unsafe*Pointer`, `withUnsafeBytes` | only in GraphicsBridge adapters, virtio queue buffer code, and binary parsers, with bounds checked before access, and marked `// UNSAFE:` (§12) |
+| `unsafeBitCast`, `unowned(unsafe)`, `nonisolated(unsafe)` | not used |
+| `@unchecked Sendable` | only with a `// UNCHECKED-SENDABLE:` comment that names the lock or queue that protects the state |
+| Global mutable state | not used. Process-wide singletons exist only where a design document names them (for example `Perf`) |
+
+---
+
+## 4. Swift concurrency
+
+Every Swift target builds in the Swift 6 language mode with complete concurrency checking ([build-system.md](build-system.md) §2.1).
+
+### 4.1 Who owns what
+
+The isolation of the main components is fixed by [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §4 and [../02-design/graphics.md](../02-design/graphics.md) §4.7:
+
+| Component | Isolation |
+|---|---|
+| `VMController` | an actor with async `start`, `stop`, `pause`, and `resume`. Virtualization.framework calls run on its serial `DispatchQueue`, bridged with `withCheckedThrowingContinuation` |
+| virtio-gpu device | the serial device queue: VZ callbacks, queue draining, validation. It never calls virglrenderer, EGL, or Metal |
+| renderer | one dedicated render thread. Every virglrenderer, EGL, and ANGLE call, and every `gb_*` call except `gb_wait_sync`, runs there |
+| completion waiter | one thread that waits on EGL syncs (`gb_wait_sync`) |
+| `DisplayPool`, `SessionRegistry`, `InputRouter`, `UpdateScheduler` | actors |
+| a guest connection | one actor per connection |
+| XPC handlers | hop to the owning actor at once |
+| UI code | `@MainActor` |
+
+A new component with shared mutable state gets one owner: an actor, a serial queue, or a dedicated thread. Its `///` comment says which.
+
+### 4.2 Rules
+
+1. **No blocking on actor executors or the main actor.** No semaphores, no `DispatchQueue.sync` onto another queue, no `Thread.sleep`, no `Process.waitUntilExit`, no synchronous network I/O, and no file I/O of unbounded size. Blocking work runs on a dedicated queue or thread and is bridged with a checked continuation.
+2. **Continuations** are `withCheckedContinuation` or `withCheckedThrowingContinuation`, and each is resumed exactly once on every path. The unsafe variants need a `// PERF:` marker with a measurement (§12).
+3. **Reentrancy.** After every `await` inside an actor, check the state again before you act on it. State changes go through the state machine's `transition(to:)`, which logs at `info` and publishes `RuntimeEvent.stateChanged` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md)).
+4. **Never infer state** from whether a reference is `nil`. Use the state enum ([../../AGENTS.md](../../AGENTS.md) §6.2).
+5. **Structured tasks.** Prefer child tasks (`async let`, task groups). An unstructured `Task { }` is stored by its owner and cancelled when the owner stops. `Task.detached` is not used, because it drops the task-local `OperationContext` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.4).
+6. **Cancellation.** Long operations call `try Task.checkCancellation` between steps, and they clean up (temporary files, sessions, leases) on every exit path.
+7. **Clocks.** Use `ContinuousClock` for durations, deadlines, and markers. `Date` is only for wall-clock timestamps in files and the UI. Code with timeouts or schedules takes an injected `any Clock<Duration>`, so tests can use the manual clock ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2).
+8. **Sendable data.** DTOs and messages are `Sendable` value types. A class that crosses isolation domains is either immutable and `final`, or an actor.
+9. **C callbacks** (`gb_callbacks`, §7) arrive on the render thread. The Swift trampoline only copies the values into the completion ring or hands them to the logger. It never awaits and never calls into an actor synchronously.
+
+---
+
+## 5. Errors, logging, and performance markers
+
+### 5.1 Typed errors (NFR-DEV-03)
+
+Every error that can reach a user is a case of a domain enum that conforms to `APKRunError` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.1):
+
+```swift
+public enum StoreFailure: APKRunError {
+    case downgradeRefused(installed: VersionCode, candidate: VersionCode)
+    case runtimeUnavailable(RuntimeFailure)
+    // … (the full list is in package-store.md §12)
+
+    public static var domain: ErrorDomain {.store }
+    public var code: String { /* the case name: "downgradeRefused" */ }
+    public var parameters: [String: ErrorParameter] { /* one entry per associated value */ }
+    public var cause: (any APKRunError)? { /* the RuntimeFailure of runtimeUnavailable, else nil */ }
+    public var underlying: UnderlyingError? { nil }
+}
+```
+
+| Rule | Detail |
+|---|---|
+| One domain per owner module | the table in [../02-design/diagnostics.md](../02-design/diagnostics.md) §2.1. A new domain needs a design change there |
+| No ad-hoc errors | never `NSError(domain: "error", code: 1)`, never a `String` thrown or returned as an error, never a bare `Error` enum that leaves its module. An error private to one module is converted to the domain type at the module boundary |
+| Typed throws | a function that throws only one domain declares it: `throws(StoreFailure)` |
+| System errors | wrapped in a domain case that carries `UnderlyingError(domain:code:)`. `userInfo` is dropped, because it may contain paths |
+| Nesting | an error caused by another domain sets `cause` and keeps the outer code (`UpdateFailure.installFailed(StoreFailure)`) |
+| Parameters | public-safe values only: IDs, versions, app labels, counts, sizes, durations. File names use `.fileName` (the last path component). Full paths are never parameters |
+| Catalog | every new case gets an entry in `Packages/DiagnosticsCore/ErrorCatalog/errors.json` in the same pull request, with `en` and `ja` text and a remediation. Run `swift scripts/errorgen.swift` and `--markdown` ([build-system.md](build-system.md) §4.2). The catalog test fails otherwise |
+| Stability | a released code never changes meaning. A removed case keeps its code as `"retired": true` |
+| Namespaces | error codes, configuration keys, and health check IDs never share a name |
+| CLI | CLI errors use the catalog text, and the `hint:` line says what to do next ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.3) |
+
+### 5.2 Logging
+
+```swift
+private let log = APKLogger(.store, category:.transaction)
+
+log.info("commit \(txn,.public) \(packageID,.public)")
+log.error("import failed for \(fileName,.private)", error: failure) // adds err=store.<code>
+```
+
+- Log only through `APKLogger`. `os.Logger`, `Logger(`, `print(`, `NSLog`, and `os_log` outside DiagnosticsCore fail `scripts/check-logging.sh`.
+- Every interpolation states its privacy: `.public`, `.private`, or `.hashed`. What goes where is listed in [../02-design/diagnostics.md](../02-design/diagnostics.md) §3.2. In short, IDs, versions, codes, counts, sizes, durations, and states are public. Paths, file names, URLs beyond the domain, window titles, and app labels in free text are private or hashed.
+- Values that must never be logged are held in `Sensitive<T>`: clipboard content, notification text, IME text, file contents, credentials and tokens, and Android account names. Logging one does not compile.
+- Subsystems and categories are the closed enums of [../02-design/diagnostics.md](../02-design/diagnostics.md) §3.1. A new category is added there and in the enum in the same pull request.
+- Levels: `debug` for per-frame, per-event, and per-message detail; `info` for transitions and operation start and end; `notice` for user-visible outcomes; `error` for a failed operation, always with `error:`; `fault` for a broken invariant.
+- Hot paths (the frame path, input events, per-message protocol handling) log only at `debug`. Use `Perf.interval` to time them.
+- The operation context (`op=`, `pkg=`, `disp=`, `sess=`) is added by the facade. Do not repeat it in the message.
+
+### 5.3 Performance markers
+
+- Emit the markers of [../02-design/diagnostics.md](../02-design/diagnostics.md) §4.2 with `Perf.mark`. A new marker is added to that table in the same pull request.
+- `Perf.mark` is for lifecycle events: a few per launch. High-frequency work uses `Perf.interval`, which only creates a signpost.
+- Host marker times use `ContinuousClock`. Guest times are never subtracted from host times. Only durations measured on one side are combined.
+- Measure before you optimize ([../../AGENTS.md](../../AGENTS.md) §8). Code whose shape comes from a measurement carries a `// PERF:` marker (§12).
+
+---
+
+## 6. Protocol and data evolution
+
+### 6.1 Guest protocol (protobuf)
+
+The protocol is proto3 in `Packages/GuestProtocol/proto/apkrun/guest/v1/`, with `package apkrun.guest.v1`, `java_package "io.apkrun.guest.protocol.v1"`, `java_multiple_files = true`, and `swift_prefix "GP"` ([../02-design/guest-protocol.md](../02-design/guest-protocol.md) §2).
+
+| Change | Kind | Also needed |
+|---|---|---|
+| Add a field, message, enum value, or oneof case | minor | a capability if the host must know whether the guest implements it ([../02-design/guest-protocol.md](../02-design/guest-protocol.md) §5.3); new golden frames |
+| Remove a field | minor, if no supported peer reads it | its number and name become `reserved` |
+| Reuse or change a field number or oneof case; change a field's type | never allowed | — |
+| Rename a field, message, or enum value | not done | `buf breaking` rejects it |
+| Change what a field means; make a new field mandatory for correctness | major | an ADR, a transition window in which the host supports both majors, and release rule R4 ([workflow.md](workflow.md) §9.1) |
+
+- Field numbers follow the ranges of [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §4.1. The same operation uses the same number in `Request.op` and `Response.result`. Numbers 200 and up are for experiments behind a capability and never appear in a release build.
+- Every enum's zero value is `<ENUM_NAME>_UNSPECIFIED = 0`. Code treats an unknown value as `*_UNSPECIFIED` and handles that case explicitly.
+- Use proto3 `optional` when "not set" and the zero value mean different things.
+- `buf breaking` runs against the last release tag in the `lint` job ([build-system.md](build-system.md) §4.1). A pull request that changes a `.proto` also updates or adds golden frames in `Packages/GuestProtocol/testdata/frames/`, which both the Swift and the Kotlin tests decode.
+- Every decoded message is validated (lengths, counts, ranges, IDs) before use. A violation is a typed `GuestProtocolFailure` or a `GuestError`, never a crash (§13).
+- The generated `GP` types stay in the modules that speak the protocol. They never appear in RuntimeAPI.
+
+### 6.2 RuntimeAPI (XPC)
+
+- Payloads are `Codable` DTOs. `NSSecureCoding` is used only for `IOSurface` and file handles ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1).
+- `RuntimeAPI.version` is `(major, minor)`. Adding an optional field or an operation raises the minor. Removing or changing something raises the major and needs an ADR.
+- New fields are optional and decoded with `decodeIfPresent`, so an older peer's messages still decode.
+- The `.wrapper` endpoint also serves the previous major (N−1). Changes to its small surface need extra care, because old wrappers stay installed for a long time ([../02-design/wrapper.md](../02-design/wrapper.md) §5.3).
+- The `.maintenance` protocol (`MaintenanceControl`) is frozen: additive changes only, with new optional fields and new operations, and no major version ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.1).
+- Wire types that copy DiagnosticsCore types have a round-trip test ([../02-design/diagnostics.md](../02-design/diagnostics.md) §1).
+
+### 6.3 JSON data files: schemaVersion and migrations
+
+The host data files, their owners, and the migration rules are in [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5. In code:
+
+- Every JSON file has an integer `schemaVersion`. Every line of a JSONL file has `"v"`.
+- The owner has one `currentSchemaVersion` constant per file. `components.json` reports it (`dataSchemas`), and a test checks that the two agree.
+- Each migration is one step `n → n+1`: a pure function from the decoded version-n form to the version-n+1 form. Steps are never merged or skipped, and a step is never deleted while R5 needs it ([workflow.md](workflow.md) §9.1).
+- Any change to a file's shape raises its version, including additive changes, because `Codable` drops unknown keys.
+- A migration never changes what a value means.
+- Each step has T0 golden files: `Tests/Fixtures/schemas/<file>/v<n>.json` → `v<n>.expected.json`.
+- A file with a newer schema than the build knows is never written. The owner starts degraded with `maintenance.dataCreatedByNewerVersion`.
+- Writes are atomic (write a temporary file, then `FileManager.replaceItemAt`). The previous bytes are kept as `<name>.v<old>.json`.
+- Other versioned JSON (image manifests, the image feed, `ThirdParty.lock.json`, the compatibility database) has its own `schemaVersion` and JSON Schema file. Readers follow the unknown-field rule of the document that defines the format.
+
+---
+
+## 7. C and Objective-C: the GraphicsBridge boundary
+
+The native path is fixed ([../../AGENTS.md](../../AGENTS.md) §6.5, [../02-design/graphics.md](../02-design/graphics.md) §5.2):
+
+```text
+Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C implementation → virglrenderer, libepoxy, ANGLE (EGL, GLES on Metal)
+```
+
+| Rule | Detail |
+|---|---|
+| One public header | `Packages/GraphicsCore/Sources/GraphicsBridge/include/GraphicsBridge.h` is the only header Swift sees. It includes only `<stdint.h>`, `<stddef.h>`, and `<stdbool.h>` |
+| Prefix | functions and types start with `gb_` (`gb_renderer_create`, `gb_rect`). Macros and constants start with `GB_` (`GB_OK`) |
+| Opaque handles | objects are incomplete structs (`typedef struct gb_renderer gb_renderer;`). Swift never sees their layout. Argument structs (`gb_resource_args`, `gb_transfer_args`, `gb_rect`, `gb_iovec`) are plain C structs of fixed-width integer types |
+| No foreign types | no C++ types, no virglrenderer, EGL, or GL types, and no Objective-C classes in the header. Metal objects cross as `void *` (`gb_renderer_metal_device`, the destination texture of `gb_present_blit`) |
+| Return values | `int` functions return `GB_OK` (0) or a negative `GB_E…` code. The Swift wrapper maps every code to a `GraphicsFailure` case. `void` functions cannot fail |
+| Ownership | every pointer parameter's comment says whether it is borrowed for the call or kept until a named release function (for example `gb_resource_detach_iov`). The bridge never frees memory it did not allocate |
+| Sizes | every buffer comes with an explicit size or count (`size_bytes`, `count`). Guest data is never treated as a NUL-terminated string |
+| Threads | every `gb_*` call except `gb_wait_sync` runs on the render thread. Callbacks (`write_fence`, `log`) arrive on the render thread (§4.2 rule 9) |
+| Lifetime | one `final` Swift class owns each `gb_renderer` and is driven from the render thread. `gb_renderer_destroy` runs on the render thread during `WillStop` ([../02-design/graphics.md](../02-design/graphics.md) §8), never from `deinit` on another thread |
+| Validation | the device queue validates guest sizes, offsets, and IDs before a command reaches the bridge. The C code checks them again wherever it indexes memory |
+| Logging | C code never prints. It calls the `log` callback, and the Swift side logs to `io.apkrun.graphics`, category `renderer`, with the message text `.private` |
+| Readback | the normal path never reads pixels back to the CPU. `gb_transfer_read` exists only for guest-requested `TRANSFER_FROM_HOST_3D`, which is counted as `guestReadbacks`. The only host-side readback is the test-only mode behind the `APKRUN_TEST_READBACK` build flag (§12) |
+| Implementation languages | C11, plus Objective-C with ARC for the Metal and IOSurface interop file. If C++ or Objective-C++ is ever needed (for example for a file derived from RiftVM), it stays in `.cpp` or `.mm` files behind the same header, every entry point is `extern "C"`, and no exception crosses the boundary |
+| Code style | 4-space indentation, `snake_case`, braces on the same line, lines up to 100 columns |
+| Build | warnings are errors in CI. The `test-swift` job runs the GraphicsCore host tests a second time with the address and undefined-behavior sanitizers, and fuzz targets that reach the bridge build with them too ([build-system.md](build-system.md) §15.1, §15.2) |
+| Upstream changes | changes to virglrenderer, libepoxy, or ANGLE are patches in `ThirdParty/patches/`, never copies in GraphicsBridge ([build-system.md](build-system.md) §6.2) |
+| Derived code | files copied or adapted from RiftVM keep their MIT notice and the line `Derived from RiftVM <commit> (MIT)` ([legal-and-licensing.md](legal-and-licensing.md) §3) |
+
+---
+
+## 8. Kotlin: the Guest Agent and the Store Agent
+
+- **Modules and packages.** `Guest/protocol`, `Guest/agentruntime`, `Guest/guestd`, and `Guest/APKRunStore`. Code lives in `io.apkrun.guest.*` and `io.apkrun.store.*`. The generated protocol classes are in `io.apkrun.guest.protocol.v1`.
+- **Dependencies.** Kotlin stdlib, kotlinx-coroutines, and protobuf-javalite only. Test-only dependencies (JUnit, Robolectric, Jazzer) are allowed in `testImplementation`. Anything else needs an ADR ([build-system.md](build-system.md) §7.1).
+- **Style.** The Kotlin coding conventions, formatted by ktfmt (§2). No `!!` in production code. `lateinit` only for fields that the framework sets.
+- **Threads and coroutines** ([../02-design/guest-components.md](../02-design/guest-components.md) §6.3):
+  - one coroutine per connection reads frames;
+  - display-affecting requests run on `Dispatchers.Default.limitedParallelism(1)`, one per display ID;
+  - framework callbacks arrive on the `HandlerThread` "apkrun-callbacks";
+  - input injection runs on the "apkrun-input" thread with `THREAD_PRIORITY_URGENT_DISPLAY`;
+  - the IME runs on the app's main thread, and `ImeBridge` posts to it with `Handler.post`.
+- **Structured concurrency.** Every coroutine belongs to the scope of its connection or service and is cancelled with it. No `GlobalScope`. `runBlocking` only in `main` and in tests. `CancellationException` is always rethrown.
+- **Hidden APIs** are reached only through the `SystemServices` wrappers in `Guest/agentruntime`. Each wrapper resolves its methods once, picks a variant by `Build.VERSION.SDK_INT`, and on a missing method fails its capability, not the agent. Reflection outside `SystemServices` is not allowed.
+- **Errors.** Exceptions are mapped to `GuestError` codes at the operation boundary. An exception never ends the connection loop.
+- **Logging.** Tags `ApkRunGuest`, `ApkRunInput`, `ApkRunIme`, and `ApkRunStore`, plus the `agent.log` and `store.log` ring buffers. Entries with an operation carry `op=<first 8 hex>`. Debug logs sit behind `if (BuildConfig.DEBUG)`, so release builds compile them out. Clipboard content, notification text, typed or IME text, and account names are never logged ([../02-design/guest-components.md](../02-design/guest-components.md) §9).
+
+---
+
+## 9. Rust: apkrun_vsockd
+
+- **Crate.** `Guest/vsockd`, edition 2021. Dependencies are `std`, `libc`, `log`, and `android_logger` only, because the product build uses the crates of AOSP `external/rust/crates` ([build-system.md](build-system.md) §7.2).
+- **Behavior limits** ([../02-design/guest-components.md](../02-design/guest-components.md) §10): a static port table with no configuration file, one thread per direction, at most 8 connections per port, a 64 KiB copy buffer, and a peer check for `VMADDR_CID_HOST`. The bridge never parses or logs payload bytes. A change to any of these is a design change.
+- **`unsafe`.** Only around `libc` calls. Every `unsafe` block has a `// SAFETY:` comment. clippy runs with `-D clippy::undocumented_unsafe_blocks`.
+- **Errors.** Functions return `std::io::Result`. No `unwrap` outside tests (`-D clippy::unwrap_used` for non-test code). `expect("…")` only for invariants that the code itself guarantees. The peer's behavior never causes a panic. A failed connection is logged and closed, and the listener continues.
+- **Logging.** Through the `log` crate with the tag `apkrun_vsockd`: ports, CIDs, connection counts, and errors. Never payload bytes.
+
+---
+
+## 10. Python and shell scripts
+
+### 10.1 Python
+
+- Python 3.12. The image tooling is the `apkrun_image` package in `Images/tools/`. Other scripts (`scripts/**/*.py`) use the same venv, the standard library, and the pinned packages only ([environment-setup.md](environment-setup.md) §2.4).
+- Every function has type hints on its parameters and return value (ruff `ANN`). Records are `dataclasses` or `TypedDict`s, not loose dictionaries.
+- Command-line scripts use `argparse` and `def main -> int`, end with `sys.exit(main)`, and print errors to stderr with the next step to take.
+- Use `pathlib` for paths. Run subprocesses with argument lists and `check=True`, never with `shell=True`.
+- Output is deterministic: `json.dumps(…, sort_keys=True, indent=2)` plus a final newline, sorted directory listings, and no wall-clock timestamps unless the format requires one ([build-system.md](build-system.md) §14).
+- Artifact names are never assumed. `apkrun_image` inventories an artifact set first and then goes through the manifest, like the host ([../../AGENTS.md](../../AGENTS.md) §6.3).
+- Tests are pytest tests in `Images/tools/tests/`.
+
+### 10.2 Shell
+
+- Scripts start with `#!/bin/bash` and `set -euo pipefail`, and they run on the system bash 3.2 of a clean Mac: no associative arrays, no `mapfile`, no `${var,}`.
+- Quote every expansion. Use arrays for argument lists.
+- Scripts that [build-system.md](build-system.md) lists work without arguments or print their usage. A missing input fails with a message that names the command that produces it.
+- `adb shell` and `pm` appear only in the paths that `scripts/check-raw-adb.sh` exempts.
+- Anything longer than about 100 lines, or anything that parses JSON, is written in Python.
+
+---
+
+## 11. Tests and fakes
+
+The tiers, locations, budgets, and fixtures are in [../04-plan/test-strategy.md](../04-plan/test-strategy.md). The code rules:
+
+| Topic | Rule |
+|---|---|
+| Framework | XCTest for all Swift tests (T0, T1, XCUITest, and T2 in the `IntegrationTests` bundle). JUnit 4 for Kotlin, pytest for Python, `#[test]` for Rust |
+| Test names | name the behavior, not the method. Swift: `testUpdateWaitsWhileWindowIsOpen`. Kotlin: `` fun `update waits while window is open` ``. Python: `test_update_waits_while_window_is_open`. Rust: `fn rejects_non_host_cid` |
+| Test classes | `<Subject>Tests`. T2 classes live in `Tests/IntegrationTests/<Area>Tests/` |
+| Fakes | `Fake<Protocol>`, in the `<Module>TestSupport` target of the module that owns the protocol. There is one fake per protocol; other modules import it instead of writing their own. A fake of guest behavior has a T2 contract test ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2) |
+| Time | inject a clock and use the manual clock. Never `sleep` to synchronize. Wait for markers with a timeout, and fail with a message that names the missing marker (P11) |
+| Isolation | each test uses its own `APKRUN_HOME` and temporary directories, and removes what it creates ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.9) |
+| Fixtures | fixture apps use `io.apkrun.fixture.<name>`. Test keys live in `Tests/Fixtures/signing/` with the `test-` prefix. Real keys are never committed |
+| Test hooks | compiled into Debug builds only (`#if DEBUG`), listed in [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3 and [../03-reference/configuration.md](../03-reference/configuration.md) §5.1, and covered by the release check ([build-system.md](build-system.md) §3.1) |
+| Bug fixes | a fix comes with a test that fails without it |
+| Skips and quarantine | a skipped or quarantined test carries `TODO(#NNN): reason` (§12). Security negative tests are never quarantined |
+| Fuzzing | a parser of untrusted input gets a fuzz target and a seed corpus. A crash reproducer is added to `Tests/Fixtures/fuzz/<target>/` with the fix ([build-system.md](build-system.md) §15.2) |
+
+---
+
+## 12. Comments, TODOs, and markers
+
+- A comment explains why the code does what it does, not what it does. When a design document dictates the behavior, cite it: `// graphics.md §4.3: no config-write callback, so …`.
+- Comments and identifiers are in English.
+- Every temporary workaround carries a TODO with a tracking task and a reason (NFR-DEV-04). `scripts/check-todos.sh` rejects a `TODO` or `FIXME` without an issue number. The task must exist in the task index ([../04-plan/issues/README.md](../04-plan/issues/README.md)). If none fits, file one (#098 and up) in the same pull request.
+- `XXX`, `HACK`, and bare `NOTE:` are not used. Use a TODO or a plain comment.
+
+| Marker | Meaning | Checked by |
+|---|---|---|
+| `TODO(#NNN): reason` | a temporary workaround, a missing piece, or a skipped test | `check-todos.sh` |
+| `FIXME(#NNN): reason` | a known bug left in place | `check-todos.sh` |
+| `// SECURITY: …` | code that enforces a trust boundary: validation of guest or APK input, XPC peer checks, policy decisions, signature checks. A change to marked code needs the security review of [workflow.md](workflow.md) §6 | review |
+| `// PERF: <scenario>: <result>` | code shaped by a measurement. It names the `apkrun-perf` scenario or harness run and the result that justified it | review |
+| `// DEBUG-READBACK: …` | test-only readback code. It exists only inside `#if APKRUN_TEST_READBACK` (a flag that only the test builds of the #022 replay test and the #023 tearing test set) and never increments or bypasses `hostReadbacks` | review; the counter tests ([../02-design/graphics.md](../02-design/graphics.md) §7) |
+| `// UNSAFE: …` (Swift), `// SAFETY: …` (Rust) | why a pointer access is in bounds and the memory is alive | review; clippy for Rust |
+| `// UNCHECKED-SENDABLE: …` | which lock or queue protects the state of an `@unchecked Sendable` type | review |
+| `Derived from RiftVM <commit> (MIT)` | copied or adapted RiftVM code, below its MIT notice | review; [legal-and-licensing.md](legal-and-licensing.md) §3 |
+| `Code generated by <tool>. DO NOT EDIT.` | a generated file | `codegen` job |
+
+---
+
+## 13. Security rules in code
+
+The threat model is in [../01-architecture/security-model.md](../01-architecture/security-model.md). In code:
+
+- **All APK code and all guest data are untrusted.** Every length, count, offset, index, and ID from the guest, an APK, a feed, or an archive is checked before use. Arithmetic on such values uses the overflow-reporting operations (`addingReportingOverflow`, `multipliedReportingOverflow`). Bad input gives a typed error, never a trap: a crash in apkrund would stop every app.
+- **Limits.** Frame sizes, message sizes, and counts follow [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §14. A download is hashed as the bytes arrive and checked against the size and hash that its feed entry declares ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.1, §4.4).
+- **Paths.** A name from outside (an APK, the guest, an archive) is never joined into a path without checks. Reject `..`, absolute paths, symlinks, and hard links in archives ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5). Host paths come from `APKRunPaths`. Nothing mounts or shares `~/`, `~/.ssh`, `~/Library`, or `~/Documents` automatically.
+- **Processes.** Run tools with `Process` and an argument array, using absolute tool paths (`/usr/bin/codesign`). Never build a shell command from a string. The production input path never runs a command per event (FR-IN-06).
+- **Checks are never skippable.** No flag, setting, or debug path skips a signature, lineage, `versionCode`, or hash check ([../../AGENTS.md](../../AGENTS.md) §4). The one test hook near these checks, the host verifier bypass, exists only in a Debug test build and only to test Android's own refusal ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3).
+- **XPC.** Every endpoint validates its peer, and a wrapper is authorized for its own package only (NFR-SEC-07). New endpoints follow [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2.
+- **Secrets.** Credentials and tokens live in the Keychain and in `Sensitive<T>` in memory. They never appear in logs, errors, JSON files, diagnostics bundles, or fixtures.
+- **Cryptography.** CryptoKit and the Security framework only. No custom cryptography. Compare tokens and MACs in constant time.
+- **Files.** Logs and state files are created with mode 0600. Writes that must not tear are atomic.
+- **Parsers** of untrusted input have fuzz targets ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §7.2) and carry the `// SECURITY:` marker at their entry point.
+
+---
+
+## 14. Performance rules in code
+
+- The normal frame path has no `glReadPixels`, no CPU framebuffer readback, and no CPU texture copy. `hostReadbacks` stays 0 in tests ([../../AGENTS.md](../../AGENTS.md) §6.4).
+- IOSurfaces cross XPC only on open and resize, never per frame ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1).
+- Input events travel as batches on the input stream. No XPC round trip and no shell command per event ([../02-design/input.md](../02-design/input.md)).
+- On the render thread and the device queue: no logging above `debug`, no file I/O, no waiting on actors, and no allocation per command where a reusable buffer works.
+- Start from a harness result and end with a new one ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) P6). An optimization without a measurement is not merged. One that changes a baseline updates it in a reviewed pull request ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.8).

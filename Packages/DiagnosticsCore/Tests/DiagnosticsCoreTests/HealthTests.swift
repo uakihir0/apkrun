@@ -297,7 +297,7 @@ import Testing
     let registry = HealthCheckRegistry(
         checks: [
             BlockingHealthCheck(id: "test.blocked", latch: latch),
-            FixtureHealthCheck(id: "test.queued"),
+            BlockingHealthCheck(id: "test.queued", latch: latch),
         ],
         timeouts: HealthCheckTimeouts(quick: .milliseconds(25), deep: .milliseconds(25)),
         maximumConcurrentChecks: 1

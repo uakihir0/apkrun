@@ -37,7 +37,7 @@ import Testing
     #expect(
         HealthVerdict.evaluate(
             results: [
-                healthResult("runtime.boot", .failure, errorCode: "runtime.graphics"),
+                healthResult("runtime.boot", .failure, errorCode: "runtime.graphics")
             ],
             context: HealthVerdictContext(runtimeState: .failed)
         ) == .graphicsFailure
@@ -119,16 +119,21 @@ import Testing
 }
 
 @Test func healthVerdictHasStableStatusLineForEveryVerdict() {
-    #expect(HealthVerdict.hostUnsupported.statusLine(results: [], runtimeState: .failed)
-        == "APKRun can't run on this Mac")
-    #expect(HealthVerdict.serviceUnavailable.statusLine(results: [], runtimeState: .stopped)
-        == "Background service not running")
-    #expect(HealthVerdict.notSetUp.statusLine(results: [], runtimeState: .stopped)
-        == "Setup not finished")
-    #expect(HealthVerdict.graphicsFailure.statusLine(results: [], runtimeState: .failed)
-        == "Graphics failed to start")
-    #expect(HealthVerdict.bootFailure.statusLine(results: [], runtimeState: .failed)
-        == "Android failed to start")
+    #expect(
+        HealthVerdict.hostUnsupported.statusLine(results: [], runtimeState: .failed)
+            == "APKRun can't run on this Mac")
+    #expect(
+        HealthVerdict.serviceUnavailable.statusLine(results: [], runtimeState: .stopped)
+            == "Background service not running")
+    #expect(
+        HealthVerdict.notSetUp.statusLine(results: [], runtimeState: .stopped)
+            == "Setup not finished")
+    #expect(
+        HealthVerdict.graphicsFailure.statusLine(results: [], runtimeState: .failed)
+            == "Graphics failed to start")
+    #expect(
+        HealthVerdict.bootFailure.statusLine(results: [], runtimeState: .failed)
+            == "Android failed to start")
     #expect(
         HealthVerdict.agentUnavailable.statusLine(
             results: [healthResult("agent.store", .failure)],
@@ -202,12 +207,13 @@ import Testing
     let results = await registry.run(
         context: context.healthContext(daemonAvailable: true, runtimeRunning: true)
     )
-    #expect(results.map(\.id) == [
-        "host.memory",
-        "host.appleSilicon",
-        "apkrund.registration",
-        "graphics.renderer",
-    ])
+    #expect(
+        results.map(\.id) == [
+            "host.memory",
+            "host.appleSilicon",
+            "apkrund.registration",
+            "graphics.renderer",
+        ])
 }
 
 @Test func healthRegistrySkipsChecksByCostAndRuntimeRequirement() async throws {
@@ -438,7 +444,9 @@ private actor HealthCheckLatch {
 
     func block() async {
         started = true
-        startWaiters.forEach { $0.resume() }
+        for waiter in startWaiters {
+            waiter.resume()
+        }
         startWaiters.removeAll()
         if released {
             return
@@ -455,7 +463,9 @@ private actor HealthCheckLatch {
 
     func release() {
         released = true
-        blockWaiters.forEach { $0.resume() }
+        for waiter in blockWaiters {
+            waiter.resume()
+        }
         blockWaiters.removeAll()
     }
 }

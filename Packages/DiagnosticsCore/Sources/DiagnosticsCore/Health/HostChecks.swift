@@ -48,9 +48,11 @@ private struct HostHealthCheck: HealthCheck {
     }
 
     var group: HealthGroup {
-        kind == .runtimeRegistration ? .backgroundService
-            : kind == .hypervisor ? .virtualization
-            : .host
+        kind == .runtimeRegistration
+            ? .backgroundService
+            : kind == .hypervisor
+                ? .virtualization
+                : .host
     }
 
     var requirement: HealthRequirement { .host }
@@ -91,10 +93,12 @@ private struct HostHealthCheck: HealthCheck {
                 context,
                 state: passes ? .pass : .failure,
                 detail: "macOS \(version)",
-                error: passes ? nil : hostRequirementError(
-                    item: "macOSVersion",
-                    remediation: "Update macOS."
-                )
+                error: passes
+                    ? nil
+                    : hostRequirementError(
+                        item: "macOSVersion",
+                        remediation: "Update macOS."
+                    )
             )
         case .hypervisor:
             return await booleanResult(
@@ -103,7 +107,8 @@ private struct HostHealthCheck: HealthCheck {
                 detail: "Virtualization is available.",
                 error: hostRequirementError(
                     item: "virtualization",
-                    remediation: "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)."
+                    remediation:
+                        "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)."
                 )
             )
         case .appLocation:
@@ -168,16 +173,19 @@ private struct HostHealthCheck: HealthCheck {
                 return result(
                     context,
                     state: .pass,
-                    detail: "\(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) available."
+                    detail:
+                        "\(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) available."
                 )
             }
             return result(
                 context,
                 state: .warning,
-                detail: "\(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) available.",
+                detail:
+                    "\(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) available.",
                 error: diagnosticError(
                     code: "diagnostics.lowDiskSpace",
-                    message: "Only \(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) is free on the disk with APKRun's data.",
+                    message:
+                        "Only \(ByteCountFormatter.string(fromByteCount: volume.availableBytes, countStyle: .file)) is free on the disk with APKRun's data.",
                     remediation: "Free up space. System Settings → Storage shows what APKRun uses.",
                     parameters: ["available": .bytes(volume.availableBytes)],
                     action: .openStorageSettings

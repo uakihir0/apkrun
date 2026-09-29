@@ -8,14 +8,19 @@ private enum HealthCheckOutcome: Sendable {
 
 /// A time budget for health checks.
 public struct HealthCheckTimeouts: Sendable {
+    /// Maximum runtime for checks classified as quick.
     public let quick: Duration
+
+    /// Maximum runtime for checks classified as deep.
     public let deep: Duration
 
+    /// Default time budgets for ordinary and deep checks.
     public static let standard = HealthCheckTimeouts(
         quick: .seconds(2),
         deep: .seconds(60)
     )
 
+    /// Creates positive time budgets for both check classes.
     public init(quick: Duration, deep: Duration) {
         precondition(quick > .zero && deep > .zero)
         self.quick = quick
@@ -29,20 +34,37 @@ public struct HealthCheckTimeouts: Sendable {
 
 /// A safe, idempotent action that a health check may offer.
 public protocol HealthFix: Sendable {
+    /// A stable identifier for the offered repair.
     var id: String { get }
+
+    /// Applies the repair using the supplied host and runtime context.
     func apply(_ context: HealthContext) async throws
 }
 
 /// Context available to health checks.
 public struct HealthContext: Sendable {
+    /// Whether the background service can be reached.
     public let daemonAvailable: Bool
+
+    /// Whether Android is currently running.
     public let runtimeRunning: Bool
+
+    /// Previous results used when checks are skipped.
     public let lastKnown: [HealthCheckID: LastKnown]
+
+    /// The host application's build metadata.
     public let buildInfo: BuildInfo
+
+    /// APKRun's host data paths.
     public let paths: APKRunPaths
+
+    /// A clock that can be replaced in deterministic tests.
     public let clock: any DiagnosticsClock
+
+    /// A host probe that can be replaced in tests.
     public let hostProbe: any HostProbe
 
+    /// Creates the inputs shared by health checks.
     public init(
         daemonAvailable: Bool,
         runtimeRunning: Bool,
@@ -64,19 +86,34 @@ public struct HealthContext: Sendable {
 
 /// A registered health check.
 public protocol HealthCheck: Sendable {
+    /// A stable identifier for this check.
     var id: HealthCheckID { get }
+
+    /// The report section that owns this check.
     var group: HealthGroup { get }
+
+    /// The runtime state required before this check can run.
     var requirement: HealthRequirement { get }
+
+    /// Whether this check is quick or requires a deep report.
     var cost: HealthCost { get }
+
+    /// An optional safe repair offered for a failed result.
     var fix: (any HealthFix)? { get }
+
+    /// The localized title shown in reports.
     var title: LocalizedText { get }
+
+    /// Performs the health check.
     func run(_ context: HealthContext) async -> HealthResult
 }
 
-public extension HealthCheck {
-    var fix: (any HealthFix)? { nil }
+extension HealthCheck {
+    /// The default implementation offers no repair.
+    public var fix: (any HealthFix)? { nil }
 
-    var title: LocalizedText {
+    /// The default title uses the check identifier as its fallback text.
+    public var title: LocalizedText {
         LocalizedText(key: id, fallback: id)
     }
 }
@@ -88,6 +125,7 @@ public enum HealthCheckRegistryError: Error, Equatable, Sendable {
 
 /// Owns health checks, enforces their budgets, and preserves deterministic report ordering.
 public actor HealthCheckRegistry {
+    /// The maximum number of health checks that may run concurrently.
     public static let maximumConcurrentChecks = 8
 
     private let timeouts: HealthCheckTimeouts
@@ -95,6 +133,7 @@ public actor HealthCheckRegistry {
     private var checks: [any HealthCheck]
     private var registeredIDs: Set<HealthCheckID>
 
+    /// Creates a registry and optionally installs its initial checks.
     public init(
         checks: [any HealthCheck] = [],
         timeouts: HealthCheckTimeouts = .standard,
@@ -166,7 +205,7 @@ public actor HealthCheckRegistry {
                     )
                     let result: HealthResult
                     switch outcome {
-                    case let .completed(value):
+                    case .completed(let value):
                         result = Self.normalized(value, for: check, measuredAt: context.clock.now)
                     case .timedOut:
                         result = Self.timeoutResult(for: check, context: context)
@@ -189,7 +228,8 @@ public actor HealthCheckRegistry {
             let groupOrder = Dictionary(
                 uniqueKeysWithValues: HealthGroup.allCases.enumerated().map { ($0.element, $0.offset) }
             )
-            return indexedResults
+            return
+                indexedResults
                 .sorted { left, right in
                     let leftGroup = groupOrder[left.1.group, default: .max]
                     let rightGroup = groupOrder[right.1.group, default: .max]

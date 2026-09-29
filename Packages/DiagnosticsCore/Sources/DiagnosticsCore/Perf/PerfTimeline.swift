@@ -10,13 +10,13 @@ public enum PerfValue: Equatable, Sendable {
 
     var signpostValue: String {
         switch self {
-        case let .string(value):
+        case .string(let value):
             String(reflecting: value)
-        case let .integer(value):
+        case .integer(let value):
             String(value)
-        case let .double(value):
+        case .double(let value):
             String(value)
-        case let .boolean(value):
+        case .boolean(let value):
             String(value)
         }
     }
@@ -24,11 +24,19 @@ public enum PerfValue: Equatable, Sendable {
 
 /// One in-memory performance marker and the operation active when it was recorded.
 public struct PerfEvent: Equatable, Sendable {
+    /// The lifecycle marker recorded for this event.
     public let marker: PerfMarker
+
+    /// The monotonic timestamp at which the event occurred.
     public let time: ContinuousClock.Instant
+
+    /// Validated, bounded attributes attached to the event.
     public let attributes: [String: PerfValue]
+
+    /// The operation active when the event was recorded, if any.
     public let operationContext: OperationContext?
 
+    /// Creates a performance event.
     public init(
         marker: PerfMarker,
         time: ContinuousClock.Instant,
@@ -44,6 +52,7 @@ public struct PerfEvent: Equatable, Sendable {
 
 /// A thread-safe ring buffer containing the most recent process performance markers.
 public final class PerfTimeline: Sendable {
+    /// The maximum number of recent events retained in memory.
     public static let capacity = 2_000
 
     private struct State: Sendable {
@@ -54,6 +63,7 @@ public final class PerfTimeline: Sendable {
 
     private let state = Mutex(State())
 
+    /// Creates an empty, thread-safe event ring buffer.
     public init() {}
 
     /// Returns the retained events from oldest to newest.

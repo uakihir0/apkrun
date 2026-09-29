@@ -23,8 +23,8 @@ public struct APKRunPaths: Sendable {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         if allowingHomeOverride,
-           let override = environment["APKRUN_HOME"],
-           !override.isEmpty
+            let override = environment["APKRUN_HOME"],
+            !override.isEmpty
         {
             let root: URL
             if override == "~" {
@@ -42,21 +42,24 @@ public struct APKRunPaths: Sendable {
         }
 
         #if DEBUG
-        let applicationName = "APKRun-Dev"
-        let cacheName = "io.apkrun.APKRun-Dev"
+            let applicationName = "APKRun-Dev"
+            let cacheName = "io.apkrun.APKRun-Dev"
         #else
-        let applicationName = "APKRun"
-        let cacheName = "io.apkrun.APKRun"
+            let applicationName = "APKRun"
+            let cacheName = "io.apkrun.APKRun"
         #endif
 
         let library = homeDirectory.appendingPathComponent("Library", isDirectory: true)
-        dataRoot = library
+        dataRoot =
+            library
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent(applicationName, isDirectory: true)
-        logsRoot = library
+        logsRoot =
+            library
             .appendingPathComponent("Logs", isDirectory: true)
             .appendingPathComponent(applicationName, isDirectory: true)
-        cachesRoot = library
+        cachesRoot =
+            library
             .appendingPathComponent("Caches", isDirectory: true)
             .appendingPathComponent(cacheName, isDirectory: true)
     }

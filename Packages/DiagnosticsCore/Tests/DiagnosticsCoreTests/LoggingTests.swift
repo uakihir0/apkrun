@@ -1,7 +1,8 @@
-@testable import DiagnosticsCore
 import DiagnosticsCoreTestSupport
 import Foundation
 import Testing
+
+@testable import DiagnosticsCore
 
 @Test func logMessageRendersEveryPrivacyModeAndStructuredContext() {
     let operationID = "12345678-90ab-cdef-1234-567890abcdef"

@@ -28,8 +28,8 @@ struct OSLogSink: LogSink {
     }
 }
 
-private extension LogLevel {
-    var osLogType: OSLogType {
+extension LogLevel {
+    fileprivate var osLogType: OSLogType {
         switch self {
         case .debug: .debug
         case .info: .info

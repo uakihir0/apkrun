@@ -13,22 +13,22 @@ public struct OperationID: Codable, Hashable, Sendable, CustomStringConvertible 
     /// Parses a canonical lowercase UUID v4 received from a wire field.
     public init?(wire: String) {
         guard wire == wire.lowercased(),
-              let uuid = UUID(uuidString: wire),
-              uuid.uuidString.lowercased() == wire
+            let uuid = UUID(uuidString: wire),
+            uuid.uuidString.lowercased() == wire
         else {
             return nil
         }
 
         let groups = wire.split(separator: "-", omittingEmptySubsequences: false)
         guard groups.count == 5,
-              groups[0].count == 8,
-              groups[1].count == 4,
-              groups[2].count == 4,
-              groups[3].count == 4,
-              groups[4].count == 12,
-              groups[2].first == "4",
-              let variant = groups[3].first,
-              ["8", "9", "a", "b"].contains(variant)
+            groups[0].count == 8,
+            groups[1].count == 4,
+            groups[2].count == 4,
+            groups[3].count == 4,
+            groups[4].count == 12,
+            groups[2].first == "4",
+            let variant = groups[3].first,
+            ["8", "9", "a", "b"].contains(variant)
         else {
             return nil
         }
@@ -51,6 +51,7 @@ public struct OperationID: Codable, Hashable, Sendable, CustomStringConvertible 
         rawValue
     }
 
+    /// Decodes a canonical lowercase UUID v4 string.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
         let wire = try container.decode(String.self)
@@ -63,6 +64,7 @@ public struct OperationID: Codable, Hashable, Sendable, CustomStringConvertible 
         self = parsed
     }
 
+    /// Encodes the identifier as its canonical wire string.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(wireValue)

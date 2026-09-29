@@ -16,11 +16,11 @@ import Testing
             "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
             "configurationInvalid",
         ].map { "vm.\($0)" }
-        + [
-            "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",
-            "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
-            "malformedReply", "versionSkew", "invalidArguments",
-        ].map { "cli.\($0)" }
+            + [
+                "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",
+                "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
+                "malformedReply", "versionSkew", "invalidArguments",
+            ].map { "cli.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(ErrorCatalog.entries.values.allSatisfy { $0.message?["en"] != nil })
@@ -34,20 +34,20 @@ import Testing
     for entry in ErrorCatalog.entries.values {
         #expect(!healthCheckIDs.contains(entry.code))
         #expect(entry.code.hasPrefix("vm.") || entry.code.hasPrefix("cli."))
-        for text in entry.message?.values ?? Dictionary<String, String>().values {
+        for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             #expect(entry.parameters.isSuperset(of: placeholders(in: text)))
         }
-        for text in entry.remediation?.values ?? Dictionary<String, String>().values {
+        for text in entry.remediation?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             #expect(entry.parameters.isSuperset(of: placeholders(in: text)))
         }
         for variant in entry.variants.values {
-            for text in variant.message?.values ?? Dictionary<String, String>().values {
+            for text in variant.message?.values ?? [String: String]().values {
                 #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 #expect(entry.parameters.isSuperset(of: placeholders(in: text)))
             }
-            for text in variant.remediation?.values ?? Dictionary<String, String>().values {
+            for text in variant.remediation?.values ?? [String: String]().values {
                 #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 #expect(entry.parameters.isSuperset(of: placeholders(in: text)))
             }
@@ -94,8 +94,7 @@ import Testing
     )
 
     #expect(
-        presenter.cli(invalidArgument) ==
-            """
+        presenter.cli(invalidArgument) == """
             error: The value of --since isn't valid (duration).
             hint: Run the command with --help to see the allowed values.
             code: cli.invalidArgument (operation 123e4567)
@@ -144,11 +143,13 @@ import Testing
         CatalogFixtureError.configuration("kernelMissing,diskMissing")
     )
     #expect(guiOutput.hints.map(\.code) == ["vm.kernelMissing", "vm.diskMissing"])
-    #expect(guiOutput.hints.map(\.message) == [
-        "Files that Android needs are missing, or APKRun can't read or write them.",
-        "Files that Android needs are missing, or APKRun can't read or write them.",
-    ])
-    let hintCount = listOutput
+    #expect(
+        guiOutput.hints.map(\.message) == [
+            "Files that Android needs are missing, or APKRun can't read or write them.",
+            "Files that Android needs are missing, or APKRun can't read or write them.",
+        ])
+    let hintCount =
+        listOutput
         .split(separator: "\n")
         .filter { $0.hasPrefix("hint:") }
         .count
@@ -287,7 +288,7 @@ private enum CatalogCLIFixtureError: APKRunError {
     }
 
     var underlying: UnderlyingError? {
-        guard case let .fileNotAccessible(_, _, underlying) = self else { return nil }
+        guard case .fileNotAccessible(_, _, let underlying) = self else { return nil }
         return underlying
     }
 }
@@ -310,8 +311,8 @@ private struct CatalogDeclinedOuterError: APKRunError {
     var cause: (any APKRunError)? { innerError }
 }
 
-private extension CatalogOuterError {
-    static func wrapped(_ cause: any APKRunError) -> CatalogOuterError {
+extension CatalogOuterError {
+    fileprivate static func wrapped(_ cause: any APKRunError) -> CatalogOuterError {
         CatalogOuterError(innerError: cause)
     }
 }

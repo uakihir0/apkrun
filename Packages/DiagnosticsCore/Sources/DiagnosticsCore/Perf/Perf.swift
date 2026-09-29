@@ -24,7 +24,7 @@ public enum Perf {
     private static let signposters = Dictionary(
         uniqueKeysWithValues: LogSubsystem.allCases.map { subsystem in
             (
-                subsystem.rawValue,
+                subsystem,
                 OSSignposter(
                     subsystem: subsystem.rawValue,
                     category: .pointsOfInterest
@@ -71,7 +71,11 @@ public enum Perf {
     }
 
     private static func signposter(for subsystem: LogSubsystem) -> OSSignposter {
-        signposters[subsystem.rawValue]!
+        signposters[subsystem]
+            ?? OSSignposter(
+                subsystem: subsystem.rawValue,
+                category: .pointsOfInterest
+            )
     }
 
     static func intervalSubsystem(for name: String) -> LogSubsystem {
@@ -130,18 +134,18 @@ public enum Perf {
         case "WRAPPER_GENERATE_START", "WRAPPER_GENERATE_END", "WRAPPER_REFRESH_END", "WRAPPER_APPROVAL_END":
             ["result": .text, "durationMs": .duration, "kind": .text]
         case "PACKAGE_IMPORT_START", "PACKAGE_INSPECTED", "PACKAGE_INSTALL_START",
-             "PACKAGE_INSTALL_COMPLETE", "PACKAGE_ROLLBACK_COMPLETE":
+            "PACKAGE_INSTALL_COMPLETE", "PACKAGE_ROLLBACK_COMPLETE":
             ["bytes": .count, "splits": .count, "status": .text]
         case "UPDATE_CHECK_START", "UPDATE_CHECK_END", "UPDATE_DOWNLOAD_START",
-             "UPDATE_DOWNLOAD_END", "UPDATE_INSTALL_START", "UPDATE_INSTALL_END",
-             "UPDATE_HEALTH_END", "UPDATE_ROLLBACK_END":
+            "UPDATE_DOWNLOAD_END", "UPDATE_INSTALL_START", "UPDATE_INSTALL_END",
+            "UPDATE_HEALTH_END", "UPDATE_ROLLBACK_END":
             ["provider": .text, "result": .text, "bytes": .count]
         case "CLIPBOARD_PUSH", "NOTIFICATION_DELIVERED", "FILE_TRANSFER":
             ["durationMs": .duration, "bytes": .count]
         case "SELF_UPDATE_CHECK_END", "HOST_UPDATE_PREPARE_START", "HOST_UPDATE_PREPARED", "HOST_UPDATED":
             ["result": .text, "fromBuild": .text, "toBuild": .text, "durationMs": .duration]
         case "IMAGE_CHECK_END", "IMAGE_DOWNLOAD_START", "IMAGE_DOWNLOAD_END", "IMAGE_INSTALL_END",
-             "IMAGE_MIGRATION_START", "IMAGE_MIGRATION_END", "IMAGE_ROLLBACK_END":
+            "IMAGE_MIGRATION_START", "IMAGE_MIGRATION_END", "IMAGE_ROLLBACK_END":
             ["imageVersion": .text, "result": .text, "bytes": .count, "durationMs": .duration]
         default:
             [:]
@@ -150,21 +154,21 @@ public enum Perf {
 
     private static func isValid(_ value: PerfValue, as kind: AttributeKind) -> Bool {
         switch (kind, value) {
-        case let (.duration, .integer(value)):
+        case (.duration, .integer(let value)):
             value >= 0 && Double(value) <= maximumDurationMilliseconds
-        case let (.duration, .double(value)):
+        case (.duration, .double(let value)):
             value.isFinite && value >= 0 && value <= maximumDurationMilliseconds
-        case let (.count, .integer(value)):
+        case (.count, .integer(let value)):
             value >= 0 && value <= maximumCount
         case (.boolean, .boolean):
             true
-        case let (.bootKind, .string(value)):
+        case (.bootKind, .string(let value)):
             ["cold", "firstBoot", "migration"].contains(value)
                 && value.utf8.count <= maximumStringValueBytes
-        case let (.agent, .string(value)):
+        case (.agent, .string(let value)):
             ["guest", "store"].contains(value)
                 && value.utf8.count <= maximumStringValueBytes
-        case let (.text, .string(value)):
+        case (.text, .string(let value)):
             value.utf8.count <= maximumStringValueBytes
                 && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         default:
@@ -226,10 +230,10 @@ public enum Perf {
 
     private static func publicSignpostValue(for key: String, value: PerfValue) -> String? {
         switch value {
-        case let .string(value):
+        case .string(let value):
             switch (key, value) {
             case ("agent", "guest"), ("agent", "store"),
-                 ("bootKind", "cold"), ("bootKind", "firstBoot"), ("bootKind", "migration"):
+                ("bootKind", "cold"), ("bootKind", "firstBoot"), ("bootKind", "migration"):
                 String(reflecting: value)
             default:
                 nil

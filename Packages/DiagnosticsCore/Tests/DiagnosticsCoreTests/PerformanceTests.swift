@@ -1,60 +1,62 @@
 import Foundation
 import Testing
+
 @testable import DiagnosticsCore
 
 @Test func perfMarkerCatalogueHasStableUniqueNames() {
     let names = Set(PerfMarker.allCases.map(\.rawValue))
 
     #expect(names.count == PerfMarker.allCases.count)
-    #expect(names == [
-        "DAEMON_READY",
-        "VM_START",
-        "KERNEL_START",
-        "ANDROID_INIT",
-        "SYSTEM_SERVER_READY",
-        "BOOT_COMPLETED",
-        "AGENT_CONNECTED",
-        "RUNTIME_READY",
-        "VM_PAUSED",
-        "VM_RESUMED",
-        "WRAPPER_PROCESS_START",
-        "APP_LAUNCH_REQUEST",
-        "DISPLAY_ATTACHED",
-        "ACTIVITY_STARTED",
-        "FIRST_FRAME",
-        "FIRST_FRAME_DISPLAYED",
-        "WRAPPER_GENERATE_START",
-        "WRAPPER_GENERATE_END",
-        "WRAPPER_REFRESH_END",
-        "WRAPPER_APPROVAL_END",
-        "PACKAGE_IMPORT_START",
-        "PACKAGE_INSPECTED",
-        "PACKAGE_INSTALL_START",
-        "PACKAGE_INSTALL_COMPLETE",
-        "PACKAGE_ROLLBACK_COMPLETE",
-        "UPDATE_CHECK_START",
-        "UPDATE_CHECK_END",
-        "UPDATE_DOWNLOAD_START",
-        "UPDATE_DOWNLOAD_END",
-        "UPDATE_INSTALL_START",
-        "UPDATE_INSTALL_END",
-        "UPDATE_HEALTH_END",
-        "UPDATE_ROLLBACK_END",
-        "CLIPBOARD_PUSH",
-        "NOTIFICATION_DELIVERED",
-        "FILE_TRANSFER",
-        "SELF_UPDATE_CHECK_END",
-        "HOST_UPDATE_PREPARE_START",
-        "HOST_UPDATE_PREPARED",
-        "HOST_UPDATED",
-        "IMAGE_CHECK_END",
-        "IMAGE_DOWNLOAD_START",
-        "IMAGE_DOWNLOAD_END",
-        "IMAGE_INSTALL_END",
-        "IMAGE_MIGRATION_START",
-        "IMAGE_MIGRATION_END",
-        "IMAGE_ROLLBACK_END",
-    ])
+    #expect(
+        names == [
+            "DAEMON_READY",
+            "VM_START",
+            "KERNEL_START",
+            "ANDROID_INIT",
+            "SYSTEM_SERVER_READY",
+            "BOOT_COMPLETED",
+            "AGENT_CONNECTED",
+            "RUNTIME_READY",
+            "VM_PAUSED",
+            "VM_RESUMED",
+            "WRAPPER_PROCESS_START",
+            "APP_LAUNCH_REQUEST",
+            "DISPLAY_ATTACHED",
+            "ACTIVITY_STARTED",
+            "FIRST_FRAME",
+            "FIRST_FRAME_DISPLAYED",
+            "WRAPPER_GENERATE_START",
+            "WRAPPER_GENERATE_END",
+            "WRAPPER_REFRESH_END",
+            "WRAPPER_APPROVAL_END",
+            "PACKAGE_IMPORT_START",
+            "PACKAGE_INSPECTED",
+            "PACKAGE_INSTALL_START",
+            "PACKAGE_INSTALL_COMPLETE",
+            "PACKAGE_ROLLBACK_COMPLETE",
+            "UPDATE_CHECK_START",
+            "UPDATE_CHECK_END",
+            "UPDATE_DOWNLOAD_START",
+            "UPDATE_DOWNLOAD_END",
+            "UPDATE_INSTALL_START",
+            "UPDATE_INSTALL_END",
+            "UPDATE_HEALTH_END",
+            "UPDATE_ROLLBACK_END",
+            "CLIPBOARD_PUSH",
+            "NOTIFICATION_DELIVERED",
+            "FILE_TRANSFER",
+            "SELF_UPDATE_CHECK_END",
+            "HOST_UPDATE_PREPARE_START",
+            "HOST_UPDATE_PREPARED",
+            "HOST_UPDATED",
+            "IMAGE_CHECK_END",
+            "IMAGE_DOWNLOAD_START",
+            "IMAGE_DOWNLOAD_END",
+            "IMAGE_INSTALL_END",
+            "IMAGE_MIGRATION_START",
+            "IMAGE_MIGRATION_END",
+            "IMAGE_ROLLBACK_END",
+        ])
 }
 
 @Test func performanceSignpostsUseTheirCatalogueSubsystems() {
@@ -228,9 +230,10 @@ import Testing
     #expect(value == "flushed")
 
     do {
-        _ = try await Perf.interval("input.route") {
-            throw PerfFixtureError.failed
-        } as String
+        _ =
+            try await Perf.interval("input.route") {
+                throw PerfFixtureError.failed
+            } as String
         Issue.record("The interval should preserve the body's error.")
     } catch PerfFixtureError.failed {
         #expect(true)

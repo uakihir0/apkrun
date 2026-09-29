@@ -2,14 +2,28 @@ import Foundation
 
 /// Shared diagnostics dependencies supplied to module entry points.
 public struct DiagnosticsContext: Sendable {
+    /// The sink used for structured diagnostics events.
     public let logSink: any LogSink
+
+    /// The registered host and runtime health checks.
     public let healthChecks: HealthCheckRegistry
+
+    /// The process-wide lifecycle performance timeline.
     public let perfTimeline: PerfTimeline
+
+    /// APKRun's host data paths.
     public let paths: APKRunPaths
+
+    /// A clock that can be replaced in deterministic tests.
     public let clock: any DiagnosticsClock
+
+    /// The host application build metadata.
     public let buildInfo: BuildInfo
+
+    /// The host system probe used by health checks.
     public let hostProbe: any HostProbe
 
+    /// Creates the dependencies used by the diagnostics service.
     public init(
         logSink: any LogSink,
         healthChecks: HealthCheckRegistry,

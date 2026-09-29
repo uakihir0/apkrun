@@ -8,9 +8,10 @@ import Testing
     #expect(results.count == 9)
     #expect(results.allSatisfy { $0.state == .pass })
     #expect(results.contains(where: { $0.id == "host.hypervisor" && $0.group == .virtualization }))
-    #expect(results.contains(where: {
-        $0.id == "apkrund.registration" && $0.group == .backgroundService
-    }))
+    #expect(
+        results.contains(where: {
+            $0.id == "apkrund.registration" && $0.group == .backgroundService
+        }))
 }
 
 @Test func hostRequirementChecksReportTypedFindings() async {
@@ -95,13 +96,16 @@ import Testing
     let unregistered = await runHostChecks(
         state: .init(runtimeRegistration: .notRegistered)
     )
-    #expect(result("apkrund.registration", in: unregistered)?.error?.message.fallback
-        == "APKRun's background service is not set up.")
+    #expect(
+        result("apkrund.registration", in: unregistered)?.error?.message.fallback
+            == "APKRun's background service is not set up.")
 }
 
 @Test func buildInfoMapsOnlyKnownIdentitiesToLaunchAgentLabels() {
     #expect(BuildInfo(infoDictionary: ["APKRunBuildIdentity": "dev"]).launchAgentLabel == "io.apkrun.apkrund.dev")
-    #expect(BuildInfo(infoDictionary: ["APKRunBuildIdentity": "updatetest"]).launchAgentLabel == "io.apkrun.apkrund.updatetest")
+    #expect(
+        BuildInfo(infoDictionary: ["APKRunBuildIdentity": "updatetest"]).launchAgentLabel
+            == "io.apkrun.apkrund.updatetest")
     #expect(BuildInfo(infoDictionary: ["APKRunBuildIdentity": "release"]).launchAgentLabel == "io.apkrun.apkrund")
     #expect(BuildInfo(infoDictionary: ["APKRunBuildIdentity": "unexpected"]).launchAgentLabel == "io.apkrun.apkrund")
 }
@@ -128,8 +132,8 @@ private func result(_ id: String, in results: [HealthResult]) -> HealthResult? {
     results.first(where: { $0.id == id })
 }
 
-private extension FakeHostProbe {
-    func currentState() -> State {
+extension FakeHostProbe {
+    fileprivate func currentState() -> State {
         State(
             supportsAppleSilicon: true,
             macOSVersion: HostOSVersion(major: 27, minor: 0),

@@ -13,10 +13,16 @@ public enum CatalogCLIExitRule: String, Equatable, Sendable {
 
 /// Localized text and an optional action for a reason-specific catalog variant.
 public struct ErrorCatalogVariant: Equatable, Sendable {
+    /// Localized message templates selected for a specific reason.
     public let message: [String: String]?
+
+    /// Localized remediation templates selected for a specific reason.
     public let remediation: [String: String]?
+
+    /// An optional action associated with this reason.
     public let action: RemediationAction?
 
+    /// Creates localized presentation overrides for one reason.
     public init(
         message: [String: String]? = nil,
         remediation: [String: String]? = nil,
@@ -30,17 +36,37 @@ public struct ErrorCatalogVariant: Equatable, Sendable {
 
 /// One generated entry from `ErrorCatalog/errors.json`.
 public struct ErrorCatalogEntry: Equatable, Sendable {
+    /// The stable qualified error code.
     public let code: String
+
+    /// The parameter names accepted by the message templates.
     public let parameters: Set<String>
+
+    /// Localized message templates.
     public let message: [String: String]?
+
+    /// Localized remediation templates.
     public let remediation: [String: String]?
+
+    /// The suggested user action.
     public let action: RemediationAction?
+
+    /// The fixed exit code or cause-based behavior.
     public let cliExit: CatalogCLIExit
+
+    /// An optional rule that computes the CLI exit status.
     public let cliExitRule: CatalogCLIExitRule?
+
+    /// Reason-specific message, remediation, and action overrides.
     public let variants: [String: ErrorCatalogVariant]
+
+    /// Whether presentation and exit status pass through to the underlying cause.
     public let transparent: Bool
+
+    /// Whether the catalog entry is retained only for compatibility.
     public let retired: Bool
 
+    /// Creates one typed error catalog entry.
     public init(
         code: String,
         parameters: Set<String>,
@@ -91,7 +117,7 @@ public enum ErrorCatalog {
         guard let entry = entries[code] else {
             return nil
         }
-        guard case let .code(code) = entry.cliExit else {
+        guard case .code(let code) = entry.cliExit else {
             return nil
         }
         return code
@@ -127,10 +153,11 @@ public enum ErrorCatalog {
         }
 
         if entry.cliExitRule == .allConfigurationItemsInternalOrFailure {
-            guard case let .text(rawItems)? = error.parameters["items"] else {
+            guard case .text(let rawItems)? = error.parameters["items"] else {
                 return 1
             }
-            let items = rawItems
+            let items =
+                rawItems
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
@@ -139,7 +166,7 @@ public enum ErrorCatalog {
             }
             let allInternal = items.allSatisfy { item in
                 guard let itemEntry = entries["vm.\(item)"],
-                      case let .code(code) = itemEntry.cliExit
+                    case .code(let code) = itemEntry.cliExit
                 else {
                     return false
                 }
@@ -148,7 +175,7 @@ public enum ErrorCatalog {
             return allInternal ? 70 : 1
         }
 
-        if case let .code(code) = entry.cliExit {
+        if case .code(let code) = entry.cliExit {
             return code
         }
         return error.cause.map { cliExit(for: $0, visited: visited) } ?? 1

@@ -43,10 +43,16 @@ public enum HealthCost: String, Codable, Equatable, Sendable {
 
 /// A localized message key plus safe parameters and an English fallback.
 public struct LocalizedText: Codable, Equatable, Sendable {
+    /// The stable localization key.
     public let key: String
+
+    /// Safe values substituted into the localized message.
     public let parameters: [String: ErrorParameter]
+
+    /// The English fallback used when no translation exists.
     public let fallback: String
 
+    /// Creates a localization value with safe substitution parameters.
     public init(
         key: String,
         parameters: [String: ErrorParameter] = [:],
@@ -60,11 +66,19 @@ public struct LocalizedText: Codable, Equatable, Sendable {
 
 /// Catalog-backed error content attached to a warning or failure result.
 public struct ErrorInfo: Codable, Equatable, Sendable {
+    /// The qualified catalog error code.
     public let code: String
+
+    /// The user-facing error message.
     public let message: LocalizedText
+
+    /// Optional guidance for resolving the error.
     public let remediation: LocalizedText?
+
+    /// An optional action a user can take.
     public let action: RemediationAction?
 
+    /// Creates catalog-backed error details for a health result.
     public init(
         code: String,
         message: LocalizedText,
@@ -80,10 +94,16 @@ public struct ErrorInfo: Codable, Equatable, Sendable {
 
 /// The most recent known result for a check that was skipped.
 public struct LastKnown: Codable, Equatable, Sendable {
+    /// The state from the previous execution.
     public let state: HealthState
+
+    /// Optional detail from the previous execution.
     public let detail: String?
+
+    /// When the previous result was measured.
     public let measuredAt: Date
 
+    /// Creates a cached result for a skipped check.
     public init(state: HealthState, detail: String? = nil, measuredAt: Date) {
         self.state = state
         self.detail = detail
@@ -93,16 +113,34 @@ public struct LastKnown: Codable, Equatable, Sendable {
 
 /// One health check result.
 public struct HealthResult: Codable, Equatable, Sendable {
+    /// The stable identifier of the check.
     public let id: HealthCheckID
+
+    /// The report section that owns the result.
     public let group: HealthGroup
+
+    /// The outcome of the check.
     public let state: HealthState
+
+    /// The localized check title.
     public let title: LocalizedText
+
+    /// Additional human-readable detail.
     public let detail: String?
+
+    /// Structured error details, when the check reports an error.
     public let error: ErrorInfo?
+
+    /// Whether the result offers a repair.
     public let fixAvailable: Bool
+
+    /// The prior result when this check was skipped.
     public let lastKnown: LastKnown?
+
+    /// When this result was measured.
     public let measuredAt: Date
 
+    /// Creates one result row for a health report.
     public init(
         id: HealthCheckID,
         group: HealthGroup,
@@ -128,13 +166,25 @@ public struct HealthResult: Codable, Equatable, Sendable {
 
 /// A complete health report assembled by the diagnostics service.
 public struct HealthReport: Codable, Equatable, Sendable {
+    /// When this report was assembled.
     public let generatedAt: Date
+
+    /// The host application build that generated the report.
     public let build: BuildInfo
+
+    /// The installed Android image version, if known.
     public let imageVersion: String?
+
+    /// Whether Android was running when the report was assembled.
     public let runtimeRunning: Bool
+
+    /// The overall status derived from check results and runtime state.
     public let verdict: HealthVerdict
+
+    /// The ordered check results included in the report.
     public let results: [HealthResult]
 
+    /// Creates a complete diagnostics report.
     public init(
         generatedAt: Date,
         build: BuildInfo,
@@ -163,11 +213,19 @@ public enum HealthRuntimeState: Equatable, Sendable {
 
 /// Additional runtime facts that are not represented by individual check rows.
 public struct HealthVerdictContext: Sendable {
+    /// The daemon's current runtime state.
     public let runtimeState: HealthRuntimeState
+
+    /// Whether initial image provisioning has completed.
     public let provisioningComplete: Bool
+
+    /// Whether repeated boot failures activated the loop guard.
     public let bootLoopGuarded: Bool
+
+    /// The most recent boot error code, if any.
     public let lastBootFailureCode: String?
 
+    /// Creates the runtime facts used when choosing a report verdict.
     public init(
         runtimeState: HealthRuntimeState,
         provisioningComplete: Bool = true,
@@ -194,12 +252,14 @@ public enum HealthVerdict: String, CaseIterable, Equatable, Sendable, Codable {
     case healthy
     case unknown
 
+    /// Decodes an unknown future verdict as `unknown`.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
         let rawValue = try container.decode(String.self)
         self = Self(rawValue: rawValue) ?? .unknown
     }
 
+    /// Encodes the stable verdict string.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
@@ -281,9 +341,9 @@ public enum HealthVerdict: String, CaseIterable, Equatable, Sendable, Codable {
             return "Graphics failed to start"
         case .bootFailure:
             if let bootResult = results.first(where: { $0.id == "runtime.boot" }),
-               bootResult.state == .failure,
-               let detail = bootResult.detail,
-               !detail.isEmpty
+                bootResult.state == .failure,
+                let detail = bootResult.detail,
+                !detail.isEmpty
             {
                 return "Android failed to start · \(detail)"
             }
@@ -295,7 +355,8 @@ public enum HealthVerdict: String, CaseIterable, Equatable, Sendable, Codable {
         case .degraded:
             let warningCount = results.filter { $0.state == .warning }.count
             let warningLabel = warningCount == 1 ? "warning" : "warnings"
-            let base = warningCount == 0
+            let base =
+                warningCount == 0
                 ? "Needs attention"
                 : "Needs attention (\(warningCount) \(warningLabel))"
             return runtimeState == .stopped ? "\(base) · Android is not running" : base

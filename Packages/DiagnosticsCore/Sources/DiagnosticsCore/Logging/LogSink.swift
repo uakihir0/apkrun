@@ -7,9 +7,9 @@ public protocol LogSink: Sendable {
     func write(_ entry: LogEntry)
 }
 
-public extension LogSink {
+extension LogSink {
     /// Defaults custom sinks to accepting every level.
-    func isEnabled(for level: LogLevel) -> Bool {
+    public func isEnabled(for level: LogLevel) -> Bool {
         true
     }
 }

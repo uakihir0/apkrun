@@ -54,14 +54,14 @@ public struct BuildInfo: Codable, Equatable, Sendable {
         gitCommit = infoDictionary["APKRunGitCommit"] as? String ?? "unknown"
 
         if let value = infoDictionary["APKRunConfiguration"] as? String,
-           let decoded = BuildConfiguration(rawValue: value.lowercased())
+            let decoded = BuildConfiguration(rawValue: value.lowercased())
         {
             configuration = decoded
         } else {
             #if DEBUG
-            configuration = .debug
+                configuration = .debug
             #else
-            configuration = .release
+                configuration = .release
             #endif
         }
 
@@ -71,9 +71,9 @@ public struct BuildInfo: Codable, Equatable, Sendable {
             usesEmbeddedRuntime = ["yes", "true", "1"].contains(value.lowercased())
         } else {
             #if APKRUN_EMBEDDED_RUNTIME
-            usesEmbeddedRuntime = true
+                usesEmbeddedRuntime = true
             #else
-            usesEmbeddedRuntime = false
+                usesEmbeddedRuntime = false
             #endif
         }
     }

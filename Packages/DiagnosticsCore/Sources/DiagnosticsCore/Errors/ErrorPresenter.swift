@@ -7,23 +7,40 @@ private struct RemediationPresentation {
 
 /// The alert content a GUI surface can show without understanding catalog internals.
 public struct PresentedErrorHint: Equatable, Sendable {
+    /// The stable code associated with the hint.
     public let code: String
+
+    /// The rendered hint text.
     public let message: String
 
+    /// Creates one user-facing hint.
     public init(code: String, message: String) {
         self.code = code
         self.message = message
     }
 }
 
+/// A complete GUI-ready presentation of a typed error.
 public struct PresentedError: Equatable, Sendable {
+    /// The stable qualified error code.
     public let code: String
+
+    /// The short title shown in the alert.
     public let title: String
+
+    /// The main remediation text shown in the alert.
     public let body: String
+
+    /// Additional cause or item-specific hints.
     public let hints: [PresentedErrorHint]
+
+    /// The action offered by the error catalog.
     public let action: RemediationAction
+
+    /// Path-free diagnostic details suitable for copying.
     public let copyDetails: String
 
+    /// Creates GUI-ready error content.
     public init(
         code: String,
         title: String,
@@ -49,6 +66,7 @@ public struct ErrorPresenter {
     private let imageVersion: String
     private let timestamp: Date
 
+    /// Creates a presenter using the current build and operation context.
     public init(
         locale: Locale = Locale(identifier: Locale.preferredLanguages.first ?? "en"),
         operationID: OperationID? = OperationContext.current?.operationID,
@@ -79,9 +97,10 @@ public struct ErrorPresenter {
 
         let listItems = listItems(for: contentError)
         if !listItems.isEmpty {
-            lines.append(contentsOf: listItems.map { item in
-                "hint: \(item.code): \(item.message)"
-            })
+            lines.append(
+                contentsOf: listItems.map { item in
+                    "hint: \(item.code): \(item.message)"
+                })
         }
 
         let remediation = remediation(for: error, visited: [])
@@ -101,9 +120,10 @@ public struct ErrorPresenter {
             "error": jsonObject(for: error, includeOperationID: true, visited: []),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-              let output = String(data: data, encoding: .utf8)
+            let output = String(data: data, encoding: .utf8)
         else {
-            return #"{"schemaVersion":1,"error":{"code":"unknown","message":"APKRun couldn't complete the operation."}}"#
+            return
+                #"{"schemaVersion":1,"error":{"code":"unknown","message":"APKRun couldn't complete the operation."}}"#
         }
         return output
     }
@@ -140,7 +160,8 @@ public struct ErrorPresenter {
         timestampFormatter.timeZone = TimeZone(secondsFromGMT: 0)
         timestampFormatter.formatOptions = [.withInternetDateTime]
         let operation = operationID?.wireValue ?? "unknown"
-        var line = "APKRun \(buildInfo.marketingVersion) (\(buildInfo.buildNumber))"
+        var line =
+            "APKRun \(buildInfo.marketingVersion) (\(buildInfo.buildNumber))"
             + " · image \(safeToken(imageVersion))"
             + " · \(safeToken(error.qualifiedCode))"
             + " · op \(operation)"
@@ -208,7 +229,7 @@ public struct ErrorPresenter {
         for error: any APKRunError,
         in entry: ErrorCatalogEntry
     ) -> ErrorCatalogVariant? {
-        guard case let .text(reason)? = error.parameters["reason"] else {
+        guard case .text(let reason)? = error.parameters["reason"] else {
             return nil
         }
         return entry.variants[reason]
@@ -251,17 +272,19 @@ public struct ErrorPresenter {
     }
 
     private func listItems(for error: any APKRunError) -> [(code: String, message: String)] {
-        guard case let .text(rawItems)? = error.parameters["items"] else {
+        guard case .text(let rawItems)? = error.parameters["items"] else {
             return []
         }
         let source = ErrorCatalog.presentationSource(for: error)
         let parentEntry = source.entry
         let contentError = source.error
-        let domain = contentError.qualifiedCode
+        let domain =
+            contentError.qualifiedCode
             .split(separator: ".", maxSplits: 1)
             .first
             .map(String.init) ?? "vm"
-        return rawItems
+        return
+            rawItems
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -308,8 +331,8 @@ public struct ErrorPresenter {
         var result = template
         for match in matches.reversed() {
             guard match.numberOfRanges == 2,
-                  let nameRange = Range(match.range(at: 1), in: result),
-                  let wholeRange = Range(match.range(at: 0), in: result)
+                let nameRange = Range(match.range(at: 1), in: result),
+                let wholeRange = Range(match.range(at: 0), in: result)
             else {
                 continue
             }
@@ -338,20 +361,20 @@ public struct ErrorPresenter {
 
     private func format(_ parameter: ErrorParameter) -> String {
         switch parameter {
-        case let .text(value):
+        case .text(let value):
             return safeDisplayText(value)
-        case let .bytes(value):
+        case .bytes(let value):
             let formatter = ByteCountFormatter()
             formatter.countStyle = .file
             formatter.includesUnit = true
             formatter.isAdaptive = true
             formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
             return formatter.string(fromByteCount: value)
-        case let .count(value):
+        case .count(let value):
             return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-        case let .duration(value):
+        case .duration(let value):
             return formatDuration(value)
-        case let .fileName(value):
+        case .fileName(let value):
             return safeDisplayText(URL(fileURLWithPath: value).lastPathComponent)
         }
     }
@@ -377,7 +400,7 @@ public struct ErrorPresenter {
 
     private func nonemptyText(_ value: String?) -> String? {
         guard let value,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }
@@ -415,7 +438,8 @@ public struct ErrorPresenter {
         for scalar in value.unicodeScalars {
             let isControl = CharacterSet.controlCharacters.contains(scalar)
             let isLineSeparator = scalar.value == 0x2028 || scalar.value == 0x2029
-            let isBidiControl = (0x202A...0x202E).contains(scalar.value)
+            let isBidiControl =
+                (0x202A...0x202E).contains(scalar.value)
                 || (0x2066...0x2069).contains(scalar.value)
                 || scalar.value == 0x200E
                 || scalar.value == 0x200F
@@ -430,7 +454,8 @@ public struct ErrorPresenter {
 
     private func formatDuration(_ duration: Duration) -> String {
         let components = duration.components
-        let seconds = Double(components.seconds)
+        let seconds =
+            Double(components.seconds)
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
         if abs(seconds) < 1 {
             return "\(Int((seconds * 1_000).rounded())) ms"
@@ -442,16 +467,16 @@ public struct ErrorPresenter {
     }
 }
 
-private extension Locale {
-    static func preferredLanguages(for locale: Locale) -> [String] {
+extension Locale {
+    fileprivate static func preferredLanguages(for locale: Locale) -> [String] {
         let identifier = locale.identifier.replacingOccurrences(of: "_", with: "-")
         let language = String(identifier.split(separator: "-").first ?? "en")
         return [identifier, language].uniqued()
     }
 }
 
-private extension Array where Element: Hashable {
-    func uniqued() -> [Element] {
+extension Array where Element: Hashable {
+    fileprivate func uniqued() -> [Element] {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }

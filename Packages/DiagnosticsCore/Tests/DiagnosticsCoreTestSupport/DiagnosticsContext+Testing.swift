@@ -1,9 +1,9 @@
 import DiagnosticsCore
 import Foundation
 
-public extension DiagnosticsContext {
+extension DiagnosticsContext {
     /// A deterministic context for module tests. The path override is explicit and isolated.
-    static func testing(
+    public static func testing(
         root: URL = FileManager.default.temporaryDirectory.appendingPathComponent(
             "APKRun-DiagnosticsTests",
             isDirectory: true

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiagnosticsCore
 
 @Test func buildInfoDecodesEmbeddedMetadataFromFixturePlist() throws {
@@ -35,13 +36,13 @@ import Testing
     let paths = APKRunPaths(environment: environment, homeDirectory: home)
 
     #if DEBUG
-    #expect(paths.dataRoot.path == "/Users/example/Library/Application Support/APKRun-Dev")
-    #expect(paths.logsRoot.path == "/Users/example/Library/Logs/APKRun-Dev")
-    #expect(paths.cachesRoot.path == "/Users/example/Library/Caches/io.apkrun.APKRun-Dev")
+        #expect(paths.dataRoot.path == "/Users/example/Library/Application Support/APKRun-Dev")
+        #expect(paths.logsRoot.path == "/Users/example/Library/Logs/APKRun-Dev")
+        #expect(paths.cachesRoot.path == "/Users/example/Library/Caches/io.apkrun.APKRun-Dev")
     #else
-    #expect(paths.dataRoot.path == "/Users/example/Library/Application Support/APKRun")
-    #expect(paths.logsRoot.path == "/Users/example/Library/Logs/APKRun")
-    #expect(paths.cachesRoot.path == "/Users/example/Library/Caches/io.apkrun.APKRun")
+        #expect(paths.dataRoot.path == "/Users/example/Library/Application Support/APKRun")
+        #expect(paths.logsRoot.path == "/Users/example/Library/Logs/APKRun")
+        #expect(paths.cachesRoot.path == "/Users/example/Library/Caches/io.apkrun.APKRun")
     #endif
 }
 
@@ -62,12 +63,20 @@ import Testing
     #expect(paths.imageChecksumsFile(version: "2026.10.0").lastPathComponent == "SHA256SUMS")
     #expect(paths.imageInstallStagingDirectory(name: "2026.10.0").lastPathComponent == ".installing-2026.10.0")
     #expect(paths.instanceInfoFile.lastPathComponent == "instance.json")
-    #expect(paths.packageIncomingDirectory(packageID: "org.example.app", ticket: "ticket-1").lastPathComponent == "ticket-1")
+    #expect(
+        paths.packageIncomingDirectory(packageID: "org.example.app", ticket: "ticket-1").lastPathComponent == "ticket-1"
+    )
     #expect(paths.packageStagedDirectory(packageID: "org.example.app").lastPathComponent == "staged")
     #expect(paths.consoleLogRotationFile(index: 2).lastPathComponent == "console.2.log")
     let recoveryPoint = paths.recoveryPointDirectory(timestamp: "20260929T120000Z", imageVersion: "2026.10.0")
     #expect(recoveryPoint.lastPathComponent == "20260929T120000Z-2026.10.0")
-    #expect(paths.recoveryPointPersistentDiskFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent == "persistent.img")
-    #expect(paths.recoveryPointUserDataDiskFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent == "userdata.img")
-    #expect(paths.recoveryPointInstanceInfoFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent == "instance.json")
+    #expect(
+        paths.recoveryPointPersistentDiskFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0")
+            .lastPathComponent == "persistent.img")
+    #expect(
+        paths.recoveryPointUserDataDiskFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent
+            == "userdata.img")
+    #expect(
+        paths.recoveryPointInstanceInfoFile(timestamp: "20260929T120000Z", imageVersion: "2026.10.0").lastPathComponent
+            == "instance.json")
 }

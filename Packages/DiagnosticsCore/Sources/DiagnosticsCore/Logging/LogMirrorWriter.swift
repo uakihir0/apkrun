@@ -111,7 +111,7 @@ public final class LogMirrorWriter: LogSink, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard byteCount <= maximumBufferedBytes,
-              pendingBytes <= maximumBufferedBytes - byteCount
+            pendingBytes <= maximumBufferedBytes - byteCount
         else {
             return false
         }
@@ -145,11 +145,13 @@ public final class LogMirrorWriter: LogSink, @unchecked Sendable {
                 ofItemAtPath: fileURL.path
             )
         } else {
-            guard FileManager.default.createFile(
-                atPath: fileURL.path,
-                contents: Data(),
-                attributes: [.posixPermissions: 0o600]
-            ) else {
+            guard
+                FileManager.default.createFile(
+                    atPath: fileURL.path,
+                    contents: Data(),
+                    attributes: [.posixPermissions: 0o600]
+                )
+            else {
                 throw CocoaError(.fileWriteUnknown)
             }
         }
@@ -157,11 +159,13 @@ public final class LogMirrorWriter: LogSink, @unchecked Sendable {
         let activeSize = try Self.fileSize(at: fileURL)
         if activeSize > 0, activeSize + line.count > maximumFileBytes {
             try rotateFiles()
-            guard FileManager.default.createFile(
-                atPath: fileURL.path,
-                contents: Data(),
-                attributes: [.posixPermissions: 0o600]
-            ) else {
+            guard
+                FileManager.default.createFile(
+                    atPath: fileURL.path,
+                    contents: Data(),
+                    attributes: [.posixPermissions: 0o600]
+                )
+            else {
                 throw CocoaError(.fileWriteUnknown)
             }
         }
@@ -212,7 +216,7 @@ public final class LogMirrorWriter: LogSink, @unchecked Sendable {
 
     private func synchronizeActiveFile() {
         guard FileManager.default.fileExists(atPath: fileURL.path),
-              let handle = try? FileHandle(forWritingTo: fileURL)
+            let handle = try? FileHandle(forWritingTo: fileURL)
         else {
             return
         }
@@ -262,8 +266,8 @@ private struct PublicLogRecord: Sendable {
     }
 }
 
-private extension URL {
-    var lastPathComponentWithoutExtension: String {
+extension URL {
+    fileprivate var lastPathComponentWithoutExtension: String {
         deletingPathExtension().lastPathComponent
     }
 }

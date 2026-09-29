@@ -15,54 +15,67 @@ public struct APKLogger: Sendable {
         self.init(subsystem: .runtime, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a virtual machine category.
     public init(category: VMLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .vm, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a graphics category.
     public init(category: GraphicsLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .graphics, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for an input category.
     public init(category: InputLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .input, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for an image category.
     public init(category: ImageLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .image, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a package store category.
     public init(category: StoreLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .store, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for an app update category.
     public init(category: UpdateLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .update, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a wrapper category.
     public init(category: WrapperLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .wrapper, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for an integration category.
     public init(category: IntegrationLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .integration, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a maintenance category.
     public init(category: MaintenanceLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .maintenance, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for an app user interface category.
     public init(category: UILogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .ui, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a menu bar category.
     public init(category: MenuBarLogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .menubar, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a command-line category.
     public init(category: CLILogCategory, sink: (any LogSink)? = nil, context: LogContext = LogContext()) {
         self.init(subsystem: .cli, category: category.rawValue, sink: sink, context: context)
     }
 
+    /// Creates a logger for a diagnostics category.
     public init(
         category: DiagnosticsLogCategory,
         sink: (any LogSink)? = nil,

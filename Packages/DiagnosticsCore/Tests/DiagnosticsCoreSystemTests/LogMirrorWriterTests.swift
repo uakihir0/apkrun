@@ -1,6 +1,7 @@
-@testable import DiagnosticsCore
 import Foundation
 import Testing
+
+@testable import DiagnosticsCore
 
 @Test func logMirrorRotatesAtTheTenMiBProductionLimit() async throws {
     let directory = try temporaryDirectory()
@@ -9,7 +10,7 @@ import Testing
     let writer = LogMirrorWriter(fileURL: logURL)
     let payload = String(repeating: "x", count: 900_000)
 
-    for _ in 0 ..< 24 {
+    for _ in 0..<24 {
         writer.write(
             LogEntry(
                 level: .info,

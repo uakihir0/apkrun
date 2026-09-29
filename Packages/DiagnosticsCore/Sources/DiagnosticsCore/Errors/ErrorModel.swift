@@ -39,6 +39,7 @@ public enum ErrorParameter: Codable, Equatable, Sendable {
         case fileName
     }
 
+    /// Decodes the tagged representation while sanitizing file names.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try container.decode(Kind.self, forKey: .kind)
@@ -62,22 +63,23 @@ public enum ErrorParameter: Codable, Equatable, Sendable {
         }
     }
 
+    /// Encodes the tagged representation without exposing arbitrary error metadata.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .text(value):
+        case .text(let value):
             try container.encode(Kind.text, forKey: .kind)
             try container.encode(value, forKey: .value)
-        case let .bytes(value):
+        case .bytes(let value):
             try container.encode(Kind.bytes, forKey: .kind)
             try container.encode(value, forKey: .value)
-        case let .count(value):
+        case .count(let value):
             try container.encode(Kind.count, forKey: .kind)
             try container.encode(value, forKey: .value)
-        case let .fileName(value):
+        case .fileName(let value):
             try container.encode(Kind.fileName, forKey: .kind)
             try container.encode(URL(fileURLWithPath: value).lastPathComponent, forKey: .value)
-        case let .duration(value):
+        case .duration(let value):
             try container.encode(Kind.duration, forKey: .kind)
             try container.encode(value.components.seconds, forKey: .seconds)
             try container.encode(value.components.attoseconds, forKey: .attoseconds)
@@ -93,6 +95,7 @@ public struct UnderlyingError: Codable, Equatable, Sendable {
     /// The numeric system error code.
     public let code: Int
 
+    /// Creates a safe, path-free representation of a system error.
     public init(domain: String, code: Int) {
         self.domain = domain
         self.code = code
@@ -129,15 +132,18 @@ public protocol APKRunError: Error, Sendable {
     var underlying: UnderlyingError? { get }
 }
 
-public extension APKRunError {
+extension APKRunError {
     /// The stable `<domain>.<case>` error code.
-    var qualifiedCode: String {
+    public var qualifiedCode: String {
         "\(Self.domain.rawValue).\(code)"
     }
 
-    var parameters: [String: ErrorParameter] { [:] }
+    /// Safe catalog parameters, empty unless the error supplies its own values.
+    public var parameters: [String: ErrorParameter] { [:] }
 
-    var cause: (any APKRunError)? { nil }
+    /// The typed error that caused this error, if any.
+    public var cause: (any APKRunError)? { nil }
 
-    var underlying: UnderlyingError? { nil }
+    /// The system error underlying this error, if any.
+    public var underlying: UnderlyingError? { nil }
 }

@@ -44,7 +44,7 @@
 
 ### 1.2 Development (embedded) mode
 
-Before #031 there is no daemon. `apkrun dev …` commands link `RuntimeHost` and `WindowingCore` (build flag `APKRUN_EMBEDDED_RUNTIME`). They run the VM and the window inside the CLI process (the CLI runs an `NSApplication` event loop with `.regular` activation policy for these commands). All code paths go through the same `RuntimeService` protocol (`EmbeddedRuntimeService`). Moving to XPC in #031/#032 therefore replaces transport, not logic.
+Before #031 there is no daemon. `apkrun dev …` commands link `RuntimeHost`, `WindowingCore`, and `InputCore` (build flag `APKRUN_EMBEDDED_RUNTIME`). They run the VM and the window inside the CLI process (the CLI runs an `NSApplication` event loop with `.regular` activation policy for these commands). All code paths go through the same `RuntimeService` protocol (`EmbeddedRuntimeService`). Moving to XPC in #031/#032 therefore replaces transport, not logic.
 
 `apkrun dev` stays available after M4 for debugging, e.g. booting a test image without touching the user's runtime. It refuses to run while apkrund owns the user's runtime instance.
 

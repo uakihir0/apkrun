@@ -381,7 +381,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 
 ## 7. Verification checklist
 
-`scripts/bootstrap` installs what it can (pinned tools, venv, `local.properties`) and then checks everything. `scripts/bootstrap --check` only checks. A fresh machine is ready when every line reports `ok`.
+`scripts/bootstrap` installs what it can (pinned tools, venv, `local.properties`) and then checks the environment. `scripts/bootstrap --check` only checks. Each task adds checks for the tools it introduces; checks for later tasks print `skip` until those tools are added. A machine is ready for the current task when every applicable check reports `ok` and no check reports `FAIL`. A full development environment reports `ok` for every row, with only the documented informational warnings.
 
 | Check | Command it runs | Expected |
 |---|---|---|

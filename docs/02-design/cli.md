@@ -23,7 +23,7 @@ This page is the complete command set. Subsystem documents show the commands the
 
 ## 2. Build, installation, and authorization
 
-- Source: `CLI/apkrun`, built with swift-argument-parser ([../01-architecture/modules.md](../01-architecture/modules.md) §1). Dependencies: `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`. With the build flag `APKRUN_EMBEDDED_RUNTIME` (development builds only), `RuntimeHost` and `WindowingCore` as well, for the `dev` commands ([runtime-daemon.md](runtime-daemon.md) §10).
+- Source: `CLI/apkrun`, built with swift-argument-parser ([../01-architecture/modules.md](../01-architecture/modules.md) §1). Dependencies: `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`. With the build flag `APKRUN_EMBEDDED_RUNTIME` (development builds only), `RuntimeHost`, `WindowingCore`, and `InputCore` as well, for the `dev` commands ([runtime-daemon.md](runtime-daemon.md) §10).
 - Installed location: `APKRun.app/Contents/Resources/bin/apkrun` ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §4). The binary is signed with APKRun's identity, so apkrund's control endpoint accepts it ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 - To put it on `PATH`, Settings → Advanced → **Install Command-Line Tool…** ([host-ui.md](host-ui.md) §9.9) shows, with a **Copy** button:
 

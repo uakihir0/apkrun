@@ -80,6 +80,7 @@ Exact formats. Code and tests are written against these documents.
 | [test-strategy.md](04-plan/test-strategy.md) | Test tiers T0–T3, fixture apps, CI and lab runs, gate tests |
 | [risks.md](04-plan/risks.md) | Technical and project risks, with mitigation, fallback, and the task that settles each |
 | [open-questions.md](04-plan/open-questions.md) | Undecided items, each with a working default |
+| [implementation-review.md](04-plan/implementation-review.md) | Implementation judgments that need maintainer review, with their reasons |
 | [traceability.md](04-plan/traceability.md) | Requirements → tasks → design → verification |
 
 ### 1.6 Development (`05-development/`)

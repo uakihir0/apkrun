@@ -44,21 +44,21 @@ A clean checkout must build and pass `swift test` without manual steps (NFR-DEV-
 | Test support targets | `Packages/<Module>/Tests/<Module>TestSupport/`: the fakes of the protocols the module owns. Only test targets depend on them ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2) |
 | Fuzz targets | `Packages/<Module>/Tests/<Module>Fuzz/`, declared only when `APKRUN_FUZZ=1` is set (§15.2) |
 | Dependencies | `swift-protobuf`, `swift-argument-parser`, and `ZIPFoundation` (ADR-0017), all with `exact:` versions, so SwiftPM and Xcode resolve the same revision |
-| Package trait | `EmbeddedRuntime` (off by default) adds the `RuntimeHost` and `WindowingCore` dependencies to `apkrun` and defines `APKRUN_EMBEDDED_RUNTIME` ([../02-design/cli.md](../02-design/cli.md) §2) |
+| Package trait | `EmbeddedRuntime` (off by default) adds the `RuntimeHost`, `WindowingCore`, and `InputCore` dependencies to `apkrun` and defines `APKRUN_EMBEDDED_RUNTIME` ([../02-design/cli.md](../02-design/cli.md) §2) |
 
 `Package.resolved` is committed. `apkrund` is an Xcode target (§2.2) with a thin `main` in `Daemon/apkrund`; all its logic is in `RuntimeHost`.
 
-The `EmbeddedRuntime` trait uses trait-conditioned target dependencies (SE-0450). #001 verifies that the pinned toolchain supports them for targets of the same package. If it does not, the fallback is a second manifest-level condition that #001 documents here.
+The `EmbeddedRuntime` trait uses trait-conditioned target dependencies (SE-0450). Verified for #001 on Xcode 27.0 / Swift 6.4: `swift build --traits EmbeddedRuntime` succeeds with the three same-package dependencies enabled, while `swift build` succeeds with the trait off. Keep the conditional edges in the package manifest; no fallback is needed.
 
 ### 2.2 project.yml and the Xcode project
 
-`project.yml` is the XcodeGen spec for everything that is a bundle or needs entitlements. `scripts/generate-project.sh` runs the pinned XcodeGen ([environment-setup.md](environment-setup.md) §2.7) and writes `APKRun.xcodeproj`. The generated project is git-ignored and never edited by hand. The local package (`Package.swift`) is referenced from `project.yml` as a local Swift package. Sparkle is referenced as a remote Swift package with an exact version ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
+`project.yml` is the XcodeGen spec for everything that is a bundle or needs entitlements. `scripts/generate-project.sh` runs the pinned XcodeGen ([environment-setup.md](environment-setup.md) §2.7) and writes `APKRun.xcodeproj`. The generated project is git-ignored and never edited by hand. The local package (`Package.swift`) is referenced from `project.yml` as a local Swift package. Sparkle is added as a remote Swift package with an exact version in #057 ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
 
 | Target | Type | Bundle ID (Release) | Sources | Links |
 |---|---|---|---|---|
-| `APKRun` | application | `io.apkrun.APKRun` | `Apps/APKRun` | RuntimeClient, DiagnosticsCore, Sparkle |
-| `APKRunMenuBar` | application (login item) | `io.apkrun.APKRunMenuBar` | `Apps/APKRunMenuBar` | RuntimeClient, DiagnosticsCore |
-| `APKRunLauncher` | application | `io.apkrun.APKRunLauncher` | `Apps/APKRunLauncher` | RuntimeClient, WindowingCore, InputCore, DiagnosticsCore |
+| `APKRun` | application | `io.apkrun.APKRun` | `Apps/APKRun` | RuntimeClient, RuntimeAPI, DiagnosticsCore; Sparkle from #057 |
+| `APKRunMenuBar` | application (login item) | `io.apkrun.APKRunMenuBar` | `Apps/APKRunMenuBar` | RuntimeClient, RuntimeAPI, DiagnosticsCore |
+| `APKRunLauncher` | application | `io.apkrun.APKRunLauncher` | `Apps/APKRunLauncher` | RuntimeClient, RuntimeAPI, WindowingCore, InputCore, DiagnosticsCore |
 | `apkrund` | command-line tool, embedded Info.plist (`CREATE_INFOPLIST_SECTION_IN_BINARY`) | `io.apkrun.apkrund` | `Daemon/apkrund` | RuntimeHost, VirGLRuntime dylibs |
 | `APKRunTestHost` | application, Debug only | `io.apkrun.testhost` | `Tests/IntegrationTests/Host` | the modules under test |
 | `IntegrationTests` | unit-test bundle hosted by `APKRunTestHost` (T2) | — | `Tests/IntegrationTests` | as needed |

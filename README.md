@@ -13,7 +13,7 @@ The generated `.app` is a thin launcher that never changes. The APK, the app's d
 
 ## Status
 
-The documentation baseline is complete. There is no code yet. Implementation starts with task #001 in milestone M0 ([docs/04-plan/roadmap.md](docs/04-plan/roadmap.md)).
+The documentation baseline is complete. Implementation is proceeding from task #001 in milestone M0 ([docs/04-plan/roadmap.md](docs/04-plan/roadmap.md)).
 
 | Milestone | Version | Result |
 |---|---|---|

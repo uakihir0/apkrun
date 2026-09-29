@@ -107,8 +107,9 @@ Out of scope:
   - 16 library targets, each with a static library product;
   - the `apkrun` executable target at `CLI/apkrun`, which excludes `Tests`;
   - the `EmbeddedRuntime` trait;
-  - `swift-argument-parser` and `swift-protobuf`, both pinned with `exact:`.
+  - `swift-argument-parser`, `swift-protobuf`, and `ZIPFoundation`, all pinned with `exact:`.
 - `Package.resolved`, committed.
+- `ThirdParty/ThirdParty.lock.json` and local license copies for the three pinned Swift packages, so each dependency satisfies the repository's pinning rule from its first commit.
 - `Packages/<Module>/Sources/<Module>/<Module>.swift`, one placeholder per module.
 - `Packages/<Module>/Tests/<Module>Tests/<Module>Tests.swift`, one Swift Testing test per module.
 - `CLI/apkrun/Tests/`, with golden files in `CLI/apkrun/Tests/Golden/`.
@@ -127,7 +128,7 @@ Out of scope:
   - `scripts/generate-project.sh`;
   - `scripts/build/embed-cli.sh`;
   - `scripts/smoke-products.sh`.
-- `.gitignore`: `build/`, `.build/`, `.swiftpm/`, `APKRun.xcodeproj/`, `DerivedData/`, `*.xcresult`, `Images/work/`, `ThirdParty/out/`.
+- `.gitignore`: `/build/`, `.build/`, `.swiftpm/`, `APKRun.xcodeproj/`, `DerivedData/`, `*.xcresult`, `Images/work/`, `ThirdParty/out/`.
 - Empty directories kept with `.gitkeep`:
   - `Guest/`, `Images/manifests/`, `Images/tools/`;
   - `ThirdParty/patches/`, `ThirdParty/build/`;
@@ -138,11 +139,11 @@ Out of scope:
 
 1. **Package manifest.** Write `Package.swift` with the settings of [../../05-development/build-system.md](../../05-development/build-system.md) §2.1.
    - Declare one target per directory in `Packages/`. Declare exactly the edges of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3, with `GuestProtocol → SwiftProtobuf`. GraphicsBridge and its edge come with #020.
-   - The `apkrun` target depends on `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`, and `ArgumentParser` ([../../02-design/cli.md](../../02-design/cli.md) §2). It also depends on `RuntimeHost` and `WindowingCore` only through `condition: .when(traits: ["EmbeddedRuntime"])`, and defines `APKRUN_EMBEDDED_RUNTIME` under the same trait. The trait is off by default.
-   - Pin both third-party packages with `exact:` at their latest releases, and commit `Package.resolved`.
+   - The `apkrun` target depends on `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`, and `ArgumentParser` ([../../02-design/cli.md](../../02-design/cli.md) §2). It also depends on `RuntimeHost`, `WindowingCore`, and `InputCore` only through `condition: .when(traits: ["EmbeddedRuntime"])`, and defines `APKRUN_EMBEDDED_RUNTIME` under the same trait. The trait is off by default.
+   - Pin `swift-argument-parser`, `swift-protobuf`, and `ZIPFoundation` with `exact:` at their latest releases, and commit `Package.resolved`.
    - Check that the pinned toolchain supports trait-conditioned dependencies between targets of the same package (SE-0450). If it does not, record the fallback in [build-system.md](../../05-development/build-system.md) §2.1 in the same pull request.
 
-   Check: `swift build` and `swift build --traits EmbeddedRuntime` both succeed. `swift package dump-package` shows the trait condition on the two `apkrun` edges only.
+   Check: `swift build` and `swift build --traits EmbeddedRuntime` both succeed. `swift package dump-package` shows the trait condition on the three `apkrun` edges only.
 2. **Placeholders and T0 targets.**
    - Give every module one public placeholder type. GuestProtocol's placeholder imports SwiftProtobuf, so that the edge is real.
    - Give every module a `<Module>Tests` target with one Swift Testing `@Test`.
@@ -228,17 +229,18 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Acceptance criteria
 
-- [ ] A clean checkout builds. `scripts/bootstrap`, `scripts/generate-project.sh`, `swift build`, and the Debug `xcodebuild` of the APKRun scheme succeed with no manual step (NFR-DEV-02).
-- [ ] `swift test` succeeds.
-- [ ] The CLI prints its version (`apkrun version`, `apkrun --version`) and its help (`apkrun --help`).
-- [ ] APKRun.app launches and quits.
-- [ ] The apkrund executable starts and exits cleanly (exit 0 on `SIGTERM`).
-- [ ] APKRun.app, APKRunMenuBar, APKRunLauncher, apkrund, and `apkrun` all build for arm64 and macOS 27.
-- [ ] `Package.swift` declares only the edges of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3. The `RuntimeHost` and `WindowingCore` edges of `apkrun` exist only with the `EmbeddedRuntime` trait.
-- [ ] The Debug CLI inside APKRun.app carries the virtualization entitlement and the `io.apkrun.cli.dev` identifier. The Release CLI carries no entitlement.
-- [ ] `--json` output follows the envelope of [../../02-design/cli.md](../../02-design/cli.md) §3.2.
-- [ ] No `Common/`, `Utils/`, `Helpers/`, or `Misc/` directory exists.
-- [ ] `APKRun.xcodeproj` is not committed and is generated only by the pinned XcodeGen.
+- [x] A clean checkout builds. `scripts/bootstrap`, `scripts/generate-project.sh`, `swift build`, and the Debug `xcodebuild` of the APKRun scheme succeed with no manual step (NFR-DEV-02).
+- [x] `swift test` succeeds.
+- [x] The CLI prints its version (`apkrun version`, `apkrun --version`) and its help (`apkrun --help`).
+- [x] APKRun.app launches and quits.
+- [x] The apkrund executable starts and exits cleanly (exit 0 on `SIGTERM`).
+- [x] APKRun.app, APKRunMenuBar, APKRunLauncher, apkrund, and `apkrun` all build for arm64 and macOS 27.
+- [x] `Package.swift` declares only the edges of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3. The `RuntimeHost`, `WindowingCore`, and `InputCore` edges of `apkrun` exist only with the `EmbeddedRuntime` trait.
+- [x] `ThirdParty/ThirdParty.lock.json` records every exact Swift package pin with its full resolved revision, license, and license file.
+- [x] The Debug CLI inside APKRun.app carries the virtualization entitlement and the `io.apkrun.cli.dev` identifier. The Release CLI carries no entitlement.
+- [x] `--json` output follows the envelope of [../../02-design/cli.md](../../02-design/cli.md) §3.2.
+- [x] No `Common/`, `Utils/`, `Helpers/`, or `Misc/` directory exists.
+- [x] `APKRun.xcodeproj` is not committed and is generated only by the pinned XcodeGen.
 
 ### Notes
 
@@ -247,6 +249,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** `swift build` alone produces a CLI with no embedded Info.plist. Code must handle missing keys (`0.0.0-dev`) and must never crash on them.
 - **Pitfall:** a path-level test such as "the GUI launches" needs a GUI session. The `apkrun-ci` runner has one ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6.2). Hosted macOS runners may run only static checks.
 - `components.json` and `scripts/build/write-components.py` ([../../05-development/build-system.md](../../05-development/build-system.md) §5) are added by #057 (M10). They are not part of #001. See the Notes of #061.
+- Verification on 2026-09-29, arm64 macOS 27.0 / Xcode 27.0 / Swift 6.4: bootstrap checks, project generation, default and `EmbeddedRuntime` Swift builds, all 22 Swift tests, Xcode Debug and unsigned Release builds, Debug product smoke, bundle identities, entitlements, and arm64 slices passed.
 
 ---
 
@@ -486,7 +489,7 @@ Out of scope:
 
 ### Deliverables
 
-- `ThirdParty/ThirdParty.lock.json` in the format of [../../05-development/build-system.md](../../05-development/build-system.md) §6.1. It has `kind: swiftpm` entries for `swift-argument-parser` and `swift-protobuf`, each with the full revision from `Package.resolved`, the version, `license: Apache-2.0`, the license files, and `ships: app`.
+- `ThirdParty/ThirdParty.lock.json` in the format of [../../05-development/build-system.md](../../05-development/build-system.md) §6.1. It has `kind: swiftpm` entries for `swift-argument-parser`, `swift-protobuf`, and ZIPFoundation, each with the full revision from `Package.resolved`, the version, license, license files, and `ships: app`.
 - The four check scripts. `check-module-deps.sh` and `check-lock.sh` are thin wrappers around `swift scripts/tools/check-module-deps.swift` and `swift scripts/tools/check-lock.swift`.
 - `.swift-format`, the configuration of [../../05-development/coding-conventions.md](../../05-development/coding-conventions.md) §2.
 - `scripts/ci/run-checks.sh`, which runs every §3 script present in the tree, and `scripts/ci/codegen.sh`.
@@ -496,7 +499,7 @@ Out of scope:
 
 ### Implementation steps
 
-1. **Lock file and lock check.** Write the lock file with the two swiftpm entries.
+1. **Lock file and lock check.** Complete the three swiftpm entries seeded by #001.
    - `check-lock.swift` enforces the §6.1 rules:
      - every required field is present;
      - `kind` and `ships` take only the listed values;
@@ -511,7 +514,7 @@ Out of scope:
 
    Check: the lock fixtures fail, one rule each (a branch name, a short commit, a missing patch, a pin mismatch, an unlisted pin), and the real lock file passes.
 2. **Module dependency check.** `check-module-deps.swift` reads the allowed graph from the two code blocks of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3, so the document stays the only source. Then it checks four sources:
-   - (a) `swift package dump-package`: every target dependency is an allowed edge. Trait conditions appear only on `apkrun → RuntimeHost` and `apkrun → WindowingCore`, with the trait `EmbeddedRuntime`.
+   - (a) `swift package dump-package`: every target dependency is an allowed edge. Trait conditions appear only on `apkrun → RuntimeHost`, `apkrun → WindowingCore`, and `apkrun → InputCore`, with the trait `EmbeddedRuntime`.
    - (b) `build/tools/xcodegen-2.44.1/bin/xcodegen dump --type json`: the dependencies of the app, daemon, and launcher targets match the executable rows.
    - (c) An import scan of every Swift, C, and Objective-C source of each production target, including `@testable`, `@_exported`, and `@_implementationOnly` imports. SwiftPM lets a target import anything in its dependency closure, so this catches, for example, `import RuntimeCore` in the CLI.
    - (d) Third-party products are used only where the graph allows them: SwiftProtobuf in GuestProtocol, ArgumentParser in `apkrun`, Sparkle in APKRun.

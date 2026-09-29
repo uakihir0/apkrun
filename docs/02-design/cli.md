@@ -98,6 +98,7 @@ public enum CLIFailure: APKRunError {
     case logsUnavailable                                    // /usr/bin/log fails and the file mirrors can't be read (§4.8). Exit 1
     case malformedReply(operation: String)                  // a reply the CLI can't decode. Exit 70
     case versionSkew(version: String, found: String)        // the CLI's build differs from apkrund's (§2). A warning. Exit 0
+    case invalidArguments                                   // swift-argument-parser reports invalid command syntax. Exit 64
 }
 
 public enum FileProblem: String, Sendable, Codable {
@@ -105,7 +106,7 @@ public enum FileProblem: String, Sendable, Codable {
 }
 ```
 
-swift-argument-parser prints its own usage errors (unknown commands, missing arguments, unknown options) and exits 64. They have no catalog entry.
+swift-argument-parser's usage failures (unknown commands, missing arguments, unknown options) are caught by the root command and rendered through `cli.invalidArguments` with exit 64. The parser's raw diagnostic is not logged or included in the error.
 
 ### 3.4 Confirmations and non-interactive use
 

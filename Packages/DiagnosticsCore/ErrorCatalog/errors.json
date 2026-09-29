@@ -1,0 +1,837 @@
+{
+  "version": 1,
+  "errors": [
+    {
+      "code": "vm.invalidTransition",
+      "parameters": [
+        "from",
+        "to"
+      ],
+      "message": {
+        "en": "Android is in an unexpected state."
+      },
+      "remediation": {
+        "en": "Restart Android. If this happens again, report the problem."
+      },
+      "action": "restartAndroid",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmFailure",
+        "case": "invalidTransition(from:to:)",
+        "when": "a lifecycle call that `VMState` does not allow. A bug",
+        "raisedBy": "VMController",
+        "ref": "§9, [../01-architecture/state-machines.md](../01-architecture/state-machines.md)"
+      }
+    },
+    {
+      "code": "vm.startFailed",
+      "parameters": [],
+      "message": {
+        "en": "Android couldn't start."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, create a diagnostics report."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "startFailed(underlying:)",
+        "when": "`VZVirtualMachine.start` fails",
+        "raisedBy": "VMController",
+        "ref": "§9.1"
+      }
+    },
+    {
+      "code": "vm.stoppedWithError",
+      "parameters": [],
+      "message": {
+        "en": "Android stopped unexpectedly."
+      },
+      "remediation": {
+        "en": "Restart Android."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "stoppedWithError(underlying:)",
+        "when": "the delegate reports `didStopWithError`",
+        "raisedBy": "VMController",
+        "ref": "§9.2"
+      }
+    },
+    {
+      "code": "vm.pauseFailed",
+      "parameters": [],
+      "message": {
+        "en": "Android couldn't be paused."
+      },
+      "remediation": {
+        "en": "Restart Android if apps stop responding."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "pauseFailed(underlying:)",
+        "when": "`pause()` fails (idle suspend, host sleep)",
+        "raisedBy": "VMController",
+        "ref": "§9.4"
+      }
+    },
+    {
+      "code": "vm.resumeFailed",
+      "parameters": [],
+      "message": {
+        "en": "Android couldn't resume."
+      },
+      "remediation": {
+        "en": "Restart Android."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "resumeFailed(underlying:)",
+        "when": "`resume()` fails",
+        "raisedBy": "VMController",
+        "ref": "§9.4"
+      }
+    },
+    {
+      "code": "vm.stopTimedOut",
+      "parameters": [],
+      "message": {
+        "en": "Android didn't stop in time."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, quit and reopen APKRun."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "stopTimedOut",
+        "when": "the forced stop did not reach `stopped`",
+        "raisedBy": "VMController",
+        "ref": "§9.3"
+      }
+    },
+    {
+      "code": "vm.vsockConnectFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't connect to Android."
+      },
+      "remediation": {
+        "en": "Restart Android."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "vsockConnectFailed(port:underlying:)",
+        "when": "`VZVirtioSocketDevice.connect` fails",
+        "raisedBy": "VMController",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "vm.vsockPortNotListening",
+      "parameters": [],
+      "message": {
+        "en": "Android isn't ready yet."
+      },
+      "remediation": {
+        "en": "Try again in a moment."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "table": "vmFailure",
+        "case": "vsockPortNotListening(port:)",
+        "when": "no guest listener on the port yet",
+        "raisedBy": "VMController",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "vm.vsockConnectTimedOut",
+      "parameters": [],
+      "message": {
+        "en": "Android didn't answer in time."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, restart Android."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "vsockConnectTimedOut(port:)",
+        "when": "the connection did not open within the timeout",
+        "raisedBy": "VMController",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "vm.virtualizationUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "Virtualization is not available on this Mac."
+      },
+      "remediation": {
+        "en": "APKRun can't run inside a virtual machine. On a real Mac, reinstall APKRun."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "virtualizationUnavailable",
+        "when": "`VZVirtualMachineConfiguration.isSupported` is false, or the entitlement is missing",
+        "raisedBy": "VMController",
+        "ref": "§13"
+      }
+    },
+    {
+      "code": "vm.cpuCountOutOfRange",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "cpuCountOutOfRange(requested, allowed)",
+        "cause": "CPU count outside the VZ and host limits",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.memoryOutOfRange",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "memoryOutOfRange",
+        "cause": "memory not a multiple of 1 MiB, or outside the VZ limits",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.memoryExceedsHostCap",
+      "parameters": [],
+      "message": {
+        "en": "The memory set for Android is more than this Mac allows."
+      },
+      "remediation": {
+        "en": "Choose less memory for Android in Settings → Runtime."
+      },
+      "action": "openRuntimeSettings",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "memoryExceedsHostCap(cap)",
+        "cause": "memory above 50 % of physical memory (NFR-RES-01)",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.kernelMissing",
+      "parameters": [],
+      "message": {
+        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "kernelMissing(url)",
+        "cause": "no kernel file",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.kernelNotUncompressedImage",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "kernelNotUncompressedImage(detected)",
+        "cause": "gzip or lz4 kernel, or no arm64 `Image` magic",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.initrdMissing",
+      "parameters": [],
+      "message": {
+        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "initrdMissing",
+        "cause": "the initrd file is missing",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.initrdTooLarge",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "initrdTooLarge",
+        "cause": "initrd above 512 MiB",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.commandLineInvalid",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "commandLineInvalid",
+        "cause": "above 2048 bytes, or not ASCII",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.diskMissing",
+      "parameters": [],
+      "message": {
+        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskMissing(role)",
+        "cause": "a disk file is missing",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.diskIsAndroidSparse",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskIsAndroidSparse(role)",
+        "cause": "a disk is an Android sparse image",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.duplicateDisk",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "duplicateDisk(role)",
+        "cause": "the same disk URL twice",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.diskNotReadable",
+      "parameters": [],
+      "message": {
+        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskNotReadable(role)",
+        "cause": "a disk is not readable",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.diskNotWritable",
+      "parameters": [],
+      "message": {
+        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+      },
+      "remediation": {
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskNotWritable(role)",
+        "cause": "a read-write disk is not writable",
+        "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.diskIdentifierInvalid",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskIdentifierInvalid",
+        "cause": "identifier above 20 ASCII characters",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.missingSystemConsole",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "missingSystemConsole",
+        "cause": "console port 0 is not the system console",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.invalidMACAddress",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "invalidMACAddress",
+        "cause": "not a locally administered unicast address",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.machineIdentifierInvalid",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "machineIdentifierInvalid",
+        "cause": "the stored machine identifier doesn't decode",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.customDeviceInvalid",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "customDeviceInvalid(name, reason)",
+        "cause": "a custom virtio device configuration is rejected",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.microphoneUsageDescriptionMissing",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "microphoneUsageDescriptionMissing",
+        "cause": "sound input without `NSMicrophoneUsageDescription`",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.frameworkRejected",
+      "parameters": [],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "frameworkRejected(underlying)",
+        "cause": "`VZVirtualMachineConfiguration.validate()` throws",
+        "exitDisplay": "70"
+      }
+    },
+    {
+      "code": "vm.configurationInvalid",
+      "parameters": [
+        "items"
+      ],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "configurationInvalid([VMConfigurationFailure])",
+        "cause": "more than one rule failed (catalog §3.6)",
+        "exitDisplay": "70 when every item is 70, otherwise 1"
+      },
+      "cliExitRule": "allConfigurationItemsInternalOrFailure"
+    },
+    {
+      "code": "cli.confirmationRequired",
+      "parameters": [
+        "flag"
+      ],
+      "message": {
+        "en": "This command needs a confirmation, but there is no terminal to ask."
+      },
+      "remediation": {
+        "en": "Run it again with {flag}."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "confirmationRequired(flag)",
+        "when": "a command that asks for confirmation runs without a TTY on stdin and without `--yes`",
+        "raisedBy": "CLI",
+        "ref": "§3.4"
+      }
+    },
+    {
+      "code": "cli.declined",
+      "parameters": [],
+      "message": {
+        "en": "Nothing was changed."
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "declined",
+        "when": "the user answered no to `Continue? [y/N]`, or did not type `Reset`",
+        "raisedBy": "CLI",
+        "ref": "§3.3, §3.4"
+      }
+    },
+    {
+      "code": "cli.invalidPackageName",
+      "parameters": [
+        "package"
+      ],
+      "message": {
+        "en": "{package} isn't a valid Android package name."
+      },
+      "remediation": {
+        "en": "Use a package name such as com.example.app. apkrun list shows the installed apps."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "invalidPackageName(package)",
+        "when": "a `<package>` argument fails the package-name grammar. No request is sent",
+        "raisedBy": "CLI",
+        "ref": "§3.1"
+      }
+    },
+    {
+      "code": "cli.invalidSourceSpec",
+      "parameters": [
+        "argument"
+      ],
+      "message": {
+        "en": "{argument} isn't a valid update source."
+      },
+      "remediation": {
+        "en": "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "invalidSourceSpec(argument)",
+        "when": "a `<spec>` argument doesn't match any update source form",
+        "raisedBy": "CLI",
+        "ref": "§3.1, [../02-design/update-system.md](../02-design/update-system.md) §11.3"
+      }
+    },
+    {
+      "code": "cli.invalidArgument",
+      "parameters": [
+        "argument",
+        "reason"
+      ],
+      "message": {
+        "en": "The value of {argument} isn't valid ({reason})."
+      },
+      "remediation": {
+        "en": "Run the command with --help to see the allowed values."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "invalidArgument(argument, reason)",
+        "when": "another validation that the CLI does itself, after swift-argument-parser (for example a `--since` duration). `{reason}` is a stable key",
+        "raisedBy": "CLI",
+        "ref": "§3.1"
+      }
+    },
+    {
+      "code": "cli.fileNotAccessible",
+      "parameters": [
+        "file",
+        "reason"
+      ],
+      "message": {
+        "en": "apkrun can't open {file}."
+      },
+      "remediation": {
+        "en": "Check the path and its permissions."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "fileNotAccessible(file, FileProblem)",
+        "when": "the CLI can't open a file argument, or can't create the `--output` file",
+        "raisedBy": "CLI",
+        "ref": "§3.1, [../02-design/diagnostics.md](../02-design/diagnostics.md) §8.1"
+      },
+      "variants": {
+        "notFound": {
+          "message": {
+            "en": "{file} doesn't exist."
+          },
+          "remediation": {
+            "en": "Check the path."
+          },
+          "action": "none",
+          "doc": {
+            "when": "the file doesn't exist",
+            "raisedBy": "CLI",
+            "ref": "§3.1"
+          }
+        },
+        "permissionDenied": {
+          "message": {
+            "en": "apkrun isn't allowed to open {file}."
+          },
+          "remediation": {
+            "en": "Check the permissions, or give Terminal access in System Settings → Privacy & Security → Files and Folders."
+          },
+          "action": "none",
+          "doc": {
+            "when": "the file or its folder can't be read or written",
+            "raisedBy": "CLI",
+            "ref": "§3.1"
+          }
+        },
+        "isDirectory": {
+          "message": {
+            "en": "{file} is a folder."
+          },
+          "remediation": {
+            "en": "Name a file. Unpacked image folders are for apkrun dev image install."
+          },
+          "action": "none",
+          "doc": {
+            "when": "a folder where a file is needed",
+            "raisedBy": "CLI",
+            "ref": "§3.1, §4.7"
+          }
+        }
+      }
+    },
+    {
+      "code": "cli.developerModeRequired",
+      "parameters": [
+        "command"
+      ],
+      "message": {
+        "en": "{command} needs developer mode."
+      },
+      "remediation": {
+        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "developerModeRequired(command)",
+        "when": "`apkrun logs --guest` while `developer.enabled` is off",
+        "raisedBy": "CLI",
+        "ref": "§4.8, [configuration.md](configuration.md)"
+      }
+    },
+    {
+      "code": "cli.logsUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's logs couldn't be read."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, create a diagnostics report."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "logsUnavailable",
+        "when": "`/usr/bin/log` fails and the file mirrors can't be read",
+        "raisedBy": "CLI",
+        "ref": "§4.8"
+      }
+    },
+    {
+      "code": "cli.malformedReply",
+      "parameters": [
+        "operation"
+      ],
+      "message": {
+        "en": "apkrun couldn't read the answer of APKRun's background service ({operation})."
+      },
+      "remediation": {
+        "en": "Make sure apkrun comes from the installed APKRun, then report the problem."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "malformedReply(operation)",
+        "when": "a reply that the CLI can't decode",
+        "raisedBy": "CLI",
+        "ref": "§3.3"
+      }
+    },
+    {
+      "code": "cli.versionSkew",
+      "parameters": [
+        "version",
+        "found"
+      ],
+      "message": {
+        "en": "This apkrun ({version}) doesn't match APKRun ({found})."
+      },
+      "remediation": {
+        "en": "Link apkrun to the installed APKRun: Settings → Advanced → Install Command-Line Tool…"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "case": "versionSkew(version, found)",
+        "when": "the CLI's build differs from apkrund's, typically a copied binary after an APKRun update. A warning",
+        "raisedBy": "CLI",
+        "ref": "§2"
+      }
+    },
+    {
+      "code": "cli.invalidArguments",
+      "parameters": [],
+      "message": {
+        "en": "The command arguments aren't valid."
+      },
+      "remediation": {
+        "en": "Run the command with --help to see the allowed values."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "—",
+        "when": "swift-argument-parser reports an unknown command or option, a missing argument, or another usage error",
+        "raisedBy": "CLI",
+        "ref": "§3.3"
+      }
+    }
+  ]
+}

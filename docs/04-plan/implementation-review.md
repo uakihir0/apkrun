@@ -124,3 +124,41 @@ Details retain the full UUID.
 while the logging format and #061 acceptance criteria specifically require
 `op=<first 8 hex>`. The concrete logging format takes precedence for log lines,
 and §2.4 now states that distinction.
+
+## IR-008: Resolve configuration-list exit status from every item
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) §§3.1, 5.2, 19.1; [diagnostics.md](../02-design/diagnostics.md) §2.2 |
+
+**Choice.** `vm.configurationInvalid` has `cliExit: 1` as its safe fallback and
+the named `cliExitRule: allConfigurationItemsInternalOrFailure`. It exits 70
+only when every listed item resolves to a VM catalog entry with exit 70.
+
+**Reason.** The error catalog specifies a mixed exit (70 only when all
+configuration failures are internal), while the base `errors.json` format
+allows only one fixed code or `"cause"`. A named rule expresses the existing
+behavior, keeps the fallback fail-safe, and is constrained to this list entry
+by generator validation.
+
+## IR-009: Catalog swift-argument-parser usage failures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [cli.md](../02-design/cli.md) §§3.2–3.3; [error-catalog.md](../03-reference/error-catalog.md) §§16, 19.2 |
+
+**Choice.** The root command presents parser syntax failures as
+`cli.invalidArguments`, with no raw argument text in the message, logs, or JSON.
+
+**Reason.** #061 explicitly requires every user-visible failure to use
+`ErrorPresenter` and specifies the catalog-backed usage entry. This conflicts
+with the earlier CLI note that swift-argument-parser owns its output. The
+catalog path provides consistent remediation while avoiding accidental
+disclosure of sensitive command-line values.
+Built-in `--help`, `--version`, and completion requests continue through
+swift-argument-parser's clean-exit presenter, so they retain their normal output
+and exit status.

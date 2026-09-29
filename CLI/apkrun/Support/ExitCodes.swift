@@ -1,3 +1,5 @@
+import DiagnosticsCore
+
 enum ExitCodes {
     static let success = 0
     static let failure = 1
@@ -10,4 +12,15 @@ enum ExitCodes {
     static let internalError = 70
     static let tryAgain = 75
     static let interrupted = 130
+
+    static func code(for error: any Error) -> Int {
+        guard let error = error as? any APKRunError else {
+            return internalError
+        }
+        return ErrorCatalog.cliExit(for: error)
+    }
+
+    static func code(for qualifiedCode: String) -> Int {
+        ErrorCatalog.cliExit(for: qualifiedCode) ?? failure
+    }
 }

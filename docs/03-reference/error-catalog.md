@@ -120,6 +120,7 @@ The format is the one of [../02-design/diagnostics.md](../02-design/diagnostics.
 | `remediation` | no | the remediation template per language |
 | `action` | yes, unless transparent | a `RemediationAction` raw value (§4) |
 | `cliExit` | yes | an exit code of [../02-design/cli.md](../02-design/cli.md) §3.3, or `"cause"` (§3.5) |
+| `cliExitRule` | no | a named data-dependent CLI exit rule; `cliExit` is its fallback |
 | `retired` | no | `true` for a removed case (§2.2) |
 | `variants` | no | texts and actions per sub-case (§3.4) |
 | `transparent` | no | `true` for a pure container (§3.5) |
@@ -244,6 +245,11 @@ A peer can send a code that the receiving build's catalog doesn't have: a newer 
 
 Owner: VirtualMachineCore. Design: [../02-design/vm.md](../02-design/vm.md). Users see these errors inside `runtime.vm` (transparent, §7.2), so the texts below are the user texts. `VZErrorInfo` becomes the `UnderlyingError` (`VZErrorDomain` and code). Its description goes to the log only.
 
+`VMDefinitionValidator` checks a `VMDefinition` before every boot ([../02-design/vm.md](../02-design/vm.md) §3). RuntimeCore and ImageCore build the definition, so almost every failure is a bug in APKRun or a damaged installation. A single failure uses the grouped text below. Several failures are listed as individual hints; the top-level message remains generic.
+
+The port number is logged, never shown.
+
+<!-- errorgen:begin vm -->
 ### 5.1 `VMFailure`
 
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
@@ -259,11 +265,7 @@ Owner: VirtualMachineCore. Design: [../02-design/vm.md](../02-design/vm.md). Use
 | `vsockConnectTimedOut(port:)` | `vm.vsockConnectTimedOut` | the connection did not open within the timeout | VMController | "Android didn't answer in time." | "Try again. If it fails again, restart Android." `retry` | 1 | §8 |
 | `virtualizationUnavailable` | `vm.virtualizationUnavailable` | `VZVirtualMachineConfiguration.isSupported` is false, or the entitlement is missing | VMController | "Virtualization is not available on this Mac." | "APKRun can't run inside a virtual machine. On a real Mac, reinstall APKRun." `openTroubleshooting` | 1 | §13 |
 
-The port number is logged, never shown.
-
 ### 5.2 `VMConfigurationFailure`
-
-`VMDefinitionValidator` checks a `VMDefinition` before every boot ([../02-design/vm.md](../02-design/vm.md) §3). RuntimeCore and ImageCore build the definition, so almost every failure is a bug in APKRun or a damaged installation. The user sees one generic text. The case name is on the `code:` line and in Copy Details.
 
 | Case | Code | Cause | Exit |
 |---|---|---|---|
@@ -293,9 +295,10 @@ Texts:
 
 | Entries | Message | Remediation · action |
 |---|---|---|
-| exit 70 entries | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
-| `vm.kernelMissing`, `vm.initrdMissing`, `vm.diskMissing`, `vm.diskNotReadable`, `vm.diskNotWritable` | "Files that Android needs are missing, or APKRun can't read or write them." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
+| `vm.commandLineInvalid`, `vm.configurationInvalid`, `vm.cpuCountOutOfRange`, `vm.customDeviceInvalid`, `vm.diskIdentifierInvalid`, `vm.diskIsAndroidSparse`, `vm.duplicateDisk`, `vm.frameworkRejected`, `vm.initrdTooLarge`, `vm.invalidMACAddress`, `vm.kernelNotUncompressedImage`, `vm.machineIdentifierInvalid`, `vm.memoryOutOfRange`, `vm.microphoneUsageDescriptionMissing`, `vm.missingSystemConsole` | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.diskMissing`, `vm.diskNotReadable`, `vm.diskNotWritable`, `vm.initrdMissing`, `vm.kernelMissing` | "Files that Android needs are missing, or APKRun can't read or write them." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
 | `vm.memoryExceedsHostCap` | "The memory set for Android is more than this Mac allows." | "Choose less memory for Android in Settings → Runtime." `openRuntimeSettings` |
+<!-- errorgen:end vm -->
 
 - The validator of vm.md §3 collects all failures. One failure is thrown as itself. Several are thrown as `configurationInvalid`, whose items the GUI and the CLI list (§3.6). `apkrun doctor` prints all of them.
 - `RuntimeFailure.vmConfiguration(VMConfigurationFailure)` carries these failures to clients. It is a transparent container like `runtime.vm` (§7.2).
@@ -1014,6 +1017,7 @@ These entries are the `HealthResult.error` of the checks of §7.3 that no other 
 
 Owner: the CLI (`CLI/apkrun`). Design: [../02-design/cli.md](../02-design/cli.md) §3. `CLIFailure` and `FileProblem` are declared in cli.md §3.3. The cases come from cli.md §2, §3, and §4. These entries are raised in the CLI process. They name commands and flags (catalog §3.3).
 
+<!-- errorgen:begin cli -->
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
 |---|---|---|---|---|---|---|---|
 | `confirmationRequired(flag)` | `cli.confirmationRequired` | a command that asks for confirmation runs without a TTY on stdin and without `--yes` | CLI | "This command needs a confirmation, but there is no terminal to ask." | "Run it again with {flag}." `none` | 1 | §3.4 |
@@ -1022,16 +1026,18 @@ Owner: the CLI (`CLI/apkrun`). Design: [../02-design/cli.md](../02-design/cli.md
 | `invalidSourceSpec(argument)` | `cli.invalidSourceSpec` | a `<spec>` argument doesn't match any update source form | CLI | "{argument} isn't a valid update source." | "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them." `none` | 64 | §3.1, [../02-design/update-system.md](../02-design/update-system.md) §11.3 |
 | `invalidArgument(argument, reason)` | `cli.invalidArgument` | another validation that the CLI does itself, after swift-argument-parser (for example a `--since` duration). `{reason}` is a stable key | CLI | "The value of {argument} isn't valid ({reason})." | "Run the command with --help to see the allowed values." `none` | 64 | §3.1 |
 | `fileNotAccessible(file, FileProblem)` | `cli.fileNotAccessible` | the CLI can't open a file argument, or can't create the `--output` file | CLI | "apkrun can't open {file}." | "Check the path and its permissions." `none` | 1 | §3.1, [../02-design/diagnostics.md](../02-design/diagnostics.md) §8.1 |
+| — | `cli.fileNotAccessible / isDirectory` | a folder where a file is needed | CLI | "{file} is a folder." | "Name a file. Unpacked image folders are for apkrun dev image install." `none` | 1 | §3.1, §4.7 |
 | — | `cli.fileNotAccessible / notFound` | the file doesn't exist | CLI | "{file} doesn't exist." | "Check the path." `none` | 1 | §3.1 |
 | — | `cli.fileNotAccessible / permissionDenied` | the file or its folder can't be read or written | CLI | "apkrun isn't allowed to open {file}." | "Check the permissions, or give Terminal access in System Settings → Privacy & Security → Files and Folders." `none` | 1 | §3.1 |
-| — | `cli.fileNotAccessible / isDirectory` | a folder where a file is needed | CLI | "{file} is a folder." | "Name a file. Unpacked image folders are for apkrun dev image install." `none` | 1 | §3.1, §4.7 |
 | `developerModeRequired(command)` | `cli.developerModeRequired` | `apkrun logs --guest` while `developer.enabled` is off | CLI | "{command} needs developer mode." | "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true" `none` | 5 | §4.8, [configuration.md](configuration.md) |
 | `logsUnavailable` | `cli.logsUnavailable` | `/usr/bin/log` fails and the file mirrors can't be read | CLI | "APKRun's logs couldn't be read." | "Try again. If it fails again, create a diagnostics report." `retry` | 1 | §4.8 |
 | `malformedReply(operation)` | `cli.malformedReply` | a reply that the CLI can't decode | CLI | "apkrun couldn't read the answer of APKRun's background service ({operation})." | "Make sure apkrun comes from the installed APKRun, then report the problem." `reportProblem` | 70 | §3.3 |
 | `versionSkew(version, found)` | `cli.versionSkew` | the CLI's build differs from apkrund's, typically a copied binary after an APKRun update. A warning | CLI | "This apkrun ({version}) doesn't match APKRun ({found})." | "Link apkrun to the installed APKRun: Settings → Advanced → Install Command-Line Tool…" `none` | 0 | §2 |
+| `—` | `cli.invalidArguments` | swift-argument-parser reports an unknown command or option, a missing argument, or another usage error | CLI | "The command arguments aren't valid." | "Run the command with --help to see the allowed values." `none` | 64 | §3.3 |
+<!-- errorgen:end cli -->
 
 - `FileProblem` (chosen): `notFound`, `permissionDenied`, `isDirectory`. `{file}` is the last path component (catalog §3.2).
-- swift-argument-parser prints its own usage errors (unknown commands, missing arguments, unknown options) and exits 64. They have no catalog entry.
+- swift-argument-parser's usage failures use `cli.invalidArguments` and exit 64. Raw argument text is not included in the error.
 - `apkrun self-update check` without apkrund prints `runtime.serviceUnavailable` with the hint "Open APKRun to check for updates." and exits 69 (cli.md §4.7). The CLI replaces only the hint line.
 - Results that are not errors print on stdout and exit 0: "APKRun is up to date.", "APKRun 1.3.0 is available (you have 1.2.0). Open APKRun to install it.", and "Nothing to finish." (`self-update finish`).
 - A second Ctrl-C exits 130 at once, without an error entry (§3.5).
@@ -1276,8 +1282,9 @@ These texts are in `Apps/APKRunLauncher/Localizable.xcstrings` ([../02-design/wr
    - `apkrun install … --wrap` and `apkrun wrap <file> --install`: the package was installed, and creating the Mac app failed. The CLI prints the `wrapper.*` error and exits 2.
    - `apkrun update` for all packages: at least one package failed (§17.5). Each failed package prints its error. When the command fails before any package is checked, the error's own exit code applies (chosen).
 8. Ctrl-C: the cancellation (`runtime.cancelled`, `update.cancelled`, `maintenance.cancelled`) exits 130. A second Ctrl-C exits 130 at once, without an entry ([../02-design/cli.md](../02-design/cli.md) §3.5).
-9. swift-argument-parser's usage errors exit 64 without an entry (§16).
-10. `--detach` exits 0 as soon as the operation has started.
+9. A named `cliExitRule` overrides the entry's fallback `cliExit`. For `vm.configurationInvalid`, exit 70 applies only when every listed item has exit 70; otherwise it uses exit 1.
+10. swift-argument-parser's usage errors map to `cli.invalidArguments` and exit 64 (§16). Raw argument text is never interpolated into this entry.
+11. `--detach` exits 0 as soon as the operation has started.
 
 The exit-code test ([../02-design/cli.md](../02-design/cli.md) §3.3) checks every fixture of a non-transparent entry against its `cliExit`, and every fixture of a transparent entry against the exit code of its cause.
 
@@ -1288,14 +1295,14 @@ Variants are listed only when the entry is not.
 | Exit | Name | Codes |
 |---|---|---|
 | 0 | warning | `store.alreadyInstalled`, `wrapper.registrationFailed`, `cli.versionSkew` |
-| 1 | failure | every entry not listed in this table, including all health findings (§15.2, §20.3), and the generic entry for an unknown code (§3.8) |
+| 1 | failure | every entry not listed in this table, including all health findings (§15.2, §20.3), and the generic entry for an unknown code (§3.8). `vm.configurationInvalid` exits 1 unless rule 9 applies |
 | 2 | partial | no entry (§19.1 rule 7) |
 | 3 | warnings | no entry (`apkrun doctor`, §20.1) |
 | 4 | not found | `runtime.packageNotInstalled`, `runtime.operationNotFound`, `runtime.unknownSetting`, `image.recoveryPointMissing`, `store.packageNotFound`, `store.unknownSetting`, `wrapper.packageNotInstalled`, `wrapper.wrapperNotFound`, `wrapper.stagingExpired`, `wrapper.approvalNotFound`, `diagnostics.unknownHealthCheck` |
 | 5 | refused | `runtime.notAuthorized`, `runtime.developerModeRequired`, `image.downgradeRejected`, `store.reservedPackage`, `store.downgradeRefused`, `store.signerMismatch`, `update.downgrade`, `update.signerMismatch`, `update.lineageMissingCapability`, `wrapper.approvalDenied`, `wrapper.bootstrapNotAllowed`, `integration.disabled`, `integration.linkRejected`, `integration.pathRejected`, `integration.folderRefused`, `integration.readOnly`, `maintenance.imageUpdateRejected`, `cli.declined`, `cli.developerModeRequired` |
-| 64 | usage | `runtime.invalidSettingValue`, `store.invalidSettingValue`, `wrapper.invalidName`, `cli.invalidPackageName`, `cli.invalidSourceSpec`, `cli.invalidArgument`, and swift-argument-parser's errors |
+| 64 | usage | `runtime.invalidSettingValue`, `store.invalidSettingValue`, `wrapper.invalidName`, `cli.invalidPackageName`, `cli.invalidSourceSpec`, `cli.invalidArgument`, `cli.invalidArguments` |
 | 69 | unavailable | `runtime.hostStartupFailed`, `runtime.notProvisioned`, `runtime.apiVersionMismatch`, `runtime.serviceUnavailable`, `wrapper.runtimeMissing`, `wrapper.runtimeNotReady`, `maintenance.agentRegistrationFailed` |
-| 70 | internal | `vm.invalidTransition`, `graphics.scanoutInvalid`, `graphics.modeUnsupported`, `runtime.invalidTransition`, `runtime.malformedRequest`, `runtime.internal`, `guestProtocol.frameTooLarge`, `guestProtocol.malformedFrame`, `image.bootconfigConflict`, `image.bootconfigTooLarge`, `image.cmdlineTooLong`, `cli.malformedReply` |
+| 70 | internal | `vm.invalidTransition`, `vm.cpuCountOutOfRange`, `vm.memoryOutOfRange`, `vm.kernelNotUncompressedImage`, `vm.initrdTooLarge`, `vm.commandLineInvalid`, `vm.diskIsAndroidSparse`, `vm.duplicateDisk`, `vm.diskIdentifierInvalid`, `vm.missingSystemConsole`, `vm.invalidMACAddress`, `vm.machineIdentifierInvalid`, `vm.customDeviceInvalid`, `vm.microphoneUsageDescriptionMissing`, `vm.frameworkRejected`, `vm.configurationInvalid` (only when every item exits 70), `graphics.scanoutInvalid`, `graphics.modeUnsupported`, `runtime.invalidTransition`, `runtime.malformedRequest`, `runtime.internal`, `guestProtocol.frameTooLarge`, `guestProtocol.malformedFrame`, `image.bootconfigConflict`, `image.bootconfigTooLarge`, `image.cmdlineTooLong`, `cli.malformedReply` |
 | 75 | try again | `vm.vsockPortNotListening`, `graphics.deviceNotReady`, `runtime.hostShuttingDown`, `runtime.hostUpdating`, `runtime.instanceLocked`, `runtime.busy`, `runtime.guestAgentUnavailable`, `runtime.requestTimedOut`, `guestProtocol.disconnected`, `guestProtocol.agentUnavailable`, `store.operationInProgress`, `store.packageInUse`, `update.providerRateLimited`, `wrapper.wrapperRunning`, `integration.guestUnavailable`, `maintenance.hostUpdateBusy`, `maintenance.hostUpdateSessionsOpen` |
 | 130 | interrupted | `runtime.cancelled`, `update.cancelled`, `maintenance.cancelled` |
 | cause | — | `runtime.image`, `runtime.vm`, `runtime.vmConfiguration`, `runtime.graphics`, `store.runtimeUnavailable`, `update.validation`, `update.intrinsic`, `update.installFailed`, `maintenance.imageInstallFailed` |

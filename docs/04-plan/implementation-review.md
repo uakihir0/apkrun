@@ -108,3 +108,19 @@ Fixed recovery point files are exposed directly.
 manifest after inventory. Keeping that boundary avoids assumptions in the
 DiagnosticsCore leaf module while still centralizing the documented writable
 paths and recovery point layout.
+
+## IR-007: Use short operation IDs in log fields
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §§2.4, 3.2; [M00](issues/M00-repository-and-vm-foundation.md) #061 step 3 |
+
+**Choice.** Log fields use `op=<first 8 hex>`; JSON, wire fields, and Copy
+Details retain the full UUID.
+
+**Reason.** The general operation ID description said logs use the full value,
+while the logging format and #061 acceptance criteria specifically require
+`op=<first 8 hex>`. The concrete logging format takes precedence for log lines,
+and §2.4 now states that distinction.

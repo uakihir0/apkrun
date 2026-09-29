@@ -185,7 +185,7 @@ APKRun 1.0 (1000) · image 2026.10.0-cf16373615-arm64 · store.downgradeRefused 
 
 An `OperationID` ties together everything that happens for one user-visible operation (NFR-OBS-01).
 
-- Format: a random UUID (version 4), lowercase. UI and CLI human output show the first 8 hex digits. JSON, logs, and Copy Details use the full value.
+- Format: a random UUID (version 4), lowercase. UI and CLI human output show the first 8 hex digits. JSON and Copy Details use the full value; logs use `op=<first 8 hex>` as specified in §3.2.
 - Created by the client that starts the operation: the GUI or CLI for a command, the launcher for `openSession`. apkrund creates IDs for work it starts itself (scheduled update runs, idle stop, recovery at startup).
 - Carried in `APIRequestHeader.operationID` over XPC ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1), in `OperationHandle` for long-running operations, and in the guest envelope's `operation_id` ([guest-protocol.md](guest-protocol.md) §4.1).
 - Inside a process, `OperationContext` is a task-local value (`@TaskLocal static var current`). `APKLogger` adds it to every entry automatically. Work started from a task inherits it. A sub-operation (one package of `apkrun update --all`) gets its own ID with `parent` set to the run's ID.

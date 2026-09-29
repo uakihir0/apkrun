@@ -121,9 +121,18 @@ public struct APKLogger: Sendable {
             category: category,
             publicMessage: renderedMessage.publicText,
             privateMessage: renderedMessage.privateText,
-            context: context,
+            context: contextForCurrentTask,
             errorCode: errorCode
         )
         sink.write(entry)
+    }
+
+    private var contextForCurrentTask: LogContext {
+        LogContext(
+            operationID: OperationContext.currentWireID ?? context.operationID,
+            packageID: context.packageID,
+            displayID: context.displayID,
+            sessionID: context.sessionID
+        )
     }
 }

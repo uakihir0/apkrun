@@ -182,7 +182,7 @@ let package = Package(
         ),
         .testTarget(
             name: "DiagnosticsCoreSystemTests",
-            dependencies: ["DiagnosticsCore"],
+            dependencies: ["DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests"
         ),
         .testTarget(
@@ -262,7 +262,7 @@ let package = Package(
         ),
         .testTarget(
             name: "apkrunTests",
-            dependencies: ["apkrun", "DiagnosticsCore"],
+            dependencies: ["apkrun", "DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "CLI/apkrun/Tests",
             resources: [
                 .copy("Golden"),

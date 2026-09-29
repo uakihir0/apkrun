@@ -111,6 +111,11 @@ Acceptance: the document identifies the exact source components required for APK
 ### 3.2 API
 
 ```swift
+public struct SharedMemoryRegionDescriptor: Sendable {
+    public var regionID: UInt8
+    public var sizeBytes: UInt64
+}
+
 public struct VirtioDeviceDescriptor: Sendable {
     public var name: String                         // logs, diagnostics ("virtio-gpu", "test-entropy")
     public var deviceID: UInt16                     // virtio device type (16 = GPU, 4 = entropy)

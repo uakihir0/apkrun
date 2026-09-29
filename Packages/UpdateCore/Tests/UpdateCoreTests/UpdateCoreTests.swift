@@ -1,4 +1,5 @@
 import Testing
+
 @testable import UpdateCore
 
 @Test func placeholderCanBeConstructed() {

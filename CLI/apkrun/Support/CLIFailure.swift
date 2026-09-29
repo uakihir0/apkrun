@@ -45,26 +45,26 @@ enum CLIFailure: APKRunError {
 
     var parameters: [String: ErrorParameter] {
         switch self {
-        case let .confirmationRequired(flag):
+        case .confirmationRequired(let flag):
             ["flag": .text(flag)]
         case .declined, .logsUnavailable, .invalidArguments:
             [:]
-        case let .invalidPackageName(package):
+        case .invalidPackageName(let package):
             ["package": .text(package)]
-        case let .invalidSourceSpec(argument):
+        case .invalidSourceSpec(let argument):
             ["argument": .text(argument)]
-        case let .invalidArgument(argument, reason):
+        case .invalidArgument(let argument, let reason):
             ["argument": .text(argument), "reason": .text(reason)]
-        case let .fileNotAccessible(file, problem):
+        case .fileNotAccessible(let file, let problem):
             [
                 "file": .fileName(URL(fileURLWithPath: file).lastPathComponent),
                 "reason": .text(problem.rawValue),
             ]
-        case let .developerModeRequired(command):
+        case .developerModeRequired(let command):
             ["command": .text(command)]
-        case let .malformedReply(operation):
+        case .malformedReply(let operation):
             ["operation": .text(operation)]
-        case let .versionSkew(version, found):
+        case .versionSkew(let version, let found):
             ["version": .text(version), "found": .text(found)]
         }
     }

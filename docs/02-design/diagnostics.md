@@ -285,23 +285,32 @@ Guest agents follow the same rules as the host: clipboard content, notification 
 
 ```swift
 public struct PerfMarker: RawRepresentable, Hashable, Sendable { public let rawValue: String }   // "FIRST_FRAME"
+public enum PerfValue: Sendable, Equatable {
+    case string(String), integer(Int64), double(Double), boolean(Bool)
+}
 
 public enum Perf {
+    public static let timeline: PerfTimeline
     public static func mark(_ marker: PerfMarker,
                             at time: ContinuousClock.Instant = .now,
-                            _ attributes: [String: PerfValue] = [:])
+                            _ attributes: [String: PerfValue] = [:],
+                            timeline: PerfTimeline = Perf.timeline)
     public static func interval<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T  // signpost only
 }
 ```
 
-- `Perf.mark` emits a signpost event (`OSSignposter`, the subsystem of the calling module, category `pointsOfInterest`) with the marker name and the structured fields of §3.2, and appends the marker to the process's `PerfTimeline` (a ring of the last 2,000 markers, with the operation context).
+- `Perf.mark` emits a signpost event (`OSSignposter`, category `pointsOfInterest`) and appends the marker, timestamp, attributes, and operation context to the selected process `PerfTimeline` (a ring of the last 2,000 markers). The timeline argument lets a module use the timeline from `DiagnosticsContext`.
+- A marker uses the subsystem of its catalogue emitter in §4.2. This keeps attribution stable when one process records a marker on behalf of another process. An unrecognized raw marker uses `io.apkrun.diagnostics`; high-frequency interval names use `io.apkrun.graphics` for `gpu.*`, `io.apkrun.input` for `input.*`, and `io.apkrun.diagnostics` otherwise.
+- `OSSignposter` event names are static strings. Lifecycle events therefore use the fixed event name `APKRunPerfMarker`; the marker name and its fields are included in the event message. A marker outside the catalogue is stored as `UNKNOWN`.
+- Public marker fields are allowlisted. `Perf.mark` accepts at most 16 attributes per event and only the attribute keys listed in §4.2. If the caller supplies more than 16 attributes, all attributes are dropped. Attribute names are at most 64 ASCII bytes and string values at most 256 UTF-8 bytes; longer values and unknown keys are dropped before storage. The in-memory timeline retains bounded string values for later processing, but the public signpost emits strings only for finite catalogue values: `bootKind` (`cold`, `firstBoot`, `migration`) and `agent` (`guest`, `store`). Other string values are omitted from the signpost. Any later writer that persists timeline data must apply the public-data rules of §3.2.
+- The signpost timestamp is when `OSSignposter` receives the event. Because it cannot be backdated, the payload includes `sourceTimeOffsetMsAtSample`, the signed millisecond distance from the supplied `at:` instant to a `ContinuousClock` sample taken after the base fields are prepared and immediately before final message encoding and `emitEvent`. The signpost timestamp follows that sample by the small cost of encoding and emission. The timeline retains the supplied instant as the marker's source time; consumers can use the offset as an approximation when correlating an event received from another process.
 - `Perf.interval` creates only a signpost interval. It is for high-frequency work (`gpu.flush`, `gpu.present`, `input.translate`, `input.route`), which is not recorded in the timeline.
 - **Clock.** All host markers use `ContinuousClock` (`mach_continuous_time`), which is the same clock in every process on the Mac, so marker times from the launcher and apkrund can be subtracted directly. Guest times are never mixed with host times. Only durations measured on one side are combined ([input.md](input.md) §8).
-- Cost: markers are lifecycle events (a few per launch). A mark costs one signpost emission and one ring append. It never does I/O on the calling thread.
+- Cost: markers are lifecycle events (a few per launch). A mark performs one signpost emission and one in-memory ring append; it does no filesystem I/O and never writes through `LogSink` or `LogMirrorWriter`.
 
 ### 4.2 Catalogue
 
-The marker catalogue requires `VM_START`, `ANDROID_BOOT_COMPLETED`, `APP_LAUNCH_REQUEST`, `ACTIVITY_STARTED`, `FIRST_FRAME`, `UPDATE_CHECK_START`, `UPDATE_DOWNLOAD_END`, and `UPDATE_INSTALL_END`. APKRun uses `BOOT_COMPLETED` as the marker for Android's `sys.boot_completed=1` event. The remaining markers are defined in this catalogue.
+The marker catalogue requires `VM_START`, `APP_LAUNCH_REQUEST`, `ACTIVITY_STARTED`, `FIRST_FRAME`, `UPDATE_CHECK_START`, `UPDATE_DOWNLOAD_END`, and `UPDATE_INSTALL_END`. `BOOT_COMPLETED` is the marker for Android's `sys.boot_completed=1` event and the emitted marker for the `.bootCompleted` phase below.
 
 | Marker | Emitted by | When | Attributes |
 |---|---|---|---|
@@ -320,7 +329,7 @@ The marker catalogue requires `VM_START`, `ANDROID_BOOT_COMPLETED`, `APP_LAUNCH_
 | `ACTIVITY_STARTED` | RuntimeCore | the agent reports the launched activity resumed | `processStarted` (the app process was started for this launch) |
 | `FIRST_FRAME` | RuntimeCore | the first `frameReady` on the session's scanout ([graphics.md](graphics.md) §7) | |
 | `FIRST_FRAME_DISPLAYED` | RuntimeCore | the first `frameDisplayed` from the wrapper: the frame is in the window's layer. The glass is at most one display refresh later | |
-| `WRAPPER_GENERATE_START`, `WRAPPER_GENERATE_END`, `WRAPPER_REFRESH_END`, `WRAPPER_APPROVAL_END` | WrapperCore | [wrapper.md](wrapper.md) §14 | `result` |
+| `WRAPPER_GENERATE_START`, `WRAPPER_GENERATE_END`, `WRAPPER_REFRESH_END`, `WRAPPER_APPROVAL_END` | WrapperCore | [wrapper.md](wrapper.md) §14 | `result`, `durationMs`, `kind` |
 | `PACKAGE_IMPORT_START`, `PACKAGE_INSPECTED`, `PACKAGE_INSTALL_START`, `PACKAGE_INSTALL_COMPLETE`, `PACKAGE_ROLLBACK_COMPLETE` | APKStoreCore | [package-store.md](package-store.md) §13 | `bytes`, `splits`, `status` |
 | `UPDATE_CHECK_START`, `UPDATE_CHECK_END`, `UPDATE_DOWNLOAD_START`, `UPDATE_DOWNLOAD_END`, `UPDATE_INSTALL_START`, `UPDATE_INSTALL_END`, `UPDATE_HEALTH_END`, `UPDATE_ROLLBACK_END` | UpdateCore | [update-system.md](update-system.md) §14 | `provider`, `result`, `bytes` |
 | `CLIPBOARD_PUSH`, `NOTIFICATION_DELIVERED`, `FILE_TRANSFER` | IntegrationCore | [desktop-integration.md](desktop-integration.md) §13 | `durationMs`, `bytes` |

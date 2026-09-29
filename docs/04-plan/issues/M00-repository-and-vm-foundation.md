@@ -369,7 +369,7 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
    - The clock is `ContinuousClock`.
    - `PerfRecordWriter` comes with #070.
 
-   Check: T0 shows that the timeline keeps the newest 2,000 markers and that a mark does no I/O (it runs against a sink that fails on any write).
+   Check: T0 shows that the timeline keeps the newest 2,000 markers, validates bounded marker attributes, and that `interval` never appends to the timeline. Implementation review confirms that `mark` has no filesystem, mirror-writer, or `LogSink` dependency; its only effects are the in-memory timeline append and the required `OSSignposter` event.
 6. **Health and the diagnostics context (§7.1–§7.3).**
    - Add the types of §7.1 and `HealthCheckRegistry`, with a 2 s timeout for quick checks, 60 s for deep checks, and at most 8 checks at once.
    - Add the verdict function of §7.2.

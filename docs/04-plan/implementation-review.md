@@ -162,3 +162,76 @@ disclosure of sensitive command-line values.
 Built-in `--help`, `--version`, and completion requests continue through
 swift-argument-parser's clean-exit presenter, so they retain their normal output
 and exit status.
+
+## IR-010: Attribute performance signposts from the marker catalogue
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §§4.1–4.2; [M00](issues/M00-repository-and-vm-foundation.md) #061 step 5 |
+
+**Choice.** `Perf.mark` selects the signpost subsystem from the marker's
+catalogue emitter, while `Perf.interval` selects it from the documented
+`gpu.*` and `input.*` prefixes. All marker events use the static signpost name
+`APKRunPerfMarker`; unknown marker strings are stored as `UNKNOWN`. The mark
+API accepts an optional `PerfTimeline` so callers can use the instance from
+`DiagnosticsContext`. Each marker has an attribute schema that checks
+key-marker pairs, value types, and numeric ranges. It accepts at most 16
+attributes, with bounded names and string sizes. The timeline retains those
+bounded values, while public signposts expose only the finite `bootKind` and
+`agent` strings. Other string values are omitted from signposts. It records
+the difference between the supplied marker instant and signpost emission time
+as `sourceTimeOffsetMsAtSample`, sampled after preparing the base fields and
+immediately before final message encoding and emission.
+
+**Reason.** DiagnosticsCore cannot determine the calling module at runtime,
+so using the catalogue's declared emitter gives deterministic subsystem
+attribution without requiring each call site to repeat it. `OSSignposter`
+requires a static event name and timestamps the event when it is emitted;
+the marker therefore belongs in the event message. The offset sample
+approximates the difference to the event time for cross-process correlations.
+Per-marker key/type/range checks
+prevent unrelated values from being presented under another marker, and
+count/size bounds cap memory. Limiting public string fields prevents
+unvalidated values from reaching signposts. Later writers of timeline data
+must still apply the catalogue's public-data rules. Injecting the timeline
+makes the documented per-context timeline usable and keeps tests isolated.
+
+## IR-011: Remove the duplicate Android boot marker name
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §4.2; [M00](issues/M00-repository-and-vm-foundation.md) #061 step 5 |
+
+**Choice.** Use `BOOT_COMPLETED` as the sole marker for the `.bootCompleted`
+phase and remove `ANDROID_BOOT_COMPLETED` from the required catalogue and API.
+
+**Reason.** The required-marker sentence names `ANDROID_BOOT_COMPLETED`, but
+the catalogue table, runtime-daemon design, and M1 boot task define only
+`BOOT_COMPLETED` for that phase. No distinct emitter or timing is specified
+for the additional name, and retaining it as a no-op would advertise a
+required marker that cannot be recorded. The table's executable event
+definition takes precedence; maintainers should confirm the removed name was
+a duplicate rather than a separate guest broadcast event.
+
+## IR-012: Verify performance marker I/O through the declared effects
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #061 step 5; [diagnostics.md](../02-design/diagnostics.md) §4.1 |
+
+**Choice.** Verify that `Perf.mark` has no filesystem, mirror-writer, or
+`LogSink` dependency by reviewing its API and implementation. The T0 tests
+exercise the injected in-memory `PerfTimeline` and check that intervals do
+not append events.
+
+**Reason.** The specified API accepts a `PerfTimeline` and emits an
+`OSSignposter` event; it has no file-writer or sink parameter. Adding an
+unused failing sink would be disconnected from the code path and would give
+a false-positive test. The task check now matches the actual effects without
+adding a production dependency solely for a test seam.

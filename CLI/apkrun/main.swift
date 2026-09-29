@@ -1,7 +1,7 @@
 import ArgumentParser
+import Darwin
 import DiagnosticsCore
 import Foundation
-import Darwin
 
 @main
 struct APKRunCommand: AsyncParsableCommand {
@@ -9,7 +9,7 @@ struct APKRunCommand: AsyncParsableCommand {
         commandName: "apkrun",
         abstract: "Run Android apps as Mac apps.",
         version: Output.versionFlag(BuildInfo.current),
-        subcommands: [VersionCommand.self]
+        subcommands: [VersionCommand.self, LogsCommand.self]
     )
 
     static func main() async {
@@ -98,7 +98,7 @@ struct VersionCommand: ParsableCommand {
     private let versionInformation: BuildInfo
 
     init() {
-        versionInformation = .current
+        self.init(versionInformation: .current)
     }
 
     init(versionInformation: BuildInfo) {
@@ -112,6 +112,11 @@ struct VersionCommand: ParsableCommand {
     }
 
     mutating func run() throws {
+        Self.recordInvocation(using: APKLogger(category: .command))
         Output.write(renderedOutput)
+    }
+
+    static func recordInvocation(using logger: APKLogger) {
+        logger.notice("version command completed")
     }
 }

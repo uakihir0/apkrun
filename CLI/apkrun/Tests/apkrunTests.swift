@@ -1,6 +1,8 @@
 import DiagnosticsCore
+import DiagnosticsCoreTestSupport
 import Foundation
 import Testing
+
 @testable import apkrun
 
 private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent("Golden")
@@ -42,22 +44,25 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #expect(APKRunCommand.isBuiltInOutputRequest(["help", "version"]))
     #expect(APKRunCommand.isBuiltInOutputRequest(["--generate-completion-script", "zsh"]))
     #expect(APKRunCommand.isBuiltInOutputRequest(["--generate-completion-script=bash"]))
-    #expect(!APKRunCommand.isBuiltInOutputRequest([
-        "--generate-completion-script",
-        "unsupported-shell",
-    ]))
+    #expect(
+        !APKRunCommand.isBuiltInOutputRequest([
+            "--generate-completion-script",
+            "unsupported-shell",
+        ]))
     #expect(!APKRunCommand.isBuiltInOutputRequest(["--generate-completion-script=unsupported-shell"]))
-    #expect(!APKRunCommand.isBuiltInOutputRequest([
-        "--help",
-        "--generate-completion-script",
-        "unsupported-shell",
-    ]))
+    #expect(
+        !APKRunCommand.isBuiltInOutputRequest([
+            "--help",
+            "--generate-completion-script",
+            "unsupported-shell",
+        ]))
     #expect(!APKRunCommand.isBuiltInOutputRequest(["invalid-command", "help"]))
     #expect(!APKRunCommand.isBuiltInOutputRequest(["--", "--help"]))
-    #expect(!APKRunCommand.isBuiltInOutputRequest([
-        "--generate-completion-script",
-        "help",
-    ]))
+    #expect(
+        !APKRunCommand.isBuiltInOutputRequest([
+            "--generate-completion-script",
+            "help",
+        ]))
     #expect(APKRunCommand.usesJSONErrorOutput(["--json", "--bogus"]))
     #expect(!APKRunCommand.usesJSONErrorOutput(["--", "--json"]))
 }
@@ -72,16 +77,174 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #expect(command.renderedOutput == golden("version-json.txt"))
 }
 
+@Test func versionCommandWritesOneNoticeToTheCLICommandSubsystem() throws {
+    let sink = RecordingLogSink()
+    let logger = APKLogger(category: .command, sink: sink)
+    VersionCommand.recordInvocation(using: logger)
+
+    #expect(sink.entries.count == 1)
+    #expect(sink.entries.first?.level == .notice)
+    #expect(sink.entries.first?.subsystem == .cli)
+    #expect(sink.entries.first?.category == "command")
+}
+
+@Test func logsCommandWritesNormalizedJSONEntriesFromTheInjectedRunner() async throws {
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let line =
+        #"{"timestamp":"\#(timestamp)","messageType":"Info","eventMessage":"ready","subsystem":"io.apkrun.cli","category":"command"}"#
+    let runner = FakeLogCommandRunner(results: [
+        LogCommandResult(exitCode: 0, standardOutput: Data(line.utf8))
+    ])
+    let paths = APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory)
+    let output = CLIOutputRecorder()
+    try await LogsCommand.execute(
+        follow: false,
+        since: "5m",
+        subsystem: "io.apkrun.cli",
+        level: .info,
+        json: true,
+        reader: LogReader(paths: paths, runner: runner),
+        output: output.append
+    )
+
+    #expect(output.lines.count == 1)
+    #expect(output.lines.first?.toStandardError == false)
+    #expect(output.lines.first?.text.contains(#""message":"ready""#) == true)
+    let arguments = await runner.recordedArguments()
+    #expect(arguments.first?.first == "show")
+}
+
+@Test func logsCommandRejectsInvalidFiltersWithCatalogExitCode64() async throws {
+    let runner = FakeLogCommandRunner(results: [])
+    let paths = APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory)
+    let output = CLIOutputRecorder()
+    do {
+        try await LogsCommand.execute(
+            follow: false,
+            since: "5m --predicate true",
+            subsystem: nil,
+            level: nil,
+            json: false,
+            reader: LogReader(paths: paths, runner: runner),
+            output: output.append
+        )
+        Issue.record("invalid duration unexpectedly succeeded")
+    } catch let failure as CLIFailure {
+        #expect(failure.code == "invalidArgument")
+        #expect(ExitCodes.code(for: failure) == 64)
+    }
+    #expect(output.lines.isEmpty)
+}
+
+@Test func logsCommandRejectsSubsystemOutsideAPKRunNamespace() async throws {
+    let runner = FakeLogCommandRunner(results: [])
+    let paths = APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory)
+    let output = CLIOutputRecorder()
+    do {
+        try await LogsCommand.execute(
+            follow: false,
+            since: "5m",
+            subsystem: #"io.apkrun.cli" OR true"#,
+            level: nil,
+            json: false,
+            reader: LogReader(paths: paths, runner: runner),
+            output: output.append
+        )
+        Issue.record("invalid subsystem unexpectedly succeeded")
+    } catch let failure as CLIFailure {
+        #expect(failure.code == "invalidArgument")
+        #expect(ExitCodes.code(for: failure) == 64)
+    }
+
+    #expect(await runner.recordedArguments().isEmpty)
+    #expect(output.lines.isEmpty)
+}
+
+@Test func logsCommandReportsUnavailableWhenNeitherSourceCanBeRead() async throws {
+    let runner = FakeLogCommandRunner(results: [LogCommandResult(exitCode: 1)])
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("APKRun-LogsUnavailable-\(UUID().uuidString)", isDirectory: true)
+    let paths = APKRunPaths(homeDirectory: directory)
+    let output = CLIOutputRecorder()
+    do {
+        try await LogsCommand.execute(
+            follow: false,
+            since: "5m",
+            subsystem: nil,
+            level: nil,
+            json: false,
+            reader: LogReader(paths: paths, runner: runner),
+            output: output.append
+        )
+        Issue.record("unavailable logs unexpectedly succeeded")
+    } catch let failure as CLIFailure {
+        #expect(failure.code == "logsUnavailable")
+        #expect(ExitCodes.code(for: failure) == 1)
+    }
+}
+
+@Test func logsCommandNotesReadableMirrorFallbackOnStandardError() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("APKRun-LogsMirror-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let paths = APKRunPaths(homeDirectory: directory)
+    try FileManager.default.createDirectory(at: paths.logsRoot, withIntermediateDirectories: true)
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    try "\(timestamp) notice io.apkrun.cli/command fallback"
+        .write(to: paths.daemonLogFile, atomically: true, encoding: .utf8)
+    let output = CLIOutputRecorder()
+
+    try await LogsCommand.execute(
+        follow: false,
+        since: "5m",
+        subsystem: nil,
+        level: nil,
+        json: false,
+        reader: LogReader(
+            paths: paths,
+            runner: FakeLogCommandRunner(results: [LogCommandResult(exitCode: 1)])
+        ),
+        output: output.append
+    )
+
+    #expect(
+        output.lines.contains {
+            $0.toStandardError && $0.text == "note: including available APKRun file mirrors."
+        })
+    #expect(output.lines.contains { !$0.toStandardError && $0.text.contains(" fallback") })
+}
+
 @Test func rootHelpMatchesGolden() {
     #expect(APKRunCommand.helpMessage() == golden("help.txt"))
+}
+
+private final class CLIOutputRecorder: @unchecked Sendable {
+    struct Line: Equatable {
+        let text: String
+        let toStandardError: Bool
+    }
+
+    private let lock = NSLock()
+    private var storedLines: [Line] = []
+
+    var lines: [Line] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedLines
+    }
+
+    func append(_ text: String, _ toStandardError: Bool) {
+        lock.lock()
+        storedLines.append(Line(text: text, toStandardError: toStandardError))
+        lock.unlock()
+    }
 }
 
 @Test func catalogUsageErrorUsesThreeLinesAndExit64() {
     let error = CLIFailure.invalidArguments
 
     #expect(
-        ErrorOutput.render(error, json: false) ==
-            """
+        ErrorOutput.render(error, json: false) == """
             error: The command arguments aren't valid.
             hint: Run the command with --help to see the allowed values.
             code: cli.invalidArguments
@@ -105,7 +268,7 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 
 @Test func cliExitTableMatchesGeneratedCatalog() {
     for entry in ErrorCatalog.entries.values where entry.code.hasPrefix("cli.") {
-        guard case let .code(expected) = entry.cliExit else {
+        guard case .code(let expected) = entry.cliExit else {
             Issue.record("CLI entry \(entry.code) must have a fixed exit code.")
             continue
         }
@@ -114,7 +277,8 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 private func golden(_ name: String) -> String {
-    let contents = try! String(contentsOf: goldenDirectory.appendingPathComponent(name), encoding: .utf8)
+    let contents = try! String(
+        contentsOf: goldenDirectory.appendingPathComponent(name), encoding: .utf8)
     return contents.trimmingCharacters(in: .newlines)
 }
 

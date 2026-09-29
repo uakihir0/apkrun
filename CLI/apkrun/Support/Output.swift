@@ -6,6 +6,11 @@ enum Output {
         FileHandle.standardOutput.write(Data((text + "\n").utf8))
     }
 
+    static func writeLogLine(_ text: String, toStandardError: Bool = false) {
+        let handle = toStandardError ? FileHandle.standardError : FileHandle.standardOutput
+        handle.write(Data((text + "\n").utf8))
+    }
+
     static func versionHuman(_ version: BuildInfo) -> String {
         "apkrun \(version.marketingVersion) (\(version.buildNumber))"
     }
@@ -21,8 +26,8 @@ enum Output {
         let encodedCommit = encodeJSONString(version.gitCommit)
         let encodedConfiguration = encodeJSONString(version.configuration.rawValue)
         return """
-        {"schemaVersion":1,"result":{"cli":{"version":\(encodedVersion),"build":\(encodedBuild),"buildIdentity":\(encodedIdentity),"commit":\(encodedCommit),"configuration":\(encodedConfiguration),"embeddedRuntime":\(version.usesEmbeddedRuntime)}}}
-        """
+            {"schemaVersion":1,"result":{"cli":{"version":\(encodedVersion),"build":\(encodedBuild),"buildIdentity":\(encodedIdentity),"commit":\(encodedCommit),"configuration":\(encodedConfiguration),"embeddedRuntime":\(version.usesEmbeddedRuntime)}}}
+            """
     }
 
     private static func encodeJSONString(_ value: String) -> String {

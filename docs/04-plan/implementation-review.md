@@ -272,3 +272,148 @@ executing application code before the separate deep signature check. Including
 permit wait in the same deadline makes the documented timeout a bound on the
 entire check, while returning an empty report on caller cancellation avoids
 presenting a misleading partial health result.
+
+## IR-014: Bound and combine host log reads
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §3.5; [cli.md](../02-design/cli.md) §4.8 |
+
+**Choice.** `apkrun logs` defaults to the most recent hour, restricts
+`--subsystem` to `io.apkrun` names, and accepts `--since` durations through
+30 days. Follow mode starts `log stream` before reading history, buffers live
+records until history is ready, then emits history and live records with
+occurrence-aware overlap removal. It reads public daemon mirrors when `log
+show` fails, times out, or returns no matching records. Stream exits trigger
+retries with backoff from one to 30 seconds. It reports `cli.logsUnavailable`
+when neither unified logging nor a mirror file provides a readable source.
+Human-readable output escapes Unicode control and formatting characters.
+
+**Reason.** `log show` without a window may read an unnecessarily large store;
+one hour gives useful context and the 30-day cap rejects accidental unbounded
+history requests. Restricting the filter keeps this APKRun command inside its
+own namespace and makes the predicate safe to compose. `log stream` already
+follows events and this host's `log stream --help` has no `--follow` option.
+Starting it before the snapshot lets buffered events cover the interval while
+`log show` runs. Backoff avoids a tight retry loop when stream startup fails.
+Mirrors contain only public daemon records, so they remain a partial fallback
+when unified records from other host processes cannot be read. A human-readable
+terminal line escapes control and formatting scalars so untrusted log messages
+cannot issue terminal control sequences or visually reorder adjacent text.
+
+## IR-015: Bound log duration and terminal output
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §3.5; [cli.md](../02-design/cli.md) §4.8 |
+
+**Choice.** `--since` accepts at most 30 days. Human-readable log output
+renders control and Unicode formatting scalars as `\u{...}` escapes, with
+readable escapes for tab, newline, and carriage return. JSON output escapes
+formatting, line-separator, and paragraph-separator scalars using JSON Unicode
+escapes, preserving the decoded record.
+
+**Reason.** A maximum horizon limits unexpectedly large `log show` results
+while leaving a month of history available for investigations. APK code and
+guest input can contribute to log messages, so plain output must prevent
+terminal control sequences and direction-format characters from affecting the
+terminal display. NDJSON remains a structured encoding of the original public
+message while avoiding physical line breaks or display-direction effects.
+
+## IR-016: Stream host logs with bounded history state
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §3.5; [cli.md](../02-design/cli.md) §4.8 |
+
+**Choice.** `LogReader` parses `/usr/bin/log` output incrementally instead of
+retaining the full stdout buffer. Duration validation also runs in
+`DiagnosticsCore`, so direct API callers receive the same 30-day bound as CLI
+callers. Follow mode retains a timestamp watermark and occurrence counts for
+the boundary record set; it does not retain a set of all historical records.
+It caps live records waiting for history at 4,096 records or 4 MiB of
+estimated record text, whichever is reached first, and backpressures pipe reads
+while that buffer is full. Individual NDJSON lines are capped at 1 MiB;
+oversized lines are discarded through the next newline. It waits for the
+`Filtering the log data using`
+stderr notice or first stdout record before it considers `log stream` ready;
+if neither arrives within 30 seconds, it terminates the process and retries.
+It reads the initial history only after readiness, while buffering live
+records, and applies `--since` to that initial history only. After any stream
+exit, it retries; after a replacement stream becomes ready, it runs a catch-up
+`log show --start` query from one second before the last covered instant while
+buffering live records. For complete unified queries, older live timestamps
+inside the initial history window are covered by the snapshot; older live
+records outside that fixed window remain eligible. At the timestamp boundary,
+it suppresses only the occurrences represented in history and preserves
+identical records beyond that count. For partial or mirror history, it
+suppresses only exact boundary occurrences and allows older timestamps
+through; partial unified output does not imply that earlier mirror or catch-up
+records were covered. Follow history fixes its `--since` cutoff at command
+start and uses `--start` with a timestamp filter; delayed live records remain
+eligible outside that window. The timestamp parser accepts fractional ISO 8601
+timestamps emitted by NDJSON. The recent-record cache is limited to 4,096
+records and 1 MiB of text. The query-side occurrence cache used to reconcile
+buffered live rows is limited to 4,096 records and 4 MiB, matching the maximum
+live buffer. A bounded count map preserves query matches for rows already
+present in the live buffer as the query advances; its keys are bounded by the
+live queue. If a matching live row arrives only after its query-side occurrence
+has been evicted, it can be replayed; retaining late rows is preferred over
+suppressing them by timestamp.
+Captured stderr is limited to a 64 KiB tail, and non-capturing log reads do
+not retain stderr.
+An initial or reconnect checkpoint advances only after a complete unified
+query, to the later of the query's launch time and stream's end time when both
+sources jointly cover the interval. If an incomplete catch-up gap outlives the
+bounded recent-record cache, a later retry can repeat older rows. This preserves
+at-least-once delivery instead of suppressing potentially late records based
+only on timestamp. An incomplete initial history query retains the original
+oldest requested boundary as its checkpoint so a later catch-up still covers
+events emitted before stream readiness. If a replacement stream cannot become
+ready after three attempts, the reader runs one final catch-up query with mirror
+fallback and returns. Without a readable source it returns
+`cli.logsUnavailable`. A mirror notice is emitted only after at least one
+mirror file can be read, and partial parsed output counts as a readable source.
+
+**Reason.** A 30-day query can produce more output than should be held in
+memory, while the history/live overlap only needs the newest timestamp
+boundary. Pipe backpressure and the byte and event caps bound handoff memory;
+the line limit also bounds a malformed or unterminated JSON record. The
+bounded exact-record cache may evict entries from a gap that remains unresolved
+after repeated partial queries. Replaying an older row in that case is safer
+than suppressing a late record solely because its timestamp is old. During a
+large successful query, a matching live row that reaches the handoff only
+after its query occurrence leaves the bounded cache can also be repeated;
+rows already in the live buffer are matched against the query as it advances.
+Waiting for the subscription notice prevents the history query from racing
+ahead of the stream attachment; the first output is a fallback readiness
+signal if the notice is absent. Applying the `--since` cutoff only to history
+keeps delayed live records from expiring while the query runs. The handoff
+limits history deduplication to timestamps inside the fixed query window, so
+older live entries remain eligible. A one-second
+catch-up margin handles `log show --start` accepting whole-second timestamps,
+and readiness before that query leaves the live stream covering its later
+portion. A failed command's partial rows do not prove older timestamps were
+covered, so mirrors and catch-up queries may fill that gap; the watermark only
+supports exact duplicate checks at its latest timestamp. Fractional ISO 8601
+support preserves timestamps used to filter and order NDJSON records. Counting
+exact occurrences avoids collapsing distinct but identical records. The
+bounded recent-record window deduplicates the reconnect overlap without
+retaining the full history. Retaining the previous checkpoint after a failed
+catch-up lets a later reconnect retry the unverified gap. Retrying clean EOF
+keeps follow mode alive when the stream process ends normally. The final
+one-shot query after repeated startup failures recovers logs when `show` works
+but `stream` does not. The query launch time plus stream end time define the
+latest point jointly covered by the two sources; using the catch-up command's
+completion time could skip records created after its snapshot while the stream
+is already closed. Bounding captured stderr prevents a long-running
+process from retaining diagnostic output indefinitely. Distinguishing
+readable output from process exit status avoids discarding useful partial
+records and avoids claiming a mirror fallback when no mirror file was
+accessible.

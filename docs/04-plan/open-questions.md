@@ -147,7 +147,7 @@ Each entry names the task that finds the answer and what changes for each result
 
 | ID | What the task checks | If yes | If no |
 |---|---|---|---|
-| OQ-04 | `log show --predicate 'subsystem BEGINSWITH "io.apkrun"'` as a standard user on macOS 27 (#061) | `apkrun logs` reads the unified log | `apkrun logs` reads the file mirrors ([../02-design/diagnostics.md](../02-design/diagnostics.md) §3.3) |
+| OQ-04 | `log show --predicate 'subsystem BEGINSWITH "io.apkrun"'` as a standard user on macOS 27 (#061) | `apkrun logs` reads the unified log | `apkrun logs` reads the file mirrors ([../02-design/diagnostics.md](../02-design/diagnostics.md) §3.3). **Observed 2026-09-29:** an unprivileged command in an `admin`-group account returned an APKRun entry; `sudo -n` required a password, and no non-admin account was available. OQ-04 remains open pending a true non-admin run. |
 | OQ-05 | `logcat -v uid` shows the UID on the stock Android 17 image (#060) | filter by UID | collect `ps -A -o PID,UID` at the same time and filter by PID |
 | OQ-06 | The VZ XPC service process can be matched by name, user, and start time right after `VM_START` (#070) | report the host-side VM footprint | report it as unavailable ([../02-design/diagnostics.md](../02-design/diagnostics.md) §5) |
 | OQ-07 | The IOKit accelerator statistics contain a GPU utilization key on the reference Mac (#070) | report it | report unavailable |

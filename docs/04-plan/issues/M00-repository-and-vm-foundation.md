@@ -262,7 +262,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 | Requirements | FR-CLI-02, FR-OPS-05, NFR-OBS-01, NFR-SEC-05, NFR-DEV-03 |
 | Design | [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §1–§4, §7.1–§7.3, §11 (#061), §12, §13; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §1–§5, §16; [../../02-design/cli.md](../../02-design/cli.md) §3.2, §3.3, §4.8, §6.2; [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1, §2; [../../05-development/build-system.md](../../05-development/build-system.md) §3, §4.2 |
 | Modules / paths | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/` (`Paths/`, `Build/`, `Logging/`, `Operations/`, `Errors/`, `Perf/`, `Health/`), `Packages/DiagnosticsCore/ErrorCatalog/errors.json`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTestSupport/`, `scripts/errorgen.swift`, `scripts/check-logging.sh`, `scripts/check-compile-fail.sh`, `scripts/build/stamp-commit.sh`, `Tests/Fixtures/compile-fail/`, `CLI/apkrun/` (`Support/`, `Commands/Logs.swift`), `project.yml` |
-| Risks / questions | OQ-04 (`log show` for standard users; verified here) |
+| Risks / questions | OQ-04 (`log show` for non-admin users; partial result recorded, non-admin account unavailable here) |
 
 ### Goal
 
@@ -446,6 +446,7 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 ### Notes
 
 - **Record:** the OQ-04 result goes into [../open-questions.md](../open-questions.md) OQ-04 and [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §14.
+- **OQ-04 environment limit (2026-09-29):** macOS 27.0 (26A428) returned the version entry from an unprivileged command in an account belonging to the `admin` group. `sudo -n` required a password, and this environment has no non-admin account. The non-admin half remains open; the implementation reads file mirrors when unified logging fails or is empty.
 - **Pitfall:** unified logging keeps `info` entries in memory only by default. A short-lived CLI's `info` entry may be gone before `log show` runs. That is why `apkrun version` logs at `notice`, and why `apkrun logs --level info` passes `--info` to `log`.
 - **Pitfall:** a Swift build plugin or a run-script phase cannot run before Xcode processes an Info.plist in the same target. The commit stamp therefore lives in the separate `BuildStamp` target.
 - **Pitfall:** `errorgen --markdown` must never touch text outside its markers. The layout of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2 (one text row for several codes) needs a domain-specific renderer.

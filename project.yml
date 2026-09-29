@@ -14,11 +14,22 @@ packages:
   APKRun:
     path: .
 
+aggregateTargets:
+  BuildStamp:
+    buildScripts:
+      - name: Stamp Git commit
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/stamp-commit.sh"
+        outputFiles:
+          - "$(SRCROOT)/build/generated/BuildStamp.h"
+
 settings:
   base:
     ARCHS: arm64
     MACOSX_DEPLOYMENT_TARGET: "27.0"
     SWIFT_VERSION: "6.0"
+    INFOPLIST_PREPROCESS: YES
+    INFOPLIST_PREFIX_HEADER: "$(SRCROOT)/build/generated/BuildStamp.h"
     ALWAYS_SEARCH_USER_PATHS: NO
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
@@ -49,6 +60,9 @@ targets:
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRun
     dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
       - package: APKRun
         product: RuntimeClient
       - package: APKRun
@@ -114,6 +128,9 @@ targets:
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunMenuBar
     dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
       - package: APKRun
         product: RuntimeClient
       - package: APKRun
@@ -137,6 +154,9 @@ targets:
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunLauncher
     dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
       - package: APKRun
         product: RuntimeClient
       - package: APKRun
@@ -165,5 +185,8 @@ targets:
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.apkrund
     dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
       - package: APKRun
         product: RuntimeHost

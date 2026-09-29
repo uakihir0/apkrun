@@ -7,6 +7,17 @@ configuration="${CONFIGURATION:-Debug}"
 marketing_version="${MARKETING_VERSION:-0.1.0}"
 build_number="${CURRENT_PROJECT_VERSION:-1}"
 build_identity="${APKRUN_BUILD_IDENTITY:-dev}"
+build_stamp="$repo_root/build/generated/BuildStamp.h"
+
+if [[ ! -f "$build_stamp" ]]; then
+    printf 'Build stamp is missing: %s\n' "$build_stamp" >&2
+    exit 1
+fi
+git_commit="$(sed -nE 's/^#define APKRUN_GIT_COMMIT ([[:xdigit:]]{7}(-dirty)?)$/\1/p' "$build_stamp")"
+if [[ -z "$git_commit" ]]; then
+    printf 'Build stamp does not contain a valid commit revision.\n' >&2
+    exit 1
+fi
 
 case "$configuration" in
     Debug)
@@ -33,6 +44,14 @@ plutil -create xml1 "$plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $marketing_version" "$plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $build_number" "$plist"
 /usr/libexec/PlistBuddy -c "Add :APKRunBuildIdentity string $build_identity" "$plist"
+/usr/libexec/PlistBuddy -c "Add :APKRunGitCommit string $git_commit" "$plist"
+/usr/libexec/PlistBuddy -c "Add :APKRunConfiguration string $configuration" "$plist"
+
+embedded_runtime=false
+if [[ "$configuration" == "Debug" ]]; then
+    embedded_runtime=true
+fi
+/usr/libexec/PlistBuddy -c "Add :APKRunEmbeddedRuntime bool $embedded_runtime" "$plist"
 
 linker_arguments=(
     -Xlinker -sectcreate

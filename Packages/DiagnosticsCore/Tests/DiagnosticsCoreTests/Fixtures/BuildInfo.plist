@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleShortVersionString</key>
+    <string>2.4.0</string>
+    <key>CFBundleVersion</key>
+    <string>20400</string>
+    <key>APKRunBuildIdentity</key>
+    <string>release</string>
+    <key>APKRunGitCommit</key>
+    <string>0123abc-dirty</string>
+    <key>APKRunConfiguration</key>
+    <string>Release</string>
+    <key>APKRunEmbeddedRuntime</key>
+    <false/>
+</dict>
+</plist>

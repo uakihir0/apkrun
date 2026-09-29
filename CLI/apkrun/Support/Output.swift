@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 
 enum Output {
@@ -5,24 +6,29 @@ enum Output {
         FileHandle.standardOutput.write(Data((text + "\n").utf8))
     }
 
-    static func versionHuman(_ version: VersionInformation) -> String {
+    static func versionHuman(_ version: BuildInfo) -> String {
         "apkrun \(version.marketingVersion) (\(version.buildNumber))"
     }
 
-    static func versionFlag(_ version: VersionInformation) -> String {
+    static func versionFlag(_ version: BuildInfo) -> String {
         version.marketingVersion
     }
 
-    static func versionJSON(_ version: VersionInformation) -> String {
+    static func versionJSON(_ version: BuildInfo) -> String {
         let encodedVersion = encodeJSONString(version.marketingVersion)
         let encodedBuild = encodeJSONString(version.buildNumber)
+        let encodedIdentity = encodeJSONString(version.buildIdentity)
+        let encodedCommit = encodeJSONString(version.gitCommit)
+        let encodedConfiguration = encodeJSONString(version.configuration.rawValue)
         return """
-        {"schemaVersion":1,"result":{"cli":{"version":\(encodedVersion),"build":\(encodedBuild)}}}
+        {"schemaVersion":1,"result":{"cli":{"version":\(encodedVersion),"build":\(encodedBuild),"buildIdentity":\(encodedIdentity),"commit":\(encodedCommit),"configuration":\(encodedConfiguration),"embeddedRuntime":\(version.usesEmbeddedRuntime)}}}
         """
     }
 
     private static func encodeJSONString(_ value: String) -> String {
-        let encoded = try! JSONEncoder().encode(value)
+        guard let encoded = try? JSONEncoder().encode(value) else {
+            return "\"\""
+        }
         return String(decoding: encoded, as: UTF8.self)
     }
 }

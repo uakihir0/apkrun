@@ -170,7 +170,10 @@ let package = Package(
         .testTarget(
             name: "DiagnosticsCoreTests",
             dependencies: ["DiagnosticsCore"],
-            path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests"
+            path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests",
+            resources: [
+                .copy("Fixtures"),
+            ]
         ),
         .testTarget(
             name: "VirtioDeviceCoreTests",
@@ -249,7 +252,7 @@ let package = Package(
         ),
         .testTarget(
             name: "apkrunTests",
-            dependencies: ["apkrun"],
+            dependencies: ["apkrun", "DiagnosticsCore"],
             path: "CLI/apkrun/Tests",
             resources: [
                 .copy("Golden"),

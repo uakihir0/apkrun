@@ -74,3 +74,37 @@ repository during #001. #062 still adds validation scripts and CI checks.
 recorded in `ThirdParty/ThirdParty.lock.json` as soon as code depends on it.
 The initial task already introduces three exact package dependencies, so
 waiting for #062 would leave the working tree outside that invariant.
+
+## IR-005: Relocate caches with `APKRUN_HOME`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [filesystem-layout.md](../01-architecture/filesystem-layout.md) §§1–3, [diagnostics.md](../02-design/diagnostics.md) §11 step 1 |
+
+**Choice.** When a caller explicitly enables `APKRUN_HOME`, the disposable
+system cache root is `<APKRUN_HOME>/Caches`, while the persistent image
+download cache remains `<APKRUN_HOME>/Cache`.
+
+**Reason.** The filesystem specification gives system caches and persistent
+application data separate roots. Keeping both below the override makes tests
+and development runs relocatable without conflating the two storage roles.
+
+## IR-006: Keep image artifact paths manifest-driven
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [filesystem-layout.md](../01-architecture/filesystem-layout.md) §§1–2, [android-image.md](../02-design/android-image.md) §3, [AGENTS.md](../../AGENTS.md) §6.3 |
+
+**Choice.** `APKRunPaths` exposes installed image roots, manifest metadata,
+staging locations, and containing directories. It does not construct paths to
+individual image payload files; those are resolved by `AndroidImageManifest`.
+Fixed recovery point files are exposed directly.
+
+**Reason.** The implementer rules require image payload access through the
+manifest after inventory. Keeping that boundary avoids assumptions in the
+DiagnosticsCore leaf module while still centralizing the documented writable
+paths and recovery point layout.

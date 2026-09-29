@@ -1,4 +1,5 @@
 import ArgumentParser
+import DiagnosticsCore
 import Foundation
 
 @main
@@ -6,7 +7,7 @@ struct APKRunCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "apkrun",
         abstract: "Run Android apps as Mac apps.",
-        version: Output.versionFlag(VersionInformation.current),
+        version: Output.versionFlag(BuildInfo.current),
         subcommands: [VersionCommand.self]
     )
 
@@ -24,13 +25,13 @@ struct VersionCommand: ParsableCommand {
     @Flag(name: .long, help: "Print version information as JSON.")
     var json = false
 
-    private let versionInformation: VersionInformation
+    private let versionInformation: BuildInfo
 
     init() {
         versionInformation = .current
     }
 
-    init(versionInformation: VersionInformation) {
+    init(versionInformation: BuildInfo) {
         self.versionInformation = versionInformation
     }
 

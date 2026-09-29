@@ -18,5 +18,11 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>APKRunBuildIdentity</key>
 	<string>$(APKRUN_BUILD_IDENTITY)</string>
+	<key>APKRunGitCommit</key>
+	<string>APKRUN_GIT_COMMIT</string>
+	<key>APKRunConfiguration</key>
+	<string>$(CONFIGURATION)</string>
+	<key>APKRunEmbeddedRuntime</key>
+	<false/>
 </dict>
 </plist>

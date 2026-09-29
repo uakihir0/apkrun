@@ -6,7 +6,7 @@
 
 ## Context
 
-  listed the modules VirtualMachineCore, GraphicsCore, RuntimeCore, APKStoreCore, UpdateCore, WrapperCore, and IntegrationCore. Implementation needs more precise boundaries: the custom virtio plumbing, XPC contract, composition root, guest protocol, image handling, input model, windowing, and diagnostics.
+The first module sketch listed the modules VirtualMachineCore, GraphicsCore, RuntimeCore, APKStoreCore, UpdateCore, WrapperCore, and IntegrationCore. Implementation needs more precise boundaries: the custom virtio plumbing, XPC contract, composition root, guest protocol, image handling, input model, windowing, and diagnostics.
 
 ## Decision
 

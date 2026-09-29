@@ -41,7 +41,7 @@ Swift formatting settings:
 | Rules on in `.swift-format` | the default rules plus `NeverForceUnwrap`, `NeverUseForceTry`, `NeverUseImplicitlyUnwrappedOptionals`, `AllPublicDeclarationsHaveDocumentation`, `OrderedImports`, `FileScopedDeclarationPrivacy` |
 | `.swift-format-tests` | the same file with the first four rules off |
 
-- `check-format.sh` runs `swift format lint --strict --configuration.swift-format` over production code and the same with `.swift-format-tests` over `Packages/*/Tests/`, `Apps/*/Tests/`, `Apps/*/UITests/`, `CLI/apkrun/Tests/`, and `Tests/`.
+- `check-format.sh` runs `swift format lint --strict --configuration .swift-format` over production code and the same with `.swift-format-tests` over `Packages/*/Tests/`, `Apps/*/Tests/`, `Apps/*/UITests/`, `CLI/apkrun/Tests/`, and `Tests/`.
 - Warnings are errors in CI for every language. Locally they stay warnings, so work in progress still builds.
 - Format before you commit. `scripts/check-format.sh --fix` runs every formatter in place.
 - Generated code (`Generated/`, `ErrorCatalog.generated.swift`) is excluded from formatting and linting.
@@ -138,7 +138,7 @@ A new component with shared mutable state gets one owner: an actor, a serial que
 
 ### 4.2 Rules
 
-1. **No blocking on actor executors or the main actor.** No semaphores, no `DispatchQueue.sync` onto another queue, no `Thread.sleep`, no `Process.waitUntilExit()`, no synchronous network I/O, and no file I/O of unbounded size. Blocking work runs on a dedicated queue or thread and is bridged with a checked continuation.
+1. **No blocking on actor executors or the main actor.** No semaphores, no `DispatchQueue.sync` onto another queue, no `Thread.sleep`, no `Process.waitUntilExit`, no synchronous network I/O, and no file I/O of unbounded size. Blocking work runs on a dedicated queue or thread and is bridged with a checked continuation.
 2. **Continuations** are `withCheckedContinuation` or `withCheckedThrowingContinuation`, and each is resumed exactly once on every path. The unsafe variants need a `// PERF:` marker with a measurement (§12).
 3. **Reentrancy.** After every `await` inside an actor, check the state again before you act on it. State changes go through the state machine's `transition(to:)`, which logs at `info` and publishes `RuntimeEvent.stateChanged` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md)).
 4. **Never infer state** from whether a reference is `nil`. Use the state enum ([../../AGENTS.md](../../AGENTS.md) §6.2).
@@ -162,7 +162,7 @@ public enum StoreFailure: APKRunError {
     case runtimeUnavailable(RuntimeFailure)
     // … (the full list is in package-store.md §12)
 
-    public static var domain: ErrorDomain {.store }
+    public static var domain: ErrorDomain { .store }
     public var code: String { /* the case name: "downgradeRefused" */ }
     public var parameters: [String: ErrorParameter] { /* one entry per associated value */ }
     public var cause: (any APKRunError)? { /* the RuntimeFailure of runtimeUnavailable, else nil */ }
@@ -186,10 +186,10 @@ public enum StoreFailure: APKRunError {
 ### 5.2 Logging
 
 ```swift
-private let log = APKLogger(.store, category:.transaction)
+private let log = APKLogger(.store, category: .transaction)
 
-log.info("commit \(txn,.public) \(packageID,.public)")
-log.error("import failed for \(fileName,.private)", error: failure) // adds err=store.<code>
+log.info("commit \(txn, .public) \(packageID, .public)")
+log.error("import failed for \(fileName, .private)", error: failure)   // adds err=store.<code>
 ```
 
 - Log only through `APKLogger`. `os.Logger`, `Logger(`, `print(`, `NSLog`, and `os_log` outside DiagnosticsCore fail `scripts/check-logging.sh`.
@@ -308,7 +308,7 @@ Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C impleme
 - **Crate.** `Guest/vsockd`, edition 2021. Dependencies are `std`, `libc`, `log`, and `android_logger` only, because the product build uses the crates of AOSP `external/rust/crates` ([build-system.md](build-system.md) §7.2).
 - **Behavior limits** ([../02-design/guest-components.md](../02-design/guest-components.md) §10): a static port table with no configuration file, one thread per direction, at most 8 connections per port, a 64 KiB copy buffer, and a peer check for `VMADDR_CID_HOST`. The bridge never parses or logs payload bytes. A change to any of these is a design change.
 - **`unsafe`.** Only around `libc` calls. Every `unsafe` block has a `// SAFETY:` comment. clippy runs with `-D clippy::undocumented_unsafe_blocks`.
-- **Errors.** Functions return `std::io::Result`. No `unwrap` outside tests (`-D clippy::unwrap_used` for non-test code). `expect("…")` only for invariants that the code itself guarantees. The peer's behavior never causes a panic. A failed connection is logged and closed, and the listener continues.
+- **Errors.** Functions return `std::io::Result`. No `unwrap()` outside tests (`-D clippy::unwrap_used` for non-test code). `expect("…")` only for invariants that the code itself guarantees. The peer's behavior never causes a panic. A failed connection is logged and closed, and the listener continues.
 - **Logging.** Through the `log` crate with the tag `apkrun_vsockd`: ports, CIDs, connection counts, and errors. Never payload bytes.
 
 ---
@@ -319,7 +319,7 @@ Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C impleme
 
 - Python 3.12. The image tooling is the `apkrun_image` package in `Images/tools/`. Other scripts (`scripts/**/*.py`) use the same venv, the standard library, and the pinned packages only ([environment-setup.md](environment-setup.md) §2.4).
 - Every function has type hints on its parameters and return value (ruff `ANN`). Records are `dataclasses` or `TypedDict`s, not loose dictionaries.
-- Command-line scripts use `argparse` and `def main -> int`, end with `sys.exit(main)`, and print errors to stderr with the next step to take.
+- Command-line scripts use `argparse` and `def main() -> int`, end with `sys.exit(main())`, and print errors to stderr with the next step to take.
 - Use `pathlib` for paths. Run subprocesses with argument lists and `check=True`, never with `shell=True`.
 - Output is deterministic: `json.dumps(…, sort_keys=True, indent=2)` plus a final newline, sorted directory listings, and no wall-clock timestamps unless the format requires one ([build-system.md](build-system.md) §14).
 - Artifact names are never assumed. `apkrun_image` inventories an artifact set first and then goes through the manifest, like the host ([../../AGENTS.md](../../AGENTS.md) §6.3).
@@ -327,7 +327,7 @@ Swift (GraphicsCore) → GraphicsBridge C API (gb_*) → C / Objective-C impleme
 
 ### 10.2 Shell
 
-- Scripts start with `#!/bin/bash` and `set -euo pipefail`, and they run on the system bash 3.2 of a clean Mac: no associative arrays, no `mapfile`, no `${var,}`.
+- Scripts start with `#!/bin/bash` and `set -euo pipefail`, and they run on the system bash 3.2 of a clean Mac: no associative arrays, no `mapfile`, no `${var,,}`.
 - Quote every expansion. Use arrays for argument lists.
 - Scripts that [build-system.md](build-system.md) lists work without arguments or print their usage. A missing input fails with a message that names the command that produces it.
 - `adb shell` and `pm` appear only in the paths that `scripts/check-raw-adb.sh` exempts.
@@ -342,7 +342,7 @@ The tiers, locations, budgets, and fixtures are in [../04-plan/test-strategy.md]
 | Topic | Rule |
 |---|---|
 | Framework | XCTest for all Swift tests (T0, T1, XCUITest, and T2 in the `IntegrationTests` bundle). JUnit 4 for Kotlin, pytest for Python, `#[test]` for Rust |
-| Test names | name the behavior, not the method. Swift: `testUpdateWaitsWhileWindowIsOpen`. Kotlin: `` fun `update waits while window is open` ``. Python: `test_update_waits_while_window_is_open`. Rust: `fn rejects_non_host_cid` |
+| Test names | name the behavior, not the method. Swift: `testUpdateWaitsWhileWindowIsOpen`. Kotlin: `` fun `update waits while window is open`() ``. Python: `test_update_waits_while_window_is_open`. Rust: `fn rejects_non_host_cid()` |
 | Test classes | `<Subject>Tests`. T2 classes live in `Tests/IntegrationTests/<Area>Tests/` |
 | Fakes | `Fake<Protocol>`, in the `<Module>TestSupport` target of the module that owns the protocol. There is one fake per protocol; other modules import it instead of writing their own. A fake of guest behavior has a T2 contract test ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2) |
 | Time | inject a clock and use the manual clock. Never `sleep` to synchronize. Wait for markers with a timeout, and fail with a message that names the missing marker (P11) |

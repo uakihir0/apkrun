@@ -69,7 +69,7 @@ The operation tables of §5–§15 use these letters in the **Clients** column.
 
 ### 1.5 Code-signing requirements
 
-apkrund sets the requirement on each anonymous listener with `NSXPCListener.setConnectionCodeSigningRequirement(_:)`. The client sets a requirement for apkrund with `NSXPCConnection.setCodeSigningRequirement(_:)` before `resume`, on the broker connection and on the endpoint connection.
+apkrund sets the requirement on each anonymous listener with `NSXPCListener.setConnectionCodeSigningRequirement(_:)`. The client sets a requirement for apkrund with `NSXPCConnection.setCodeSigningRequirement(_:)` before `resume()`, on the broker connection and on the endpoint connection.
 
 | Connection | Release requirement | Development requirement (ad-hoc) |
 |---|---|---|
@@ -98,13 +98,13 @@ apkrund sets the requirement on each anonymous listener with `NSXPCListener.setC
 
 ```swift
 public enum RuntimeAPI {
-    public static let version = APIVersion(major: 1, minor: 0) // the control and wrapper protocols
-    public static let wrapperMajors: [Int] = [1] // served on the wrapper endpoint: N and N−1
-    public static let brokerRevision = 1 // additive-only broker protocol
-    public static let maintenanceRevision = 1 // additive-only MaintenanceControl
+    public static let version = APIVersion(major: 1, minor: 0)       // the control and wrapper protocols
+    public static let wrapperMajors: [Int] = [1]                     // served on the wrapper endpoint: N and N−1
+    public static let brokerRevision = 1                              // additive-only broker protocol
+    public static let maintenanceRevision = 1                         // additive-only MaintenanceControl
 }
 
-public struct APIVersion: Codable, Sendable, Comparable { public var major: Int; public var minor: Int } // encoded "1.0"
+public struct APIVersion: Codable, Sendable, Comparable { public var major: Int; public var minor: Int }   // encoded "1.0"
 ```
 
 - The first released version is `1.0` at #032. Before #032 there is no XPC and no version check (§3.8).
@@ -153,15 +153,15 @@ The launcher is built against `M.m`. apkrund serves `N.n`. The launcher decides 
 ### 3.1 Sequence
 
 ```text
-client apkrund
-connect io.apkrun.apkrund.xpc, requirement for apkrund ─▶ broker
-hello(HelloRequest) ─▶ HelloReply
-requestEndpoint(EndpointRequest) ─▶ EndpointReply (.granted + endpoint |.rejected)
-wrapper, rejected: requestApproval(ApprovalRequest) ─▶ ApprovalReply; then requestEndpoint again
-close the broker connection
-connect the endpoint, requirement for apkrund,
-exportedInterface = RuntimeEventSink ─▶ control | maintenance | wrapper endpoint
-subscribe(…), openSession(…), other operations
+client                                              apkrund
+  connect io.apkrun.apkrund.xpc, requirement for apkrund ─▶ broker
+  hello(HelloRequest)                               ─▶ HelloReply
+  requestEndpoint(EndpointRequest)                  ─▶ EndpointReply (.granted + endpoint | .rejected)
+     wrapper, rejected: requestApproval(ApprovalRequest) ─▶ ApprovalReply; then requestEndpoint again
+  close the broker connection
+  connect the endpoint, requirement for apkrund,
+     exportedInterface = RuntimeEventSink           ─▶ control | maintenance | wrapper endpoint
+  subscribe(…), openSession(…), other operations
 ```
 
 ### 3.2 `hello`
@@ -169,17 +169,17 @@ subscribe(…), openSession(…), other operations
 ```swift
 public struct HelloRequest: Codable, Sendable {
     public var clientKind: ClientKind
-    public var claimedIdentity: String // the client's bundle or code identifier; used to pick the listener
-    public var apiVersion: APIVersion // the version the client was built against
-    public var clientVersion: String? // marketing version, for logs
+    public var claimedIdentity: String        // the client's bundle or code identifier; used to pick the listener
+    public var apiVersion: APIVersion         // the version the client was built against
+    public var clientVersion: String?         // marketing version, for logs
     public var clientBuild: Int?
 }
 
 public struct HelloReply: Codable, Sendable {
-    public var runtimeVersion: String // APKRun marketing version, "1.2.0"
+    public var runtimeVersion: String         // APKRun marketing version, "1.2.0"
     public var runtimeBuild: Int
-    public var apiVersion: APIVersion // the server's version for the control protocol
-    public var hostState: HostState // §3.7
+    public var apiVersion: APIVersion         // the server's version for the control protocol
+    public var hostState: HostState           // §3.7
 }
 ```
 
@@ -199,26 +199,26 @@ public enum EndpointKind: Codable, Sendable, Hashable {
 public struct EndpointRequest: Codable, Sendable {
     public var kind: EndpointKind
     public var apiVersion: APIVersion
-    public var selfCdhash: String? // wrappers: the launcher's own cdhash (SecCodeCopySelf); advisory only
+    public var selfCdhash: String?            // wrappers: the launcher's own cdhash (SecCodeCopySelf); advisory only
 }
 
 public enum EndpointRejection: String, Codable, Sendable {
-    case notRegistered // wrapper: bundle ID not in the registry
-    case cdhashMismatch // wrapper: registered with another cdhash
-    case unsupportedAPI // wrapper major outside RuntimeAPI.wrapperMajors
-    case unknownClient // control or maintenance: no listener for the claimed identity
+    case notRegistered                        // wrapper: bundle ID not in the registry
+    case cdhashMismatch                       // wrapper: registered with another cdhash
+    case unsupportedAPI                       // wrapper major outside RuntimeAPI.wrapperMajors
+    case unknownClient                        // control or maintenance: no listener for the claimed identity
 }
 ```
 
 ```swift
 public enum EndpointReply: Codable, Sendable {
-    case granted // the NSXPCListenerEndpoint travels next to the JSON reply (§4.9)
+    case granted                              // the NSXPCListenerEndpoint travels next to the JSON reply (§4.9)
     case rejected(EndpointRejection)
 }
 // @objc: func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
 ```
 
-- `selfCdhash` lets apkrund answer `cdhashMismatch` without an endpoint round trip. It grants nothing: the listener requirement still checks the real cdhash. When `selfCdhash` is missing and the cdhash differs, the endpoint connection is invalidated right after `resume`, and the launcher treats that as `cdhashMismatch`.
+- `selfCdhash` lets apkrund answer `cdhashMismatch` without an endpoint round trip. It grants nothing: the listener requirement still checks the real cdhash. When `selfCdhash` is missing and the cdhash differs, the endpoint connection is invalidated right after `resume()`, and the launcher treats that as `cdhashMismatch`.
 - A rejected wrapper goes to approval (§3.4). A rejected control client shows "APKRun is damaged. Download it again." (`runtime.notAuthorized`).
 - Deadline: 5 s.
 
@@ -228,15 +228,15 @@ Flow and dialog: [../02-design/wrapper.md](../02-design/wrapper.md) §7.3.
 
 ```swift
 public struct ApprovalRequest: Codable, Sendable {
-    public var bundleURL: URL // file URL of the wrapper bundle
+    public var bundleURL: URL                 // file URL of the wrapper bundle
     public var bundleID: String
     public var packageID: PackageID
 }
 
 public enum ApprovalReply: Codable, Sendable {
     case approved
-    case denied(until: Date) // the denial lasts 24 h
-    case timedOut // no answer in 10 min
+    case denied(until: Date)                  // the denial lasts 24 h
+    case timedOut                             // no answer in 10 min
 }
 ```
 
@@ -256,7 +256,7 @@ public enum ApprovalReply: Codable, Sendable {
 | Event on the endpoint connection | Meaning | Client action |
 |---|---|---|
 | `interruptionHandler` | apkrund exited or crashed; launchd restarts it on demand (NFR-REL-02) | reconnect (§3.6) |
-| `invalidationHandler` right after `resume` | the code-signing requirement failed | wrapper: `cdhashMismatch` → approval. Control client: `runtime.notAuthorized` |
+| `invalidationHandler` right after `resume()` | the code-signing requirement failed | wrapper: `cdhashMismatch` → approval. Control client: `runtime.notAuthorized` |
 | `invalidationHandler` later | apkrund dropped the connection (limits, invalid use) or exited | reconnect (§3.6) |
 | a reply block never called within the deadline + 5 s | a lost request | the client fails the call with `runtime.requestTimedOut(operation:)` and invalidates the connection |
 
@@ -291,8 +291,8 @@ After a reconnect the client subscribes again and asks for fresh snapshots (for 
 ```swift
 public enum HostState: Codable, Sendable, Equatable {
     case normal
-    case updating(targetBuild: Int) // an APKRun update is being installed, or is finishing
-    case restartPending(bundleBuild: Int?) // the bundle on disk is newer than the running apkrund
+    case updating(targetBuild: Int)           // an APKRun update is being installed, or is finishing
+    case restartPending(bundleBuild: Int?)    // the bundle on disk is newer than the running apkrund
 }
 ```
 
@@ -344,7 +344,7 @@ func frameDisplayed(generation: UInt32, frameSeq: UInt64)
 ```swift
 public struct RequestEnvelope<Body: Codable & Sendable>: Codable, Sendable {
     public var header: APIRequestHeader
-    public var body: Body // `Empty` for operations without arguments
+    public var body: Body                     // `Empty` for operations without arguments
 }
 
 public struct APIRequestHeader: Codable, Sendable {
@@ -354,7 +354,7 @@ public struct APIRequestHeader: Codable, Sendable {
 }
 
 public struct ReplyEnvelope<Result: Codable & Sendable>: Codable, Sendable {
-    public var result: Result? // exactly one of result and error is set
+    public var result: Result?                // exactly one of result and error is set
     public var error: WireError?
 }
 ```
@@ -364,11 +364,11 @@ public struct ReplyEnvelope<Result: Codable & Sendable>: Codable, Sendable {
 
 ```swift
 @objc public protocol RuntimeEventSink {
-    func deliver(_ batch: Data, reply: @escaping () -> Void) // [EventEnvelope], topic events; the reply is the ack (§16.2)
-    func sessionEvent(_ event: Data) // SessionEvent, own session only (§6.3)
+    func deliver(_ batch: Data, reply: @escaping () -> Void)        // [EventEnvelope], topic events; the reply is the ack (§16.2)
+    func sessionEvent(_ event: Data)                                // SessionEvent, own session only (§6.3)
     func frameReady(generation: UInt32, surfaceIndex: UInt8, frameSeq: UInt64, presentationTime: UInt64)
     func surfacesReplaced(_ set: Data, surfaces: [IOSurface])
-    func streamEvent(_ event: Data, reply: @escaping () -> Void) // StreamEnvelope; the reply is the ack (§16.4)
+    func streamEvent(_ event: Data, reply: @escaping () -> Void)    // StreamEnvelope; the reply is the ack (§16.4)
 }
 ```
 
@@ -425,11 +425,11 @@ Every error on the wire is a `WireError`, the RuntimeAPI copy of `APKRunError` (
 
 ```swift
 public struct WireError: Error, Codable, Sendable, Equatable {
-    public var domain: String // "runtime", "store", … (error-catalog.md §2)
-    public var code: String // qualified code "store.downgradeRefused"
+    public var domain: String                             // "runtime", "store", … (error-catalog.md §2)
+    public var code: String                               // qualified code "store.downgradeRefused"
     public var parameters: [String: WireErrorParameter]
-    public var cause: WireErrorBox? // nested error, same shape
-    public var underlying: WireUnderlyingError? // { domain, code }, no userInfo
+    public var cause: WireErrorBox?                       // nested error, same shape
+    public var underlying: WireUnderlyingError?           // { domain, code }, no userInfo
     public var context: ErrorContext?
 }
 
@@ -503,11 +503,11 @@ public struct OperationHandle: Codable, Sendable {
 
 public enum OperationKind: String, Codable, Sendable {
     case `import`, inspect, install, uninstall, repair, rollback,
-    update, updateCheck,
-    wrapperCreate, wrapperRefresh, wrapperRefreshAll, distributionWrapper, bootstrapImport,
-    setup, resetAndroid, runtimeStop, runtimeRestart,
-    imageCheck, imageDownload, imageInstall, imageApply, imageRollback,
-    diagnostics
+         update, updateCheck,
+         wrapperCreate, wrapperRefresh, wrapperRefreshAll, distributionWrapper, bootstrapImport,
+         setup, resetAndroid, runtimeStop, runtimeRestart,
+         imageCheck, imageDownload, imageInstall, imageApply, imageRollback,
+         diagnostics
 }
 ```
 
@@ -526,8 +526,8 @@ public enum OperationKind: String, Codable, Sendable {
 
 ```swift
 public enum CancelReply: Codable, Sendable {
-    case cancelling // the operation will stop at its next cancellation point
-    case notCancellable(reason: String) // past its last cancellation point; it continues
+    case cancelling                           // the operation will stop at its next cancellation point
+    case notCancellable(reason: String)       // past its last cancellation point; it continues
     case alreadyFinished(OperationResult)
 }
 
@@ -536,10 +536,10 @@ public struct OperationSnapshot: Codable, Sendable {
     public var parent: OperationID?
     public var kind: OperationKind
     public var packageID: PackageID?
-    public var clientKind: ClientKind? // nil for work apkrund started itself
+    public var clientKind: ClientKind?        // nil for work apkrund started itself
     public var startedAt: Date
     public var progress: OperationProgress?
-    public var result: OperationResult? // nil while running
+    public var result: OperationResult?       // nil while running
     public var finishedAt: Date?
 }
 ```
@@ -651,12 +651,12 @@ Topics, payloads, coalescing, and ordering are in §16. Summary:
 
 ```swift
 public struct StartRuntimeRequest: Codable, Sendable {
-    public var hold: Bool // keep an activity assertion (.cli) until this connection closes
-    public var timeoutMs: Int64? // default runtime.bootTimeoutSeconds + 30 s (first boot: firstBootTimeoutSeconds + 30 s)
+    public var hold: Bool                     // keep an activity assertion (.cli) until this connection closes
+    public var timeoutMs: Int64?              // default runtime.bootTimeoutSeconds + 30 s (first boot: firstBootTimeoutSeconds + 30 s)
 }
 
 public struct StopRuntimeRequest: Codable, Sendable {
-    public var force: Bool // stop even when sessions, store operations, or other activities exist
+    public var force: Bool                    // stop even when sessions, store operations, or other activities exist
 }
 
 public struct RestartRuntimeRequest: Codable, Sendable {
@@ -677,30 +677,30 @@ public struct RestartRuntimeRequest: Codable, Sendable {
 ```swift
 public struct RuntimeStatus: Codable, Sendable {
     public var state: WireRuntimeState
-    public var bootProgress: BootProgress? // while booting
-    public var owner: RuntimeOwner //.apkrund,.apkrunDev (the instance lock holder)
-    public var hostState: HostState // §3.7
+    public var bootProgress: BootProgress?    // while booting
+    public var owner: RuntimeOwner            // .apkrund, .apkrunDev (the instance lock holder)
+    public var hostState: HostState           // §3.7
     public var provisioning: WireProvisioningState
-    public var uptimeMs: Int64? // since the last ready
+    public var uptimeMs: Int64?               // since the last ready
     public var idle: IdleStatus
     public var bootLoopGuard: BootLoopGuardStatus?
-    public var imageVersion: ImageVersion? // the current image
+    public var imageVersion: ImageVersion?    // the current image
     public var agents: [AgentConnection]
     public var developerMode: Bool
     public var runtimeVersion: String
     public var runtimeBuild: Int
-    public var lastFailure: WireError? // the last RuntimeFailure, kept until the next ready
+    public var lastFailure: WireError?        // the last RuntimeFailure, kept until the next ready
     public var lastStopReason: WireStopReason?
 }
 
-public enum WireRuntimeState: Codable, Sendable, Equatable { // state-machines.md §2
+public enum WireRuntimeState: Codable, Sendable, Equatable {   // state-machines.md §2
     case stopped
     case booting(BootPhase)
     case ready
     case suspended
     case stopping(WireStopReason)
     case failed(WireError)
-    case unknown // open enum (§2.3)
+    case unknown                              // open enum (§2.3)
 }
 
 public enum BootPhase: String, Codable, Sendable { case kernel, `init`, systemServer, bootCompleted, agentsConnecting }
@@ -709,38 +709,38 @@ public enum RuntimeOwner: String, Codable, Sendable { case apkrund, apkrunDev }
 
 public struct BootProgress: Codable, Sendable, Equatable {
     public var phase: BootPhase
-    public var fraction: Double? // an estimate from the phase and the last boot's durations
+    public var fraction: Double?              // an estimate from the phase and the last boot's durations
     public var elapsedMs: Int64
     public var purpose: BootPurpose
 }
 
 public enum BootPurpose: Codable, Sendable, Equatable {
     case normal
-    case firstBoot // provisioning
-    case imageUpdate(from: ImageVersion, to: ImageVersion) // runtime-maintenance.md §4.7
+    case firstBoot                            // provisioning
+    case imageUpdate(from: ImageVersion, to: ImageVersion)   // runtime-maintenance.md §4.7
 }
 
 public struct IdleStatus: Codable, Sendable {
-    public var activities: [ActivityKind] // §17.2; empty = idle
+    public var activities: [ActivityKind]     // §17.2; empty = idle
     public var idleSince: Date?
-    public var suspendAt: Date? // nil when runtime.idleSuspendMinutes = 0 or not idle
+    public var suspendAt: Date?               // nil when runtime.idleSuspendMinutes = 0 or not idle
     public var stopAt: Date?
 }
 
 public struct BootLoopGuardStatus: Codable, Sendable {
-    public var failures: Int // within the window
+    public var failures: Int                  // within the window
     public var windowStartedAt: Date
-    public var tripped: Bool // 3 failures within 10 minutes (runtime-daemon.md §3.6)
+    public var tripped: Bool                  // 3 failures within 10 minutes (runtime-daemon.md §3.6)
 }
 
 public struct AgentConnection: Codable, Sendable {
-    public var agent: AgentKind // §17.2
-    public var state: AgentConnectionState //.connected,.connecting,.disconnected,.incompatible
+    public var agent: AgentKind               // §17.2
+    public var state: AgentConnectionState    // .connected, .connecting, .disconnected, .incompatible
     public var protocolVersion: String?
-    public var required: Bool // dev image: guestd; custom image: guestd and store
+    public var required: Bool                 // dev image: guestd; custom image: guestd and store
 }
 
-public struct RuntimeSummary: Codable, Sendable { // the wrapper endpoint's view
+public struct RuntimeSummary: Codable, Sendable {   // the wrapper endpoint's view
     public var state: WireRuntimeState
     public var bootProgress: BootProgress?
     public var hostState: HostState
@@ -753,16 +753,16 @@ public struct RuntimeSummary: Codable, Sendable { // the wrapper endpoint's view
 
 ```swift
 public struct RuntimeInfoRequest: Codable, Sendable {
-    public var resources: Bool // apkrun info --runtime
-    public var displays: Bool // apkrun info --displays
+    public var resources: Bool                // apkrun info --runtime
+    public var displays: Bool                 // apkrun info --displays
 }
 
 public struct RuntimeInfo: Codable, Sendable {
     public var status: RuntimeStatus
-    public var sizing: RuntimeSizing // cpuCount, memoryGiB, userdataGiB in effect
+    public var sizing: RuntimeSizing          // cpuCount, memoryGiB, userdataGiB in effect
     public var displayPoolSize: Int
-    public var resources: ResourceUsage? // guest memory, IOSurface memory, host process memory, disk use of the instance
-    public var displays: [DisplaySlotSnapshot]? // slot, DisplayState, holder SessionID, pixel size, density
+    public var resources: ResourceUsage?      // guest memory, IOSurface memory, host process memory, disk use of the instance
+    public var displays: [DisplaySlotSnapshot]?   // slot, DisplayState, holder SessionID, pixel size, density
 }
 ```
 
@@ -773,21 +773,21 @@ public struct RuntimeInfo: Codable, Sendable {
 ```swift
 public struct SetupRequest: Codable, Sendable {
     public var image: SetupImageSource
-    public var recreateInstance: Bool? // Start Over (host-ui.md §4) after 2 failed first boots: delete the instance, then create it again. Chosen (§19.1)
+    public var recreateInstance: Bool?        // Start Over (host-ui.md §4) after 2 failed first boots: delete the instance, then create it again. Chosen (§19.1)
 }
 
 public enum SetupImageSource: Codable, Sendable {
-    case archive(fileIndex: Int) // a signed image archive the client opened (apkrun setup --image <file>)
-    case directory(bookmark: Data) // a local bundle directory (development, M4–M9)
-    case feed // download from the release feed (#087)
+    case archive(fileIndex: Int)              // a signed image archive the client opened (apkrun setup --image <file>)
+    case directory(bookmark: Data)            // a local bundle directory (development, M4–M9)
+    case feed                                 // download from the release feed (#087)
 }
 
 public struct ResetAndroidRequest: Codable, Sendable {
-    public var keepBackup: Bool // create a recovery point, kept 7 days (default true)
-    public var confirmed: Bool // the user typed "Reset" (GUI) or answered the prompt / --yes (CLI)
+    public var keepBackup: Bool               // create a recovery point, kept 7 days (default true)
+    public var confirmed: Bool                // the user typed "Reset" (GUI) or answered the prompt / --yes (CLI)
 }
 
-public enum WireProvisioningState: Codable, Sendable, Equatable { // runtime-daemon.md §9.2
+public enum WireProvisioningState: Codable, Sendable, Equatable {   // runtime-daemon.md §9.2
     case notStarted, checkingHost
     case installingImage(fraction: Double)
     case creatingInstance
@@ -839,35 +839,35 @@ APKRun.app and the CLI never open app sessions. They call `launch`, which opens 
 public struct OpenSessionRequest: Codable, Sendable {
     public var packageID: PackageID
     public var geometry: DisplayGeometry
-    public var screenSize: CGSize // visible frame of the window's screen, in points
-    public var launchTiming: LaunchTiming? // diagnostics.md §4.2
+    public var screenSize: CGSize             // visible frame of the window's screen, in points
+    public var launchTiming: LaunchTiming?    // diagnostics.md §4.2
 }
 
 public struct DisplayGeometry: Codable, Sendable, Equatable {
-    public var pointSize: CGSize // window content size in points
-    public var backingScale: Double // 1.0 or 2.0
-    public var zoom: Double // 0.75…2.0
+    public var pointSize: CGSize              // window content size in points
+    public var backingScale: Double           // 1.0 or 2.0
+    public var zoom: Double                   // 0.75…2.0
 }
 
 public struct LaunchTiming: Codable, Sendable {
-    public var processStart: UInt64 // continuous-clock nanoseconds
+    public var processStart: UInt64           // continuous-clock nanoseconds
     public var requestSent: UInt64
 }
 
 public struct SessionDescriptor: Codable, Sendable {
-    public var sessionID: UUID // the.app session
+    public var sessionID: UUID                // the .app session
     public var displayID: DisplayID
     public var windowPrefs: WindowPrefs
-    public var inputPrefs: InputPrefs // the input.* values in effect for this session (§14.2)
-    public var windowMode: AndroidWindowMode //.secondaryDisplay,.primaryDisplayCompatibility
+    public var inputPrefs: InputPrefs         // the input.* values in effect for this session (§14.2)
+    public var windowMode: AndroidWindowMode  // .secondaryDisplay, .primaryDisplayCompatibility
     public var state: SessionPhase
-    public var surfaces: SurfaceSet // the IOSurfaces travel next to the JSON, in index order
+    public var surfaces: SurfaceSet           // the IOSurfaces travel next to the JSON, in index order
 }
 
 public struct SurfaceSet: Codable, Sendable {
     public var generation: UInt32
-    public var surfaceCount: Int // 3
-    public var pixelSize: PixelSize // { width, height }, Int
+    public var surfaceCount: Int              // 3
+    public var pixelSize: PixelSize           // { width, height }, Int
     public var densityDpi: Int
 }
 
@@ -894,20 +894,20 @@ Session phase on the wire:
 
 ```swift
 public enum SessionPhase: Codable, Sendable, Equatable {
-    case starting // requested, acquiringDisplay
-    case booting(BootProgress) // waitingForRuntime
-    case waitingForPackage // a store transaction of the package is running
+    case starting                             // requested, acquiringDisplay
+    case booting(BootProgress)                // waitingForRuntime
+    case waitingForPackage                    // a store transaction of the package is running
     case launching
-    case running // running and backgrounded
+    case running                              // running and backgrounded
     case ended(SessionEndReason)
     case unknown
 }
 
-public enum SessionEndReason: Codable, Sendable, Equatable { // state-machines.md §3
+public enum SessionEndReason: Codable, Sendable, Equatable {   // state-machines.md §3
     case userClosed, appExited, appCrashed, runtimeStopped
-    case updating // "Update Now" for this package; APKRun reopens it after the update
-    case runtimeUpdating // APKRun or Android system update; the launcher shows screen U and reopens
-    case packageUninstalled // the package is being uninstalled (package-store.md §8)
+    case updating                             // "Update Now" for this package; APKRun reopens it after the update
+    case runtimeUpdating                      // APKRun or Android system update; the launcher shows screen U and reopens
+    case packageUninstalled                   // the package is being uninstalled (package-store.md §8)
     case error(WireError)
     case unknown
 }
@@ -923,8 +923,8 @@ public struct LaunchRequest: Codable, Sendable {
 }
 
 public struct LaunchReply: Codable, Sendable {
-    public var session: SessionSummary // state running, or the ended state
-    public var via: LaunchPath //.wrapper(bundleURL: URL),.genericLauncher
+    public var session: SessionSummary        // state running, or the ended state
+    public var via: LaunchPath                // .wrapper(bundleURL: URL), .genericLauncher
 }
 
 public struct TerminateRequest: Codable, Sendable {
@@ -944,11 +944,11 @@ public struct SessionSummary: Codable, Sendable {
     public var displayName: String
     public var state: SessionPhase
     public var displayID: DisplayID?
-    public var clientKind: ClientKind //.wrapper or.launcher
+    public var clientKind: ClientKind         // .wrapper or .launcher
     public var openedAt: Date
     public var windowMode: AndroidWindowMode
-    public var recording: Bool // microphone in use (desktop-integration.md §8.2)
-    public var pointSize: CGSize? // window content size of the last openSession or resize; Use Current Size (§14.3)
+    public var recording: Bool                // microphone in use (desktop-integration.md §8.2)
+    public var pointSize: CGSize?             // window content size of the last openSession or resize; Use Current Size (§14.3)
 }
 ```
 
@@ -977,7 +977,7 @@ Client → apkrund:
 
 ```swift
 public struct CloseSessionRequest: Codable, Sendable {
-    public var policy: ClosePolicy? //.stop,.keepRunning. nil = the package's window.closeBehavior
+    public var policy: ClosePolicy?           // .stop, .keepRunning. nil = the package's window.closeBehavior
 }
 ```
 
@@ -993,21 +993,21 @@ apkrund → client, on `RuntimeEventSink`:
 public enum SessionEvent: Codable, Sendable {
     case stateChanged(SessionPhase)
     case imeStateChanged(EditorState)
-    case windowRequest(WindowRequest) //.activate,.close,.setTitle(String)
+    case windowRequest(WindowRequest)         // .activate, .close, .setTitle(String)
     case windowPrefsChanged(WindowPrefs)
-    case clipboardFromGuest(ClipItem) // only to the key window's session
+    case clipboardFromGuest(ClipItem)         // only to the key window's session
     case exportOffered(ExportOffer)
     case linkPrompt(LinkPrompt)
     case unknown
 }
 
-public struct EditorState: Codable, Sendable, Equatable { // input.md §5.1
+public struct EditorState: Codable, Sendable, Equatable {   // input.md §5.1
     public var focused: Bool
-    public var inputType: Int32 // EditorInfo.inputType
+    public var inputType: Int32               // EditorInfo.inputType
     public var imeOptions: Int32
-    public var selection: TextRange? // { start, end } in UTF-16 units
+    public var selection: TextRange?          // { start, end } in UTF-16 units
     public var composing: TextRange?
-    public var cursorRect: DisplayRect? // display pixels { x, y, width, height }
+    public var cursorRect: DisplayRect?       // display pixels { x, y, width, height }
 }
 ```
 
@@ -1048,12 +1048,12 @@ The input types of InputCore are `Sendable` but not `Codable`, and RuntimeAPI ca
 
 ```swift
 public struct InputBatch: Codable, Sendable {
-    public var events: [WireInputEvent] // 1…512, in the order they happened
+    public var events: [WireInputEvent]       // 1…512, in the order they happened
 }
 
-public struct InputTimestamp: Codable, Sendable { public var hostNanos: UInt64 } // mach continuous time of the NSEvent
-public struct DisplayPoint: Codable, Sendable { public var x: Double; public var y: Double } // display pixels
-public struct TextRange: Codable, Sendable { public var start: Int; public var end: Int } // UTF-16 code units
+public struct InputTimestamp: Codable, Sendable { public var hostNanos: UInt64 }   // mach continuous time of the NSEvent
+public struct DisplayPoint: Codable, Sendable { public var x: Double; public var y: Double }   // display pixels
+public struct TextRange: Codable, Sendable { public var start: Int; public var end: Int }     // UTF-16 code units
 
 public enum WireInputEvent: Codable, Sendable {
     case touch(WireTouchEvent)
@@ -1065,16 +1065,16 @@ public enum WireInputEvent: Codable, Sendable {
 }
 
 public struct WireTouchEvent: Codable, Sendable {
-    public var phase: TouchPhase //.down,.move,.up,.cancel
-    public var pointerID: Int // 0 in v1
+    public var phase: TouchPhase              // .down, .move, .up, .cancel
+    public var pointerID: Int                 // 0 in v1
     public var position: DisplayPoint
     public var time: InputTimestamp
 }
 
 public struct WireMouseEvent: Codable, Sendable {
-    public var action: MouseAction //.hoverEnter,.hoverMove,.hoverExit,.press(MouseButton),.release(MouseButton)
+    public var action: MouseAction            // .hoverEnter, .hoverMove, .hoverExit, .press(MouseButton), .release(MouseButton)
     public var position: DisplayPoint
-    public var buttons: Int32 // Android MotionEvent BUTTON_* bit mask of the buttons now down
+    public var buttons: Int32                 // Android MotionEvent BUTTON_* bit mask of the buttons now down
     public var time: InputTimestamp
 }
 
@@ -1082,15 +1082,15 @@ public enum MouseButton: String, Codable, Sendable { case primary, secondary, te
 
 public struct WireScrollEvent: Codable, Sendable {
     public var position: DisplayPoint
-    public var vertical: Double // AXIS_VSCROLL units
-    public var horizontal: Double // AXIS_HSCROLL units
+    public var vertical: Double               // AXIS_VSCROLL units
+    public var horizontal: Double             // AXIS_HSCROLL units
     public var time: InputTimestamp
 }
 
 public struct WireKeyEvent: Codable, Sendable {
-    public var action: KeyAction //.down,.up
-    public var androidKeyCode: Int32 // KEYCODE_*
-    public var metaState: Int32 // Android META_* bit mask
+    public var action: KeyAction              // .down, .up
+    public var androidKeyCode: Int32          // KEYCODE_*
+    public var metaState: Int32               // Android META_* bit mask
     public var repeatCount: Int32
     public var time: InputTimestamp
 }
@@ -1099,9 +1099,9 @@ public enum WireImeTextEvent: Codable, Sendable {
     case commit(String)
     case setComposing(String, selection: TextRange)
     case finishComposing
-    case key(WireKeyEvent) // editor-mode keys
-    case editorAction(Int32) // EditorInfo.IME_ACTION_*
-    case contextMenuAction(ContextMenuAction) //.copy,.cut,.paste,.selectAll
+    case key(WireKeyEvent)                    // editor-mode keys
+    case editorAction(Int32)                  // EditorInfo.IME_ACTION_*
+    case contextMenuAction(ContextMenuAction) // .copy, .cut, .paste, .selectAll
 }
 ```
 
@@ -1138,19 +1138,19 @@ Store semantics: [../02-design/package-store.md](../02-design/package-store.md) 
 | `adoptPackage` | `PackageRequest` → `PackageSummary` | C | U | `packages.installed`, `.unmanagedChanged` | package-store §9.3 |
 | `updatePackageSettings` | §14 | C | U | `packages.settingsChanged` | package-store §2.4 |
 
-`rollbackPackage` appears in [../02-design/update-system.md](../02-design/update-system.md) §11.1 and [../02-design/package-store.md](../02-design/package-store.md) §11.1. It is one operation, documented here. The mapping of #027's `install`, `uninstall`, `listInstalled`, and `applicationInfo` is in package-store §11.1.
+`rollbackPackage` appears in [../02-design/update-system.md](../02-design/update-system.md) §11.1 and [../02-design/package-store.md](../02-design/package-store.md) §11.1. It is one operation, documented here. The mapping of #027's `install()`, `uninstall()`, `listInstalled()`, and `applicationInfo()` is in package-store §11.1.
 
 ### 8.2 Import and install
 
 ```swift
 public struct ImportPackageRequest: Codable, Sendable {
-    public var files: [ImportSourceFile] // 1…20
-    public var origin: ImportOrigin //.addFlow,.document,.dropOnHome,.cli,.wrap. For logs and PackageSource
+    public var files: [ImportSourceFile]      // 1…20
+    public var origin: ImportOrigin           // .addFlow, .document, .dropOnHome, .cli, .wrap. For logs and PackageSource
 }
 
 public struct ImportSourceFile: Codable, Sendable {
-    public var fileIndex: Int // into the files: array (§4.9)
-    public var name: String // last path component only; used for the container type and in messages
+    public var fileIndex: Int                 // into the files: array (§4.9)
+    public var name: String                   // last path component only; used for the container type and in messages
 }
 
 public struct InstallImportedRequest: Codable, Sendable {
@@ -1159,10 +1159,10 @@ public struct InstallImportedRequest: Codable, Sendable {
 }
 
 public struct InstallOptions: Codable, Sendable {
-    public var authority: UpdateAuthority? //.manual or.apkrun; nil = the default of update-system.md §2.4
-    public var provider: ProviderSpec? // implies authority.apkrun
-    public var updateChoice: UpdateChoice? //.automatic,.notifyOnly (apkrun install --updates); nil = the default choice
-    public var createWrapper: Bool // create the Mac app at ~/Applications after the install (child operation)
+    public var authority: UpdateAuthority?    // .manual or .apkrun; nil = the default of update-system.md §2.4
+    public var provider: ProviderSpec?        // implies authority .apkrun
+    public var updateChoice: UpdateChoice?    // .automatic, .notifyOnly (apkrun install --updates); nil = the default choice
+    public var createWrapper: Bool            // create the Mac app at ~/Applications after the install (child operation)
 }
 
 public struct CancelImportRequest: Codable, Sendable { public var ticket: ImportTicket }
@@ -1177,7 +1177,7 @@ public struct CancelImportRequest: Codable, Sendable { public var ticket: Import
 ### 8.3 Queries
 
 ```swift
-public struct ListPackagesRequest: Codable, Sendable { public var filter: PackageFilter } //.managed,.all
+public struct ListPackagesRequest: Codable, Sendable { public var filter: PackageFilter }   // .managed, .all
 public struct PackageRequest: Codable, Sendable { public var packageID: PackageID }
 
 public struct PackageSummary: Codable, Sendable {
@@ -1186,58 +1186,58 @@ public struct PackageSummary: Codable, Sendable {
     public var versionCode: VersionCode
     public var versionName: String?
     public var state: WirePackageState
-    public var managed: Bool // false: installed in Android by something else, no record
-    public var installer: Installer //.apkrun,.external
-    public var updateAuthority: UpdateAuthority //.apkrun,.googlePlay,.external,.manual
-    public var updateChoice: UpdateChoice? // for .apkrun and .manual authority (update-system.md §2.3)
-    public var wrapperStatus: WrapperStatus? // nil = no Mac app
+    public var managed: Bool                  // false: installed in Android by something else, no record
+    public var installer: Installer           // .apkrun, .external
+    public var updateAuthority: UpdateAuthority   // .apkrun, .googlePlay, .external, .manual
+    public var updateChoice: UpdateChoice?    // for authority .apkrun and .manual (update-system.md §2.3)
+    public var wrapperStatus: WrapperStatus?  // nil = no Mac app
     public var iconDigest: SHA256Digest?
-    public var wrapperError: WireError? // only in the result of installImported with createWrapper
+    public var wrapperError: WireError?       // only in the result of installImported with createWrapper
 }
 
-public enum WirePackageState: Codable, Sendable, Equatable { // state-machines.md §5
+public enum WirePackageState: Codable, Sendable, Equatable {   // state-machines.md §5
     case importing, inspecting, installing, installed
     case updating(WireUpdatePhase)
     case uninstalling, uninstalledKeepingData
-    case needsReinstall(ReinstallReason) //.userdataReset,.userdataRestored
-    case broken(WireBrokenReason) //.removedInAndroid,.signerChanged,.artifactMissing,.reinstallFailed(WireError)
+    case needsReinstall(ReinstallReason)      // .userdataReset, .userdataRestored
+    case broken(WireBrokenReason)             // .removedInAndroid, .signerChanged, .artifactMissing, .reinstallFailed(WireError)
     case unknown
 }
 
 public struct PackageDetails: Codable, Sendable {
     public var summary: PackageSummary
-    public var record: WirePackageRecord? // the metadata.json form (package-metadata-json.md); nil for unmanaged packages
-    public var settings: ResolvedPackageSettings // §14.2
-    public var slots: ArtifactSlotsSummary // the artifacts object of package-metadata-json.md §2.3.2: current?, previous?, staged?; all nil for unmanaged packages
-    public var sizes: PackageSizes // artifactsBytes, androidDataBytes?, androidCacheBytes? (last known)
+    public var record: WirePackageRecord?     // the metadata.json form (package-metadata-json.md); nil for unmanaged packages
+    public var settings: ResolvedPackageSettings   // §14.2
+    public var slots: ArtifactSlotsSummary    // the artifacts object of package-metadata-json.md §2.3.2: current?, previous?, staged?; all nil for unmanaged packages
+    public var sizes: PackageSizes            // artifactsBytes, androidDataBytes?, androidCacheBytes? (last known)
     public var wrapperCount: Int
     public var lastOperation: OperationSummary?
     public var skippedVersions: [VersionCode]
-    public var compatibility: CompatibilityInfo? // for the installed version (#090); nil = no database entry
+    public var compatibility: CompatibilityInfo?  // for the installed version (#090); nil = no database entry
 }
 
-public struct CompatibilityInfo: Codable, Sendable, Equatable { // diagnostics.md §10.3
-    public var level: CompatibilityLevel //.nativeLike,.compatible,.compatibilityMode,.unsupported,.unknown (scope.md §4)
-    public var label: CompatibilityLabel //.works,.worksWithLimitations,.unsupported,.unknown: the user-facing label
+public struct CompatibilityInfo: Codable, Sendable, Equatable {   // diagnostics.md §10.3
+    public var level: CompatibilityLevel      // .nativeLike, .compatible, .compatibilityMode, .unsupported, .unknown (scope.md §4)
+    public var label: CompatibilityLabel      // .works, .worksWithLimitations, .unsupported, .unknown: the user-facing label
     public var issues: [CompatibilityIssue]
-    public var recommendedKeys: [String] // the settings keys the entry recommends, for "Recommended for this app"
+    public var recommendedKeys: [String]      // the settings keys the entry recommends, for "Recommended for this app"
 }
 
 public struct CompatibilityIssue: Codable, Sendable, Equatable {
-    public var id: String // "blank-secondary-display"
-    public var title: [String: String] // language code → text, as in compatibility.json; the client picks its language
+    public var id: String                     // "blank-secondary-display"
+    public var title: [String: String]        // language code → text, as in compatibility.json; the client picks its language
     public var workaround: [String: String]?
 }
 
 public struct PackageIconRequest: Codable, Sendable {
     public var packageID: PackageID
-    public var sizePx: Int // 16…1024
+    public var sizePx: Int                    // 16…1024
 }
 
 public struct PackageIcon: Codable, Sendable {
     public var png: Data
     public var digest: SHA256Digest
-    public var source: IconSource //.rendered,.hostPreview,.placeholder
+    public var source: IconSource             // .rendered, .hostPreview, .placeholder
 }
 ```
 
@@ -1254,9 +1254,9 @@ public struct UninstallPackageRequest: Codable, Sendable {
 }
 
 public struct UninstallOptions: Codable, Sendable {
-    public var keepData: Bool // state uninstalledKeepingData
-    public var trashWrappers: Bool // default true; apkrun uninstall --keep-wrapper sets false
-    public var forget: Bool // remove the record without Android (for a broken package)
+    public var keepData: Bool                 // state uninstalledKeepingData
+    public var trashWrappers: Bool            // default true; apkrun uninstall --keep-wrapper sets false
+    public var forget: Bool                   // remove the record without Android (for a broken package)
 }
 
 public struct RollbackPackageRequest: Codable, Sendable {
@@ -1307,8 +1307,8 @@ Update semantics: [../02-design/update-system.md](../02-design/update-system.md)
 
 ```swift
 public struct CheckForUpdatesRequest: Codable, Sendable {
-    public var packages: [PackageID]? // nil = every package with authority.apkrun
-    public var checkOnly: Bool // default false. true: report only, nothing is downloaded or installed (apkrun update --check-only; the field comes with #038)
+    public var packages: [PackageID]?         // nil = every package with authority .apkrun
+    public var checkOnly: Bool                // default false. true: report only, nothing is downloaded or installed (apkrun update --check-only; the field comes with #038)
 }
 ```
 
@@ -1318,35 +1318,35 @@ public struct CheckForUpdatesRequest: Codable, Sendable {
 ```swift
 public struct UpdateCheckResult: Codable, Sendable {
     public var packageID: PackageID
-    public var outcome: UpdateCheckOutcome //.upToDate,.available(WireUpdateCandidate),.installed(from:to:),.waiting(WaitingReason),.failed(WireError)
+    public var outcome: UpdateCheckOutcome    // .upToDate, .available(WireUpdateCandidate), .installed(from:to:), .waiting(WaitingReason), .failed(WireError)
 }
 
 public struct PackageUpdateStatus: Codable, Sendable {
     public var packageID: PackageID
-    public var choice: UpdateChoice? // nil for googlePlay and external
+    public var choice: UpdateChoice?          // nil for googlePlay and external
     public var authority: UpdateAuthority
-    public var provider: ProviderSummary? // type and host only, never full URLs or tokens
+    public var provider: ProviderSummary?     // type and host only, never full URLs or tokens
     public var phase: WireUpdatePhase?
     public var candidate: WireUpdateCandidate?
     public var lastCheckAt: Date?
     public var nextCheckAt: Date?
     public var consecutiveFailures: Int
-    public var waiting: [WaitingReason] // the gate conditions that are false: GU1…GU7 (update-system.md §7)
+    public var waiting: [WaitingReason]       // the gate conditions that are false: GU1…GU7 (update-system.md §7)
 }
 
 public struct ProviderSummary: Codable, Sendable, Equatable {
-    public var type: ProviderType //.local,.direct,.fdroid,.github
-    public var label: String // the folder name (local), the host (direct, fdroid), or owner/name (github)
-    public var channel: String? // github: "stable" or "prerelease"
-    public var hasToken: Bool // github: a token is stored in the Keychain. The token itself is never returned
+    public var type: ProviderType             // .local, .direct, .fdroid, .github
+    public var label: String                  // the folder name (local), the host (direct, fdroid), or owner/name (github)
+    public var channel: String?               // github: "stable" or "prerelease"
+    public var hasToken: Bool                 // github: a token is stored in the Keychain. The token itself is never returned
 }
 
-public enum WireUpdatePhase: Codable, Sendable, Equatable { // state-machines.md §6
+public enum WireUpdatePhase: Codable, Sendable, Equatable {   // state-machines.md §6
     case checking
     case available(WireUpdateCandidate)
     case downloading(progress: Double)
     case validating, staged, installing, healthChecking
-    case rollingBack(RollbackReason) //.healthCheckFailed(WireError),.userRequested
+    case rollingBack(RollbackReason)          // .healthCheckFailed(WireError), .userRequested
     case completed(UpdateOutcome)
     case unknown
 }
@@ -1355,14 +1355,14 @@ public enum UpdateOutcome: Codable, Sendable, Equatable {
     case updated(from: VersionCode, to: VersionCode)
     case rolledBack(reason: RollbackReason)
     case keptAfterFailedHealthCheck(reason: WireError)
-    case skipped(SkipReason) //.upToDate,.checkFailed(WireError),.downloadFailed(WireError),.validationFailed(WireError),.installFailed(WireError),.userSkipped,.authorityChanged (state-machines.md §6, update-system.md §5)
+    case skipped(SkipReason)                  // .upToDate, .checkFailed(WireError), .downloadFailed(WireError), .validationFailed(WireError), .installFailed(WireError), .userSkipped, .authorityChanged (state-machines.md §6, update-system.md §5)
 }
 
 public struct WireUpdateCandidate: Codable, Sendable, Equatable {
-    public var versionCode: VersionCode? // nil when the provider cannot know it before download
+    public var versionCode: VersionCode?      // nil when the provider cannot know it before download
     public var versionName: String?
-    public var provider: ProviderType //.local,.direct,.fdroid,.github
-    public var releaseNotes: String? // plain text, at most 16 KiB
+    public var provider: ProviderType         // .local, .direct, .fdroid, .github
+    public var releaseNotes: String?          // plain text, at most 16 KiB
     public var publishedAt: Date?
     public var downloadBytes: Int64?
 }
@@ -1373,8 +1373,8 @@ public struct UpdatePackageRequest: Codable, Sendable {
 }
 
 public struct UpdateNowOptions: Codable, Sendable {
-    public var closeRunningApp: Bool // true: the session ends with .updating and reopens after; false: wait until the app quits
-    public var files: [ImportSourceFile]? // a manual update from files (apkrun update --file)
+    public var closeRunningApp: Bool          // true: the session ends with .updating and reopens after; false: wait until the app quits
+    public var files: [ImportSourceFile]?     // a manual update from files (apkrun update --file)
 }
 
 public struct SetUpdatePolicyRequest: Codable, Sendable {
@@ -1384,32 +1384,32 @@ public struct SetUpdatePolicyRequest: Codable, Sendable {
 
 public struct SetUpdateAuthorityRequest: Codable, Sendable {
     public var packageID: PackageID
-    public var authority: AuthorityChoice //.apkrun,.manual,.external. Only #097 sets googlePlay
+    public var authority: AuthorityChoice     // .apkrun, .manual, .external. Only #097 sets googlePlay
 }
 
 public struct UpdatePolicy: Codable, Sendable {
-    public var choice: UpdateChoice //.automatic,.notifyOnly,.manual
-    public var provider: ProviderChange //.keep,.set(ProviderSpec),.remove
+    public var choice: UpdateChoice           // .automatic, .notifyOnly, .manual
+    public var provider: ProviderChange       // .keep, .set(ProviderSpec), .remove
 }
 
 public struct ProviderSpec: Codable, Sendable {
-    public var spec: String // local:<path>, direct:<https-url>, fdroid[:<url>#<fingerprint>], github:<owner>/<name>[:<glob>][@prerelease]
-    public var bookmark: Data? // required for local: apkrund does not open the path
-    public var token: String? // github: written to the Keychain, never returned
+    public var spec: String                   // local:<path>, direct:<https-url>, fdroid[:<url>#<fingerprint>], github:<owner>/<name>[:<glob>][@prerelease]
+    public var bookmark: Data?                // required for local: apkrund does not open the path
+    public var token: String?                 // github: written to the Keychain, never returned
 }
 
 public struct UpdateHistoryRequest: Codable, Sendable {
     public var packageID: PackageID?
-    public var limit: Int // default 50, at most 1000
+    public var limit: Int                     // default 50, at most 1000
 }
 
-public struct UpdateHistoryEntry: Codable, Sendable { // one line of Updates/history.jsonl
+public struct UpdateHistoryEntry: Codable, Sendable {   // one line of Updates/history.jsonl
     public var time: Date
     public var packageID: PackageID
     public var from: VersionCode?
     public var to: VersionCode?
     public var provider: ProviderType?
-    public var trigger: UpdateTrigger //.scheduled,.userInitiated,.manual,.launchOpportunistic
+    public var trigger: UpdateTrigger         // .scheduled, .userInitiated, .manual, .launchOpportunistic
     public var outcome: UpdateOutcome
     public var failure: WireError?
     public var phaseDurationsMs: [String: Int64]
@@ -1487,32 +1487,32 @@ The wrapper endpoint serves major N and N−1 (§2.4). Every item of this list i
 ```swift
 public struct WrapperRequest: Codable, Sendable {
     public var packageID: PackageID
-    public var destination: WireWrapperDestination? // nil = wrappers.defaultLocation; "ask" there means.userApplications
-    public var fileName: String? // override of the file name rule (wrapper.md §4.3)
-    public var displayName: String? // nil = the package's display name
-    public var icon: WrapperIconChoice? // nil = the Android icon
+    public var destination: WireWrapperDestination?   // nil = wrappers.defaultLocation; "ask" there means .userApplications
+    public var fileName: String?              // override of the file name rule (wrapper.md §4.3)
+    public var displayName: String?           // nil = the package's display name
+    public var icon: WrapperIconChoice?       // nil = the Android icon
     public var portable: Bool
-    public var replace: WireReplacePolicy //.never,.sameWrapper
-    public var importTicket: ImportTicket? // portable wrapper of a package that is not installed (wrapper.md §10.1)
-    public var windowDefaults: WrapperWindowDefaults? // wrapper.json "window"; --window-size, --resizable
-    public var updateDefaults: WrapperUpdateDefaults? // wrapper.json "updates"; only together with importTicket
+    public var replace: WireReplacePolicy     // .never, .sameWrapper
+    public var importTicket: ImportTicket?    // portable wrapper of a package that is not installed (wrapper.md §10.1)
+    public var windowDefaults: WrapperWindowDefaults?  // wrapper.json "window"; --window-size, --resizable
+    public var updateDefaults: WrapperUpdateDefaults?  // wrapper.json "updates"; only together with importTicket
 }
 
 public enum WireWrapperDestination: Codable, Sendable, Equatable {
-    case userApplications // ~/Applications, created if missing
-    case applications // /Applications; needs an admin user
+    case userApplications                     // ~/Applications, created if missing
+    case applications                         // /Applications; needs an admin user
     case directory(URL)
 }
 
 public enum WrapperIconChoice: Codable, Sendable, Equatable {
-    case android // the store's icon files (package-store.md §10)
-    case custom(fileIndex: Int) // PNG, square, at least 512 px
+    case android                              // the store's icon files (package-store.md §10)
+    case custom(fileIndex: Int)               // PNG, square, at least 512 px
 }
 
 public enum WireReplacePolicy: String, Codable, Sendable { case never, sameWrapper }
 
 public struct WrapperWindowDefaults: Codable, Sendable, Equatable {
-    public var defaultWidth: Int? // points
+    public var defaultWidth: Int?             // points
     public var defaultHeight: Int?
     public var resizable: Bool?
 }
@@ -1520,18 +1520,18 @@ public struct WrapperWindowDefaults: Codable, Sendable, Equatable {
 public struct WrapperUpdateDefaults: Codable, Sendable, Equatable {
     public var authority: UpdateAuthority?
     public var choice: UpdateChoice?
-    public var provider: ProviderSpec? // ProviderSpec.token is refused here: a wrapper never carries a token
+    public var provider: ProviderSpec?        // ProviderSpec.token is refused here: a wrapper never carries a token
 }
 
 public struct PlaceStagedWrapperRequest: Codable, Sendable {
     public var stagingToken: StagingToken
-    public var finalURL: URL // where the client moved the bundle, or the wrapper whose Contents it swapped (§10.5)
-    public var bookmark: Data // bookmark of finalURL, created by the client
+    public var finalURL: URL                  // where the client moved the bundle, or the wrapper whose Contents it swapped (§10.5)
+    public var bookmark: Data                 // bookmark of finalURL, created by the client
 }
 ```
 
 - The `.wrapper(WrapperInfo)` output is sent after step 13 of wrapper §6.2. `registrationFailed` does not fail the operation. It is in `WrapperInfo.warnings`.
-- `replace =.sameWrapper` for an existing wrapper of the same package runs a refresh at that location (wrapper §6.4). For a `signatureInvalid` wrapper it moves the modified bundle to the Trash and generates again (**Create It Again**, wrapper §9.1).
+- `replace = .sameWrapper` for an existing wrapper of the same package runs a refresh at that location (wrapper §6.4). For a `signatureInvalid` wrapper it moves the modified bundle to the Trash and generates again (**Create It Again**, wrapper §9.1).
 - `updateDefaults` for an installed package returns `runtime.malformedRequest`. The CLI says to use `apkrun update policy` instead (wrapper §12.2).
 - An `importTicket` must be a ticket of a `newPackage` preview for the same package ID. The operation uses the ticket's artifact set and the host preview icon, and does not consume the ticket.
 
@@ -1549,10 +1549,10 @@ public struct WrapperSummary: Codable, Sendable {
     public var packageID: PackageID
     public var bundleID: String
     public var displayName: String
-    public var kind: WrapperKindTag //.local,.portable,.distribution
-    public var bundleURL: URL // the registry path, updated after a move
+    public var kind: WrapperKindTag           // .local, .portable, .distribution
+    public var bundleURL: URL                 // the registry path, updated after a move
     public var status: WrapperStatus
-    public var approval: WrapperApproval //.generated,.user
+    public var approval: WrapperApproval      // .generated, .user
     public var launcherVersion: String
     public var createdAt: Date
     public var refreshedAt: Date?
@@ -1561,14 +1561,14 @@ public struct WrapperSummary: Codable, Sendable {
 public struct WrapperInfo: Codable, Sendable {
     public var summary: WrapperSummary
     public var fileName: String
-    public var customization: WrapperCustomization // displayName?, customIcon: Bool
+    public var customization: WrapperCustomization    // displayName?, customIcon: Bool
     public var signer: WrapperSigner
     public var cdhash: String
     public var launcherAPI: APIVersion
     public var formatVersion: Int
     public var iconDigest: SHA256Digest
     public var lastValidatedAt: Date?
-    public var warnings: [WireError] // for example wrapper.registrationFailed
+    public var warnings: [WireError]          // for example wrapper.registrationFailed
 }
 
 public enum WrapperSigner: Codable, Sendable, Equatable {
@@ -1579,22 +1579,22 @@ public enum WrapperSigner: Codable, Sendable, Equatable {
 
 public struct VerifyWrapperRequest: Codable, Sendable {
     public var bundleURL: URL
-    public var deep: Bool // adds SecStaticCodeCheckValidity (strict, all architectures)
+    public var deep: Bool                     // adds SecStaticCodeCheckValidity (strict, all architectures)
 }
 
 public struct WrapperVerification: Codable, Sendable {
     public var bundleURL: URL
     public var bundleID: String?
-    public var packageID: PackageID? // APKRunPackageID of the bundle
+    public var packageID: PackageID?          // APKRunPackageID of the bundle
     public var kind: WrapperKindTag?
-    public var registered: Bool // bundle ID and cdhash match the registry
-    public var state: WrapperState? // registered bundles only
-    public var problems: [BundleProblem] // wrapper.md §13; empty = passes the approval checks
+    public var registered: Bool               // bundle ID and cdhash match the registry
+    public var state: WrapperState?           // registered bundles only
+    public var problems: [BundleProblem]      // wrapper.md §13; empty = passes the approval checks
     public var signer: WrapperSigner?
     public var cdhash: String?
     public var launcherVersion: String?
     public var launcherAPI: APIVersion?
-    public var bundledVersion: VersionCode? // portable and distribution wrappers
+    public var bundledVersion: VersionCode?   // portable and distribution wrappers
 }
 ```
 
@@ -1611,27 +1611,27 @@ public struct RefreshWrapperRequest: Codable, Sendable {
 }
 
 public struct WrapperRefresh: Codable, Sendable {
-    public var displayName: String? // "" = back to the package's display name
-    public var icon: WrapperIconChoice? // nil = keep the current choice
-    public var launcherOnly: Bool // only a new launcher (wrapper.md §9.4)
-    public var makeLocal: Bool // Make Local Mac App: drop bootstrap/, kind.local (wrapper.md §10.2)
-    public var closeRunningApp: Bool // false: a running wrapper fails with wrapper.wrapperRunning
+    public var displayName: String?           // "" = back to the package's display name
+    public var icon: WrapperIconChoice?       // nil = keep the current choice
+    public var launcherOnly: Bool             // only a new launcher (wrapper.md §9.4)
+    public var makeLocal: Bool                // Make Local Mac App: drop bootstrap/, kind .local (wrapper.md §10.2)
+    public var closeRunningApp: Bool          // false: a running wrapper fails with wrapper.wrapperRunning
 }
 
 public struct RefreshAllWrappersRequest: Codable, Sendable {
-    public var scope: WrapperRefreshScope //.needingRefresh (refresh reasons set),.all
+    public var scope: WrapperRefreshScope     // .needingRefresh (refresh reasons set), .all
     public var launcherOnly: Bool
 }
 
 public struct WrapperBatchResult: Codable, Sendable {
     public var refreshed: [PackageID]
     public var skippedRunning: [PackageID]
-    public var failed: [WrapperBatchFailure] // { packageID, error: WireError }
+    public var failed: [WrapperBatchFailure]  // { packageID, error: WireError }
 }
 
 public struct RemoveWrapperRequest: Codable, Sendable {
     public var packageID: PackageID
-    public var options: RemoveWrapperOptions // { trash: Bool }; false = Remove from List
+    public var options: RemoveWrapperOptions  // { trash: Bool }; false = Remove from List
 }
 ```
 
@@ -1647,20 +1647,20 @@ The broker call `requestApproval` is in §3.4. The control side:
 ```swift
 public struct ApprovalPrompt: Codable, Sendable {
     public var approvalID: ApprovalID
-    public var kind: ApprovalKind //.wrapper,.bootstrapInstall(ImportPreview)
+    public var kind: ApprovalKind             // .wrapper, .bootstrapInstall(ImportPreview)
     public var bundleURL: URL
     public var bundleID: String
     public var packageID: PackageID
     public var displayName: String
     public var signer: WrapperSigner
     public var packageInstalled: Bool
-    public var installedVersion: String? // versionName
-    public var bundledVersion: String? // portable and distribution wrappers
-    public var replacesURL: URL? // an active entry for the bundle ID is replaced (wrapper.md §7.3)
-    public var integrations: [IntegrationKind: WireIntegrationDecision] // wrapper.json values capped by this Mac's defaults
-    public var icon: Data? // PNG, at most 256 px
+    public var installedVersion: String?      // versionName
+    public var bundledVersion: String?        // portable and distribution wrappers
+    public var replacesURL: URL?              // an active entry for the bundle ID is replaced (wrapper.md §7.3)
+    public var integrations: [IntegrationKind: WireIntegrationDecision]   // wrapper.json values capped by this Mac's defaults
+    public var icon: Data?                    // PNG, at most 256 px
     public var requestedAt: Date
-    public var expiresAt: Date // requestedAt + 10 min
+    public var expiresAt: Date                // requestedAt + 10 min
 }
 
 public struct DecideApprovalRequest: Codable, Sendable {
@@ -1685,8 +1685,8 @@ public struct ClearWrapperDenialRequest: Codable, Sendable {
 public struct RescanWrappersRequest: Codable, Sendable { public var register: Bool }
 
 public struct RescanResult: Codable, Sendable {
-    public var candidates: [WrapperVerification] // bundles with APKRunPackageID in ~/Applications and /Applications
-    public var registered: [PackageID] // empty when register == false
+    public var candidates: [WrapperVerification]  // bundles with APKRunPackageID in ~/Applications and /Applications
+    public var registered: [PackageID]            // empty when register == false
 }
 ```
 
@@ -1698,16 +1698,16 @@ public struct RescanResult: Codable, Sendable {
 
 ```swift
 public struct ImportBootstrapRequest: Codable, Sendable {
-    public var bootstrapJSON: Data // Contents/Resources/bootstrap/bootstrap.json, at most 64 KiB
-    public var files: [ImportSourceFile] // 1…20, in bootstrap.json order
+    public var bootstrapJSON: Data            // Contents/Resources/bootstrap/bootstrap.json, at most 64 KiB
+    public var files: [ImportSourceFile]      // 1…20, in bootstrap.json order
 }
 ```
 
 Server steps ([../02-design/wrapper.md](../02-design/wrapper.md) §10.2):
 
-1. The wrapper must be approved, `bootstrapJSON.packageId` must equal the registry's package, and the package must not be installed (or be `uninstalledKeepingData`). Otherwise `wrapper.bootstrapNotAllowed(.notApproved |.alreadyInstalled)`.
-2. The store copies the files and checks each SHA-256 and the set digest against `bootstrapJSON`, then runs all intrinsic checks and the preview. The source is `wrapperBootstrap`. A mismatch is `wrapper.bootstrapInvalid(.hashMismatch |.packageMismatch |.malformed)`.
-3. Preview warnings (for example a low `targetSdk`) need a confirmation. apkrund publishes `wrappers.approvalRequested` with `kind =.bootstrapInstall(ImportPreview)`, and APKRun.app shows the install sheet. **Don't Install** ends the operation with `cancelled`. No answer in 10 min is `wrapper.approvalTimedOut`.
+1. The wrapper must be approved, `bootstrapJSON.packageId` must equal the registry's package, and the package must not be installed (or be `uninstalledKeepingData`). Otherwise `wrapper.bootstrapNotAllowed(.notApproved | .alreadyInstalled)`.
+2. The store copies the files and checks each SHA-256 and the set digest against `bootstrapJSON`, then runs all intrinsic checks and the preview. The source is `wrapperBootstrap`. A mismatch is `wrapper.bootstrapInvalid(.hashMismatch | .packageMismatch | .malformed)`.
+3. Preview warnings (for example a low `targetSdk`) need a confirmation. apkrund publishes `wrappers.approvalRequested` with `kind = .bootstrapInstall(ImportPreview)`, and APKRun.app shows the install sheet. **Don't Install** ends the operation with `cancelled`. No answer in 10 min is `wrapper.approvalTimedOut`.
 4. apkrund reads `wrapper.json` from the registered bundle, not from the request. Its `updates` values become the initial authority, choice, and provider. Its `window` and `integration` values become the package settings.
 5. The result is `.package(PackageSummary)`. The launcher then repeats `openSession`.
 
@@ -1716,25 +1716,25 @@ Server steps ([../02-design/wrapper.md](../02-design/wrapper.md) §10.2):
 ```swift
 public struct DistributionWrapperRequest: Codable, Sendable {
     public var packageID: PackageID
-    public var outputDirectory: URL // the CLI passes --output, or the current directory
+    public var outputDirectory: URL           // the CLI passes --output, or the current directory
     public var fileName: String?
     public var displayName: String?
     public var icon: WrapperIconChoice?
-    public var identity: String // "Developer ID Application: Name (TEAMID)", in the user's keychain
+    public var identity: String               // "Developer ID Application: Name (TEAMID)", in the user's keychain
     public var notarize: Bool
-    public var keychainProfile: String? // notarytool store-credentials profile; required with notarize
-    public var redistributionConfirmed: Bool // the legal confirmation of wrapper.md §11; false = runtime.malformedRequest
+    public var keychainProfile: String?       // notarytool store-credentials profile; required with notarize
+    public var redistributionConfirmed: Bool  // the legal confirmation of wrapper.md §11; false = runtime.malformedRequest
 }
 
 public struct DistributionWrapperResult: Codable, Sendable {
-    public var appURL: URL // <dir>/<name>.app
-    public var zipURL: URL // <dir>/<name>.zip
+    public var appURL: URL                    // <dir>/<name>.app
+    public var zipURL: URL                    // <dir>/<name>.zip
     public var bundleID: String
     public var cdhash: String
     public var teamID: String
     public var notarized: Bool
     public var submissionID: String?
-    public var assessment: String? // spctl output, with notarize only
+    public var assessment: String?            // spctl output, with notarize only
 }
 ```
 
@@ -1751,7 +1751,7 @@ public enum WrapperChange: Codable, Sendable {
     case refreshed(WrapperSummary)
     case removed(PackageID)
     case statusChanged(PackageID, WrapperStatus)
-    case approvalRequested(ApprovalPrompt) // APKRun.app shows the dialog
+    case approvalRequested(ApprovalPrompt)    // APKRun.app shows the dialog
     case approvalResolved(ApprovalID)
     case unknown
 }
@@ -1800,29 +1800,29 @@ Integration semantics: [../02-design/desktop-integration.md](../02-design/deskto
 public struct IntegrationStatus: Codable, Sendable {
     public var packageID: PackageID
     public var items: [IntegrationItemStatus] // one per IntegrationKind
-    public var microphoneNeedsRestart: Bool // the microphone input is attached at VM start only (desktop-integration.md §8.2)
+    public var microphoneNeedsRestart: Bool   // the microphone input is attached at VM start only (desktop-integration.md §8.2)
 }
 
 public struct IntegrationItemStatus: Codable, Sendable {
-    public var kind: IntegrationKind // clipboard, notifications, links, files, sharedFolders, microphone
-    public var value: JSONValue // the package setting in effect: true, "ask", "readOnly", …
-    public var source: SettingSource // §14.2
-    public var decision: WireIntegrationDecision // without the session context (focus, rate)
+    public var kind: IntegrationKind          // clipboard, notifications, links, files, sharedFolders, microphone
+    public var value: JSONValue               // the package setting in effect: true, "ask", "readOnly", …
+    public var source: SettingSource          // §14.2
+    public var decision: WireIntegrationDecision   // without the session context (focus, rate)
     public var support: IntegrationSupport
-    public var macPermission: MacPermissionState? // notifications: the wrapper's; microphone: APKRun's
+    public var macPermission: MacPermissionState?  // notifications: the wrapper's; microphone: APKRun's
 }
 
 public enum WireIntegrationDecision: Codable, Sendable, Equatable {
     case allow
-    case ask // links only
-    case deny(IntegrationDenial) //.globallyOff,.packageOff,.notFocused,.noSession,.notSupported(capability),.rateLimited
+    case ask                                  // links only
+    case deny(IntegrationDenial)              // .globallyOff, .packageOff, .notFocused, .noSession, .notSupported(capability), .rateLimited
     case unknown
 }
 
 public enum IntegrationSupport: Codable, Sendable, Equatable {
     case supported
-    case unsupported(capability: String) // the running image lacks the capability (desktop-integration.md §2.4)
-    case unknown // Android has not run with this image yet
+    case unsupported(capability: String)      // the running image lacks the capability (desktop-integration.md §2.4)
+    case unknown                              // Android has not run with this image yet
 }
 
 public enum MacPermissionState: String, Codable, Sendable {
@@ -1830,17 +1830,17 @@ public enum MacPermissionState: String, Codable, Sendable {
 }
 
 public struct SharedFolder: Codable, Sendable {
-    public var id: SharedFolderID // "shared" for the built-in folder
-    public var name: String // the root's name in the Android file picker
-    public var path: String // for display only; apkrund uses the bookmark
-    public var access: SharedFolderAccess //.readOnly,.readWrite: the root's maximum
-    public var builtIn: Bool // the APKRun Shared folder; cannot be removed
-    public var availability: FolderAvailability //.available,.missing,.privacyDenied,.offline,.unknown
+    public var id: SharedFolderID             // "shared" for the built-in folder
+    public var name: String                   // the root's name in the Android file picker
+    public var path: String                   // for display only; apkrund uses the bookmark
+    public var access: SharedFolderAccess     // .readOnly, .readWrite: the root's maximum
+    public var builtIn: Bool                  // the APKRun Shared folder; cannot be removed
+    public var availability: FolderAvailability   // .available, .missing, .privacyDenied, .offline, .unknown
 }
 
 public struct AddSharedFolderRequest: Codable, Sendable {
-    public var bookmark: Data // from the open panel, or created by the CLI for <path>
-    public var access: SharedFolderAccess // default.readOnly; --read-write sets.readWrite
+    public var bookmark: Data                 // from the open panel, or created by the CLI for <path>
+    public var access: SharedFolderAccess     // default .readOnly; --read-write sets .readWrite
 }
 
 public struct SharedFolderRequest: Codable, Sendable { public var id: SharedFolderID }
@@ -1863,30 +1863,30 @@ The integration messages of the session channel (§6.3) use these types ([../02-
 
 ```swift
 public struct ClipItem: Codable, Sendable {
-    public var text: String? // UTF-8, at most 1 MiB
-    public var html: String? // at most 1 MiB, always together with text
-    public var image: ClipImage? // #080
-    public var sensitive: Bool // org.nspasteboard.ConcealedType / EXTRA_IS_SENSITIVE
-    public var digest: SHA256Digest // over the normalized text or image bytes (loop prevention)
-    public var truncated: Bool // the text was cut at 1 MiB
-    public var trigger: ClipTrigger? // client → server:.paste,.focus; nil from the guest
+    public var text: String?                  // UTF-8, at most 1 MiB
+    public var html: String?                  // at most 1 MiB, always together with text
+    public var image: ClipImage?              // #080
+    public var sensitive: Bool                // org.nspasteboard.ConcealedType / EXTRA_IS_SENSITIVE
+    public var digest: SHA256Digest           // over the normalized text or image bytes (loop prevention)
+    public var truncated: Bool                // the text was cut at 1 MiB
+    public var trigger: ClipTrigger?          // client → server: .paste, .focus; nil from the guest
 }
 
 public struct ClipImage: Codable, Sendable {
-    public var png: Data // at most 16 MiB encoded
-    public var pixelSize: PixelSize // at most 8192 px per side
+    public var png: Data                      // at most 16 MiB encoded
+    public var pixelSize: PixelSize           // at most 8192 px per side
 }
 
-public struct ClipAck: Codable, Sendable { public var seq: UInt64 } // the guest's ClipData.seq
+public struct ClipAck: Codable, Sendable { public var seq: UInt64 }   // the guest's ClipData.seq
 
 public struct ClipboardWritten: Codable, Sendable {
-    public var changeCount: Int // NSPasteboard.changeCount after the write
+    public var changeCount: Int               // NSPasteboard.changeCount after the write
     public var digest: SHA256Digest
 }
 
 public struct ImportFilesRequest: Codable, Sendable {
-    public var files: [ImportFileInfo] // 1…20, in the order of the files: array
-    public var target: ImportTarget //.shareToApp
+    public var files: [ImportFileInfo]        // 1…20, in the order of the files: array
+    public var target: ImportTarget           // .shareToApp
 }
 
 public struct ImportFileInfo: Codable, Sendable {
@@ -1898,35 +1898,35 @@ public struct ImportFileInfo: Codable, Sendable {
 
 public struct ImportResult: Codable, Sendable {
     public var contentURIs: [String]
-    public var disposition: ImportDisposition //.shared,.savedToDownloads
+    public var disposition: ImportDisposition // .shared, .savedToDownloads
 }
 
 public struct ExportOffer: Codable, Sendable {
     public var offerID: OfferID
-    public var name: String // sanitized as in wrapper.md §4.3
+    public var name: String                   // sanitized as in wrapper.md §4.3
     public var size: Int64?
-    public var type: String // MIME type from Android
+    public var type: String                   // MIME type from Android
 }
 
 public struct AcceptExportRequest: Codable, Sendable {
     public var offerID: OfferID
-    public var fileIndex: Int? // a write handle (§4.9); nil = the user cancelled
+    public var fileIndex: Int?                // a write handle (§4.9); nil = the user cancelled
 }
 
 public struct LinkPrompt: Codable, Sendable {
     public var promptID: PromptID
-    public var host: String // Unicode host, or the mail address for mailto
-    public var registrableDomain: String? // shown in bold
-    public var scheme: String // http, https, mailto
-    public var signInHint: Bool // the path contains oauth, authorize, or login
-    public var keepInAndroidAvailable: Bool // false when the image has no in-Android browser
-    public var expiresAt: Date // 60 s after the prompt; then Cancel
+    public var host: String                   // Unicode host, or the mail address for mailto
+    public var registrableDomain: String?     // shown in bold
+    public var scheme: String                 // http, https, mailto
+    public var signInHint: Bool               // the path contains oauth, authorize, or login
+    public var keepInAndroidAvailable: Bool   // false when the image has no in-Android browser
+    public var expiresAt: Date                // 60 s after the prompt; then Cancel
 }
 
 public struct ResolveLinkPromptRequest: Codable, Sendable {
     public var promptID: PromptID
-    public var choice: LinkChoice //.openOnMac,.keepInAndroid,.cancel
-    public var remember: Bool // writes integrations.links = mac | android
+    public var choice: LinkChoice             // .openOnMac, .keepInAndroid, .cancel
+    public var remember: Bool                 // writes integrations.links = mac | android
 }
 ```
 
@@ -1940,32 +1940,32 @@ public struct ResolveLinkPromptRequest: Codable, Sendable {
 
 ```swift
 public struct NotificationRelayRequest: Codable, Sendable {
-    public var background: Bool // started in background mode; for logs and the queue timeout
+    public var background: Bool               // started in background mode; for logs and the queue timeout
 }
 
-public enum RelayMessage: Codable, Sendable { // server → wrapper, in StreamEnvelope.event
+public enum RelayMessage: Codable, Sendable {             // server → wrapper, in StreamEnvelope.event
     case post(NotificationPayload)
-    case remove([String]) // identifiers
-    case setBadge(Int?) // nil clears the Dock badge
+    case remove([String])                     // identifiers
+    case setBadge(Int?)                       // nil clears the Dock badge
     case unknown
 }
 
 public struct NotificationPayload: Codable, Sendable {
-    public var identifier: String // "<package>|<first 16 hex of SHA-256(key)>"
-    public var threadID: String // "<package>/<group or channel>"
+    public var identifier: String             // "<package>|<first 16 hex of SHA-256(key)>"
+    public var threadID: String               // "<package>/<group or channel>"
     public var title: String
     public var body: String
     public var sound: Bool
-    public var interruption: NotificationInterruption //.passive,.active
-    public var actions: [String] // titles, at most 3 (a0–a2)
+    public var interruption: NotificationInterruption   // .passive, .active
+    public var actions: [String]              // titles, at most 3 (a0–a2)
     public var badge: Int?
-    public var replay: Bool // re-sent after a reconnect: update without a banner
+    public var replay: Bool                   // re-sent after a reconnect: update without a banner
 }
 
-public enum RelayResponse: Codable, Sendable { // wrapper → server, one-way
-    case activated(identifier: String, actionIndex: Int?) // after the session is running
+public enum RelayResponse: Codable, Sendable {            // wrapper → server, one-way
+    case activated(identifier: String, actionIndex: Int?)   // after the session is running
     case dismissed(identifier: String)
-    case authorizationChanged(MacPermissionState) // the wire form of UNAuthorizationStatus
+    case authorizationChanged(MacPermissionState)           // the wire form of UNAuthorizationStatus
     case unknown
 }
 ```
@@ -1977,10 +1977,10 @@ public enum RelayResponse: Codable, Sendable { // wrapper → server, one-way
 
 ```swift
 public struct HostNotificationsRequest: Codable, Sendable {
-    public var background: Bool // APKRun.app was opened with --notify
+    public var background: Bool               // APKRun.app was opened with --notify
 }
 
-public enum HostNotificationMessage: Codable, Sendable { // server → APKRun.app
+public enum HostNotificationMessage: Codable, Sendable {  // server → APKRun.app
     case post(HostNotificationPayload)
     case remove([String])
     case unknown
@@ -1991,29 +1991,29 @@ public struct HostNotificationPayload: Codable, Sendable {
     public var kind: HostNotificationKind
     public var packageID: PackageID?
     public var title: WireLocalizedText
-    public var subtitle: String? // the app's display name for Android app notifications
+    public var subtitle: String?              // the app's display name for Android app notifications
     public var body: WireLocalizedText
     public var threadID: String?
     public var sound: Bool
     public var interruption: NotificationInterruption
     public var actions: [HostNotificationAction]
-    public var targetURL: URL? // apkrun:// URL opened by a click on the notification itself
+    public var targetURL: URL?                // apkrun:// URL opened by a click on the notification itself
 }
 
 public enum HostNotificationKind: String, Codable, Sendable {
     case androidApp, updateAvailable, updated, updateWaiting, updateRolledBack, updateRefused, providerProblem,
-    runtimeStopped, approvalNeeded, selfUpdateAvailable, imageUpdateReady, imageUpdated,
-    imageUpdateFailed, imageIncompatible, unknown
+         runtimeStopped, approvalNeeded, selfUpdateAvailable, imageUpdateReady, imageUpdated,
+         imageUpdateFailed, imageIncompatible, unknown
 }
 
 public enum HostNotificationAction: Codable, Sendable, Equatable {
     case updateNow, open, restart, update, later, reportProblem, openAPKRun
-    case android(index: Int, title: String) // the Android actions of an androidApp notification
+    case android(index: Int, title: String)   // the Android actions of an androidApp notification
     case unknown
 }
 
 public enum HostNotificationResponse: Codable, Sendable { // APKRun.app → server, one-way
-    case activated(identifier: String, action: HostNotificationAction?) // nil = the notification itself
+    case activated(identifier: String, action: HostNotificationAction?)   // nil = the notification itself
     case dismissed(identifier: String)
     case unknown
 }
@@ -2075,14 +2075,14 @@ Maintenance semantics: [../02-design/runtime-maintenance.md](../02-design/runtim
 
 ```swift
 public struct MaintenanceStatus: Codable, Sendable {
-    public var version: String // apkrund's CFBundleShortVersionString
-    public var build: Int // apkrund's CFBundleVersion
+    public var version: String                // apkrund's CFBundleShortVersionString
+    public var build: Int                     // apkrund's CFBundleVersion
     public var hostState: HostState
-    public var sessions: [PackageID] // packages with a session that is not ended
+    public var sessions: [PackageID]          // packages with a session that is not ended
     public var backgroundTasks: [PackageID]
-    public var activities: [ActivityKind] // §17.2
+    public var activities: [ActivityKind]     // §17.2
     public var imageMigrating: Bool
-    public var marker: HostUpdateMarker? // Runtime/maintenance.json while updating
+    public var marker: HostUpdateMarker?      // Runtime/maintenance.json while updating
 }
 
 public struct HostUpdateMarker: Codable, Sendable {
@@ -2097,7 +2097,7 @@ public struct HostUpdateMarker: Codable, Sendable {
 public struct HostUpdateRequest: Codable, Sendable {
     public var targetVersion: String
     public var targetBuild: Int
-    public var closeSessions: Bool // false with open sessions: maintenance.hostUpdateSessionsOpen
+    public var closeSessions: Bool            // false with open sessions: maintenance.hostUpdateSessionsOpen
 }
 
 public struct RestartForUpdateRequest: Codable, Sendable {
@@ -2121,23 +2121,23 @@ public struct RestartForUpdateRequest: Codable, Sendable {
 public struct SelfUpdateStatus: Codable, Sendable {
     public var currentVersion: String
     public var currentBuild: Int
-    public var latest: AvailableRelease? // nil = up to date, or never checked
+    public var latest: AvailableRelease?      // nil = up to date, or never checked
     public var critical: Bool
     public var lastCheckedAt: Date?
-    public var lastError: WireError? // maintenance.selfUpdateFeedUnreachable,.selfUpdateFeedInvalid
-    public var pendingOnQuit: Bool // Sparkle has downloaded an update that installs on quit
+    public var lastError: WireError?          // maintenance.selfUpdateFeedUnreachable, .selfUpdateFeedInvalid
+    public var pendingOnQuit: Bool            // Sparkle has downloaded an update that installs on quit
 }
 
 public struct AvailableRelease: Codable, Sendable {
-    public var version: String // sparkle:shortVersionString
-    public var build: Int // sparkle:version
-    public var channel: String? // nil = stable
+    public var version: String                // sparkle:shortVersionString
+    public var build: Int                     // sparkle:version
+    public var channel: String?               // nil = stable
     public var minimumSystemVersion: String?
     public var releaseNotesURL: URL?
     public var publishedAt: Date?
 }
 
-public struct SelfUpdateNote: Codable, Sendable { // Sparkle's results, reported by APKRun.app
+public struct SelfUpdateNote: Codable, Sendable {   // Sparkle's results, reported by APKRun.app
     public var found: AvailableRelease?
     public var pendingOnQuit: Bool
     public var checkedAt: Date
@@ -2166,20 +2166,20 @@ public struct SelfUpdateNote: Codable, Sendable { // Sparkle's results, reported
 public struct ImageUpdateStatus: Codable, Sendable {
     public var phase: WireImageUpdatePhase
     public var current: ImageVersion?
-    public var requiresNewerAPKRun: String? // the minimum APKRun version of a newer image this build cannot use
-    public var rejected: [RejectedImage] // { version, at, reason: WireError }
+    public var requiresNewerAPKRun: String?   // the minimum APKRun version of a newer image this build cannot use
+    public var rejected: [RejectedImage]      // { version, at, reason: WireError }
     public var lastResult: ImageUpdateOutcome?
-    public var waitingFor: [ImageApplyCondition] // the gate conditions (a1…a7) that are false now
-    public var installMode: ImageInstallMode //.automatic,.ask (maintenance.installImages)
+    public var waitingFor: [ImageApplyCondition]  // the gate conditions (a1…a7) that are false now
+    public var installMode: ImageInstallMode  // .automatic, .ask (maintenance.installImages)
     public var lastCheckAt: Date?
     public var nextCheckAt: Date?
 }
 
-public enum WireImageUpdatePhase: Codable, Sendable, Equatable { // runtime-maintenance.md §4.3
+public enum WireImageUpdatePhase: Codable, Sendable, Equatable {   // runtime-maintenance.md §4.3
     case idle
     case checking
     case available(WireImageCandidate)
-    case downloading(WireImageCandidate, DownloadProgress) // { bytes, totalBytes, resumed }
+    case downloading(WireImageCandidate, DownloadProgress)   // { bytes, totalBytes, resumed }
     case installing(WireImageCandidate, fraction: Double)
     case ready(ImageVersion)
     case applying(from: ImageVersion, to: ImageVersion)
@@ -2187,13 +2187,13 @@ public enum WireImageUpdatePhase: Codable, Sendable, Equatable { // runtime-main
     case unknown
 }
 
-public struct WireImageCandidate: Codable, Sendable, Equatable { // one entry of the image feed
+public struct WireImageCandidate: Codable, Sendable, Equatable {  // one entry of the image feed
     public var version: ImageVersion
-    public var kind: ImageKind //.apkrun,.stock
+    public var kind: ImageKind                // .apkrun, .stock
     public var publishedAt: Date
-    public var downloadBytes: Int64 // archive.size
-    public var expandedBytes: Int64 // expandedSize
-    public var securityPatchLevel: String // "2026-09-05"
+    public var downloadBytes: Int64           // archive.size
+    public var expandedBytes: Int64           // expandedSize
+    public var securityPatchLevel: String     // "2026-09-05"
     public var critical: Bool
     public var releaseNotesURL: URL?
 }
@@ -2210,25 +2210,25 @@ public enum ImageUpdateOutcome: Codable, Sendable, Equatable {
 }
 
 public struct ApplyImageUpdateRequest: Codable, Sendable {
-    public var version: ImageVersion // must be the ready image
+    public var version: ImageVersion          // must be the ready image
     public var closeSessions: Bool
-    public var retryRejected: Bool // false for a rejected version: maintenance.imageUpdateRejected
+    public var retryRejected: Bool            // false for a rejected version: maintenance.imageUpdateRejected
 }
 
 public struct ImageInstallRequest: Codable, Sendable {
-    public var source: ImageInstallSource //.file(fileIndex: Int) (a signed.aar),.latest (the feed candidate)
-    public var apply: Bool // apply after the install (the CLI always sets true)
-    public var closeSessions: Bool // used by the apply step
+    public var source: ImageInstallSource     // .file(fileIndex: Int) (a signed .aar), .latest (the feed candidate)
+    public var apply: Bool                    // apply after the install (the CLI always sets true)
+    public var closeSessions: Bool            // used by the apply step
     public var retryRejected: Bool
 }
 
 public struct RollbackImageRequest: Codable, Sendable {
-    public var confirmed: Bool // the data-loss confirmation of runtime-maintenance.md §4.8; false = runtime.malformedRequest
+    public var confirmed: Bool                // the data-loss confirmation of runtime-maintenance.md §4.8; false = runtime.malformedRequest
 }
 
 public struct WireImageInfo: Codable, Sendable {
     public var version: ImageVersion
-    public var role: ImageRole //.current,.previous,.ready,.rejected,.other
+    public var role: ImageRole                // .current, .previous, .ready, .rejected, .other
     public var kind: ImageKind
     public var sizeBytes: Int64
     public var installedAt: Date?
@@ -2239,9 +2239,9 @@ public struct WireRecoveryPoint: Codable, Sendable {
     public var id: RecoveryPointID
     public var imageVersion: ImageVersion
     public var createdAt: Date
-    public var reason: RecoveryPointReason //.migration,.resetAndroid,.unknown
-    public var sizeBytes: Int64? // blocks not shared with the instance, when known
-    public var failed: Bool // recovery-points/failed-<ts>/ kept for diagnostics
+    public var reason: RecoveryPointReason    // .migration, .resetAndroid, .unknown
+    public var sizeBytes: Int64?              // blocks not shared with the instance, when known
+    public var failed: Bool                   // recovery-points/failed-<ts>/ kept for diagnostics
 }
 
 public struct RecoveryPointRequest: Codable, Sendable { public var id: RecoveryPointID }
@@ -2252,7 +2252,7 @@ public struct RecoveryPointRequest: Codable, Sendable { public var id: RecoveryP
 - `cancelImageDownload` keeps the partial file. It is the same as `cancel` on the `imageDownload` operation.
 - `rollbackImage` restores the recovery point of the last migration while the `previous` image exists. Without one it returns `maintenance.rollbackUnavailable`.
 - `deleteRecoveryPoint` for an unknown ID returns `image.recoveryPointMissing`. Deleting the recovery point of the last migration removes the way back, so the client asks first.
-- A recovery point made by Reset Android (`reason =.resetAndroid`) has no restore operation in v1. `recoveryPoints` lists it and `deleteRecoveryPoint` deletes it (runtime-daemon §9.5, [../04-plan/open-questions.md](../04-plan/open-questions.md) OQ-41).
+- A recovery point made by Reset Android (`reason = .resetAndroid`) has no restore operation in v1. `recoveryPoints` lists it and `deleteRecoveryPoint` deletes it (runtime-daemon §9.5, [../04-plan/open-questions.md](../04-plan/open-questions.md) OQ-41).
 
 ### 12.4 Events
 
@@ -2263,7 +2263,7 @@ public enum MaintenanceEvent: Codable, Sendable {
     case hostStateChanged(HostState)
     case selfUpdateStatusChanged(SelfUpdateStatus)
     case imageUpdatePhaseChanged(WireImageUpdatePhase)
-    case imageUpdateProgress(OperationID, fraction: Double, bytes: Int64?) // coalesced to 10 per second
+    case imageUpdateProgress(OperationID, fraction: Double, bytes: Int64?)   // coalesced to 10 per second
     case imageUpdateFinished(ImageUpdateOutcome)
     case unknown
 }
@@ -2303,60 +2303,60 @@ Diagnostics semantics: [../02-design/diagnostics.md](../02-design/diagnostics.md
 ```swift
 public struct HealthRequest: Codable, Sendable {
     public var deep: Bool
-    public var checks: [HealthCheckID]? // nil = all; Run Again on one row sends one ID
+    public var checks: [HealthCheckID]?       // nil = all; Run Again on one row sends one ID
 }
 
 public struct HealthFixRequest: Codable, Sendable {
-    public var checks: [HealthCheckID] // empty = every check in warning or failure that has a fix (doctor --fix)
+    public var checks: [HealthCheckID]        // empty = every check in warning or failure that has a fix (doctor --fix)
 }
 
 public struct WireHealthReport: Codable, Sendable {
     public var generatedAt: Date
-    public var build: WireBuildInfo // { version, build, commit?, channel }
+    public var build: WireBuildInfo           // { version, build, commit?, channel }
     public var imageVersion: ImageVersion?
     public var runtimeRunning: Bool
-    public var verdict: HealthVerdict // diagnostics.md §7.2
-    public var results: [WireHealthResult] // ordered by group, then registration order
+    public var verdict: HealthVerdict         // diagnostics.md §7.2
+    public var results: [WireHealthResult]    // ordered by group, then registration order
 }
 
 public enum HealthVerdict: String, Codable, Sendable {
     case hostUnsupported, serviceUnavailable, notSetUp, graphicsFailure, bootFailure,
-    agentUnavailable, degraded, stopped, healthy, unknown
+         agentUnavailable, degraded, stopped, healthy, unknown
 }
 
 public struct WireHealthResult: Codable, Sendable {
     public var id: HealthCheckID
-    public var group: HealthGroup // host, backgroundService, virtualization, android, graphics, guest,
-    // store, updates, applications, macApps, integrations, maintenance
-    public var state: HealthState // pass, info, warning, failure, skipped
+    public var group: HealthGroup             // host, backgroundService, virtualization, android, graphics, guest,
+                                              // store, updates, applications, macApps, integrations, maintenance
+    public var state: HealthState             // pass, info, warning, failure, skipped
     public var title: WireLocalizedText
-    public var detail: String? // public-safe text
-    public var error: WireError? // warning and failure with a next step
+    public var detail: String?                // public-safe text
+    public var error: WireError?              // warning and failure with a next step
     public var fixAvailable: Bool
-    public var lastKnown: LastKnownResult? // skipped checks: { state, detail?, measuredAt }
+    public var lastKnown: LastKnownResult?    // skipped checks: { state, detail?, measuredAt }
     public var measuredAt: Date
 }
 
 public struct DiagnosticsRequest: Codable, Sendable {
-    public var outputFileIndex: Int // an empty regular file opened for writing (§4.9)
-    public var includeLogcat: Bool // keep all Android app log lines (still redacted)
-    public var deep: Bool // deep health checks in the bundle
-    public var focusPackage: PackageID? // adds the package's update history and launch records
+    public var outputFileIndex: Int           // an empty regular file opened for writing (§4.9)
+    public var includeLogcat: Bool            // keep all Android app log lines (still redacted)
+    public var deep: Bool                     // deep health checks in the bundle
+    public var focusPackage: PackageID?       // adds the package's update history and launch records
 }
 
 public struct DiagnosticsResult: Codable, Sendable {
-    public var summary: String // summary.txt
+    public var summary: String                // summary.txt
     public var sizeBytes: Int64
-    public var omitted: [OmittedItem] // { item, reason }: contributors that failed or ran out of time
+    public var omitted: [OmittedItem]         // { item, reason }: contributors that failed or ran out of time
 }
 
 public struct GuestLogRequest: Codable, Sendable {
-    public var follow: Bool // false: the buffered lines, then the stream ends
+    public var follow: Bool                   // false: the buffered lines, then the stream ends
 }
 
 public struct GuestLogChunk: Codable, Sendable {
-    public var lines: [String] // logcat lines as read from the logcat console port
-    public var dropped: Int // lines dropped because the client was slow
+    public var lines: [String]                // logcat lines as read from the logcat console port
+    public var dropped: Int                   // lines dropped because the client was slow
 }
 ```
 
@@ -2369,18 +2369,18 @@ public struct GuestLogChunk: Codable, Sendable {
 
 ```swift
 public struct WirePerfStatistics: Codable, Sendable {
-    public var since: Date // the last reset, or apkrund start
-    public var markers: [MarkerStatistics] // { name, count, p50Us, p95Us, maxUs }
-    public var input: [LatencyHistogram] // { segment ("input.translate", "input.route"), boundsUs: [Int64], counts: [Int] }
+    public var since: Date                    // the last reset, or apkrund start
+    public var markers: [MarkerStatistics]    // { name, count, p50Us, p95Us, maxUs }
+    public var input: [LatencyHistogram]      // { segment ("input.translate", "input.route"), boundsUs: [Int64], counts: [Int] }
     public var sessions: [SessionGraphicsStatistics]
 }
 
 public struct SessionGraphicsStatistics: Codable, Sendable {
     public var packageID: PackageID
     public var displayID: DisplayID
-    public var fps: Double // average of the last 10 s
+    public var fps: Double                    // average of the last 10 s
     public var droppedFrames: Int64
-    public var hostReadbacks: Int64 // must stay 0 (AGENTS.md §6.4)
+    public var hostReadbacks: Int64           // must stay 0 (AGENTS.md §6.4)
     public var cpuPixelCopies: Int64
     public var presentGPUTimeP50Us: Int64
     public var presentGPUTimeP95Us: Int64
@@ -2395,7 +2395,7 @@ Topic `health`:
 
 ```swift
 public enum HealthEvent: Codable, Sendable {
-    case healthChanged(WireHealthResult) // live checks only (diagnostics.md §7.1)
+    case healthChanged(WireHealthResult)      // live checks only (diagnostics.md §7.1)
     case unknown
 }
 ```
@@ -2433,72 +2433,72 @@ A launcher reads its own package's settings without these operations. It gets th
 
 ```swift
 public struct ConfigurationSnapshot: Codable, Sendable {
-    public var entries: [ConfigurationEntry] // every key of configuration.md §2, sorted by key
+    public var entries: [ConfigurationEntry]  // every key of configuration.md §2, sorted by key
 }
 
 public struct ConfigurationEntry: Codable, Sendable {
-    public var key: String // dotted: "runtime.idleStopMinutes"
-    public var value: JSONValue // the effective value
+    public var key: String                    // dotted: "runtime.idleStopMinutes"
+    public var value: JSONValue               // the effective value
     public var defaultValue: JSONValue
-    public var isSet: Bool // present in settings.json, also when equal to the default
+    public var isSet: Bool                    // present in settings.json, also when equal to the default
     public var applies: SettingApplies
 }
 
 public struct ConfigurationPatch: Codable, Sendable {
-    public var patch: JSONValue // an object: RFC 7396 merge patch on the nested form (configuration.md §1.2)
+    public var patch: JSONValue               // an object: RFC 7396 merge patch on the nested form (configuration.md §1.2)
 }
 
 public struct PackageSettingsPatch: Codable, Sendable {
     public var packageID: PackageID
-    public var patch: JSONValue // an object: merge patch on the nested package keys (configuration.md §3.1)
+    public var patch: JSONValue               // an object: merge patch on the nested package keys (configuration.md §3.1)
 }
 
 public struct ResolvedPackageSettings: Codable, Sendable {
     public var packageID: PackageID
-    public var entries: [ResolvedSetting] // every key of configuration.md §3.1, sorted by key
-    public var window: WindowSettings // the window.* values of entries, typed
-    public var input: InputPrefs // the input.* values of entries, typed
+    public var entries: [ResolvedSetting]     // every key of configuration.md §3.1, sorted by key
+    public var window: WindowSettings         // the window.* values of entries, typed
+    public var input: InputPrefs              // the input.* values of entries, typed
 }
 
 public struct ResolvedSetting: Codable, Sendable {
-    public var key: String // "window.zoom"
-    public var value: JSONValue // the effective value
+    public var key: String                    // "window.zoom"
+    public var value: JSONValue               // the effective value
     public var source: SettingSource
     public var defaultValue: JSONValue
-    public var recommended: JSONValue? // the compatibility database value, when there is one (#090)
+    public var recommended: JSONValue?        // the compatibility database value, when there is one (#090)
     public var applies: SettingApplies
 }
 
-public enum SettingSource: String, Codable, Sendable { // configuration.md §3.2, in precedence order
-    case globalSwitch // integrations.enabled.<kind> = false overrides the package value
-    case user // the package's settings.json: set by the user, or from wrapper.json at the first record
-    case recommended // compatibility.json recommendedSettings
+public enum SettingSource: String, Codable, Sendable {   // configuration.md §3.2, in precedence order
+    case globalSwitch                         // integrations.enabled.<kind> = false overrides the package value
+    case user                                 // the package's settings.json: set by the user, or from wrapper.json at the first record
+    case recommended                          // compatibility.json recommendedSettings
     case `default`
     case unknown
 }
 
-public enum SettingApplies: String, Codable, Sendable { // configuration.md "Applies"
+public enum SettingApplies: String, Codable, Sendable {   // configuration.md "Applies"
     case live, nextSession, runtimeRestart, nextCheck, nextLogin, newPackages, provisioning
-    case nextBoot // runtime.bootTimeoutSeconds, runtime.firstBootTimeoutSeconds
-    case nextHealthCheckResult // update.autoRollback
-    case nextUpdate // update.healthCheckLaunch
+    case nextBoot                             // runtime.bootTimeoutSeconds, runtime.firstBootTimeoutSeconds
+    case nextHealthCheckResult                // update.autoRollback
+    case nextUpdate                           // update.healthCheckLaunch
     case unknown
 }
 
 public struct WindowSettings: Codable, Sendable, Equatable {
-    public var mode: AndroidWindowMode //.secondaryDisplay,.primaryDisplayCompatibility
-    public var defaultWidth: Int // points, ≥ 320
-    public var defaultHeight: Int // points, ≥ 400
+    public var mode: AndroidWindowMode        // .secondaryDisplay, .primaryDisplayCompatibility
+    public var defaultWidth: Int              // points, ≥ 320
+    public var defaultHeight: Int             // points, ≥ 400
     public var resizable: Bool
     public var alwaysOnTop: Bool
-    public var zoom: Double // 0.75…2.0
-    public var closeBehavior: ClosePolicy //.stop,.keepRunning
+    public var zoom: Double                   // 0.75…2.0
+    public var closeBehavior: ClosePolicy     // .stop, .keepRunning
 }
 
-public struct InputPrefs: Codable, Sendable, Equatable { // applied by InputCore in the launcher (input.md)
-    public var escapeKey: EscapeKeyMapping //.back,.escape
-    public var secondaryClick: SecondaryClickMapping //.mouseSecondary,.longPress
-    public var scrollMode: ScrollMode //.scroll,.touchDrag
+public struct InputPrefs: Codable, Sendable, Equatable {   // applied by InputCore in the launcher (input.md)
+    public var escapeKey: EscapeKeyMapping    // .back, .escape
+    public var secondaryClick: SecondaryClickMapping   // .mouseSecondary, .longPress
+    public var scrollMode: ScrollMode         // .scroll, .touchDrag
     public var hover: Bool
     public var sendCommandKey: Bool
 }
@@ -2542,17 +2542,17 @@ public struct InputPrefs: Codable, Sendable, Equatable { // applied by InputCore
 |---|---|---|---|
 | `bootLinux` | `LinuxBootRequest { kernel: URL?, initrd: URL?, tests: [String], window: Bool, stats: Bool, timeoutMs: Int64? }` → `LinuxBootResult { results: [{ name, ok, line }] }` | `apkrun dev linux` | [../02-design/vm.md](../02-design/vm.md) §12 |
 | `installImageBundle` | `ImageBundleInstallRequest { source: URL }` (a directory or an `.aar`) → `WireImageInfo` | `apkrun dev image install` | [../02-design/android-image.md](../02-design/android-image.md) §10.3 |
-| `boot` | `DevBootRequest { bundle: URL?, gpu: DevGPUProfile?, window: Bool, stats: Bool, noAnimations: Bool, guestTransport:.vsock \|.adb, waitReady: Bool }` → `RuntimeStatus` | `apkrun dev boot` | cli §5, [../02-design/graphics.md](../02-design/graphics.md) §9 |
-| `launchApps` | `DevLaunchRequest { items: [.apk(URL) \|.package(PackageID)], display:.primary \|.secondary, window: Bool }` → `[DevLaunchResult { packageID, outcome, taskID, session: SessionSummary? }]` | `apkrun dev launch` | cli §5, [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §7.1, [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §12 |
+| `boot` | `DevBootRequest { bundle: URL?, gpu: DevGPUProfile?, window: Bool, stats: Bool, noAnimations: Bool, guestTransport: .vsock \| .adb, waitReady: Bool }` → `RuntimeStatus` | `apkrun dev boot` | cli §5, [../02-design/graphics.md](../02-design/graphics.md) §9 |
+| `launchApps` | `DevLaunchRequest { items: [.apk(URL) \| .package(PackageID)], display: .primary \| .secondary, window: Bool }` → `[DevLaunchResult { packageID, outcome, taskID, session: SessionSummary? }]` | `apkrun dev launch` | cli §5, [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §7.1, [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §12 |
 | `addDisplay` | `DevDisplayRequest { pixelSize: PixelSize?, densityDpi: Int? }` → `DisplaySlotSnapshot` | `apkrun dev displays add` | cli §5 |
 | `removeDisplay` | `DisplayID` → `Void` | `apkrun dev displays remove` | cli §5 |
 | `listDisplays` | → `[DisplaySlotSnapshot]` | `apkrun dev displays list` | cli §5 |
-| `injectPower` | `.sleep \|.wake` → `Void` | `apkrun dev power` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §6 |
+| `injectPower` | `.sleep \| .wake` → `Void` | `apkrun dev power` | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §6 |
 
 - Errors are the domain errors of the design documents (`VMFailure`, `ImageFailure`, `RuntimeFailure`, …) as `APKRunError`, not `WireError`.
 - `DevGPUProfile` maps to the GPU profiles of [../02-design/graphics.md](../02-design/graphics.md) §9: `.none` → `headless` (development only, #012), `.swiftshader` → `guestSwiftshader` (#021), `.virgl` → `drmVirgl` (#022). `nil` selects the default of cli §5, which is `.virgl` once #022 exists.
 - `stats` adds an overlay to the development window with the fps and the readback counters of [../02-design/graphics.md](../02-design/graphics.md) §7. It is the same overlay for `bootLinux` and `boot`. Without `window` it has no effect. Chosen (§19.1).
-- `launchApps` boots Android if needed, installs each APK through `AdbClient`, and launches each app through the Guest Agent (`LaunchApplication`). `outcome` and `taskID` come from its `LaunchResult`. With `window = false` (#072) it opens no window, `session` is `nil`, and the CLI only prints the result. From #024 the CLI sends `window = true`: the development window of #023 opens with input. From #026 each app gets its own window, `display =.secondary` (#029) uses a pool display, and several items (#030) run side by side.
+- `launchApps` boots Android if needed, installs each APK through `AdbClient`, and launches each app through the Guest Agent (`LaunchApplication`). `outcome` and `taskID` come from its `LaunchResult`. With `window = false` (#072) it opens no window, `session` is `nil`, and the CLI only prints the result. From #024 the CLI sends `window = true`: the development window of #023 opens with input. From #026 each app gets its own window, `display = .secondary` (#029) uses a pool display, and several items (#030) run side by side.
 - `injectPower` runs in the `apkrun dev boot` process that owns the instance. `apkrun dev power` reaches it through that process's control socket (cli §5).
 - `apkrun dev console` and `apkrun dev adb` use no method. They attach to the console socket and run `adb` against the dev instance directly (cli §5).
 - `DeveloperService` works only on the dev instance (`APKRUN_HOME`). It is never compiled into release APKRun.app or apkrund.
@@ -2576,7 +2576,7 @@ public enum EventTopic: String, Codable, Sendable {
 }
 
 public struct SubscribeRequest: Codable, Sendable { public var topics: [EventTopic] }
-public struct SubscribeReply: Codable, Sendable { public var topics: [EventTopic] } // every topic the connection now has
+public struct SubscribeReply: Codable, Sendable { public var topics: [EventTopic] }   // every topic the connection now has
 public struct UnsubscribeRequest: Codable, Sendable { public var topics: [EventTopic] }
 ```
 
@@ -2590,9 +2590,9 @@ public struct UnsubscribeRequest: Codable, Sendable { public var topics: [EventT
 ```swift
 public struct EventEnvelope: Codable, Sendable {
     public var topic: EventTopic
-    public var seq: UInt64 // per connection, from 1, assigned when sent
-    public var time: Date // when the event was produced
-    public var operationID: OperationID? // the operation that caused the event, when there is one
+    public var seq: UInt64                    // per connection, from 1, assigned when sent
+    public var time: Date                     // when the event was produced
+    public var operationID: OperationID?      // the operation that caused the event, when there is one
     public var payload: EventPayload
 }
 
@@ -2602,11 +2602,11 @@ public enum EventPayload: Codable, Sendable {
     case packages(PackageChange)
     case updates(UpdateEvent)
     case operations(OperationEvent)
-    case health(HealthEvent) // §13.2
-    case maintenance(MaintenanceEvent) // §12.4
-    case wrappers(WrapperChange) // §10.9
+    case health(HealthEvent)                  // §13.2
+    case maintenance(MaintenanceEvent)        // §12.4
+    case wrappers(WrapperChange)              // §10.9
     case integrations(IntegrationChange)
-    case resyncRequired(EventTopic) // events of the topic were dropped: fetch fresh snapshots
+    case resyncRequired(EventTopic)           // events of the topic were dropped: fetch fresh snapshots
     case unknown
 }
 ```
@@ -2639,7 +2639,7 @@ Payloads not defined in other sections:
 ```swift
 public enum RuntimeChange: Codable, Sendable {
     case stateChanged(WireRuntimeState)
-    case bootProgress(BootProgress) // coalesced
+    case bootProgress(BootProgress)           // coalesced
     case bootLoopGuardChanged(BootLoopGuardStatus?)
     case provisioningChanged(WireProvisioningState)
     case configurationChanged(keys: [String]) // dotted keys (configuration.md §1.5)
@@ -2652,17 +2652,17 @@ public enum RuntimeChange: Codable, Sendable {
 public enum SessionListChange: Codable, Sendable {
     case opened(SessionSummary)
     case stateChanged(SessionSummary)
-    case ended(SessionSummary) // state is.ended(reason)
+    case ended(SessionSummary)                // state is .ended(reason)
     case unknown
 }
 
-public enum PackageChange: Codable, Sendable { // package-store.md §11.3
+public enum PackageChange: Codable, Sendable {           // package-store.md §11.3
     case installed(PackageSummary)
-    case updated(PackageSummary, from: VersionCode) // also a same-version reinstall (from == to)
+    case updated(PackageSummary, from: VersionCode)      // also a same-version reinstall (from == to)
     case rolledBack(PackageSummary, from: VersionCode)
     case removed(PackageID, keptData: Bool)
     case stateChanged(PackageID, WirePackageState)
-    case operationProgress(PackageID, OperationID, StoreOperationProgress) // coalesced
+    case operationProgress(PackageID, OperationID, StoreOperationProgress)   // coalesced
     case iconChanged(PackageID)
     case settingsChanged(PackageID, keys: [String])
     case unmanagedChanged([PackageSummary])
@@ -2670,22 +2670,22 @@ public enum PackageChange: Codable, Sendable { // package-store.md §11.3
 }
 
 public struct StoreOperationProgress: Codable, Sendable, Equatable {
-    public var stage: StoreOperationStage //.copying,.inspecting (import);.receiving,.verifying,.committing (guest install);.uninstalling
+    public var stage: StoreOperationStage     // .copying, .inspecting (import); .receiving, .verifying, .committing (guest install); .uninstalling
     public var fraction: Double?
 }
 
-public enum UpdateEvent: Codable, Sendable { // update-system.md §11.2
+public enum UpdateEvent: Codable, Sendable {             // update-system.md §11.2
     case phaseChanged(PackageID, WireUpdatePhase)
-    case progress(PackageID, OperationID, fraction: Double) // download, install; coalesced
+    case progress(PackageID, OperationID, fraction: Double)   // download, install; coalesced
     case finished(PackageID, UpdateOutcome)
-    case summaryChanged(available: Int, waiting: Int, failed: Int) // for the menu bar badge
+    case summaryChanged(available: Int, waiting: Int, failed: Int)   // for the menu bar badge
     case unknown
 }
 
-public enum IntegrationChange: Codable, Sendable { // desktop-integration.md §11
-    case statusChanged(PackageID) // the client calls integrationStatus; coalesced
-    case recordingChanged([PackageID]) // the packages that use the microphone now
-    case sharedFoldersChanged // the client calls sharedFolders
+public enum IntegrationChange: Codable, Sendable {       // desktop-integration.md §11
+    case statusChanged(PackageID)             // the client calls integrationStatus; coalesced
+    case recordingChanged([PackageID])        // the packages that use the microphone now
+    case sharedFoldersChanged                 // the client calls sharedFolders
     case unknown
 }
 ```
@@ -2701,17 +2701,17 @@ Topic `operations`. These events report every long operation of §4.7, including
 ```swift
 public enum OperationEvent: Codable, Sendable {
     case started(OperationSnapshot)
-    case progress(OperationID, OperationProgress) // coalesced per operation
+    case progress(OperationID, OperationProgress)   // coalesced per operation
     case finished(OperationID, OperationResult)
     case unknown
 }
 
 public struct OperationProgress: Codable, Sendable, Equatable {
-    public var fraction: Double? // nil = indeterminate
-    public var stage: String? // the stage names in the operation tables: "copying", "collecting", …
+    public var fraction: Double?              // nil = indeterminate
+    public var stage: String?                 // the stage names in the operation tables: "copying", "collecting", …
     public var bytes: Int64?
     public var totalBytes: Int64?
-    public var message: WireLocalizedText? // "Installing ‹App›…"
+    public var message: WireLocalizedText?    // "Installing ‹App›…"
 }
 
 public enum OperationResult: Codable, Sendable {
@@ -2771,22 +2771,22 @@ public struct StreamHandle: Codable, Sendable { public var streamID: StreamID }
 
 public struct StreamEnvelope: Codable, Sendable {
     public var streamID: StreamID
-    public var seq: UInt64 // per stream, from 1
+    public var seq: UInt64                    // per stream, from 1
     public var event: StreamEvent
 }
 
 public enum StreamEvent: Codable, Sendable {
-    case relay(RelayMessage) // notificationRelay (§11.3)
-    case hostNotification(HostNotificationMessage) // hostNotifications (§11.3)
-    case guestLog(GuestLogChunk) // guestLog (§13.1)
+    case relay(RelayMessage)                  // notificationRelay (§11.3)
+    case hostNotification(HostNotificationMessage)   // hostNotifications (§11.3)
+    case guestLog(GuestLogChunk)              // guestLog (§13.1)
     case ended(StreamEndReason)
     case unknown
 }
 
 public enum StreamEndReason: Codable, Sendable, Equatable {
-    case closed // closeStream
-    case replaced // a newer hostNotifications stream took over (§11.3)
-    case finished // guestLog with follow = false
+    case closed                               // closeStream
+    case replaced                             // a newer hostNotifications stream took over (§11.3)
+    case finished                             // guestLog with follow = false
     case error(WireError)
     case unknown
 }
@@ -2816,7 +2816,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
     case object([String: JSONValue])
 }
 
-public struct Empty: Codable, Sendable, Equatable { public init {} } // encodes as {}
+public struct Empty: Codable, Sendable, Equatable { public init() {} }   // encodes as {}
 ```
 
 - `JSONValue` encodes as plain JSON (`true`, `1.25`, `"ask"`, `{…}`), not with the one-key enum form of §4.2. It is the only exception to that rule. It carries setting values and merge patches (§14).
@@ -2825,16 +2825,16 @@ public struct Empty: Codable, Sendable, Equatable { public init {} } // encodes 
 
 ### 17.2 Types defined here
 
-Many small enums and structs are defined by the trailing comment where they are first used, for example `FolderAvailability //.available,.missing, …`. A comment of the form `.a,.b` lists the cases. `{ x, y }` lists the fields. Every enum in a reply or event is open and also has `unknown` (§2.3). Request enums have no `unknown`. The types below are used in several sections.
+Many small enums and structs are defined by the trailing comment where they are first used, for example `FolderAvailability // .available, .missing, …`. A comment of the form `.a, .b` lists the cases. `{ x, y }` lists the fields. Every enum in a reply or event is open and also has `unknown` (§2.3). Request enums have no `unknown`. The types below are used in several sections.
 
 ```swift
-public struct ActivityKind: RawRepresentable, Codable, Sendable, Hashable { // runtime-daemon.md §5.1
+public struct ActivityKind: RawRepresentable, Codable, Sendable, Hashable {   // runtime-daemon.md §5.1
     public var rawValue: String
     // known values: "session", "backgroundTask", "storeOperation", "diagnostics", "migration",
     // "provisioning", "adbClient", "cli"
 }
 
-public enum AgentKind: String, Codable, Sendable { case guest, store, unknown } // Guest Agent, Store Agent (guest-components.md)
+public enum AgentKind: String, Codable, Sendable { case guest, store, unknown }   // Guest Agent, Store Agent (guest-components.md)
 public enum AgentConnectionState: String, Codable, Sendable { case connected, connecting, disconnected, incompatible, unknown }
 
 public enum AndroidWindowMode: String, Codable, Sendable { case secondaryDisplay, primaryDisplayCompatibility, unknown }
@@ -2844,8 +2844,8 @@ public enum SecondaryClickMapping: String, Codable, Sendable { case mouseSeconda
 public enum ScrollMode: String, Codable, Sendable { case scroll, touchDrag, unknown }
 
 public enum StoreOperationStage: String, Codable, Sendable {
-    case copying, inspecting // import (package-store.md §4)
-    case receiving, verifying, committing // guest install: InstallProgress stages (guest-protocol.md)
+    case copying, inspecting                  // import (package-store.md §4)
+    case receiving, verifying, committing     // guest install: InstallProgress stages (guest-protocol.md)
     case uninstalling
     case unknown
 }
@@ -2855,16 +2855,16 @@ public struct PixelSize: Codable, Sendable, Equatable {
     public var height: Int
 }
 
-public struct DisplaySlotSnapshot: Codable, Sendable { // DisplayPool.snapshot (display-and-windowing.md §3)
-    public var slot: Int // scanout index; 0 is Android's primary display
+public struct DisplaySlotSnapshot: Codable, Sendable {   // DisplayPool.snapshot() (display-and-windowing.md §3)
+    public var slot: Int                      // scanout index; 0 is Android's primary display
     public var state: WireDisplayState
-    public var displayID: DisplayID? // the lease, while allocated
+    public var displayID: DisplayID?          // the lease, while allocated
     public var androidDisplayID: Int32?
     public var pixelSize: PixelSize?
     public var densityDpi: Int?
 }
 
-public enum WireDisplayState: Codable, Sendable, Equatable { // state-machines.md §4
+public enum WireDisplayState: Codable, Sendable, Equatable {   // state-machines.md §4
     case free, attaching
     case allocated(SessionID)
     case releasing
@@ -2943,7 +2943,7 @@ The CLI uses the control endpoint. It uses the maintenance endpoint only for `se
 | `runtime reset` | `resetRuntime` | |
 | `runtime reset --erase [--no-backup]` | `resetAndroid` | `keepBackup = !--no-backup`, `confirmed` after the prompt or with `--yes` |
 | `info [--runtime] [--displays]` | `runtimeInfo` | `resources`, `displays` |
-| `install <file>…` | `importPackage`, `installImported` | `--provider` and `--updates` become `InstallOptions` (`--updates manual` sets `authority =.manual`). With `--wrap` it also sets `createWrapper`. With `--wrap --output` it calls `createWrapper` after the install instead (§8.2) |
+| `install <file>…` | `importPackage`, `installImported` | `--provider` and `--updates` become `InstallOptions` (`--updates manual` sets `authority = .manual`). With `--wrap` it also sets `createWrapper`. With `--wrap --output` it calls `createWrapper` after the install instead (§8.2) |
 | `uninstall <package>` | `uninstallPackage` | `--keep-data` sets `keepData`, `--keep-wrapper` sets `trashWrappers = false`, and `--forget` sets `forget` |
 | `list [--all]` | `listPackages` | `.managed` or `.all` |
 | `info <package>` | `packageInfo` | |
@@ -2984,12 +2984,12 @@ The CLI uses the control endpoint. It uses the maintenance endpoint only for `se
 | `operations wait <id>` | `operationStatus`, topic `operations` | |
 | `operations cancel <id>` | `cancel` | |
 | `wrap <file>…` | `importPackage`, `installImported` when an install is needed, `createWrapper` | the combinations of wrapper §12.2. `--portable` without an install sends `importTicket` |
-| `wrap <package>` | `createWrapper` | `--output` sets `destination`, `--replace` sets `replace =.sameWrapper` |
+| `wrap <package>` | `createWrapper` | `--output` sets `destination`, `--replace` sets `replace = .sameWrapper` |
 | `wrap <package> --distribution` | `buildDistributionWrapper` | M12 |
 | `wrapper list` | `listWrappers` | |
 | `wrapper info <package>` | `wrapperInfo` | |
 | `wrapper refresh <package>…` | `refreshWrapper` | `--name`, `--icon`, `--android-icon`, `--launcher-only` |
-| `wrapper refresh --all` | `refreshAllWrappers` | `scope =.all` |
+| `wrapper refresh --all` | `refreshAllWrappers` | `scope = .all` |
 | `wrapper remove <package> [--trash]` | `removeWrapper` | |
 | `wrapper verify <path> [--deep]` | `verifyWrapper` | |
 | `wrapper approve <path>` | `approveWrapper` | |
@@ -3028,7 +3028,7 @@ Sections refer to [../02-design/host-ui.md](../02-design/host-ui.md).
 | Settings → Files (§9.5) | `sharedFolders`, `addSharedFolder`, `removeSharedFolder`, `setSharedFolderAccess` | the bookmark comes from the open panel |
 | Settings → Storage (§9.7): sizes | `runtimeInfo { resources: true }`, `listPackages(.all)`, `listImages`, `recoveryPoints` | |
 | Settings → Storage: **Reinstall…**, **Delete Data** | `importPackage` and `installImported`, `uninstallPackage { forget: true }` | for `uninstalledKeepingData` |
-| Settings → Storage: recovery point **Delete…**, **Go Back to Android ‹A›…**, **Install from File…** | `deleteRecoveryPoint`, `rollbackImage`, `installImage {.file }` | |
+| Settings → Storage: recovery point **Delete…**, **Go Back to Android ‹A›…**, **Install from File…** | `deleteRecoveryPoint`, `rollbackImage`, `installImage { .file }` | |
 | Troubleshooting (§9.8): **Run Again**, **Deep Check**, **Fix** | `healthReport`, `healthReport { deep: true }`, `applyHealthFixes` | |
 | Troubleshooting: **Create Diagnostics Report…** | `createDiagnostics` | **Cancel** sends `cancel` |
 | Troubleshooting: **Restart Android**, **Turn Off Graphics Safe Mode**, **Reset Android…** | `restartRuntime`, `updateConfiguration({ graphics.safeMode: null })` then `restartRuntime`, `resetAndroid` | |
@@ -3063,7 +3063,7 @@ Sections refer to wrapper.md. The generic launcher (L) uses the same code with a
 | Integrations | `pushClipboard`, `clipboardWritten`, `importFiles`, `acceptExport`, `resolveLinkPrompt`, `notificationRelay`, `notificationRelayResponse` | §11 |
 | Screen N **Install from This App** (portable) | `importBootstrap` | §10.7 |
 | Screen E **Try Again**, **Reopen**, reconnect | `openSession` | |
-| **Open APKRun**, **Get APKRun**, **Check for Updates**, **Update Mac App**, Settings… (⌘), Show in APKRun, Report a Problem… | no operation | `apkrun://` URLs and the downloads page |
+| **Open APKRun**, **Get APKRun**, **Check for Updates**, **Update Mac App**, Settings… (⌘,), Show in APKRun, Report a Problem… | no operation | `apkrun://` URLs and the downloads page |
 | ⌘W, ⌘Q, logout | `closeSession` | |
 | View: Zoom In, Zoom Out, Actual Size | `resize` | writes `window.zoom` (§14.3) |
 | View: Show Frame Statistics | `frameStatistics` | once per second while shown (§6.3) |

@@ -110,7 +110,7 @@ There are no parallel tasks inside M11, because #060 depends on #059. M11 as a w
    - Show "Needs attention" in the runtime header and a dot plus "⚠ Needs attention" in the menu bar while a live check warns or fails. `apkrun://settings/troubleshooting` opens the pane.
    - Check: a T0 model test with a fake `RuntimeService` for grouping, collapse, and the header state. Opening the pane with Android stopped does not start it (T2-4 (a)).
 5. **Fixes** (§11 #059 step 5, §7.5).
-   - Implement the fixes of `wrappers.registration` (`LSRegisterURL`), `agent.ime` (select the APKRun IME again), `integrations.notificationListener` and `integrations.browserRole` (restore the grant or the role, custom image), `apkrund.registration` (CLI: `open -a APKRun --args --register-runtime` after a confirmation; app: `SMAppService.register`), and `apkrund.version` (`launchctl kickstart -k gui/<uid>/io.apkrun.apkrund`, offered only while Android is stopped).
+   - Implement the fixes of `wrappers.registration` (`LSRegisterURL`), `agent.ime` (select the APKRun IME again), `integrations.notificationListener` and `integrations.browserRole` (restore the grant or the role, custom image), `apkrund.registration` (CLI: `open -a APKRun --args --register-runtime` after a confirmation; app: `SMAppService.register()`), and `apkrund.version` (`launchctl kickstart -k gui/<uid>/io.apkrun.apkrund`, offered only while Android is stopped).
    - `--fix` runs the fix of every `warning` or `failure` row that has one, prints "Fixed: ‹title›" or the error, then runs the whole report again. `applyHealthFixes` does the same for the app.
    - Check: T2-7 passes for `wrappers.registration` and `agent.ime`.
 6. **Acceptance** (§11 #059 step 6, §12 T2-4).

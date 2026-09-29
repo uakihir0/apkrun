@@ -30,7 +30,7 @@ This directory is the specification of APKRun. Code implements what these docume
 | [state-machines.md](01-architecture/state-machines.md) | VM, runtime, session, DisplayPool, install, and update state machines |
 | [filesystem-layout.md](01-architecture/filesystem-layout.md) | Every host path APKRun reads or writes, and the guest disks |
 | [security-model.md](01-architecture/security-model.md) | Trust boundaries, signing, XPC authorization, guest capabilities |
-| [decisions/](01-architecture/decisions/README.md) | Accepted architecture decision records |
+| [decisions/](01-architecture/decisions/README.md) | Architecture decision records ADR-0001 to ADR-0017 |
 
 ### 1.3 Design (`02-design/`)
 

@@ -32,7 +32,7 @@ The design says "Do not mix them." APKRun updates and Android system updates hav
 | `ImageUpdateCoordinator` (actor) | RuntimeHost | owns `ImageUpdatePhase`: check → download → install → apply | §4 |
 | `ImageFeedClient` | ImageCore | fetches and verifies the image feed | §4.1 |
 | `ImageDownloader` | ImageCore | resumable, verified archive downloads into `Cache/images/`. First-run provisioning uses it too ([runtime-daemon.md](runtime-daemon.md) §9.3) | §4.4 |
-| `ImageStore.install(from:.archive)` | ImageCore | safe extraction, verification, hole punching | §4.5, [android-image.md](android-image.md) §10.4 |
+| `ImageStore.install(from: .archive)` | ImageCore | safe extraction, verification, hole punching | §4.5, [android-image.md](android-image.md) §10.4 |
 | `RuntimeSupervisor.migrateImage(to:operation:)` | RuntimeCore | migration A → B: boot, health check, restore on failure | §4.7, [android-image.md](android-image.md) §12.3 |
 | `SchemaMigrator` | DiagnosticsCore (generic runner); each store supplies its steps | forward-only migrations of host data files | §5 |
 
@@ -57,37 +57,13 @@ Rules:
   "build": 1200,
   "channel": "stable",
   "commit": "4f2c9e1",
-  "runtimeAPI": {
-    "current": "3.1",
-    "wrapperMajors": [
-      2,
-      3
-    ]
-  },
-  "guestProtocol": {
-    "majors": [
-      1
-    ]
-  },
+  "runtimeAPI": { "current": "3.1", "wrapperMajors": [2, 3] },
+  "guestProtocol": { "majors": [1] },
   "agentPlistSHA256": "9b1c…",
-  "dataSchemas": {
-    "state": 1,
-    "settings": 2,
-    "packageRecord": 1,
-    "packageSettings": 1,
-    "journal": 1,
-    "wrapperRegistry": 1,
-    "updateState": 1,
-    "imageUpdateState": 1,
-    "instance": 1
-  },
-  "components": {
-    "virglrenderer": "1.1.1+apkrun.2",
-    "angle": "chromium/7151",
-    "aapt2": "8.9.1-12782657",
-    "devGuestAgentVersionCode": 1002000,
-    "sparkle": "2.x.y"
-  }
+  "dataSchemas": { "state": 1, "settings": 2, "packageRecord": 1, "packageSettings": 1, "journal": 1,
+                   "wrapperRegistry": 1, "updateState": 1, "imageUpdateState": 1, "instance": 1 },
+  "components": { "virglrenderer": "1.1.1+apkrun.2", "angle": "chromium/7151", "aapt2": "8.9.1-12782657",
+                  "devGuestAgentVersionCode": 1002000, "sparkle": "2.x.y" }
 }
 ```
 
@@ -191,12 +167,12 @@ Wrappers keep their own copy of the launcher. They go on working under the N−1
   <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
   <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
   <sparkle:releaseNotesLink>https://<updates host>/apkrun/release-notes/1.2.0.html</sparkle:releaseNotesLink>
-    <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>
-    <!-- beta items only --> <sparkle:channel>beta</sparkle:channel>
-    <!-- security fixes only --> <sparkle:criticalUpdate sparkle:version="1150"/>
-    <enclosure url="https://<updates host>/apkrun/APKRun-1.2.0.zip" length="48213377"
-      type="application/octet-stream" sparkle:edSignature="…"/>
-    </item>
+  <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>
+  <!-- beta items only -->      <sparkle:channel>beta</sparkle:channel>
+  <!-- security fixes only -->  <sparkle:criticalUpdate sparkle:version="1150"/>
+  <enclosure url="https://<updates host>/apkrun/APKRun-1.2.0.zip" length="48213377"
+             type="application/octet-stream" sparkle:edSignature="…"/>
+</item>
 ```
 
 - **Phased rollout:** stable items use `phasedRolloutInterval` 86400, so Sparkle spreads them over about a week. Beta items and critical updates are not phased. A user-initiated check ignores the phasing (Sparkle's behavior).
@@ -210,7 +186,7 @@ Sparkle checks only while APKRun.app is running. Many people only open their Mac
 - **What:** one conditional GET of the appcast (`If-None-Match`, `If-Modified-Since`), with a 30 s timeout and a 2 MiB size limit. It follows the network rules of [update-system.md](update-system.md) §3.4 (HTTPS only, system proxy). `XMLParser` reads the items. The probe keeps the items whose channel is allowed, whose `minimumSystemVersion` is at most the running macOS, and whose `sparkle:version` is higher than its own build, and it picks the highest. Items under phased rollout are ignored until `pubDate + 7 × phasedRolloutInterval`, except critical updates and user-initiated checks. The probe can't see Sparkle's rollout group. When the appcast is signed (`SURequireSignedFeed`), the probe checks the signature with `SUPublicEDKey` from the bundle's Info.plist (CryptoKit `Curve25519.Signing`). A bad signature makes the result `unknown` and logs `maintenance.selfUpdateFeedInvalid`.
 - **Informational only:** it never downloads or installs. A forged appcast can cause at worst a wrong notification. An install always goes through Sparkle and all of Sparkle's checks.
 - **Result:** `SelfUpdateStatus { currentVersion, currentBuild, latest: AvailableRelease?, critical, lastCheckedAt, lastError, pendingOnQuit }`, published on the `maintenance` topic (§8.3). `AvailableRelease` is the chosen appcast item ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §12.2).
-- **Notification:** once per version, posted through `HostNotifier` ([update-system.md](update-system.md) §9), and only when APKRun.app is not connected, because Sparkle shows its own alert then. "APKRun ‹1.2.0› is available. Open APKRun to install it." with **Update…**. APKRun.app handles the action itself: it opens Settings → General and starts a user-initiated Sparkle check (`checkForUpdates`). A critical update is notified again after 3 days if it is still not installed.
+- **Notification:** once per version, posted through `HostNotifier` ([update-system.md](update-system.md) §9), and only when APKRun.app is not connected, because Sparkle shows its own alert then. "APKRun ‹1.2.0› is available. Open APKRun to install it." with **Update…**. APKRun.app handles the action itself: it opens Settings → General and starts a user-initiated Sparkle check (`checkForUpdates()`). A critical update is notified again after 3 days if it is still not installed.
 - **Menu bar:** a row "APKRun ‹1.2.0› is available" with **Update…** ([host-ui.md](host-ui.md) §12). **CLI:** `apkrun self-update check` (§7.6).
 
 ### 3.5 Install coordination (#057 "safe restart coordination for daemon")
@@ -220,25 +196,25 @@ Sparkle replaces APKRun.app, but apkrund, the menu bar, and the VM's GPU rendere
 **The main path.** The user clicks **Install and Relaunch** in Sparkle's alert, or **Install and Relaunch Now** for an update that is pending on quit.
 
 ```text
-APKRun.app apkrund (MaintenanceService)
-1 Sparkle: shouldPostponeRelaunch → true
-2 maintenanceStatus ───────────────────────▶ sessions, background tasks, migration, store operations
-3 apps open? → dialog (below)
-Cancel → nothing changes; the update stays downloaded
-Install When Apps Are Closed → §3.5.1
-4 prepareForHostUpdate(targetVersion,
-targetBuild, closeSessions) ───────────▶ a) refuse if an image migration runs (busy) or targetBuild ≤ own build
-b) host state ← updating(targetBuild): new sessions, store operations,
-and wrapper generation → RuntimeFailure.hostUpdating
-c) wait ≤ 2 min for running store transactions and app update installs
-d) write Runtime/maintenance.json (§3.6)
-e) end sessions with ended(.runtimeUpdating)
-f) stop Android: StopReason.hostUpdate, 40 s deadline, then forced
-g) flush logs, daemon.json cleanExit = true
-◀──────────── reply ok, then exit 0 after 1 s
-5 terminate APKRunMenuBar (NSRunningApplication.terminate)
-6 call Sparkle's block → Sparkle quits APKRun.app, replaces the bundle, and relaunches it
-7 new APKRun.app: first-launch tasks (§3.7) new apkrund: marker handling (§3.6), post-update tasks (§3.8)
+APKRun.app                                        apkrund (MaintenanceService)
+ 1  Sparkle: shouldPostponeRelaunch → true
+ 2  maintenanceStatus() ───────────────────────▶  sessions, background tasks, migration, store operations
+ 3  apps open? → dialog (below)
+      Cancel → nothing changes; the update stays downloaded
+      Install When Apps Are Closed → §3.5.1
+ 4  prepareForHostUpdate(targetVersion,
+       targetBuild, closeSessions) ───────────▶  a) refuse if an image migration runs (busy) or targetBuild ≤ own build
+                                                  b) host state ← updating(targetBuild): new sessions, store operations,
+                                                     and wrapper generation → RuntimeFailure.hostUpdating
+                                                  c) wait ≤ 2 min for running store transactions and app update installs
+                                                  d) write Runtime/maintenance.json (§3.6)
+                                                  e) end sessions with ended(.runtimeUpdating)
+                                                  f) stop Android: StopReason.hostUpdate, 40 s deadline, then forced
+                                                  g) flush logs, daemon.json cleanExit = true
+                                   ◀────────────  reply ok, then exit 0 after 1 s
+ 5  terminate APKRunMenuBar (NSRunningApplication.terminate)
+ 6  call Sparkle's block → Sparkle quits APKRun.app, replaces the bundle, and relaunches it
+ 7  new APKRun.app: first-launch tasks (§3.7)    new apkrund: marker handling (§3.6), post-update tasks (§3.8)
 ```
 
 The dialog when apps are open (sessions and `keepRunning` background tasks, [runtime-daemon.md](runtime-daemon.md) §5.1):
@@ -247,7 +223,7 @@ The dialog when apps are open (sessions and `keepRunning` background tasks, [run
 Install APKRun 1.2.0?
 Discord and Spotify will close while APKRun updates.
 Their windows reopen when the update is finished.
-[Install When Apps Are Closed] [Cancel] [Close Apps and Install]
+               [Install When Apps Are Closed]   [Cancel]   [Close Apps and Install]
 ```
 
 - The whole of step 4 has a 3-minute timeout on the APKRun.app side. If step 4 fails or times out, APKRun.app calls `abortHostUpdate`, which deletes the marker and returns the host state to `normal`. It then shows the error with **Try Again**. Sparkle keeps the downloaded update.
@@ -277,10 +253,8 @@ If APKRun.app quits before that, Sparkle installs the postponed update when it q
 ```json
 {
   "schemaVersion": 1,
-  "fromVersion": "1.1.0",
-  "fromBuild": 1100,
-  "targetVersion": "1.2.0",
-  "targetBuild": 1200,
+  "fromVersion": "1.1.0", "fromBuild": 1100,
+  "targetVersion": "1.2.0", "targetBuild": 1200,
   "createdAt": "2026-11-02T10:15:02Z",
   "operationID": "3f9a1c2e-5b7d-4e8f-9a01-2c3d4e5f6a7b"
 }
@@ -299,12 +273,12 @@ When APKRun.app starts and finds a marker whose `targetBuild` is higher than its
 
 ### 3.7 First launch of the new APKRun.app
 
-`SelfUpdateController.completeUpdateIfNeeded` runs in `applicationDidFinishLaunching`, before any view uses the runtime:
+`SelfUpdateController.completeUpdateIfNeeded()` runs in `applicationDidFinishLaunching`, before any view uses the runtime:
 
 1. Compare the own build with UserDefaults `lastLaunchedBuild`. If they are equal, stop here.
-2. **Agent registration (`AgentRegistrar`):** if `SMAppService.agent(plistName:).status != .enabled`, or the SHA-256 of the embedded agent plist differs from UserDefaults `registeredAgentPlistSHA256`, then `unregister` and `register`, and store the new hash. Unregistering stops a running apkrund with `SIGTERM`. In the coordinated path apkrund is in `updating` at this point and has no sessions. Outside the coordinated path (install on quit, DMG copy), if apkrund has sessions, re-registration waits for the "Finish updating APKRun" banner (§7.3). If the plist is unchanged, no re-registration is needed: `BundleProgram` is resolved when launchd spawns the job, so the next spawn runs the new binary. #057 verifies this in T2. If it does not hold, the fallback is to re-register on every build change, with the same coordination.
+2. **Agent registration (`AgentRegistrar`):** if `SMAppService.agent(plistName:).status != .enabled`, or the SHA-256 of the embedded agent plist differs from UserDefaults `registeredAgentPlistSHA256`, then `unregister()` and `register()`, and store the new hash. Unregistering stops a running apkrund with `SIGTERM`. In the coordinated path apkrund is in `updating` at this point and has no sessions. Outside the coordinated path (install on quit, DMG copy), if apkrund has sessions, re-registration waits for the "Finish updating APKRun" banner (§7.3). If the plist is unchanged, no re-registration is needed: `BundleProgram` is resolved when launchd spawns the job, so the next spawn runs the new binary. #057 verifies this in T2. If it does not hold, the fallback is to re-register on every build change, with the same coordination.
 3. **Menu bar:** if "Show APKRun in the menu bar" is on and APKRunMenuBar is not running, or runs another build, terminate it and open the new one. The menu bar also checks by itself: at every connection it compares `HelloReply.runtimeBuild` with its own build, and when apkrund is newer it opens its own bundle URL again and exits. That covers updates made while APKRun.app is not opened.
-4. `completeHostUpdate` on the maintenance endpoint (§3.6).
+4. `completeHostUpdate()` on the maintenance endpoint (§3.6).
 5. **Launcher refresh prompt:** if some wrappers are two RuntimeAPI majors behind, or the new build sets `LauncherBuild.recommendsRefresh`, show "‹N› Mac apps need to be updated to work with this version of APKRun." with **Update Now** and **Later** ([wrapper.md](wrapper.md) §9.4).
 6. Store `lastLaunchedBuild`.
 
@@ -357,29 +331,12 @@ If `lastRuntimeBuild` is **higher** than the own build, someone installed an old
       "imageVersion": "2026.10.0-ar000123-arm64",
       "kind": "apkrun",
       "publishedAt": "2026-10-02T09:00:00Z",
-      "archive": {
-        "url": "https://<updates host>/apkrun/images/2026.10.0-ar000123-arm64.aar",
-        "size": 1932735283,
-        "sha256": "…"
-      },
+      "archive": { "url": "https://<updates host>/apkrun/images/2026.10.0-ar000123-arm64.aar",
+                   "size": 1932735283, "sha256": "…" },
       "expandedSize": 9663676416,
-      "requirements": {
-        "minimumRuntimeVersion": "1.1.0",
-        "guestProtocol": {
-          "min": 1,
-          "max": 1
-        }
-      },
-      "userdata": {
-        "schemaVersion": 3,
-        "upgradableFrom": [
-          2,
-          3
-        ]
-      },
-      "upgradeFrom": {
-        "minimumImageVersion": "2026.04.0"
-      },
+      "requirements": { "minimumRuntimeVersion": "1.1.0", "guestProtocol": { "min": 1, "max": 1 } },
+      "userdata": { "schemaVersion": 3, "upgradableFrom": [2, 3] },
+      "upgradeFrom": { "minimumImageVersion": "2026.04.0" },
       "securityPatchLevel": "2026-09-05",
       "tzdataVersion": "2026b",
       "critical": false,
@@ -426,13 +383,13 @@ The **candidate** is the highest `imageVersion` in the feed that meets all of th
 
 ```swift
 public enum ImageUpdatePhase: Codable, Sendable, Equatable {
-    case idle // up to date, or nothing compatible
+    case idle                                            // up to date, or nothing compatible
     case checking
-    case available(ImageCandidate) // download not started (network rules, or automatic download off)
+    case available(ImageCandidate)                       // download not started (network rules, or automatic download off)
     case downloading(ImageCandidate, DownloadProgress)
-    case installing(ImageCandidate, fraction: Double) // extract, verify, punch holes (§4.5)
-    case ready(ImageVersion) // in Images/, not current; waiting for the apply gate (§4.6)
-    case applying(from: ImageVersion, to: ImageVersion) // RuntimeImageState.migrating
+    case installing(ImageCandidate, fraction: Double)    // extract, verify, punch holes (§4.5)
+    case ready(ImageVersion)                             // in Images/, not current; waiting for the apply gate (§4.6)
+    case applying(from: ImageVersion, to: ImageVersion)  // RuntimeImageState.migrating
     case failed(ImageCandidate?, MaintenanceFailure, retryAt: Date?)
 }
 ```
@@ -459,14 +416,14 @@ public enum ImageUpdatePhase: Codable, Sendable, Equatable {
 
 - `ImageDownloader` downloads over HTTPS into `Cache/images/<imageVersion>.aar.partial` and hashes it with SHA-256 as the bytes arrive. To resume, it sends `Range: bytes=<n>-` with `If-Range: <ETag>`. A `200` reply starts again from zero. Before it resumes, it hashes the partial file again, which takes a few seconds at SSD speed. When size and hash match, it renames the file to `.aar`. If the server sends more than `size` bytes, it stops with `imageArchiveSizeMismatch`.
 - **Space:** before downloading and before installing, the free space must be at least the archive size + `expandedSize` + 10 GiB. Otherwise the result is `insufficientSpace`, and the Storage pane explains what is needed. A manual install (§4.5) has no `expandedSize`: it needs the file size + 10 GiB before it starts, and the extraction stops with `insufficientSpace` when less than 10 GiB would be left ([../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §8.3).
-- **Network:** background downloads use `networkServiceType =.background`, `waitsForConnectivity`, `allowsExpensiveNetworkAccess = false`, and `allowsConstrainedNetworkAccess = false`. They wait while Low Power Mode is on. A user-initiated download on an expensive or constrained network asks first: "This download is ‹1.8 GB›. You're on a network that may charge for data."
+- **Network:** background downloads use `networkServiceType = .background`, `waitsForConnectivity`, `allowsExpensiveNetworkAccess = false`, and `allowsConstrainedNetworkAccess = false`. They wait while Low Power Mode is on. A user-initiated download on an expensive or constrained network asks first: "This download is ‹1.8 GB›. You're on a network that may charge for data."
 - Background downloads run only while `maintenance.downloadImagesAutomatically` is on (the default). With it off, the phase stays `available` until the user clicks.
 - A running download counts as an operation in flight, so apkrund does not exit ([runtime-daemon.md](runtime-daemon.md) §2.4). It never starts Android. When the Mac sleeps, the connection drops, and the download resumes 2 minutes after wake.
 - **Cancel** (Settings, or Ctrl-C of `apkrun image install --latest`) keeps the partial file for a later resume. Partial files are deleted after 7 days, or when a newer candidate replaces them.
 
 ### 4.5 Installing into `Images/`
 
-`ImageStore.install(from:.archive(url))` ([android-image.md](android-image.md) §10.4) extracts with the AppleArchive framework under these rules:
+`ImageStore.install(from: .archive(url))` ([android-image.md](android-image.md) §10.4) extracts with the AppleArchive framework under these rules:
 
 - Every entry must be a regular file or a directory, with a relative path inside the bundle root. Entries with `..`, absolute paths, symlinks, hard links, devices, or FIFOs are rejected. Permissions are reset (0644 for files, 0755 for directories), and extended attributes and ACLs are dropped. A violation gives `imageArchiveUnsafeEntry(path)`: the install stops and `Images/.installing-*` is removed.
 - Verification: signature → manifest schema → every file ([android-image.md](android-image.md) §10.1). In addition, the manifest must agree with the feed entry (§4.1 rule 6).
@@ -497,7 +454,7 @@ The coordinator evaluates the gate every 5 minutes while an image is `ready` and
 Update Android now?
 Discord and Spotify will close. Updating Android takes a few minutes,
 and your apps and data are kept.
-[Cancel] [Close Apps and Update]
+                                     [Cancel]   [Close Apps and Update]
 ```
 
 Store transactions are waited for (at most 2 minutes). A4, A5, and A7 are ignored. On battery below 20 %, the dialog adds a warning.
@@ -512,7 +469,7 @@ Store transactions are waited for (at most 2 minutes). A4, A5, and A7 are ignore
 
 1. **Sessions** end with `ended(.runtimeUpdating)`, with the user's consent in the user-initiated case. A wrapper shows screen U and calls `openSession` again. apkrund accepts the new session, and it waits in `waitingForRuntime` until the migration's health check has finished (§7.5).
 2. **Activity and power:** the supervisor holds the `.migration` activity assertion, so the idle policy never suspends the first boot. It also holds an `IOPMAssertionTypePreventUserIdleSystemSleep` assertion named "Updating Android". The 15-minute first-boot timeout is measured with `SuspendingClock`, so time asleep doesn't count (the VM is paused while the Mac sleeps, [runtime-daemon.md](runtime-daemon.md) §6).
-3. **Progress:** `RuntimeState` goes through `booting(BootPhase)` as usual. `RuntimeStatus` and the `runtime` topic also carry `bootPurpose =.imageUpdate(from: A, to: B)` (the default is `.normal`), so the runtime header shows "◐ Updating Android… (‹phase›)" instead of "Starting Android…", and so do the menu bar and waiting wrappers.
+3. **Progress:** `RuntimeState` goes through `booting(BootPhase)` as usual. `RuntimeStatus` and the `runtime` topic also carry `bootPurpose = .imageUpdate(from: A, to: B)` (the default is `.normal`), so the runtime header shows "◐ Updating Android… (‹phase›)" instead of "Starting Android…", and so do the menu bar and waiting wrappers.
 4. **Afterwards:** Android returns to its earlier state. If sessions are waiting, they go ahead. If Android was stopped before an automatic apply, it is stopped right after the health check. If it was running without sessions, it stays `ready` and the idle policy takes over.
 5. **On failure** (step 6b, A restored): Android boots A only if a session is waiting. APKRun always posts a notification: "Android couldn't be updated to ‹B›. Your apps and data are unchanged." with **Report a Problem…** (`apkrun://report`, [diagnostics.md](diagnostics.md) §8.5). B is rejected (§4.8).
 6. **Crash safety:** [android-image.md](android-image.md) §12.3 (a `migration` field in `instance.json`, found at startup, is treated as failed). The coordinator's own phase is reconciled as in §4.3.
@@ -530,14 +487,14 @@ Go back to Android 2026.07.0?
 Android returns to the state it was in before the update on 2 October.
 Changes made in Android since then are lost, including app data.
 Apps you added since then are installed again, without their data.
-[Cancel] [Go Back]
+                                                 [Cancel]   [Go Back]
 ```
 
   The rolled-back version is then rejected with reason `userRolledBack`, so it is not applied again automatically.
 
 ### 4.9 Garbage collection and disk use
 
-- `ImageStore.garbageCollect` runs after every migration, rejection, and install, and once a day. It keeps `current`, `previous`, a `ready` image, and a rejected image younger than 7 days. It deletes everything else under `Images/`.
+- `ImageStore.garbageCollect()` runs after every migration, rejection, and install, and once a day. It keeps `current`, `previous`, a `ready` image, and a rejected image younger than 7 days. It deletes everything else under `Images/`.
 - Recovery points follow [android-image.md](android-image.md) §12.2: after a successful migration, only the newest one is kept. APKRun never deletes it automatically, because deleting it removes the way back. The Storage pane and `image.freeSpace` suggest deleting it when free space is below 10 GiB.
 - `Cache/images/`: partial downloads older than 7 days and archives of images that are already installed are deleted.
 - The Storage pane ([host-ui.md](host-ui.md) §9.7) shows "Android system": the current version with its size, the previous version, an update that is ready, and the recovery point with its date.
@@ -606,26 +563,26 @@ The keys are also listed in [../03-reference/configuration.md](../03-reference/c
 
 ```text
 Updates
-APKRun 1.2.0 (1200) · Android 2026.10.0 (security patch 5 September 2026)
-☑ Check for updates automatically
-☐ Install APKRun updates automatically
-Android system updates: (•) Install automatically when the Mac is idle
-Ask before installing
-☑ Download Android system updates in the background
-☐ Notify me when Android was updated
-Channel: [Stable ▾]
-[Check Now] Last checked today at 09:14
+  APKRun 1.2.0 (1200) · Android 2026.10.0 (security patch 5 September 2026)
+  ☑ Check for updates automatically
+  ☐ Install APKRun updates automatically
+  Android system updates:  (•) Install automatically when the Mac is idle
+                           ( ) Ask before installing
+  ☑ Download Android system updates in the background
+  ☐ Notify me when Android was updated
+  Channel: [Stable ▾]
+  [Check Now]   Last checked today at 09:14
 
-Status line (one of):
-APKRun 1.3.0 is available. [Install Update…]
-APKRun 1.3.0 will be installed when you quit APKRun. [Install and Relaunch Now]
-Android 2026.11.0 is ready to install. [Update Android Now…]
-Downloading Android 2026.11.0… 45 % of 1.8 GB [Cancel]
-A newer Android version needs APKRun 1.3 or later. [Install Update…]
-The last Android update failed. Android 2026.10.0 is still in use. [Try Again] [Report a Problem…]
+  Status line (one of):
+  APKRun 1.3.0 is available.                                   [Install Update…]
+  APKRun 1.3.0 will be installed when you quit APKRun.         [Install and Relaunch Now]
+  Android 2026.11.0 is ready to install.                       [Update Android Now…]
+  Downloading Android 2026.11.0… 45 % of 1.8 GB                [Cancel]
+  A newer Android version needs APKRun 1.3 or later.           [Install Update…]
+  The last Android update failed. Android 2026.10.0 is still in use.  [Try Again] [Report a Problem…]
 ```
 
-**Install Update…** starts a user-initiated Sparkle check with its UI. When this pane opens, it also runs Sparkle's `checkForUpdateInformation` (no UI) at most once every 5 minutes, so the status line is current. Wrapper screen V opens this pane (§7.5).
+**Install Update…** starts a user-initiated Sparkle check with its UI. When this pane opens, it also runs Sparkle's `checkForUpdateInformation()` (no UI) at most once every 5 minutes, so the status line is current. Wrapper screen V opens this pane (§7.5).
 
 ### 7.2 Settings → Storage ([host-ui.md](host-ui.md) §9.7)
 
@@ -686,26 +643,26 @@ The endpoint kind is `.maintenance`, with the same code-signing requirement as `
 
 | Operation | Behavior |
 |---|---|
-| `maintenanceStatus` | `MaintenanceStatus { version, build, hostState, sessions: [PackageID], backgroundTasks: [PackageID], activities: [ActivityKind], imageMigrating, marker? }` |
+| `maintenanceStatus()` | `MaintenanceStatus { version, build, hostState, sessions: [PackageID], backgroundTasks: [PackageID], activities: [ActivityKind], imageMigrating, marker? }` |
 | `prepareForHostUpdate(HostUpdateRequest{ targetVersion, targetBuild, closeSessions })` | §3.5 step 4. Errors: `hostUpdateBusy(ActivityKind)`, `hostUpdateSessionsOpen([PackageID])` (when `closeSessions` is false), `selfUpdateNotNewer` |
-| `abortHostUpdate` | deletes the marker. The host state becomes `normal`. Idempotent |
-| `completeHostUpdate` | ends the finishing wait (§3.6). Idempotent |
+| `abortHostUpdate()` | deletes the marker. The host state becomes `normal`. Idempotent |
+| `completeHostUpdate()` | ends the finishing wait (§3.6). Idempotent |
 | `restartForUpdate(closeSessions)` | in `restartPending`: ends sessions with `.runtimeUpdating`, stops Android, and exits. Returns `hostUpdateSessionsOpen` if sessions exist and `closeSessions` is false |
 
 ### 8.2 Control endpoint
 
 | Operation | Behavior | Long operation |
 |---|---|---|
-| `selfUpdateStatus` | `SelfUpdateStatus` (§3.4) | no |
+| `selfUpdateStatus()` | `SelfUpdateStatus` (§3.4) | no |
 | `checkSelfUpdate(userInitiated)` | runs the probe | no (30 s timeout) |
 | `noteSelfUpdateStatus(SelfUpdateNote{ found: AvailableRelease?, pendingOnQuit, checkedAt })` | APKRun.app reports Sparkle's results ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §12.2) | no |
-| `imageUpdateStatus` | phase, candidate and sizes, `requiresNewerAPKRun`, rejected versions, last result, and the gate conditions that are false | no |
-| `checkImageUpdate` | user-initiated check | yes |
-| `downloadImageUpdate`, `cancelImageDownload` | §4.4 | yes / no |
+| `imageUpdateStatus()` | phase, candidate and sizes, `requiresNewerAPKRun`, rejected versions, last result, and the gate conditions that are false | no |
+| `checkImageUpdate()` | user-initiated check | yes |
+| `downloadImageUpdate()`, `cancelImageDownload()` | §4.4 | yes / no |
 | `applyImageUpdate(ApplyImageUpdateRequest{ version, closeSessions, retryRejected })` | user-initiated apply (§4.6) | yes |
-| `installImage(ImageInstallRequest{ source:.file(fileIndex:) \|.latest, apply })` | §4.5, then apply if `apply`. This is the `imageInstall` long operation of [runtime-daemon.md](runtime-daemon.md) §8.3 | yes |
+| `installImage(ImageInstallRequest{ source: .file(fileIndex:) \| .latest, apply })` | §4.5, then apply if `apply`. This is the `imageInstall` long operation of [runtime-daemon.md](runtime-daemon.md) §8.3 | yes |
 | `rollbackImage(RollbackImageRequest{ confirmed })` | §4.8 | yes |
-| `listImages`, `recoveryPoints`, `deleteRecoveryPoint(id)` | [android-image.md](android-image.md) §12.2 | no |
+| `listImages()`, `recoveryPoints()`, `deleteRecoveryPoint(id)` | [android-image.md](android-image.md) §12.2 | no |
 
 The DTOs are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md) §12.2 and §12.3. A file source passes as a file handle, named by its index in the request (runtime-api.md §4.9).
 
@@ -720,8 +677,8 @@ public enum MaintenanceEvent: Codable, Sendable {
     case hostStateChanged(HostState)
     case selfUpdateStatusChanged(SelfUpdateStatus)
     case imageUpdatePhaseChanged(ImageUpdatePhase)
-    case imageUpdateProgress(OperationID, fraction: Double, bytes: Int64?) // coalesced to 10 Hz
-    case imageUpdateFinished(ImageUpdateOutcome) //.installed(ImageVersion),.rejected(ImageVersion, MaintenanceFailure),.rolledBack(to: ImageVersion)
+    case imageUpdateProgress(OperationID, fraction: Double, bytes: Int64?)   // coalesced to 10 Hz
+    case imageUpdateFinished(ImageUpdateOutcome)   // .installed(ImageVersion), .rejected(ImageVersion, MaintenanceFailure), .rolledBack(to: ImageVersion)
 }
 ```
 
@@ -768,8 +725,8 @@ public enum MaintenanceFailure: APKRunError {
     case selfUpdateFeedUnreachable(detail: String)
     case selfUpdateFeedInvalid(detail: String)
     case selfUpdateNotNewer(current: Int, target: Int)
-    case sparkle(code: Int, detail: String) // SUError code from Sparkle
-    case hostUpdateBusy(ActivityKind) // "migration", "storeOperation"
+    case sparkle(code: Int, detail: String)                 // SUError code from Sparkle
+    case hostUpdateBusy(ActivityKind)                       // "migration", "storeOperation"
     case hostUpdateSessionsOpen([PackageID])
     case hostUpdateStopFailed(RuntimeFailure)
     case hostUpdateAbandoned(targetBuild: Int)
@@ -783,24 +740,24 @@ public enum MaintenanceFailure: APKRunError {
     case imageFeedInvalid(detail: String)
     case imageFeedReplayed(sequence: Int, highest: Int)
     case imageFeedExpired(Date)
-    case noCompatibleImage(NoImageReason) //.requiresNewerAPKRun(String),.protocol,.userdataSchema,.none
+    case noCompatibleImage(NoImageReason)                   // .requiresNewerAPKRun(String), .protocol, .userdataSchema, .none
     case imageDownloadFailed(detail: String)
     case imageArchiveSizeMismatch(expected: Int64, actual: Int64)
     case imageArchiveHashMismatch
     case imageArchiveUnsafeEntry(path: String)
     case imageInstallFailed(ImageFailure)
     case insufficientSpace(required: Int64, available: Int64)
-    case imageUpdateNotReady // apply requested without a ready image
-    case imageUpdateRejected(ImageVersion) // apply of a rejected version without retryRejected
+    case imageUpdateNotReady                                 // apply requested without a ready image
+    case imageUpdateRejected(ImageVersion)                   // apply of a rejected version without retryRejected
     case imageMigrationFailed(ImageFailure)
     case rollbackUnavailable
     case cancelled
     // health findings (§12), never thrown
-    case criticalUpdateWaiting(version: String) // maintenance.selfUpdate: a critical update has been available for more than 3 days
-    case selfUpdateCheckOverdue // maintenance.selfUpdate: no successful check for 7 days while automatic checks are on
-    case hostDowngraded(version: String) // maintenance.selfUpdate: APKRun was downgraded from version
-    case imageUpdateWaiting(version: ImageVersion) // maintenance.imageUpdate: an update has been ready for more than 14 days
-    case imageCheckOverdue // maintenance.imageUpdate: no successful feed check for 7 days
+    case criticalUpdateWaiting(version: String)              // maintenance.selfUpdate: a critical update has been available for more than 3 days
+    case selfUpdateCheckOverdue                              // maintenance.selfUpdate: no successful check for 7 days while automatic checks are on
+    case hostDowngraded(version: String)                     // maintenance.selfUpdate: APKRun was downgraded from version
+    case imageUpdateWaiting(version: ImageVersion)           // maintenance.imageUpdate: an update has been ready for more than 14 days
+    case imageCheckOverdue                                   // maintenance.imageUpdate: no successful feed check for 7 days
 }
 ```
 

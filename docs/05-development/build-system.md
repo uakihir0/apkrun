@@ -13,13 +13,13 @@ This guide describes how every artifact of APKRun is built: the host app and its
 ## 1. Quick start
 
 ```bash
-scripts/bootstrap # pinned tools, venv, local.properties (environment-setup.md §7)
-scripts/build-third-party.sh virgl-runtime # once; later runs hit the cache (§6)
-scripts/build-guest.sh # guest agent APKs (§7)
-scripts/generate-project.sh # APKRun.xcodeproj from project.yml (§2.2)
-swift build && swift test # all Swift packages and the CLI, tiers T0 and T1
+scripts/bootstrap                                  # pinned tools, venv, local.properties (environment-setup.md §7)
+scripts/build-third-party.sh virgl-runtime         # once; later runs hit the cache (§6)
+scripts/build-guest.sh                             # guest agent APKs (§7)
+scripts/generate-project.sh                        # APKRun.xcodeproj from project.yml (§2.2)
+swift build && swift test                          # all Swift packages and the CLI, tiers T0 and T1
 xcodebuild -project APKRun.xcodeproj -scheme APKRun -configuration Debug build
-scripts/dev/install-dev-app.sh # "~/Applications/APKRun Dev.app" + agent registration (§13)
+scripts/dev/install-dev-app.sh                     # "~/Applications/APKRun Dev.app" + agent registration (§13)
 ```
 
 A clean checkout must build and pass `swift test` without manual steps (NFR-DEV-02). Steps that need artifacts that are not in the repository (a Cuttlefish build, the test Linux kernel) skip with a message that names the command that produces them.
@@ -38,7 +38,7 @@ A clean checkout must build and pass `swift test` without manual steps (NFR-DEV-
 | Language mode | Swift 6 for every target (`swiftLanguageModes: [.v6]`), so strict concurrency checking is complete |
 | Platform | `.macOS("27.0")` |
 | Library targets | one per directory in `Packages/` (16 modules), plus the C target `GraphicsBridge` inside `Packages/GraphicsCore/` |
-| Library products | static only. No `type:.dynamic`. Swift packages are linked statically into each executable ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §4) |
+| Library products | static only. No `type: .dynamic`. Swift packages are linked statically into each executable ([../01-architecture/filesystem-layout.md](../01-architecture/filesystem-layout.md) §4) |
 | Executables | `apkrun` (`CLI/apkrun`), `apkrun-perf` (`Tests/PerformanceTests/apkrun-perf`) |
 | Test targets | `Packages/<Module>/Tests/<Module>Tests/` (T0), `Packages/<Module>/Tests/<Module>SystemTests/` (T1), and `CLI/apkrun/Tests/` (T0, goldens in `CLI/apkrun/Tests/Golden/`) ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.2, §2.3) |
 | Test support targets | `Packages/<Module>/Tests/<Module>TestSupport/`: the fakes of the protocols the module owns. Only test targets depend on them ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.2) |
@@ -208,21 +208,11 @@ Every third-party input is pinned by commit or by hash, never by a moving branch
       "commit": "960bd667…",
       "version": "1.1.1+apkrun.2",
       "license": "MIT",
-      "licenseFiles": [
-        "COPYING"
-      ],
-      "buildFlags": [
-        "-Dplatforms=egl",
-        "-Dtests=false"
-      ],
-      "patches": [
-        "virglrenderer/0001-msaa-downgrade.patch"
-      ],
+      "licenseFiles": ["COPYING"],
+      "buildFlags": ["-Dplatforms=egl", "-Dtests=false"],
+      "patches": ["virglrenderer/0001-msaa-downgrade.patch"],
       "ships": "app",
-      "upstream": {
-        "watch": "commits",
-        "branch": "main"
-      }
+      "upstream": { "watch": "commits", "branch": "main" }
     }
   ]
 }
@@ -325,8 +315,8 @@ A maintainer triages the issue within one week. A fix that affects the virglrend
 ### 7.1 Kotlin agents (Gradle)
 
 ```bash
-scripts/build-guest.sh #./gradlew -p Guest assembleRelease, then copies to Guest/build/out/
-ls Guest/build/out/ # apkrun-guest.apk apkrun-store.apk
+scripts/build-guest.sh            # ./gradlew -p Guest assembleRelease, then copies to Guest/build/out/
+ls Guest/build/out/               # apkrun-guest.apk  apkrun-store.apk
 ```
 
 - One Gradle build in `Guest/` (`settings.gradle.kts`) with the modules `protocol`, `common`, `guestd`, and `APKRunStore` ([../02-design/guest-components.md](../02-design/guest-components.md) §2).
@@ -340,8 +330,8 @@ ls Guest/build/out/ # apkrun-guest.apk apkrun-store.apk
 
 ```bash
 cd Guest/vsockd
-cargo ndk -t arm64-v8a build --release # target/aarch64-linux-android/release/apkrun_vsockd
-cargo test # T0 on the host
+cargo ndk -t arm64-v8a build --release     # target/aarch64-linux-android/release/apkrun_vsockd
+cargo test                                 # T0 on the host
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -411,11 +401,11 @@ The resulting `apkrun_arm64-img-ar<counter>.zip` enters the same pipeline as a s
 
 ```bash
 source Images/tools/.venv/bin/activate
-python3 -m apkrun_image keygen --out ~/.config/apkrun/dev-image-key # once per developer
+python3 -m apkrun_image keygen --out ~/.config/apkrun/dev-image-key      # once per developer
 python3 scripts/inventory-cuttlefish.py Images/work/16373615/download/
 python3 -m apkrun_image bundle \
   --manifest Images/manifests/16373615/android-image.json \
-  --layout Images/tools/layouts/cuttlefish-phone-arm64.json \
+  --layout   Images/tools/layouts/cuttlefish-phone-arm64.json \
   --reference Images/reference/16373615/target \
   --image-version 2026.10.0 \
   --sign-key ~/.config/apkrun/dev-image-key \
@@ -574,7 +564,7 @@ Debug builds never replace an installed release ([../02-design/runtime-daemon.md
 | CLI name | `apkrun` | `apkrun-dev` | — |
 
 ```bash
-scripts/dev/install-dev-app.sh # copies the Debug build, runs "APKRun --register-runtime", links apkrun-dev
+scripts/dev/install-dev-app.sh          # copies the Debug build, runs "APKRun --register-runtime", links apkrun-dev
 launchctl kickstart -k gui/$(id -u)/io.apkrun.apkrund.dev
 launchctl print gui/$(id -u)/io.apkrun.apkrund.dev
 ```
@@ -648,13 +638,13 @@ Path filter of `linux-guest` ([test-strategy.md](../04-plan/test-strategy.md) §
 ```yaml
 paths:
   - Packages/VirtualMachineCore/**
-- Packages/VirtioDeviceCore/**
-- Packages/GraphicsCore/**
-- Packages/ImageCore/**
-- Tests/Fixtures/linux/**
-- Tests/IntegrationTests/LinuxGuestTests/**
-- scripts/fetch-test-linux.sh
-- scripts/build-test-initramfs.sh
+  - Packages/VirtioDeviceCore/**
+  - Packages/GraphicsCore/**
+  - Packages/ImageCore/**
+  - Tests/Fixtures/linux/**
+  - Tests/IntegrationTests/LinuxGuestTests/**
+  - scripts/fetch-test-linux.sh
+  - scripts/build-test-initramfs.sh
 ```
 
 - The label `run-t2` runs every T2 suite. The labels `t2-android` and `t2-maintenance` run only their suites.

@@ -46,12 +46,12 @@ The longest dependency chain runs through Android bring-up, graphics, multi-wind
 ```text
 #001 → #002 → #003 (G1) → #005 ─────────────────────┐
 #001 → #008 → #009 → #010 ──────────────────────────┴→ #011 → #012 → #013 → #095 → #014 (G2)
-#014 + #019 → #021 → #022 → #023 (G3) (#019 needs #018, #003, #063; #022 needs #020)
+#014 + #019 → #021 → #022 → #023 (G3)                 (#019 needs #018, #003, #063; #022 needs #020)
 #023 + #072 → #024 → #025 → #026 (G4) → #027 → #028 → #029 → #030 (G5) → #031 (G6)
 
-wrapper branch: #031 → #032 → #068 → #044 → #045 → #046 → #047 (G8) → #048 ─┐
-update branch: #027 + #033 → #034 → #035 → #036 → #037 → #038 → #039 → #040 (G7)
-#038 → #041 → #042 → #043 ──┴→ #049 (G9)
+wrapper branch:  #031 → #032 → #068 → #044 → #045 → #046 → #047 (G8) → #048 ─┐
+update branch:   #027 + #033 → #034 → #035 → #036 → #037 → #038 → #039 → #040 (G7)
+                                                        #038 → #041 → #042 → #043 ──┴→ #049 (G9)
 ```
 
 - The update branch contains the AOSP product build (#035), which needs a Linux builder and long builds (R-14). Start the builder setup ([../05-development/environment-setup.md](../05-development/environment-setup.md) §5) during M3 so that #035 can start as soon as #034 is done.
@@ -86,7 +86,9 @@ Within M9–M12, most tasks are independent once their dependencies from earlier
 
 ## 2. Gates
 
-A gate is a checkpoint that proves one technical step end to end. Each gate is closed by one task, and it passes only when every condition below holds on the reference Mac ([open-questions.md](open-questions.md) OQ-02) with a clean build from `main`. Each condition is checked by an acceptance test in `Tests/AcceptanceTests/` ([test-strategy.md](test-strategy.md)) or, where noted, by a recorded manual check. The core architecture is not validated before G3, and the product concept is not validated before G9.
+A gate is a checkpoint that proves one technical step end to end. Each gate is closed by one task, and it passes only when every condition below holds on the reference Mac ([open-questions.md](open-questions.md) OQ-02) with a clean build from `main`. Each condition is checked by an acceptance test in `Tests/AcceptanceTests/` ([test-strategy.md](test-strategy.md)) or, where noted, by a recorded manual check.
+
+**Do not declare the core architecture validated before G3, and do not declare the product concept validated before G9.**
 
 | Gate | Name | Closed by | Pass conditions |
 |---|---|---|---|
@@ -97,7 +99,7 @@ A gate is a checkpoint that proves one technical step end to end. Each gate is c
 | G5 | Two APKs run in two Mac windows | #030 | 1. HelloText and HelloCompose run at the same time in two independent windows, each on its own Android display ([../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §12). 2. Input in one window reaches only its app. 3. Closing one window leaves the other app running and interactive. |
 | G6 | Runtime remains warm under apkrund | #031, completed by #032 and #068 (staged, see below) | 1. The VM runs in `apkrund`, started by launchd. 2. Quitting APKRun.app while an app window is open does not stop the runtime or the app. 3. A warm launch does not boot the VM (the boot phase markers do not appear). 4. Killing `apkrund` gets it restarted by launchd, and clients reconnect (NFR-REL-02). |
 | G7 | APK v1 automatically upgrades to v2 | #040 | 1. On the custom image, with HelloUpdate V1 installed and the LocalProvider serving HelloUpdate V2, APKRun detects and stages V2 in the background. 2. While V1 is in use (its window is open, or it runs with `keepRunning`), V2 is not installed. 3. After the app is closed, V2 is installed without user action, and its data is kept (V2 logs `data HELLO`). 4. The update history records each step. |
-| G8 | APK can be wrapped as.app | #047 | 1. `apkrun wrap` with HelloText produces `HelloText.app` with the bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`, ad-hoc signed, which passes `codesign --verify --strict`. 2. Double-clicking it in Finder shows an interactive HelloText window. 3. No terminal interaction is needed, and launching from the Dock works with the runtime stopped and with it warm. |
+| G8 | APK can be wrapped as .app | #047 | 1. `apkrun wrap` with HelloText produces `HelloText.app` with the bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`, ad-hoc signed, which passes `codesign --verify --strict`. 2. Double-clicking it in Finder shows an interactive HelloText window. 3. No terminal interaction is needed, and launching from the Dock works with the runtime stopped and with it warm. |
 | G9 | Wrapper unchanged while the APK updates automatically | #049 | 1. `HelloUpdate.app` runs HelloUpdate V1. 2. V2 is detected in the background, installed after `HelloUpdate.app` quits, and `HelloUpdate.app` then runs V2. 3. App data is kept. 4. The wrapper bundle is byte-for-byte unchanged (same file hashes and the same cdhash), and it was not re-signed. |
 
 **Staged G6.** Two G6 conditions need tasks after #031: a warm launch needs `launch` over XPC (#032), and "while an app window is open" needs the launcher window (#068). #031 builds the check with conditions 1, 2 (with HelloText on display 0 and no window), and 4. #032 adds condition 3. G6 passes when the full check passes in #068 ([issues/M04-daemon-and-guest-protocol.md](issues/M04-daemon-and-guest-protocol.md) #031 Notes). Tasks that depend on G6 wait for #068.
@@ -116,7 +118,7 @@ A version is done when every item of its Definition of Done holds, every task li
 
 ### 3.1 v0.1: Android app in a Mac window (M0–M2, part of M3)
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | Android ARM64 boot | #012–#014 (G2) |
 | VirGL accelerated rendering | #019–#023 (G3) |
@@ -130,7 +132,7 @@ Also required by this plan: the diagnostics foundation and error catalog (#061),
 
 ### 3.2 v0.2: several apps and a resident runtime (rest of M3, M4)
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | Multiple APKs | #028–#030 (G5) |
 | Multiple native windows | #029, #030, #068 (wrapper-owned windows over XPC) |
@@ -143,7 +145,7 @@ Also: first-run provisioning (#066), idle pause and host sleep/wake (#069), the 
 
 ### 3.3 v0.3: the store and automatic updates (M5, M6)
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | APK Store | #027, #036, #073 |
 | LocalProvider | #037 |
@@ -159,7 +161,7 @@ Also: the APKRun AOSP product (#035), which from here on is the image the produc
 
 ### 3.4 v0.4: Android app as a Mac app, first public demo (M7)
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | APK → Mac app | #044–#047 (G8) |
 | `.app` generated | #046, #075 |
@@ -175,7 +177,7 @@ Also: wrapper lifecycle and uninstall choices (#076), the home and store UI (#07
 
 ### 3.5 v0.5: real sources, desktop integration, maintenance (M8–M11)
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | GitHubProvider | #052 |
 | F-DroidProvider | #051 |
@@ -189,9 +191,9 @@ Also: links (#081), locale and time (#085), the menu bar (#086), `apkrun doctor`
 
 ### 3.6 v1.0: release (M12)
 
-  lists the v1.0 candidates. They are all in the plan:
+The v1.0 Definition of Done lists these candidates. They are all in the plan:
 
-| item | Delivered by |
+| Definition of Done item | Delivered by |
 |---|---|
 | Stable Mac app wrappers | M7, hardened by #088 and #091 |
 | Stable application auto update | M6, M8 |

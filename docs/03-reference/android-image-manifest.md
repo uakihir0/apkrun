@@ -118,16 +118,8 @@ Shortened to four files. The real file lists every file in the archive.
           "details": {
             "blockDeviceSize": 7516192768,
             "logicalPartitions": [
-              {
-                "group": "google_dynamic_partitions_a",
-                "name": "system_a",
-                "size": 897581056
-              },
-              {
-                "group": "google_dynamic_partitions_a",
-                "name": "vendor_a",
-                "size": 150994944
-              }
+              { "group": "google_dynamic_partitions_a", "name": "system_a", "size": 897581056 },
+              { "group": "google_dynamic_partitions_a", "name": "vendor_a", "size": 150994944 }
             ],
             "metadataSlots": 2
           },
@@ -235,169 +227,45 @@ This is the manifest for build `16373615`. Hashes and the sizes of `super`, `use
       }
     ]
   },
-  "android": {
-    "release": "17",
-    "sdk": 37,
-    "variant": "userdebug",
-    "securityPatch": "2026-09"
-  },
+  "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-09" },
   "architecture": "arm64",
   "deviceFamily": "cuttlefish-phone-arm64",
   "artifacts": [
-    {
-      "id": "boot",
-      "file": "boot.img",
-      "sha256": "4509beb0ab401d71fa4a5cd94a55c9a74f13332776ae4019c5bfc4c2005157ff",
-      "size": 67108864,
-      "kind": "bootImage",
-      "partition": "boot"
-    },
-    {
-      "id": "init_boot",
-      "file": "init_boot.img",
-      "sha256": "cd19026f4b3933f79100922d0383d948b53744aca39b50b44b7e81c021cde3d7",
-      "size": 8388608,
-      "kind": "bootImage",
-      "partition": "init_boot"
-    },
-    {
-      "id": "vendor_boot",
-      "file": "vendor_boot.img",
-      "sha256": "fce16cbfd9d47eeeb76c893c5bf880dd01cae03cba8e9af0845e4646592aa9f4",
-      "size": 67108864,
-      "kind": "vendorBootImage",
-      "partition": "vendor_boot"
-    },
-    {
-      "id": "vbmeta",
-      "file": "vbmeta.img",
-      "sha256": "a0c6f07a4b3a17fb9348db981de3c5602e2685d626599be1bd909195c694a57b",
-      "size": 65536,
-      "kind": "vbmeta",
-      "partition": "vbmeta"
-    },
-    {
-      "id": "vbmeta_system",
-      "file": "vbmeta_system.img",
-      "sha256": "0ed258163a6ded2b600f003e91e541e90380e52eb1cdac2444d9df1b1daf9996",
-      "size": 65536,
-      "kind": "vbmeta",
-      "partition": "vbmeta_system"
-    },
-    {
-      "id": "vbmeta_system_dlkm",
-      "file": "vbmeta_system_dlkm.img",
-      "sha256": "9754204bb12c6d45da311778c739179c0154ec3fa8f4155d4a51223064e405df",
-      "size": 65536,
-      "kind": "vbmeta",
-      "partition": "vbmeta_system_dlkm"
-    },
-    {
-      "id": "vbmeta_vendor_dlkm",
-      "file": "vbmeta_vendor_dlkm.img",
-      "sha256": "560fcdda0d381e5db9c99bb5d872972e4fd70c0e8f4ae7226975823373c74604",
-      "size": 65536,
-      "kind": "vbmeta",
-      "partition": "vbmeta_vendor_dlkm"
-    },
-    {
-      "id": "super",
-      "file": "super.img",
-      "sha256": "73d1b1b1bc1dabfb97f216d897b7968e44b06457920f00f2dc6c1ed3be25ad4c",
-      "size": 1879048192,
-      "kind": "sparse",
-      "partition": "super"
-    },
-    {
-      "id": "custom",
-      "file": "cuttlefish_example_custom.img",
-      "sha256": "6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33",
-      "size": 4194304,
-      "kind": "filesystem",
-      "partition": "custom"
-    },
-    {
-      "id": "userdata",
-      "file": "userdata.img",
-      "sha256": "834f09a48336314550d7d8f159c23f87fb9d9ed687df30d5189c8d4992ef3ea6",
-      "size": 2166784,
-      "kind": "sparse",
-      "partition": "userdata"
-    }
+    { "id": "boot", "file": "boot.img", "sha256": "4509beb0ab401d71fa4a5cd94a55c9a74f13332776ae4019c5bfc4c2005157ff", "size": 67108864, "kind": "bootImage", "partition": "boot" },
+    { "id": "init_boot", "file": "init_boot.img", "sha256": "cd19026f4b3933f79100922d0383d948b53744aca39b50b44b7e81c021cde3d7", "size": 8388608, "kind": "bootImage", "partition": "init_boot" },
+    { "id": "vendor_boot", "file": "vendor_boot.img", "sha256": "fce16cbfd9d47eeeb76c893c5bf880dd01cae03cba8e9af0845e4646592aa9f4", "size": 67108864, "kind": "vendorBootImage", "partition": "vendor_boot" },
+    { "id": "vbmeta", "file": "vbmeta.img", "sha256": "a0c6f07a4b3a17fb9348db981de3c5602e2685d626599be1bd909195c694a57b", "size": 65536, "kind": "vbmeta", "partition": "vbmeta" },
+    { "id": "vbmeta_system", "file": "vbmeta_system.img", "sha256": "0ed258163a6ded2b600f003e91e541e90380e52eb1cdac2444d9df1b1daf9996", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_system" },
+    { "id": "vbmeta_system_dlkm", "file": "vbmeta_system_dlkm.img", "sha256": "9754204bb12c6d45da311778c739179c0154ec3fa8f4155d4a51223064e405df", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_system_dlkm" },
+    { "id": "vbmeta_vendor_dlkm", "file": "vbmeta_vendor_dlkm.img", "sha256": "560fcdda0d381e5db9c99bb5d872972e4fd70c0e8f4ae7226975823373c74604", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_vendor_dlkm" },
+    { "id": "super", "file": "super.img", "sha256": "73d1b1b1bc1dabfb97f216d897b7968e44b06457920f00f2dc6c1ed3be25ad4c", "size": 1879048192, "kind": "sparse", "partition": "super" },
+    { "id": "custom", "file": "cuttlefish_example_custom.img", "sha256": "6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33", "size": 4194304, "kind": "filesystem", "partition": "custom" },
+    { "id": "userdata", "file": "userdata.img", "sha256": "834f09a48336314550d7d8f159c23f87fb9d9ed687df30d5189c8d4992ef3ea6", "size": 2166784, "kind": "sparse", "partition": "userdata" }
   ],
   "roles": {
     "kernel": "boot",
     "genericRamdisk": "init_boot",
     "vendorBoot": "vendor_boot",
-    "vbmeta": [
-      "vbmeta",
-      "vbmeta_system",
-      "vbmeta_system_dlkm",
-      "vbmeta_vendor_dlkm"
-    ],
+    "vbmeta": ["vbmeta", "vbmeta_system", "vbmeta_system_dlkm", "vbmeta_vendor_dlkm"],
     "super": "super",
     "userdataTemplate": "userdata"
   },
   "logicalPartitions": [
-    {
-      "name": "system_a",
-      "size": 897581056,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "system_ext_a",
-      "size": 214532096,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "product_a",
-      "size": 402653184,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "vendor_a",
-      "size": 150994944,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "vendor_dlkm_a",
-      "size": 20971520,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "odm_a",
-      "size": 1048576,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "odm_dlkm_a",
-      "size": 1048576,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "system_dlkm_a",
-      "size": 8388608,
-      "filesystem": "erofs"
-    }
+    { "name": "system_a", "size": 897581056, "filesystem": "erofs" },
+    { "name": "system_ext_a", "size": 214532096, "filesystem": "erofs" },
+    { "name": "product_a", "size": 402653184, "filesystem": "erofs" },
+    { "name": "vendor_a", "size": 150994944, "filesystem": "erofs" },
+    { "name": "vendor_dlkm_a", "size": 20971520, "filesystem": "erofs" },
+    { "name": "odm_a", "size": 1048576, "filesystem": "erofs" },
+    { "name": "odm_dlkm_a", "size": 1048576, "filesystem": "erofs" },
+    { "name": "system_dlkm_a", "size": 8388608, "filesystem": "erofs" }
   ],
   "blankPartitions": [
-    {
-      "partition": "misc",
-      "size": 1048576
-    },
-    {
-      "partition": "metadata",
-      "size": 67108864
-    },
-    {
-      "partition": "frp",
-      "size": 1048576
-    }
+    { "partition": "misc", "size": 1048576 },
+    { "partition": "metadata", "size": 67108864 },
+    { "partition": "frp", "size": 1048576 }
   ],
-  "androidInfo": {
-    "config": "phone",
-    "gfxstream": "supported"
-  }
+  "androidInfo": { "config": "phone", "gfxstream": "supported" }
 }
 ```
 
@@ -503,53 +371,18 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
   "title": "APKRun AndroidImageManifest, schema version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "source",
-    "android",
-    "architecture",
-    "deviceFamily",
-    "artifacts",
-    "roles",
-    "logicalPartitions",
-    "blankPartitions",
-    "androidInfo"
-  ],
+  "required": ["schemaVersion", "source", "android", "architecture", "deviceFamily", "artifacts", "roles", "logicalPartitions", "blankPartitions", "androidInfo"],
   "properties": {
-    "schemaVersion": {
-      "type": "integer",
-      "minimum": 1
-    },
+    "schemaVersion": { "type": "integer", "minimum": 1 },
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "origin",
-        "branch",
-        "target",
-        "buildId",
-        "archives"
-      ],
+      "required": ["origin", "branch", "target", "buildId", "archives"],
       "properties": {
-        "origin": {
-          "enum": [
-            "ci.android.com",
-            "apkrun-builder"
-          ]
-        },
-        "branch": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
-        },
-        "target": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$"
-        },
-        "buildId": {
-          "type": "string",
-          "pattern": "^([0-9]{1,20}|ar[0-9]{6})$"
-        },
+        "origin": { "enum": ["ci.android.com", "apkrun-builder"] },
+        "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+        "target": { "type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$" },
+        "buildId": { "type": "string", "pattern": "^([0-9]{1,20}|ar[0-9]{6})$" },
         "archives": {
           "type": "array",
           "minItems": 1,
@@ -557,23 +390,11 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "name",
-              "size",
-              "sha256"
-            ],
+            "required": ["name", "size", "sha256"],
             "properties": {
-              "name": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9._+-]{1,255}$"
-              },
-              "size": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "sha256": {
-                "$ref": "#/$defs/sha256"
-              }
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$" },
+              "size": { "type": "integer", "minimum": 1 },
+              "sha256": { "$ref": "#/$defs/sha256" }
             }
           }
         }
@@ -582,44 +403,16 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
     "android": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "release",
-        "sdk",
-        "variant",
-        "securityPatch"
-      ],
+      "required": ["release", "sdk", "variant", "securityPatch"],
       "properties": {
-        "release": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$"
-        },
-        "sdk": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
-        "variant": {
-          "enum": [
-            "user",
-            "userdebug",
-            "eng"
-          ]
-        },
-        "securityPatch": {
-          "type": "string",
-          "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
-        }
+        "release": { "type": "string", "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$" },
+        "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "variant": { "enum": ["user", "userdebug", "eng"] },
+        "securityPatch": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" }
       }
     },
-    "architecture": {
-      "type": "string",
-      "pattern": "^[a-z0-9_]{1,32}$"
-    },
-    "deviceFamily": {
-      "type": "string",
-      "maxLength": 64,
-      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
-    },
+    "architecture": { "type": "string", "pattern": "^[a-z0-9_]{1,32}$" },
+    "deviceFamily": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
     "artifacts": {
       "type": "array",
       "minItems": 1,
@@ -627,85 +420,33 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "id",
-          "file",
-          "sha256",
-          "size",
-          "kind",
-          "partition"
-        ],
+        "required": ["id", "file", "sha256", "size", "kind", "partition"],
         "properties": {
-          "id": {
-            "$ref": "#/$defs/artifactId"
-          },
+          "id": { "$ref": "#/$defs/artifactId" },
           "file": {
             "type": "string",
             "maxLength": 255,
             "pattern": "^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$",
-            "not": {
-              "pattern": "(^|/)\\.{1,2}(/|$)"
-            }
+            "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
           },
-          "sha256": {
-            "$ref": "#/$defs/sha256"
-          },
-          "size": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "kind": {
-            "enum": [
-              "bootImage",
-              "vendorBootImage",
-              "vbmeta",
-              "sparse",
-              "dynamicPartitions",
-              "filesystem",
-              "unknown"
-            ]
-          },
-          "partition": {
-            "$ref": "#/$defs/partition"
-          }
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size": { "type": "integer", "minimum": 1 },
+          "kind": { "enum": ["bootImage", "vendorBootImage", "vbmeta", "sparse", "dynamicPartitions", "filesystem", "unknown"] },
+          "partition": { "$ref": "#/$defs/partition" }
         }
       }
     },
     "roles": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kernel",
-        "genericRamdisk",
-        "vendorBoot",
-        "vbmeta",
-        "super"
-      ],
+      "required": ["kernel", "genericRamdisk", "vendorBoot", "vbmeta", "super"],
       "properties": {
-        "kernel": {
-          "$ref": "#/$defs/artifactId"
-        },
-        "genericRamdisk": {
-          "$ref": "#/$defs/artifactId"
-        },
-        "vendorBoot": {
-          "$ref": "#/$defs/artifactId"
-        },
-        "vbmeta": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 16,
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/artifactId"
-          }
-        },
-        "super": {
-          "$ref": "#/$defs/artifactId"
-        },
-        "userdataTemplate": {
-          "$ref": "#/$defs/artifactId"
-        }
+        "kernel": { "$ref": "#/$defs/artifactId" },
+        "genericRamdisk": { "$ref": "#/$defs/artifactId" },
+        "vendorBoot": { "$ref": "#/$defs/artifactId" },
+        "vbmeta": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/artifactId" } },
+        "super": { "$ref": "#/$defs/artifactId" },
+        "userdataTemplate": { "$ref": "#/$defs/artifactId" }
       }
     },
     "logicalPartitions": {
@@ -715,29 +456,11 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "name",
-          "size",
-          "filesystem"
-        ],
+        "required": ["name", "size", "filesystem"],
         "properties": {
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,35}$"
-          },
-          "size": {
-            "type": "integer",
-            "minimum": 512,
-            "multipleOf": 512
-          },
-          "filesystem": {
-            "enum": [
-              "ext4",
-              "erofs",
-              "f2fs",
-              "unknown"
-            ]
-          }
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
+          "size": { "type": "integer", "minimum": 512, "multipleOf": 512 },
+          "filesystem": { "enum": ["ext4", "erofs", "f2fs", "unknown"] }
         }
       }
     },
@@ -747,46 +470,23 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "partition",
-          "size"
-        ],
+        "required": ["partition", "size"],
         "properties": {
-          "partition": {
-            "$ref": "#/$defs/partition"
-          },
-          "size": {
-            "type": "integer",
-            "minimum": 4096,
-            "multipleOf": 4096
-          }
+          "partition": { "$ref": "#/$defs/partition" },
+          "size": { "type": "integer", "minimum": 4096, "multipleOf": 4096 }
         }
       }
     },
     "androidInfo": {
       "type": "object",
-      "propertyNames": {
-        "pattern": "^[A-Za-z0-9_.-]{1,64}$"
-      },
-      "additionalProperties": {
-        "type": "string",
-        "maxLength": 1024
-      }
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+      "additionalProperties": { "type": "string", "maxLength": 1024 }
     }
   },
   "$defs": {
-    "sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
-    },
-    "artifactId": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,35}$"
-    },
-    "partition": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,33}$"
-    }
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactId": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
+    "partition": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,33}$" }
   }
 }
 ```

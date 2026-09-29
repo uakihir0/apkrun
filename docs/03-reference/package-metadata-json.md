@@ -66,9 +66,7 @@ An `apkrun` package with a Direct provider. Version 45 is installed. Version 44 
     "lastSyncedAt": "2026-10-02T09:12:10.020Z",
     "lastUpdateTime": "2026-10-02T09:12:08.000Z",
     "minSdk": 26,
-    "nativeAbis": [
-      "arm64-v8a"
-    ],
+    "nativeAbis": ["arm64-v8a"],
     "targetSdk": 35,
     "updateOwner": "io.apkrun.store",
     "userdataGeneration": "622ec21f-5ab6-4077-8b13-293c025adcfb"
@@ -92,9 +90,7 @@ An `apkrun` package with a Direct provider. Version 45 is installed. Version 44 
     "staged": {
       "fileCount": 1,
       "origin": {
-        "declaredDigests": [
-          "sha256:289d4f633b49cdd40870cb597196fb715ba82fdbd8292bac2049953102e0a357"
-        ],
+        "declaredDigests": ["sha256:289d4f633b49cdd40870cb597196fb715ba82fdbd8292bac2049953102e0a357"],
         "type": "direct",
         "url": "https://downloads.example.org/notes/notes-4.6.apk"
       },
@@ -119,25 +115,19 @@ An `apkrun` package with a Direct provider. Version 45 is installed. Version 44 
   },
   "packageId": "org.example.notes",
   "schemaVersion": 1,
-  "signingCertificates": [
-    "sha256:d43041c5c08759aeb0aa94c1bb854186b4ab1512364f8dc5c1150ae176e3ec56"
-  ],
+  "signingCertificates": ["sha256:d43041c5c08759aeb0aa94c1bb854186b4ab1512364f8dc5c1150ae176e3ec56"],
   "signingLineage": [],
   "source": {
     "at": "2026-09-20T14:02:58.000Z",
     "container": "apk",
-    "fileNames": [
-      "notes-4.3.apk"
-    ],
+    "fileNames": ["notes-4.3.apk"],
     "kind": "file",
     "origin": "addFlow"
   },
   "state": "installed",
   "updateAuthority": "apkrun",
   "updateProvider": {
-    "configuration": {
-      "url": "https://downloads.example.org/notes/manifest.json"
-    },
+    "configuration": { "url": "https://downloads.example.org/notes/manifest.json" },
     "type": "direct"
   },
   "updatedAt": "2026-10-02T09:20:01.007Z",
@@ -160,9 +150,7 @@ An adopted package ([../02-design/package-store.md](../02-design/package-store.m
     "targetSdk": 34,
     "userdataGeneration": "622ec21f-5ab6-4077-8b13-293c025adcfb"
   },
-  "artifacts": {
-    "currentMatchesAndroid": false
-  },
+  "artifacts": { "currentMatchesAndroid": false },
   "createdAt": "2026-10-01T08:00:02.310Z",
   "displayName": "Chat",
   "installer": "external",
@@ -176,14 +164,9 @@ An adopted package ([../02-design/package-store.md](../02-design/package-store.m
   },
   "packageId": "com.example.chat",
   "schemaVersion": 1,
-  "signingCertificates": [
-    "sha256:c07000f33afeca8af1aeff0de3de6ca0179be64d7546c267d51e4ca5d23f82f2"
-  ],
+  "signingCertificates": ["sha256:c07000f33afeca8af1aeff0de3de6ca0179be64d7546c267d51e4ca5d23f82f2"],
   "signingLineage": [],
-  "source": {
-    "at": "2026-10-01T08:00:01.950Z",
-    "kind": "adopted"
-  },
+  "source": { "at": "2026-10-01T08:00:01.950Z", "kind": "adopted" },
   "state": "installed",
   "updateAuthority": "external",
   "updatedAt": "2026-10-01T08:00:02.310Z",
@@ -333,7 +316,7 @@ This is the definition of `OperationSummary`, which [../02-design/package-store.
 | `pending` | boolean | no | never written to `metadata.json` | only in the published record: post-boot work is pending ([../02-design/package-store.md](../02-design/package-store.md) §5.4 step 6) |
 
 - Booleans that can only be `true` are omitted instead of being written as `false`. Readers treat `false` like an absent field.
-- `pending` is an overlay. The store sets it when it publishes records at `open`. The file keeps the last finished operation.
+- `pending` is an overlay. The store sets it when it publishes records at `open()`. The file keeps the last finished operation.
 
 #### 2.3.6 `StoredError`
 
@@ -441,393 +424,115 @@ The store checks these rules before every write (§4.1). The schema of §2.6 enc
   "title": "APKRun package record (Packages/<dir>/metadata.json), schemaVersion 1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "packageId",
-    "displayName",
-    "versionCode",
-    "signingCertificates",
-    "signingLineage",
-    "installer",
-    "updateAuthority",
-    "state",
-    "artifacts",
-    "android",
-    "source",
-    "createdAt",
-    "updatedAt"
-  ],
+  "required": ["schemaVersion", "packageId", "displayName", "versionCode", "signingCertificates", "signingLineage", "installer", "updateAuthority", "state", "artifacts", "android", "source", "createdAt", "updatedAt"],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
-    "packageId": {
-      "$ref": "#/$defs/packageId"
-    },
-    "displayName": {
-      "$ref": "#/$defs/label"
-    },
-    "versionCode": {
-      "$ref": "#/$defs/versionCode"
-    },
-    "versionName": {
-      "$ref": "#/$defs/label"
-    },
-    "signingCertificates": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 16,
-      "uniqueItems": true,
-      "items": {
-        "$ref": "#/$defs/sha256Digest"
-      }
-    },
-    "signingLineage": {
-      "type": "array",
-      "maxItems": 16,
-      "uniqueItems": true,
-      "items": {
-        "$ref": "#/$defs/sha256Digest"
-      }
-    },
-    "installer": {
-      "enum": [
-        "apkrun",
-        "external"
-      ]
-    },
-    "updateAuthority": {
-      "enum": [
-        "apkrun",
-        "googlePlay",
-        "external",
-        "manual"
-      ]
-    },
-    "updateProvider": {
-      "$ref": "#/$defs/updateProvider"
-    },
-    "state": {
-      "$ref": "#/$defs/state"
-    },
-    "artifacts": {
-      "$ref": "#/$defs/artifacts"
-    },
-    "android": {
-      "$ref": "#/$defs/android"
-    },
-    "source": {
-      "$ref": "#/$defs/source"
-    },
-    "lastOperation": {
-      "$ref": "#/$defs/operationSummary"
-    },
-    "createdAt": {
-      "$ref": "#/$defs/date"
-    },
-    "updatedAt": {
-      "$ref": "#/$defs/date"
-    }
+    "schemaVersion": { "const": 1 },
+    "packageId": { "$ref": "#/$defs/packageId" },
+    "displayName": { "$ref": "#/$defs/label" },
+    "versionCode": { "$ref": "#/$defs/versionCode" },
+    "versionName": { "$ref": "#/$defs/label" },
+    "signingCertificates": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/sha256Digest" } },
+    "signingLineage": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/sha256Digest" } },
+    "installer": { "enum": ["apkrun", "external"] },
+    "updateAuthority": { "enum": ["apkrun", "googlePlay", "external", "manual"] },
+    "updateProvider": { "$ref": "#/$defs/updateProvider" },
+    "state": { "$ref": "#/$defs/state" },
+    "artifacts": { "$ref": "#/$defs/artifacts" },
+    "android": { "$ref": "#/$defs/android" },
+    "source": { "$ref": "#/$defs/source" },
+    "lastOperation": { "$ref": "#/$defs/operationSummary" },
+    "createdAt": { "$ref": "#/$defs/date" },
+    "updatedAt": { "$ref": "#/$defs/date" }
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "installer": {
-            "const": "external"
-          }
-        }
-      },
+      "if": { "properties": { "installer": { "const": "external" } } },
       "then": {
         "properties": {
-          "updateAuthority": {
-            "enum": [
-              "external",
-              "googlePlay",
-              "manual"
-            ]
-          },
-          "artifacts": {
-            "not": {
-              "required": [
-                "current"
-              ]
-            }
-          }
+          "updateAuthority": { "enum": ["external", "googlePlay", "manual"] },
+          "artifacts": { "not": { "required": ["current"] } }
         },
-        "not": {
-          "required": [
-            "updateProvider"
-          ]
-        }
+        "not": { "required": ["updateProvider"] }
       }
     },
     {
-      "if": {
-        "properties": {
-          "updateAuthority": {
-            "const": "apkrun"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "updateProvider"
-        ],
-        "properties": {
-          "installer": {
-            "const": "apkrun"
-          }
-        }
-      }
+      "if": { "properties": { "updateAuthority": { "const": "apkrun" } } },
+      "then": { "required": ["updateProvider"], "properties": { "installer": { "const": "apkrun" } } }
     },
     {
-      "if": {
-        "properties": {
-          "updateAuthority": {
-            "enum": [
-              "googlePlay",
-              "external"
-            ]
-          }
-        }
-      },
-      "then": {
-        "not": {
-          "required": [
-            "updateProvider"
-          ]
-        }
-      }
+      "if": { "properties": { "updateAuthority": { "enum": ["googlePlay", "external"] } } },
+      "then": { "not": { "required": ["updateProvider"] } }
     },
     {
-      "if": {
-        "properties": {
-          "state": {
-            "const": "uninstalledKeepingData"
-          }
-        }
-      },
+      "if": { "properties": { "state": { "const": "uninstalledKeepingData" } } },
       "then": {
         "properties": {
           "artifacts": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "current"
-                  ]
-                },
-                {
-                  "required": [
-                    "previous"
-                  ]
-                },
-                {
-                  "required": [
-                    "staged"
-                  ]
-                }
-              ]
-            }
+            "not": { "anyOf": [ { "required": ["current"] }, { "required": ["previous"] }, { "required": ["staged"] } ] }
           }
         }
       }
     },
     {
       "if": {
-        "properties": {
-          "installer": {
-            "const": "apkrun"
-          },
-          "state": {
-            "not": {
-              "const": "uninstalledKeepingData"
-            }
-          }
-        }
+        "properties": { "installer": { "const": "apkrun" }, "state": { "not": { "const": "uninstalledKeepingData" } } }
       },
-      "then": {
-        "properties": {
-          "artifacts": {
-            "required": [
-              "current"
-            ]
-          }
-        }
-      }
+      "then": { "properties": { "artifacts": { "required": ["current"] } } }
     },
     {
-      "if": {
-        "properties": {
-          "state": {
-            "type": "object",
-            "required": [
-              "needsReinstall"
-            ]
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "installer": {
-            "const": "apkrun"
-          }
-        }
-      }
+      "if": { "properties": { "state": { "type": "object", "required": ["needsReinstall"] } } },
+      "then": { "properties": { "installer": { "const": "apkrun" } } }
     }
   ],
   "$defs": {
-    "packageId": {
-      "type": "string",
-      "maxLength": 255,
-      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
-    },
-    "versionCode": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 9223372036854775807
-    },
-    "sha256Digest": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "date": {
-      "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
-    },
-    "uuid": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-    },
-    "label": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1024
-    },
-    "httpsURL": {
-      "type": "string",
-      "maxLength": 2048,
-      "pattern": "^https://[^/?#@\\s]+(/[^?#\\s]*)?$"
-    },
-    "providerType": {
-      "enum": [
-        "local",
-        "direct",
-        "fdroid",
-        "github"
-      ]
-    },
+    "packageId": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+    "versionCode": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "sha256Digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$" },
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "httpsURL": { "type": "string", "maxLength": 2048, "pattern": "^https://[^/?#@\\s]+(/[^?#\\s]*)?$" },
+    "providerType": { "enum": ["local", "direct", "fdroid", "github"] },
     "updateProvider": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "type",
-        "configuration"
-      ],
+      "required": ["type", "configuration"],
       "properties": {
-        "type": {
-          "$ref": "#/$defs/providerType"
-        },
-        "configuration": {
-          "type": "object"
-        }
+        "type": { "$ref": "#/$defs/providerType" },
+        "configuration": { "type": "object" }
       },
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "local"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "configuration": {
-                "$ref": "#/$defs/localConfiguration"
-              }
-            }
-          }
+          "if": { "properties": { "type": { "const": "local" } } },
+          "then": { "properties": { "configuration": { "$ref": "#/$defs/localConfiguration" } } }
         },
         {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "direct"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "configuration": {
-                "$ref": "#/$defs/directConfiguration"
-              }
-            }
-          }
+          "if": { "properties": { "type": { "const": "direct" } } },
+          "then": { "properties": { "configuration": { "$ref": "#/$defs/directConfiguration" } } }
         },
         {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "fdroid"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "configuration": {
-                "$ref": "#/$defs/fdroidConfiguration"
-              }
-            }
-          }
+          "if": { "properties": { "type": { "const": "fdroid" } } },
+          "then": { "properties": { "configuration": { "$ref": "#/$defs/fdroidConfiguration" } } }
         },
         {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "github"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "configuration": {
-                "$ref": "#/$defs/githubConfiguration"
-              }
-            }
-          }
+          "if": { "properties": { "type": { "const": "github" } } },
+          "then": { "properties": { "configuration": { "$ref": "#/$defs/githubConfiguration" } } }
         }
       ]
     },
     "localConfiguration": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "path",
-        "bookmark"
-      ],
+      "required": ["path", "bookmark"],
       "properties": {
-        "path": {
-          "type": "string",
-          "minLength": 2,
-          "maxLength": 1024,
-          "pattern": "^/(?!.*(^|/)\\.\\.?(/|$)).*$"
-        },
-        "bookmark": {
-          "type": "string",
-          "minLength": 4,
-          "maxLength": 10924,
-          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
-        }
+        "path": { "type": "string", "minLength": 2, "maxLength": 1024, "pattern": "^/(?!.*(^|/)\\.\\.?(/|$)).*$" },
+        "bookmark": { "type": "string", "minLength": 4, "maxLength": 10924, "pattern": "^[A-Za-z0-9+/]+={0,2}$" }
       }
     },
     "directConfiguration": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "url"
-      ],
+      "required": ["url"],
       "properties": {
         "url": {
           "type": "string",
@@ -839,102 +544,56 @@ The store checks these rules before every write (§4.1). The schema of §2.6 enc
     "fdroidConfiguration": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "repository",
-        "fingerprint"
-      ],
+      "required": ["repository", "fingerprint"],
       "properties": {
         "repository": {
           "type": "string",
           "maxLength": 2048,
           "pattern": "^(https://[^/?#@\\s]+|http://(127\\.0\\.0\\.1|localhost)(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
-          "not": {
-            "pattern": "/$"
-          }
+          "not": { "pattern": "/$" }
         },
-        "fingerprint": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        }
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
     "githubConfiguration": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "repository",
-        "assetPattern",
-        "channel"
-      ],
+      "required": ["repository", "assetPattern", "channel"],
       "properties": {
         "repository": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/(?!\\.\\.?$)[A-Za-z0-9._-]{1,100}$"
         },
-        "assetPattern": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 255,
-          "pattern": "^[^/]+$"
-        },
-        "channel": {
-          "enum": [
-            "stable",
-            "prerelease"
-          ]
-        }
+        "assetPattern": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^/]+$" },
+        "channel": { "enum": ["stable", "prerelease"] }
       }
     },
     "state": {
       "oneOf": [
-        {
-          "enum": [
-            "installed",
-            "uninstalledKeepingData"
-          ]
-        },
+        { "enum": ["installed", "uninstalledKeepingData"] },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "needsReinstall"
-          ],
+          "required": ["needsReinstall"],
           "properties": {
             "needsReinstall": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "_0"
-              ],
-              "properties": {
-                "_0": {
-                  "enum": [
-                    "userdataReset",
-                    "userdataRestored"
-                  ]
-                }
-              }
+              "required": ["_0"],
+              "properties": { "_0": { "enum": ["userdataReset", "userdataRestored"] } }
             }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "broken"
-          ],
+          "required": ["broken"],
           "properties": {
             "broken": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "_0"
-              ],
-              "properties": {
-                "_0": {
-                  "$ref": "#/$defs/brokenReason"
-                }
-              }
+              "required": ["_0"],
+              "properties": { "_0": { "$ref": "#/$defs/brokenReason" } }
             }
           }
         }
@@ -942,31 +601,17 @@ The store checks these rules before every write (§4.1). The schema of §2.6 enc
     },
     "brokenReason": {
       "oneOf": [
-        {
-          "enum": [
-            "removedInAndroid",
-            "signerChanged",
-            "artifactMissing"
-          ]
-        },
+        { "enum": ["removedInAndroid", "signerChanged", "artifactMissing"] },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "reinstallFailed"
-          ],
+          "required": ["reinstallFailed"],
           "properties": {
             "reinstallFailed": {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "_0"
-              ],
-              "properties": {
-                "_0": {
-                  "$ref": "#/$defs/storedError"
-                }
-              }
+              "required": ["_0"],
+              "properties": { "_0": { "$ref": "#/$defs/storedError" } }
             }
           }
         }
@@ -975,630 +620,199 @@ The store checks these rules before every write (§4.1). The schema of §2.6 enc
     "storedError": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "domain",
-        "code",
-        "parameters"
-      ],
+      "required": ["domain", "code", "parameters"],
       "properties": {
-        "domain": {
-          "type": "string",
-          "pattern": "^[a-z][A-Za-z0-9]{0,31}$"
-        },
-        "code": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$"
-        },
+        "domain": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]{0,31}$" },
+        "code": { "type": "string", "maxLength": 128, "pattern": "^[a-z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$" },
         "parameters": {
           "type": "object",
           "maxProperties": 16,
-          "propertyNames": {
-            "pattern": "^[a-z][A-Za-z0-9]{0,31}$"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/errorParameter"
-          }
+          "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]{0,31}$" },
+          "additionalProperties": { "$ref": "#/$defs/errorParameter" }
         },
-        "cause": {
-          "$ref": "#/$defs/storedError"
-        },
+        "cause": { "$ref": "#/$defs/storedError" },
         "underlying": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "domain",
-            "code"
-          ],
+          "required": ["domain", "code"],
           "properties": {
-            "domain": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "code": {
-              "type": "integer"
-            }
+            "domain": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "code": { "type": "integer" }
           }
         }
       }
     },
     "errorParameter": {
       "oneOf": [
-        {
-          "$ref": "#/$defs/textParameter"
-        },
-        {
-          "$ref": "#/$defs/integerParameter"
-        }
+        { "$ref": "#/$defs/textParameter" },
+        { "$ref": "#/$defs/integerParameter" }
       ]
     },
     "textParameter": {
       "type": "object",
       "minProperties": 1,
       "maxProperties": 1,
-      "propertyNames": {
-        "enum": [
-          "text",
-          "fileName"
-        ]
-      },
+      "propertyNames": { "enum": ["text", "fileName"] },
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "_0"
-        ],
-        "properties": {
-          "_0": {
-            "type": "string",
-            "maxLength": 1024
-          }
-        }
+        "required": ["_0"],
+        "properties": { "_0": { "type": "string", "maxLength": 1024 } }
       }
     },
     "integerParameter": {
       "type": "object",
       "minProperties": 1,
       "maxProperties": 1,
-      "propertyNames": {
-        "enum": [
-          "bytes",
-          "count",
-          "durationMs"
-        ]
-      },
+      "propertyNames": { "enum": ["bytes", "count", "durationMs"] },
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "_0"
-        ],
-        "properties": {
-          "_0": {
-            "type": "integer"
-          }
-        }
+        "required": ["_0"],
+        "properties": { "_0": { "type": "integer" } }
       }
     },
     "slotSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "versionCode",
-        "setDigest",
-        "size",
-        "fileCount"
-      ],
+      "required": ["versionCode", "setDigest", "size", "fileCount"],
       "properties": {
-        "versionCode": {
-          "$ref": "#/$defs/versionCode"
-        },
-        "versionName": {
-          "$ref": "#/$defs/label"
-        },
-        "setDigest": {
-          "$ref": "#/$defs/sha256Digest"
-        },
-        "size": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 8589934592
-        },
-        "fileCount": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 256
-        }
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "versionName": { "$ref": "#/$defs/label" },
+        "setDigest": { "$ref": "#/$defs/sha256Digest" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 8589934592 },
+        "fileCount": { "type": "integer", "minimum": 1, "maximum": 256 }
       }
     },
     "stagedSlotSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "versionCode",
-        "setDigest",
-        "size",
-        "fileCount",
-        "origin"
-      ],
+      "required": ["versionCode", "setDigest", "size", "fileCount", "origin"],
       "properties": {
-        "versionCode": {
-          "$ref": "#/$defs/versionCode"
-        },
-        "versionName": {
-          "$ref": "#/$defs/label"
-        },
-        "setDigest": {
-          "$ref": "#/$defs/sha256Digest"
-        },
-        "size": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 8589934592
-        },
-        "fileCount": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 256
-        },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "versionName": { "$ref": "#/$defs/label" },
+        "setDigest": { "$ref": "#/$defs/sha256Digest" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 8589934592 },
+        "fileCount": { "type": "integer", "minimum": 1, "maximum": 256 },
         "origin": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "type"
-          ],
+          "required": ["type"],
           "properties": {
-            "type": {
-              "enum": [
-                "local",
-                "direct",
-                "fdroid",
-                "github",
-                "manualFile"
-              ]
-            },
-            "url": {
-              "$ref": "#/$defs/httpsURL"
-            },
-            "declaredDigests": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 256,
-              "items": {
-                "$ref": "#/$defs/sha256Digest"
-              }
-            }
+            "type": { "enum": ["local", "direct", "fdroid", "github", "manualFile"] },
+            "url": { "$ref": "#/$defs/httpsURL" },
+            "declaredDigests": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/sha256Digest" } }
           },
-          "if": {
-            "properties": {
-              "type": {
-                "enum": [
-                  "local",
-                  "manualFile"
-                ]
-              }
-            }
-          },
-          "then": {
-            "not": {
-              "required": [
-                "url"
-              ]
-            }
-          }
+          "if": { "properties": { "type": { "enum": ["local", "manualFile"] } } },
+          "then": { "not": { "required": ["url"] } }
         }
       }
     },
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "currentMatchesAndroid"
-      ],
+      "required": ["currentMatchesAndroid"],
       "properties": {
-        "current": {
-          "$ref": "#/$defs/slotSummary"
-        },
-        "previous": {
-          "$ref": "#/$defs/slotSummary"
-        },
-        "staged": {
-          "$ref": "#/$defs/stagedSlotSummary"
-        },
-        "currentMatchesAndroid": {
-          "type": "boolean"
-        }
+        "current": { "$ref": "#/$defs/slotSummary" },
+        "previous": { "$ref": "#/$defs/slotSummary" },
+        "staged": { "$ref": "#/$defs/stagedSlotSummary" },
+        "currentMatchesAndroid": { "type": "boolean" }
       },
-      "dependentRequired": {
-        "previous": [
-          "current"
-        ],
-        "staged": [
-          "current"
-        ]
-      },
-      "if": {
-        "not": {
-          "required": [
-            "current"
-          ]
-        }
-      },
-      "then": {
-        "properties": {
-          "currentMatchesAndroid": {
-            "const": false
-          }
-        }
-      }
+      "dependentRequired": { "previous": ["current"], "staged": ["current"] },
+      "if": { "not": { "required": ["current"] } },
+      "then": { "properties": { "currentMatchesAndroid": { "const": false } } }
     },
     "android": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "minSdk",
-        "targetSdk",
-        "nativeAbis",
-        "userdataGeneration",
-        "lastSyncedAt"
-      ],
+      "required": ["minSdk", "targetSdk", "nativeAbis", "userdataGeneration", "lastSyncedAt"],
       "properties": {
-        "updateOwner": {
-          "$ref": "#/$defs/packageId"
-        },
-        "installerOfRecord": {
-          "$ref": "#/$defs/packageId"
-        },
-        "firstInstallTime": {
-          "$ref": "#/$defs/date"
-        },
-        "lastUpdateTime": {
-          "$ref": "#/$defs/date"
-        },
-        "minSdk": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
-        "targetSdk": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
-        "nativeAbis": {
-          "type": "array",
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9_-]{1,32}$"
-          }
-        },
-        "userdataGeneration": {
-          "$ref": "#/$defs/uuid"
-        },
-        "lastSyncedAt": {
-          "$ref": "#/$defs/date"
-        }
+        "updateOwner": { "$ref": "#/$defs/packageId" },
+        "installerOfRecord": { "$ref": "#/$defs/packageId" },
+        "firstInstallTime": { "$ref": "#/$defs/date" },
+        "lastUpdateTime": { "$ref": "#/$defs/date" },
+        "minSdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "targetSdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "nativeAbis": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" } },
+        "userdataGeneration": { "$ref": "#/$defs/uuid" },
+        "lastSyncedAt": { "$ref": "#/$defs/date" }
       }
     },
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind",
-        "at"
-      ],
+      "required": ["kind", "at"],
       "properties": {
-        "kind": {
-          "enum": [
-            "file",
-            "provider",
-            "wrapperBootstrap",
-            "adopted"
-          ]
-        },
-        "at": {
-          "$ref": "#/$defs/date"
-        },
-        "origin": {
-          "enum": [
-            "addFlow",
-            "document",
-            "dropOnHome",
-            "cli",
-            "wrap"
-          ]
-        },
-        "fileNames": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 20,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255,
-            "pattern": "^[^/]+$"
-          }
-        },
-        "container": {
-          "enum": [
-            "apk",
-            "apks",
-            "xapk",
-            "apkm",
-            "zip"
-          ]
-        },
-        "providerType": {
-          "$ref": "#/$defs/providerType"
-        },
-        "wrapperBundleId": {
-          "type": "string",
-          "maxLength": 255,
-          "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+$"
-        }
+        "kind": { "enum": ["file", "provider", "wrapperBootstrap", "adopted"] },
+        "at": { "$ref": "#/$defs/date" },
+        "origin": { "enum": ["addFlow", "document", "dropOnHome", "cli", "wrap"] },
+        "fileNames": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^/]+$" } },
+        "container": { "enum": ["apk", "apks", "xapk", "apkm", "zip"] },
+        "providerType": { "$ref": "#/$defs/providerType" },
+        "wrapperBundleId": { "type": "string", "maxLength": 255, "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+$" }
       },
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "file"
-              }
-            }
-          },
-          "else": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "origin"
-                  ]
-                },
-                {
-                  "required": [
-                    "fileNames"
-                  ]
-                }
-              ]
-            }
-          }
+          "if": { "properties": { "kind": { "const": "file" } } },
+          "else": { "not": { "anyOf": [ { "required": ["origin"] }, { "required": ["fileNames"] } ] } }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "file",
-                  "provider"
-                ]
-              }
-            }
-          },
-          "else": {
-            "not": {
-              "required": [
-                "container"
-              ]
-            }
-          }
+          "if": { "properties": { "kind": { "enum": ["file", "provider"] } } },
+          "else": { "not": { "required": ["container"] } }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "provider"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "providerType"
-            ]
-          },
-          "else": {
-            "not": {
-              "required": [
-                "providerType"
-              ]
-            }
-          }
+          "if": { "properties": { "kind": { "const": "provider" } } },
+          "then": { "required": ["providerType"] },
+          "else": { "not": { "required": ["providerType"] } }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "wrapperBootstrap"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "wrapperBundleId"
-            ]
-          },
-          "else": {
-            "not": {
-              "required": [
-                "wrapperBundleId"
-              ]
-            }
-          }
+          "if": { "properties": { "kind": { "const": "wrapperBootstrap" } } },
+          "then": { "required": ["wrapperBundleId"] },
+          "else": { "not": { "required": ["wrapperBundleId"] } }
         }
       ]
     },
     "operationSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind",
-        "operationID",
-        "startedAt",
-        "finishedAt",
-        "result"
-      ],
+      "required": ["kind", "operationID", "startedAt", "finishedAt", "result"],
       "properties": {
-        "kind": {
-          "enum": [
-            "firstInstall",
-            "reinstall",
-            "update",
-            "rollback",
-            "uninstall",
-            "adopt"
-          ]
-        },
-        "operationID": {
-          "$ref": "#/$defs/uuid"
-        },
-        "startedAt": {
-          "$ref": "#/$defs/date"
-        },
-        "finishedAt": {
-          "$ref": "#/$defs/date"
-        },
-        "fromVersionCode": {
-          "$ref": "#/$defs/versionCode"
-        },
-        "toVersionCode": {
-          "$ref": "#/$defs/versionCode"
-        },
-        "result": {
-          "enum": [
-            "succeeded",
-            "failed",
-            "interrupted",
-            "rollbackUnavailable"
-          ]
-        },
-        "healthPending": {
-          "const": true
-        },
-        "healthResult": {
-          "enum": [
-            "passed",
-            "failed"
-          ]
-        },
-        "failureCount": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "error": {
-          "$ref": "#/$defs/storedError"
-        }
+        "kind": { "enum": ["firstInstall", "reinstall", "update", "rollback", "uninstall", "adopt"] },
+        "operationID": { "$ref": "#/$defs/uuid" },
+        "startedAt": { "$ref": "#/$defs/date" },
+        "finishedAt": { "$ref": "#/$defs/date" },
+        "fromVersionCode": { "$ref": "#/$defs/versionCode" },
+        "toVersionCode": { "$ref": "#/$defs/versionCode" },
+        "result": { "enum": ["succeeded", "failed", "interrupted", "rollbackUnavailable"] },
+        "healthPending": { "const": true },
+        "healthResult": { "enum": ["passed", "failed"] },
+        "failureCount": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "error": { "$ref": "#/$defs/storedError" }
       },
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "result": {
-                "const": "failed"
-              }
-            }
-          },
+          "if": { "properties": { "result": { "const": "failed" } } },
+          "then": { "required": ["failureCount"] },
+          "else": { "not": { "required": ["failureCount"] } }
+        },
+        {
+          "if": { "properties": { "result": { "enum": ["succeeded", "interrupted"] } } },
+          "then": { "not": { "required": ["error"] } }
+        },
+        {
+          "if": { "properties": { "result": { "const": "rollbackUnavailable" } } },
+          "then": { "properties": { "kind": { "const": "rollback" } } }
+        },
+        {
+          "if": { "anyOf": [ { "required": ["healthPending"] }, { "required": ["healthResult"] } ] },
           "then": {
-            "required": [
-              "failureCount"
-            ]
-          },
-          "else": {
-            "not": {
-              "required": [
-                "failureCount"
-              ]
-            }
+            "properties": { "kind": { "const": "update" }, "result": { "const": "succeeded" } },
+            "not": { "required": ["healthPending", "healthResult"] }
           }
         },
         {
-          "if": {
-            "properties": {
-              "result": {
-                "enum": [
-                  "succeeded",
-                  "interrupted"
-                ]
-              }
-            }
-          },
-          "then": {
-            "not": {
-              "required": [
-                "error"
-              ]
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "result": {
-                "const": "rollbackUnavailable"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "kind": {
-                "const": "rollback"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "anyOf": [
-              {
-                "required": [
-                  "healthPending"
-                ]
-              },
-              {
-                "required": [
-                  "healthResult"
-                ]
-              }
-            ]
-          },
-          "then": {
-            "properties": {
-              "kind": {
-                "const": "update"
-              },
-              "result": {
-                "const": "succeeded"
-              }
-            },
-            "not": {
-              "required": [
-                "healthPending",
-                "healthResult"
-              ]
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "firstInstall",
-                  "uninstall",
-                  "adopt"
-                ]
-              }
-            }
-          },
-          "then": {
-            "not": {
-              "required": [
-                "fromVersionCode"
-              ]
-            }
-          }
+          "if": { "properties": { "kind": { "enum": ["firstInstall", "uninstall", "adopt"] } } },
+          "then": { "not": { "required": ["fromVersionCode"] } }
         }
       ]
     }
@@ -1682,51 +896,21 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
   "title": "APKRun package settings (Packages/<dir>/settings.json), schemaVersion 1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion"
-  ],
+  "required": ["schemaVersion"],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
+    "schemaVersion": { "const": 1 },
     "window": {
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "mode": {
-          "enum": [
-            "secondaryDisplay",
-            "primaryDisplayCompatibility"
-          ]
-        },
-        "defaultWidth": {
-          "type": "integer",
-          "minimum": 320,
-          "maximum": 8192
-        },
-        "defaultHeight": {
-          "type": "integer",
-          "minimum": 400,
-          "maximum": 8192
-        },
-        "resizable": {
-          "type": "boolean"
-        },
-        "alwaysOnTop": {
-          "type": "boolean"
-        },
-        "zoom": {
-          "type": "number",
-          "minimum": 0.75,
-          "maximum": 2.0
-        },
-        "closeBehavior": {
-          "enum": [
-            "stop",
-            "keepRunning"
-          ]
-        }
+        "mode": { "enum": ["secondaryDisplay", "primaryDisplayCompatibility"] },
+        "defaultWidth": { "type": "integer", "minimum": 320, "maximum": 8192 },
+        "defaultHeight": { "type": "integer", "minimum": 400, "maximum": 8192 },
+        "resizable": { "type": "boolean" },
+        "alwaysOnTop": { "type": "boolean" },
+        "zoom": { "type": "number", "minimum": 0.75, "maximum": 2.0 },
+        "closeBehavior": { "enum": ["stop", "keepRunning"] }
       }
     },
     "input": {
@@ -1734,30 +918,11 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "escapeKey": {
-          "enum": [
-            "back",
-            "escape"
-          ]
-        },
-        "secondaryClick": {
-          "enum": [
-            "mouseSecondary",
-            "longPress"
-          ]
-        },
-        "scrollMode": {
-          "enum": [
-            "scroll",
-            "touchDrag"
-          ]
-        },
-        "hover": {
-          "type": "boolean"
-        },
-        "sendCommandKey": {
-          "type": "boolean"
-        }
+        "escapeKey": { "enum": ["back", "escape"] },
+        "secondaryClick": { "enum": ["mouseSecondary", "longPress"] },
+        "scrollMode": { "enum": ["scroll", "touchDrag"] },
+        "hover": { "type": "boolean" },
+        "sendCommandKey": { "type": "boolean" }
       }
     },
     "integrations": {
@@ -1765,32 +930,12 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "clipboard": {
-          "type": "boolean"
-        },
-        "notifications": {
-          "type": "boolean"
-        },
-        "links": {
-          "enum": [
-            "ask",
-            "mac",
-            "android"
-          ]
-        },
-        "files": {
-          "type": "boolean"
-        },
-        "sharedFolders": {
-          "enum": [
-            "off",
-            "readOnly",
-            "readWrite"
-          ]
-        },
-        "microphone": {
-          "type": "boolean"
-        }
+        "clipboard": { "type": "boolean" },
+        "notifications": { "type": "boolean" },
+        "links": { "enum": ["ask", "mac", "android"] },
+        "files": { "type": "boolean" },
+        "sharedFolders": { "enum": ["off", "readOnly", "readWrite"] },
+        "microphone": { "type": "boolean" }
       }
     },
     "update": {
@@ -1798,18 +943,9 @@ This schema is the writer's contract. It rejects unknown keys. Readers are more 
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "mode": {
-          "enum": [
-            "automatic",
-            "notifyOnly"
-          ]
-        },
-        "autoRollback": {
-          "type": "boolean"
-        },
-        "healthCheckLaunch": {
-          "type": "boolean"
-        }
+        "mode": { "enum": ["automatic", "notifyOnly"] },
+        "autoRollback": { "type": "boolean" },
+        "healthCheckLaunch": { "type": "boolean" }
       }
     }
   }
@@ -1880,7 +1016,7 @@ Every write is atomic: a temporary file in the same directory, `fcntl(F_BARRIERF
 
 ### 5.2 Migrating older files
 
-At `open` ([../02-design/package-store.md](../02-design/package-store.md) §5.4 step 2), before recovery:
+At `open()` ([../02-design/package-store.md](../02-design/package-store.md) §5.4 step 2), before recovery:
 
 1. The store begins one journal transaction of kind `schemaMigration` for all packages that have an older file ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).
 2. For each file: keep the original bytes as `metadata.v<old>.json` or `settings.v<old>.json` in the same directory. Migrate in memory, validate against the current schema, and replace the file with `FileManager.replaceItemAt`. Journal step `migrated` with the package ID.
@@ -1945,7 +1081,7 @@ The order for `setUpdatePolicy` is chosen so that a crash between the two writes
 | Role | Component | Notes |
 |---|---|---|
 | Writer | `PackageStore` in APKStoreCore (apkrund, or the embedded runtime of `apkrun dev`) | the only writer of both files ([configuration.md](configuration.md) §1.1) |
-| Reader | `PackageStore.open` | builds the directory index, migrates, recovers (§5, §6) |
+| Reader | `PackageStore.open()` | builds the directory index, migrates, recovers (§5, §6) |
 | Reader | RuntimeHost for RuntimeAPI | `packageInfo` returns the record as `WirePackageRecord` and the settings as `ResolvedPackageSettings` ([runtime-api.md](runtime-api.md) §8.3) |
 | Reader | UpdateCore | authority, provider, and `update.*` through `PackageStore` |
 | Reader | sessions, IntegrationCore, DisplayPool | settings through `PackageStore.settings(for:)`. They do not cache across `settingsChanged` ([../02-design/package-store.md](../02-design/package-store.md) §2.4) |

@@ -60,7 +60,7 @@ The APKRun AOSP product builds reproducibly on the Linux builder, and its image 
 
 - The product tree `Guest/product/` of [../../02-design/android-image.md](../../02-design/android-image.md) §11.1, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/` by `.repo/local_manifests/apkrun.xml`:
   - `AndroidProducts.mk` with the lunch choices `apkrun_arm64-trunk_staging-userdebug` and `apkrun_arm64-trunk_staging-user`.
-  - `apkrun_arm64.mk`, which inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`, sets `PRODUCT_NAME:= apkrun_arm64` (`PRODUCT_DEVICE` stays `vsoc_arm64_only`), adds `apkrun_vsockd ApkRunGuest ApkRunStore` to `PRODUCT_PACKAGES`, adds the product sepolicy directory, and sets the APKRun property `ro.apkrun.product=1` plus the GPU properties of the default profile. The image version comes from bootconfig at boot (`ro.boot.apkrun.image`, [../../02-design/android-image.md](../../02-design/android-image.md) §11.1), not from the build (#035: "APKRun properties", "graphics config").
+  - `apkrun_arm64.mk`, which inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`, sets `PRODUCT_NAME := apkrun_arm64` (`PRODUCT_DEVICE` stays `vsoc_arm64_only`), adds `apkrun_vsockd ApkRunGuest ApkRunStore` to `PRODUCT_PACKAGES`, adds the product sepolicy directory, and sets the APKRun property `ro.apkrun.product=1` plus the GPU properties of the default profile. The image version comes from bootconfig at boot (`ro.boot.apkrun.image`, [../../02-design/android-image.md](../../02-design/android-image.md) §11.1), not from the build (#035: "APKRun properties", "graphics config").
   - `Android.bp` with `android_app_import` for both agent APKs (`certificate: "platform"`, `privileged: true`, `presigned: false`, installed in `/system_ext/priv-app/`) and `prebuilt_etc` for the permission and init files.
   - `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml`.
 - The product changes of [../../02-design/android-image.md](../../02-design/android-image.md) §11.2: the agents, the bridge, the policy, and the allowlist; the in-guest KeyMint and Gatekeeper defaults; `virtio_snd` only if the stock kernel lacks it; `AUTO_TIME = 0` and `AUTO_TIME_ZONE = 0`; `Browser2` if the base has no browser; the multi-display and freeform overlays. No kernel, partition, or fstab change.
@@ -111,11 +111,11 @@ The APKRun AOSP product builds reproducibly on the Linux builder, and its image 
 
      ```text
      service apkrun_vsockd /system_ext/bin/apkrun_vsockd
-     class main
-     user system
-     group system
-     capabilities
-     restart_period 1
+         class main
+         user system
+         group system
+         capabilities
+         restart_period 1
      ```
 
    - Label the binary in `file_contexts` (`/system_ext/bin/apkrun_vsockd u:object_r:apkrun_vsockd_exec:s0`).

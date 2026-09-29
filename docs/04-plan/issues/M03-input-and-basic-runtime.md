@@ -132,7 +132,7 @@ One versioned Protocol Buffers schema defines every message between the host and
 2. **Generation.**
    - `scripts/generate-protos.sh` writes the Swift sources. The Gradle protobuf lite plugin generates the Kotlin sources.
    - The CI check regenerates and fails when the checked-in sources differ.
-   - Check: `swift build` and `./gradlew -p Guest:guestd:assemble` pass.
+   - Check: `swift build` and `./gradlew -p Guest :guestd:assemble` pass.
 3. **Frame codec.**
    - Write `FrameCodec` in Swift and Kotlin with the limits of §4.
    - Commit the golden frames. Both test suites decode all of them, reject the invalid ones, and re-encode the valid ones byte for byte.
@@ -157,7 +157,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 ### Acceptance criteria
 
 - [ ] The schemas cover handshake, health, launch, stop, package query, input, display lifecycle, clipboard, and notifications, using Protocol Buffers.
-- [ ] The schemas compile for the host and guest environments: `swift build` and `./gradlew -p Guest:guestd:assemble`.
+- [ ] The schemas compile for the host and guest environments: `swift build` and `./gradlew -p Guest :guestd:assemble`.
 - [ ] The version mismatch behavior is documented in §5.2, and a T0 test shows that a fake agent sending major 2 is rejected with `incompatibleVersion` (FR-RT-04, NFR-REL-04).
 - [ ] Both codecs decode every golden frame, reject every invalid one, and re-encode the valid ones byte for byte.
 - [ ] The CI regeneration check and `buf lint` pass.
@@ -568,7 +568,7 @@ The CLI and the tests install, launch, terminate, uninstall, list, and inspect a
 ### Scope
 
 - The APKStoreCore types of §15 (#027) step 1. `updateAuthority` is `manual` for every package in M3.
-- `PackageStore`: `open`, the journal, `firstInstall`, `reinstall`, `uninstall`, and `forget`, the recovery of §5.5, and fault injection with `APKRUN_STORE_FAULT`.
+- `PackageStore`: `open()`, the journal, `firstInstall`, `reinstall`, `uninstall`, and `forget`, the recovery of §5.5, and fault injection with `APKRUN_STORE_FAULT`.
 - `APKInspector` v0: `aapt2` metadata and SHA-256. The signing check reports `notPerformed`.
 - `ADBStoreAgentChannel` ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §13.2): `adb install-multiple -r --no-streaming`, `pm uninstall` with `-k` to keep data, `-r -d` for a downgrade reinstall on debuggable images, and `QueryPackage` and `ListPackages` through the Guest Agent.
 - `StoreRuntimeAccess` in `EmbeddedRuntimeService`.
@@ -597,7 +597,7 @@ The CLI and the tests install, launch, terminate, uninstall, list, and inspect a
    - Write `PackageID`, `VersionCode`, the APK set digest, and the other types of §15 (#027) step 1.
    - Check: T0 of the `PackageID` grammar, `VersionCode`, and the set digest.
 2. **PackageStore.**
-   - Write `open`, the journal, the four operations, and the recovery table of §5.5. `APKRUN_STORE_FAULT` stops the process at a named step.
+   - Write `open()`, the journal, the four operations, and the recovery table of §5.5. `APKRUN_STORE_FAULT` stops the process at a named step.
    - Check: T0 of the journal and the recovery table (kind × step), and T1 crash injection at every step of `firstInstall` and `uninstall`.
 3. **Inspector.**
    - `APKInspector` v0 reads the metadata with `aapt2` and hashes every file. Host parsing is for previews only; `PackageManager` stays the source of truth ([AGENTS.md](../../../AGENTS.md) §4).
@@ -630,7 +630,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [ ] ADB is used only inside `ADBStoreAgentChannel` and `AdbClient` (ADB is acceptable internally).
 - [ ] An installed package has the layout `Packages/io.apkrun.fixture.hellotext/current/{base.apk,artifact.json,metadata.json}`.
 - [ ] `apkrun-dev list` shows the versionCode.
-- [ ] A crash at any step of `firstInstall` or `uninstall` is recovered at the next `open` (NFR-REL-01).
+- [ ] A crash at any step of `firstInstall` or `uninstall` is recovered at the next `open()` (NFR-REL-01).
 - [ ] Uninstall keeps or deletes the app data as asked (FR-PKG-07, data part).
 - [ ] HelloSplit installs as one package with all its splits.
 

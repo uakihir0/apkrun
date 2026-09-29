@@ -24,40 +24,23 @@
 
 ```xml
 <dict>
-    <key>Label</key>
-    <string>io.apkrun.apkrund</string>
-    <key>BundleProgram</key>
-    <string>Contents/Helpers/apkrund</string>
-    <key>MachServices</key>
-    <dict>
-        <key>io.apkrun.apkrund.xpc</key>
-        <true/>
-    </dict>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StartInterval</key>
-    <integer>3600</integer>
-    <key>ExitTimeOut</key>
-    <integer>45</integer>
-    <key>AssociatedBundleIdentifiers</key>
-    <array>
-        <string>io.apkrun.APKRun</string>
-    </array>
+  <key>Label</key>            <string>io.apkrun.apkrund</string>
+  <key>BundleProgram</key>    <string>Contents/Helpers/apkrund</string>
+  <key>MachServices</key>     <dict><key>io.apkrun.apkrund.xpc</key><true/></dict>
+  <key>ProcessType</key>      <string>Interactive</string>
+  <key>KeepAlive</key>        <dict><key>SuccessfulExit</key><false/></dict>
+  <key>RunAtLoad</key>        <true/>
+  <key>StartInterval</key>    <integer>3600</integer>
+  <key>ExitTimeOut</key>      <integer>45</integer>
+  <key>AssociatedBundleIdentifiers</key> <array><string>io.apkrun.APKRun</string></array>
 </dict>
 ```
 
-- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register` on first launch. If `status == .requiresApproval`, the app explains why and calls `SMAppService.openSystemSettingsLoginItems`.
+- `APKRun.app` calls `SMAppService.agent(plistName: "io.apkrun.apkrund.plist").register()` on first launch. If `status == .requiresApproval`, the app explains why and calls `SMAppService.openSystemSettingsLoginItems()`.
 - `KeepAlive.SuccessfulExit = false` makes launchd restart apkrund after a crash (NFR-REL-02). A clean idle exit (status 0) is not restarted. The next client connection relaunches it on demand.
 - `RunAtLoad`, `StartInterval`, and `ExitTimeOut` serve preboot and startup recovery, background update checks, and a graceful Android shutdown on logout. The reasons are in [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.1.
 - Debug builds use the label `io.apkrun.apkrund.dev` and the Mach service `io.apkrun.apkrund.dev.xpc` ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6).
-- Sparkle replaces the bundle but does not manage agents. Before it does, apkrund stops Android and exits through the install handshake ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5). At the first launch of the new version, APKRun.app runs `unregister` then `register` only if the agent's status is not `.enabled`, or the SHA-256 of the embedded plist differs from the one it registered last. With an unchanged plist, launchd resolves `BundleProgram` at the next spawn, so the new apkrund runs without re-registration. This is verified in #057 (R-24); the fallback is re-registration on every build change ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7).
+- Sparkle replaces the bundle but does not manage agents. Before it does, apkrund stops Android and exits through the install handshake ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.5). At the first launch of the new version, APKRun.app runs `unregister()` then `register()` only if the agent's status is not `.enabled`, or the SHA-256 of the embedded plist differs from the one it registered last. With an unchanged plist, launchd resolves `BundleProgram` at the next spawn, so the new apkrund runs without re-registration. This is verified in #057 (R-24); the fallback is re-registration on every build change ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.7).
 
 ### 1.2 Development (embedded) mode
 
@@ -82,11 +65,11 @@ The main Mach service is reachable by any process of the logged-in user. Therefo
 
 ```text
 client ──(1) connect io.apkrun.apkrund.xpc──▶ BrokerService
-hello(clientKind, claimedIdentity, apiVersion) → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)
-requestEndpoint(kind) → NSXPCListenerEndpoint
-kind = .control → requirement: APKRun's own signing identity
-kind = .maintenance → same requirement as .control; version-stable (runtime-maintenance.md §8.1)
-kind = .wrapper(bundleID) → requirement: identifier "<bundleID>" and cdhash H"<registered cdhash>"
+        hello(clientKind, claimedIdentity, apiVersion) → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)
+        requestEndpoint(kind) → NSXPCListenerEndpoint
+              kind = .control    → requirement: APKRun's own signing identity
+              kind = .maintenance → same requirement as .control; version-stable (runtime-maintenance.md §8.1)
+              kind = .wrapper(bundleID) → requirement: identifier "<bundleID>" and cdhash H"<registered cdhash>"
 client ──(2) connect to endpoint──▶ (system enforces the requirement; mismatch ⇒ invalidated)
 ```
 
@@ -101,40 +84,40 @@ Notes:
 
 - Wrapper launchers are re-signed per wrapper (ad-hoc, identifier = wrapper bundle ID), so each wrapper has its own cdhash. WrapperCore records it in `Wrappers/registry.json` at generation time ([../02-design/wrapper.md](../02-design/wrapper.md) §7).
 - Using the private `auditToken` of `NSXPCConnection` is forbidden. Using `processIdentifier` for authorization is forbidden (PID reuse races).
-- The client side verifies apkrund too: `NSXPCConnection.setCodeSigningRequirement(_:)` with APKRun's identity before `resume`.
+- The client side verifies apkrund too: `NSXPCConnection.setCodeSigningRequirement(_:)` with APKRun's identity before `resume()`.
 
 ### 2.3 Session channel (wrapper ↔ apkrund)
 
 ```text
 openSession(OpenSessionRequest{ packageID, geometry: DisplayGeometry{ pointSize, backingScale, zoom }, screenSize,
-launchTiming: LaunchTiming{ processStart, requestSent } }) (diagnostics.md §4.2)
-→ SessionDescriptor{ sessionID, displayID, windowPrefs, state,
-surfaces: SurfaceSet{ generation, [IOSurface] (3), pixelSize, densityDpi } }
+                                 launchTiming: LaunchTiming{ processStart, requestSent } })   (diagnostics.md §4.2)
+  → SessionDescriptor{ sessionID, displayID, windowPrefs, state,
+                       surfaces: SurfaceSet{ generation, [IOSurface] (3), pixelSize, densityDpi } }
 events (server → client, via exported object on the same connection; stateChanged, imeStateChanged, windowRequest,
-windowPrefsChanged, and the integration events are cases of SessionEvent, runtime-api.md §6.3):
-stateChanged(phase) SessionPhase (runtime-api.md §6.2): starting | booting(progress) | waitingForPackage | launching | running | ended(reason)
-frameReady(generation, surfaceIndex, frameSeq, presentationTime)
-surfacesReplaced(SurfaceSet) after resize / backing-scale change
-imeStateChanged(EditorState) Android editor focus, input type, selection, cursor rect (input.md §5.1)
-windowRequest(.activate |.close |.setTitle) e.g. notification click, app finished
-windowPrefsChanged(WindowPrefs) package settings changed: resizable, alwaysOnTop, zoom (host-ui.md §7.2)
+        windowPrefsChanged, and the integration events are cases of SessionEvent, runtime-api.md §6.3):
+  stateChanged(phase)                    SessionPhase (runtime-api.md §6.2): starting | booting(progress) | waitingForPackage | launching | running | ended(reason)
+  frameReady(generation, surfaceIndex, frameSeq, presentationTime)
+  surfacesReplaced(SurfaceSet)           after resize / backing-scale change
+  imeStateChanged(EditorState)           Android editor focus, input type, selection, cursor rect (input.md §5.1)
+  windowRequest(.activate | .close | .setTitle)  e.g. notification click, app finished
+  windowPrefsChanged(WindowPrefs)        package settings changed: resizable, alwaysOnTop, zoom (host-ui.md §7.2)
 client → server:
-frameDisplayed(generation, frameSeq) releases older buffers (see display-and-windowing.md §5)
-visibilityChanged(Bool) minimized / occluded / hidden → presents stop
-sendInput([InputEvent]) batched per runloop turn (input.md §8)
-sendText(ImeTextEvent) unbatched, ordered (input.md §5)
-resize(DisplayGeometry) after live resize ends, on backing-scale or zoom change
-focusChanged(Bool)
-closeSession(policy).stop |.keepRunning (display-and-windowing.md §7.6)
-restartApp Android → Restart ‹App›: force-stop, then a new launch on the same display (wrapper.md §5.6)
-frameStatistics → SessionGraphicsStatistics developer mode only: View → Show Frame Statistics (display-and-windowing.md §7.7)
+  frameDisplayed(generation, frameSeq)   releases older buffers (see display-and-windowing.md §5)
+  visibilityChanged(Bool)                minimized / occluded / hidden → presents stop
+  sendInput([InputEvent])                batched per runloop turn (input.md §8)
+  sendText(ImeTextEvent)                 unbatched, ordered (input.md §5)
+  resize(DisplayGeometry)                after live resize ends, on backing-scale or zoom change
+  focusChanged(Bool)
+  closeSession(policy)                   .stop | .keepRunning (display-and-windowing.md §7.6)
+  restartApp()                           Android → Restart ‹App›: force-stop, then a new launch on the same display (wrapper.md §5.6)
+  frameStatistics() → SessionGraphicsStatistics    developer mode only: View → Show Frame Statistics (display-and-windowing.md §7.7)
 integration (desktop-integration.md §3.3):
-pushClipboard(ClipItem) → ClipAck ⌘V and window-key pushes (§4.2 there)
-clipboardWritten(changeCount, digest) after the window wrote a guest clip to NSPasteboard
-importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult drag and drop
-acceptExport(offerID, FileHandle?) Save panel result for "Save to Mac"
-resolveLinkPrompt(promptID, LinkChoice)
-events: clipboardFromGuest(ClipItem), exportOffered(ExportOffer), linkPrompt(LinkPrompt)
+  pushClipboard(ClipItem) → ClipAck      ⌘V and window-key pushes (§4.2 there)
+  clipboardWritten(changeCount, digest)  after the window wrote a guest clip to NSPasteboard
+  importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult    drag and drop
+  acceptExport(offerID, FileHandle?)     Save panel result for "Save to Mac"
+  resolveLinkPrompt(promptID, LinkChoice)
+  events: clipboardFromGuest(ClipItem), exportOffered(ExportOffer), linkPrompt(LinkPrompt)
 ```
 
 - `IOSurface` objects pass over NSXPC directly (the class adopts `NSSecureCoding`). Surfaces are sent only on open and resize, never per frame. File handles for drag and drop and Save to Mac pass the same way (`NSFileHandle`), so apkrund never opens user-chosen paths itself.
@@ -190,8 +173,8 @@ Every stream carries length-prefixed frames: `uint32 big-endian length` + `Envel
 
 ```text
 guest → host: Hello{ protocol_version{major,minor}, agent{kind, version, build}, runtime_image_version,
-android{sdk_int, release, build_fingerprint}, capabilities[] }
-host → guest: HelloAck{ accepted | rejected(reason), host_protocol_version, session_token, enabled_capabilities[] }
+                     android{sdk_int, release, build_fingerprint}, capabilities[] }
+host  → guest: HelloAck{ accepted | rejected(reason), host_protocol_version, session_token, enabled_capabilities[] }
 ```
 
 A major-version mismatch results in `rejected`. The host marks the agent `incompatible` in health and surfaces a `GuestProtocolFailure.incompatibleVersion` error with remediation. The connection is closed (NFR-REL-04). Minor versions negotiate capabilities.

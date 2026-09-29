@@ -22,19 +22,19 @@ Non-goals:
 
 ```swift
 public struct VMDefinition: Sendable {
-    public var label: String // VZVirtualMachineConfiguration.label (macOS 27), e.g. "APKRun Android"
+    public var label: String                      // VZVirtualMachineConfiguration.label (macOS 27), e.g. "APKRun Android"
     public var cpuCount: Int
-    public var memorySize: UInt64 // bytes, multiple of 1 MiB
-    public var machineIdentifier: Data? // VZGenericMachineIdentifier.dataRepresentation; nil = create new
+    public var memorySize: UInt64                 // bytes, multiple of 1 MiB
+    public var machineIdentifier: Data?           // VZGenericMachineIdentifier.dataRepresentation; nil = create new
     public var boot: BootDefinition
-    public var disks: [DiskDefinition] // attached in array order
-    public var network: NetworkDefinition? // nil = no NIC
+    public var disks: [DiskDefinition]            // attached in array order
+    public var network: NetworkDefinition?        // nil = no NIC
     public var vsockEnabled: Bool
-    public var consolePorts: [ConsolePortDefinition] // attached in array order; index 0 must be the system console
-    public var entropy: Bool // virtio-rng, default true
-    public var memoryBalloon: Bool // default true (device present, not driven in v1)
-    public var sound: SoundDefinition? // nil = no virtio-snd
-    public var customDevices: [any VirtioDeviceModel] // from VirtioDeviceCore / GraphicsCore
+    public var consolePorts: [ConsolePortDefinition]  // attached in array order; index 0 must be the system console
+    public var entropy: Bool                      // virtio-rng, default true
+    public var memoryBalloon: Bool                // default true (device present, not driven in v1)
+    public var sound: SoundDefinition?            // nil = no virtio-snd
+    public var customDevices: [any VirtioDeviceModel]  // from VirtioDeviceCore / GraphicsCore
 }
 
 public enum BootDefinition: Sendable {
@@ -44,23 +44,23 @@ public enum BootDefinition: Sendable {
 public struct DiskDefinition: Sendable, Codable, Equatable {
     public var url: URL
     public var readOnly: Bool
-    public var caching: DiskCaching //.automatic (default) |.cached |.uncached
-    public var synchronization: DiskSync //.full (default for rw) |.fsync |.none (tests only)
-    public var identifier: String? // VZVirtioBlockDeviceConfiguration.blockDeviceIdentifier (≤ 20 ASCII), visible as /sys/block/vdX/serial
-    public var role: String // for logs only, e.g. "os", "persistent", "userdata"
+    public var caching: DiskCaching               // .automatic (default) | .cached | .uncached
+    public var synchronization: DiskSync          // .full (default for rw) | .fsync | .none (tests only)
+    public var identifier: String?                // VZVirtioBlockDeviceConfiguration.blockDeviceIdentifier (≤ 20 ASCII), visible as /sys/block/vdX/serial
+    public var role: String                       // for logs only, e.g. "os", "persistent", "userdata"
 }
 
 public enum NetworkDefinition: Sendable, Codable, Equatable {
-    case nat(macAddress: String) // locally administered, persisted per instance
+    case nat(macAddress: String)                  // locally administered, persisted per instance
 }
 
 public struct ConsolePortDefinition: Sendable, Codable, Equatable {
-    public var role: ConsoleRole //.systemConsole |.log(name) |.silent(name) |.service(name)
+    public var role: ConsoleRole                  // .systemConsole | .log(name) | .silent(name) | .service(name)
 }
 
 public struct SoundDefinition: Sendable, Codable, Equatable {
-    public var output: Bool // VZHostAudioOutputStreamSink
-    public var input: Bool // VZHostAudioInputStreamSource (microphone, #084)
+    public var output: Bool                       // VZHostAudioOutputStreamSink
+    public var input: Bool                        // VZHostAudioInputStreamSource (microphone, #084)
 }
 ```
 
@@ -76,22 +76,22 @@ public actor VMController {
     public func start() async throws
     public func pause() async throws
     public func resume() async throws
-    public func stop() async throws // forced stop (VZ stop)
-    public func requestGuestStop() async throws // VZ requestStop (power-button event); see §9.3
-    public func reset() async throws // failed → stopped only; see §9.6
+    public func stop() async throws                    // forced stop (VZ stop)
+    public func requestGuestStop() async throws        // VZ requestStop (power-button event); see §9.3
+    public func reset() async throws                   // failed → stopped only; see §9.6
 
     public func connect(vsockPort: UInt32, timeout: Duration) async throws -> VsockConnection
-    public nonisolated func console(_ role: ConsoleRole) -> ConsoleChannel // read stream + optional writer
+    public nonisolated func console(_ role: ConsoleRole) -> ConsoleChannel   // read stream + optional writer
 }
 
 public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator can create it */ }
 ```
 
-  is followed literally: the controller is an actor, the state is explicit (`VMState`), and state is never inferred from a nil `VZVirtualMachine`.
+[AGENTS.md](../../AGENTS.md) §6.2 is followed literally: the controller is an actor, the state is explicit (`VMState`), and state is never inferred from a nil `VZVirtualMachine`.
 
 ## 3. Validation (`VMDefinitionValidator`, #002)
 
-`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every rule below, then builds the `VZVirtualMachineConfiguration` and calls its `validate`. Errors are collected, not thrown on the first one, so `apkrun doctor` can print them all:
+`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every rule below, then builds the `VZVirtualMachineConfiguration` and calls its `validate()`. Errors are collected, not thrown on the first one, so `apkrun doctor` can print them all:
 
 - One broken rule is thrown as its own case.
 - Several broken rules are thrown as one `.configurationInvalid([VMConfigurationFailure])`, a flat list in rule order ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §5.2).
@@ -115,7 +115,7 @@ public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator ca
 | `machineIdentifier`, when present, decodes with `VZGenericMachineIdentifier(dataRepresentation:)` | `.machineIdentifierInvalid` |
 | Custom device count ≤ what VZ accepts; each model's configuration validates (VirtioDeviceCore) | `.customDeviceInvalid(name, reason)` |
 | `sound.input == true` only when `NSMicrophoneUsageDescription` is present in the host bundle | `.microphoneUsageDescriptionMissing` |
-| `VZVirtualMachineConfiguration.validate` | `.frameworkRejected(underlying)` |
+| `VZVirtualMachineConfiguration.validate()` | `.frameworkRejected(underlying)` |
 
 Tests (T0): one test per rule, including kernel magic detection with real gzip, lz4, and `Image` headers (fixture headers are 64 bytes, not whole kernels).
 
@@ -165,7 +165,7 @@ The alternative, one `VZVirtioConsoleDeviceConfiguration` with named multiport p
 
 Apple does not document the order in which VZ assigns PCI functions to serial ports. So:
 
-1. #004 (M0) attaches three ports to the test Linux guest: `[.systemConsole,.service("test-1"),.service("test-2")]`. The host writes `APKRUN-PORT-<i>\n` into the `.service` ports 1 and 2 only, because it never writes to the system console outside `apkrun dev console` (§6.3). Port 0 is identified by the kernel console output that arrives on its pipe. The guest's `/init` reads `/dev/hvc1` and `/dev/hvc2` and prints which marker it saw. The mapping is asserted in a T2 test.
+1. #004 (M0) attaches three ports to the test Linux guest: `[.systemConsole, .service("test-1"), .service("test-2")]`. The host writes `APKRUN-PORT-<i>\n` into the `.service` ports 1 and 2 only, because it never writes to the system console outside `apkrun dev console` (§6.3). Port 0 is identified by the kernel console output that arrives on its pipe. The guest's `/init` reads `/dev/hvc1` and `/dev/hvc2` and prints which marker it saw. The mapping is asserted in a T2 test.
 2. #095 repeats this with all 20 ports, using a small guest-side probe run from the test initramfs, before the Android boot relies on it.
 3. If VZ numbering is not the array order, `ConsolePortPlan` (RuntimeCore) re-orders the array so that the guest numbering matches the Cuttlefish map. The mapping is data, never scattered constants.
 
@@ -195,7 +195,7 @@ Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
 ## 7. Networking (#006)
 
 - One virtio-net device with a NAT attachment. The guest gets an address from VZ's DHCP (typically `192.168.64.0/24`), and DNS is served by the host. No entitlement is needed.
-- The MAC address is generated once (`VZMACAddress.randomLocallyAdministered`) and stored in `instance.json`, so the guest sees a stable interface across boots.
+- The MAC address is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`, so the guest sees a stable interface across boots.
 - No inbound port forwarding exists or is needed. Host → guest traffic uses vsock (§8).
 - Cuttlefish expects particular interface names (for example, Wi-Fi via `virt_wifi` over a renamed ethernet interface). Whether the stock image brings up connectivity on VZ's single NIC is checked in #095 ([android-image.md](android-image.md) §7.4).
 - Test (T2, #006): the Linux test guest gets a DHCP lease and fetches `http://<gateway>:<port>/generate_204` from an HTTP server that the test runs on the host (expects 204), and the attachment's disconnect delegate callback is logged. T2 needs no Internet access. Resolving a public name and fetching `https://connectivitycheck.gstatic.com/generate_204` is a T3 network check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.5).
@@ -215,13 +215,13 @@ Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
 ### 9.1 Start
 
 ```text
-start
-state: stopped → starting (PerfMarker VM_START)
-build VZVirtualMachine on the VM queue with the validated configuration
-attach delegates: VZVirtualMachineDelegate, VZNetworkDeviceAttachment disconnect handling
-vm.start { result }
-success → state: running
-failure → state: failed(.startFailed(underlying))
+start()
+  state: stopped → starting                 (PerfMarker VM_START)
+  build VZVirtualMachine on the VM queue with the validated configuration
+  attach delegates: VZVirtualMachineDelegate, VZNetworkDeviceAttachment disconnect handling
+  vm.start { result }
+     success → state: running
+     failure → state: failed(.startFailed(underlying))
 ```
 
 `KERNEL_START` is recorded by RuntimeCore's `BootPhaseDetector` when the first console line arrives (Linux prints `Booting Linux on physical CPU` first).
@@ -236,17 +236,17 @@ failure → state: failed(.startFailed(underlying))
 
 ### 9.3 Stopping Android correctly
 
-`requestGuestStop` maps to `VZVirtualMachine.requestStop`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:
+`requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:
 
 - RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
-- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
+- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
 - A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
-- `requestGuestStop` exists for the test Linux guest, whose init powers off on the power key.
+- `requestGuestStop()` exists for the test Linux guest, whose init powers off on the power key.
 
 ### 9.4 Pause and resume
 
-- `pause` / `resume` wrap `VZVirtualMachine.pause/resume`. Custom devices get `WillPause`/`WillResume` delegate callbacks; GraphicsCore stops presenting while paused ([graphics.md](graphics.md) §8).
-- The guest clock does not advance correctly across a pause as far as Android is concerned. After `resume`, RuntimeCore asks the Guest Agent to resync wall-clock time ([desktop-integration.md](desktop-integration.md) §9). VirtualMachineCore only reports the pause duration.
+- `pause()` / `resume()` wrap `VZVirtualMachine.pause/resume`. Custom devices get `WillPause`/`WillResume` delegate callbacks; GraphicsCore stops presenting while paused ([graphics.md](graphics.md) §8).
+- The guest clock does not advance correctly across a pause as far as Android is concerned. After `resume()`, RuntimeCore asks the Guest Agent to resync wall-clock time ([desktop-integration.md](desktop-integration.md) §9). VirtualMachineCore only reports the pause duration.
 - Host sleep: RuntimeCore's `PowerObserver` registers with `IORegisterForSystemPower` (apkrund has no NSApplication, so `NSWorkspace` notifications are not used). It pauses a running VM before acknowledging `kIOMessageSystemWillSleep` and resumes it on `kIOMessageSystemHasPoweredOn` ([runtime-daemon.md](runtime-daemon.md) §6). We don't rely on VZ's implicit behaviour during host sleep (FR-VM-11, #069).
 
 ### 9.5 Save and restore
@@ -255,7 +255,7 @@ Not used. The VirGL renderer state lives in host GL contexts and cannot be seria
 
 ### 9.6 Reset
 
-`failed → stopped` happens only through `reset`, after the diagnostics capture ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1). `reset` releases the `VZVirtualMachine`, closes pipes, and flushes console logs.
+`failed → stopped` happens only through `reset()`, after the diagnostics capture ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1). `reset()` releases the `VZVirtualMachine`, closes pipes, and flushes console logs.
 
 ## 10. Memory and CPU defaults
 
@@ -294,7 +294,7 @@ The same guest is reused by #063 (test virtio device) and #019 (virtio-gpu probi
 ```swift
 public enum VMConfigurationFailure: APKRunError {
     /* one case per §3 rule */
-    case configurationInvalid([VMConfigurationFailure]) // several rules broken (§3)
+    case configurationInvalid([VMConfigurationFailure])   // several rules broken (§3)
 }
 
 public enum VMFailure: APKRunError {
@@ -307,10 +307,10 @@ public enum VMFailure: APKRunError {
     case vsockConnectFailed(port: UInt32, underlying: VZErrorInfo)
     case vsockPortNotListening(port: UInt32)
     case vsockConnectTimedOut(port: UInt32)
-    case virtualizationUnavailable // VZVirtualMachineConfiguration.isSupported == false or entitlement missing
+    case virtualizationUnavailable          // VZVirtualMachineConfiguration.isSupported == false or entitlement missing
     // health findings (§14), never thrown
-    case networkAttachmentLost // vm.network: the NAT attachment was disconnected (§9.2)
-    case consoleLogWriteFailed // vm.consoleWriter: writing a console log failed
+    case networkAttachmentLost              // vm.network: the NAT attachment was disconnected (§9.2)
+    case consoleLogWriteFailed              // vm.consoleWriter: writing a console log failed
 }
 ```
 
@@ -320,7 +320,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 
 - Subsystem `io.apkrun.vm`, categories `lifecycle`, `config`, `console`, `vsock`, `network`, and `virtio` (VirtioDeviceCore: `DRIVER_OK`, notifications, resets).
 - Every transition is logged with the operation ID that caused it.
-- `PerfMarker.vmStart` at `start`. Other boot markers come from RuntimeCore ([diagnostics.md](diagnostics.md) §4).
+- `PerfMarker.vmStart` at `start()`. Other boot markers come from RuntimeCore ([diagnostics.md](diagnostics.md) §4).
 - Health (`HealthCheck` in DiagnosticsCore): `vm.state`, `vm.network` (warning `vm.networkAttachmentLost` after a disconnect), `vm.consoleWriter` (errors while writing logs: warning `vm.consoleLogWriteFailed`), `vm.virtualizationSupported`.
 
 ## 15. Tests
@@ -347,7 +347,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 |---|---|
 | VZ serial port numbering is not documented (§6.2) | #004 checks three ports on the test Linux guest, #095 all 20 ports. If the order is not the array order, `ConsolePortPlan` re-orders the array |
 | Device order and the PCI host bridge's platform device name (§5) | discovered by #011 and committed to `Images/reference/vz/<macOS build>/topology.txt`. Nothing relies on `vdX` letters or slot numbers |
-| Whether `VZVirtualMachineConfiguration.validate` runs in an unentitled `swift test` process (§3) | #002 tries it. If it needs the virtualization entitlement, the T0 validator tests stop before the framework step, and the framework rule is tested in the `IntegrationTests` bundle hosted by the entitled `APKRunTestHost` ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
+| Whether `VZVirtualMachineConfiguration.validate()` runs in an unentitled `swift test` process (§3) | #002 tries it. If it needs the virtualization entitlement, the T0 validator tests stop before the framework step, and the framework rule is tested in the `IntegrationTests` bundle hosted by the entitled `APKRunTestHost` ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
 | How VZ reports a start failure: the `start` completion error, `didStopWithError`, or both (§9.1, §9.2) | #003 records it for a bad kernel and a missing disk. A second report of the same failure must not cause a second transition |
 | Whether macOS shows the microphone prompt at VM start or at the first capture (OQ-29, §11) | #084. The input stream is attached only while a package uses it, so neither answer changes the design |
 | Whether the stock Cuttlefish arm64 kernel carries `virtio_snd` (OQ-38, §11) | #083. If not, the custom image adds it ([android-image.md](android-image.md) §7.5) |
@@ -359,7 +359,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 
 | Question | Task | Result |
 |---|---|---|
-| `validate` without the virtualization entitlement | #002 | pending |
+| `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
 | Serial port numbering with three ports | #004 | pending |
 | Read-only disks are read-only in the guest | #005 | pending |

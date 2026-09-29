@@ -152,13 +152,13 @@ public protocol UpdateProvider: Sendable {
     /// Downloads every artifact of the candidate into `destination` (Packages/<id>/incoming/<ticket>/),
     /// hashing while streaming.
     func download(_ candidate: UpdateCandidate, to destination: DownloadDestination,
-        context: ProviderContext,
-        progress: @Sendable (DownloadProgress) -> Void) async throws(UpdateFailure) -> PackageArtifact
+                  context: ProviderContext,
+                  progress: @Sendable (DownloadProgress) -> Void) async throws(UpdateFailure) -> PackageArtifact
 }
 
 public struct UpdateProviderRef: Codable, Sendable, Hashable {
-    public var type: ProviderType //.local,.direct,.fdroid,.github
-    public var configuration: ProviderConfiguration // typed per provider, stored as JSON (package-metadata-json.md §2.4)
+    public var type: ProviderType              // .local, .direct, .fdroid, .github
+    public var configuration: ProviderConfiguration   // typed per provider, stored as JSON (package-metadata-json.md §2.4)
 }
 
 public struct InstalledPackage: Sendable {
@@ -166,33 +166,33 @@ public struct InstalledPackage: Sendable {
     public var versionCode: VersionCode
     public var signerDigests: [SHA256Digest]
     public var lineage: [SHA256Digest]
-    public var guest: GuestFacts // SDK, ABIs
-    public var lastCursor: ProviderCursor? // what the provider saw last time (§4.2)
+    public var guest: GuestFacts               // SDK, ABIs
+    public var lastCursor: ProviderCursor?     // what the provider saw last time (§4.2)
 }
 
 public struct UpdateCandidate: Codable, Sendable, Hashable {
     public var packageID: PackageID
     public var provider: UpdateProviderRef
-    public var declaredVersionCode: VersionCode? // nil when the provider cannot know it before download (GitHub)
+    public var declaredVersionCode: VersionCode?        // nil when the provider cannot know it before download (GitHub)
     public var declaredVersionName: String?
-    public var declaredSignerDigests: [SHA256Digest]? // F-Droid index, Direct manifest (optional)
+    public var declaredSignerDigests: [SHA256Digest]?   // F-Droid index, Direct manifest (optional)
     public var artifacts: [RemoteArtifact]
-    public var releaseNotes: String? // plain text, at most 16 KiB, shown as text (never rendered as HTML)
+    public var releaseNotes: String?                    // plain text, at most 16 KiB, shown as text (never rendered as HTML)
     public var publishedAt: Date?
-    public var cursor: ProviderCursor // identifies this release to the provider
+    public var cursor: ProviderCursor                   // identifies this release to the provider
 }
 
 public struct RemoteArtifact: Codable, Sendable, Hashable {
-    public var url: URL // HTTPS (file URL for LocalProvider)
-    public var kind: RemoteArtifactKind //.apk,.split(name:),.container (.apks,.xapk,.apkm)
-    public var sha256: SHA256Digest? // provider-declared; required for Direct and F-Droid
+    public var url: URL                                 // HTTPS (file URL for LocalProvider)
+    public var kind: RemoteArtifactKind                 // .apk, .split(name:), .container (.apks, .xapk, .apkm)
+    public var sha256: SHA256Digest?                    // provider-declared; required for Direct and F-Droid
     public var size: Int64?
 }
 
 public struct ProviderContext: Sendable {
-    public var http: UpdateHTTPClient // the shared session of §3.4
-    public var cache: ProviderCache // Providers/cache/<type>/<key>/
-    public var credentials: ProviderCredentials // Keychain access (GitHub token)
+    public var http: UpdateHTTPClient                   // the shared session of §3.4
+    public var cache: ProviderCache                     // Providers/cache/<type>/<key>/
+    public var credentials: ProviderCredentials         // Keychain access (GitHub token)
     public var userInitiated: Bool
 }
 ```
@@ -211,7 +211,7 @@ For tests and development. It is hidden in the UI unless developer mode is on, a
 <root>/
 └── <packageId>/
     ├── 1/
-    │   └── app.apk # or base.apk + split_*.apk, or one.apks
+    │   └── app.apk                      # or base.apk + split_*.apk, or one .apks
     └── 2/
         └── app.apk
 ```
@@ -231,16 +231,9 @@ A distributor publishes an APKRun manifest over HTTPS (FR-UPD-12). The format is
   "versionCode": 44,
   "versionName": "4.4.0",
   "artifacts": [
-    {
-      "type": "apk",
-      "url": "https://example.com/app-4.4.0.apk",
-      "sha256": "…",
-      "size": 51234567
-    }
+    { "type": "apk", "url": "https://example.com/app-4.4.0.apk", "sha256": "…", "size": 51234567 }
   ],
-  "signingCertificates": [
-    "sha256:…"
-  ],
+  "signingCertificates": ["sha256:…"],
   "minSdk": 29,
   "releaseNotes": "…"
 }
@@ -290,18 +283,18 @@ The suggestion is off by default. The user turns it on, and the sheet shows wher
 
 ```text
 UpdateCoordinator.run(package)
-checking provider.check → nil → completed(.skipped(.upToDate)); cursor saved
-error → completed(.skipped(.checkFailed(UpdateFailure))); backoff (§3.2)
-→ candidate → available(candidate)
-available notifyOnly: stop, notify (§9). automatic, or the user chose "Update": continue
-downloading PackageStore.beginDownloadTicket(id) → incoming/<ticket>/
-provider.download (hash while streaming; size cap 8 GiB; progress events)
-sha256 ≠ declared → discard, retry once from scratch, then.hashMismatch
-validating PackageStore.inspect(ticket) → intrinsic checks (package-store.md §4.6)
-UpdateValidator V1–V6 (§6)
-failure → completed(.skipped(.validationFailed(reason))); ticket deleted; cursor saved
-staged PackageStore.stage(ticket, StagedUpdateInfo{provider, candidate, validation report})
-→ GentleUpdateGate (§7)
+  checking        provider.check → nil → completed(.skipped(.upToDate)); cursor saved
+                  error → completed(.skipped(.checkFailed(UpdateFailure))); backoff (§3.2)
+                  → candidate → available(candidate)
+  available       notifyOnly: stop, notify (§9). automatic, or the user chose "Update": continue
+  downloading     PackageStore.beginDownloadTicket(id) → incoming/<ticket>/
+                  provider.download (hash while streaming; size cap 8 GiB; progress events)
+                  sha256 ≠ declared → discard, retry once from scratch, then .hashMismatch
+  validating      PackageStore.inspect(ticket) → intrinsic checks (package-store.md §4.6)
+                  UpdateValidator V1–V6 (§6)
+                  failure → completed(.skipped(.validationFailed(reason))); ticket deleted; cursor saved
+  staged          PackageStore.stage(ticket, StagedUpdateInfo{provider, candidate, validation report})
+                  → GentleUpdateGate (§7)
 ```
 
 - A **manual update** (a newer file imported by the user, `ImportRelation.update`, [package-store.md](package-store.md) §4.7) enters at `validating` with the import ticket. It then follows the same path. Its gate is user-initiated (§7.3).
@@ -354,13 +347,13 @@ An update is never installed while the app is in use (FR-UPD-07). "In use" is de
 | GU2 | No `AppSession` for the package in any state except `ended`, including `backgrounded` | `SessionRegistry` ([runtime-daemon.md](runtime-daemon.md) §7) |
 | GU3 | No keep-running task for the package (`window.closeBehavior = keepRunning`) | `ActivityKind.backgroundTask` ([runtime-daemon.md](runtime-daemon.md) §5.1) |
 | GU4 | The last session of the package ended at least 15 s ago, so a quick reopen does not collide with the install | `SessionRegistry` |
-| GU5 | Android agrees. Custom image: `CheckInstallConstraints` (Store Agent op 110) with `InstallConstraints.GENTLE_UPDATE` plus `setAppNotForegroundRequired`, timeout 10 s. Stock image: the Guest Agent's `ListTasks` shows no task of the package on any display | [guest-protocol.md](guest-protocol.md) §11.1 |
+| GU5 | Android agrees. Custom image: `CheckInstallConstraints` (Store Agent op 110) with `InstallConstraints.GENTLE_UPDATE` plus `setAppNotForegroundRequired()`, timeout 10 s. Stock image: the Guest Agent's `ListTasks` shows no task of the package on any display | [guest-protocol.md](guest-protocol.md) §11.1 |
 | GU6 | No other store transaction is running for the package, and none is queued ahead of it (one Android commit at a time, [package-store.md](package-store.md) §5.3) | `PackageStore` |
 | GU7 | A DisplayPool slot is available for the health check (§8), unless the package's health check is `versionOnly` | `DisplayPool` |
 
 GU5 is a hint that can change a moment later ("the query result is just a hint", Android documentation). What makes the outcome deterministic is the host side: GU2–GU4, plus the rule in §7.2 that a session opened during an install waits for it.
 
-Whether `GENTLE_UPDATE` together with `setAppNotForegroundRequired` treats a foreground service (music playback started from a notification) as "in use" is verified in #040. If it does not, GU5 on custom images adds the `ListTasks` rule and a process-importance query, and this section is updated.
+Whether `GENTLE_UPDATE` together with `setAppNotForegroundRequired()` treats a foreground service (music playback started from a notification) as "in use" is verified in #040. If it does not, GU5 on custom images adds the `ListTasks` rule and a process-importance query, and this section is updated.
 
 ### 7.2 Evaluation and races
 
@@ -392,14 +385,14 @@ When an update has been staged for 7 days without the gate opening (the app is a
 /// Injected by RuntimeHost. UpdateCore never imports RuntimeCore.
 public protocol UpdateRuntimeAccess: Sendable {
     var runtimeState: RuntimeState { get async }
-    var runtimeEvents: AsyncStream<RuntimeEvent> { get } // state changes, session starts/ends, task ends
-    func hasActiveUse(_ package: PackageID) async -> Bool // GU2 + GU3
+    var runtimeEvents: AsyncStream<RuntimeEvent> { get }                 // state changes, session starts/ends, task ends
+    func hasActiveUse(_ package: PackageID) async -> Bool                // GU2 + GU3
     func lastSessionEnd(_ package: PackageID) async -> ContinuousClock.Instant?
-    func androidAllowsGentleInstall(_ package: PackageID) async -> Bool // GU5 on either image
-    func ensureReady(_ reason: StartReason) async throws(RuntimeFailure) //.update (§3.5, §7.3)
+    func androidAllowsGentleInstall(_ package: PackageID) async -> Bool  // GU5 on either image
+    func ensureReady(_ reason: StartReason) async throws(RuntimeFailure)          // .update (§3.5, §7.3)
     func endSessions(for package: PackageID, reason: SessionEndReason) async
-    func reopen(_ package: PackageID) async // after "Update Now"
-    func healthCheckLaunch(_ package: PackageID, timeouts: HealthCheckTimeouts) async -> HealthLaunchResult // §8.2
+    func reopen(_ package: PackageID) async                              // after "Update Now"
+    func healthCheckLaunch(_ package: PackageID, timeouts: HealthCheckTimeouts) async -> HealthLaunchResult   // §8.2
 }
 ```
 
@@ -502,21 +495,12 @@ Owned by `UpdateStateStore`. Written atomically (temporary file + barrier fsync 
       "lastCheckAt": "2026-10-02T09:00:00Z",
       "nextCheckAt": "2026-10-02T15:21:00Z",
       "consecutiveFailures": 0,
-      "cursor": {
-        "type": "direct",
-        "value": "W/\"5f2c…\""
-      },
+      "cursor": { "type": "direct", "value": "W/\"5f2c…\"" },
       "phase": "staged",
-      "candidate": {
-        "versionCode": 45,
-        "versionName": "4.5.0",
-        "provider": "direct"
-      },
+      "candidate": { "versionCode": 45, "versionName": "4.5.0", "provider": "direct" },
       "stagedAt": "2026-10-02T09:01:10Z",
       "waitingNotifiedAt": null,
-      "skippedVersions": [
-        43
-      ]
+      "skippedVersions": [43]
     }
   }
 }
@@ -540,7 +524,7 @@ The DTOs are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md)
 | Operation | Behavior | Long operation |
 |---|---|---|
 | `checkForUpdates(packages: [PackageID]?)` | user-initiated check of the given packages, or all `apkrun` packages | yes (per-package results) |
-| `listUpdates` | per package: phase, candidate, last check, next check, waiting reason (which gate condition is false) | no |
+| `listUpdates()` | per package: phase, candidate, last check, next check, waiting reason (which gate condition is false) | no |
 | `updatePackage(id, UpdateNowOptions{closeRunningApp, file})` | §7.3. With `file`, a manual update from a file handle | yes |
 | `setUpdatePolicy(id, UpdatePolicy{choice, provider})` | §2.3. Validates the provider configuration, and for F-Droid and GitHub makes one test request | no |
 | `setUpdateAuthority(id, AuthorityChoice)` | §2.1. `.apkrun`, `.manual`, or `.external`, through `PackageStore.setUpdateAuthority` | no |
@@ -557,9 +541,9 @@ Topic `updates`:
 ```swift
 public enum UpdateEvent: Codable, Sendable {
     case phaseChanged(PackageID, UpdatePhase)
-    case progress(PackageID, OperationID, fraction: Double) // download, install; coalesced to 10 Hz
+    case progress(PackageID, OperationID, fraction: Double)      // download, install; coalesced to 10 Hz
     case finished(PackageID, UpdateOutcome)
-    case summaryChanged(available: Int, waiting: Int, failed: Int) // for the menu bar badge
+    case summaryChanged(available: Int, waiting: Int, failed: Int)   // for the menu bar badge
 }
 ```
 
@@ -568,8 +552,8 @@ public enum UpdateEvent: Codable, Sendable {
 The full syntax is in [cli.md](cli.md).
 
 ```text
-apkrun update [--check-only] [--json] check every apkrun package now; install per mode (automatic ones gently)
-apkrun update <package> [--now] [--file <apk>…] check and install this package now (§7.3); --file = manual update
+apkrun update [--check-only] [--json]                 check every apkrun package now; install per mode (automatic ones gently)
+apkrun update <package> [--now] [--file <apk>…]       check and install this package now (§7.3); --file = manual update
 apkrun update policy <package> --mode automatic|notify|manual [--provider <spec> | --no-provider]
 apkrun update authority <package> apkrun|manual|external
 apkrun update skip <package> <versionCode>
@@ -578,7 +562,7 @@ apkrun update history [<package>] [--limit <n>] [--json]
 apkrun rollback <package> [--allow-data-loss]
 ```
 
-Provider specs: `local:<path>`, `direct:<https-url>`, `fdroid[:<repository-url>#<fingerprint>]`, and `github:<owner>/<name>[:<asset-glob>][@prerelease]`. The legacy `apkrun wrap … --update auto|notify|manual --update-provider direct --update-url <url>` and `--updates auto` options are accepted as aliases.
+Provider specs: `local:<path>`, `direct:<https-url>`, `fdroid[:<repository-url>#<fingerprint>]`, and `github:<owner>/<name>[:<asset-glob>][@prerelease]`. The alternate `apkrun wrap … --update auto|notify|manual --update-provider direct --update-url <url>` and `--updates auto` options are accepted as aliases.
 
 ---
 
@@ -605,24 +589,24 @@ public enum UpdateFailure: APKRunError {
     case providerMetadataInvalid(detail: String)
     case providerSignatureInvalid
     case providerNotConfigured
-    case noCompatibleArtifact(NoArtifactReason) //.abi,.sdk,.signerDiffers
+    case noCompatibleArtifact(NoArtifactReason)        // .abi, .sdk, .signerDiffers
     case ambiguousAsset([String])
     case downloadFailed(detail: String)
     case hashMismatch(file: String)
     case tooLarge(bytes: Int64)
-    case validation(ValidationFailure) // §6
+    case validation(ValidationFailure)                 // §6
     case authorityDoesNotAllowUpdates(UpdateAuthority)
     case installFailed(StoreFailure)
-    case healthCheckFailed(HealthCheckFailure) //.versionNotConfirmed(found:),.launchFailed,.processDied(.crash/.anr),.noFirstFrame
+    case healthCheckFailed(HealthCheckFailure)          // .versionNotConfirmed(found:), .launchFailed, .processDied(.crash/.anr), .noFirstFrame
     case rollbackFailed(StoreFailure)
     case cancelled
     // health findings (§14), never thrown
-    case schedulerLate(duration: Duration) // updates.scheduler: no scheduler run for 2 × the interval while apkrund was running
-    case stagedTooLong(PackageID) // updates.waiting: an update staged for more than 7 days
+    case schedulerLate(duration: Duration)              // updates.scheduler: no scheduler run for 2 × the interval while apkrund was running
+    case stagedTooLong(PackageID)                       // updates.waiting: an update staged for more than 7 days
 }
 
-public enum HealthCheckFailure: APKRunError { // the post-install health check (§8)
-    case versionNotConfirmed(found: VersionCode?) // H1: Android doesn't report the staged versionCode and signer within 30 s. nil when it reports none
+public enum HealthCheckFailure: APKRunError {           // the post-install health check (§8)
+    case versionNotConfirmed(found: VersionCode?)       // H1: Android doesn't report the staged versionCode and signer within 30 s. nil when it reports none
     case launchFailed
     case processDied(ProcessDeath)
     case noFirstFrame
@@ -779,7 +763,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Does `GENTLE_UPDATE` with `setAppNotForegroundRequired` treat a foreground service as "in use"? | #040 | pending (§7.1, OQ-17) |
+| Does `GENTLE_UPDATE` with `setAppNotForegroundRequired()` treat a foreground service as "in use"? | #040 | pending (§7.1, OQ-17) |
 | Gate G7: APK v1 automatically upgrades to v2 ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2) | #040 | pending (§15 #040) |
 | A launch with a slow provider reaches `FIRST_FRAME` in the same time as with the provider disabled (NFR-PERF-07) | #074 | pending (§15 #074) |
 | Gate G9: the wrapper stays unchanged while the APK updates automatically ([../04-plan/roadmap.md](../04-plan/roadmap.md) §2) | #049 | pending (§15 #049) |

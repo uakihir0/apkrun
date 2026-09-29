@@ -24,21 +24,21 @@ APKRun is not an Android emulator UI. The Android OS is never shown to the user.
 
 ```text
 Discord.apk
-  ↓ drop onto APKRun (or double-click)
-┌───────────────────────────────────────┐
-│ Add Android Application               │
-│ [icon] Discord                        │
-│ Package: com.discord                  │
-│ Version: 245.0                        │
-│ ☑ Create Mac Application              │
-│ Install in /Applications              │
-│ Updates: ● Automatic                  │
-│           ○ Notify only               │
-│           ○ Manual                    │
-│ Provider: Automatic Detection         │
-│ [ Install ]                           │
-└───────────────────────────────────────┘
-  ↓
+      ↓  drop onto APKRun (or double-click)
+┌──────────────────────────────┐
+│ Add Android Application      │
+│ [icon]  Discord              │
+│ Package   com.discord        │
+│ Version   245.0              │
+│ Create Mac Application  ✓    │
+│ Install in  /Applications    │
+│ Updates   ● Automatic        │
+│           ○ Notify only      │
+│           ○ Manual           │
+│ Provider  Automatic Detection│
+│              [ Install ]     │
+└──────────────────────────────┘
+      ↓
 /Applications/Discord.app
 ```
 
@@ -63,19 +63,19 @@ Weeks later, Discord for Android v246 is published. In the background:
 
 ```text
 UpdateProvider detects new version
-↓ download
-↓ verify (package ID / signing lineage / versionCode / hash / split consistency)
-↓ Discord is in use → wait
-↓ Discord closed
-↓ install through PackageInstaller (data preserved)
-↓ health check (version / launch / first frame)
+      ↓ download
+      ↓ verify (package ID / signing lineage / versionCode / hash / split consistency)
+      ↓ Discord is in use → wait
+      ↓ Discord closed
+      ↓ install through PackageInstaller (data preserved)
+      ↓ health check (version / launch / first frame)
 v246 installed
 ```
 
 The next day the user launches `Discord.app`. It looks exactly the same, but the latest Android app runs inside. **`Discord.app` itself has not changed by a single byte** — no re-signing, no re-notarization.
 
 ```text
-Discord.app ──(unchanged)──▶ APKRun Runtime ──▶ com.discord v246
+Discord.app  ──(unchanged)──▶  APKRun Runtime  ──▶  com.discord v246
 ```
 
 This is the finished form of APKRun.
@@ -86,15 +86,15 @@ This is the finished form of APKRun.
 
 ```text
 Discord.app (thin wrapper / APKRunLauncher, owns the NSWindow)
-  ↓ XPC
+      ↓ XPC
 apkrund (per-user LaunchAgent, resident)
-  ↓
+      ↓
 Android VM (Virtualization.framework, kept warm)
-  ↓
+      ↓
 com.discord (runs on the real Android Framework / ART)
-  ↓
+      ↓
 Android display N (virtio-gpu scanout N)
-  ↓ VirGL → virglrenderer → ANGLE → Metal → IOSurface
+      ↓ VirGL → virglrenderer → ANGLE → Metal → IOSurface
 Presented in Discord.app's NSWindow
 ```
 
@@ -136,15 +136,15 @@ Runtime sharing (one VM shared by all apps)
 
 ```text
 Thin Mac App Wrapper
-+
+       +
 Shared Android Runtime (apkrund)
-+
+       +
 ARM64 Virtualization (Virtualization.framework)
-+
+       +
 Native Window Bridge (Android display ↔ NSWindow via IOSurface)
-+
+       +
 Managed Android Package Store (Store Agent + PackageInstaller)
-+
+       +
 Automatic Updates (UpdateCore + UpdateProvider)
 ```
 

@@ -11,7 +11,7 @@ This is the one test strategy for APKRun. The design documents list what each mo
 
 ## 1. Principles
 
-| ID | Principle | Source |
+| ID | Principle | Reference |
 |---|---|---|
 | P1 | Every module with logic has unit tests (T0). Pure logic is tested at T0, never only at T2. | |
 | P2 | Integration tests use a real Android guest. A behavior that crosses the host/guest boundary is verified at T2 against a real image. Tests with fakes alone never close such a task. | |
@@ -64,7 +64,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 - **Definition.** Real host resources, no VM. Examples from the design documents:
   - processes: crash injection with `APKRUN_STORE_FAULT`, the instance lock between two processes, `aapt2` golden outputs, compile-fail tests;
   - the file system: `clonefile`, hole punching, and recovery points on a temporary APFS volume, file modes, registry atomic writes;
-  - XPC: an in-process `NSXPCListener.anonymous` with authorization per endpoint;
+  - XPC: an in-process `NSXPCListener.anonymous()` with authorization per endpoint;
   - Metal and windows: GraphicsBridge, the recorded `kmscube` replay, `IOSurfaceLayerView` screenshots;
   - `codesign`: wrapper generation, validation, and approval;
   - local HTTP servers on `127.0.0.1`: the image downloader, a local feed, the GitHub REST mock;
@@ -446,7 +446,7 @@ The gates and their pass conditions are listed in [roadmap.md](roadmap.md) §2. 
 | G5 Two APKs in two windows | #030 | `G5TwoWindows` | stock image, HelloText and HelloCompose ([display-and-windowing.md](../02-design/display-and-windowing.md) §12 #030) | two windows, each on its own Android display; input reaches only the focused window's app; closing one leaves the other running and interactive |
 | G6 Warm under apkrund | #031, #032, #068 (staged, [roadmap.md](roadmap.md) §2) | `G6WarmRuntime` | stock image (custom image after #035), HelloText | the VM runs in apkrund started by launchd; quitting APKRun.app leaves HelloText interactive for 5 minutes; a warm launch shows no boot markers; after `kill -9`, launchd restarts apkrund within 15 s and the client reconnects |
 | G7 v1 → v2 automatically | #040 | `G7GentleUpdate` | custom image, HelloUpdate V1 and V2, local provider | V2 is found and staged in the background; no install for 10 minutes while V1's window is open, nor while it runs with `keepRunning`; V2 is installed within 30 s after quit; the next launch shows V2 with `data HELLO`; the update history records each step |
-| G8 APK wrapped as.app | #047 | `G8Wrapper` | custom image, HelloText | `HelloText.app` has bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`, `Signature=adhoc`, and passes `codesign --verify --strict`; opening it in Finder shows an interactive window; no Terminal and no other process starts; the Dock launch works for a cold and a warm runtime |
+| G8 APK wrapped as .app | #047 | `G8Wrapper` | custom image, HelloText | `HelloText.app` has bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`, `Signature=adhoc`, and passes `codesign --verify --strict`; opening it in Finder shows an interactive window; no Terminal and no other process starts; the Dock launch works for a cold and a warm runtime |
 | G9 Wrapper unchanged during updates | #049 | `G9WrapperIntegrity` | custom image, HelloUpdate V1 and V2 | the SHA-256 of every file of `HelloUpdate.app` (`APKRunLauncher`, `Info.plist`, `wrapper.json`, `AppIcon.icns`, `_CodeSignature/`) and the cdhash in `Wrappers/registry.json` are unchanged after V2 is installed; the same wrapper runs V2 and V1's data is kept; no re-signing happened |
 
 Rules:
@@ -535,7 +535,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #053 | `IntegrationPolicy` table, loop prevention | `ClipboardBridge` echo suppression | [desktop-integration.md](../02-design/desktop-integration.md) §4.5: `héllo 😀` both ways, setting off, 5-minute loop with HelloClipboard and HelloText | ⌘V p95 ≤ 150 ms for 64 KiB (§7.1); v0.2 checklist: TextEdit, R-21 |
 | #069 | `IdleController` with a manual clock | — | suspended after 1 minute; resume p50 ≤ 500 ms over 20 runs; idle stop; `keepRunning`, `adb shell`, and installs prevent suspend; injected sleep and wake with time sync; Linux guest pause and resume | nightly `pmset sleepnow` with a scheduled wake; `idle-cpu` (§7.1); v1.0 checklist: lid close |
 | #070 | `PerfRecordWriter` and `launchState` classification ([diagnostics.md](../02-design/diagnostics.md) §12 T1-9) | — | `CollectDiagnostics` returns `DUMPSYS_MEMINFO`, and an item the agent does not know is answered `unsupported` | all harness scenarios; two `warm-launch` runs agree within 10 %; segments add up within 5 ms |
-| #071 | `TextInputModel`, editor commands, secure input balance | IME command mapping with a fake `InputConnection` | にほんご → 日本語 in HelloText and HelloCompose; emoji; ⌘V; password field has secure input (`IsSecureEventInputEnabled`) and a Roman source | v0.2 checklist: candidate window position |
+| #071 | `TextInputModel`, editor commands, secure input balance | IME command mapping with a fake `InputConnection` | にほんご → 日本語 in HelloText and HelloCompose; emoji; ⌘V; password field has secure input (`IsSecureEventInputEnabled()`) and a Roman source | v0.2 checklist: candidate window position |
 
 ### 6.6 M5 Custom Android image
 

@@ -26,21 +26,21 @@ enum VMState: Sendable, Equatable {
 
 | From | To | Trigger |
 |---|---|---|
-| stopped | starting | `start` |
+| stopped | starting | `start()` |
 | starting | running | VZ `start` completion success |
 | starting | failed | VZ `start` completion error, or configuration validation failure |
-| running | paused | `pause` (idle policy, sleep) |
-| paused | running | `resume` |
-| running, paused | stopping | `stop` / `requestGuestStop` |
+| running | paused | `pause()` (idle policy, sleep) |
+| paused | running | `resume()` |
+| running, paused | stopping | `stop()` / `requestGuestStop()` |
 | stopping | stopped | `guestDidStop` or forced stop completed |
 | stopping | failed | `virtualMachine(_:didStopWithError:)`, or the forced stop did not complete within 10 s (`.stopTimedOut`) |
 | running, paused | failed | `virtualMachine(_:didStopWithError:)` |
 | running, paused | stopped | `guestDidStop` (guest powered off by itself) |
-| failed | stopped | `reset` (clears error after diagnostics were captured) |
+| failed | stopped | `reset()` (clears error after diagnostics were captured) |
 
 Notes:
 
-- Android is not stopped with `requestGuestStop`: VZ's `requestStop` is a power-button press, which Android treats as "screen off". RuntimeCore asks Android to shut down (Guest Agent `Shutdown`, or `adb shell reboot -p` in development), waits 20 s for `guestDidStop`, and then calls `stop` ([../02-design/vm.md](../02-design/vm.md) §9.3). `requestGuestStop` is for the test Linux guest.
+- Android is not stopped with `requestGuestStop()`: VZ's `requestStop` is a power-button press, which Android treats as "screen off". RuntimeCore asks Android to shut down (Guest Agent `Shutdown`, or `adb shell reboot -p` in development), waits 20 s for `guestDidStop`, and then calls `stop()` ([../02-design/vm.md](../02-design/vm.md) §9.3). `requestGuestStop()` is for the test Linux guest.
 - `VZVirtualMachine.state` is observed, never trusted as the only source of truth. VMController maps VZ callbacks to transitions.
 
 ## 2. RuntimeState (RuntimeCore, owner `RuntimeSupervisor`)
@@ -48,10 +48,10 @@ Notes:
 ```swift
 enum RuntimeState: Sendable, Equatable {
     case stopped
-    case booting(BootPhase) // .kernel, .init, .systemServer, .bootCompleted, .agentsConnecting
+    case booting(BootPhase)      // .kernel, .init, .systemServer, .bootCompleted, .agentsConnecting
     case ready
-    case suspended // VM paused (idle policy / host sleep)
-    case stopping(StopReason) // Android shutting down (runtime-daemon.md §3.5)
+    case suspended               // VM paused (idle policy / host sleep)
+    case stopping(StopReason)    // Android shutting down (runtime-daemon.md §3.5)
     case failed(RuntimeFailure)
 }
 ```
@@ -64,8 +64,8 @@ enum RuntimeState: Sendable, Equatable {
 | booting(p) | booting(p′) | phase detected (monotonic: kernel → init → systemServer → bootCompleted → agentsConnecting; a phase whose signal is not observable may be skipped) |
 | booting(.agentsConnecting) | ready | all *required* agents completed the handshake (dev: guestd; custom image: guestd + store) |
 | booting(*) | failed | boot timeout (180 s default, configurable) or stall, VM failed, kernel panic or `VIRTUAL_DEVICE_BOOT_FAILED` in the console, agent protocol incompatible ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2) |
-| ready | suspended | idle policy: no activity for N minutes (default 10; activity sources in [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §5.1) → `VMController.pause`; host sleep (§6 of the same document); critical host memory pressure without visible sessions |
-| suspended | ready | session request, activity assertion, or host wake after a sleep-time pause → `resume` → agents ping OK → clock resync |
+| ready | suspended | idle policy: no activity for N minutes (default 10; activity sources in [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §5.1) → `VMController.pause()`; host sleep (§6 of the same document); critical host memory pressure without visible sessions |
+| suspended | ready | session request, activity assertion, or host wake after a sleep-time pause → `resume()` → agents ping OK → clock resync |
 | booting, ready, suspended | stopping | `apkrun runtime stop`, idle-stop policy (default 60 min without activity), "Quit APKRun and Stop Android", logout/`SIGTERM`, image migration, reset |
 | stopping | stopped | Android powered off (`guestDidStop`), or the forced stop completed ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.5) |
 | stopping | failed | the VM failed during the shutdown sequence |
@@ -87,7 +87,7 @@ enum AppSessionState: Sendable, Equatable {
     case acquiringDisplay
     case launching
     case running
-    case backgrounded // wrapper hidden/minimized: frames throttled
+    case backgrounded            // wrapper hidden/minimized: frames throttled
     case closing
     case ended(SessionEndReason) // .userClosed, .appExited, .appCrashed, .runtimeStopped, .updating, .runtimeUpdating, .packageUninstalled, .error(RuntimeFailure)
 }
@@ -104,7 +104,7 @@ enum AppSessionState: Sendable, Equatable {
 | running | backgrounded | wrapper reported occlusion/minimize |
 | backgrounded | running | wrapper visible again |
 | running, backgrounded | closing | wrapper `closeSession` or window closed |
-| running, backgrounded | ended(.appExited /.appCrashed) | Guest Agent reports the task removed or the process died |
+| running, backgrounded | ended(.appExited / .appCrashed) | Guest Agent reports the task removed or the process died |
 | closing | ended(.userClosed) | the app's task finished on the display (or 5 s timeout → force-stop policy) |
 | any | ended(.runtimeStopped) | RuntimeState → stopped |
 | any | ended(.error(f)) | RuntimeState → failed(f) ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.6) |
@@ -118,20 +118,20 @@ Only one live session per package is allowed. A second `openSession` for the sam
 
 ```swift
 enum DisplayState: Sendable, Equatable {
-    case free // scanout disabled, not visible to Android
-    case attaching // hotplug requested; waiting for Android to report the display
+    case free                    // scanout disabled, not visible to Android
+    case attaching               // hotplug requested; waiting for Android to report the display
     case allocated(SessionID)
-    case releasing // task moved/finished, scanout being disabled
-    case faulted(DisplayFault) // .attachTimedOut, .releaseTimedOut, .graphics(GraphicsFailure)
+    case releasing               // task moved/finished, scanout being disabled
+    case faulted(DisplayFault)   // .attachTimedOut, .releaseTimedOut, .graphics(GraphicsFailure)
 }
 ```
 
 | From | To | Trigger |
 |---|---|---|
-| free | attaching | `acquire` enables the scanout with the requested mode (GraphicsCore) and signals display change |
+| free | attaching | `acquire()` enables the scanout with the requested mode (GraphicsCore) and signals display change |
 | attaching | allocated | Guest Agent reports `DisplayAdded(displayId, …)` matching the scanout |
 | attaching | faulted(.attachTimedOut) | no `DisplayAdded` within 5 s (the pool retries once on another slot; [../02-design/display-and-windowing.md](../02-design/display-and-windowing.md) §3.3) |
-| allocated | releasing | `release` |
+| allocated | releasing | `release()` |
 | attaching | releasing | the session was cancelled or the Guest Agent disconnected during the attach |
 | releasing | free | scanout disabled and Guest Agent reports `DisplayRemoved` (or 3 s timeout) |
 | faulted | free | reset of that scanout succeeded |
@@ -142,24 +142,24 @@ Display 0 (primary) is not part of the pool in `secondaryDisplay` mode. In `prim
 
 ```swift
 enum PackageState: Sendable, Equatable {
-    case importing // artifact being copied into incoming/<ticket>/
-    case inspecting // host inspection and intrinsic checks (package-store.md §4)
-    case installing // first install, same-version reinstall, repair
+    case importing                        // artifact being copied into incoming/<ticket>/
+    case inspecting                       // host inspection and intrinsic checks (package-store.md §4)
+    case installing                       // first install, same-version reinstall, repair
     case installed
-    case updating(UpdatePhase) // see §6
+    case updating(UpdatePhase)            // see §6
     case uninstalling
-    case uninstalledKeepingData // removed from Android with DELETE_KEEP_DATA; record and settings kept
-    case needsReinstall(ReinstallReason) // Android lost the package (Reset Android, recovery point restore)
-    case broken(BrokenReason) // host record and Android disagree in a way that needs the user
+    case uninstalledKeepingData           // removed from Android with DELETE_KEEP_DATA; record and settings kept
+    case needsReinstall(ReinstallReason)  // Android lost the package (Reset Android, recovery point restore)
+    case broken(BrokenReason)             // host record and Android disagree in a way that needs the user
 }
 
 enum ReinstallReason: Sendable, Equatable { case userdataReset, userdataRestored }
 
 enum BrokenReason: Sendable, Equatable {
-    case removedInAndroid // absent from Android in the same userdata generation
-    case signerChanged // Android has the package with a different signer set
-    case artifactMissing // current/ missing or not matching artifact.json
-    case reinstallFailed(StoreFailure) // needsReinstall failed on three consecutive boots
+    case removedInAndroid                 // absent from Android in the same userdata generation
+    case signerChanged                    // Android has the package with a different signer set
+    case artifactMissing                  // current/ missing or not matching artifact.json
+    case reinstallFailed(StoreFailure)    // needsReinstall failed on three consecutive boots
 }
 ```
 
@@ -194,14 +194,14 @@ The mechanics behind each edge (journal transactions, recovery after a crash) ar
 ```swift
 enum UpdatePhase: Sendable, Equatable {
     case checking
-    case available(UpdateCandidate) // notifyOnly stops here
+    case available(UpdateCandidate)       // notifyOnly stops here
     case downloading(progress: Double)
     case validating
-    case staged // waiting for a gentle-install window
+    case staged                           // waiting for a gentle-install window
     case installing
     case healthChecking
-    case rollingBack(RollbackReason) //.healthCheckFailed(UpdateFailure),.userRequested
-    case completed(UpdateOutcome) //.updated(from:to:),.rolledBack(reason),.keptAfterFailedHealthCheck(reason),.skipped(reason)
+    case rollingBack(RollbackReason)      // .healthCheckFailed(UpdateFailure), .userRequested
+    case completed(UpdateOutcome)         // .updated(from:to:), .rolledBack(reason), .keptAfterFailedHealthCheck(reason), .skipped(reason)
 }
 ```
 
@@ -219,7 +219,7 @@ enum UpdatePhase: Sendable, Equatable {
 | validating | completed(.skipped(.validationFailed)) | any check failed (an actionable notification is posted) |
 | staged | installing | the gentle-update gate is open (conditions GU1–GU7: runtime ready, no session or keep-running task, 15 s grace, Android `checkInstallConstraints(GENTLE_UPDATE)` or no task on stock images, no other transaction, a display for the health check; [../02-design/update-system.md](../02-design/update-system.md) §7.1), or the user chose "Update Now" |
 | staged | staged | a scheduled check found a newer candidate. It was downloaded and validated beside the staged set and replaced it |
-| staged | completed(.skipped(.userSkipped /.authorityChanged)) | the user skipped the version, or the authority changed. The store runs `discardStaged` |
+| staged | completed(.skipped(.userSkipped / .authorityChanged)) | the user skipped the version, or the authority changed. The store runs `discardStaged` |
 | installing | staged | the user opened the app before the Android commit was requested. The install is abandoned, and the session opens with the old version ([../02-design/update-system.md](../02-design/update-system.md) §7.2) |
 | installing | healthChecking | Android reports success. The store has already promoted `staged/` → `current/` and `current/` → `previous/` |
 | installing | completed(.skipped(.installFailed)) | Android refused the update. `PackageInstaller` commits are atomic, so the old version is still installed and nothing was promoted |

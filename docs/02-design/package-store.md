@@ -51,7 +51,7 @@ public struct SHA256Digest: Codable, Sendable, Hashable { … }
 
 ### 2.2 Artifacts
 
-  defines the input shape. The store turns it into a verified set on disk.
+The import format defines the input shape. The store turns it into a verified set on disk.
 
 ```swift
 /// What a caller hands to the store (a file import, a provider download, a wrapper bootstrap).
@@ -62,22 +62,22 @@ public enum PackageArtifact: Sendable, Hashable {
 
 /// One file of a verified set.
 public struct ArtifactFile: Codable, Sendable, Hashable {
-    public var name: String // "base.apk", "split_config.arm64_v8a.apk", "split_feature_camera.apk"
-    public var splitName: String? // nil for the base; "config.arm64_v8a", "feature_camera", …
+    public var name: String          // "base.apk", "split_config.arm64_v8a.apk", "split_feature_camera.apk"
+    public var splitName: String?    // nil for the base; "config.arm64_v8a", "feature_camera", …
     public var size: Int64
     public var sha256: SHA256Digest
 }
 
 /// The content of artifact.json in current/, previous/, staged/.
 public struct ArtifactSet: Codable, Sendable, Hashable {
-    public var schemaVersion: Int // 1
+    public var schemaVersion: Int              // 1
     public var packageID: PackageID
     public var versionCode: VersionCode
     public var versionName: String?
-    public var files: [ArtifactFile] // base first, then splits sorted by splitName
-    public var setDigest: SHA256Digest // §3.3
-    public var signerDigests: [SHA256Digest] // the signer set Android will use on the guest SDK (§4.5)
-    public var lineage: [SHA256Digest] // oldest → newest; empty without rotation
+    public var files: [ArtifactFile]           // base first, then splits sorted by splitName
+    public var setDigest: SHA256Digest         // §3.3
+    public var signerDigests: [SHA256Digest]   // the signer set Android will use on the guest SDK (§4.5)
+    public var lineage: [SHA256Digest]         // oldest → newest; empty without rotation
     public var inspection: InspectionProvenance // aapt2 version, verifier version, date, host checks performed
 }
 ```
@@ -88,23 +88,23 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
 
 ```swift
 public struct PackageRecord: Codable, Sendable, Equatable {
-    public var schemaVersion: Int // 1
+    public var schemaVersion: Int                    // 1
     public var packageId: PackageID
-    public var displayName: String // Android label in the guest's locale (§10)
-    public var versionCode: VersionCode // what Android reports as installed
+    public var displayName: String                   // Android label in the guest's locale (§10)
+    public var versionCode: VersionCode              // what Android reports as installed
     public var versionName: String?
-    public var signingCertificates: [SHA256Digest] // current signer set (from Android after install)
+    public var signingCertificates: [SHA256Digest]   // current signer set (from Android after install)
     public var signingLineage: [SHA256Digest]
-    public var installer: Installer //.apkrun,.external (§9.3)
-    public var updateAuthority: UpdateAuthority //.apkrun,.googlePlay,.external,.manual (ADR-0010)
-    public var updateProvider: UpdateProviderRef? // {type, configuration}; nil = none (update-system.md §4)
-    public var state: PackageState // state-machines.md §5
-    public var artifacts: ArtifactSlots // summaries of current / previous / staged (versionCode, versionName,
-    // setDigest, size, fileCount; staged adds origin)
-    public var android: AndroidPackageFacts // updateOwner, installerOfRecord, first/last install time, min/target SDK,
-    // native ABIs, userdataGeneration, lastSyncedAt
-    public var source: PackageSource // how it first arrived: file, provider, wrapperBootstrap, adopted
-    public var lastOperation: OperationSummary? // last install / update / rollback / uninstall / adopt result, for the UI and doctor
+    public var installer: Installer                  // .apkrun, .external (§9.3)
+    public var updateAuthority: UpdateAuthority      // .apkrun, .googlePlay, .external, .manual (ADR-0010)
+    public var updateProvider: UpdateProviderRef?    // {type, configuration}; nil = none (update-system.md §4)
+    public var state: PackageState                   // state-machines.md §5
+    public var artifacts: ArtifactSlots              // summaries of current / previous / staged (versionCode, versionName,
+                                                     // setDigest, size, fileCount; staged adds origin)
+    public var android: AndroidPackageFacts          // updateOwner, installerOfRecord, first/last install time, min/target SDK,
+                                                     // native ABIs, userdataGeneration, lastSyncedAt
+    public var source: PackageSource                 // how it first arrived: file, provider, wrapperBootstrap, adopted
+    public var lastOperation: OperationSummary?      // last install / update / rollback / uninstall / adopt result, for the UI and doctor
     public var createdAt: Date
     public var updatedAt: Date
 }
@@ -144,34 +144,34 @@ public enum Installer: String, Codable, Sendable { case apkrun, external }
 ```text
 Packages/
 ├── journal.jsonl
-├── .trash/ # directories moved out by committed transactions; purged in the background
+├── .trash/                               # directories moved out by committed transactions; purged in the background
 │   └── <txn>-<slot>/
-└── <dir>/ # usually the package ID (§3.2)
-    ├── metadata.json # PackageRecord
-    ├── settings.json # PackageSettings
-    ├── current/ # what Android should have installed
+└── <dir>/                                # usually the package ID (§3.2)
+    ├── metadata.json                     # PackageRecord
+    ├── settings.json                     # PackageSettings
+    ├── current/                          # what Android should have installed
     │   ├── artifact.json
     │   ├── base.apk
     │   └── split_<splitName>.apk …
-    ├── previous/ # last known-good set, present after an update until the next update
-    ├── staged/ # verified update waiting for an install window (UpdateCore)
-    │   └── validation.json # UpdateCore's validation report (update-system.md §6); not part of setDigest
-    ├── incoming/<ticket>/ # imports and downloads being inspected; never referenced by a record
-    ├── failed/<versionCode>/ # a set that was rolled back; kept 7 days for diagnostics, then deleted
-    └── icon/ # rendered icon layers (§10)
+    ├── previous/                         # last known-good set, present after an update until the next update
+    ├── staged/                           # verified update waiting for an install window (UpdateCore)
+    │   └── validation.json               # UpdateCore's validation report (update-system.md §6); not part of setDigest
+    ├── incoming/<ticket>/                # imports and downloads being inspected; never referenced by a record
+    ├── failed/<versionCode>/             # a set that was rolled back; kept 7 days for diagnostics, then deleted
+    └── icon/                             # rendered icon layers (§10)
 ```
 
 - File names in a set are fixed: `base.apk` and `split_<splitName>.apk`. The `PackageInstaller` session names are the same without the extension ([guest-protocol.md](guest-protocol.md) §11.3). The original file names from the user's import are recorded in `source` only.
 - `artifact.json` makes each slot self-describing. Recovery (§5.5) identifies a directory by its `setDigest`, never by its name alone.
 - At most one set per slot. A newer staged update replaces the older staged set (§5.2, kind `stage`).
-- `incoming/<ticket>/` is scratch space. The importer creates it, and an install or `stage` transaction renames it into a slot. Tickets that no transaction references are deleted at `open` and after 24 h.
+- `incoming/<ticket>/` is scratch space. The importer creates it, and an install or `stage` transaction renames it into a slot. Tickets that no transaction references are deleted at `open()` and after 24 h.
 - `failed/` is deleted after 7 days or when the package is uninstalled. It is included in diagnostics bundles as metadata only (names, sizes, digests), never the APKs.
 
 ### 3.2 Directory names
 
-- The directory name is the package ID, as in (`Packages/com.discord/`).
+- The directory name is the package ID (`Packages/com.discord/`).
 - If another directory already has the same name ignoring case (for example `com.Foo` and `com.foo`), the new directory is `<packageId>~<first 8 hex of SHA-256(packageId)>`. Wrapper bundle IDs use a different, order-independent rule, because they must be the same on every Mac and `~` is not allowed in bundle IDs ([wrapper.md](wrapper.md) §4.1).
-- `open` builds the `PackageID → directory` index from each `metadata.json`. A directory without a `metadata.json` is moved to `.trash/` with a health warning after its contents were checked against the journal (§5.5). A directory whose `metadata.json` exists but can't be read is never moved: the package ID comes from the directory name, and the package is read-only (§5.4, [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §6.3).
+- `open()` builds the `PackageID → directory` index from each `metadata.json`. A directory without a `metadata.json` is moved to `.trash/` with a health warning after its contents were checked against the journal (§5.5). A directory whose `metadata.json` exists but can't be read is never moved: the package ID comes from the directory name, and the package is read-only (§5.4, [../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §6.3).
 
 ### 3.3 Set digest
 
@@ -194,6 +194,7 @@ Import copies with `clonefile(2)` when the source is on the same APFS volume. Ot
 
 ### 4.1 Sources
 
+| Source | Entry point | Notes |
 |---|---|---|
 | Files dropped on APKRun.app, the Add sheet, or the Dock icon | `RuntimeService.importPackage` with file handles | The GUI passes open file descriptors over XPC (`FileHandle`, [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1), so apkrund never needs its own TCC consent for `~/Downloads` or `~/Desktop` |
 | `apkrun install <file…>` | same, with file handles opened by the CLI | Several `.apk` files form one split set |
@@ -291,7 +292,7 @@ Test vectors: the apksig test resources (Apache-2.0) and a differential run agai
 | I1 | Container supported, extraction limits respected (§4.2) | `unsupportedContainer`, `archiveLimitExceeded` |
 | I2 | Every file is an APK with a manifest | `notAnAPK(file)` |
 | I3 | Exactly one base, unique split names | `missingBase`, `multipleBases`, `duplicateSplit(name)` |
-| I4 | Same package and `VersionCode` in every APK | `inconsistentSplits(.package /.versionCode, file)` |
+| I4 | Same package and `VersionCode` in every APK | `inconsistentSplits(.package / .versionCode, file)` |
 | I5 | Valid signature (§4.5), and the same signer set in every APK | `unsignedAPK`, `invalidSignature`, `legacySignatureNotAllowed`, `inconsistentSplits(.signer, file)` |
 | I6 | Required splits present (`requiredSplitTypes`, `isSplitRequired`) | `incompleteSplitSet(missing:)` |
 | I7 | ABI: no native code, or native code for at least one guest ABI in the base or the selected ABI split. `arm64-v8a` is the only guest ABI on APKRun images ([../00-product/scope.md](../00-product/scope.md)) | `unsupportedABI(found:, supported:)` |
@@ -318,34 +319,34 @@ Warnings do not block the install. They appear in the preview and in `apkrun ins
 public struct ImportPreview: Codable, Sendable {
     public var ticket: ImportTicket
     public var packageID: PackageID
-    public var displayName: String // host label in the best macOS language match
+    public var displayName: String                 // host label in the best macOS language match
     public var versionCode: VersionCode
     public var versionName: String?
-    public var icon: HostIconPreview? // §10.1
-    public var files: [ArtifactFile] // after split selection
-    public var excludedSplits: [String] // shown in "Details"
-    public var signer: SignerSummary // digests, scheme, lineage length, verification level
-    public var permissions: [String] // requested permissions, for the "Details" disclosure
+    public var icon: HostIconPreview?              // §10.1
+    public var files: [ArtifactFile]               // after split selection
+    public var excludedSplits: [String]            // shown in "Details"
+    public var signer: SignerSummary               // digests, scheme, lineage length, verification level
+    public var permissions: [String]               // requested permissions, for the "Details" disclosure
     public var warnings: [ImportWarning]
-    public var relation: ImportRelation // see below
-    public var compatibility: CompatibilityInfo? // the compatibility database entry for this build (#090, diagnostics.md §10.3); nil = none
+    public var relation: ImportRelation            // see below
+    public var compatibility: CompatibilityInfo?   // the compatibility database entry for this build (#090, diagnostics.md §10.3); nil = none
 }
 
 public enum ImportRelation: Codable, Sendable {
     case newPackage
-    case sameAsInstalled // same setDigest → nothing to do ("Already installed")
-    case reinstallSameVersion // same versionCode, different files (for example other splits)
-    case update(from: VersionCode) // routed to UpdateCore as a manual update
-    case downgrade(from: VersionCode) // refused (FR-UPD-05)
-    case otherSigner // refused: Android would reject it
-    case uninstalledWithData(VersionCode) // a record in uninstalledKeepingData: install restores the data
+    case sameAsInstalled                           // same setDigest → nothing to do ("Already installed")
+    case reinstallSameVersion                      // same versionCode, different files (for example other splits)
+    case update(from: VersionCode)                 // routed to UpdateCore as a manual update
+    case downgrade(from: VersionCode)              // refused (FR-UPD-05)
+    case otherSigner                               // refused: Android would reject it
+    case uninstalledWithData(VersionCode)          // a record in uninstalledKeepingData: install restores the data
 }
 
-public enum ImportWarning: Codable, Sendable, Equatable { // the warnings of §4.6. Not errors: the exit code doesn't change
-    case missingHardwareFeature(feature: String) // uses-feature android:required="true" for hardware the guest lacks
-    case certificateOnlyVerification // the signature was verified as.certificateOnly (§4.5)
-    case debuggable // debuggable="true"
-    case lowTargetSDK(target: Int) // the target SDK is below 28
+public enum ImportWarning: Codable, Sendable, Equatable {   // the warnings of §4.6. Not errors: the exit code doesn't change
+    case missingHardwareFeature(feature: String)   // uses-feature android:required="true" for hardware the guest lacks
+    case certificateOnlyVerification               // the signature was verified as .certificateOnly (§4.5)
+    case debuggable                                // debuggable="true"
+    case lowTargetSDK(target: Int)                 // the target SDK is below 28
 }
 ```
 
@@ -356,13 +357,13 @@ public enum ImportWarning: Codable, Sendable, Equatable { // the warnings of §4
 
 ## 5. Transactions and the journal
 
-Every change to Android or to the artifact slots is a transaction in `Packages/journal.jsonl`. Its purpose is that a crash, a kill, or a power loss at any point leaves a state that `open` can finish or undo without user action. The one exception is that the result of an Android commit that was in flight must be read back from Android after boot.
+Every change to Android or to the artifact slots is a transaction in `Packages/journal.jsonl`. Its purpose is that a crash, a kill, or a power loss at any point leaves a state that `open()` can finish or undo without user action. The one exception is that the result of an Android commit that was in flight must be read back from Android after boot.
 
 ### 5.1 Journal format
 
 JSON Lines, append-only, one object per line:
 
-```jsonl
+```json
 {"v":1,"seq":41,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:03.120Z","op":"begin","kind":"update","package":"com.example.app","dir":"com.example.app","from":44,"to":45,"setDigest":"sha256:9f2c…"}
 {"v":1,"seq":42,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:03.410Z","op":"step","step":"guestCommitRequested","androidSession":1873}
 {"v":1,"seq":43,"txn":"01J9ZQ5K7Y3M","at":"2026-10-02T09:12:09.002Z","op":"step","step":"guestInstalled","versionCode":45}
@@ -374,7 +375,7 @@ JSON Lines, append-only, one object per line:
 - `txn` is a ULID. `seq` increases by one per line across the file. A gap or a line that does not parse ends the readable part of the journal (a torn last write). Everything after it is ignored, and `store.journal` health reports it.
 - Durability: each line is written with a single `write(2)`, then `fcntl(F_BARRIERFSYNC)`. Renames of slots are followed by `fsync` of the package directory. `metadata.json` and `settings.json` are written to a temporary file in the same directory, barrier-synced, then renamed over the old file. `F_FULLFSYNC` is not used. After a power loss the store relies on ordering, not on the last write reaching the disk.
 - Guest steps are journaled **before** the request that changes Android (`…Requested`) and again after the outcome. Host file steps are journaled **after** they are done. Recovery infers half-done file steps from the directories themselves (§5.5).
-- Compaction: at `open` and after each commit when the file exceeds 1 MiB, the journal is rewritten (temporary file + rename) with only the lines of unfinished transactions. `seq` continues from the last value.
+- Compaction: at `open()` and after each commit when the file exceeds 1 MiB, the journal is rewritten (temporary file + rename) with only the lines of unfinished transactions. `seq` continues from the last value.
 
 ### 5.2 Transaction kinds
 
@@ -388,14 +389,14 @@ JSON Lines, append-only, one object per line:
 | `uninstall` | user | `begin` → `guestUninstallRequested` → `guestUninstalled` → `filesRemoved` → `metadataWritten` or `recordRemoved` → `commit` | the package directory → `.trash` (keep data: only the slots, the record stays) |
 | `forget` | "Remove from APKRun" for a package that cannot be uninstalled from Android (runtime broken, package already gone) | `begin` → `filesRemoved` → `recordRemoved` → `commit` | package directory → `.trash` |
 | `discardStaged` | UpdateCore (candidate withdrawn, authority changed, user "Skip this version") | `begin` → `filesRemoved` → `metadataWritten` → `commit` | `staged` → `.trash` |
-| `schemaMigration` | `open` when a record or settings file has an older schema version (§5.4) | `begin` → `migrated` (once per package) → `commit` | `metadata.v<old>.json` and `settings.v<old>.json` backups next to the migrated files ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §5.2) |
+| `schemaMigration` | `open()` when a record or settings file has an older schema version (§5.4) | `begin` → `migrated` (once per package) → `commit` | `metadata.v<old>.json` and `settings.v<old>.json` backups next to the migrated files ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §5.2) |
 
 Rules:
 
 - **Files mirror Android.** `current/` is promoted as soon as Android confirms the install, before the post-update health check. The directories therefore always describe what Android should have, and a rollback is a transaction of its own. The previous set stays in `previous/` until the next successful update.
 - A failure before `guestCommitRequested` ends the transaction with `{"op":"abort","reason":…}` and undoes nothing on disk, because nothing has moved yet. The `incoming/` or `staged/` set stays where it was, for a retry or cleanup.
 - `update` promotion uses `renamex_np(RENAME_SWAP)` for `staged ↔ current`, then renames the old `current` (now in `staged`) to `previous` after the old `previous` went to `.trash`. Each rename is atomic on APFS, and each intermediate state is recognizable by `setDigest` (§5.5).
-- `.trash` is purged by a background task after the commit. A crash leaves at most garbage in `.trash`, which the next `open` purges.
+- `.trash` is purged by a background task after the commit. A crash leaves at most garbage in `.trash`, which the next `open()` purges.
 - Some writes change only the record or `settings.json`, never a slot or Android: reconciliation (§9.2), `recordHealth`, adopt (§9.3), `setUpdatePolicy`, and `updatePackageSettings`. They are not transactions. They take the operation lock (§5.3) and write atomically ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §6.2).
 
 ### 5.3 Concurrency
@@ -406,7 +407,7 @@ Rules:
 
 ### 5.4 Opening the store
 
-`PackageStore.open` is startup step 6 of apkrund ([runtime-daemon.md](runtime-daemon.md) §2.2) and runs in embedded mode too. It does not need the VM.
+`PackageStore.open()` is startup step 6 of apkrund ([runtime-daemon.md](runtime-daemon.md) §2.2) and runs in embedded mode too. It does not need the VM.
 
 1. Read `journal.jsonl` up to the first unreadable line.
 2. Load every `metadata.json`. Build the directory index (§3.2). Migrate older record and settings files in one `schemaMigration` transaction. An unfinished one from an earlier start continues here ([../03-reference/package-metadata-json.md](../03-reference/package-metadata-json.md) §5.2).
@@ -444,18 +445,18 @@ For each unfinished transaction, the last journaled step decides the action.
 
 ```swift
 public protocol StoreAgentChannel: Sendable {
-    var capabilities: StoreCapabilities { get } //.install,.metadata,.inspect,.icons,.updateOwnership,.rollback,.downgradeReinstall
+    var capabilities: StoreCapabilities { get }      // .install, .metadata, .inspect, .icons, .updateOwnership, .rollback, .downgradeReinstall
 
     func inspect(_ files: [StagedFile]) async throws -> GuestArchiveInfo
     func install(_ request: StoreInstallRequest, files: [StagedFile],
-        progress: @Sendable (StoreInstallProgress) -> Void) async throws -> StoreInstallResult
+                 progress: @Sendable (StoreInstallProgress) -> Void) async throws -> StoreInstallResult
     func uninstall(_ package: PackageID, keepData: Bool) async throws
     func rollback(_ package: PackageID, from: VersionCode, to: VersionCode) async throws -> StoreRollbackResult
     func relinquishUpdateOwnership(_ package: PackageID) async throws
-    func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? // nil = not installed
+    func packageInfo(_ package: PackageID) async throws -> StorePackageInfo?     // nil = not installed
     func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageInfo]
     func renderIcon(_ package: PackageID, sizePx: Int) async throws -> RenderedIcon
-    nonisolated var packageEvents: AsyncStream<StorePackageEvent> { get } // PackageChanged
+    nonisolated var packageEvents: AsyncStream<StorePackageEvent> { get }       // PackageChanged
 }
 
 /// Injected by RuntimeHost. Hides RuntimeCore from APKStoreCore.
@@ -463,9 +464,9 @@ public protocol StoreRuntimeAccess: Sendable {
     /// Ensures the runtime is ready (boots it if needed), holds a storeOperation assertion,
     /// and hands over the channel for the current image.
     func withStoreAgent<T: Sendable>(_ reason: StoreOperationReason, operation: OperationID,
-        _ body: @Sendable (any StoreAgentChannel) async throws -> T) async throws -> T
-    func guestFacts() async -> GuestFacts? // SDK, ABIs, install floor, userdataGeneration
-    func hasOpenSession(_ package: PackageID) async -> Bool // any AppSession except ended; the check of §7.2 (#038)
+                                     _ body: @Sendable (any StoreAgentChannel) async throws -> T) async throws -> T
+    func guestFacts() async -> GuestFacts?             // SDK, ABIs, install floor, userdataGeneration
+    func hasOpenSession(_ package: PackageID) async -> Bool   // any AppSession except ended; the check of §7.2 (#038)
     func endSessions(for package: PackageID, reason: SessionEndReason) async
 }
 ```
@@ -481,22 +482,22 @@ Missing capabilities are not errors. The store records what it could not do (for
 
 ```text
 install(ticket, options)
-1. re-check the ticket: preview still valid (files unchanged: sizes and digests), no record, or record in uninstalledKeepingData
-2. journal begin(firstInstall) state: inspecting → installing
-3. withStoreAgent(.install): boots Android if needed; OperationHandle shows "Starting Android…"
-a. BeginInstall(InstallRequest{ expected_package, expected_version_code, expected_signer_sha256,
-mode: INSTALL_NEW, request_update_ownership: §6.3,
-enable_rollback: false, artifacts, install_reason: USER,
-package_source: OTHER })
-b. stream every file on the artifact stream (progress: RECEIVING)
-c. journal step guestCommitRequested
-d. CommitInstall → wait for InstallFinished (progress: VERIFYING, COMMITTING)
-4. SUCCESS → journal step guestInstalled(versionCode)
-5. rename incoming/<ticket> → current journal step filesPromoted
-6. GetPackageMetadata → write metadata.json journal step metadataWritten, commit
-state: installing → installed
-7. RenderIcon (1024 px) → icon/ (non-fatal, retried on the next boot if it fails)
-8. emit PackageChange.installed; optional WrapperCore.generate (the "Create Mac app" choice)
+  1. re-check the ticket: preview still valid (files unchanged: sizes and digests), no record, or record in uninstalledKeepingData
+  2. journal begin(firstInstall)                       state: inspecting → installing
+  3. withStoreAgent(.install):                         boots Android if needed; OperationHandle shows "Starting Android…"
+     a. BeginInstall(InstallRequest{ expected_package, expected_version_code, expected_signer_sha256,
+                                     mode: INSTALL_NEW, request_update_ownership: §6.3,
+                                     enable_rollback: false, artifacts, install_reason: USER,
+                                     package_source: OTHER })
+     b. stream every file on the artifact stream (progress: RECEIVING)
+     c. journal step guestCommitRequested
+     d. CommitInstall → wait for InstallFinished (progress: VERIFYING, COMMITTING)
+  4. SUCCESS → journal step guestInstalled(versionCode)
+  5. rename incoming/<ticket> → current                journal step filesPromoted
+  6. GetPackageMetadata → write metadata.json           journal step metadataWritten, commit
+                                                        state: installing → installed
+  7. RenderIcon (1024 px) → icon/  (non-fatal, retried on the next boot if it fails)
+  8. emit PackageChange.installed; optional WrapperCore.generate (the "Create Mac app" choice)
 ```
 
 - `ADBStoreAgentChannel` performs step 3 as `adb install-multiple -r --no-streaming <files>` after the host verified the digests. Steps 4–6 use `QueryPackage`.
@@ -580,15 +581,15 @@ The Uninstall dialog (GUI) and `apkrun uninstall` (CLI) offer two choices (FR-PK
 
 ```text
 uninstall(id, options)
-1. journal begin(uninstall); state → uninstalling
-2. withStoreAgent(.uninstall):
-a. endSessions(id,.packageUninstalled) wrappers close their windows
-b. journal step guestUninstallRequested
-c. Uninstall(package, keep_data) → UninstallResult
-3. journal step guestUninstalled
-4. slots (or the whole directory) →.trash journal step filesRemoved
-5. keep data: write metadata (uninstalledKeepingData), else remove the record journal step, commit
-6. emit PackageChange.removed(keptData:)
+  1. journal begin(uninstall); state → uninstalling
+  2. withStoreAgent(.uninstall):
+     a. endSessions(id, .packageUninstalled)       wrappers close their windows
+     b. journal step guestUninstallRequested
+     c. Uninstall(package, keep_data)            → UninstallResult
+  3. journal step guestUninstalled
+  4. slots (or the whole directory) → .trash    journal step filesRemoved
+  5. keep data: write metadata (uninstalledKeepingData), else remove the record   journal step, commit
+  6. emit PackageChange.removed(keptData:)
 ```
 
 - `Uninstall` answers `NOT_FOUND` when Android no longer has the package. The store treats that as success.
@@ -619,7 +620,7 @@ Android is canonical for package metadata (FR-PKG-02). The host record is canoni
 | installed, same generation | absent | a user or app removed it inside Android (for example through Android Settings opened by an app). State → `broken(.removedInAndroid)`. Actions: **Reinstall** or **Remove from APKRun** |
 | installed | present, higher version | someone else updated it (only possible without ownership enforcement, or with authority `googlePlay`/`external`). Take Android's version. `current/` no longer matches (`artifacts.currentMatchesAndroid = false`). For `apkrun`/`manual`, health warns `store.externallyUpdated`. The next APKRun update restores the match |
 | installed | present, different signer set | `broken(.signerChanged)`. Only possible through an external uninstall and reinstall. Repair offers **Reinstall APKRun's copy (erases data)** or **Adopt Android's version** (authority `external`) |
-| installed, `current/` missing or its file sizes differ from `artifact.json` (checked at `open`; digests are checked before every reinstall) | any | `broken(.artifactMissing)`. The app keeps working while Android has it. Repair asks for the APK again (same package, versionCode, and signer) |
+| installed, `current/` missing or its file sizes differ from `artifact.json` (checked at `open()`; digests are checked before every reinstall) | any | `broken(.artifactMissing)`. The app keeps working while Android has it. Repair asks for the APK again (same package, versionCode, and signer) |
 | `uninstalledKeepingData` | absent or data-only | nothing |
 | no record | present, user-installed | listed as unmanaged under "Other Android apps" (§9.3) |
 | pending transaction | any | the transaction's recovery (§5.5) runs first |
@@ -665,7 +666,7 @@ The XPC operations are listed with their DTOs in [../03-reference/runtime-api.md
 | `installImported(ticket, InstallOptions{authority, provider, updateChoice, createWrapper})` | §6.2, or hands the ticket to UpdateCore when `relation == .update`. `updateChoice` (`.automatic` or `.notifyOnly`, from `apkrun install --updates`) is the first update choice of an `apkrun` package ([update-system.md](update-system.md) §2.3). nil keeps the default | yes |
 | `cancelImport(ticket)` | deletes the ticket | no |
 | `inspectFile(files)` | the same as `importPackage` but deletes the ticket afterwards. For `apkrun inspect` | yes |
-| `listPackages(filter:.managed /.all)` | records plus unmanaged packages from the last reconcile. Works while the runtime is stopped (last known Android facts) | no |
+| `listPackages(filter: .managed / .all)` | records plus unmanaged packages from the last reconcile. Works while the runtime is stopped (last known Android facts) | no |
 | `packageInfo(id)` | `PackageDetails`: record, settings summary, slots, sizes, wrapper count (from WrapperCore), last operation | no |
 | `uninstallPackage(id, UninstallOptions{keepData, trashWrappers, forget})` | §8 | yes |
 | `repairPackage(id)` | `broken` → `reinstall` of `current/`, or `forget` if the user chose it | yes |
@@ -674,7 +675,7 @@ The XPC operations are listed with their DTOs in [../03-reference/runtime-api.md
 | `updatePackageSettings(id, patch)` | validated JSON merge patch on `PackageSettings` | no |
 | `packageIcon(id, sizePx)` | PNG composed from `icon/` (or the host preview) | no |
 
-#027's `install`, `uninstall`, `listInstalled`, and `applicationInfo` map to `importPackage` + `installImported`, `uninstallPackage`, `listPackages(.managed)`, and `packageInfo`. `launch` and `terminate` are session operations ([runtime-daemon.md](runtime-daemon.md) §7).
+#027's `install()`, `uninstall()`, `listInstalled()`, and `applicationInfo()` map to `importPackage` + `installImported`, `uninstallPackage`, `listPackages(.managed)`, and `packageInfo`. `launch()` and `terminate()` are session operations ([runtime-daemon.md](runtime-daemon.md) §7).
 
 ### 11.2 Authorization
 
@@ -687,11 +688,11 @@ Topic `packages` on the event stream ([runtime-daemon.md](runtime-daemon.md) §8
 ```swift
 public enum PackageChange: Codable, Sendable {
     case installed(PackageSummary)
-    case updated(PackageSummary, from: VersionCode) // also a same-version reinstall (from == to)
+    case updated(PackageSummary, from: VersionCode)      // also a same-version reinstall (from == to)
     case rolledBack(PackageSummary, from: VersionCode)
     case removed(PackageID, keptData: Bool)
     case stateChanged(PackageID, PackageState)
-    case operationProgress(PackageID, OperationID, StoreOperationProgress) // coalesced to 10 Hz
+    case operationProgress(PackageID, OperationID, StoreOperationProgress)   // coalesced to 10 Hz
     case iconChanged(PackageID)
     case settingsChanged(PackageID, keys: [String])
     case unmanagedChanged([PackageSummary])
@@ -707,7 +708,7 @@ apkrun install <file>… [--yes] [--provider <spec>] [--updates automatic|notify
 apkrun uninstall <package> [--keep-data] [--keep-wrapper] [--forget] [--yes]
 apkrun list [--all] [--json]
 apkrun info <package> [--json]
-apkrun inspect <file>… [--json] # no VM, no install
+apkrun inspect <file>… [--json]            # no VM, no install
 apkrun repair <package>
 apkrun rollback <package> [--allow-data-loss] [--yes]
 apkrun adopt <package>
@@ -724,7 +725,7 @@ apkrun adopt <package>
 ```swift
 public enum StoreFailure: APKRunError {
     // import and inspection (§4)
-    case unsupportedContainer(ContainerKind) //.appBundle,.encryptedAPKM,.unknown
+    case unsupportedContainer(ContainerKind)          // .appBundle, .encryptedAPKM, .unknown
     case unreadableArchive(detail: String)
     case archiveLimitExceeded(ArchiveLimit)
     case notAnAPK(file: String)
@@ -755,35 +756,35 @@ public enum StoreFailure: APKRunError {
     case guestStorageFull
     case userActionRequired
     case uninstallFailed(detail: String)
-    case rollbackUnavailable(RollbackUnavailableReason) //.noPreviousSet,.notEnabled,.expired,.capabilityMissing
+    case rollbackUnavailable(RollbackUnavailableReason)   // .noPreviousSet, .notEnabled, .expired, .capabilityMissing
     case rollbackFailed(detail: String)
     case runtimeUnavailable(RuntimeFailure)
     case capabilityMissing(String)
     // package settings (configuration.md §8.1)
-    case unknownSetting(key: String) // a package settings key that does not exist
-    case invalidSettingValue(key: String, allowed: String) // a value of the wrong type or outside the allowed values
+    case unknownSetting(key: String)                  // a package settings key that does not exist
+    case invalidSettingValue(key: String, allowed: String)   // a value of the wrong type or outside the allowed values
     // store integrity
     case journalUnreadable(line: Int)
     case metadataUnreadable(PackageID, detail: String)
     case storeReadOnly(reason: String)
     // health findings (§13), never thrown
-    case journalLineDropped // store.journal: a torn last line was dropped
-    case postBootTaskRequeued // store.pending: a post-boot task was re-queued twice
-    case updateOwnerMissing(count: Int) // store.ownership
-    case updatedOutsideAPKRun(count: Int) // store.externallyUpdated
-    case reinstallPending(count: Int) // store.packages: packages in needsReinstall for more than one boot
-    case packagesNeedRepair(count: Int) // store.packages: packages that are broken
+    case journalLineDropped                           // store.journal: a torn last line was dropped
+    case postBootTaskRequeued                         // store.pending: a post-boot task was re-queued twice
+    case updateOwnerMissing(count: Int)               // store.ownership
+    case updatedOutsideAPKRun(count: Int)             // store.externallyUpdated
+    case reinstallPending(count: Int)                 // store.packages: packages in needsReinstall for more than one boot
+    case packagesNeedRepair(count: Int)               // store.packages: packages that are broken
 }
 
-public enum ArchiveLimit: String, Sendable, Codable { // the extraction limits of §4.2
+public enum ArchiveLimit: String, Sendable, Codable {        // the extraction limits of §4.2
     case entryCount, apkCount, fileSize, totalSize, compressionRatio, unsafeName
 }
 
-public enum InconsistentField: String, Sendable, Codable { // I4, I5 (§4.6)
+public enum InconsistentField: String, Sendable, Codable {   // I4, I5 (§4.6)
     case package, versionCode, signer
 }
 
-public enum InstallFailureKind: String, Sendable, Codable { // InstallFinished.status (§6.4)
+public enum InstallFailureKind: String, Sendable, Codable {  // InstallFinished.status (§6.4)
     case conflict, incompatible, invalid, blocked, aborted, other
 }
 ```
@@ -826,7 +827,7 @@ Each task lists the store-side steps. Update policy steps for the same task numb
 ### #027 RuntimeCore package operations on the stock image (M3)
 
 1. `APKStoreCore` target with `PackageID`, `VersionCode`, `SHA256Digest`, `ArtifactFile`, `ArtifactSet`, `PackageRecord` (fields as in §2.3; `updateAuthority` fixed to `manual`), and `PackageState`.
-2. `PackageStore` actor with `open`, the journal (§5.1), and the kinds `firstInstall`, `reinstall`, `uninstall`, and `forget`, including recovery (§5.5) and fault-injection hooks (`APKRUN_STORE_FAULT=<kind>:<step>` crashes the process after that step in debug builds).
+2. `PackageStore` actor with `open()`, the journal (§5.1), and the kinds `firstInstall`, `reinstall`, `uninstall`, and `forget`, including recovery (§5.5) and fault-injection hooks (`APKRUN_STORE_FAULT=<kind>:<step>` crashes the process after that step in debug builds).
 3. `APKInspector` v0: single APKs and several `.apk` files as a split set, through aapt2 and SHA-256. The signature check is recorded as `notPerformed`, and Android verifies at install.
 4. `ADBStoreAgentChannel` (install, uninstall, `QueryPackage`, `ListPackages`) and a `StoreRuntimeAccess` implementation in `EmbeddedRuntimeService`.
 5. `RuntimeService` store operations `importPackage`, `installImported`, `listPackages`, `packageInfo`, and `uninstallPackage`, with CLI commands `install`, `uninstall`, `list`, and `info` in embedded mode.
@@ -917,7 +918,7 @@ Each task lists the store-side steps. Update policy steps for the same task numb
 | T0 | Intrinsic checks I1–I12, one fixture per failure | #073, #041 |
 | T0 | Relation classification (§4.7) and routing of updates to UpdateCore | #038 |
 | T1 | `PackageStore` with a fake `StoreAgentChannel`: first install, update, rollback, uninstall with and without keep data, forget, concurrent requests (`operationInProgress`), queue priorities | #027, #038, #043, #076 |
-| T1 | Crash injection with a real process: `APKRUN_STORE_FAULT` at every host step, restart, `open` result checked | #027, #038 |
+| T1 | Crash injection with a real process: `APKRUN_STORE_FAULT` at every host step, restart, `open()` result checked | #027, #038 |
 | T1 | aapt2 parser golden outputs for the pinned aapt2 version | #073 |
 | T1 | Source deleted after `beginImport`, install still succeeds | #048 |
 | T2 | Stock image, ADB channel: install, split install, uninstall, reinstall, downgrade reinstall (`-d`) | #027, #042, #043 |

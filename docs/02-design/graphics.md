@@ -26,21 +26,20 @@ Out of scope here:
 
 ### 1.1 Frame path
 
-```mermaid
-flowchart TD
-    guest["Guest app (GLES)"]
-    mesa["Mesa virgl (Gallium)"]
-    driver["virtio_gpu DRM driver"]
-    device["VZ custom virtio device (deviceQueue)<br/>VirtioDeviceCore"]
-    render["Render thread<br/>virglrenderer → ANGLE (GLES 3.0) → Metal<br/>GraphicsCore + GraphicsBridge"]
-    surface["Borrow scanout texture → one GPU blit<br/>IOSurface[i] of SurfacePool(scanout)"]
-    event["ScanoutEvent.frameReady(scanout, i, seq)<br/>RuntimeCore → XPC frameReady → wrapper layer.contents"]
-
-    guest --> mesa --> driver
-    driver -->|"controlq: CTX_CREATE, RESOURCE_CREATE_3D, SUBMIT_3D, TRANSFER_*, SET_SCANOUT, RESOURCE_FLUSH"| device
-    device -->|"Decode, copy, and validate; no guest-memory rereads"| render
-    render -->|"RESOURCE_FLUSH on a scanout with a consumer"| surface
-    surface -->|"GPU completion"| event
+```text
+guest app (GLES) ─▶ Mesa virgl (Gallium) ─▶ virtio_gpu DRM driver
+      │ controlq: CTX_CREATE, RESOURCE_CREATE_3D, SUBMIT_3D, TRANSFER_*, SET_SCANOUT, RESOURCE_FLUSH
+      ▼
+VZ custom virtio device (deviceQueue)                         VirtioDeviceCore
+      │ decode + copy + validate (no guest memory re-reads)
+      ▼
+render thread ─▶ virglrenderer ─▶ ANGLE (GLES 3.0) ─▶ Metal    GraphicsCore + GraphicsBridge
+      │ RESOURCE_FLUSH on a scanout with a consumer
+      ▼
+borrow scanout texture ─▶ 1 GPU blit ─▶ IOSurface[i] of SurfacePool(scanout)
+      │ GPU completion
+      ▼
+ScanoutEvent.frameReady(scanout, i, seq) ─▶ RuntimeCore ─▶ XPC frameReady ─▶ wrapper layer.contents
 ```
 
 The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-05, NFR-PERF-05). RiftVM measures the same path at about 60 fps with 0.4–0.8 ms per present. The only difference is that RiftVM blits into a `CAMetalLayer` drawable in the same process, while we blit into an IOSurface that another process presents ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)).
@@ -49,7 +48,7 @@ The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-
 
 ## 2. RiftVM as the reference implementation (#018)
 
-RiftVM (MIT, `github.com/riftvm/riftvm`, v1.0.4) already implements a standard virtio-gpu device (device ID 16) on the macOS 27 custom virtio API. The guest side is the stock Linux `virtio_gpu` driver with Mesa VirGL, and the host side is virglrenderer → ANGLE → Metal. makes it the starting point: we do not design GPU virtualization from scratch.
+RiftVM (MIT, `github.com/riftvm/riftvm`, v1.0.4) already implements a standard virtio-gpu device (device ID 16) on the macOS 27 custom virtio API. The guest side is the stock Linux `virtio_gpu` driver with Mesa VirGL, and the host side is virglrenderer → ANGLE → Metal. APKRun uses it as the starting point: we do not design GPU virtualization from scratch.
 
 ### 2.1 What RiftVM provides (research baseline)
 
@@ -113,15 +112,15 @@ Acceptance: the document identifies the exact source components required for APK
 
 ```swift
 public struct VirtioDeviceDescriptor: Sendable {
-    public var name: String // logs, diagnostics ("virtio-gpu", "test-entropy")
-    public var deviceID: UInt16 // virtio device type (16 = GPU, 4 = entropy)
+    public var name: String                         // logs, diagnostics ("virtio-gpu", "test-entropy")
+    public var deviceID: UInt16                     // virtio device type (16 = GPU, 4 = entropy)
     public var pciClass: UInt8
     public var pciSubclass: UInt8
     public var queueCount: UInt16
-    public var mandatoryFeatures: UInt64 // mapped to VZVirtioFeatureSet subset0/subset1
+    public var mandatoryFeatures: UInt64            // mapped to VZVirtioFeatureSet subset0/subset1
     public var optionalFeatures: UInt64
-    public var configurationSpace: Data // initial device-specific config; its size is fixed forever
-    public var sharedMemoryRegions: [SharedMemoryRegionDescriptor] // empty in v1
+    public var configurationSpace: Data             // initial device-specific config; its size is fixed forever
+    public var sharedMemoryRegions: [SharedMemoryRegionDescriptor]   // empty in v1
 }
 
 public protocol VirtioDeviceModel: AnyObject, Sendable {
@@ -129,21 +128,21 @@ public protocol VirtioDeviceModel: AnyObject, Sendable {
     /// Called on the device queue. `context` stays valid until `deviceWillReset` / `deviceWillStop`.
     func deviceDidStart(context: VirtioDeviceContext, negotiatedFeatures: UInt64)
     func queueNotified(index: Int, context: VirtioDeviceContext)
-    func deviceWillPause
-    func deviceWillResume
-    func deviceWillReset // guest reset or reboot: drop all guest-derived state
-    func deviceWillStop // VM stopping: release host resources
+    func deviceWillPause()
+    func deviceWillResume()
+    func deviceWillReset()                          // guest reset or reboot: drop all guest-derived state
+    func deviceWillStop()                           // VM stopping: release host resources
 }
 
-public final class VirtioDeviceContext { // confined to the device queue
+public final class VirtioDeviceContext {            // confined to the device queue
     public func queue(_ index: Int) -> VirtioQueue
     public func mapGuestMemory(_ range: GuestPhysicalRange) throws(VirtioFailure) -> GuestMemory
-    public func updateConfigurationSpace(_ bytes: Data) async throws(VirtioFailure) // same size, else.configSizeMismatch
+    public func updateConfigurationSpace(_ bytes: Data) async throws(VirtioFailure)  // same size, else .configSizeMismatch
     public func requestReset(reason: String)
     public var negotiatedFeatures: UInt64 { get }
 }
 
-public protocol VirtioQueue { // VZ-backed and fake implementations
+public protocol VirtioQueue {                       // VZ-backed and fake implementations
     /// Calls `body` for every available element until the queue is empty.
     func drain(_ body: (consuming VirtioElement) throws -> Void) rethrows
 }
@@ -151,10 +150,10 @@ public protocol VirtioQueue { // VZ-backed and fake implementations
 public struct VirtioElement: ~Copyable {
     public var readableByteCount: Int { get }
     public var writableByteCount: Int { get }
-    public func copyReadable(maxBytes: Int) throws(VirtioFailure) -> [UInt8] // one snapshot of guest data
+    public func copyReadable(maxBytes: Int) throws(VirtioFailure) -> [UInt8]   // one snapshot of guest data
     public mutating func write(_ bytes: UnsafeRawBufferPointer) throws(VirtioFailure)
-    public consuming func complete // returnToQueue, exactly once
-    public consuming func deferCompletion() -> PendingElement // completion later (fenced commands)
+    public consuming func complete()                                           // returnToQueue, exactly once
+    public consuming func deferCompletion() -> PendingElement                  // completion later (fenced commands)
 }
 ```
 
@@ -162,7 +161,7 @@ Design rules:
 
 - **One device queue per device** (a serial `DispatchQueue` with `.userInteractive` QoS). VZ objects (`VZCustomVirtioDevice`, queues, elements) are touched only on it.
 - **Copy, then validate.** Request bytes are copied out of guest memory exactly once (`copyReadable`) before any field is validated. Validated values are never re-read from guest memory. This is the TOCTOU rule from Apple's documentation.
-- **Exactly-once completion.** `VirtioElement` is non-copyable. `complete` and `deferCompletion` consume it, and `PendingElement.complete` consumes the pending handle. The type system prevents double returns (a double `returnToQueue` raises an exception in VZ). A `deinit` check in debug builds catches forgotten elements.
+- **Exactly-once completion.** `VirtioElement` is non-copyable. `complete()` and `deferCompletion()` consume it, and `PendingElement.complete()` consumes the pending handle. The type system prevents double returns (a double `returnToQueue` raises an exception in VZ). A `deinit` check in debug builds catches forgotten elements.
 - **Guest memory mappings** are cached per device and dropped in `deviceWillReset`/`deviceWillStop`. A `GuestMemory` value checks bounds on every access, and every length is checked for overflow (`gpa + len` must not wrap).
 - **Features** are expressed as a `UInt64` and split into `subset0` (bits 0–31) and `subset1` (bits 32–63) only in the VZ adapter.
 - A `FakeVirtioQueue` and `FakeGuestMemory` live in the `VirtioDeviceCoreTestSupport` target so device models can be unit-tested (T0) without a VM.
@@ -248,10 +247,10 @@ Open point, verified first in #019 and then with Android in #028: **does `update
 ```swift
 struct GPUResource {
     let id: UInt32
-    let kind: Kind //.virgl(target, format, bind, w, h, depth, arraySize, lastLevel, nrSamples, flags) |.host2D(format, w, h)
-    var backing: [GuestMemory] // from ATTACH_BACKING; empty until attached
-    var scanouts: Set<ScanoutID> // bound by SET_SCANOUT
-    var byteEstimate: UInt64 // for the global memory limit
+    let kind: Kind                    // .virgl(target, format, bind, w, h, depth, arraySize, lastLevel, nrSamples, flags) | .host2D(format, w, h)
+    var backing: [GuestMemory]        // from ATTACH_BACKING; empty until attached
+    var scanouts: Set<ScanoutID>      // bound by SET_SCANOUT
+    var byteEstimate: UInt64          // for the global memory limit
 }
 ```
 
@@ -266,7 +265,7 @@ Rules:
 
 - Without `CONTEXT_INIT`, all fences are on one global timeline and complete in order. The device keeps a FIFO of deferred elements `(fenceID, PendingElement)`.
 - For a fenced command, the render thread calls `virgl_renderer_create_fence(fenceID, ctxID)` after executing it. virglrenderer's `write_fence(fenceID)` callback (on the render thread) reports the highest completed fence. The device then completes every deferred element with `fenceID ≤ completed`, in order.
-- Fence progress requires `virgl_renderer_poll`. On macOS, virglrenderer's thread-sync mode depends on Linux eventfd and is not available. The render thread therefore polls after every batch and every 1 ms while fences are outstanding (a `DispatchSourceTimer` on the render thread's run loop, stopped when the FIFO is empty).
+- Fence progress requires `virgl_renderer_poll()`. On macOS, virglrenderer's thread-sync mode depends on Linux eventfd and is not available. The render thread therefore polls after every batch and every 1 ms while fences are outstanding (a `DispatchSourceTimer` on the render thread's run loop, stopped when the FIFO is empty).
 - Unfenced commands are completed as soon as they execute. The controlq is processed strictly in order, so a response never overtakes an earlier fenced command in a way the guest could observe.
 
 ### 4.6 Cursor queue
@@ -311,38 +310,38 @@ A C target (`Packages/GraphicsCore/Sources/GraphicsBridge`, with a small Objecti
 typedef struct gb_renderer gb_renderer;
 
 typedef struct {
-  void (*write_fence)(void *user, uint32_t fence_id); // render thread
-  void (*log)(void *user, int level, const char *message);
+    void (*write_fence)(void *user, uint32_t fence_id);     // render thread
+    void (*log)(void *user, int level, const char *message);
 } gb_callbacks;
 
-int gb_renderer_create(const gb_callbacks *cb, void *user, gb_renderer **out); // EGL (ANGLE Metal) + virgl_renderer_init
+int  gb_renderer_create(const gb_callbacks *cb, void *user, gb_renderer **out);   // EGL (ANGLE Metal) + virgl_renderer_init
 void gb_renderer_destroy(gb_renderer *r);
-int gb_renderer_reset(gb_renderer *r);
-void *gb_renderer_metal_device(gb_renderer *r); // id<MTLDevice> ANGLE uses (EGL_ANGLE_device_metal)
+int  gb_renderer_reset(gb_renderer *r);
+void *gb_renderer_metal_device(gb_renderer *r);             // id<MTLDevice> ANGLE uses (EGL_ANGLE_device_metal)
 
-int gb_capset_info(gb_renderer *r, uint32_t capset_id, uint32_t *max_version, uint32_t *max_size);
-int gb_capset_fill(gb_renderer *r, uint32_t capset_id, uint32_t version, void *out);
+int  gb_capset_info(gb_renderer *r, uint32_t capset_id, uint32_t *max_version, uint32_t *max_size);
+int  gb_capset_fill(gb_renderer *r, uint32_t capset_id, uint32_t version, void *out);
 
-int gb_ctx_create(gb_renderer *r, uint32_t ctx_id, const char *name);
+int  gb_ctx_create(gb_renderer *r, uint32_t ctx_id, const char *name);
 void gb_ctx_destroy(gb_renderer *r, uint32_t ctx_id);
-int gb_ctx_attach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
+int  gb_ctx_attach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
 void gb_ctx_detach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
-int gb_submit(gb_renderer *r, uint32_t ctx_id, const void *cmd, uint32_t size_bytes);
+int  gb_submit(gb_renderer *r, uint32_t ctx_id, const void *cmd, uint32_t size_bytes);
 
-int gb_resource_create(gb_renderer *r, const gb_resource_args *args);
+int  gb_resource_create(gb_renderer *r, const gb_resource_args *args);
 void gb_resource_unref(gb_renderer *r, uint32_t res_id);
-int gb_resource_attach_iov(gb_renderer *r, uint32_t res_id, const gb_iovec *iov, uint32_t count);
+int  gb_resource_attach_iov(gb_renderer *r, uint32_t res_id, const gb_iovec *iov, uint32_t count);
 void gb_resource_detach_iov(gb_renderer *r, uint32_t res_id);
-int gb_transfer_write(gb_renderer *r, const gb_transfer_args *args); // TO_HOST
-int gb_transfer_read(gb_renderer *r, const gb_transfer_args *args); // FROM_HOST
+int  gb_transfer_write(gb_renderer *r, const gb_transfer_args *args);   // TO_HOST
+int  gb_transfer_read(gb_renderer *r, const gb_transfer_args *args);    // FROM_HOST
 
-int gb_create_fence(gb_renderer *r, uint32_t fence_id, uint32_t ctx_id);
+int  gb_create_fence(gb_renderer *r, uint32_t fence_id, uint32_t ctx_id);
 void gb_poll(gb_renderer *r);
 
 /// Blits the scanout rect of `res_id` into `dst` (an IOSurface-backed MTLTexture), flipping Y.
 /// Returns an EGL sync handle to wait on (completion waiter thread).
-int gb_present_blit(gb_renderer *r, uint32_t res_id, gb_rect src, void *dst_mtl_texture, void **out_sync);
-int gb_wait_sync(gb_renderer *r, void *sync, uint64_t timeout_ns);
+int  gb_present_blit(gb_renderer *r, uint32_t res_id, gb_rect src, void *dst_mtl_texture, void **out_sync);
+int  gb_wait_sync(gb_renderer *r, void *sync, uint64_t timeout_ns);
 ```
 
 Implementation notes:
@@ -382,29 +381,29 @@ Reaching a memory limit is logged with the current totals, and the `graphics.mem
 The host decides which scanouts exist and what mode they offer. The guest decides what it shows on them.
 
 ```swift
-public struct ScanoutID: Hashable, Sendable { public let rawValue: Int } // 0...15
+public struct ScanoutID: Hashable, Sendable { public let rawValue: Int }   // 0...15
 
 public struct DisplayMode: Sendable, Equatable {
-    public var widthPixels: Int // ≤ 4095 while EDID uses a detailed timing descriptor (§6.4)
+    public var widthPixels: Int                    // ≤ 4095 while EDID uses a detailed timing descriptor (§6.4)
     public var heightPixels: Int
-    public var refreshHz: Int // 60
-    public var dotsPerInch: Int // encoded as physical size in the EDID
+    public var refreshHz: Int                      // 60
+    public var dotsPerInch: Int                    // encoded as physical size in the EDID
 }
 
 public actor ScanoutController {
-    public func configure(_ id: ScanoutID, mode: DisplayMode) async throws(GraphicsFailure) // enabled = true, display event (§4.3)
-    public func disable(_ id: ScanoutID) async throws(GraphicsFailure) // enabled = false, display event
-    public func attach(_ pool: SurfacePool, to id: ScanoutID) // start presenting this scanout
-    public func detachPool(from id: ScanoutID) -> SurfacePool? // stop presenting (flushes still complete)
-    public func setPresenting(_ id: ScanoutID, _ presenting: Bool) // false while the consumer is not visible (display-and-windowing.md §5.2 rules 4–5)
-    public func requestPresent(_ id: ScanoutID) // re-blit the bound resource now, without a guest flush
+    public func configure(_ id: ScanoutID, mode: DisplayMode) async throws(GraphicsFailure)   // enabled = true, display event (§4.3)
+    public func disable(_ id: ScanoutID) async throws(GraphicsFailure)                        // enabled = false, display event
+    public func attach(_ pool: SurfacePool, to id: ScanoutID)       // start presenting this scanout
+    public func detachPool(from id: ScanoutID) -> SurfacePool?      // stop presenting (flushes still complete)
+    public func setPresenting(_ id: ScanoutID, _ presenting: Bool)  // false while the consumer is not visible (display-and-windowing.md §5.2 rules 4–5)
+    public func requestPresent(_ id: ScanoutID)                     // re-blit the bound resource now, without a guest flush
     public nonisolated var events: AsyncStream<ScanoutEvent> { get }
     public func statistics(_ id: ScanoutID) -> FrameStatistics
 }
 
 public enum ScanoutEvent: Sendable {
-    case guestBound(ScanoutID, resourceSize: PixelSize) // SET_SCANOUT with a resource
-    case guestUnbound(ScanoutID) // SET_SCANOUT with resource 0
+    case guestBound(ScanoutID, resourceSize: PixelSize)   // SET_SCANOUT with a resource
+    case guestUnbound(ScanoutID)                          // SET_SCANOUT with resource 0
     case frameReady(ScanoutID, bufferIndex: Int, sequence: UInt64, hostTime: UInt64)
     case frameDropped(ScanoutID, sequence: UInt64)
     case deviceReset
@@ -419,7 +418,7 @@ public enum ScanoutEvent: Sendable {
 
 For each scanout bound to the flushed resource and with a pool attached:
 
-1. **Pick a buffer.** `SurfacePool.acquireForRender` returns a free buffer index. If none is free (the consumer still holds the others), the present waits as the scanout's single pending present, and it runs as soon as a buffer frees. A newer flush replaces a pending present, and the replaced frame counts as dropped (latest frame wins, like RiftVM's `LatestFrameScheduler`). An offered buffer is never overwritten ([display-and-windowing.md](display-and-windowing.md) §5.2 rule 1). At most one blit per scanout is in flight.
+1. **Pick a buffer.** `SurfacePool.acquireForRender()` returns a free buffer index. If none is free (the consumer still holds the others), the present waits as the scanout's single pending present, and it runs as soon as a buffer frees. A newer flush replaces a pending present, and the replaced frame counts as dropped (latest frame wins, like RiftVM's `LatestFrameScheduler`). An offered buffer is never overwritten ([display-and-windowing.md](display-and-windowing.md) §5.2 rule 1). At most one blit per scanout is in flight.
 2. **Blit.** On the render thread, `gb_present_blit(resource, rect, pool.texture(i))`. The source rect is the scanout rect from `SET_SCANOUT`. If the resource size differs from the pool size (during a resize), the blit scales to the pool size and logs once per mode change.
 3. **Complete the guest's flush.** The flush response is sent after the blit is flushed to the GPU queue, not after it has executed and not after display. The flush of a replaced pending present is completed when it is replaced, and a flush on a scanout that is not presenting is completed at once. The guest HWC paces itself with its own vsync timer, so the host does not add back-pressure. The ordering of the blit against later guest rendering relies on ANGLE's Metal backend using one command queue per display. #023 verifies there is no tearing with HelloGL's alternating-color test (§12).
 4. **GPU completion.** The completion waiter waits on the blit's EGL sync (timeout 100 ms, which is logged as a stall) and then emits `frameReady(scanout, i, seq, hostTime)`. The IOSurface content is complete before any consumer sees the index.
@@ -431,12 +430,12 @@ Pixel formats: guest scanout resources are 32-bit (`B8G8R8X8`/`B8G8R8A8`/`R8G8B8
 ```swift
 public final class SurfacePool: Sendable {
     public init(pixelSize: PixelSize, bufferCount: Int = 3, device: any MTLDevice) throws(GraphicsFailure)
-    public let generation: UInt64 // increases on every reallocation
+    public let generation: UInt64                  // increases on every reallocation
     public let pixelSize: PixelSize
-    public var surfaces: [IOSurface] { get } // sent to the wrapper once per generation
-    func acquireForRender() -> Int? // render thread
+    public var surfaces: [IOSurface] { get }       // sent to the wrapper once per generation
+    func acquireForRender() -> Int?                // render thread
     func markReady(_ index: Int, sequence: UInt64)
-    public func consumerDisplayed(upTo sequence: UInt64) // from the wrapper's frameDisplayed (display-and-windowing.md §5)
+    public func consumerDisplayed(upTo sequence: UInt64)   // from the wrapper's frameDisplayed (display-and-windowing.md §5)
 }
 ```
 
@@ -458,7 +457,7 @@ public final class SurfacePool: Sendable {
 
 ## 7. Frame statistics and counters (#023, #070)
 
-  lists FPS, frame latency, dropped frames, CPU utilization, GPU utilization, resource copies, and CPU readbacks. GraphicsCore records the following per scanout and globally, and exposes them through `ScanoutController.statistics` and the diagnostics snapshot.
+The graphics metrics are FPS, frame latency, dropped frames, CPU utilization, GPU utilization, resource copies, and CPU readbacks. GraphicsCore records the following per scanout and globally, and exposes them through `ScanoutController.statistics` and the diagnostics snapshot.
 
 | Metric | Definition | Where it is measured |
 |---|---|---|

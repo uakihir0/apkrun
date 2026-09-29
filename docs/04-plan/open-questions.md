@@ -49,7 +49,7 @@ Rules:
 | OQ-14 | Which density split should be chosen from an `.apks` set? | Package store | Verification | #042 | the baseline rule ([package-store.md](../02-design/package-store.md) §4.4) | open |
 | OQ-15 | How often does the host verifier reject what Android would accept? | Package store | Verification | field data after v0.4 (`verifier.disagreement`) | host verifier stays strict | open |
 | OQ-16 | Should rollback restore app data (`ROLLBACK_DATA_POLICY_RESTORE`)? | Package store | Deferred | post-v1 | code-only rollback | deferred |
-| OQ-17 | How does `GENTLE_UPDATE` behave while the app runs a foreground service? | Update system | Verification | #040 | trust `GENTLE_UPDATE` with `setAppNotForegroundRequired` | open |
+| OQ-17 | How does `GENTLE_UPDATE` behave while the app runs a foreground service? | Update system | Verification | #040 | trust `GENTLE_UPDATE` with `setAppNotForegroundRequired()` | open |
 | OQ-18 | F-Droid index details and main repository fingerprint; GitHub asset `digest` availability | Update system | Verification | #051, #052 | as specified ([update-system.md](../02-design/update-system.md) §4.5–§4.6) | open |
 | OQ-19 | Should Direct manifests be signed? | Update system | Deferred | v1.x | unsigned manifest, APK signer check protects updates | deferred |
 | OQ-20 | Do health-check launches cause visible side effects for real apps? | Update system | Verification | #090 | the default health-check level | open |

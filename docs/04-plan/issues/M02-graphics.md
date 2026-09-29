@@ -88,7 +88,7 @@ The team knows exactly which RiftVM components APKRun reuses, rewrites, or ignor
 
 - Pinning RiftVM v1.0.4 as a source-only lock entry.
 - Reading the files of §2.1 and the RiftVM architecture document.
-- The file-by-file table of §2.2, covering the flow The task lists: `VZCustomVirtioDevice`, virtqueue handling, virtio-gpu commands, resource creation, resource backing, VirGL, scanout, ANGLE, Metal, and the cursor.
+- The file-by-file table of §2.2, covering the flow the task lists: `VZCustomVirtioDevice`, virtqueue handling, virtio-gpu commands, resource creation, resource backing, VirGL, scanout, ANGLE, Metal, and the cursor.
 - The patches and exact build flags that RiftVM uses for virglrenderer, libepoxy, and ANGLE, and its EGL init flags.
 - License review of every reusable file.
 - Out of scope:
@@ -132,7 +132,7 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 ### Acceptance criteria
 
 - [ ] `docs/02-design/riftvm-analysis.md` identifies the exact source components required for APKRun.
-- [ ] It covers every flow step The task lists: `VZCustomVirtioDevice`, virtqueue handling, virtio-gpu commands, resource creation, resource backing, VirGL, scanout, ANGLE, Metal, and the cursor.
+- [ ] It covers every flow step the task lists: `VZCustomVirtioDevice`, virtqueue handling, virtio-gpu commands, resource creation, resource backing, VirGL, scanout, ANGLE, Metal, and the cursor.
 - [ ] It identifies the reusable code and the licenses of each part.
 - [ ] It lists the renderer patches and build flags that #020 uses.
 - [ ] RiftVM is pinned in the lock file as source only, and no build step depends on it.

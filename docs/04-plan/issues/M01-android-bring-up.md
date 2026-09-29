@@ -123,14 +123,14 @@ A developer fetches the pinned build 16373615. They get a committed, reproducibl
 2. **Vendored tools and synthetic fixtures.**
    - Copy `mkbootimg.py`, `unpack_bootimg.py`, and `avbtool.py` into `Images/tools/vendor/`, and pin them in the lock file as `kind: vendored` entries with the AOSP commit and the SHA-256 of each file. Add the vendored-file check to `scripts/tools/check-lock.swift`: a copied file whose hash differs from its entry fails ([../../05-development/build-system.md](../../05-development/build-system.md) §6.4).
    - `build_fixtures.py` uses them to write small synthetic images:
-   - a boot image v4 and an init_boot image;
-   - a vendor_boot v4 image with three ramdisk fragments (PLATFORM, RECOVERY, DLKM) and a bootconfig section;
-   - a vbmeta with two chain descriptors;
-   - a sparse ext4 image with all four chunk types;
-   - a small super image with liblp metadata;
-   - superblock stubs for erofs and f2fs;
-   - `android-info.txt` and `fastboot-info.txt`;
-   - one unknown file.
+     - a boot image v4 and an init_boot image;
+     - a vendor_boot v4 image with three ramdisk fragments (PLATFORM, RECOVERY, DLKM) and a bootconfig section;
+     - a vbmeta with two chain descriptors;
+     - a sparse ext4 image with all four chunk types;
+     - a small super image with liblp metadata;
+     - superblock stubs for erofs and f2fs;
+     - `android-info.txt` and `fastboot-info.txt`;
+     - one unknown file.
    - It also writes the fixture zip.
    - Check: two runs of `build_fixtures.py` give identical hashes. The hashes are committed in `Images/tools/tests/fixtures/images/SHA256SUMS`.
 3. **`fetch.py`.**
@@ -234,12 +234,12 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
    - Check: `launch_cvd --cpus 4 --memory_mb 4096` boots, and `adb shell getprop sys.boot_completed` prints `1` on the reference host.
 2. **Guest-side command list.**
    - Write `guest-capture.txt` with the right-hand column of §8.3:
-   - `/proc/cmdline`, `/proc/bootconfig`, `getprop`, `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`;
-   - partition sizes from sysfs, `/proc/mounts`, `/vendor/etc/fstab.*`, `dmesg`, `lsmod`;
-   - the hvc holders from `/proc/*/fd`;
-   - `logcat -d -b all` (gzip), `lshal`, `service list`, `ls /apex`, `pm list features`;
-   - `ip addr`, `ip route`, `ip link`, the `dumpsys connectivity` summary;
-   - `/proc/asound/cards`, `getenforce`, AVC denials, and the `VIRTUAL_DEVICE_*` lines with timestamps.
+     - `/proc/cmdline`, `/proc/bootconfig`, `getprop`, `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`;
+     - partition sizes from sysfs, `/proc/mounts`, `/vendor/etc/fstab.*`, `dmesg`, `lsmod`;
+     - the hvc holders from `/proc/*/fd`;
+     - `logcat -d -b all` (gzip), `lshal`, `service list`, `ls /apex`, `pm list features`;
+     - `ip addr`, `ip route`, `ip link`, the `dumpsys connectivity` summary;
+     - `/proc/asound/cards`, `getenforce`, AVC denials, and the `VIRTUAL_DEVICE_*` lines with timestamps.
    - Commands that need root are prefixed with `su 0`. This works on userdebug over both `adb shell` and the serial console.
    - Only toybox commands are used, so the same list runs over the serial shell in #014.
    - Check: every §8.3 guest item has exactly one entry.
@@ -264,9 +264,9 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
    - The boot-phase strings `Booting Linux on physical CPU`, `init: init first stage started!`, `init: starting service 'zygote'`, and `VIRTUAL_DEVICE_BOOT_COMPLETED` go into [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3, each confirmed or replaced, with median timings.
    - The `androidboot.*` keys that U-Boot and the launcher add (from `/proc/bootconfig` compared with `internal/bootconfig`) go into the source column of [android-image.md](../../02-design/android-image.md) §6.2.
    - The values for later tasks are noted in the pull request:
-   - `ro.adb.secure` and `persist.adb.tcp.port`, for #015;
-   - the by-name list, the partition sizes, and the fstab, for #011 and #013;
-   - the hvc holders, for #095.
+     - `ro.adb.secure` and `persist.adb.tcp.port`, for #015;
+     - the by-name list, the partition sizes, and the fstab, for #011 and #013;
+     - the hvc holders, for #095.
    - Check: the design-doc pull request marks each candidate "confirmed" or "changed".
 
 ### Tests
@@ -341,12 +341,12 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
    - Check: T0 passes over all pairs.
 2. **Draft generator.**
    - `python3 -m apkrun_image manifest --inventory Images/manifests/16373615/inventory.json --out Images/manifests/16373615/android-image.json` fills in:
-   - `source`;
-   - `android` (from the boot header `os_version` and the SDK table, where 17 maps to 37);
-   - `artifacts` from the inventory kinds, including `vbmeta_system`, `vbmeta_system_dlkm`, `vbmeta_vendor_dlkm`, and `custom` (reference §5);
-   - `roles`;
-   - `logicalPartitions` from the super metadata;
-   - `blankPartitions` with the placeholders misc 1 MiB, metadata 64 MiB, and frp 1 MiB.
+     - `source`;
+     - `android` (from the boot header `os_version` and the SDK table, where 17 maps to 37);
+     - `artifacts` from the inventory kinds, including `vbmeta_system`, `vbmeta_system_dlkm`, `vbmeta_vendor_dlkm`, and `custom` (reference §5);
+     - `roles`;
+     - `logicalPartitions` from the super metadata;
+     - `blankPartitions` with the placeholders misc 1 MiB, metadata 64 MiB, and frp 1 MiB.
    - Check: `manifest --check` passes on the draft.
 3. **Review and commit.**
    - A maintainer reviews the draft and commits it.
@@ -438,21 +438,21 @@ See [../test-strategy.md](../test-strategy.md).
 3. **`extract`.**
    - Run `python3 -m apkrun_image extract --manifest Images/manifests/<buildId>/android-image.json --out Images/work/<buildId>/boot/`.
    - It opens inputs read-only and re-hashes them against the manifest (M4). It writes:
-   - `kernel`;
-   - `ramdisk.img`: the vendor fragments in table order without RECOVERY, then the init_boot ramdisk;
-   - `vendor-bootconfig.txt`;
-   - `cmdline.txt`: the vendor cmdline, then the boot cmdline, then `cmdline.additions` from the layout;
-   - `dtb`;
-   - `extraction.json`: input and output SHA-256 values, sizes, header fields, and each fragment with its type and whether it was included.
+     - `kernel`;
+     - `ramdisk.img`: the vendor fragments in table order without RECOVERY, then the init_boot ramdisk;
+     - `vendor-bootconfig.txt`;
+     - `cmdline.txt`: the vendor cmdline, then the boot cmdline, then `cmdline.additions` from the layout;
+     - `dtb`;
+     - `extraction.json`: input and output SHA-256 values, sizes, header fields, and each fragment with its type and whether it was included.
    - Check: T1 on the fixture set. The outputs equal the expected bytes, the original hashes are unchanged, and a second run gives identical outputs.
 4. **`bootconfig.py`.**
    - Parse and serialize bootconfig.
    - Implement the merge rules of §6.1:
-   - one layer per key;
-   - a conflict unless `overrides` is set;
-   - key regex `[A-Za-z0-9_.-]+`;
-   - printable ASCII values without `"`, backslash, or newline, always double-quoted;
-   - the build fails above 16 KiB.
+     - one layer per key;
+     - a conflict unless `overrides` is set;
+     - key regex `[A-Za-z0-9_.-]+`;
+     - printable ASCII values without `"`, backslash, or newline, always double-quoted;
+     - the build fails above 16 KiB.
    - Implement the trailer of §6.3.
    - Golden vectors cover: empty input, one key, many keys, values with spaces, a block exactly at 16 KiB, and a conflict whose message is `bootconfigConflict(key, layerA, layerB)`.
    - Check: T0 passes.
@@ -513,7 +513,7 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
 - Discovering the topology with the Linux test guest.
 - The verified mapping table in [android-image.md](../../02-design/android-image.md) §4.2.
 - Out of scope:
-- Booting Android (#012). The Android-kernel acceptance check for this task runs in #012.
+  - Booting Android (#012). The Android-kernel acceptance check for this task runs in #012.
   - Image install (#065) and first-run provisioning UI (#066).
   - `_b` slots and crosvm composite disks.
   - Pre-formatted userdata, which is fallback A or B of §5.2 and only if #013 needs it.
@@ -535,21 +535,21 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
    - Check: T1 hashes equal the committed `simg2img` hashes in `Images/tools/tests/fixtures/sparse/expected-sha256.txt`.
 2. **`gpt.py`.**
    - Write and read GPT as in §4.4:
-   - 512-byte sectors;
-   - a protective MBR;
-   - the primary header at LBA 1, entries in LBA 2–33, and the backup at the end;
-   - CRC32 checksums;
-   - 1 MiB alignment;
-   - type GUID `0FC63DAF-8483-4772-8E79-3D69D8477DE4`;
-   - UUIDv5 values over (imageVersion, disk role, label);
-   - UTF-16LE names of at most 36 units.
+     - 512-byte sectors;
+     - a protective MBR;
+     - the primary header at LBA 1, entries in LBA 2–33, and the backup at the end;
+     - CRC32 checksums;
+     - 1 MiB alignment;
+     - type GUID `0FC63DAF-8483-4772-8E79-3D69D8477DE4`;
+     - UUIDv5 values over (imageVersion, disk role, label);
+     - UTF-16LE names of at most 36 units.
    - `python3 -m apkrun_image inspect <file>` prints the table.
    - Check: T0 round trip and CRC tests pass. T1: macOS reads the table, and `hdiutil attach -imagekey diskimage-class=CRawDiskImage -nomount os.img` followed by `diskutil list` shows the partition names.
 3. **Disk plan and `disks`.**
    - Add the §4.2 plan to the layout:
-   - disk 0 `os`, read-only, with its nine partitions;
-   - disk 1 `persistent`, read-write, with misc, metadata, and frp;
-   - disk 2 `userdata`, read-write.
+     - disk 0 `os`, read-only, with its nine partitions;
+     - disk 1 `persistent`, read-write, with misc, metadata, and frp;
+     - disk 2 `userdata`, read-write.
    - Replace the `blankPartitions` placeholders in `android-image.json` with the sizes from the #064 `target` sysfs capture.
    - `python3 -m apkrun_image disks --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --out Images/work/16373615/disks/` writes `os.img`, `persistent.img`, the blank formattable `userdata.img`, and `disks.json`.
    - `disks.json` has, per disk: the file, role, access, identifier, and sector size. Per partition it has the name, GUID, first and last LBA, size, and source SHA-256.
@@ -562,10 +562,10 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
 5. **Swift instance disks.**
    - `GPTDisk` reads and verifies the header and entries. It rewrites the disk and partition GUIDs, moves the backup header and entries to a new end, updates `alternate_lba` and `last_usable_lba`, extends the last partition's `ending_lba`, and recomputes the CRCs.
    - `InstanceDiskProvisioner` does four things:
-   - clones the templates with `clonefile`;
-   - derives the new GUIDs from the instance UUID;
-   - grows `userdata.img` to `runtime.userdataGiB` (default 32) with `ftruncate` plus `GPTDisk`;
-   - calls `fsync`.
+     - clones the templates with `clonefile`;
+     - derives the new GUIDs from the instance UUID;
+     - grows `userdata.img` to `runtime.userdataGiB` (default 32) with `ftruncate` plus `GPTDisk`;
+     - calls `fsync`.
    - Errors: `ImageFailure.cloneUnsupported(volume)`, `cloneFailed(errno)`, and `insufficientSpace(required, available)`.
    - Check: T0 tests against the Python GPT fixtures in `Images/tools/tests/fixtures/gpt/` pass. The T1 tests pass.
 6. **Documentation.**
@@ -659,10 +659,10 @@ See [../test-strategy.md](../test-strategy.md).
 1. **Unsigned bundle.**
    - Run `python3 -m apkrun_image bundle --unsigned --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --reference Images/reference/16373615/target --image-version 2026.10.0 --out Images/work/16373615/bundle/`.
    - It runs `extract` and `disks`, then writes:
-   - `boot/{kernel,ramdisk.img,bootconfig.txt,cmdline.txt}`;
-   - `disks/os.img`;
-   - `templates/{persistent.img,userdata.img}`;
-   - `manifest.json`, with `consolePorts` from a provisional layout `consolePorts` section ([android-image.md](../../02-design/android-image.md) §7.1) and `gpuProfiles.headless`.
+     - `boot/{kernel,ramdisk.img,bootconfig.txt,cmdline.txt}`;
+     - `disks/os.img`;
+     - `templates/{persistent.img,userdata.img}`;
+     - `manifest.json`, with `consolePorts` from a provisional layout `consolePorts` section ([android-image.md](../../02-design/android-image.md) §7.1) and `gpuProfiles.headless`.
    - Check: the tree matches [filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1, except for the two signature files.
 2. **ImageCore data types.**
    - `ImageVersion` parses and orders versions.
@@ -672,27 +672,27 @@ See [../test-strategy.md](../test-strategy.md).
    - Check: T0 passes, including the shared golden vectors of `Images/tools/tests/fixtures/bootconfig/`.
 3. **Instance and boot plan.**
    - `InstanceStore.provision(image:sizing:)` creates `$APKRUN_HOME/Runtime/instance/` as in §5.1:
-   - `instance.json` holds the UUID, the `VZGenericMachineIdentifier`, the MAC address, the sizing (4 vCPU and 4 GiB, [../../02-design/vm.md](../../02-design/vm.md) §10), `imageVersion`, `userdataSchemaVersion`, and `userdataGeneration`. It is written last.
+     - `instance.json` holds the UUID, the `VZGenericMachineIdentifier`, the MAC address, the sizing (4 vCPU and 4 GiB, [../../02-design/vm.md](../../02-design/vm.md) §10), `imageVersion`, `userdataSchemaVersion`, and `userdataGeneration`. It is written last.
    - `AndroidBootPlanner.prepareBoot(image:instance:options:)` merges the layers in this order:
-   - layer 1, vendor: `[vendor]` from `boot/bootconfig.txt`;
-   - layer 2, image: `[image]` plus the selected GPU profile;
-   - layer 3, platform: `boot_devices`;
-   - layer 4, instance: `serialno` (`APKRUN` plus 10 uppercase hex digits), `lcd_density`, `ddr_size`, and `apkrun.instance`, `apkrun.devmode`, `apkrun.image`.
+     - layer 1, vendor: `[vendor]` from `boot/bootconfig.txt`;
+     - layer 2, image: `[image]` plus the selected GPU profile;
+     - layer 3, platform: `boot_devices`;
+     - layer 4, instance: `serialno` (`APKRUN` plus 10 uppercase hex digits), `lcd_density`, `ddr_size`, and `apkrun.instance`, `apkrun.devmode`, `apkrun.image`.
    - It then builds the initrd: `clonefile` of `boot/ramdisk.img` to `Runtime/instance/boot/initrd.img.tmp`, append the trailer, `fsync`, rename, and record the SHA-256.
    - It returns an `AndroidBootPlan` whose `VMDefinition` follows §9.2:
-   - the label;
-   - `.linux(kernel:initialRamdisk:commandLine:)`;
-   - the disks;
-   - `.nat(macAddress:)`;
-   - vsock, `consolePorts`, entropy, and balloon;
-   - no sound in M1.
+     - the label;
+     - `.linux(kernel:initialRamdisk:commandLine:)`;
+     - the disks;
+     - `.nat(macAddress:)`;
+     - vsock, `consolePorts`, entropy, and balloon;
+     - no sound in M1.
    - Check: the T0 mapping test passes, and the definition passes `VMDefinitionValidator`.
 4. **Supervisor, detector, CLI.**
    - `RuntimeSupervisor.ensureReady(.cli, operation:)` implements steps 0–2, 4, and 5 of [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2.
    - `BootSignals.swift` holds the pattern table:
-   - `.kernel` is entered on the first console byte after `VM_START`, with PerfMarker `KERNEL_START`;
-   - `Kernel panic - not syncing` gives `failed(.kernelPanic)` at once.
-   - `apkrun dev boot --bundle <dir> [--gpu none]` runs in the embedded runtime (`APKRUN_EMBEDDED_RUNTIME`, [runtime-daemon.md](../../02-design/runtime-daemon.md) §10). It provisions the instance when there is none, streams the phases, and stops the VM on Ctrl-C with `VMController.stop`.
+     - `.kernel` is entered on the first console byte after `VM_START`, with PerfMarker `KERNEL_START`;
+     - `Kernel panic - not syncing` gives `failed(.kernelPanic)` at once.
+   - `apkrun dev boot --bundle <dir> [--gpu none]` runs in the embedded runtime (`APKRUN_EMBEDDED_RUNTIME`, [runtime-daemon.md](../../02-design/runtime-daemon.md) §10). It provisions the instance when there is none, streams the phases, and stops the VM on Ctrl-C with `VMController.stop()`.
    - Check: T0 golden tests pass over the #064 kernel logs. `apkrun-dev dev boot --bundle Images/work/16373615/bundle/ --gpu none` prints `.kernel`.
 5. **Bootconfig on the Linux guest.**
    - Add `apkrun.test=bootconfig`, which prints `/proc/bootconfig`.
@@ -702,12 +702,12 @@ See [../test-strategy.md](../test-strategy.md).
 6. **Android kernel boot.**
    - `AndroidBootTests.testKernelBoot` boots the unsigned bundle with `--gpu none`. It waits up to 120 s for `init: init first stage started!`, then force-stops the VM.
    - It asserts these lines in `boot-<timestamp>.log`:
-   - `Booting Linux on physical CPU`;
-   - `Kernel command line:` with a value equal to `cmdline.txt`;
-   - `virtio_blk` lines for `vda`, `vdb`, and `vdc` with 9, 3, and 1 partitions;
-   - `rtc-pl031` registered as `rtc0`;
-   - the virtio console, virtio-net, vsock, rng, and balloon devices probed;
-   - no panic.
+     - `Booting Linux on physical CPU`;
+     - `Kernel command line:` with a value equal to `cmdline.txt`;
+     - `virtio_blk` lines for `vda`, `vdb`, and `vdc` with 9, 3, and 1 partitions;
+     - `rtc-pl031` registered as `rtc0`;
+     - the virtio console, virtio-net, vsock, rng, and balloon devices probed;
+     - no panic.
    - A second test boots a deliberately truncated ramdisk and expects `failed(.kernelPanic)`.
    - Record in [android-image.md](../../02-design/android-image.md) §6: the kernel version, the time to each line, and any missing device.
    - Check: both T2 tests pass.
@@ -787,7 +787,7 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
 2. **Serial shell.**
    - hvc1 becomes `.service("serial")` in developer mode. `apkrun-dev dev boot` always boots with `BootOptions.developerMode = true`.
    - `AndroidShellConsole` sends `<command>; echo __APKRUN_END_<n>__ $?` and reads until the sentinel. It returns stdout and the exit code, and prefixes root commands with `su 0`.
-   - Ctrl-C in `apkrun dev boot` now sends `reboot -p` on the serial shell first, and forces `VMController.stop` after 20 s ([../../02-design/vm.md](../../02-design/vm.md) §9.3).
+   - Ctrl-C in `apkrun dev boot` now sends `reboot -p` on the serial shell first, and forces `VMController.stop()` after 20 s ([../../02-design/vm.md](../../02-design/vm.md) §9.3).
    - Check: T2 runs `getprop ro.build.fingerprint` and gets the build's fingerprint.
 3. **Boot devices, fstab, dynamic partitions.**
    - Confirm the `/dev/block/by-name/*` links that `androidboot.boot_devices` creates, and the fstab chosen by `androidboot.fstab_suffix`.
@@ -890,9 +890,9 @@ Every Cuttlefish host dependency has a decided and verified substitute. Android 
 3. **Security HALs.**
    - Set the `androidboot.vendor.apex.*` keys that select the in-guest insecure KeyMint and Gatekeeper. Copy the APEX names from `Images/reference/16373615/target/` (§7.2).
    - Check:
-   - `service list` shows the KeyMint (`IKeyMintDevice/default`) and Gatekeeper services;
-   - vold mounts `/data` with metadata encryption (`/proc/mounts` shows `/data`);
-   - the first boot formats `userdata` (the `formattable` path of §5.2).
+     - `service list` shows the KeyMint (`IKeyMintDevice/default`) and Gatekeeper services;
+     - vold mounts `/data` with metadata encryption (`/proc/mounts` shows `/data`);
+     - the first boot formats `userdata` (the `formattable` path of §5.2).
 4. **vsock services and absent host services.**
    - Leave out the `androidboot.vsock_*` and `modem_simulator_ports` keys.
    - For each client that the reference bootconfig configures, record in [android-image.md](../../02-design/android-image.md) §7.3 whether it stays idle, exits once, or crash-loops. The clients include tombstone transmit, the RIL and modem simulator, camera, and audio control.
@@ -978,9 +978,9 @@ The stock image reaches `sys.boot_completed=1`, the host detects it, and Android
 
 1. **Readiness monitor.**
    - Add the console signals:
-   - `.systemServer` on `init: starting service 'zygote'`, with PerfMarker `SYSTEM_SERVER_READY`;
-   - `.bootCompleted` on `VIRTUAL_DEVICE_BOOT_COMPLETED`, with PerfMarker `BOOT_COMPLETED`;
-   - `VIRTUAL_DEVICE_BOOT_FAILED` gives `failed(.androidBootFailed)`.
+     - `.systemServer` on `init: starting service 'zygote'`, with PerfMarker `SYSTEM_SERVER_READY`;
+     - `.bootCompleted` on `VIRTUAL_DEVICE_BOOT_COMPLETED`, with PerfMarker `BOOT_COMPLETED`;
+     - `VIRTUAL_DEVICE_BOOT_FAILED` gives `failed(.androidBootFailed)`.
    - Add the whole-boot timeouts of 180 s and 900 s (`runtime.bootTimeoutSeconds`, `runtime.firstBootTimeoutSeconds`) and the stall limits of 90 s and 600 s, which give `.bootTimedOut(phase)` and `.bootStalled(phase)`.
    - Write one record per boot to `perf/boots.jsonl`.
    - In M1, `ready` is entered at `.bootCompleted`, because steps 3 and 7–9 of [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2 do not exist yet.
@@ -1006,10 +1006,10 @@ The stock image reaches `sys.boot_completed=1`, the host detects it, and Android
 6. **G2 acceptance.**
    - `scripts/run-gate.sh G2` runs `Tests/AcceptanceTests/G2/` on the reference Mac with a clean build from `main`. It resets the instance, then runs five cold boots in a row. The first boot uses the first-boot timeout.
    - For each boot, it asserts:
-   - `.bootCompleted` is detected and `BOOT_COMPLETED` is logged;
-   - `getprop sys.boot_completed` over the serial shell returns `1`;
-   - over 10 minutes, `sys.system_server.start_count` stays `1`, the logcat has no watchdog kill of system_server, and there is no HAL crash loop (as defined in #095);
-   - after the last boot, the reference diff passes.
+     - `.bootCompleted` is detected and `BOOT_COMPLETED` is logged;
+     - `getprop sys.boot_completed` over the serial shell returns `1`;
+     - over 10 minutes, `sys.system_server.start_count` stays `1`, the logcat has no watchdog kill of system_server, and there is no HAL crash loop (as defined in #095);
+     - after the last boot, the reference diff passes.
    - Record the result in [android-image.md](../../02-design/android-image.md) §8 and in R-06, R-11, and R-12.
    - Check: the gate passes, and the nightly T3 run includes it.
 
@@ -1097,10 +1097,10 @@ In developer mode, `adb -s 127.0.0.1:6520` reaches the guest's adbd through vsoc
    - Check: T0 builds the command lines, parses the output, and maps errors, using a fake `adb` executable.
 4. **ADB signals and stop.**
    - Once `adb` connects, poll every 500 ms:
-   - `getprop sys.system_server.start_count` non-empty enters `.systemServer`;
-   - `getprop sys.boot_completed` = `1` enters `.bootCompleted`.
+     - `getprop sys.system_server.start_count` non-empty enters `.systemServer`;
+     - `getprop sys.boot_completed` = `1` enters `.bootCompleted`.
    - The first signal wins ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3).
-   - Ctrl-C now runs `adb shell reboot -p` and forces `VMController.stop` after 20 s ([../../02-design/vm.md](../../02-design/vm.md) §9.3).
+   - Ctrl-C now runs `adb shell reboot -p` and forces `VMController.stop()` after 20 s ([../../02-design/vm.md](../../02-design/vm.md) §9.3).
    - Check: T0 detector tests with mixed console and ADB signals. T2 graceful stop.
 5. **`apkrun dev adb [<args>…]`.**
    - Run `adb -s 127.0.0.1:6520 <args>` and pass the exit code through.
@@ -1182,9 +1182,9 @@ HelloText builds reproducibly. `adb install` installs it through a PackageInstal
 1. **Fixture project.**
    - Create the Gradle project and HelloText as specified.
    - Add a JVM unit test for the counter store.
-   - Check: `./gradlew -p Tests/Fixtures/AndroidApps:HelloText:testReleaseUnitTest` passes.
+   - Check: `./gradlew -p Tests/Fixtures/AndroidApps :HelloText:testReleaseUnitTest` passes.
 2. **Build script.**
-   - `scripts/build-fixtures.sh` runs `./gradlew -p Tests/Fixtures/AndroidApps:HelloText:assembleRelease`, signs with the test key, and copies the result to `out/HelloText.apk`.
+   - `scripts/build-fixtures.sh` runs `./gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleRelease`, signs with the test key, and copies the result to `out/HelloText.apk`.
    - Check: two clean builds have the same content, meaning the same `aapt2 dump badging` output and the same dex hashes ([../../05-development/build-system.md](../../05-development/build-system.md) §14).
 3. **Install.**
    - `AdbClient.install(apk:)` runs `adb -s 127.0.0.1:6520 install -r <apk>`. On the device this is a PackageInstaller session. Nothing is ever copied into `/data/app` (FR-PKG-01).
@@ -1260,7 +1260,7 @@ HelloText's `MainActivity` is started explicitly over ADB, and the process and A
    - `AdbClient.pidof("io.apkrun.fixture.hellotext")` returns a PID, and `ps -A` lists the process.
    - Check: T2 passes.
 3. **ActivityManager state.**
-   - `AdbClient.dumpsysActivities` parses `dumpsys activity activities`. The resumed activity (`topResumedActivity`, or `mResumedActivity` on older formats) is `io.apkrun.fixture.hellotext/.MainActivity`.
+   - `AdbClient.dumpsysActivities()` parses `dumpsys activity activities`. The resumed activity (`topResumedActivity`, or `mResumedActivity` on older formats) is `io.apkrun.fixture.hellotext/.MainActivity`.
    - Check: T2 passes.
 4. **Stop.**
    - `AdbClient.forceStop` runs `am force-stop io.apkrun.fixture.hellotext`. Afterwards `pidof` returns nothing, and the Activity is no longer resumed.
@@ -1322,7 +1322,7 @@ One signed, deterministic bundle built from the stock build installs with `apkru
 ### Deliverables
 
 - The full `bundle` output (the image version gets the suffix `-cf16373615-arm64`), `sign.py`, `keygen`, and the runtime manifest schema.
-- ImageCore: the full `RuntimeImageManifest`, `ImageTrustStore`, and `ImageStore` (`install(from:.directory)`, `verify(_:depth:)`, `current`, `previous`, `setCurrent`, `garbageCollect`).
+- ImageCore: the full `RuntimeImageManifest`, `ImageTrustStore`, and `ImageStore` (`install(from: .directory)`, `verify(_:depth:)`, `current()`, `previous()`, `setCurrent`, `garbageCollect`).
 - `apkrun dev image install <dir>`.
 - Signing test vectors in `Images/tools/tests/fixtures/signing/`.
 
@@ -1342,7 +1342,7 @@ One signed, deterministic bundle built from the stock build installs with `apkru
    - Add the image trust and image manifest rows to `scripts/release/check-release-build.sh` ([../../05-development/build-system.md](../../05-development/build-system.md) §3.1): the Release `ImageTrustStore` holds only release key IDs, with no ID of `test-image-ed25519` and no per-developer key, and a release image manifest has no `androidboot.apkrun.test.*` key.
    - Check: T0 and T1 rejection tests pass. A fixture Release build that trusts the test key fails the release check, and so does a fixture manifest with an `androidboot.apkrun.test.*` key.
 4. **`ImageStore`.**
-   - `install(from:.directory)` verifies the bundle, clones it into `Images/.installing-<v>/`, renames it into place, and sets `current`.
+   - `install(from: .directory)` verifies the bundle, clones it into `Images/.installing-<v>/`, renames it into place, and sets `current`.
    - Orphaned `.installing-*` directories are removed at startup.
    - Check: T1 on a temporary APFS volume covers an interrupted install, a bad signature, an extra file, and a hash mismatch. It also checks that holes are kept, by comparing allocated and logical sizes.
 5. **Development install.**

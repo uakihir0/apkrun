@@ -15,7 +15,7 @@ Android APK
     ↓
 APKRun (package store, updates, wrapper generator)
     ↓
-Thin Mac app wrapper (/Applications/App.app)
+Thin Mac app wrapper  (/Applications/App.app)
     ↓
 apkrund (per-user LaunchAgent, owns the VM)
     ↓
@@ -25,7 +25,7 @@ Android ARM64 guest (AOSP Cuttlefish based) on Virtualization.framework
 The target command is:
 
 ```bash
-apkrun wrap app.apk --install # → /Applications/App.app
+apkrun wrap app.apk --install        # → /Applications/App.app
 ```
 
 A generated `.app` is a thin, immutable launcher. APK files, Android data, update metadata, runtime images, and all Android state live outside the signed bundle ([docs/02-design/wrapper.md](docs/02-design/wrapper.md), ADR-0009).

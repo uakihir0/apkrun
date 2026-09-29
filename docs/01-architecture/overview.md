@@ -12,24 +12,24 @@ This page explains how APKRun fits together. Subsystem details live in [../02-de
 ## 1. The four layers
 
 ```text
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ 1. App wrapper layer                                                          │
-│ Discord.app, Spotify.app … (thin, immutable, APKRunLauncher)                  │
-│ APKRun.app (GUI) · APKRunMenuBar · apkrun CLI                                 │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ 2. Desktop runtime layer — apkrund, per-user LaunchAgent                      │
-│ RuntimeCore · DisplayPool · GraphicsCore · InputRouter                        │
-│ IntegrationCore · VirtualMachineCore · ImageCore                              │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ 3. Android runtime layer — inside the VM                                      │
-│ APKRun AOSP product (Cuttlefish arm64 based)                                  │
-│ Android Framework / ART · SurfaceFlinger · Mesa VirGL                         │
-│ Guest Agent (apkrun_guestd) · Store Agent (io.apkrun.store)                   │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ 4. Store and update layer — host logic with guest execution                   │
-│ APKStoreCore · UpdateCore · UpdateProviders                                   │
-│ Package Store on disk · PackageInstaller in the guest                         │
-└───────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ 1. App Wrapper layer                                                 │
+│    Discord.app, Spotify.app …  (thin, immutable, APKRunLauncher)     │
+│    APKRun.app (GUI) · APKRunMenuBar · apkrun CLI                     │
+├──────────────────────────────────────────────────────────────────────┤
+│ 2. Desktop Runtime layer  (apkrund, per-user LaunchAgent)            │
+│    RuntimeCore · DisplayPool · GraphicsCore · InputRouter            │
+│    IntegrationCore · VirtualMachineCore · ImageCore                  │
+├──────────────────────────────────────────────────────────────────────┤
+│ 3. Android Runtime layer  (inside the VM)                            │
+│    APKRun AOSP product (Cuttlefish arm64 based)                      │
+│    Android Framework / ART · SurfaceFlinger · Mesa VirGL             │
+│    Guest Agent (apkrun_guestd) · Store Agent (io.apkrun.store)       │
+├──────────────────────────────────────────────────────────────────────┤
+│ 4. Store & Update layer  (apkrund + Store Agent)                     │
+│    APKStoreCore · UpdateCore · UpdateProviders                       │
+│    Package Store on disk · PackageInstaller in the guest             │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 Layer 4 is split across processes. The decision logic runs on the host (`APKStoreCore`, `UpdateCore`). Execution runs in the guest (Store Agent → `PackageInstaller`).
@@ -38,37 +38,27 @@ Layer 4 is split across processes. The decision logic runs on the host (`APKStor
 
 ## 2. Component diagram
 
-```mermaid
-flowchart LR
-  subgraph Clients["Wrapper and APKRun clients"]
-    wrapper["APKRunLauncher<br/>WindowingCore · InputCore"]
-    apps["APKRun.app · APKRunMenuBar · apkrun CLI"]
-    client["RuntimeClient"]
-    wrapper --> client
-    apps --> client
-  end
-
-  subgraph Daemon["apkrund — one per user"]
-    runtime["RuntimeCore<br/>AppSession registry · DisplayPool · InputRouter"]
-    vm["VirtualMachineCore<br/>VZVirtualMachine"]
-    graphics["GraphicsCore<br/>virtio-gpu model · virglrenderer · ANGLE / Metal<br/>SurfacePool per scanout"]
-    store["APKStoreCore · UpdateCore · UpdateProviders<br/>WrapperCore · IntegrationCore · DiagnosticsCore"]
-    runtime --> vm
-  end
-
-  subgraph Guest["Android VM"]
-    kernel["Linux kernel<br/>virtio-gpu · virtio-blk · virtio-net · vsock"]
-    android["Android userspace<br/>SurfaceFlinger · Mesa VirGL · system_server / ART"]
-    agents["apkrun_guestd · io.apkrun.store · adbd (development)"]
-    kernel --> android
-    android --> agents
-  end
-
-  client <-->|"XPC: requests, events, IOSurfaces"| runtime
-  vm --> kernel
-  graphics <-->|"virtio-gpu"| kernel
-  runtime <-->|"vsock: Guest Protocol; ADB in development"| agents
-  store <-->|"PackageInstaller operations"| agents
+```text
+ Wrapper process (one per open app)          apkrund (one per user)                         Android VM
+┌──────────────────────────────┐   XPC    ┌───────────────────────────────────────┐   ┌──────────────────────────────┐
+│ APKRunLauncher               │◀────────▶│ RuntimeHost (composition root)        │   │ Linux kernel (GKI arm64)     │
+│  WindowingCore  (NSWindow,   │ requests │  RuntimeCore                          │   │  virtio-gpu drm driver       │
+│    IOSurface-backed layer)   │ events   │   ├ RuntimeState / readiness          │   │  virtio-blk / net / vsock    │
+│  InputCore (NSEvent →        │ IOSurface│   ├ AppSession registry               │   │                              │
+│    InputEvent, IME)          │ handles  │   ├ DisplayPool                       │   │ Android userspace            │
+│  RuntimeClient               │          │   ├ InputRouter                       │   │  SurfaceFlinger + HWC (drm)  │
+└──────────────────────────────┘          │   └ GuestAgentConnection / ADB        │   │  Mesa VirGL (GLES)           │
+                                          │  GraphicsCore                         │   │  system_server / ART         │
+ APKRun.app / MenuBar / CLI               │   ├ virtio-gpu device model  ◀────────┼──▶│                              │
+┌──────────────────────────────┐   XPC    │   ├ virglrenderer + ANGLE (Metal)     │   │  apkrun_guestd  ◀── vsock ──▶│
+│ RuntimeClient                │◀────────▶│   └ SurfacePool per scanout           │   │  io.apkrun.store ◀─ vsock ──▶│
+└──────────────────────────────┘          │  VirtualMachineCore (VZVirtualMachine)│   │  adbd (dev)      ◀─ vsock ──▶│
+                                          │  VirtioDeviceCore (custom virtio)     │   └──────────────────────────────┘
+                                          │  ImageCore (runtime images, userdata) │
+                                          │  APKStoreCore · UpdateCore            │
+                                          │  WrapperCore · IntegrationCore        │
+                                          │  DiagnosticsCore (logs, health, perf) │
+                                          └───────────────────────────────────────┘
 ```
 
 ---
@@ -79,9 +69,9 @@ flowchart LR
 
 ```text
 App (GLES) → Mesa VirGL (guest) → virtio-gpu 3D commands (virtqueue)
-→ GraphicsCore virtio-gpu device (apkrund) → virglrenderer → ANGLE → Metal
-→ scanout texture → 1 GPU blit → IOSurface from the display's SurfacePool
-→ XPC event "frame ready (surface index)" → wrapper sets layer.contents
+   → GraphicsCore virtio-gpu device (apkrund) → virglrenderer → ANGLE → Metal
+   → scanout texture → 1 GPU blit → IOSurface from the display's SurfacePool
+   → XPC event "frame ready (surface index)" → wrapper sets layer.contents
 ```
 
 - The normal path has no CPU readback (NFR-PERF-05). At most one GPU blit per frame. RiftVM measures the same approach at 0.4–0.8 ms per present.
@@ -92,11 +82,11 @@ App (GLES) → Mesa VirGL (guest) → virtio-gpu 3D commands (virtqueue)
 
 ```text
 NSEvent (wrapper process) → InputCore → InputEvent (display pixel coordinates)
-→ XPC session.sendInput → apkrund InputRouter (checks: session owns display)
-→ GuestProtocol InputFrame on the input stream (vsock)
-→ apkrun_guestd → InputManager.injectInputEvent(displayId = N)
+   → XPC session.sendInput → apkrund InputRouter (checks: session owns display)
+   → GuestProtocol InputFrame on the input stream (vsock)
+   → apkrun_guestd → InputManager.injectInputEvent(displayId = N)
 IME: NSTextInputClient → committed / marked text → GuestProtocol ImeText
-→ APKRun IME service (InputMethodService) → InputConnection.commitText / setComposingText
+   → APKRun IME service (InputMethodService) → InputConnection.commitText / setComposingText
 ```
 
 - A host-implemented virtio-input device is not possible (research, [decisions/0013-input-via-guest-injection.md](decisions/0013-input-via-guest-injection.md)). Cuttlefish itself uses vhost-user virtio-input, which VZ cannot provide.
@@ -107,15 +97,15 @@ IME: NSTextInputClient → committed / marked text → GuestProtocol ImeText
 
 ```text
 user opens Discord.app
-→ APKRunLauncher reads wrapper.json, connects to io.apkrun.apkrund.xpc
-→ openSession(packageId) (auth: bundle ID ↔ packageId, see security-model.md)
-→ RuntimeCore: package installed? RuntimeState == ready?
-→ DisplayPool.acquire(config from window prefs & screen scale)
-→ surfaces shared with the wrapper; the wrapper's window (created hidden at startup) is attached
-→ Guest Agent: LaunchApplication(package, displayId)
-→ first frame on scanout → FIRST_FRAME marker → window ordered front
-(if no frame arrives within 400 ms, the window is shown earlier with the placeholder)
-(async, never on this path) UpdateCore.noteLaunched(package)
+ → APKRunLauncher reads wrapper.json, connects to io.apkrun.apkrund.xpc
+ → openSession(packageId)            (auth: bundle ID ↔ packageId, see security-model.md)
+ → RuntimeCore: package installed? RuntimeState == ready?
+ → DisplayPool.acquire(config from window prefs & screen scale)
+ → surfaces shared with the wrapper; the wrapper's window (created hidden at startup) is attached
+ → Guest Agent: LaunchApplication(package, displayId)
+ → first frame on scanout → FIRST_FRAME marker → window ordered front
+   (if no frame arrives within 400 ms, the window is shown earlier with the placeholder)
+ (async, never on this path) UpdateCore.noteLaunched(package)
 ```
 
 KPI: click → first frame, p50 ≤ 1.5 s (NFR-PERF-01, provisional).
@@ -123,10 +113,10 @@ KPI: click → first frame, p50 ≤ 1.5 s (NFR-PERF-01, provisional).
 ### 3.4 Cold launch (VM stopped)
 
 ```text
-… openSession(packageId)
-→ RuntimeState stopped → start VM (VMController.start)
-→ wait: kernel → init → system_server → boot_completed → guest agents connected
-→ continue as warm launch
+ … openSession(packageId)
+ → RuntimeState stopped → start VM (VMController.start)
+ → wait: kernel → init → system_server → boot_completed → guest agents connected
+ → continue as warm launch
 ```
 
 The wrapper shows a native "Starting Android runtime…" placeholder window during boot. It never shows Android UI. VM save/restore for fast cold launch is **not** available while VirGL is used (host renderer state cannot be serialized; R-07).
@@ -134,26 +124,26 @@ The wrapper shows a native "Starting Android runtime…" placeholder window duri
 ### 3.5 Install (first time)
 
 ```text
-APK/APKS/XAPK dropped on APKRun.app (or `apkrun install`, `apkrun wrap --install`)
-→ APKStoreCore: import to Packages/<id>/incoming/, host preview (APKInspector)
-→ Store Agent: analyze archive (canonical metadata), validate
-→ Store Agent: PackageInstaller session (setRequestUpdateOwnership if authority == apkrun)
-→ commit Packages/<id>/current/, write metadata.json
-→ (optional) WrapperCore generates <Name>.app with icon rendered by the Store Agent
+APK/APKS/XAPK dropped on APKRun.app  (or `apkrun install`, `apkrun wrap --install`)
+ → APKStoreCore: import to Packages/<id>/incoming/, host preview (APKInspector)
+ → Store Agent: analyze archive (canonical metadata), validate
+ → Store Agent: PackageInstaller session (setRequestUpdateOwnership if authority == apkrun)
+ → commit Packages/<id>/current/, write metadata.json
+ → (optional) WrapperCore generates <Name>.app with icon rendered by the Store Agent
 ```
 
 ### 3.6 Automatic update
 
 ```text
 UpdateScheduler (every 6 h ± jitter, never on the launch path)
-→ provider.check → UpdateCandidate → download → validation pipeline (package, versionCode,
-signer lineage, ABI, SDK, split set, SHA-256) → Packages/<id>/staged/
-→ gentle: wait until the runtime is running anyway, the app has no session or keep-running task,
-and Android InstallConstraints GENTLE_UPDATE agrees (never closes an app by itself)
-→ Store Agent install with rollback enabled (same session rules)
-→ promote: current → previous, staged → current (the directories always mirror Android)
-→ health check (version, launch, process, first frame)
-→ failure: roll back to previous (Android RollbackManager; app data is not reverted)
+ → provider.check → UpdateCandidate → download → validation pipeline (package, versionCode,
+   signer lineage, ABI, SDK, split set, SHA-256) → Packages/<id>/staged/
+ → gentle: wait until the runtime is running anyway, the app has no session or keep-running task,
+   and Android InstallConstraints GENTLE_UPDATE agrees (never closes an app by itself)
+ → Store Agent install with rollback enabled (same session rules)
+ → promote: current → previous, staged → current (the directories always mirror Android)
+ → health check (version, launch, process, first frame)
+ → failure: roll back to previous (Android RollbackManager; app data is not reverted)
 ```
 
 Store mechanics (journal, promotion, rollback per image kind) are in [../02-design/package-store.md](../02-design/package-store.md) §5–§7. Policy (schedule, gentle window, health check) is in [../02-design/update-system.md](../02-design/update-system.md).

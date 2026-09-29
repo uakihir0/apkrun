@@ -30,28 +30,28 @@ Non-goals for v1: in-guest OTA, A/B slot switching, recovery mode, booting throu
 
 ```text
 ci.android.com build (or our AOSP builder, M5+)
-│ fetch (#008) Images/work/<buildId>/download/
-▼
+  │ fetch (#008)                                  Images/work/<buildId>/download/
+  ▼
 inventory (#008) ──────────────────────────────▶ Images/manifests/<buildId>/inventory.json
-│
-▼
+  │
+  ▼
 AndroidImageManifest (#009) ───────────────────▶ Images/manifests/<buildId>/android-image.json
-│
-├─ boot extraction (#010): kernel, ramdisk, cmdline, vendor bootconfig
-├─ disk assembly (#011): os.img (GPT) + templates (persistent, userdata)
-├─ bootconfig baseline (#012/#013): image-level keys
-│
-▼
+  │
+  ├─ boot extraction (#010): kernel, ramdisk, cmdline, vendor bootconfig
+  ├─ disk assembly (#011): os.img (GPT) + templates (persistent, userdata)
+  ├─ bootconfig baseline (#012/#013): image-level keys
+  │
+  ▼
 runtime image bundle (#065) + manifest.json + manifest.sig + SHA256SUMS
-│ dev: `apkrun dev image install <dir>` release: signed archive via the image feed (#087)
-▼
-ImageCore: Images/<imageVersion>/ ──▶ Runtime/instance/ (clone disks, #066)
-│ before every boot
-▼
+  │ dev: `apkrun dev image install <dir>`     release: signed archive via the image feed (#087)
+  ▼
+ImageCore: Images/<imageVersion>/  ──▶  Runtime/instance/ (clone disks, #066)
+  │ before every boot
+  ▼
 per-boot initrd (ramdisk + merged bootconfig) + cmdline + disk list + console plan
-│
-▼
-VMDefinition (Android parts) ──▶ RuntimeCore adds GPU device ──▶ VirtualMachineCore
+  │
+  ▼
+VMDefinition (Android parts)  ──▶  RuntimeCore adds GPU device  ──▶  VirtualMachineCore
 ```
 
 ### 1.2 Tooling layout
@@ -59,40 +59,41 @@ VMDefinition (Android parts) ──▶ RuntimeCore adds GPU device ──▶ Vir
 ```text
 Images/
 ├── tools/
-│   ├── pyproject.toml # Python 3.12; pinned deps (lz4, cryptography, jsonschema, pytest)
+│   ├── pyproject.toml             # Python 3.12; pinned deps (lz4, cryptography, jsonschema, pytest)
 │   ├── apkrun_image/
-│   │   ├── __main__.py # `python3 -m apkrun_image <command>`
-│   │   ├── fetch.py # Build API v4 client (§2)
-│   │   ├── inventory.py # content-based file classification (§3.1)
-│   │   ├── manifest.py # AndroidImageManifest model + schema validation (§3.2)
-│   │   ├── bootimg.py # boot / init_boot / vendor_boot parsing via vendored unpack_bootimg (§4.1)
-│   │   ├── kernel.py # decompression + arm64 Image header checks
-│   │   ├── bootconfig.py # parse, merge, serialize, trailer (§6)
-│   │   ├── sparse.py # Android sparse → raw (§4.3)
-│   │   ├── lp.py # liblp (super) metadata reader, read-only (§3.1)
-│   │   ├── avb.py # vbmeta digest via vendored avbtool (§6.2)
-│   │   ├── gpt.py # GPT writer and reader (§4.4)
-│   │   ├── layout.py # data-driven disk plans (§4.2)
-│   │   ├── bundle.py # runtime image bundle writer (§10)
-│   │   └── sign.py # Ed25519 manifest signing
+│   │   ├── __main__.py            # `python3 -m apkrun_image <command>`
+│   │   ├── fetch.py               # Build API v4 client (§2)
+│   │   ├── inventory.py           # content-based file classification (§3.1)
+│   │   ├── manifest.py            # AndroidImageManifest model + schema validation (§3.2)
+│   │   ├── bootimg.py             # boot / init_boot / vendor_boot parsing via vendored unpack_bootimg (§4.1)
+│   │   ├── kernel.py              # decompression + arm64 Image header checks
+│   │   ├── bootconfig.py          # parse, merge, serialize, trailer (§6)
+│   │   ├── sparse.py              # Android sparse → raw (§4.3)
+│   │   ├── lp.py                  # liblp (super) metadata reader, read-only (§3.1)
+│   │   ├── avb.py                 # vbmeta digest via vendored avbtool (§6.2)
+│   │   ├── gpt.py                 # GPT writer and reader (§4.4)
+│   │   ├── layout.py              # data-driven disk plans (§4.2)
+│   │   ├── bundle.py              # runtime image bundle writer (§10)
+│   │   └── sign.py                # Ed25519 manifest signing
 │   ├── layouts/
-│   │   └── cuttlefish-phone-arm64.json # disk plan + console port plan + bootconfig baseline for this device family
+│   │   └── cuttlefish-phone-arm64.json   # disk plan + console port plan + bootconfig baseline for this device family
 │   ├── schemas/
 │   │   ├── android-image-manifest.schema.json
 │   │   └── runtime-image-manifest.schema.json
 │   ├── reference/
-│   │   ├── capture.sh # runs on the Linux reference host (§8)
+│   │   ├── capture.sh             # runs on the Linux reference host (§8)
 │   │   ├── compare_boot.py
-│   │   └── normalize.yaml # rules that remove volatile values before diffing
-│   ├── vendor/ # pinned copies: mkbootimg.py, unpack_bootimg.py (Apache-2.0), avbtool.py (MIT)
-│   └── tests/ # pytest (T0/T1), synthetic fixtures
-├── manifests/<buildId>/ # committed: inventory.json, android-image.json
+│   │   └── normalize.yaml         # rules that remove volatile values before diffing
+│   ├── vendor/                    # pinned copies: mkbootimg.py, unpack_bootimg.py (Apache-2.0), avbtool.py (MIT)
+│   └── tests/                     # pytest (T0/T1), synthetic fixtures
+├── manifests/<buildId>/           # committed: inventory.json, android-image.json
 ├── reference/<buildId>/<profile>/ # committed: reference boot captures (§8)
-├── reference/vz/<macOS build>/ # committed: VZ topology captures (vm.md §5)
-└── work/<buildId>/ # git-ignored: downloads and derived artifacts
+├── reference/vz/<macOS build>/    # committed: VZ topology captures (vm.md §5)
+└── work/<buildId>/                # git-ignored: downloads and derived artifacts
+scripts/inventory-cuttlefish.py    # entry point (#008); calls apkrun_image.inventory
 ```
 
-The root-level `scripts/inventory-cuttlefish.py` entry point (#008) calls `apkrun_image.inventory`. The vendored `mkbootimg` and `avbtool` revisions are pinned in `ThirdParty/ThirdParty.lock.json` like every other third-party input ([../05-development/build-system.md](../05-development/build-system.md) §6).
+The vendored `mkbootimg` and `avbtool` revisions are pinned in `ThirdParty/ThirdParty.lock.json` like every other third-party input ([../05-development/build-system.md](../05-development/build-system.md) §6).
 
 ---
 
@@ -160,17 +161,7 @@ Output (`inventory.json`, one entry per file):
   "sha256": "…",
   "kind": "vendorBootImage",
   "probablePurpose": "vendor_boot partition (vendor ramdisk, vendor cmdline, bootconfig)",
-  "details": {
-    "headerVersion": 4,
-    "ramdisks": [
-      {
-        "name": "",
-        "type": "PLATFORM",
-        "size": 0
-      }
-    ],
-    "bootconfigSize": 0
-  }
+  "details": { "headerVersion": 4, "ramdisks": [{ "name": "", "type": "PLATFORM", "size": 0 }], "bootconfigSize": 0 }
 }
 ```
 
@@ -190,120 +181,38 @@ The inventory says *what is there*. The `AndroidImageManifest` says *what each t
     "branch": "aosp-android-latest-release",
     "target": "aosp_cf_arm64_only_phone-userdebug",
     "buildId": "16373615",
-    "archives": [
-      {
-        "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
-        "size": 1476395008,
-        "sha256": "…"
-      }
-    ]
+    "archives": [{ "name": "aosp_cf_arm64_only_phone-img-16373615.zip", "size": 1476395008, "sha256": "…" }]
   },
-  "android": {
-    "release": "17",
-    "sdk": 37,
-    "variant": "userdebug",
-    "securityPatch": "2026-09"
-  },
+  "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-09" },
   "architecture": "arm64",
   "deviceFamily": "cuttlefish-phone-arm64",
   "artifacts": [
-    {
-      "id": "boot",
-      "file": "boot.img",
-      "sha256": "…",
-      "size": 67108864,
-      "kind": "bootImage",
-      "partition": "boot"
-    },
-    {
-      "id": "init_boot",
-      "file": "init_boot.img",
-      "sha256": "…",
-      "size": 8388608,
-      "kind": "bootImage",
-      "partition": "init_boot"
-    },
-    {
-      "id": "vendor_boot",
-      "file": "vendor_boot.img",
-      "sha256": "…",
-      "size": 67108864,
-      "kind": "vendorBootImage",
-      "partition": "vendor_boot"
-    },
-    {
-      "id": "vbmeta",
-      "file": "vbmeta.img",
-      "sha256": "…",
-      "size": 65536,
-      "kind": "vbmeta",
-      "partition": "vbmeta"
-    },
-    {
-      "id": "super",
-      "file": "super.img",
-      "sha256": "…",
-      "size": 1879048192,
-      "kind": "sparse",
-      "partition": "super"
-    },
-    {
-      "id": "userdata",
-      "file": "userdata.img",
-      "sha256": "…",
-      "size": 2166784,
-      "kind": "sparse",
-      "partition": "userdata"
-    }
+    { "id": "boot",        "file": "boot.img",        "sha256": "…", "size": 67108864,   "kind": "bootImage",       "partition": "boot" },
+    { "id": "init_boot",   "file": "init_boot.img",   "sha256": "…", "size": 8388608,    "kind": "bootImage",       "partition": "init_boot" },
+    { "id": "vendor_boot", "file": "vendor_boot.img", "sha256": "…", "size": 67108864,   "kind": "vendorBootImage", "partition": "vendor_boot" },
+    { "id": "vbmeta",      "file": "vbmeta.img",      "sha256": "…", "size": 65536,      "kind": "vbmeta",          "partition": "vbmeta" },
+    { "id": "super",       "file": "super.img",       "sha256": "…", "size": 1879048192, "kind": "sparse",          "partition": "super" },
+    { "id": "userdata",    "file": "userdata.img",    "sha256": "…", "size": 2166784,    "kind": "sparse",          "partition": "userdata" }
   ],
   "roles": {
     "kernel": "boot",
     "genericRamdisk": "init_boot",
     "vendorBoot": "vendor_boot",
-    "vbmeta": [
-      "vbmeta",
-      "vbmeta_system",
-      "vbmeta_system_dlkm",
-      "vbmeta_vendor_dlkm"
-    ],
+    "vbmeta": ["vbmeta", "vbmeta_system", "vbmeta_system_dlkm", "vbmeta_vendor_dlkm"],
     "super": "super",
     "userdataTemplate": "userdata"
   },
   "logicalPartitions": [
-    {
-      "name": "system_a",
-      "size": 897581056,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "product_a",
-      "size": 402653184,
-      "filesystem": "erofs"
-    },
-    {
-      "name": "vendor_a",
-      "size": 150994944,
-      "filesystem": "erofs"
-    }
+    { "name": "system_a", "size": 897581056, "filesystem": "erofs" },
+    { "name": "product_a", "size": 402653184, "filesystem": "erofs" },
+    { "name": "vendor_a", "size": 150994944, "filesystem": "erofs" }
   ],
   "blankPartitions": [
-    {
-      "partition": "misc",
-      "size": 1048576
-    },
-    {
-      "partition": "metadata",
-      "size": 67108864
-    },
-    {
-      "partition": "frp",
-      "size": 1048576
-    }
+    { "partition": "misc",     "size": 1048576 },
+    { "partition": "metadata", "size": 67108864 },
+    { "partition": "frp",      "size": 1048576 }
   ],
-  "androidInfo": {
-    "config": "phone",
-    "gfxstream": "supported"
-  }
+  "androidInfo": { "config": "phone", "gfxstream": "supported" }
 }
 ```
 
@@ -694,32 +603,32 @@ Every difference must be listed in `Images/reference/<buildId>/expected-differen
 
 ```swift
 public struct ImageVersion: Comparable, Codable, Sendable, CustomStringConvertible {
-    public var year: Int, month: Int, sequence: Int // ordering uses these only
-    public var base: String // "cf16373615", "ar000123" (informational)
-    public var architecture: String // "arm64"
+    public var year: Int, month: Int, sequence: Int   // ordering uses these only
+    public var base: String                           // "cf16373615", "ar000123" (informational)
+    public var architecture: String                   // "arm64"
 }
 
 public struct InstalledImage: Sendable {
     public var version: ImageVersion
-    public var root: URL // Images/<version>/
-    public var manifest: RuntimeImageManifest // 03-reference/runtime-image-manifest.md
+    public var root: URL                              // Images/<version>/
+    public var manifest: RuntimeImageManifest         // 03-reference/runtime-image-manifest.md
 }
 
 public actor ImageStore {
     public init(paths: APKRunPaths, trust: ImageTrustStore, diagnostics: Diagnostics)
-    public var state: RuntimeImageState { get } // state-machines.md §7
+    public var state: RuntimeImageState { get }       // state-machines.md §7
     public func current() throws -> InstalledImage
     public func previous() -> InstalledImage?
-    public func install(from source: ImageSource) async throws -> InstalledImage //.directory(URL) (dev) |.archive(URL) (#058; feed checks #087)
-    public func verify(_ image: InstalledImage, depth: VerificationDepth) async throws //.quick |.full
-    public func setCurrent(_ version: ImageVersion) async throws // moves `previous`
-    public func garbageCollect() async throws // keeps current + previous
+    public func install(from source: ImageSource) async throws -> InstalledImage   // .directory(URL) (dev) | .archive(URL) (#058; feed checks #087)
+    public func verify(_ image: InstalledImage, depth: VerificationDepth) async throws  // .quick | .full
+    public func setCurrent(_ version: ImageVersion) async throws                   // moves `previous`
+    public func garbageCollect() async throws                                      // keeps current + previous
 }
 
 public actor InstanceStore {
     public func load() throws -> InstanceConfiguration?
-    public func provision(image: InstalledImage, sizing: InstanceSizing) async throws -> InstanceConfiguration // §5.1
-    public func resetAndroid(image: InstalledImage) async throws // recreate disks from templates
+    public func provision(image: InstalledImage, sizing: InstanceSizing) async throws -> InstanceConfiguration  // §5.1
+    public func resetAndroid(image: InstalledImage) async throws                   // recreate disks from templates
     public func createRecoveryPoint(reason: RecoveryReason) async throws -> RecoveryPoint
     public func restore(_ point: RecoveryPoint) async throws
     public func recoveryPoints() -> [RecoveryPoint]
@@ -729,12 +638,12 @@ public struct AndroidBootPlanner: Sendable {
     public init(platform: VZPlatformProfile)
     /// Regenerates Runtime/instance/boot/initrd.img and returns the Android parts of the definition.
     public func prepareBoot(image: InstalledImage,
-        instance: InstanceConfiguration,
-        options: BootOptions) throws -> AndroidBootPlan
+                            instance: InstanceConfiguration,
+                            options: BootOptions) throws -> AndroidBootPlan
 }
 
 public struct BootOptions: Sendable {
-    public var gpuProfile: GPUProfileID //.drmVirgl (default) |.guestSwiftshader |.headless (dev only)
+    public var gpuProfile: GPUProfileID                // .drmVirgl (default) | .guestSwiftshader | .headless (dev only)
     public var developerMode: Bool
     public var captureLogcat: Bool
     public var soundOutput: Bool
@@ -742,8 +651,8 @@ public struct BootOptions: Sendable {
 }
 
 public struct AndroidBootPlan: Sendable {
-    public var definition: VMDefinition // customDevices empty; RuntimeCore adds the GPU device
-    public var bootconfig: [BootconfigEntry] // merged, with layer of origin (diagnostics)
+    public var definition: VMDefinition               // customDevices empty; RuntimeCore adds the GPU device
+    public var bootconfig: [BootconfigEntry]          // merged, with layer of origin (diagnostics)
     public var bootRecordID: UUID
 }
 ```
@@ -770,8 +679,8 @@ public struct AndroidBootPlan: Sendable {
 
 ### 9.3 Before every boot
 
-1. `ImageStore.verify(current,.quick)`: steps 1–7 of [../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §7.1 (signature, `schemaVersion`, schema, semantic rules, the file set, and file sizes). The result of steps 1–6 is cached for the life of the apkrund process, keyed by the inode, size, and modification time of `manifest.json`. The full hash check (step 8) runs at install and in `apkrun doctor --deep`.
-2. `InstanceStore.load`: disks present, sizes as recorded, `imageVersion` equals `current` (otherwise a migration is pending, §12.3).
+1. `ImageStore.verify(current, .quick)`: steps 1–7 of [../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §7.1 (signature, `schemaVersion`, schema, semantic rules, the file set, and file sizes). The result of steps 1–6 is cached for the life of the apkrund process, keyed by the inode, size, and modification time of `manifest.json`. The full hash check (step 8) runs at install and in `apkrun doctor --deep`.
+2. `InstanceStore.load()`: disks present, sizes as recorded, `imageVersion` equals `current` (otherwise a migration is pending, §12.3).
 3. Compatibility: `manifest.requirements.minimumRuntimeVersion ≤ APKRun version`, and the guest protocol range intersects the host's `guestProtocol.majors` in `components.json` ([runtime-maintenance.md](runtime-maintenance.md) §2.1). Failures: `incompatibleRuntime(required)`, `incompatibleProtocol(range)` (§12.1, §14.1).
 4. `AndroidBootPlanner.prepareBoot` writes the initrd and returns the plan.
 5. RuntimeCore adds the GPU device and hands the definition to `VMController`.
@@ -813,7 +722,7 @@ Manifest `schemaVersion`: installed manifests are signed, so they are never rewr
 ```bash
 python3 -m apkrun_image bundle \
   --manifest Images/manifests/16373615/android-image.json \
-  --layout Images/tools/layouts/cuttlefish-phone-arm64.json \
+  --layout   Images/tools/layouts/cuttlefish-phone-arm64.json \
   --reference Images/reference/16373615/target \
   --image-version 2026.10.0 \
   --sign-key ~/.config/apkrun/dev-image-key \
@@ -850,30 +759,30 @@ The source lives in `Guest/product/` and is mapped into the AOSP tree as `device
 
 ```text
 Guest/product/
-├── AndroidProducts.mk # PRODUCT_MAKEFILES:= $(LOCAL_DIR)/apkrun_arm64.mk
-│   # COMMON_LUNCH_CHOICES:= apkrun_arm64-trunk_staging-userdebug apkrun_arm64-trunk_staging-user
-├── apkrun_arm64.mk # $(call inherit-product, device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk)
-│   # PRODUCT_NAME:= apkrun_arm64, PRODUCT_DEVICE stays vsoc_arm64_only
-│   # PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore
-│   # BOARD_SEPOLICY_DIRS += device/apkrun/apkrun_arm64/sepolicy
-├── Android.bp # android_app_import for the agent APKs in prebuilt/ (certificate: "platform", privileged: true,
-│   # presigned: false; installed in /system_ext/priv-app), prebuilt_etc for permissions/init.
-│   # apkrun_vsockd is a rust_binary in its own Guest/vsockd/Android.bp (build-system.md §9)
-├── prebuilt/ # git-ignored: the two agent APKs, copied here by scripts/build-guest.sh
-├── init/apkrun.rc # apkrun_vsockd service, devmode property triggers
-├── sepolicy/ # apkrun_vsockd.te (typeattribute … unconstrained_vsock_violators),
-│   # apkrun_guest_app.te, apkrun_store_app.te, file_contexts, seapp_contexts
-├── permissions/ # privapp-permissions-apkrun.xml, default-permissions, feature XMLs
-├── overlay/ # framework config overlays (multi-display, IME, freeform)
-├── settings/ # default Settings.Global values (e.g. enable_freeform_support, force_resizable_activities)
-└── manifest/pinned.xml # `repo manifest -r` snapshot of the AOSP checkout used for release builds
+├── AndroidProducts.mk        # PRODUCT_MAKEFILES := $(LOCAL_DIR)/apkrun_arm64.mk
+│                             # COMMON_LUNCH_CHOICES := apkrun_arm64-trunk_staging-userdebug apkrun_arm64-trunk_staging-user
+├── apkrun_arm64.mk           # $(call inherit-product, device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk)
+│                             # PRODUCT_NAME := apkrun_arm64, PRODUCT_DEVICE stays vsoc_arm64_only
+│                             # PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore
+│                             # BOARD_SEPOLICY_DIRS += device/apkrun/apkrun_arm64/sepolicy
+├── Android.bp                # android_app_import for the agent APKs in prebuilt/ (certificate: "platform", privileged: true,
+│                             # presigned: false; installed in /system_ext/priv-app), prebuilt_etc for permissions/init.
+│                             # apkrun_vsockd is a rust_binary in its own Guest/vsockd/Android.bp (build-system.md §9)
+├── prebuilt/                 # git-ignored: the two agent APKs, copied here by scripts/build-guest.sh
+├── init/apkrun.rc            # apkrun_vsockd service, devmode property triggers
+├── sepolicy/                 # apkrun_vsockd.te (typeattribute … unconstrained_vsock_violators),
+│                             # apkrun_guest_app.te, apkrun_store_app.te, file_contexts, seapp_contexts
+├── permissions/              # privapp-permissions-apkrun.xml, default-permissions, feature XMLs
+├── overlay/                  # framework config overlays (multi-display, IME, freeform)
+├── settings/                 # default Settings.Global values (e.g. enable_freeform_support, force_resizable_activities)
+└── manifest/pinned.xml       # `repo manifest -r` snapshot of the AOSP checkout used for release builds
 ```
 
 The policy starts in `BOARD_SEPOLICY_DIRS`. If the Treble `neverallow` checks reject types for `/system_ext` files there, #035 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here ([../04-plan/issues/M05-custom-android-image.md](../04-plan/issues/M05-custom-android-image.md) #035).
 
 Notes:
 
-- The base product sets `PRODUCT_IGNORE_ALL_ANDROIDMK:= true`, so all modules use `Android.bp`.
+- The base product sets `PRODUCT_IGNORE_ALL_ANDROIDMK := true`, so all modules use `Android.bp`.
 - The base product uses a 16K maximum page size. Our Rust and Kotlin components have no page-size assumptions.
 - `vendor/google` is not needed. The desktop product (`aosp_cf_x86_64_desktop`) is x86-only and not used.
 - Properties: `ro.apkrun.product=1`, plus the GPU props of the default profile. The image version is not a build property: it is assigned later, by `bundle --image-version`, so ImageCore passes it at every boot as `androidboot.apkrun.image` (§6.2), which Android exposes as `ro.boot.apkrun.image`.
@@ -932,25 +841,25 @@ Proposed for release, and to be confirmed in #035: pass `orange`/`unlocked`, but
 ImageCore provides the data steps. RuntimeCore's `RuntimeSupervisor` orchestrates the boot and health check, because ImageCore never starts VMs.
 
 ```text
-preconditions B installed and fully verified; A → B allowed (compatibility, userdata schema);
-no active sessions, or the user agreed; free space ≥ 10 GiB
+preconditions  B installed and fully verified; A → B allowed (compatibility, userdata schema);
+               no active sessions, or the user agreed; free space ≥ 10 GiB
 1. stop VM gracefully (vm.md §9.3)
 2. ImageCore: recovery point R of the instance (image A)
 3. ImageCore: instance.json `migration` ← (A, B), which is `RuntimeImageState.migrating(A, B)`; then `previous` → A, `current` → B;
-instance.json imageVersion ← B
+   instance.json imageVersion ← B
 4. RuntimeCore: boot B with the existing persistent/userdata (first-boot timeout 15 min: package scan and dexopt)
 5. RuntimeCore: health check
-- sys.boot_completed = 1
-- Guest Agent and Store Agent handshakes succeed, protocol in range
-- every package in the host PackageStore is present with the recorded versionCode
-- a display can be created and a frame from the Guest Agent's health activity arrives
+     - sys.boot_completed = 1
+     - Guest Agent and Store Agent handshakes succeed, protocol in range
+     - every package in the host PackageStore is present with the recorded versionCode
+     - a display can be created and a frame from the Guest Agent's health activity arrives
 6a. success: instance.json `migration` removed (`installed(B)`); prune recovery points except R; garbage-collect images (runtime-maintenance.md §4.9)
 6b. failure (timeout, crash loop, failed check):
-stop VM; move the failed disks to recovery-points/failed-<ts>/ for diagnostics (deleted after 7 days);
-restore R (clonefile back); `current` → A; last, R's instance.json with a new `userdataGeneration` (§5.1)
-and no `migration` (`installed(A)`); B is rejected by the caller (not retried automatically,
-runtime-maintenance.md §4.8);
-offer a diagnostics bundle
+     stop VM; move the failed disks to recovery-points/failed-<ts>/ for diagnostics (deleted after 7 days);
+     restore R (clonefile back); `current` → A; last, R's instance.json with a new `userdataGeneration` (§5.1)
+     and no `migration` (`installed(A)`); B is rejected by the caller (not retried automatically,
+     runtime-maintenance.md §4.8);
+     offer a diagnostics bundle
 ```
 
 Crash safety: the migration state lives in the `migration` field of `Runtime/instance/instance.json`, which ImageCore's `InstanceStore` owns. It is written before step 3 changes anything and removed only by the last write of 6a or 6b. Every write of `instance.json` goes to a temporary file, is `fsync`ed, and is renamed into place, and the `current` and `previous` symlinks are replaced the same way. If apkrund starts and finds a `migration` field with no VM running, it treats the migration as failed and runs 6b, because the health result is unknown. 6b can run again after a crash in 6b: it always restores R from the start.

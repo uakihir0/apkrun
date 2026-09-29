@@ -12,9 +12,9 @@ This document covers the daemon process `apkrund` and the parts of RuntimeCore t
 
 ## 1. Responsibilities
 
-  lists what apkrund coordinates. The table shows who implements each item. apkrund itself is only the composition root.
+This section lists what apkrund coordinates. The table shows who implements each item. apkrund itself is only the composition root.
 
-| item | Implemented by | Design |
+| Item | Implemented by | Design |
 |---|---|---|
 | VM lifecycle | `VMController` (VirtualMachineCore), driven by `RuntimeSupervisor` | [vm.md](vm.md), §3 |
 | Android readiness | `RuntimeSupervisor`, `BootPhaseDetector` (RuntimeCore) | §3 |
@@ -48,9 +48,9 @@ launchd job keys added to the plist in [process-model-and-ipc.md](../01-architec
 |---|---|---|
 | `RunAtLoad` | `true` | preboot at login and startup recovery of interrupted package transactions happen without a client |
 | `StartInterval` | `3600` | update checks while no APKRun process runs (FR-UPD, NFR-PERF-07). The job exits again when there is nothing to do |
-| `ExitTimeOut` | `45` | launchd waits this long after `SIGTERM` (logout, shutdown, `unregister`) before `SIGKILL`. A graceful Android shutdown needs up to 40 s (§3.5) |
+| `ExitTimeOut` | `45` | launchd waits this long after `SIGTERM` (logout, shutdown, `unregister()`) before `SIGKILL`. A graceful Android shutdown needs up to 40 s (§3.5) |
 
-### 2.2 Startup sequence (`RuntimeHost.start`)
+### 2.2 Startup sequence (`RuntimeHost.start()`)
 
 The order is fixed. Each step logs `host.startup.<step>` with its duration. Target: the XPC listener is resumed within 300 ms of process start when no recovery work is pending (measured in #031, logged as `DAEMON_READY`).
 
@@ -59,9 +59,9 @@ The order is fixed. Each step logs `host.startup.<step>` with its duration. Targ
 | 1 | Resolve `APKRunPaths`, bootstrap logging, install `SIGTERM` handler (§2.4) | DiagnosticsCore | yes (exit 70) |
 | 2 | Acquire the instance lock (§2.3) | RuntimeHost | yes: another owner runs. Exit 0 if the owner is another apkrund, otherwise serve the broker with `RuntimeFailure.instanceLocked` |
 | 3 | Read `Runtime/daemon.json`; detect an unclean previous exit (§2.5); write the new `running` record | RuntimeHost | no |
-| 4 | Load `settings.json` and `state.json`, migrating older schemas forward. A newer schema than this binary understands → host startup failure. Then `MaintenanceService.start`: read `Runtime/maintenance.json` and apply its startup rules (the host state may become `updating`), and start `BundleWatcher` ([runtime-maintenance.md](runtime-maintenance.md) §3.6, §5) | DiagnosticsCore, RuntimeHost | degraded (see below) |
-| 5 | `ImageStore.open`: delete `Images/.installing-*`, resolve `current`/`previous`, recover an interrupted migration ([android-image.md](android-image.md) §12.3) | ImageCore | degraded |
-| 6 | `PackageStore.open`: replay `Packages/journal.jsonl`. Steps that need the guest are queued as post-boot work (§3.4) ([package-store.md](package-store.md) §5) | APKStoreCore | degraded |
+| 4 | Load `settings.json` and `state.json`, migrating older schemas forward. A newer schema than this binary understands → host startup failure. Then `MaintenanceService.start()`: read `Runtime/maintenance.json` and apply its startup rules (the host state may become `updating`), and start `BundleWatcher` ([runtime-maintenance.md](runtime-maintenance.md) §3.6, §5) | DiagnosticsCore, RuntimeHost | degraded (see below) |
+| 5 | `ImageStore.open()`: delete `Images/.installing-*`, resolve `current`/`previous`, recover an interrupted migration ([android-image.md](android-image.md) §12.3) | ImageCore | degraded |
+| 6 | `PackageStore.open()`: replay `Packages/journal.jsonl`. Steps that need the guest are queued as post-boot work (§3.4) ([package-store.md](package-store.md) §5) | APKStoreCore | degraded |
 | 7 | Load `Wrappers/registry.json` | WrapperCore | degraded |
 | 8 | Construct RuntimeCore: `RuntimeSupervisor` (state `stopped`), `DisplayPool`, `SessionRegistry`, `InputRouter`, agent supervisors | RuntimeCore | yes |
 | 9 | Construct `UpdateScheduler` (timers only), IntegrationCore, `ImageUpdateCoordinator` (reconciles its phase with `RuntimeImageState`), and `SelfUpdateProbe`. When `state.json.lastRuntimeBuild` is lower than this build, queue the post-update tasks ([runtime-maintenance.md](runtime-maintenance.md) §3.8, §4.3) | UpdateCore, IntegrationCore, RuntimeHost | degraded |
@@ -90,13 +90,13 @@ Two maintenance exits skip the grace period ([runtime-maintenance.md](runtime-ma
 
 Exit status 0 is not restarted by launchd. The next client connection, the next login, or the next `StartInterval` starts apkrund again.
 
-`SIGTERM` (logout, system shutdown, `SMAppService.unregister`, `launchctl bootout`):
+`SIGTERM` (logout, system shutdown, `SMAppService.unregister()`, `launchctl bootout`):
 
 1. Stop accepting new XPC requests. Pending replies get `RuntimeFailure.hostShuttingDown`.
-2. `RuntimeSupervisor.stop(reason:.hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
+2. `RuntimeSupervisor.stop(reason: .hostShutdown)` with a 40 s deadline (§3.5). Sessions end with `.runtimeStopped`. Wrappers show nothing new: during logout they are quitting too.
 3. Flush logs, write `daemon.json` with `cleanExit = true`, exit 0.
 
-If the deadline passes, the VM is force-stopped (`VMController.stop`), which is still better than launchd's `SIGKILL` at 45 s: userdata is written through the host page cache, so a forced VM stop loses only data Android had not yet flushed.
+If the deadline passes, the VM is force-stopped (`VMController.stop()`), which is still better than launchd's `SIGKILL` at 45 s: userdata is written through the host page cache, so a forced VM stop loses only data Android had not yet flushed.
 
 ### 2.5 Unclean exit and crash recovery (NFR-REL-02)
 
@@ -109,22 +109,8 @@ If the deadline passes, the VM is force-stopped (`VMController.stop`), which is 
   "startedAt": "2026-09-28T09:12:03Z",
   "version": "0.2.0 (200)",
   "cleanExit": false,
-  "recentUncleanExits": [
-    "2026-09-28T08:55:10Z"
-  ],
-  "bootHistory": [
-    {
-      "imageVersion": "2026.10.0-cf16373615-arm64",
-      "kind": "cold",
-      "phasesMs": {
-        "kernel": 900,
-        "init": 3100,
-        "systemServer": 9800,
-        "bootCompleted": 21500,
-        "agentsConnecting": 23900
-      }
-    }
-  ]
+  "recentUncleanExits": ["2026-09-28T08:55:10Z"],
+  "bootHistory": [ { "imageVersion": "2026.10.0-cf16373615-arm64", "kind": "cold", "phasesMs": { "kernel": 900, "init": 3100, "systemServer": 9800, "bootCompleted": 21500, "agentsConnecting": 23900 } } ]
 }
 ```
 
@@ -163,16 +149,16 @@ public actor RuntimeSupervisor {
 
     public func stop(_ reason: StopReason, force: Bool, operation: OperationID) async throws
     public func restart(_ reason: StopReason, operation: OperationID) async throws
-    public func reset(operation: OperationID) async throws // failed → stopped (vm.md §9.6)
+    public func reset(operation: OperationID) async throws            // failed → stopped (vm.md §9.6)
 
     /// Image migration A → B: stop, recovery point, boot B, health check, restore A on failure
     /// (android-image.md §12.3, orchestration in runtime-maintenance.md §4.7).
     public func migrateImage(to version: ImageVersion, operation: OperationID) async throws -> ImageMigrationResult
 
-    public func beginActivity(_ kind: ActivityKind, owner: String) -> RuntimeActivityAssertion // §5.1
+    public func beginActivity(_ kind: ActivityKind, owner: String) -> RuntimeActivityAssertion   // §5.1
 }
 
-public enum StartReason: Sendable { case session(PackageID), store, update, cli, user, preboot, diagnostics, migration, provisioning } // user: APKRun.app or the menu bar
+public enum StartReason: Sendable { case session(PackageID), store, update, cli, user, preboot, diagnostics, migration, provisioning }   // user: APKRun.app or the menu bar
 public enum StopReason: Sendable { case user, idle, hostShutdown, hostUpdate, migration, reset, failure }
 
 /// Handed out only while `ready`. Every accessor throws `guestAgentUnavailable` during a reconnect (§4.3).
@@ -194,19 +180,19 @@ public struct ReadyRuntime: Sendable {
 
 ```text
 ensureReady(reason)
-0. guard: provisioned (§9; skipped for reason.provisioning), not boot-loop-blocked (§3.6); take activity assertion.boot
-1. state: stopped → booting(.kernel)
-2. ImageCore: pre-boot checks and per-boot initrd (android-image.md §9.3)
-3. GraphicsCore: create the virtio-gpu device model and the renderer thread; apply graphics.safeMode (graphics.md §9)
-4. VirtualMachineCore: VMController.start(definition) PerfMarker VM_START
-5. attach ConsoleLogWriter → BootPhaseDetector (§3.3)
-6. start the ADB bridge: guest vsock 5555 ↔ 127.0.0.1:6520 (#015; connects succeed once adbd listens)
-7. agents (§4): development → after.bootCompleted, GuestAgentProvisioner installs/starts guestd over ADB
-custom image → connect attempts start at.systemServer (persistent apps start before boot completes)
-8. booting(.agentsConnecting) → all required agents accepted (guest-protocol.md §5) PerfMarker AGENT_CONNECTED (per agent)
-9. post-boot setup (§3.4)
-10. state: → ready PerfMarker RUNTIME_READY
-resume all ensureReady waiters; release assertion.boot; IdleController starts counting (§5)
+  0. guard: provisioned (§9; skipped for reason .provisioning), not boot-loop-blocked (§3.6); take activity assertion .boot
+  1. state: stopped → booting(.kernel)
+  2. ImageCore: pre-boot checks and per-boot initrd (android-image.md §9.3)
+  3. GraphicsCore: create the virtio-gpu device model and the renderer thread; apply graphics.safeMode (graphics.md §9)
+  4. VirtualMachineCore: VMController.start(definition)           PerfMarker VM_START
+  5. attach ConsoleLogWriter → BootPhaseDetector (§3.3)
+  6. start the ADB bridge: guest vsock 5555 ↔ 127.0.0.1:6520 (#015; connects succeed once adbd listens)
+  7. agents (§4): development → after .bootCompleted, GuestAgentProvisioner installs/starts guestd over ADB
+                  custom image → connect attempts start at .systemServer (persistent apps start before boot completes)
+  8. booting(.agentsConnecting) → all required agents accepted (guest-protocol.md §5)   PerfMarker AGENT_CONNECTED (per agent)
+  9. post-boot setup (§3.4)
+ 10. state: → ready                                               PerfMarker RUNTIME_READY
+     resume all ensureReady waiters; release assertion .boot; IdleController starts counting (§5)
 ```
 
 Timeouts:
@@ -250,21 +236,21 @@ Immediate failures during boot: the console shows `Kernel panic - not syncing` (
 
 ```text
 stop(reason, force)
-0. refuse with RuntimeFailure.busy(activities) if assertions other than.backgroundTask are held
-and force == false (the GUI asks "Android is installing ‹App›. Stop anyway?")
-1. state: → stopping(reason); new ensureReady callers wait (§3.1)
-2. `SessionRegistry.endAll(.runtimeStopped)`: wrappers receive `stateChanged(.ended)` and close.
-   For a host update or image migration, the reason is `.runtimeUpdating` instead; the wrapper
-   shows screen U and reopens ([runtime-maintenance.md](runtime-maintenance.md) §3.5, §4.7).
-3. suspended? → VMController.resume first (Android can only shut down while running)
-4. Guest Agent Shutdown (20 s, guest-protocol.md §7.1) → Android runs its shutdown sequence
-5. wait for guestDidStop (20 s total from step 4)
-6. fallback: VMController.requestStop (power button, vm.md §9.3), then after 20 s VMController.stop
-7. GraphicsCore WillStop; close agent connections; stop the ADB bridge
-8. state: → stopped
+  0. refuse with RuntimeFailure.busy(activities) if assertions other than .backgroundTask are held
+     and force == false (the GUI asks "Android is installing ‹App›. Stop anyway?")
+  1. state: → stopping(reason); new ensureReady callers wait (§3.1)
+  2. SessionRegistry.endAll(.runtimeStopped): wrappers receive stateChanged(.ended) and close
+     (reasons .hostUpdate and .migration end them with .runtimeUpdating instead: the wrapper shows screen U
+     and reopens, runtime-maintenance.md §3.5, §4.7)
+  3. suspended? → VMController.resume() first (Android can only shut down while running)
+  4. Guest Agent Shutdown (20 s, guest-protocol.md §7.1) → Android runs its shutdown sequence
+  5. wait for guestDidStop (20 s total from step 4)
+  6. fallback: VMController.requestStop() (power button, vm.md §9.3), then after 20 s VMController.stop()
+  7. GraphicsCore WillStop; close agent connections; stop the ADB bridge
+  8. state: → stopped
 ```
 
-- With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop` when the deadline is near.
+- With `reason == .hostShutdown` the whole sequence has a 40 s deadline (§2.4). Step 6 then goes straight to `stop()` when the deadline is near.
 - Without a Guest Agent (it is unreachable), step 4 is skipped.
 - Every stop logs the path it took (`graceful`, `powerButton`, `forced`) and its duration. `apkrun doctor` warns when the last 3 stops were forced.
 
@@ -273,7 +259,7 @@ and force == false (the GUI asks "Android is installing ‹App›. Stop anyway?"
 When the supervisor enters `failed(f)`:
 
 1. Capture a diagnostics snapshot into `~/Library/Logs/APKRun/crash/<timestamp>-runtime/`: the console tail (last 2 MiB), the last 200 `BootPhaseDetector` events, agent health, GraphicsCore statistics, and `logcat -d` if ADB is still reachable (5 s limit) ([diagnostics.md](diagnostics.md) §8).
-2. `VMController.stop` if the VM still runs, then `reset`. The state becomes `stopped` (state-machines.md §2: "automatic after diagnostics capture").
+2. `VMController.stop()` if the VM still runs, then `reset()`. The state becomes `stopped` (state-machines.md §2: "automatic after diagnostics capture").
 3. Sessions have already ended with `.error(f)` or `.runtimeStopped`.
 
 Automatic restart (`runtime.autoRestart`, default `true`): if at least one session was `running` when the failure happened, the supervisor performs **one** cold boot and the affected wrappers retry `openSession` ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5). A second failure within 10 minutes is not retried. The wrapper shows "Android stopped unexpectedly" with **Restart**, **Troubleshooting…**, and **Report…**.
@@ -292,12 +278,12 @@ Each agent supervisor ([guest-protocol.md](guest-protocol.md) §13.1) has its ow
 
 ```swift
 enum AgentConnectionState: Sendable, Equatable {
-    case notStarted // before the boot phase where the agent can exist
+    case notStarted           // before the boot phase where the agent can exist
     case connecting(attempt: Int)
     case connected(GuestHello)
     case reconnecting(since: ContinuousClock.Instant, attempt: Int)
-    case incompatible(ProtocolVersion) // handshake rejected (major mismatch); no retries
-    case paused // VM suspended: no pings, no timeouts (§5.6)
+    case incompatible(ProtocolVersion)   // handshake rejected (major mismatch); no retries
+    case paused               // VM suspended: no pings, no timeouts (§5.6)
 }
 ```
 
@@ -334,12 +320,13 @@ Rule: **the host is the source of truth for configuration, the guest for Android
 
 ## 5. Idle policy (#069)
 
-`IdleController` (RuntimeCore, actor) decides when to suspend (VM paused) and when to stop the runtime. It implements FR-VM-10 and is the only component that calls `VMController.pause` outside host sleep (§6). [vm.md](vm.md) and [graphics.md](graphics.md) §8 reference this section.
+`IdleController` (RuntimeCore, actor) decides when to suspend (VM paused) and when to stop the runtime. It implements FR-VM-10 and is the only component that calls `VMController.pause()` outside host sleep (§6). [vm.md](vm.md) and [graphics.md](graphics.md) §8 reference this section.
 
 ### 5.1 Activity
 
 The runtime is **active** while any of these exist. Idle time counts only while none exists.
 
+| Source | How it is tracked |
 |---|---|
 | An app session in any state except `ended` (`backgrounded` counts) | `SessionRegistry` |
 | A task kept alive by `window.closeBehavior = keepRunning` ([display-and-windowing.md](display-and-windowing.md) §7.6) | `ActivityKind.backgroundTask`, held until the task vanishes or the package is terminated |
@@ -349,15 +336,15 @@ The runtime is **active** while any of these exist. Idle time counts only while 
 | `apkrun runtime start --hold` (keeps the runtime ready until the CLI exits or is interrupted) | `.cli` |
 
 ```swift
-public struct ActivityKind: RawRepresentable, Sendable, Hashable { // "storeOperation", "backgroundTask", …
+public struct ActivityKind: RawRepresentable, Sendable, Hashable {   // "storeOperation", "backgroundTask", …
     public let rawValue: String
 }
 
-/// Released by release or on deinit. Holding one keeps the runtime `ready` (it resumes it if needed)
+/// Released by release() or on deinit. Holding one keeps the runtime `ready` (it resumes it if needed)
 /// and resets the idle timers when released.
 public final class RuntimeActivityAssertion: Sendable {
     public let kind: ActivityKind
-    public func release
+    public func release()
 }
 ```
 
@@ -381,15 +368,15 @@ Consequence: an Android app closed with `stop` receives no notifications while t
 
 ```text
 suspend (ready, idle ≥ idleSuspendMinutes)
-1. agent supervisors → paused (stop pings and request timeouts; §4.1)
-2. VMController.pause → GraphicsCore WillPause (graphics.md §8) PerfMarker VM_PAUSED
-3. state: ready → suspended
+  1. agent supervisors → paused (stop pings and request timeouts; §4.1)
+  2. VMController.pause()          → GraphicsCore WillPause (graphics.md §8)     PerfMarker VM_PAUSED
+  3. state: ready → suspended
 
 resume (suspended, ensureReady or an activity assertion)
-1. VMController.resume → GraphicsCore WillResume PerfMarker VM_RESUMED
-2. agent supervisors: Ping each required agent (2 s); on failure → reconnect path (§4)
-3. time sync: SyncTime with the host wall clock (desktop-integration.md §9)
-4. state: suspended → ready
+  1. VMController.resume()         → GraphicsCore WillResume                      PerfMarker VM_RESUMED
+  2. agent supervisors: Ping each required agent (2 s); on failure → reconnect path (§4)
+  3. time sync: SyncTime with the host wall clock (desktop-integration.md §9)
+  4. state: suspended → ready
 ```
 
 - Resume target: `VM_RESUMED` → `ready` p50 ≤ 500 ms, so a launch from `suspended` stays within NFR-PERF-01 plus 0.5 s. #070 measures it.
@@ -404,7 +391,7 @@ resume (suspended, ensureReady or an activity assertion)
 
 ### 5.5 Host memory pressure
 
-`DispatchSource.makeMemoryPressureSource(eventMask: [.warning,.critical])`:
+`DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical])`:
 
 - `.critical` while the runtime is `ready` and no session is visible (every session `backgrounded`, or none) → suspend at once, without waiting for the idle timer. `backgroundTask` assertions prevent this, because suspending would stop the audio the user chose to keep.
 - `.warning` → log and health `runtime.memoryPressure = warning`. No action.
@@ -449,18 +436,18 @@ The registry grows over several tasks. #026 builds a minimal registry for embedd
 ### 7.1 `openSession`
 
 ```text
-openSession(request, client) PerfMarker APP_LAUNCH_REQUEST
-1. authorize: wrapper endpoint → only its own package (NFR-SEC-07); control endpoint → any package
-2. existing live session for the package?
-same client → return its descriptor
-other client → the new client takes over (the old one receives windowRequest(.close)); used by the generic launcher
-orphaned (§7.3) → re-attach: new surfaces, same display and tasks
-3. package installed (PackageStore)? else RuntimeFailure.packageNotInstalled
-4. state requested → waitingForRuntime; runtime.ensureReady(.session(pkg)) (cold boot or resume if needed)
-5. acquiringDisplay: DisplayPool.acquire(geometry) PerfMarker DISPLAY_ATTACHED
-6. launching: AndroidControlChannel.launch(package, display) PerfMarker ACTIVITY_STARTED
-7. running: first frame PerfMarker FIRST_FRAME
-(async, after reply) UpdateCore.noteLaunched(package) never on this path (NFR-PERF-07)
+openSession(request, client)                              PerfMarker APP_LAUNCH_REQUEST
+  1. authorize: wrapper endpoint → only its own package (NFR-SEC-07); control endpoint → any package
+  2. existing live session for the package?
+       same client  → return its descriptor
+       other client → the new client takes over (the old one receives windowRequest(.close)); used by the generic launcher
+       orphaned (§7.3) → re-attach: new surfaces, same display and tasks
+  3. package installed (PackageStore)? else RuntimeFailure.packageNotInstalled
+  4. state requested → waitingForRuntime; runtime.ensureReady(.session(pkg))   (cold boot or resume if needed)
+  5. acquiringDisplay: DisplayPool.acquire(geometry)                            PerfMarker DISPLAY_ATTACHED
+  6. launching: AndroidControlChannel.launch(package, display)                  PerfMarker ACTIVITY_STARTED
+  7. running: first frame                                                         PerfMarker FIRST_FRAME
+  (async, after reply) UpdateCore.noteLaunched(package)                          never on this path (NFR-PERF-07)
 ```
 
 - The descriptor is returned at step 5 (surfaces exist). The client learns the rest through the session event `stateChanged` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §6.3). The wrapper shows the placeholder window until the first frame ([display-and-windowing.md](display-and-windowing.md) §7.3).
@@ -474,7 +461,7 @@ Wrappers open sessions. Control clients (GUI, menu bar, CLI) do not own windows,
 - `launch(packageID)`: apkrund resolves the window owner and opens it with `NSWorkspace.openApplication(at:configuration:)`:
   1. the registered wrapper for the package (`Wrappers/registry.json`), if its bundle still exists and its cdhash matches;
   2. otherwise the generic launcher `APKRun.app/Contents/Helpers/APKRunLauncher.app` with the arguments `--package <id>` (#068). It is signed with APKRun's identity and uses the `.control` endpoint.
-     The launched process calls `openSession`. `launch` returns when that session reaches `running` (or fails), so `apkrun launch` can print the result and the first-frame time.
+  The launched process calls `openSession`. `launch` returns when that session reaches `running` (or fails), so `apkrun launch` can print the result and the first-frame time.
 - `terminate(packageID)`: ends the session (the wrapper receives `windowRequest(.close)`), stops keep-running tasks, and sends `StopApplication` (force-stop) to the Guest Agent. The session ends with `.userClosed`.
 
 #032's acceptance, "CLI launches HelloText through XPC without direct VM ownership", is tested with `apkrun launch io.apkrun.fixture.hellotext` (§13).
@@ -569,16 +556,17 @@ The GUI's onboarding (host-ui.md) and `apkrun setup` drive the same steps. Regis
 
 ```text
 APKRun.app first launch
-1. SMAppService.agent(plistName:).register.requiresApproval → explain, openSystemSettingsLoginItems, poll status every 2 s while the sheet is open
-2. connect to apkrund (broker → control endpoint)
-3. setup(imageSource) → ProvisioningState events
-checkingHost HostRequirementsCheck (§9.1)
-installingImage ImageStore.install(source) (android-image.md §10.3, §10.4)
-creatingInstance InstanceStore.provision (android-image.md §5.1)
-firstBoot(phase) ensureReady(.provisioning) with the first-boot timeouts (§3.2)
-installingAgents development: GuestAgentProvisioner installs the agent and the IME (guest-components.md §3.1)
-verifying DisplayPool acquire + LaunchApplication of HealthCheckActivity (guest-components.md §4.1) + first frame, then release
-complete state.json: provisioned = true
+  1. SMAppService.agent(plistName:).register()
+       .requiresApproval → explain, openSystemSettingsLoginItems(), poll status every 2 s while the sheet is open
+  2. connect to apkrund (broker → control endpoint)
+  3. setup(imageSource)  → ProvisioningState events
+       checkingHost        HostRequirementsCheck (§9.1)
+       installingImage     ImageStore.install(source) (android-image.md §10.3, §10.4)
+       creatingInstance    InstanceStore.provision() (android-image.md §5.1)
+       firstBoot(phase)    ensureReady(.provisioning) with the first-boot timeouts (§3.2)
+       installingAgents    development: GuestAgentProvisioner installs the agent and the IME (guest-components.md §3.1)
+       verifying           DisplayPool acquire + LaunchApplication of HealthCheckActivity (guest-components.md §4.1) + first frame, then release
+       complete            state.json: provisioned = true
 ```
 
 ```swift
@@ -601,6 +589,7 @@ public enum ProvisioningState: Sendable, Equatable, Codable {
 
 ### 9.3 Image sources
 
+| Source | When | How |
 |---|---|---|
 | Local bundle directory; a local `.aar` from #058 (M10) | development and M4–M9 builds, and later for manual installs | chosen in the onboarding sheet, `apkrun setup --image <path>`, or `apkrun dev image install <dir>`. `.aar` files need the archive install of #058 ([runtime-maintenance.md](runtime-maintenance.md) §4.5) |
 | Release feed | from #087 (M10) | `ImageFeedClient` selects the newest compatible image of the channel and `ImageDownloader` downloads it ([runtime-maintenance.md](runtime-maintenance.md) §4.1–§4.5, [android-image.md](android-image.md) §10.4). The onboarding shows the size and a progress bar. First-run downloads ignore the rollout percentage and the expensive-network rule, but ask first on an expensive network |
@@ -651,7 +640,7 @@ public enum RuntimeFailure: APKRunError {
     // host process
     case hostStartupFailed(step: HostStartupStep, underlying: WireError)
     case hostShuttingDown
-    case hostUpdating // an APKRun update is being installed or waits for a restart (runtime-maintenance.md §3.6)
+    case hostUpdating                     // an APKRun update is being installed or waits for a restart (runtime-maintenance.md §3.6)
     case instanceLocked(owner: InstanceLockOwner)
     case notProvisioned
     case hostRequirementsNotMet([HostRequirement])
@@ -659,7 +648,7 @@ public enum RuntimeFailure: APKRunError {
     case invalidTransition(from: RuntimeState, to: RuntimeState)
     case image(ImageFailure)
     case vm(VMFailure)
-    case vmConfiguration(VMConfigurationFailure) // VMDefinitionValidator rejects the definition (vm.md §3)
+    case vmConfiguration(VMConfigurationFailure)   // VMDefinitionValidator rejects the definition (vm.md §3)
     case graphics(GraphicsFailure)
     case bootTimedOut(phase: BootPhase)
     case bootStalled(phase: BootPhase)
@@ -684,39 +673,39 @@ public enum RuntimeFailure: APKRunError {
     case malformedRequest
     case cancelled
     case internal(String)
-    case operationNotFound(OperationID) // operationStatus, cancel, or apkrun operations wait for an unknown or expired ID
-    case serviceUnavailable(ServiceUnavailableReason) // RuntimeClient can't reach the broker or an endpoint (§8.5)
-    case requestTimedOut(operation: String) // RuntimeClient got no reply within the operation's deadline plus 5 s
-    case developerModeRequired // guestLog or frameStatistics while developer.enabled is off (../03-reference/runtime-api.md §6.3, §13.1)
+    case operationNotFound(OperationID)            // operationStatus, cancel, or apkrun operations wait for an unknown or expired ID
+    case serviceUnavailable(ServiceUnavailableReason)   // RuntimeClient can't reach the broker or an endpoint (§8.5)
+    case requestTimedOut(operation: String)        // RuntimeClient got no reply within the operation's deadline plus 5 s
+    case developerModeRequired                     // guestLog or frameStatistics while developer.enabled is off (../03-reference/runtime-api.md §6.3, §13.1)
     // settings (configuration.md §8.1)
-    case unknownSetting(key: String) // a global settings key that does not exist
-    case invalidSettingValue(key: String, allowed: String) // a value of the wrong type or outside the allowed values. Fixed variant sharedFolders
+    case unknownSetting(key: String)               // a global settings key that does not exist
+    case invalidSettingValue(key: String, allowed: String)   // a value of the wrong type or outside the allowed values. Fixed variant sharedFolders
     // health findings (§12), never thrown
-    case slowBoot(duration: Duration) // runtime.boot: the last boot took more than 2× the median
-    case stopsForced // runtime.stop: the last 3 stops were forced (§3.5)
-    case hostMemoryPressure // runtime.memoryPressure: warning or critical (§5.5)
-    case inputDegraded // agent.input (diagnostics.md §7.4)
-    case inputMethodNotSelected // agent.ime (diagnostics.md §7.4)
-    case adbEnabledUnexpectedly // agent.developerMode: ADB is on while developer mode is off
+    case slowBoot(duration: Duration)              // runtime.boot: the last boot took more than 2× the median
+    case stopsForced                               // runtime.stop: the last 3 stops were forced (§3.5)
+    case hostMemoryPressure                        // runtime.memoryPressure: warning or critical (§5.5)
+    case inputDegraded                             // agent.input (diagnostics.md §7.4)
+    case inputMethodNotSelected                    // agent.ime (diagnostics.md §7.4)
+    case adbEnabledUnexpectedly                    // agent.developerMode: ADB is on while developer mode is off
 }
 
 public enum HostStartupStep: String, Sendable, Codable {
-    case settings, maintenance, imageStore, packageStore, wrapperRegistry, services // the degraded steps of §2.2
+    case settings, maintenance, imageStore, packageStore, wrapperRegistry, services   // the degraded steps of §2.2
 }
 
 public enum InstanceLockOwner: String, Sendable, Codable {
-    case apkrund, apkrunDev // the owner written in the lock file (§2.3)
+    case apkrund, apkrunDev                        // the owner written in the lock file (§2.3)
 }
 
 public enum HostRequirement: Sendable, Codable, Equatable {
     case appleSilicon, macOSVersion, virtualization, apfsVolume
-    case freeDiskSpace(needed: Int64) // §9.1. Memory is a warning, not a requirement
+    case freeDiskSpace(needed: Int64)              // §9.1. Memory is a warning, not a requirement
 }
 
 public enum ServiceUnavailableReason: String, Sendable, Codable {
-    case notRegistered // SMAppService.status is notRegistered or notFound
-    case requiresApproval // SMAppService.status == .requiresApproval
-    case notRunning // registered, but the broker doesn't answer
+    case notRegistered                             // SMAppService.status is notRegistered or notFound
+    case requiresApproval                          // SMAppService.status == .requiresApproval
+    case notRunning                                // registered, but the broker doesn't answer
 }
 ```
 
@@ -749,8 +738,8 @@ Error domain `runtime`. Codes, user messages, and remediations are in [../03-ref
 
 ### #031 Introduce apkrund (M4)
 
-1. Add the `Daemon/apkrund` target: a thin `main.swift` that builds `RuntimeHost` and calls `RunLoop.main.run`. Embed it in `APKRun.app/Contents/Helpers/` with the plist from [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1 plus the launchd keys of §2.1.
-2. Implement `RuntimeHost.start` in the order of §2.2, the instance lock (§2.3), `daemon.json` and unclean-exit handling (§2.5), and the exit rules with `SIGTERM` handling (§2.4).
+1. Add the `Daemon/apkrund` target: a thin `main.swift` that builds `RuntimeHost` and calls `RunLoop.main.run()`. Embed it in `APKRun.app/Contents/Helpers/` with the plist from [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1 plus the launchd keys of §2.1.
+2. Implement `RuntimeHost.start()` in the order of §2.2, the instance lock (§2.3), `daemon.json` and unclean-exit handling (§2.5), and the exit rules with `SIGTERM` handling (§2.4).
 3. Move VM ownership from the CLI to apkrund: `RuntimeSupervisor` with the boot sequence (§3.2), `BootPhaseDetector` with golden tests over the #064 console captures (§3.3), readiness (§3.4), stop (§3.5), and failure handling (§3.6).
 4. Agent supervision and reconciliation (§4) on top of #072's `GuestAgentSupervisor`. The broker listener with the version handshake and the first control operations `runtimeStatus`, `runtime start`, and `runtime stop` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)). Startup step 11 needs the listener, and the T2 tests need a way to start and stop the runtime. #032 builds the rest of the API around these three without changing their shape.
 5. Registration in APKRun.app (`SMAppService`; re-registration when the agent is not `.enabled` or the embedded plist hash changed, [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §1.1, [runtime-maintenance.md](runtime-maintenance.md) §3.7 step 2). #057 moves this check into `AgentRegistrar`.
@@ -805,7 +794,7 @@ The checks in §12 are implemented with the components above. #059 adds them to 
 | Tier | Test | Task |
 |---|---|---|
 | T0 | `RuntimeState` edges (state-machines.md §2); `IdleController` with a manual clock (activity sources, both timers, settings change, `0` = never, sleep not counted); `BootPhaseDetector` golden tests over captured console logs; `BootProgressEstimator`; `ReplyGuard`; exit-rule evaluation | #031, #069 |
-| T1 | `RuntimeHost` startup order with fake modules, including degraded steps; instance lock contention between two processes; XPC server with `NSXPCListener.anonymous` in-process: version mismatch, authorization per endpoint kind, 65th in-flight request rejected, long-operation handle and cancel; `SessionRegistry` with a fake runtime: queued sessions, orphan re-attach, takeover, reconciliation table (§4.2) | #031, #032 |
+| T1 | `RuntimeHost` startup order with fake modules, including degraded steps; instance lock contention between two processes; XPC server with `NSXPCListener.anonymous()` in-process: version mismatch, authorization per endpoint kind, 65th in-flight request rejected, long-operation handle and cancel; `SessionRegistry` with a fake runtime: queued sessions, orphan re-attach, takeover, reconciliation table (§4.2) | #031, #032 |
 | T2 | Real VM: cold boot to `ready` with markers; stop paths (graceful, power button, forced); agent kill and reconnect with session continuity; suspend/resume with time sync; injected sleep/wake; CPU budget while suspended; `kill -9 apkrund` recovery; boot-loop guard with test bundle P, whose kernel panics on a missing init ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.5) | #031, #032, #069 |
 | T3 | Gate G6: runtime stays warm under apkrund with the GUI closed (staged over #031, #032, and #068); warm launch KPI (with #070); real `pmset sleepnow` sleep and wake; onboarding on a fresh macOS user account (#066) | #031, #032, #068, #066, #069, #070 |
 

@@ -69,8 +69,8 @@ public enum IntegrationKind: String, Codable, Sendable { case clipboard, notific
 
 public enum IntegrationDecision: Sendable, Equatable {
     case allow
-    case ask // links only (§7)
-    case deny(IntegrationDenial) //.globallyOff,.packageOff,.notFocused,.noSession,.notSupported(capability),.rateLimited
+    case ask                          // links only (§7)
+    case deny(IntegrationDenial)      // .globallyOff, .packageOff, .notFocused, .noSession, .notSupported(capability), .rateLimited
 }
 
 public actor IntegrationPolicy {
@@ -124,15 +124,15 @@ The window process and apkrund exchange integration messages on the session chan
 
 ```text
 client → server
-pushClipboard(ClipItem) → ClipAck §4.2 (⌘V and focus)
-clipboardWritten(changeCount, digest) §4.3 (after writing a guest clip to NSPasteboard)
-importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult §6.2
-acceptExport(offerID, FileHandle?) §6.3 (nil = cancelled)
-resolveLinkPrompt(promptID, LinkChoice) §7.2
+  pushClipboard(ClipItem) → ClipAck                 §4.2 (⌘V and focus)
+  clipboardWritten(changeCount, digest)             §4.3 (after writing a guest clip to NSPasteboard)
+  importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult     §6.2
+  acceptExport(offerID, FileHandle?)                §6.3 (nil = cancelled)
+  resolveLinkPrompt(promptID, LinkChoice)           §7.2
 server → client (events)
-clipboardFromGuest(ClipItem) §4.3 (only to the key window's session)
-exportOffered(ExportOffer) §6.3
-linkPrompt(LinkPrompt) §7.2
+  clipboardFromGuest(ClipItem)                      §4.3 (only to the key window's session)
+  exportOffered(ExportOffer)                        §6.3
+  linkPrompt(LinkPrompt)                            §7.2
 ```
 
 `ClipItem`, `ImportFileInfo`, `ExportOffer`, and `LinkPrompt` are RuntimeAPI DTOs. Their fields, and the request and event forms of this list, are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md) §6.3 and §11.2. File handles cross XPC as `NSFileHandle` (secure coding), the same way IOSurfaces do. A `ClipItem` image is PNG bytes as `Data` inside the message, at most 16 MiB, so a clip fits the 32 MiB XPC message limit ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §4.10). Only the host ↔ guest hop uses a bulk transfer (§4.4).
@@ -141,7 +141,9 @@ linkPrompt(LinkPrompt) §7.2
 
 ## 4. Clipboard (#053 text, #080 images and HTML; FR-INT-01, FR-INT-02)
 
-### 4.1 Model: `NSPasteboard ↔ apkrund ↔ Guest Agent ↔ ClipboardManager`. The rules:
+### 4.1 Model
+
+The clipboard path is `NSPasteboard ↔ apkrund ↔ Guest Agent ↔ ClipboardManager`. The rules:
 
 - **No background sync.** The Mac pasteboard and the Android clipboard are exchanged only while a window of a package with `integrations.clipboard` is key (security-model §6). Android has one clipboard for all apps, so an exchange made for one app is visible to every Android app that reads the clipboard afterwards. This is the same as on a phone, and the settings UI says so.
 - **Mac → Android** happens at a paste (⌘V or Edit → Paste) and when the window becomes key (§4.2).
@@ -152,20 +154,20 @@ linkPrompt(LinkPrompt) §7.2
 
 ```text
 trigger (in the window process):
-a) ⌘V / Edit → Paste in editor mode (input.md §6)
-b) window becomes key, and NSPasteboard.general.changeCount ≠ the last count this adapter pushed or wrote,
-and reading does not require a user prompt (R-21)
+  a) ⌘V / Edit → Paste in editor mode (input.md §6)
+  b) window becomes key, and NSPasteboard.general.changeCount ≠ the last count this adapter pushed or wrote,
+     and reading does not require a user prompt (R-21)
 PasteboardAdapter reads, in order: public.utf8-plain-text, (#080) public.html, public.png / public.tiff
-flags: org.nspasteboard.ConcealedType → sensitive; org.nspasteboard.TransientType → only for a paste, never on focus
-skip when the pasteboard carries io.apkrun.clip-origin (it came from Android, §4.3) and its digest equals the guest's
-current clip (the digest is kept by ClipboardCoordinator)
+  flags: org.nspasteboard.ConcealedType → sensitive; org.nspasteboard.TransientType → only for a paste, never on focus
+  skip when the pasteboard carries io.apkrun.clip-origin (it came from Android, §4.3) and its digest equals the guest's
+  current clip (the digest is kept by ClipboardCoordinator)
 pushClipboard(ClipItem{text?, html?, image?, sensitive, digest}) → apkrund
-IntegrationPolicy.evaluate(.clipboard, package, context) — must be the key window's session
-ClipboardCoordinator: size rules (§4.4); record lastHostDigest
-Guest Agent SetClipboard(ClipData{origin HOST, seq, text, html, image(transfer_id), sensitive})
-reply → ClipAck{seq}
+  IntegrationPolicy.evaluate(.clipboard, package, context) — must be the key window's session
+  ClipboardCoordinator: size rules (§4.4); record lastHostDigest
+  Guest Agent SetClipboard(ClipData{origin HOST, seq, text, html, image(transfer_id), sensitive})
+  reply → ClipAck{seq}
 paste (case a): the window sends the paste to Android after the ack (input.md §6), or after 500 ms without an ack
-as a plain-text commit
+                as a plain-text commit
 ```
 
 - `sensitive` becomes `ClipDescription.EXTRA_IS_SENSITIVE` in Android, so Android does not show the content in its clipboard preview.
@@ -175,17 +177,17 @@ as a plain-text commit
 
 ```text
 Guest Agent: ClipboardManager.OnPrimaryClipChangedListener
-(priv-app: the APKRun IME is the default IME and runs in the agent's uid, so background reads are allowed)
-ignore the change if it is the clip this agent just set (same seq / same content hash)
-ClipboardChanged(ClipData{origin GUEST, seq, text, html, image, source_package, sensitive})
+  (priv-app: the APKRun IME is the default IME and runs in the agent's uid, so background reads are allowed)
+  ignore the change if it is the clip this agent just set (same seq / same content hash)
+  ClipboardChanged(ClipData{origin GUEST, seq, text, html, image, source_package, sensitive})
 apkrund ClipboardCoordinator:
-accept only if a window is key, its package has integrations.clipboard, and source_package (when known) is that package
-or a package that also has integrations.clipboard (for example a system dialog inside the app's window)
-ignore if digest == lastHostDigest (our own push, echoed)
-event clipboardFromGuest(ClipItem) → the key window's process
+  accept only if a window is key, its package has integrations.clipboard, and source_package (when known) is that package
+  or a package that also has integrations.clipboard (for example a system dialog inside the app's window)
+  ignore if digest == lastHostDigest (our own push, echoed)
+  event clipboardFromGuest(ClipItem) → the key window's process
 PasteboardAdapter: clearContents, write the types, plus io.apkrun.clip-origin = {package, seq, digest};
-sensitive → also org.nspasteboard.ConcealedType (clipboard managers skip it)
-clipboardWritten(changeCount, digest) → apkrund (so the next focus does not push it back)
+  sensitive → also org.nspasteboard.ConcealedType (clipboard managers skip it)
+  clipboardWritten(changeCount, digest) → apkrund (so the next focus does not push it back)
 ```
 
 Changes that happen while no window is key are dropped. They are not queued.
@@ -239,27 +241,27 @@ Loop prevention uses three independent signals: the `origin` and `seq` of `ClipD
 | text | `body` |
 | — | `subtitle` is empty for wrapper notifications. For notifications posted by APKRun (no wrapper, §5.3) it is the app's display name |
 | group key, else channel ID | `threadIdentifier = "<package>/<group or channel>"` |
-| importance `LOW` or `alert = false` | no sound, `interruptionLevel =.passive` |
-| importance `DEFAULT` or `HIGH` | `sound =.default`, `.active` |
+| importance `LOW` or `alert = false` | no sound, `interruptionLevel = .passive` |
+| importance `DEFAULT` or `HIGH` | `sound = .default`, `.active` |
 | actions (up to 3) | a `UNNotificationCategory` with actions `a0`–`a2` and the action titles. Categories are keyed by a hash of the titles and kept in an LRU of 32 per wrapper, because the category set is registered per process |
 | key | `identifier = "<package>|<first 16 hex of SHA-256(key)>"`. Posting again with the same identifier replaces the Mac notification, as an Android update replaces its notification |
 | — | `userInfo = {package, keyDigest}`. The Android key itself stays in apkrund |
 
 - The icon is the wrapper's icon, because the wrapper posts it. APKRun never draws the Android small icon.
 - `time-sensitive` and critical alerts need entitlements that ad-hoc wrappers cannot have. They are not used.
-- While the app's window is key, `userNotificationCenter(_:willPresent:)` returns `[.list,.sound]` for `DEFAULT` and `[.banner,.list,.sound]` for `HIGH`, which is close to Android's heads-up rule.
+- While the app's window is key, `userNotificationCenter(_:willPresent:)` returns `[.list, .sound]` for `DEFAULT` and `[.banner, .list, .sound]` for `HIGH`, which is close to Android's heads-up rule.
 - Focus modes and notification settings are macOS's. Each wrapper appears separately in System Settings → Notifications ([wrapper.md](wrapper.md) §4.2).
 
 ### 5.3 Routing
 
 ```text
 NotificationPosted(n) → NotificationCoordinator
-policy:.notifications for n.package (global switch, package setting)
-wrapper = registry entry for n.package with status valid (wrapper.md §9.1)
-├─ wrapper process connected (window open or background mode) → relay.post(payload)
-├─ wrapper registered, not running → start it in background mode (wrapper.md §5.8), queue the payload
-│ queue ≤ 50 per package, 10 s timeout; on timeout the queue is dropped and counted
-└─ no usable wrapper → APKRun posts it (HostNotifier, update-system.md §9), subtitle = display name
+  policy: .notifications for n.package (global switch, package setting)
+  wrapper = registry entry for n.package with status valid (wrapper.md §9.1)
+  ├─ wrapper process connected (window open or background mode) → relay.post(payload)
+  ├─ wrapper registered, not running → start it in background mode (wrapper.md §5.8), queue the payload
+  │     queue ≤ 50 per package, 10 s timeout; on timeout the queue is dropped and counted
+  └─ no usable wrapper → APKRun posts it (HostNotifier, update-system.md §9), subtitle = display name
 NotificationRemoved(key) → relay.remove(identifier), or HostNotifier removal
 ```
 
@@ -267,13 +269,13 @@ The notification relay on the `.wrapper` endpoint ([wrapper.md](wrapper.md) §12
 
 ```text
 notificationRelay(background) → stream of
-post(NotificationPayload{identifier, threadID, title, body, sound, interruption, actions, badge})
-remove([identifier])
-setBadge(Int?)
+  post(NotificationPayload{identifier, threadID, title, body, sound, interruption, actions, badge})
+  remove([identifier])
+  setBadge(Int?)
 client → server (notificationRelayResponse, one-way)
-activated(identifier, actionIndex?)
-dismissed(identifier)
-authorizationChanged(MacPermissionState) the wire form of UNAuthorizationStatus
+  activated(identifier, actionIndex?)
+  dismissed(identifier)
+  authorizationChanged(MacPermissionState)       the wire form of UNAuthorizationStatus
 ```
 
 - **Reconnect.** After a reconnect, `SetNotificationForwarding` makes the agent re-send every active forwarded notification with `replay = true` ([guest-protocol.md](guest-protocol.md) §8.4). The coordinator rebuilds its key map and badge counts from them without new banners, and removes Mac notifications whose Android notification is gone (for example after a runtime restart).
@@ -287,17 +289,17 @@ authorizationChanged(MacPermissionState) the wire form of UNAuthorizationStatus
 ```text
 Mac: user clicks the notification (or an action button)
 wrapper process (UNUserNotificationCenterDelegate.didReceive):
-default action / action a<i>:
-background mode → activation policy.regular, continue at wrapper.md §5.2 step 3 (window, openSession)
-NSApp.activate; order the window front
-relay.activated(identifier, actionIndex) after the session is `running`
-dismiss (category option.customDismissAction) → relay.dismissed(identifier)
+  default action / action a<i>:
+    background mode → activation policy .regular, continue at wrapper.md §5.2 step 3 (window, openSession)
+    NSApp.activate(); order the window front
+    relay.activated(identifier, actionIndex) after the session is `running`
+  dismiss (category option .customDismissAction) → relay.dismissed(identifier)
 apkrund:
-activated → Guest Agent ActivateNotification(key, action_index, display_id = the session's display)
-dismissed → DismissNotification(key) (as a swipe-away on Android)
+  activated → Guest Agent ActivateNotification(key, action_index, display_id = the session's display)
+  dismissed → DismissNotification(key)   (as a swipe-away on Android)
 Guest Agent: PendingIntent.send with ActivityOptions launch display = display_id
-(and the background-activity-start mode that lets the agent's privilege apply, API 34+; verify in #054)
-no content intent → LaunchApplication(package, display_id) instead
+  (and the background-activity-start mode that lets the agent's privilege apply, API 34+; verify in #054)
+  no content intent → LaunchApplication(package, display_id) instead
 ```
 
 - A click on a Mac notification whose Android notification no longer exists (the runtime restarted, or the app removed it) opens the app normally.
@@ -311,7 +313,7 @@ no content intent → LaunchApplication(package, display_id) instead
 - A click with the app closed (runtime running, `keepRunning`) opens the window and shows the notification's content intent. A click with the window open brings it to the front. Action buttons arrive as the right action intent.
 - Dismissing on the Mac removes the notification on Android (the fixture lists its active notifications). Removing it on Android removes it on the Mac.
 - With `integrations.notifications = false`, nothing leaves the guest (the agent's forwarded counter stays 0).
-- Latency from Android `notify` to the Mac banner: p50 ≤ 1 s with the wrapper running, ≤ 3 s with a background start.
+- Latency from Android `notify()` to the Mac banner: p50 ≤ 1 s with the wrapper running, ≤ 3 s with a background start.
 - R-19 ([wrapper.md](wrapper.md) §5.8): no Dock tile flash in background mode, and the permission survives a wrapper refresh.
 
 ---
@@ -328,15 +330,15 @@ no content intent → LaunchApplication(package, display_id) instead
 
 ```text
 wrapper window (DropTarget on the session view): accepts file URLs; no folders, no promised files in v1
-limits: ≤ 20 files, each ≤ 2 GiB, total ≤ 4 GiB; otherwise the drop is refused with a message
-opens each file for reading → importFiles([FileHandle], [ImportFileInfo{name, size, uti}],.shareToApp)
-apkrund: policy.files for the package (the session's package; there must be a user drop, which only the window can report)
-bulk transfers (host → guest) of the file handles; ImportFiles(target SHARE_TO_PACKAGE, package, display_id, files)
+  limits: ≤ 20 files, each ≤ 2 GiB, total ≤ 4 GiB; otherwise the drop is refused with a message
+  opens each file for reading → importFiles([FileHandle], [ImportFileInfo{name, size, uti}], .shareToApp)
+apkrund: policy .files for the package (the session's package; there must be a user drop, which only the window can report)
+  bulk transfers (host → guest) of the file handles; ImportFiles(target SHARE_TO_PACKAGE, package, display_id, files)
 Guest Agent FilesBridge:
-stores the files in its private cache, exposes them through its FileProvider (authority io.apkrun.guest.files)
-ACTION_SEND / ACTION_SEND_MULTIPLE with the content URIs, FLAG_GRANT_READ_URI_PERMISSION, to the package, on display_id
-the package has no send target → MediaStore.Downloads insert instead, and a toast "Saved to Downloads"
-ImportResult{repeated content_uri, disposition: SHARED | SAVED_TO_DOWNLOADS}
+  stores the files in its private cache, exposes them through its FileProvider (authority io.apkrun.guest.files)
+  ACTION_SEND / ACTION_SEND_MULTIPLE with the content URIs, FLAG_GRANT_READ_URI_PERMISSION, to the package, on display_id
+  the package has no send target → MediaStore.Downloads insert instead, and a toast "Saved to Downloads"
+  ImportResult{repeated content_uri, disposition: SHARED | SAVED_TO_DOWNLOADS}
 ```
 
 - Android has no API to inject a drag from outside Android, so a drop does not arrive as a `DragEvent` at the drop position. It arrives as a share to the app, which is how most apps accept files. Limitation recorded in [input.md](input.md) §10.
@@ -346,16 +348,16 @@ ImportResult{repeated content_uri, disposition: SHARED | SAVED_TO_DOWNLOADS}
 
 ```text
 Android app shares (ACTION_SEND / SEND_MULTIPLE) → chooser → "Save to Mac" (Guest Agent activity SaveToMacActivity)
-or the app creates a document in the Mac provider (ACTION_CREATE_DOCUMENT, §6.4, readWrite roots only)
+   or the app creates a document in the Mac provider (ACTION_CREATE_DOCUMENT, §6.4, readWrite roots only)
 SaveToMacActivity: reads name, MIME type, size from the content URIs (at most 20 items)
-ExportFileOffered(offer_id, name, mime_type, size, source_package, display_id)
-apkrund: policy.files for source_package; the offer goes to the window of the session on display_id
-(no such window → ResolveExport(offer_id, DECLINE))
-event exportOffered(ExportOffer{offerID, name, size, type})
+  ExportFileOffered(offer_id, name, mime_type, size, source_package, display_id)
+apkrund: policy .files for source_package; the offer goes to the window of the session on display_id
+  (no such window → ResolveExport(offer_id, DECLINE))
+  event exportOffered(ExportOffer{offerID, name, size, type})
 wrapper window: NSSavePanel as a sheet (default folder ~/Downloads, the name from Android, sanitized)
-save → acceptExport(offerID, FileHandle opened for writing); cancel → acceptExport(offerID, nil)
+  save → acceptExport(offerID, FileHandle opened for writing); cancel → acceptExport(offerID, nil)
 apkrund: ResolveExport(offer_id, ACCEPT) → the agent sends the bytes on the bulk stream
-apkrund writes them to the handle, checks size and SHA-256 from BulkEnd
+  apkrund writes them to the handle, checks size and SHA-256 from BulkEnd
 wrapper: sets com.apple.quarantine on the saved file; on failure deletes the partial file
 ```
 
@@ -370,7 +372,7 @@ wrapper: sets com.apple.quarantine on the saved file; on failure deletes the par
 
 **Guest side.** `MacFilesProvider`, a `DocumentsProvider` in the Guest Agent (authority `io.apkrun.guest.macfiles`), shows one root per Mac folder in the Android file picker. Android apps reach files only through the picker (`ACTION_OPEN_DOCUMENT`, `ACTION_OPEN_DOCUMENT_TREE`, `ACTION_CREATE_DOCUMENT`) and the URI permissions that the picker grants.
 
-- `openDocument` and every write check `getCallingPackage` against the access list from `SetSharedFolderAccess`. A package without access gets `SecurityException("Blocked by APKRun settings")`. Browsing in the picker (caller `com.android.documentsui`) lists names only.
+- `openDocument` and every write check `getCallingPackage()` against the access list from `SetSharedFolderAccess`. A package without access gets `SecurityException("Blocked by APKRun settings")`. Browsing in the picker (caller `com.android.documentsui`) lists names only.
 - File contents are served with `StorageManager.openProxyFileDescriptor`, so Android apps get a seekable file descriptor whose reads and writes become host requests. Nothing is copied into the guest.
 
 **Host side.** The agent calls the host operations of [guest-protocol.md](guest-protocol.md) §7.5 (`HostListRoots`, `HostQueryChildren`, `HostStat`, `HostOpenFile`, `HostReadRange`, `HostWriteRange`, `HostCloseFile`, `HostCreateDocument`, `HostDeleteDocument`, `HostRenameDocument`). Every request carries the calling package. `SharedFolderService` checks, for each request:
@@ -410,17 +412,17 @@ wrapper: sets com.apple.quarantine on the saved file; on failure deletes the par
 
 ```text
 OpenUrlOnHost → LinkForwarder
-validate: URLComponents parse; scheme http | https | mailto; length ≤ 8 KiB; http(s) needs a host
-anything else → ResolveUrl(request_id, DROP), counted
-policy: the app's window must be key, or have had user input in the last 5 s (links opened by background work are dropped)
-rate: ≤ 3 per 10 s per package; beyond that DROP
-integrations.links:
-mac → WorkspaceOpener.open(url) (default browser or mail app); ResolveUrl(OPENED_ON_HOST)
-android → (normally excluded in the agent) ResolveUrl(OPEN_IN_GUEST)
-ask → linkPrompt(LinkPrompt{promptID, host or address, scheme}) to the window
-sheet: "‹App› wants to open ‹example.com›." [Open in Browser] [Keep in Android] [Cancel], ☐ Remember for ‹App›
-resolveLinkPrompt → as above; "Remember" writes integrations.links = mac | android
-no answer in 60 s → Cancel
+  validate: URLComponents parse; scheme http | https | mailto; length ≤ 8 KiB; http(s) needs a host
+    anything else → ResolveUrl(request_id, DROP), counted
+  policy: the app's window must be key, or have had user input in the last 5 s (links opened by background work are dropped)
+  rate: ≤ 3 per 10 s per package; beyond that DROP
+  integrations.links:
+    mac     → WorkspaceOpener.open(url) (default browser or mail app); ResolveUrl(OPENED_ON_HOST)
+    android → (normally excluded in the agent) ResolveUrl(OPEN_IN_GUEST)
+    ask     → linkPrompt(LinkPrompt{promptID, host or address, scheme}) to the window
+              sheet: "‹App› wants to open ‹example.com›." [Open in Browser] [Keep in Android] [Cancel], ☐ Remember for ‹App›
+              resolveLinkPrompt → as above; "Remember" writes integrations.links = mac | android
+              no answer in 60 s → Cancel
 Guest Agent ResolveUrl: OPEN_IN_GUEST → start the kept intent in the in-Android browser on the same display
 ```
 
@@ -470,8 +472,8 @@ Guest Agent ResolveUrl: OPEN_IN_GUEST → start the kept intent in the in-Androi
 |---|---|---|---|
 | Languages | `Locale.preferredLanguages` (BCP 47), with the region from `Locale.current.region` added to the first language when it has none | `SetLocale(bcp47 list, up to 8)` | post-boot setup, reconnect, `NSLocale.currentLocaleDidChangeNotification` |
 | Time zone | `TimeZone.current.identifier` (IANA) | `SetTimeZone(tz_id)` | post-boot, reconnect, `NSSystemTimeZoneDidChange` |
-| 12/24-hour clock | `DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale:.current)` contains `a` → 12-hour | `SetClockFormat(TWELVE / TWENTY_FOUR)` (`Settings.System.TIME_12_24`) | post-boot, reconnect, `NSLocale.currentLocaleDidChangeNotification` |
-| Wall clock | host `Date` | `SyncTime(unix_time_ms)` | post-boot, after resume and wake ([runtime-daemon.md](runtime-daemon.md) §5.3, §6), every 30 min while `ready`, and after `NSSystemClockDidChange` |
+| 12/24-hour clock | `DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current)` contains `a` → 12-hour | `SetClockFormat(TWELVE / TWENTY_FOUR)` (`Settings.System.TIME_12_24`) | post-boot, reconnect, `NSLocale.currentLocaleDidChangeNotification` |
+| Wall clock | host `Date()` | `SyncTime(unix_time_ms)` | post-boot, after resume and wake ([runtime-daemon.md](runtime-daemon.md) §5.3, §6), every 30 min while `ready`, and after `NSSystemClockDidChange` |
 
 - Only changes are pushed. The agent compares with the current Android value and does nothing when they are equal, because a locale change restarts activities that do not handle configuration changes. A locale push never happens on the launch path.
 - **Locale mapping.** macOS and Android both use BCP 47 tags, so tags are passed through. Script subtags (`zh-Hans`, `zh-Hant`, `sr-Latn`) are kept. Android matches unsupported regions to its nearest resources. Android app labels follow the new locale, which can change display names ([package-store.md](package-store.md) §10.3) and give wrappers a `.displayName` refresh reason ([wrapper.md](wrapper.md) §9.1).
@@ -504,8 +506,8 @@ Control-endpoint operations. The DTOs are in [../03-reference/runtime-api.md](..
 | Operation | Behavior |
 |---|---|
 | `integrationStatus(packageID)` → `IntegrationStatus` | per integration: setting, effective decision, support on the running image, macOS permission (notifications of the wrapper, microphone of APKRun) |
-| `sharedFolders`, `addSharedFolder(bookmark, access)`, `removeSharedFolder(id)`, `setSharedFolderAccess(id, access)` | §6.4 roots. The GUI gets the bookmark from an open panel |
-| `activeRecordings` | §8.2, for the menu bar |
+| `sharedFolders()`, `addSharedFolder(bookmark, access)`, `removeSharedFolder(id)`, `setSharedFolderAccess(id, access)` | §6.4 roots. The GUI gets the bookmark from an open panel |
+| `activeRecordings()` | §8.2, for the menu bar |
 
 Notification operations ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §11.3):
 
@@ -520,7 +522,7 @@ Package settings are changed with the store's settings operations ([package-stor
 CLI ([cli.md](cli.md)):
 
 ```text
-apkrun settings <package> set integrations.<key> <value> # the generic settings command
+apkrun settings <package> set integrations.<key> <value>     # the generic settings command
 apkrun integrations status <package> [--json]
 apkrun shared-folders list [--json] | add <path> [--read-write] | remove <path|id>
 ```
@@ -533,24 +535,24 @@ apkrun shared-folders list [--json] | add <path> [--read-write] | remove <path|i
 public enum IntegrationFailure: APKRunError {
     case disabled(IntegrationKind, IntegrationDenial)
     case notSupportedOnImage(capability: String)
-    case guestUnavailable // agent not connected; the operation is not queued
+    case guestUnavailable                          // agent not connected; the operation is not queued
     case clipboardTooLarge(bytes: Int, limit: Int)
-    case linkRejected(LinkRejection) //.scheme,.tooLong,.notFocused,.rateLimited
+    case linkRejected(LinkRejection)               // .scheme, .tooLong, .notFocused, .rateLimited
     case tooManyFiles(count: Int, limit: Int)
     case fileTooLarge(name: String, bytes: Int64)
-    case transferFailed(String) // bulk abort, hash mismatch
-    case folderUnavailable(FolderProblem) //.missing,.privacyDenied,.offline
-    case pathRejected(PathProblem) //.outsideRoot,.hidden,.notRegularFile
-    case folderRefused(FolderRefusal) // addSharedFolder:.volumeRoot,.homeFolder,.insideLibrary,.hidden,.limitReached (§6.4)
+    case transferFailed(String)                    // bulk abort, hash mismatch
+    case folderUnavailable(FolderProblem)          // .missing, .privacyDenied, .offline
+    case pathRejected(PathProblem)                 // .outsideRoot, .hidden, .notRegularFile
+    case folderRefused(FolderRefusal)              // addSharedFolder: .volumeRoot, .homeFolder, .insideLibrary, .hidden, .limitReached (§6.4)
     case readOnly
     case notificationPermissionDenied
     case microphonePermissionDenied
     case microphoneNeedsRestart
     case promptTimedOut
     // health findings (§13), never thrown
-    case notificationAccessMissing // integrations.notificationListener: the listener grant is missing
-    case browserRoleMissing // integrations.browserRole: the redirect activity does not hold the browser role
-    case timeSyncFailed // integrations.time: the last SyncTime failed, or the time zone fell back to a fixed offset
+    case notificationAccessMissing                 // integrations.notificationListener: the listener grant is missing
+    case browserRoleMissing                        // integrations.browserRole: the redirect activity does not hold the browser role
+    case timeSyncFailed                            // integrations.time: the last SyncTime failed, or the time zone fell back to a fixed offset
 }
 ```
 

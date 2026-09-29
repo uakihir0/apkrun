@@ -26,7 +26,7 @@ This document defines how APKRun reports errors, writes logs, measures performan
 | `Redactor`, `RedactionRules` | redaction of everything that leaves the Mac in a report | §6 |
 | `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, `HostChecks`, `DoctorFormatter` | the health model and `apkrun doctor` | §7 |
 | `DiagnosticsContributor`, `DiagnosticsBundleWriter`, `ZipWriter` | the diagnostics bundle | §8 |
-| `DiagnosticsContext` | the `Sendable` value that module entry points receive (for example `VMController.init`, [vm.md](vm.md) §2): the `LogSink`, the `HealthCheckRegistry`, the `PerfTimeline`, `APKRunPaths`, and a clock. `DiagnosticsContext.live(paths:)` builds the production value; `DiagnosticsContext.testing` lives in `DiagnosticsCoreTestSupport` | — |
+| `DiagnosticsContext` | the `Sendable` value that module entry points receive (for example `VMController.init`, [vm.md](vm.md) §2): the `LogSink`, the `HealthCheckRegistry`, the `PerfTimeline`, `APKRunPaths`, and a clock. `DiagnosticsContext.live(paths:)` builds the production value; `DiagnosticsContext.testing()` lives in `DiagnosticsCoreTestSupport` | — |
 
 Components outside DiagnosticsCore:
 
@@ -49,27 +49,27 @@ Every error that can reach a user is a typed domain error ([../01-architecture/o
 ```swift
 public protocol APKRunError: Error, Sendable {
     static var domain: ErrorDomain { get }
-    var code: String { get } // the enum case name, stable: "downgradeRefused"
-    var parameters: [String: ErrorParameter] { get } // public-safe values for the message template
-    var cause: (any APKRunError)? { get } // a nested domain error, if any
-    var underlying: UnderlyingError? { get } // a system error: domain and code only
+    var code: String { get }                          // the enum case name, stable: "downgradeRefused"
+    var parameters: [String: ErrorParameter] { get }  // public-safe values for the message template
+    var cause: (any APKRunError)? { get }             // a nested domain error, if any
+    var underlying: UnderlyingError? { get }          // a system error: domain and code only
 }
 
 public extension APKRunError {
-    var qualifiedCode: String { "\(Self.domain.rawValue).\(code)" } // "store.downgradeRefused"
+    var qualifiedCode: String { "\(Self.domain.rawValue).\(code)" }   // "store.downgradeRefused"
 }
 
 public enum ErrorParameter: Sendable, Codable, Equatable {
-    case text(String) // must be public-safe: package ID, version name, app label, step name
-    case bytes(Int64) // formatted with ByteCountFormatter
+    case text(String)            // must be public-safe: package ID, version name, app label, step name
+    case bytes(Int64)            // formatted with ByteCountFormatter
     case count(Int)
     case duration(Duration)
-    case fileName(String) // last path component only. Full paths are never parameters
+    case fileName(String)        // last path component only. Full paths are never parameters
 }
 
 public struct UnderlyingError: Sendable, Codable, Equatable {
-    public var domain: String // "VZErrorDomain", "NSPOSIXErrorDomain", "OSStatus"
-    public var code: Int // userInfo is dropped: it may contain paths (NSFilePathErrorKey)
+    public var domain: String    // "VZErrorDomain", "NSPOSIXErrorDomain", "OSStatus"
+    public var code: Int         // userInfo is dropped: it may contain paths (NSFilePathErrorKey)
 }
 ```
 
@@ -100,19 +100,19 @@ DiagnosticsCore's own domain covers reports, fixes, and the findings of the host
 ```swift
 public enum DiagnosticsFailure: APKRunError {
     // reports and fixes (§7.5, §7.6, §8.1)
-    case stagingFailed // the staging directory in $TMPDIR can't be created or written (§8.1 step 3)
-    case bundleWriteFailed // writing the ZIP into the client's file handle fails. apkrund truncates the output; the client deletes the file
-    case unknownHealthCheck(check: HealthCheckID) // healthReport or applyHealthFixes names an ID that this apkrund doesn't have (an N−1 client)
-    case fixNotAvailable(check: HealthCheckID) // the check has no fix, or its fix is not offered now (apkrund.version while Android runs)
-    case fixFailed(check: HealthCheckID, underlying: any APKRunError) // a fix ran and failed. The fix's error is the cause
+    case stagingFailed                                  // the staging directory in $TMPDIR can't be created or written (§8.1 step 3)
+    case bundleWriteFailed                              // writing the ZIP into the client's file handle fails. apkrund truncates the output; the client deletes the file
+    case unknownHealthCheck(check: HealthCheckID)       // healthReport or applyHealthFixes names an ID that this apkrund doesn't have (an N−1 client)
+    case fixNotAvailable(check: HealthCheckID)          // the check has no fix, or its fix is not offered now (apkrund.version while Android runs)
+    case fixFailed(check: HealthCheckID, underlying: any APKRunError)   // a fix ran and failed. The fix's error is the cause
     // findings of the host and background service checks (§7.3), never thrown
-    case appNotInApplications // host.appLocation
-    case appSignatureInvalid // host.appSignature
-    case componentVersionMismatch(build: String) // host.componentVersions
-    case lowDiskSpace(available: Int64) // host.dataVolume, image.freeSpace, and the store.hostSpace warning
-    case lowMemory(memory: Int64) // host.memory
-    case serviceVersionMismatch(build: String) // apkrund.version. Variants restartPending, androidRunning
-    case serviceCrashLoop(count: Int) // apkrund.crashLoop
+    case appNotInApplications                           // host.appLocation
+    case appSignatureInvalid                            // host.appSignature
+    case componentVersionMismatch(build: String)        // host.componentVersions
+    case lowDiskSpace(available: Int64)                 // host.dataVolume, image.freeSpace, and the store.hostSpace warning
+    case lowMemory(memory: Int64)                       // host.memory
+    case serviceVersionMismatch(build: String)          // apkrund.version. Variants restartPending, androidRunning
+    case serviceCrashLoop(count: Int)                   // apkrund.crashLoop
 }
 ```
 
@@ -128,19 +128,10 @@ The catalog is the single source of user-facing error text for the GUI, the menu
   ```json
   {
     "code": "store.downgradeRefused",
-    "parameters": [
-      "app",
-      "installedVersion",
-      "newVersion"
-    ],
-    "message": {
-      "en": "{app} {newVersion} is older than the installed version {installedVersion}.",
-      "ja": "…"
-    },
-    "remediation": {
-      "en": "Keep the installed version, or uninstall {app} first.",
-      "ja": "…"
-    },
+    "parameters": ["app", "installedVersion", "newVersion"],
+    "message":     { "en": "{app} {newVersion} is older than the installed version {installedVersion}.",
+                     "ja": "…" },
+    "remediation": { "en": "Keep the installed version, or uninstall {app} first.", "ja": "…" },
     "action": "none",
     "cliExit": 5
   }
@@ -160,11 +151,11 @@ The catalog is the single source of user-facing error text for the GUI, the menu
 ```swift
 public enum RemediationAction: String, Sendable, Codable {
     case none, retry, openTroubleshooting, restartAndroid, startGraphicsSafeMode,
-    openRuntimeSettings, openStorageSettings, openPrivacySettings,
-    openLoginItemsSettings, // System Settings → General → Login Items & Extensions
-    openNotificationSettings, // System Settings → Notifications
-    openDownloadsPage, // the APKRun downloads page in the browser
-    updateAPKRun, updateAndroid, updateMacApp, createMacApp, reinstallApp, reportProblem
+         openRuntimeSettings, openStorageSettings, openPrivacySettings,
+         openLoginItemsSettings,        // System Settings → General → Login Items & Extensions
+         openNotificationSettings,      // System Settings → Notifications
+         openDownloadsPage,             // the APKRun downloads page in the browser
+         updateAPKRun, updateAndroid, updateMacApp, createMacApp, reinstallApp, reportProblem
 }
 ```
 
@@ -232,15 +223,15 @@ Unified logging (`os_log`) is the primary sink. Every host process logs only thr
 
 ```swift
 let log = APKLogger(.store, category: .transaction)
-log.info("commit \(txn,.public) \(packageID,.public) \(fromCode,.public)→\(toCode,.public)")
-log.error("import failed for \(fileName,.private)", error: failure) // adds err=store.<code>
+log.info("commit \(txn, .public) \(packageID, .public) \(fromCode, .public)→\(toCode, .public)")
+log.error("import failed for \(fileName, .private)", error: failure)   // adds err=store.<code>
 ```
 
 - `LogMessage` is a custom string-interpolation type. **Every interpolation must state its privacy** (`.public`, `.private`, or `.hashed`). There is no default, so forgetting is a compile error.
 - `.hashed` renders `#` plus the first 8 hex digits of SHA-256 over a random salt created at process start and the value. It lets a reader see that two entries refer to the same file without seeing the name. Hashes correlate within one process lifetime only.
 - `Sensitive<T>` wraps values that must never be logged at any level: clipboard content, notification title and text, IME text, file contents, credentials and tokens, Android account names. Its `description` is `<redacted>`, and `LogMessage` has no interpolation overload for it, so logging one does not compile. IntegrationCore, InputCore, and UpdateCore (provider credentials) hold these values only inside `Sensitive`.
 - Structured context: the facade appends ` op=<id8> pkg=<packageID> disp=<displayID> sess=<sessionID> err=<qualifiedCode>` from `OperationContext` and the call's `error:` argument (NFR-OBS-01). These fields are always public. `apkrun logs` and the bundle's "Recent problems" (§8.3) parse them.
-- Rendering: the facade renders a **public text**, where private values become `<private>` and hashed values become their hash, and, only when the message has private values, a **full text**. It sends `"\(publicText, privacy:.public)\u{1F}\(fullText, privacy:.private)"` to `os.Logger`. Unified logging shows the second part as `<private>` unless a private-data logging profile is installed. The bundle writer cuts every entry at U+001F, so a developer Mac with such a profile still produces a clean report (§6.2).
+- Rendering: the facade renders a **public text**, where private values become `<private>` and hashed values become their hash, and, only when the message has private values, a **full text**. It sends `"\(publicText, privacy: .public)\u{1F}\(fullText, privacy: .private)"` to `os.Logger`. Unified logging shows the second part as `<private>` unless a private-data logging profile is installed. The bundle writer cuts every entry at U+001F, so a developer Mac with such a profile still produces a clean report (§6.2).
 - Messages are rendered only if the level is enabled (`OSLog.isEnabled(type:)`), so debug messages cost almost nothing in release builds.
 - What may be public: IDs (package, bundle, session, display, operation, transaction), versions, error codes, counts, sizes, durations, states, digests truncated to 12 hex, provider type and host name. What must be `.private` or `.hashed`: paths (after `APKRunPaths` reduction, §6.3), file names, URLs beyond scheme and registrable domain, window titles, Android app labels in free text. What is never logged: everything that `Sensitive` wraps. Input details (key codes, pointer positions) are `.private` and logged only at debug level in development builds ([input.md](input.md) §9).
 
@@ -270,6 +261,7 @@ log.error("import failed for \(fileName,.private)", error: failure) // adds err=
 
 ### 3.4 Guest logs
 
+| Source | Content | Reaches the host through |
 |---|---|---|
 | logcat tags `ApkRunGuest`, `ApkRunInput`, `ApkRunIme`, `ApkRunStore`, `apkrun_vsockd` | agent logs ([guest-components.md](guest-components.md) §9) | `CollectDiagnostics` (§8.3), logcat capture |
 | `agent.log`, `store.log` ring buffers (2 × 1 MiB) | agent logs that survive logcat rotation | `CollectDiagnostics` item `AGENT_LOG` |
@@ -291,13 +283,13 @@ Guest agents follow the same rules as the host: clipboard content, notification 
 ### 4.1 Model
 
 ```swift
-public struct PerfMarker: RawRepresentable, Hashable, Sendable { public let rawValue: String } // "FIRST_FRAME"
+public struct PerfMarker: RawRepresentable, Hashable, Sendable { public let rawValue: String }   // "FIRST_FRAME"
 
 public enum Perf {
     public static func mark(_ marker: PerfMarker,
-        at time: ContinuousClock.Instant = .now,
-        _ attributes: [String: PerfValue] = [:])
-    public static func interval<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T // signpost only
+                            at time: ContinuousClock.Instant = .now,
+                            _ attributes: [String: PerfValue] = [:])
+    public static func interval<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T  // signpost only
 }
 ```
 
@@ -345,29 +337,12 @@ apkrund writes one record per launch and per boot with `PerfRecordWriter`. These
 `perf/launches.jsonl`, one line per session launch, written at `FIRST_FRAME_DISPLAYED` or when the session ends before it:
 
 ```json
-{
-  "v": 1,
-  "recordedAt": "2026-09-28T10:15:02Z",
-  "packageID": "io.apkrun.fixture.hellotext",
-  "versionCode": 3,
-  "sessionID": "s-12",
-  "operationID": "3f9a1c2e-…",
-  "launchState": "warm",
-  "windowMode": "secondaryDisplay",
-  "build": "1.0 (1000)",
-  "image": "2026.10.0-cf16373615-arm64",
-  "gpuProfile": "drmVirgl",
-  "markers": {
-    "WRAPPER_PROCESS_START": 0,
-    "APP_LAUNCH_REQUEST": 138.2,
-    "DISPLAY_ATTACHED": 412.9,
-    "ACTIVITY_STARTED": 1104.5,
-    "FIRST_FRAME": 1188.0,
-    "FIRST_FRAME_DISPLAYED": 1196.3
-  },
-  "totalMs": 1196.3,
-  "outcome": "shown"
-}
+{"v":1,"recordedAt":"2026-09-28T10:15:02Z","packageID":"io.apkrun.fixture.hellotext","versionCode":3,
+ "sessionID":"s-12","operationID":"3f9a1c2e-…","launchState":"warm","windowMode":"secondaryDisplay",
+ "build":"1.0 (1000)","image":"2026.10.0-cf16373615-arm64","gpuProfile":"drmVirgl",
+ "markers":{"WRAPPER_PROCESS_START":0,"APP_LAUNCH_REQUEST":138.2,"DISPLAY_ATTACHED":412.9,
+            "ACTIVITY_STARTED":1104.5,"FIRST_FRAME":1188.0,"FIRST_FRAME_DISPLAYED":1196.3},
+ "totalMs":1196.3,"outcome":"shown"}
 ```
 
 | `launchState` | Meaning | Target |
@@ -439,7 +414,7 @@ Applied by `Redactor` to every text file in the bundle (logs, console output, lo
 | Rule | Replacement |
 |---|---|
 | The user's home directory | `~` |
-| The account name (`NSUserName`), full name (`NSFullUserName`), computer name and local host name (`SCDynamicStoreCopyComputerName`, `SCDynamicStoreCopyLocalHostName`) | `<user>`, `<user-name>`, `<computer>` |
+| The account name (`NSUserName()`), full name (`NSFullUserName()`), computer name and local host name (`SCDynamicStoreCopyComputerName`, `SCDynamicStoreCopyLocalHostName`) | `<user>`, `<user-name>`, `<computer>` |
 | Paths inside the home directory other than `~/Library/Application Support/APKRun`, `~/Library/Logs/APKRun`, and `/Applications/APKRun.app` | `~/…/<last component>` |
 | URLs | `scheme://host/…`: path, query, fragment, and user info are removed. Hosts of APKRun's own endpoints are kept with their path (they carry no user data) |
 | E-mail addresses | `<email>` |
@@ -479,18 +454,18 @@ public enum HealthState: String, Sendable, Codable { case pass, info, warning, f
 
 public enum HealthGroup: String, Sendable, Codable, CaseIterable {
     case host, backgroundService, virtualization, android, graphics, guest,
-    store, updates, applications, macApps, integrations, maintenance
+         store, updates, applications, macApps, integrations, maintenance
 }
 
-public enum HealthRequirement: Sendable { case host, daemon, runningRuntime } // what the check needs
-public enum HealthCost: Sendable { case quick, deep } // deep: --deep only
+public enum HealthRequirement: Sendable { case host, daemon, runningRuntime }   // what the check needs
+public enum HealthCost: Sendable { case quick, deep }                            // deep: --deep only
 
 public protocol HealthCheck: Sendable {
-    var id: HealthCheckID { get } // "runtime.boot"
+    var id: HealthCheckID { get }                   // "runtime.boot"
     var group: HealthGroup { get }
     var requirement: HealthRequirement { get }
     var cost: HealthCost { get }
-    var fix: HealthFix? { get } // a safe automatic fix, if any (§7.5)
+    var fix: HealthFix? { get }                     // a safe automatic fix, if any (§7.5)
     func run(_ context: HealthContext) async -> HealthResult
 }
 
@@ -498,11 +473,11 @@ public struct HealthResult: Sendable, Codable {
     public var id: HealthCheckID
     public var group: HealthGroup
     public var state: HealthState
-    public var title: LocalizedText // "Boot completed"
-    public var detail: String? // public-safe: "31 s", "stopped at systemServer after 180 s"
-    public var error: ErrorInfo? // code, message, remediation, action (§2)
+    public var title: LocalizedText                 // "Boot completed"
+    public var detail: String?                      // public-safe: "31 s", "stopped at systemServer after 180 s"
+    public var error: ErrorInfo?                    // code, message, remediation, action (§2)
     public var fixAvailable: Bool
-    public var lastKnown: LastKnown? // for skipped checks: the last result and its time
+    public var lastKnown: LastKnown?                // for skipped checks: the last result and its time
     public var measuredAt: Date
 }
 
@@ -511,8 +486,8 @@ public struct HealthReport: Sendable, Codable {
     public var build: BuildInfo
     public var imageVersion: String?
     public var runtimeRunning: Bool
-    public var verdict: HealthVerdict // §7.2
-    public var results: [HealthResult] // ordered by group, then registration order
+    public var verdict: HealthVerdict               // §7.2
+    public var results: [HealthResult]              // ordered by group, then registration order
 }
 ```
 
@@ -607,7 +582,7 @@ A fix is offered only when it is safe: idempotent, no data loss, no change to a 
 | `wrappers.registration` | re-register the wrapper with LaunchServices (`LSRegisterURL`) |
 | `agent.ime` | ask the Guest Agent to select the APKRun input method again |
 | `integrations.notificationListener`, `integrations.browserRole` | ask the Guest Agent to restore the grant or role (custom image, privileged agent; [desktop-integration.md](desktop-integration.md)) |
-| `apkrund.registration` | CLI: `open -a APKRun --args --register-runtime` after a confirmation ([cli.md](cli.md) §4.1). APKRun.app: `SMAppService.register` |
+| `apkrund.registration` | CLI: `open -a APKRun --args --register-runtime` after a confirmation ([cli.md](cli.md) §4.1). APKRun.app: `SMAppService.register()` |
 | `apkrund.version` | restart apkrund (`launchctl kickstart -k gui/<uid>/io.apkrun.apkrund`), only while Android is stopped. Otherwise the fix is not offered and the remediation says to stop Android first |
 
 `apkrun doctor --fix` runs the fixes of every check in `warning` or `failure` that has one, prints "Fixed: ‹title›" or the error, then runs the whole report again. APKRun.app shows a **Fix** button on those rows.
@@ -626,10 +601,10 @@ All are on the control endpoint only, not on wrapper endpoints ([../01-architect
 
 ### 7.7 Output
 
-Human output follows: headings per group, one line per check, and the status at the end. Rows that pass show their title (and detail). Other rows add the remediation on an indented line. `--deep` adds a **Metrics** block (§5).
+Human output has headings per group, one line per check, and the status at the end. Rows that pass show their title (and detail). Other rows add the remediation on an indented line. `--deep` adds a **Metrics** block (§5).
 
 ```text
-APKRun Doctor APKRun 1.0 (1000) · Android image 2026.10.0-cf16373615-arm64
+APKRun Doctor                          APKRun 1.0 (1000) · Android image 2026.10.0-cf16373615-arm64
 
 Host
 ✓ Apple silicon (Mac15,6)
@@ -664,7 +639,7 @@ Applications
 
 Mac Apps
 ⚠ “Hello GL” was moved to the Trash
-→ Create the Mac app again: APKRun → Hello GL → Mac App
+  → Create the Mac app again: APKRun → Hello GL → Mac App
 
 Status
 Needs attention (1 warning)
@@ -694,54 +669,49 @@ Needs attention (1 warning)
 
 ```text
 APKRun-Diagnostics-20260928-101502/
-├── summary.txt human-readable summary (§8.3)
-├── manifest.json format, options, file list, omitted items, redaction counts
+├── summary.txt                     human-readable summary (§8.3)
+├── manifest.json                   format, options, file list, omitted items, redaction counts
 ├── host/
-│   ├── environment.json Mac model identifier, chip, memory, macOS version and build, displays (count, scales),
-│   │ locale and region, free space and file system of the data volume
-│   ├── versions.json BuildInfo of APKRun.app, apkrund, CLI, launcher template; image version; agent versions
-│   ├── health.json, health.txt the HealthReport (deep when requested) and its doctor rendering
-│   ├── config.json global settings (allowlisted keys, §6.2)
-│   ├── metrics.json MetricsSnapshot (§5)
-│   ├── logs/unified.ndjson APKRun subsystems, last 24 h, newest 30 MiB (or mirrors/ when log show failed)
-│   ├── logs/mirrors/ apkrund.log*
-│   ├── crash-reports/.ips files of apkrund, APKRun, APKRunMenuBar, apkrun, APKRunLauncher; last 7 days, at most 20
-│   └── perf/
-│       ├── launches.jsonl # newest 500 records
-│       └── boots.jsonl # newest 50 records
+│   ├── environment.json            Mac model identifier, chip, memory, macOS version and build, displays (count, scales),
+│   │                               locale and region, free space and file system of the data volume
+│   ├── versions.json               BuildInfo of APKRun.app, apkrund, CLI, launcher template; image version; agent versions
+│   ├── health.json, health.txt     the HealthReport (deep when requested) and its doctor rendering
+│   ├── config.json                 global settings (allowlisted keys, §6.2)
+│   ├── metrics.json                MetricsSnapshot (§5)
+│   ├── logs/unified.ndjson         APKRun subsystems, last 24 h, newest 30 MiB (or mirrors/ when log show failed)
+│   ├── logs/mirrors/               apkrund.log*
+│   ├── crash-reports/              .ips files of apkrund, APKRun, APKRunMenuBar, apkrun, APKRunLauncher; last 7 days, at most 20
+│   └── perf/                       launches.jsonl and boots.jsonl (newest 500 / 50 records)
 ├── runtime/
-│   ├── status.json RuntimeStatus, agent states, sessions, display pool snapshot (as `apkrun info --displays`)
-│   ├── daemon.json apkrund run record: clean-exit flag, unclean exits, boot history
-│   ├── boot-phases.json BootPhaseDetector events of the last 5 boots
-│   ├── console/ boot-<ts>.log of the last 5 boots and console.log (last 8 MiB)
-│   ├── crash/ the last 3 failure snapshots (§3.3)
-│   ├── graphics.json GPU profile, Metal device name and family, virglrenderer and ANGLE versions, statistics (graphics.md §7)
-│   ├── input.json input counters (input.md §11)
-│   └── image/ image store state, manifest summary, bootconfig and cmdline (placeholders, §6.2), migration state
-├── guest/ only when the Guest Agent answered, or from a logcat capture file
-│   ├── getprop.txt allowlisted properties (§6.2)
-│   ├── logcat.txt filtered (§8.3), or full with --include-logcat
+│   ├── status.json                 RuntimeStatus, agent states, sessions, display pool snapshot (as `apkrun info --displays`)
+│   ├── daemon.json                 apkrund run record: clean-exit flag, unclean exits, boot history
+│   ├── boot-phases.json            BootPhaseDetector events of the last 5 boots
+│   ├── console/                    boot-<ts>.log of the last 5 boots and the last 8 MiB of console.log
+│   ├── crash/                      the last 3 failure snapshots (§3.3)
+│   ├── graphics.json               GPU profile, Metal device name and family, virglrenderer and ANGLE versions, statistics (graphics.md §7)
+│   ├── input.json                  input counters (input.md §11)
+│   └── image/                      image store state, manifest summary, bootconfig and cmdline (placeholders, §6.2), migration state
+├── guest/                          only when the Guest Agent answered, or from a logcat capture file
+│   ├── getprop.txt                 allowlisted properties (§6.2)
+│   ├── logcat.txt                  filtered (§8.3), or full with --include-logcat
 │   ├── dumpsys-{window,display,input,activity,surfaceflinger,meminfo}.txt
-│   ├── tombstones.txt list only: time, process name, signal. Tombstone contents are never collected
+│   ├── tombstones.txt              list only: time, process name, signal. Tombstone contents are never collected
 │   └── agent.log, store.log
 ├── packages/
-│   ├── packages.json allowlisted package records (§6.2)
-│   ├── settings.json per-package settings (allowlisted keys)
-│   ├── journal-tail.jsonl the last 500 store journal entries (paths reduced)
-│   └── updates.json update phase, last result, and the last 10 history entries per package
-├── wrappers/
-│   └── registry.json paths reduced to the last component, bookmarks removed
-├── integrations/
-│   └── status.json capabilities, enabled integrations per package (booleans), shared folder count
-└── maintenance/
-    └── state.json HostState, SelfUpdateStatus, the host-update marker, Images/update-state.json (runtime-maintenance.md §12)
+│   ├── packages.json               allowlisted package records (§6.2)
+│   ├── settings.json               per-package settings (allowlisted keys)
+│   ├── journal-tail.jsonl          the last 500 store journal entries (paths reduced)
+│   └── updates.json                update phase, last result, and the last 10 history entries per package
+├── wrappers/registry.json          paths reduced to the last component, bookmarks removed
+├── integrations/status.json        capabilities, enabled integrations per package (booleans), shared folder count
+└── maintenance/state.json          HostState, SelfUpdateStatus, the host-update marker, Images/update-state.json (runtime-maintenance.md §12)
 ```
 
 - Every section comes from a `DiagnosticsContributor` owned by the module that knows the data:
 
   ```swift
   public protocol DiagnosticsContributor: Sendable {
-      var name: String { get } // "store", "graphics"
+      var name: String { get }                         // "store", "graphics"
       var budget: Duration { get }
       func contribute(to bundle: DiagnosticsBundleBuilder, options: DiagnosticsOptions) async throws
   }
@@ -753,45 +723,14 @@ APKRun-Diagnostics-20260928-101502/
 - `manifest.json`:
 
   ```json
-  {
-    "format": 1,
-    "reportID": "7c1e0f7a-…",
-    "createdAt": "2026-09-28T01:15:02Z",
-    "createdBy": "apkrund",
-    "mode": "full",
-    "options": {
-      "includeLogcat": false,
-      "deep": false,
-      "focusPackage": null
-    },
-    "build": "1.0 (1000)",
-    "redactionRulesVersion": 1,
-    "files": [
-      {
-        "path": "host/environment.json",
-        "bytes": 1432,
-        "sha256": "…",
-        "contributor": "host"
-      }
-    ],
-    "omitted": [
-      {
-        "item": "guest/logcat.txt",
-        "reason": "guestAgentUnavailable"
-      }
-    ],
-    "redaction": {
-      "path": 118,
-      "url": 40,
-      "token": 2,
-      "email": 1,
-      "user": 9,
-      "ip": 3
-    },
-    "counters": {
-      "diagnostics.mirrorDropped": 0
-    }
-  }
+  { "format": 1, "reportID": "7c1e0f7a-…", "createdAt": "2026-09-28T01:15:02Z",
+    "createdBy": "apkrund", "mode": "full",
+    "options": { "includeLogcat": false, "deep": false, "focusPackage": null },
+    "build": "1.0 (1000)", "redactionRulesVersion": 1,
+    "files": [ { "path": "host/environment.json", "bytes": 1432, "sha256": "…", "contributor": "host" } ],
+    "omitted": [ { "item": "guest/logcat.txt", "reason": "guestAgentUnavailable" } ],
+    "redaction": { "path": 118, "url": 40, "token": 2, "email": 1, "user": 9, "ip": 3 },
+    "counters": { "diagnostics.mirrorDropped": 0 } }
   ```
 
   The report ID is random. It is not linked to the Mac or the user.
@@ -811,28 +750,28 @@ APKRun Diagnostics Report
 Created 2026-09-28 10:15:02 +0900 · Report 7c1e0f7a · operation 3f9a1c2e
 
 Status: Android failed to start
-The last start stopped at "system services" after 180 s (runtime.bootTimedOut).
-Suggested: Start in Graphics Safe Mode (Settings → Troubleshooting).
+  The last start stopped at "system services" after 180 s (runtime.bootTimedOut).
+  Suggested: Start in Graphics Safe Mode (Settings → Troubleshooting).
 
 APKRun 1.0 (1000) · apkrund 1.0 (1000) · CLI 1.0 (1000) · launcher 1.0
 Android image 2026.10.0-cf16373615-arm64 (custom) · Guest Agent 1.0.3 · Store Agent 1.0.3
 Mac15,6 · Apple M3 Pro · 36 GB · macOS 27.0 (27A5301) · 2 displays
 
 Health: 1 failure, 2 warnings (see host/health.txt)
-✕ runtime.boot last boot failed: timeout at systemServer
-⚠ graphics.renderer renderer lost once in the last 24 h
-⚠ wrappers.status 1 Mac app is missing
+  ✕ runtime.boot           last boot failed: timeout at systemServer
+  ⚠ graphics.renderer      renderer lost once in the last 24 h
+  ⚠ wrappers.status        1 Mac app is missing
 
 Recent problems (last 7 days, from logs)
-2026-09-28 10:02 runtime.bootTimedOut op 91ab22c0
-2026-09-27 18:40 update.healthCheckFailed org.example.notes 2.1 → rolled back to 2.0
+  2026-09-28 10:02  runtime.bootTimedOut                 op 91ab22c0
+  2026-09-27 18:40  update.healthCheckFailed  org.example.notes 2.1 → rolled back to 2.0
 
 Apps: 4 installed, 1 needs attention · last launches: warm p50 1.2 s (12 launches)
 
 Privacy
-Not collected: clipboard, notification text, your files, app data, accounts, passwords, Keychain items.
-Removed: 118 paths, 40 URLs, 2 tokens, 1 e-mail address, 9 user or computer names, 3 IP addresses.
-Omitted: guest logs (Android was not running).
+  Not collected: clipboard, notification text, your files, app data, accounts, passwords, Keychain items.
+  Removed: 118 paths, 40 URLs, 2 tokens, 1 e-mail address, 9 user or computer names, 3 IP addresses.
+  Omitted: guest logs (Android was not running).
 ```
 
 "Recent problems" comes from `error`-level entries (their `err=` fields) in the collected logs. "Last launches" comes from `launches.jsonl`.
@@ -870,7 +809,7 @@ When apkrund is unreachable, the CLI ([cli.md](cli.md) §4.8) and APKRun.app bui
 ```text
 swift run apkrun-perf <scenario> [--runs <n>] [--warmup <n>] [--output <dir>] [--baseline <file>]
 scenarios: warm-launch, suspended-launch, cold-launch, input-latency, hellogl-fps, idle-cpu,
-update-check-launch, boot-phases, memory, all
+           update-check-launch, boot-phases, memory, all
 ```
 
 Preconditions, checked before every run and recorded in the results: AC power; Low Power Mode off; `ProcessInfo.thermalState == .nominal`; display awake (`caffeinate -d` held by the harness); no other virtual machines running; APKRun Release configuration (in the lab, signed with the lab identity); fixture apps installed from `Tests/Fixtures/AndroidApps` and their Mac apps generated into a temporary folder with `apkrun wrap <package> --output <dir>`. A failed precondition stops the run with a message rather than producing misleading numbers.
@@ -891,7 +830,7 @@ The input scenario synthesizes events with `CGEvent.postToPid`, which needs the 
 | `idle-cpu` | no app open; wait for `VM_PAUSED`; sample apkrund CPU time with `proc_pid_rusage` at the start and after 300 s | CPU time ÷ wall time | NFR-PERF-06: < 1 % |
 | `update-check-launch` | the `update-repos` fixture provider answers after 5 s. Trigger checks for 10 packages (`apkrun update --check-only`), then run `warm-launch` 30 times while they run | launch p50 and p95 compared with `warm-launch` of the same session | NFR-PERF-07: p50 difference ≤ 50 ms (within noise); no launch waits on a check |
 | `boot-phases` | 10 cold boots without launching an app (`apkrun runtime start`) | each boot segment of §4.3 | tracked against the baseline (input for reducing NFR-PERF-02) |
-| `memory` | after `warm-launch`, collect `MetricsSnapshot` with `DUMPSYS_MEMINFO` | values | tracked only; no v1 target |
+| `memory` | after `warm-launch`, collect `MetricsSnapshot` with `DUMPSYS_MEMINFO` | the memory metrics of §5 | tracked only; no v1 target |
 
 `perfStatistics(reset:)` (§7.6) returns the aggregated host-side values the harness cannot see from outside: input latency histograms, per-session graphics statistics, and marker durations. `reset: true` clears the aggregates at the start of a scenario.
 
@@ -923,35 +862,16 @@ The database records how well known apps work on APKRun and which settings help.
   "entries": [
     {
       "packageID": "org.example.notes",
-      "signerDigests": [
-        "3f2a…"
-      ],
-      "versionCodes": {
-        "min": 120,
-        "max": null
-      },
+      "signerDigests": ["3f2a…"],
+      "versionCodes": { "min": 120, "max": null },
       "level": "compatibilityMode",
       "issues": [
-        {
-          "id": "blank-secondary-display",
-          "title": {
-            "en": "Shows a blank window in the standard window mode",
-            "ja": "…"
-          },
-          "workaround": {
-            "en": "APKRun uses the compatibility window mode for this app.",
-            "ja": "…"
-          }
-        }
+        { "id": "blank-secondary-display",
+          "title":  { "en": "Shows a blank window in the standard window mode", "ja": "…" },
+          "workaround": { "en": "APKRun uses the compatibility window mode for this app.", "ja": "…" } }
       ],
-      "recommendedSettings": {
-        "window.mode": "primaryDisplayCompatibility"
-      },
-      "testedWith": {
-        "apkrun": "1.0",
-        "image": "2026.10.0-cf16373615-arm64",
-        "date": "2026-10-30"
-      },
+      "recommendedSettings": { "window.mode": "primaryDisplayCompatibility" },
+      "testedWith": { "apkrun": "1.0", "image": "2026.10.0-cf16373615-arm64", "date": "2026-10-30" },
       "source": "lab"
     }
   ]
@@ -989,7 +909,7 @@ The database records how well known apps work on APKRun and which settings help.
 3. `OperationID`, `OperationContext` (task-local), propagation helpers for XPC headers and the guest envelope.
 4. `APKRunError`, `ErrorDomain`, `ErrorParameter`, `UnderlyingError`, `RemediationAction`. `errors.json` with the first entries (`vm.*`, `cli.*`), `scripts/errorgen.swift` for the Swift and Markdown outputs, and `ErrorPresenter` for the GUI, launcher, and CLI formats of §2.3.
 5. `PerfMarker`, `Perf.mark`, `Perf.interval`, `PerfTimeline`. `PerfRecordWriter` comes with #070.
-6. `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, the verdict function (§7.2), and `HostChecks` (§7.3). Modules add their checks as they are built. `DiagnosticsContext` (§1), with `DiagnosticsContext.testing` in `DiagnosticsCoreTestSupport`.
+6. `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, the verdict function (§7.2), and `HostChecks` (§7.3). Modules add their checks as they are built. `DiagnosticsContext` (§1), with `DiagnosticsContext.testing()` in `DiagnosticsCoreTestSupport`.
 7. `scripts/check-logging.sh` (no `os.Logger`, `print`, or `NSLog` outside DiagnosticsCore; no `Sensitive` unwrapping in logging calls) in CI (#062).
 8. The CLI uses the error presentation from its first command (`apkrun version`, [cli.md](cli.md) §6.2).
 9. Acceptance: unit tests (§12) pass. `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds. A deliberately invalid CLI argument prints the three-line error format and exits 64.

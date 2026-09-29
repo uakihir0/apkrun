@@ -6,7 +6,7 @@
 
 ## Context
 
-  described the launcher as a short-lived process that asks the runtime to open a window. For macOS identity (Dock icon, Cmd+Tab, the app menu, per-app notifications, "Quit Discord"), the window must belong to the wrapper's process. The VM and renderer must live in apkrund, because one VM is shared by all apps.
+The original product notes described the launcher as a short-lived process that asks the runtime to open a window. For macOS identity (Dock icon, Cmd+Tab, the app menu, per-app notifications, "Quit Discord"), the window must belong to the wrapper's process. The VM and renderer must live in apkrund, because one VM is shared by all apps.
 
 Research: IOSurfaces can be shared across processes via XPC (`IOSurfaceCreateXPCObject` / `IOSurfaceLookupFromXPCObject`, and `IOSurface` supports `NSSecureCoding` for NSXPC). UTM presents cross-process via IOSurfaces. RiftVM presents in-process into a `CAMetalLayer` from a Metal texture borrowed from virglrenderer (`virgl_renderer_borrow_texture_for_scanout` → `EGL_METAL_TEXTURE_ANGLE`) with one GPU blit.
 

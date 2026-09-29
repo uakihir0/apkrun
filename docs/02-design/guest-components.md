@@ -26,14 +26,14 @@ The same daemon code runs in both modes. The difference is how it gets a process
 
 ```text
 Guest/
-├── settings.gradle.kts # one Gradle build for all Kotlin guest code
-├── gradle/libs.versions.toml # pinned AGP, Kotlin, coroutines, protobuf-javalite, test libraries
-├── protocol/ # Android library: generated protobuf lite from Packages/GuestProtocol/proto, FrameCodec
-├── agentruntime/ # Android library, the shared runtime of both agents: SystemServices (reflection wrappers), socket server, peer checks, logging
-├── guestd/ # application io.apkrun.guest: daemon Main, services, IME, listener, URL handler
-├── APKRunStore/ # application io.apkrun.store
-├── vsockd/ # Rust crate apkrun_vsockd (Cargo for development, Soong rust_binary in the product)
-└── product/ # AOSP product (android-image.md §11.1)
+├── settings.gradle.kts          # one Gradle build for all Kotlin guest code
+├── gradle/libs.versions.toml    # pinned AGP, Kotlin, coroutines, protobuf-javalite, test libraries
+├── protocol/                    # Android library: generated protobuf lite from Packages/GuestProtocol/proto, FrameCodec
+├── agentruntime/                # Android library, the shared runtime of both agents: SystemServices (reflection wrappers), socket server, peer checks, logging
+├── guestd/                      # application io.apkrun.guest: daemon Main, services, IME, listener, URL handler
+├── APKRunStore/                 # application io.apkrun.store
+├── vsockd/                      # Rust crate apkrun_vsockd (Cargo for development, Soong rust_binary in the product)
+└── product/                     # AOSP product (android-image.md §11.1)
 ```
 
 `Guest/protocol` and `Guest/agentruntime` (listed in [../01-architecture/modules.md](../01-architecture/modules.md) §1) avoid duplicating the codec and the system-service wrappers in both agents.
@@ -74,7 +74,7 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 - `app_process` with the installed APK on the class path is the scrcpy pattern. The process runs under the shell uid in the `shell` SELinux domain, with the shell's permissions (§5).
 - `setsid nohup … &` detaches it from the ADB session, so it survives host reconnects.
 - Single instance: the daemon binds the abstract socket `@apkrun-guestd-control` first. If the bind fails with `EADDRINUSE`, another instance is running, and the new one exits with status 3.
-- `Main` calls `Looper.prepareMainLooper`, creates the service objects, binds the three sockets (`@apkrun-guestd-control`, `@apkrun-guestd-input`, `@apkrun-guestd-bulk`), and runs the looper. There is no `Context`. System services are reached through `SystemServices` (§6.2).
+- `Main` calls `Looper.prepareMainLooper()`, creates the service objects, binds the three sockets (`@apkrun-guestd-control`, `@apkrun-guestd-input`, `@apkrun-guestd-bulk`), and runs the looper. There is no `Context`. System services are reached through `SystemServices` (§6.2).
 
 ### 3.3 Supervision
 
@@ -107,44 +107,44 @@ The original values are not restored when the agent stops. The stock image is a 
 ```xml
 <manifest package="io.apkrun.guest">
   <application android:persistent="true" android:directBootAware="true"
-  android:defaultToDeviceProtectedStorage="true" android:allowBackup="false"
-  android:name=".GuestAgentApplication" android:label="APKRun Guest Agent">
-  <service android:name=".ime.ApkRunInputMethodService"
-  android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
-  <intent-filter><action android:name="android.view.InputMethod"/></intent-filter>
-  <meta-data android:name="android.view.im" android:resource="@xml/method"/>
-</service>
-<service android:name=".notifications.ApkRunNotificationListener"
-android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
-<intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
-</service>
-<activity android:name=".url.UrlRedirectActivity" android:exported="true"
-android:theme="@android:style/Theme.NoDisplay" android:excludeFromRecents="true">
-<intent-filter>
-  <action android:name="android.intent.action.VIEW"/>
-  <category android:name="android.intent.category.DEFAULT"/>
-  <category android:name="android.intent.category.BROWSABLE"/>
-  <data android:scheme="http"/><data android:scheme="https"/><data android:scheme="mailto"/>
-</intent-filter>
-<intent-filter>
-  <action android:name="android.intent.action.SENDTO"/>
-  <category android:name="android.intent.category.DEFAULT"/>
-  <data android:scheme="mailto"/>
-</intent-filter>
-</activity>
-<activity android:name=".health.HealthCheckActivity" android:exported="true"
-android:excludeFromRecents="true" android:noHistory="true"
-android:theme="@android:style/Theme.DeviceDefault.NoActionBar"/>
-<provider android:name=".files.MacFilesProvider" android:authorities="io.apkrun.guest.macfiles"
-android:permission="android.permission.MANAGE_DOCUMENTS" android:exported="true"
-android:grantUriPermissions="true">
-<intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER"/></intent-filter>
-</provider>
-<provider android:name="androidx.core.content.FileProvider" android:authorities="io.apkrun.guest.files"
-android:exported="false" android:grantUriPermissions="true">
-<meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
-</provider>
-</application>
+               android:defaultToDeviceProtectedStorage="true" android:allowBackup="false"
+               android:name=".GuestAgentApplication" android:label="APKRun Guest Agent">
+    <service android:name=".ime.ApkRunInputMethodService"
+             android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
+      <intent-filter><action android:name="android.view.InputMethod"/></intent-filter>
+      <meta-data android:name="android.view.im" android:resource="@xml/method"/>
+    </service>
+    <service android:name=".notifications.ApkRunNotificationListener"
+             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+      <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+    </service>
+    <activity android:name=".url.UrlRedirectActivity" android:exported="true"
+              android:theme="@android:style/Theme.NoDisplay" android:excludeFromRecents="true">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="http"/><data android:scheme="https"/><data android:scheme="mailto"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SENDTO"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:scheme="mailto"/>
+      </intent-filter>
+    </activity>
+    <activity android:name=".health.HealthCheckActivity" android:exported="true"
+              android:excludeFromRecents="true" android:noHistory="true"
+              android:theme="@android:style/Theme.DeviceDefault.NoActionBar"/>
+    <provider android:name=".files.MacFilesProvider" android:authorities="io.apkrun.guest.macfiles"
+              android:permission="android.permission.MANAGE_DOCUMENTS" android:exported="true"
+              android:grantUriPermissions="true">
+      <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER"/></intent-filter>
+    </provider>
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="io.apkrun.guest.files"
+              android:exported="false" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
+    </provider>
+  </application>
 </manifest>
 ```
 
@@ -163,9 +163,9 @@ type apkrun_guest_app, domain;
 app_domain(apkrun_guest_app)
 # system services it calls (§5)
 allow apkrun_guest_app { activity_service activity_task_service input_service input_method_service
-window_service display_service clipboard_service notification_service
-power_service package_service lock_settings_service role_service
-adb_service alarm_service }:service_manager find;
+                         window_service display_service clipboard_service notification_service
+                         power_service package_service lock_settings_service role_service
+                         adb_service alarm_service }:service_manager find;
 # only the bridge may connect to our abstract sockets
 allow apkrun_vsockd apkrun_guest_app:unix_stream_socket connectto;
 ```
@@ -226,27 +226,27 @@ The product sets the device-setup values of §3.4 as defaults through a `Setting
 
 ```text
 Main / GuestAgentApplication
-└── AgentRuntime (mode, config, lifecycle)
-    ├── SocketServer ×3 (+ IME socket in development): abstract-namespace `LocalServerSocket`, `SO_PEERCRED` check
-    ├── SessionManager: handshake, session token, secondary stream binding, keepalive bookkeeping
-    ├── Dispatcher: `Request.op` → service; per-display serial executors; timeouts; cancellation
-    ├── EventBus: ordered event queue per control connection (`Event.seq`)
-    └── Services
-        ├── DisplayService: `DisplayManager.DisplayListener` → display events; `SetDisplayPolicy`
-        ├── TaskService: `ITaskStackListener` + `getTasks` → task events; `ClearDisplay`, `MoveTaskToDisplay`, `FocusDisplay`
-        ├── LaunchService: `LaunchApplication`, `StopApplication`
-        ├── InputInjector: input stream → `MotionEvent` / `KeyEvent`; gesture integrity ([input.md](input.md) §7.3)
-        ├── ImeBridge: IME commands and state (in-process on the custom image)
-        ├── PackageService: `QueryPackage`, `ListPackages`, `PackageChanged` (development mode)
-        ├── HealthService: `GetHealth`, `HealthWarning`, `AppProcessEvent`
-        ├── ClipboardBridge: #053, #080
-        ├── NotificationBridge: #054 (custom image)
-        ├── UrlRedirect: #081 (custom image)
-        ├── FilesBridge: #082 (custom image); `ImportFiles`, `SaveToMacActivity`, `MacFilesProvider` (agent → host requests)
-        ├── LocaleTimeService: #085 (`SyncTime` from #069)
-        └── MicrophoneGate: #084 (custom image); `SetMicrophoneAccess`, `RecordingChanged`
-├─ SystemService Shutdown, AuthorizeAdbKey
-└─ DiagnosticsService CollectDiagnostics (#070, items from #059 and #060)
+ └─ AgentRuntime (mode, config, lifecycle)
+     ├─ SocketServer ×3 (+ IME socket in development)   LocalServerSocket in the abstract namespace, SO_PEERCRED check
+     ├─ SessionManager            handshake, session token, secondary stream binding, keepalive bookkeeping
+     ├─ Dispatcher                Request.op → service; per-display serial executors; timeouts; cancel
+     ├─ EventBus                  ordered event queue per control connection (Event.seq)
+     └─ Services
+         ├─ DisplayService        DisplayManager.DisplayListener → display events; SetDisplayPolicy
+         ├─ TaskService           ITaskStackListener + getTasks → task events; ClearDisplay; MoveTaskToDisplay; FocusDisplay
+         ├─ LaunchService         LaunchApplication, StopApplication
+         ├─ InputInjector         input stream → MotionEvent / KeyEvent; gesture integrity (input.md §7.3)
+         ├─ ImeBridge             IME commands and state (in-process on the custom image)
+         ├─ PackageService        QueryPackage, ListPackages, PackageChanged (development mode)
+         ├─ HealthService         GetHealth, HealthWarning, AppProcessEvent
+         ├─ ClipboardBridge       #053, #080
+         ├─ NotificationBridge    #054 (custom image)
+         ├─ UrlRedirect           #081 (custom image)
+         ├─ FilesBridge           #082 (custom image): ImportFiles, SaveToMacActivity, MacFilesProvider (agent → host requests)
+         ├─ LocaleTimeService     #085 (SyncTime from #069)
+         ├─ MicrophoneGate        #084 (custom image): SetMicrophoneAccess, RecordingChanged
+         ├─ SystemService         Shutdown, AuthorizeAdbKey
+         └─ DiagnosticsService    CollectDiagnostics (#070, items from #059 and #060)
 ```
 
 ### 6.2 SystemServices
@@ -279,10 +279,10 @@ Hidden API restrictions do not apply to `app_process` or to platform-signed syst
 The behavior is defined in [input.md](input.md) §5. The component details are:
 
 - `res/xml/method.xml`: `<input-method android:isDefault="true" android:supportsSwitchingToNextInputMethod="false" android:showInInputMethodPicker="false"/>` with one subtype, `imeSubtypeMode="keyboard"`, `isAsciiCapable="true"`, and no locale (the macOS input method does the language work).
-- `onCreateInputView` returns an empty zero-height view. `onEvaluateInputViewShown` and `onEvaluateFullscreenMode` return false. `onShowInputRequested` returns false, so nothing is drawn and Android does not resize windows for a keyboard.
-- `onStartInput(attribute, restarting)` records `EditorInfo` (input type, IME options, initial selection) and sends `ImeState{editor_focused = true}`. `onFinishInput` sends `editor_focused = false`.
-- `requestCursorUpdates(CURSOR_UPDATE_MONITOR | CURSOR_UPDATE_IMMEDIATE)` on each input start, and `onUpdateCursorAnchorInfo` turns the insertion marker into `cursor_rect_px` in display coordinates (using `CursorAnchorInfo.getMatrix`).
-- The display of the current editor is taken from the IME window's display (`getWindow.getWindow.getDecorView.getDisplay.getDisplayId`), because with the `LOCAL` policy the IME runs on the editor's display ([display-and-windowing.md](display-and-windowing.md) §4).
+- `onCreateInputView()` returns an empty zero-height view. `onEvaluateInputViewShown()` and `onEvaluateFullscreenMode()` return false. `onShowInputRequested()` returns false, so nothing is drawn and Android does not resize windows for a keyboard.
+- `onStartInput(attribute, restarting)` records `EditorInfo` (input type, IME options, initial selection) and sends `ImeState{editor_focused = true}`. `onFinishInput()` sends `editor_focused = false`.
+- `requestCursorUpdates(CURSOR_UPDATE_MONITOR | CURSOR_UPDATE_IMMEDIATE)` on each input start, and `onUpdateCursorAnchorInfo` turns the insertion marker into `cursor_rect_px` in display coordinates (using `CursorAnchorInfo.getMatrix()`).
+- The display of the current editor is taken from the IME window's display (`getWindow().getWindow().getDecorView().getDisplay().getDisplayId()`), because with the `LOCAL` policy the IME runs on the editor's display ([display-and-windowing.md](display-and-windowing.md) §4).
 - Transport: in-process `ImeBridge` on the custom image. In development mode the IME process listens on `@apkrun-guest-ime` itself ([input.md](input.md) §5.6), with a `SO_PEERCRED` check that accepts the shell uid only.
 
 ---
@@ -299,16 +299,16 @@ The behavior is defined in [input.md](input.md) §5. The component details are:
 
 ```text
 StoreAgentApplication
-├── SocketServer ×2 (`@apkrun-store-control`, `@apkrun-store-artifacts`), `SessionManager`, `Dispatcher` (shared via `Guest/agentruntime`)
-├── InstallService: `BeginInstall`, artifact writes, `CommitInstall`, `AbandonInstall`; session bookkeeping
-├── ArchiveInspector: `InspectArchive` and pre-commit checks with `PackageManager.getPackageArchiveInfo`
-├── UninstallService: `PackageInstaller.uninstall` (`DELETE_KEEP_DATA` when `keep_data`)
-├── RollbackService: `RollbackPackage`, `RollbackManager.getAvailableRollbacks` → `commitRollback` (#043)
-├── OwnershipService: `RelinquishUpdateOwnership`, `PackageManager.relinquishUpdateOwnership` (#039)
-├── ConstraintsService: `CheckInstallConstraints`, `PackageInstaller.checkInstallConstraints` (#040)
-├── MetadataService: `GetPackageMetadata` / `ListManagedPackages` (`InstallSourceInfo`, `SigningInfo`, `StorageStatsManager`)
-├── IconRenderer: `RenderIcon`, `loadUnbadgedIcon` → adaptive-icon layers or a legacy bitmap → PNG
-└── PackageMonitor: `ACTION_PACKAGE_ADDED/REPLACED/REMOVED/CHANGED` receivers + `PackageInstaller.SessionCallback` → `PackageChanged`
+ ├─ SocketServer ×2 (@apkrun-store-control, @apkrun-store-artifacts), SessionManager, Dispatcher   (shared with the Guest Agent via Guest/agentruntime)
+ ├─ InstallService      BeginInstall / artifact writes / CommitInstall / AbandonInstall; session bookkeeping
+ ├─ ArchiveInspector    InspectArchive and pre-commit checks with PackageManager.getPackageArchiveInfo
+ ├─ UninstallService    PackageInstaller.uninstall (DELETE_KEEP_DATA when keep_data)
+ ├─ RollbackService     RollbackPackage: RollbackManager.getAvailableRollbacks → commitRollback (#043)
+ ├─ OwnershipService    RelinquishUpdateOwnership: PackageManager.relinquishUpdateOwnership (#039)
+ ├─ ConstraintsService  CheckInstallConstraints: PackageInstaller.checkInstallConstraints (#040)
+ ├─ MetadataService     GetPackageMetadata / ListManagedPackages (InstallSourceInfo, SigningInfo, StorageStatsManager)
+ ├─ IconRenderer        RenderIcon: loadUnbadgedIcon → AdaptiveIconDrawable layers or a legacy bitmap → PNG
+ └─ PackageMonitor      ACTION_PACKAGE_ADDED/REPLACED/REMOVED/CHANGED receivers + PackageInstaller.SessionCallback → PackageChanged
 ```
 
 - Install sessions: `SessionParams(MODE_FULL_INSTALL)`, `setAppPackageName(expected)`, `setInstallReason(INSTALL_REASON_USER)`, `setPackageSource(PACKAGE_SOURCE_OTHER)`, `setRequestUpdateOwnership(request_update_ownership)`, `setEnableRollback(true, PackageManager.ROLLBACK_DATA_POLICY_RETAIN)` when `enable_rollback` is set, and `setRequireUserAction(USER_ACTION_NOT_REQUIRED)`. The streaming flow is in [guest-protocol.md](guest-protocol.md) §11.3. The host-side transaction around each call is in [package-store.md](package-store.md) §5–§7.
@@ -350,11 +350,11 @@ The same content rules as the host apply ([guest-protocol.md](guest-protocol.md)
 
 ```text
 service apkrun_vsockd /system_ext/bin/apkrun_vsockd
-class main
-user system
-group system
-capabilities
-restart_period 1
+    class main
+    user system
+    group system
+    capabilities
+    restart_period 1
 ```
 
 - `sepolicy/apkrun_vsockd.te` (sketch):
@@ -420,7 +420,7 @@ The IME is built as §7 describes, with the steps of [input.md](input.md) §12 (
 | #040 | `ConstraintsService`, the foreground-service *verify* item (§5) |
 | #043 | `RollbackService`, `setEnableRollback`, the `TEST_MANAGE_ROLLBACKS` *verify* item (§5) |
 | #080 | image clips over the bulk stream |
-| #081 | `UrlRedirectActivity`, browser role, `OpenUrlOnHost` with `getLaunchedFromPackage` as the source, kept intents and `ResolveUrl`, `BROWSER_ROLE_LOST` warning |
+| #081 | `UrlRedirectActivity`, browser role, `OpenUrlOnHost` with `getLaunchedFromPackage()` as the source, kept intents and `ResolveUrl`, `BROWSER_ROLE_LOST` warning |
 | #082 | `FilesBridge` (import with the Downloads fallback, `SaveToMacActivity`, `ResolveExport`), `MacFilesProvider` with proxy file descriptors and the agent → host operations ([guest-protocol.md](guest-protocol.md) §7.5) |
 | #085 | `LocaleTimeService`: `SetLocale`, `SetTimeZone`, `SetClockFormat` (`SyncTime` exists from #069) |
 | #084 | `MicrophoneGate`: app-op gating, `RecordingChanged` |
@@ -454,7 +454,7 @@ The host side of each is in [desktop-integration.md](desktop-integration.md), an
 | A notification click from the background starts the app's activity on the requested display (§5) | #054 checks it on the custom image |
 | `SET_TIME_ZONE` for the shell-launched agent (§5) | #085 checks it |
 | Update ownership: granted for an owner-less package, and enforcement active on the image (§5, §8.2, OQ-12) | #039 checks both and reports enforcement in `Hello` (`store.ownership.v1`). Working default: APKRun keeps ownership on the host only, and health reports `store.ownership` as a warning |
-| `checkInstallConstraints`: the exact caller rule, and how a foreground service counts with `GENTLE_UPDATE` (§5, §8.2, OQ-17) | #040. Working default: trust `GENTLE_UPDATE` with `setAppNotForegroundRequired`. If a foreground service is not reported as busy, custom images add the `ListTasks` rule and a process-importance query ([update-system.md](update-system.md) §7.1) |
+| `checkInstallConstraints`: the exact caller rule, and how a foreground service counts with `GENTLE_UPDATE` (§5, §8.2, OQ-17) | #040. Working default: trust `GENTLE_UPDATE` with `setAppNotForegroundRequired()`. If a foreground service is not reported as busy, custom images add the `ListTasks` rule and a process-importance query ([update-system.md](update-system.md) §7.1) |
 | Rollback with `TEST_MANAGE_ROLLBACKS` on `user` and `userdebug` builds (§5, OQ-11) | #043. Working default: the confirmed data-loss path ([package-store.md](package-store.md) §7.3) |
 | Hidden and privileged APIs change between Android releases (§5, §6.2, R-18) | #072, #034, #039, #043, and #058 for each new Android base. A missing method fails only its capability (§6.2). The per-API fallbacks are listed in R-18 |
 | vsock on the stock image with `apkrun_vsockd` run as root (§11, #034 step 3) | #034 tries it. If the stock image's policy does not allow it, #034 records that, and the validation moves to #035 |

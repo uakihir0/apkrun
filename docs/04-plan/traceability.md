@@ -13,7 +13,7 @@ This document connects each requirement to its implementation tasks, design sect
 - Keep design clarifications in their canonical product, architecture, or design documents. If a clarification changes an architectural decision, add an ADR ([../01-architecture/decisions/README.md](../01-architecture/decisions/README.md)).
 - The Tasks column lists the tasks that deliver the requirement by its target version. These are the tasks whose entries name the requirement in their Requirements row, before any `Constraints:` part. A task that only keeps a requirement names it under `Constraints:` and is not listed here.
 - Tasks after `later:` extend or re-verify a requirement after its target version: hardening, polish, and post-v1 tracks. They do not gate that version ([roadmap.md](roadmap.md) §3).
-- “Verified by” names the test tiers in [test-strategy.md](test-strategy.md) and the task whose acceptance tests cover the requirement. Individual tests are listed in the milestone files ([issues/README.md](issues/README.md)).
+- "Verified by" names the test tiers in [test-strategy.md](test-strategy.md) and the task whose acceptance tests cover the requirement. Individual tests are listed in the milestone files ([issues/README.md](issues/README.md)).
 - [roadmap.md](roadmap.md) §3 uses §2 as the release checklist: every `Must` requirement for a version needs its tasks done and its tests passing.
 
 ## 2. Requirements → tasks → design → verification

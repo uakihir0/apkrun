@@ -48,7 +48,7 @@ sudo xcode-select -s /Applications/Xcode.app
 sudo xcodebuild -license accept
 xcodebuild -runFirstLaunch
 xcodebuild -downloadComponent MetalToolchain
-xcrun swift --version # Swift 6.2 or later
+xcrun swift --version        # Swift 6.2 or later
 ```
 
 The Metal toolchain is needed to compile the GraphicsCore shaders and the ANGLE Metal backend. Distribution wrappers (#088) also need the command line tools on the creator's Mac ([../02-design/wrapper.md](../02-design/wrapper.md) §11), but that is a user requirement, not a developer one.
@@ -118,7 +118,7 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 | cargo-ndk | 3.5.4 | `scripts/tool-versions.env` (`CARGO_NDK_VERSION`) |
 
 ```bash
-rustup show # inside Guest/vsockd, installs the pinned toolchain and target
+rustup show                     # inside Guest/vsockd, installs the pinned toolchain and target
 cargo install cargo-ndk --version 3.5.4 --locked
 cd Guest/vsockd && cargo ndk -t arm64-v8a build --release
 ```
@@ -226,10 +226,10 @@ Without an M3 Mac, use an arm64 Linux machine (bare metal or cloud), or as a las
 M0 (#003–#007, then #063 and #019) boots a small Linux guest before Android ([../02-design/vm.md](../02-design/vm.md) §12).
 
 ```bash
-scripts/fetch-test-linux.sh # Alpine linux-virt kernel, hash from ThirdParty.lock.json, decompressed
-scripts/build-test-initramfs.sh # pinned minirootfs + modules + socat + Tests/Fixtures/linux/init
+scripts/fetch-test-linux.sh          # Alpine linux-virt kernel, hash from ThirdParty.lock.json, decompressed
+scripts/build-test-initramfs.sh      # pinned minirootfs + modules + socat + Tests/Fixtures/linux/init
 xcodebuild test -scheme IntegrationTests \
-  -only-testing:IntegrationTests/LinuxGuestTests # T2, 60 s timeout per boot
+  -only-testing:IntegrationTests/LinuxGuestTests   # T2, 60 s timeout per boot
 ```
 
 - Both scripts write to `build/test-linux/` (override with `APKRUN_TEST_LINUX_DIR`). The initramfs build runs on macOS with `cpio` and `gzip` from the base system and needs no Linux machine.
@@ -263,7 +263,7 @@ A cloud VM is fine for development builds. Release builds need the AOSP release 
 
 ```bash
 docker build -t apkrun-aosp-builder -f scripts/aosp/builder.Dockerfile scripts/aosp
-docker image inspect --format '{{.Id}}' apkrun-aosp-builder # record this digest
+docker image inspect --format '{{.Id}}' apkrun-aosp-builder   # record this digest
 ```
 
 ### 5.3 Source checkout
@@ -272,7 +272,7 @@ docker image inspect --format '{{.Id}}' apkrun-aosp-builder # record this digest
 mkdir -p ~/aosp && cd ~/aosp
 repo init -u https://android.googlesource.com/platform/manifest \
   -b aosp-android-latest-release --partial-clone --clone-filter=blob:limit=10M
-cp <apkrun checkout>/Guest/product/manifest/pinned.xml.repo/manifests/apkrun-pinned.xml
+cp <apkrun checkout>/Guest/product/manifest/pinned.xml .repo/manifests/apkrun-pinned.xml
 repo init -m apkrun-pinned.xml
 repo sync -c -j"$(nproc)" --no-tags
 ```
@@ -287,8 +287,8 @@ repo sync -c -j"$(nproc)" --no-tags
 
 ```bash
 source build/envsetup.sh
-lunch apkrun_arm64-trunk_staging-userdebug # or apkrun_arm64-trunk_staging-user for release
-export BUILD_NUMBER=ar000123 # from the builder's counter, §5.7
+lunch apkrun_arm64-trunk_staging-userdebug      # or apkrun_arm64-trunk_staging-user for release
+export BUILD_NUMBER=ar000123                    # from the builder's counter, §5.7
 m
 m dist DIST_DIR=out/dist
 ls out/dist/apkrun_arm64-img-ar000123.zip
@@ -302,7 +302,7 @@ Developers work on the Mac and drive the builder over SSH.
 
 ```bash
 export APKRUN_AOSP_BUILDER=builder@aosp-builder.example
-git push origin task/035-apkrun-aosp-product # the builder fetches this commit
+git push origin task/035-apkrun-aosp-product      # the builder fetches this commit
 scripts/aosp/remote-build.sh --revision "$(git rev-parse HEAD)" --variant userdebug
 ```
 
@@ -361,7 +361,7 @@ The `apkrun-perf` input scenario synthesizes events with `CGEvent.postToPid`, wh
 2. Run the harness once from the runner user's session. macOS lists it under System Settings → Privacy & Security → Accessibility.
 3. Turn it on. Re-check after every macOS update.
 
-The harness checks `AXIsProcessTrusted` at start and fails with a message that names this section if the permission is missing.
+The harness checks `AXIsProcessTrusted()` at start and fails with a message that names this section if the permission is missing.
 
 ### 6.4 Secrets and credentials
 
@@ -399,13 +399,13 @@ The harness checks `AXIsProcessTrusted` at start and fails with a message that n
 | protoc-gen-swift | `--version` | the swift-protobuf version in `Package.resolved` |
 | API key | `APKRUN_ANDROID_BUILD_API_KEY` is set | set (warning only) |
 | Nested virtualization | `VZGenericPlatformConfiguration.isNestedVirtualizationSupported` | reported (informational) |
-| Free disk | `df -g.` | ≥ 150 GB (warning only) |
+| Free disk | `df -g .` | ≥ 150 GB (warning only) |
 
 Then run the first build ([build-system.md](build-system.md) §1):
 
 ```bash
 scripts/generate-project.sh
-swift build && swift test # a clean checkout builds and passes (NFR-DEV-02)
+swift build && swift test       # a clean checkout builds and passes (NFR-DEV-02)
 scripts/check-module-deps.sh
 ```
 

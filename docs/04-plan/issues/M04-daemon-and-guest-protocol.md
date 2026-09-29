@@ -75,12 +75,12 @@ apkrund runs as a per-user LaunchAgent, started by launchd, and is the sole owne
 
 - The `Daemon/apkrund` target: a thin `main.swift` that builds `RuntimeHost` and runs the main run loop. It is embedded at `APKRun.app/Contents/Helpers/apkrund`, with the LaunchAgent plist at `Contents/Library/LaunchAgents/io.apkrun.apkrund.plist` written by `scripts/build/write-launch-agent.sh` from `LaunchAgent.plist.in` (§2.1, [../../01-architecture/process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §1.1).
 - The launchd keys of §2.1: `MachServices` (on demand), `RunAtLoad` (applies `startPolicy`), `StartInterval` 3600 for the update scheduler, `KeepAlive` with `SuccessfulExit = false`, `ExitTimeOut` 45, `ProcessType` Interactive, `AssociatedBundleIdentifiers`.
-- `RuntimeHost.start` in the 12 steps of §2.2, with the fatal and degraded steps. The XPC listener is resumed within 300 ms of process start and logs `DAEMON_READY`. A failed degraded step sets `RuntimeFailure.hostStartupFailed(step:)`.
+- `RuntimeHost.start()` in the 12 steps of §2.2, with the fatal and degraded steps. The XPC listener is resumed within 300 ms of process start and logs `DAEMON_READY`. A failed degraded step sets `RuntimeFailure.hostStartupFailed(step:)`.
 - The instance lock (§2.3), the exit rules and `SIGTERM` handling (§2.4), and `daemon.json` with unclean-exit handling and the crash-loop rule (§2.5).
 - Moving VM ownership from the CLI to apkrund: `RuntimeSupervisor` with the boot sequence (§3.2), `BootPhaseDetector` (§3.3), readiness (§3.4), the stop sequence (§3.5), failure handling with one automatic restart and the boot-loop guard (§3.6).
 - Agent supervision and reconciliation (§4) on top of #072's `GuestAgentSupervisor`, over the ADB-forward development transport.
 - The XPC broker listener `io.apkrun.apkrund.xpc` with the version handshake and the first control operations `runtimeStatus`, `runtime start`, and `runtime stop` (see Notes). #032 adds everything else.
-- Registration from APKRun.app: `APKRun.app --register-runtime` calls `SMAppService.agent(plistName:).register`, and re-registers only when the agent's status is not `.enabled`, or the SHA-256 of the embedded agent plist differs from the one registered last ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3.7 step 2).
+- Registration from APKRun.app: `APKRun.app --register-runtime` calls `SMAppService.agent(plistName:).register()`, and re-registers only when the agent's status is not `.enabled`, or the SHA-256 of the embedded agent plist differs from the one registered last ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3.7 step 2).
 - The Debug identities and the development install (§2.6).
 - `startPolicy = onDemand` only. The runtime boots on the first request, and apkrund exits after the grace period when nothing needs it.
 - Out of scope ([../../00-product/scope.md](../../00-product/scope.md) §5):
@@ -105,12 +105,12 @@ apkrund runs as a per-user LaunchAgent, started by launchd, and is the sole owne
 ### Implementation steps
 
 1. **Daemon target and plist** (§2.1, §13 #031 step 1; [../../01-architecture/process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §1.1).
-   - Add the `Daemon/apkrund` target. `main.swift` builds `RuntimeHost` and calls `RunLoop.main.run`. All logic lives in `Packages/RuntimeHost/`.
+   - Add the `Daemon/apkrund` target. `main.swift` builds `RuntimeHost` and calls `RunLoop.main.run()`. All logic lives in `Packages/RuntimeHost/`.
    - Add `LaunchAgent.plist.in` with the keys of §2.1 and `scripts/build/write-launch-agent.sh`, which writes the Release and Debug plists (`io.apkrun.apkrund`, `io.apkrun.apkrund.dev`).
    - Embed `apkrund` in `APKRun.app/Contents/Helpers/`.
    - Check: a build-time test reads the built plist and asserts every key of §2.1 and the Mach service name. `codesign --verify --strict` passes on the embedded helper.
 2. **Startup, lock, state file, and exit** (§2.2–§2.5, §13 #031 step 2).
-   - Implement `RuntimeHost.start` in the order of §2.2. Steps 1, 8, and 11 are fatal (exit 70). The others are degraded and record `hostStartupFailed(step:)`.
+   - Implement `RuntimeHost.start()` in the order of §2.2. Steps 1, 8, and 11 are fatal (exit 70). The others are degraded and record `hostStartupFailed(step:)`.
    - Implement the instance lock (`flock` on `Runtime/instance.lock`). A second apkrund for the same user exits 0. A lock held by a non-apkrund process makes apkrund serve the broker with `instanceLocked`.
    - Implement `daemon.json` and the unclean-exit path: log `host.previousExitUnclean`, record the crash report path, remove stale ADB forwards, and `adb disconnect`. Three unclean exits in 10 minutes set `apkrund.crashLoop` and block automatic boots.
    - Implement the exit rules: exit 0 after 2 minutes with the runtime stopped, no XPC connections, no activity assertions, and no work due. On `SIGTERM`: publish `hostShuttingDown`, `stop(.hostShutdown)` with a 40 s deadline, then write `cleanExit = true`.
@@ -126,7 +126,7 @@ apkrund runs as a per-user LaunchAgent, started by launchd, and is the sole owne
    - Make `apkrun dev` refuse the user instance while apkrund holds the lock (exit 75, [../../02-design/cli.md](../../02-design/cli.md) §5).
    - Check: T2 `DaemonLifecycleTests`: after the agent process is killed, it reconnects and `runtimeStatus` reports it `connected` again. T1: a second process fails to take the lock.
 5. **Registration** (§2.6, §13 #031 step 5; [../../01-architecture/process-model-and-ipc.md](../../01-architecture/process-model-and-ipc.md) §1.1).
-   - `APKRun.app --register-runtime` registers the LaunchAgent with `SMAppService` and re-registers it only when the agent's status is not `.enabled`, or the SHA-256 of the embedded agent plist differs from the one registered last ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3.7 step 2). It stores the hash in UserDefaults `registeredAgentPlistSHA256`. `.requiresApproval` opens the Login Items settings with `openSystemSettingsLoginItems`. The polling and the onboarding texts are #066.
+   - `APKRun.app --register-runtime` registers the LaunchAgent with `SMAppService` and re-registers it only when the agent's status is not `.enabled`, or the SHA-256 of the embedded agent plist differs from the one registered last ([../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §3.7 step 2). It stores the hash in UserDefaults `registeredAgentPlistSHA256`. `.requiresApproval` opens the Login Items settings with `openSystemSettingsLoginItems()`. The polling and the onboarding texts are #066.
    - `scripts/dev/install-dev-app.sh` installs `~/Applications/APKRun Dev.app` and runs `--register-runtime`. `launchctl kickstart -k gui/$(id -u)/io.apkrun.apkrund.dev` restarts the development daemon.
    - Check: on a lab Mac, `launchctl print gui/$(id -u)/io.apkrun.apkrund.dev` shows the service after the script, and a second run does not re-register.
 6. **Recovery and the gate check** (§2.5, §3.6, §13 #031 step 6; [../roadmap.md](../roadmap.md) §2).
@@ -200,7 +200,7 @@ APKRun.app, APKRunLauncher, and the CLI reach apkrund through one versioned XPC 
 - RuntimeHost `XPCBrokerListener`, `ControlEndpoint`, `WrapperEndpoint`, `EventHub`, `XPCRuntimeExporter`, and `ReplyGuard`. RuntimeCore `SessionRegistry` with client connections, takeover, and orphaned sessions, on top of the M3 registry ([../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §7).
 - RuntimeClient `XPCRuntimeService`.
 - The CLI commands of [../../02-design/cli.md](../../02-design/cli.md) §7 row #032 with golden files.
-- T1 tests in `Packages/RuntimeHost/Tests/RuntimeHostSystemTests/` over `NSXPCListener.anonymous`.
+- T1 tests in `Packages/RuntimeHost/Tests/RuntimeHostSystemTests/` over `NSXPCListener.anonymous()`.
 - T2 tests: `XPCLaunchTests` in `Tests/IntegrationTests/CLITests/`, and `XPCAuthorizationTests` in `Tests/IntegrationTests/SecurityTests/` with a test binary signed by another identity.
 - The Debug-only test hook `APKRUN_TEST_HEADLESS_LAUNCH=1` (see Notes), as listed in [../../03-reference/configuration.md](../../03-reference/configuration.md) §5.1 and [../test-strategy.md](../test-strategy.md) §3.3.
 
@@ -213,7 +213,7 @@ APKRun.app, APKRunLauncher, and the CLI reach apkrund through one versioned XPC 
 2. **Broker, endpoints, and request rules** (§8.1, §8.2).
    - Implement `XPCBrokerListener`, which checks the client's code signature and hands out a `ControlEndpoint` or a `WrapperEndpoint(bundleID)`.
    - Implement the rules of §8.2 and `ReplyGuard` (every reply is sent once, also on cancel and disconnect).
-   - Check: T1 over `NSXPCListener.anonymous` in-process: a version mismatch gives `apiVersionMismatch`, authorization is checked per endpoint kind, the 65th in-flight request is rejected, and a malformed request gives `malformedRequest`.
+   - Check: T1 over `NSXPCListener.anonymous()` in-process: a version mismatch gives `apiVersionMismatch`, authorization is checked per endpoint kind, the 65th in-flight request is rejected, and a malformed request gives `malformedRequest`.
 3. **Long operations, events, and sessions** (§8.3, §8.4, §7).
    - Add `OperationHandle` with progress and `cancel`, and `EventHub` with the seven topics.
    - Implement `launch` (resolve the Mac app, or open the generic launcher, and return when the session is `running`), `terminate`, and `SessionRegistry` with orphaned sessions (§7).
@@ -736,7 +736,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 4. **`CollectDiagnostics` and `apkrun-perf`** (§9.2, §9.3, §11 #070 step 4; [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §7.1, §10, §15).
    - Add operation 73 `CollectDiagnostics` on the host and in the Guest Agent's `DiagnosticsService`, behind `diagnostics.v1`. The request lists items and a `max_bytes` of at most 16 MiB. The agent runs `dumpsys meminfo -c` for `DUMPSYS_MEMINFO`, sends the output as a bulk transfer over the bulk stream (port 6102), and truncates at `max_bytes`. The result pairs each requested item with its status (`OK`, `UNSUPPORTED`, `TOO_LARGE`, or `FAILED`), its transfer ID, and a `truncated` flag. An unknown item gets `UNSUPPORTED`. The host enforces the 16 MiB cap and the 60 s timeout. On the stock image the bulk stream uses an ADB forward; on the custom image it uses vsock.
    - Add `apkrun-perf` with the preconditions and all scenarios. `memory` collects `MetricsSnapshot` with `DUMPSYS_MEMINFO` after `warm-launch`.
-   - Check: T1 JVM tests for `DiagnosticsService` (the known item, an unknown item, truncation at `max_bytes`). T2 `CollectDiagnosticsTests`. `apkrun-perf memory` prints the values.
+   - Check: T1 JVM tests for `DiagnosticsService` (the known item, an unknown item, truncation at `max_bytes`). T2 `CollectDiagnosticsTests`. `apkrun-perf memory` prints the memory metrics of the `memory` scenario.
 5. **Results, baselines, and the nightly job** (§9.4, §11 #070 step 5).
    - Write `results.json` and `summary.md`. Add the first baseline for each lab Mac through a reviewed pull request. Add the nightly job with the failure rule (a missed NFR target, or a p50 more than 15 % worse than the baseline, 10 % for `hellogl-fps`), naming the segment that grew most.
    - Check: a nightly run on the reference Mac produces both files and compares against the baseline.
@@ -749,7 +749,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 
 - **T0** (`Packages/RuntimeHost/Tests/RuntimeHostTests/`, `Packages/GuestProtocol/Tests/GuestProtocolTests/`): `PerfRecordWriter` and `launchState` (diagnostics T1-9); `perfStatistics` and `frameStatistics` round trips; the `CollectDiagnostics` messages and the item status rules.
-- **T1** (`Packages/RuntimeHost/Tests/RuntimeHostSystemTests/`, over `NSXPCListener.anonymous`): `reset: true` clears the aggregates; `frameStatistics` fails with `runtime.developerModeRequired` while developer mode is off.
+- **T1** (`Packages/RuntimeHost/Tests/RuntimeHostSystemTests/`, over `NSXPCListener.anonymous()`): `reset: true` clears the aggregates; `frameStatistics` fails with `runtime.developerModeRequired` while developer mode is off.
 - **T1** (`Guest/guestd` JVM tests): `DiagnosticsService` with a fake `dumpsys`: the known item, an unknown item answered `UNSUPPORTED`, truncation at `max_bytes`.
 - **T2** (`Tests/IntegrationTests/DiagnosticsTests/`, AndroidStock suite, stock image): `CollectDiagnosticsTests`: `CollectDiagnostics` returns `DUMPSYS_MEMINFO` over the bulk stream, and an item the agent does not know is answered `unsupported` while the request itself succeeds.
 - **T3** (`Tests/PerformanceTests/`, nightly on the reference Mac): every scenario of §9.3; two consecutive `warm-launch` runs within 10 % at p50; the segments add up to the total within 5 ms.
@@ -835,7 +835,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 
 - **T0** (`Packages/InputCore/Tests/InputCoreTests/`, `Packages/WindowingCore/Tests/WindowingCoreTests/`): `TextInputModel`; the editor commands; the secure-input balance.
 - **T1** (`Guest/guestd` JVM tests): IME command mapping with a fake `InputConnection`.
-- **T2** (`Tests/IntegrationTests/InputTests/`, AndroidStock suite, stock image): "にほんご" converts to "日本語" in HelloText and in a HelloCompose `TextField`; emoji; ⌘V; secure input in a password field (`IsSecureEventInputEnabled`) with a Roman input source; typing in the focused window when two apps are open on two displays.
+- **T2** (`Tests/IntegrationTests/InputTests/`, AndroidStock suite, stock image): "にほんご" converts to "日本語" in HelloText and in a HelloCompose `TextField`; emoji; ⌘V; secure input in a password field (`IsSecureEventInputEnabled()`) with a Roman input source; typing in the focused window when two apps are open on two displays.
 - **T3**: checklist C02-2 of [../test-strategy.md](../test-strategy.md) §8.3.
 
 ### Acceptance criteria
@@ -844,7 +844,7 @@ By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 - [ ] The candidate window is next to the Android cursor (FR-IN-07).
 - [ ] Emoji from the character viewer are inserted (FR-IN-07).
 - [ ] ⌘V pastes Mac text, and ⌘C, ⌘X, ⌘A, and ⌘Z do the equivalent Android actions (FR-IN-08).
-- [ ] In a password field, secure input is on (checked with `IsSecureEventInputEnabled` in the UI test), the input source is Roman, and secure input is off again after the field loses focus (FR-IN-07, §5.5).
+- [ ] In a password field, secure input is on (checked with `IsSecureEventInputEnabled()` in the UI test), the input source is Roman, and secure input is off again after the field loses focus (FR-IN-07, §5.5).
 - [ ] With two apps on two displays, typing and conversion go only to the key window's app, and the IME binds to the editor on that display (R-05).
 
 ### Notes

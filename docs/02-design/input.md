@@ -11,18 +11,18 @@
 ## 1. Pipeline
 
 ```text
-wrapper process apkrund guest (apkrun_guestd)
+wrapper process                                   apkrund                                 guest (apkrun_guestd)
 NSEvent ─▶ IOSurfaceLayerView (WindowingCore)
-├─ pointer / scroll / keys ─▶ InputCore.EventTranslator ─▶ [InputEvent] (display px)
-└─ NSTextInputClient ───────▶ InputCore.TextInputModel ─▶ ImeTextEvent
-InputSink ─XPC sendInput/sendText─▶ InputRouter (actor)
-ownership, rate limit,
-coalescing, displayID
-─vsock 6101 input stream─▶ InputInjector
-InputManager.injectInputEvent
-(setDisplayId = N)
-▶ ApkRunIme (InputMethodService)
-InputConnection.commitText …
+            ├─ pointer / scroll / keys ─▶ InputCore.EventTranslator ─▶ [InputEvent] (display px)
+            └─ NSTextInputClient ───────▶ InputCore.TextInputModel  ─▶ ImeTextEvent
+                                      InputSink ─XPC sendInput/sendText─▶ InputRouter (actor)
+                                                                           ownership, rate limit,
+                                                                           coalescing, displayID
+                                                                           ─vsock 6101 input stream─▶ InputInjector
+                                                                                                      InputManager.injectInputEvent
+                                                                                                      (setDisplayId = N)
+                                                                                                    ▶ ApkRunIme (InputMethodService)
+                                                                                                      InputConnection.commitText …
 ◀──────────────────── imeStateChanged(EditorState) ◀──────────── editor focus, cursor rect ◀────────── ApkRunIme
 ```
 
@@ -38,22 +38,22 @@ Rules:
 ## 2. Event model (InputCore)
 
 ```swift
-public struct InputTimestamp: Sendable { public var hostNanos: UInt64 } // mach continuous time of the NSEvent
+public struct InputTimestamp: Sendable { public var hostNanos: UInt64 }     // mach continuous time of the NSEvent
 
 public enum InputEvent: Sendable, Equatable {
     case touch(TouchEvent)
     case mouse(MouseEvent)
     case scroll(ScrollEvent)
     case key(KeyEvent)
-    case longPress(DisplayPoint, InputTimestamp) // right-click emulation option (§4.3); the agent owns timing
-    case cancelAll(InputTimestamp) // cancel open gestures and release pressed keys
+    case longPress(DisplayPoint, InputTimestamp)     // right-click emulation option (§4.3); the agent owns timing
+    case cancelAll(InputTimestamp)                   // cancel open gestures and release pressed keys
 }
 
 public struct TouchEvent: Sendable, Equatable {
     public enum Phase: Sendable { case down, move, up, cancel }
     public var phase: Phase
-    public var pointerID: Int // 0 in v1 (single pointer)
-    public var position: DisplayPoint // display pixels, floating point
+    public var pointerID: Int                        // 0 in v1 (single pointer)
+    public var position: DisplayPoint                // display pixels, floating point
     public var time: InputTimestamp
 }
 
@@ -61,22 +61,22 @@ public struct MouseEvent: Sendable, Equatable {
     public enum Action: Sendable { case hoverEnter, hoverMove, hoverExit, press(MouseButton), release(MouseButton) }
     public var action: Action
     public var position: DisplayPoint
-    public var buttons: MouseButtons // current button state
+    public var buttons: MouseButtons                 // current button state
     public var time: InputTimestamp
 }
 
 public struct ScrollEvent: Sendable, Equatable {
     public var position: DisplayPoint
-    public var vertical: Double // Android AXIS_VSCROLL units (§4.4)
-    public var horizontal: Double // Android AXIS_HSCROLL units
+    public var vertical: Double                      // Android AXIS_VSCROLL units (§4.4)
+    public var horizontal: Double                    // Android AXIS_HSCROLL units
     public var time: InputTimestamp
 }
 
 public struct KeyEvent: Sendable, Equatable {
     public enum Action: Sendable { case down, up }
     public var action: Action
-    public var androidKeyCode: Int32 // KEYCODE_*
-    public var metaState: AndroidMetaState // META_SHIFT_ON, META_CTRL_ON, META_ALT_ON, META_CAPS_LOCK_ON …
+    public var androidKeyCode: Int32                 // KEYCODE_*
+    public var metaState: AndroidMetaState           // META_SHIFT_ON, META_CTRL_ON, META_ALT_ON, META_CAPS_LOCK_ON …
     public var repeatCount: Int32
     public var time: InputTimestamp
 }
@@ -85,9 +85,9 @@ public enum ImeTextEvent: Sendable, Equatable {
     case commit(String)
     case setComposing(String, selection: Range<Int>)
     case finishComposing
-    case key(KeyEvent) // editor-mode keys, sent through InputConnection.sendKeyEvent (§5.4)
-    case editorAction(Int32) // EditorInfo.IME_ACTION_*
-    case contextMenuAction(ContextMenuAction) //.copy,.cut,.paste,.selectAll
+    case key(KeyEvent)                               // editor-mode keys, sent through InputConnection.sendKeyEvent (§5.4)
+    case editorAction(Int32)                         // EditorInfo.IME_ACTION_*
+    case contextMenuAction(ContextMenuAction)        // .copy, .cut, .paste, .selectAll
 }
 ```
 
@@ -100,10 +100,10 @@ public enum ImeTextEvent: Sendable, Equatable {
 `CoordinateMapper` (InputCore, pure, T0-tested) is created by `IOSurfaceLayerView` from the current content rect and the pool's pixel size:
 
 ```text
-contentRect = view bounds in steady state; the aspect-fit rect of the current frame during live resize
-(display-and-windowing.md §7.1)
-x_px = (p.x − contentRect.minX) × pixelWidth / contentRect.width
-y_px = (contentRect.maxY − p.y) × pixelHeight / contentRect.height // AppKit y-up → Android y-down
+contentRect  = view bounds in steady state; the aspect-fit rect of the current frame during live resize
+               (display-and-windowing.md §7.1)
+x_px = (p.x − contentRect.minX) × pixelWidth  / contentRect.width
+y_px = (contentRect.maxY − p.y) × pixelHeight / contentRect.height      // AppKit y-up → Android y-down
 ```
 
 - Events outside `contentRect` (the letterbox bars during live resize) are dropped when they would start a gesture. During a gesture they are **clamped** to the display edge, so a drag that leaves the window still ends with `UP` at the edge.
@@ -145,20 +145,20 @@ A mouse click in a window that is not key only activates the window (`acceptsFir
 ### 4.3 Secondary click
 
 - `mouseSecondary` (default, ADR-0013): real mouse secondary-button events. Views get `onContextClick` / context menus, and web content gets `contextmenu`.
-- `longPress`: the agent injects `DOWN`, waits `ViewConfiguration.getLongPressTimeout + 50 ms`, then `UP`, at the click position. This helps phone apps that only react to long press. It is a per-package option in Settings → App → Input.
+- `longPress`: the agent injects `DOWN`, waits `ViewConfiguration.getLongPressTimeout() + 50 ms`, then `UP`, at the click position. This helps phone apps that only react to long press. It is a per-package option in Settings → App → Input.
 
 ### 4.4 Scrolling
 
-Android views scroll by `axis value × ViewConfiguration.getScaled{Vertical,Horizontal}ScrollFactor`. The factor is 64 dp by default (`config_verticalScrollFactor`). The agent reports it in dp for each display in `DisplayAdded` / `DisplayChanged` ([guest-protocol.md](guest-protocol.md)), and the translator converts:
+Android views scroll by `axis value × ViewConfiguration.getScaled{Vertical,Horizontal}ScrollFactor()`. The factor is 64 dp by default (`config_verticalScrollFactor`). The agent reports it in dp for each display in `DisplayAdded` / `DisplayChanged` ([guest-protocol.md](guest-protocol.md)), and the translator converts:
 
 ```text
 precise deltas (trackpad, Magic Mouse; hasPreciseScrollingDeltas):
-dp = scrollingDelta (points) / zoom // 1 dp = 1 pt at zoom 1 (display-and-windowing.md §6.1)
-AXIS_VSCROLL = + dpY / scrollFactorDp
-AXIS_HSCROLL = − dpX / scrollFactorDp
+    dp = scrollingDelta (points) / zoom                  // 1 dp = 1 pt at zoom 1 (display-and-windowing.md §6.1)
+    AXIS_VSCROLL = + dpY / scrollFactorDp
+    AXIS_HSCROLL = − dpX / scrollFactorDp
 line deltas (wheel mice):
-AXIS_VSCROLL = + scrollingDeltaY (lines ≈ notches)
-AXIS_HSCROLL = − scrollingDeltaX
+    AXIS_VSCROLL = + scrollingDeltaY   (lines ≈ notches)
+    AXIS_HSCROLL = − scrollingDeltaX
 ```
 
 - `scrollingDelta` already includes the user's "natural scrolling" preference, so no extra inversion is applied. The signs above are verified by T2 tests in #024 (HelloCompose list: two-finger swipe up must move content up, as in Safari).
@@ -203,7 +203,7 @@ Until #071 (M4) there is no IME. Everything uses key mode, and characters come f
 
 Meta state: Shift → `META_SHIFT_ON` (+ `LEFT`/`RIGHT`), Control → `META_CTRL_ON`, Option → `META_ALT_ON`, Caps Lock → `META_CAPS_LOCK_ON`. Key repeat (`isARepeat`) increments `repeatCount` on repeated `down` events.
 
-Key codes are positional (US ANSI positions). With a non-US Mac layout, apps in key mode that read `KeyEvent.getUnicodeChar` see US characters. Editor mode is not affected, because text comes from the macOS input method (§10).
+Key codes are positional (US ANSI positions). With a non-US Mac layout, apps in key mode that read `KeyEvent.getUnicodeChar()` see US characters. Editor mode is not affected, because text comes from the macOS input method (§10).
 
 ### 5.3 Editor mode: `NSTextInputClient`
 
@@ -213,7 +213,7 @@ Key codes are positional (US ANSI positions). With a non-US Mac layout, apps in 
 |---|---|
 | `insertText(_:replacementRange:)` | `.commit(text)`. It replaces an active composition, as Android's `commitText` does |
 | `setMarkedText(_:selectedRange:replacementRange:)` | `.setComposing(text, selection)` → `InputConnection.setComposingText(text, 1)`, then `setSelection` inside the composition |
-| `unmarkText` | `.finishComposing` |
+| `unmarkText()` | `.finishComposing` |
 | `firstRect(forCharacterRange:actualRange:)` | answered locally from the last `EditorState.cursorRect` (display px → window → screen), so the macOS candidate window appears next to the Android cursor. If none is known, the bottom-left of the content rect |
 | `hasMarkedText`, `markedRange`, `selectedRange` | answered from `TextInputModel` |
 | `attributedSubstring(forProposedRange:)` | `nil` (surrounding text is not mirrored; reconversion unsupported, §10) |
@@ -242,14 +242,14 @@ The IME reports cursor rectangles through `InputConnection.requestCursorUpdates(
 
 ### 5.5 Password and secure fields
 
-When `EditorState.inputType` is a password variation (`TYPE_TEXT_VARIATION_PASSWORD`, `VISIBLE_PASSWORD`, `WEB_PASSWORD`, `TYPE_NUMBER_VARIATION_PASSWORD`) and the window is key, the view calls `EnableSecureEventInput` and sets `inputContext.allowedInputSourceLocales = [NSAllRomanInputSourcesLocaleIdentifier]`, as `NSSecureTextField` does. It calls `DisableSecureEventInput` when focus leaves the field, the window resigns key, or the session ends. The calls are balanced by a counter, and a unit test checks the balance.
+When `EditorState.inputType` is a password variation (`TYPE_TEXT_VARIATION_PASSWORD`, `VISIBLE_PASSWORD`, `WEB_PASSWORD`, `TYPE_NUMBER_VARIATION_PASSWORD`) and the window is key, the view calls `EnableSecureEventInput()` and sets `inputContext.allowedInputSourceLocales = [NSAllRomanInputSourcesLocaleIdentifier]`, as `NSSecureTextField` does. It calls `DisableSecureEventInput()` when focus leaves the field, the window resigns key, or the session ends. The calls are balanced by a counter, and a unit test checks the balance.
 
 ### 5.6 The APKRun IME (guest side, #071)
 
-- `io.apkrun.guest/.ime.ApkRunInputMethodService`, an `InputMethodService` with no visible keyboard: `onEvaluateInputViewShown` returns false, and `onCreateInputView` returns an empty view. The Mac keyboard and the macOS input method are the only text input.
+- `io.apkrun.guest/.ime.ApkRunInputMethodService`, an `InputMethodService` with no visible keyboard: `onEvaluateInputViewShown()` returns false, and `onCreateInputView()` returns an empty view. The Mac keyboard and the macOS input method are the only text input.
 - The Guest Agent enables it and selects it as the default IME at start (`Settings.Secure.ENABLED_INPUT_METHODS` / `DEFAULT_INPUT_METHOD`, which needs `WRITE_SECURE_SETTINGS`: available to the shell uid in development and granted to the priv-app in the custom image).
 - `onStartInput` / `onFinishInput` / `onUpdateSelection` / `onUpdateCursorAnchorInfo` → `EditorState` events to the host.
-- Commands from the host run on the IME's main thread against `getCurrentInputConnection`. A command that arrives while no editor is bound is dropped and counted.
+- Commands from the host run on the IME's main thread against `getCurrentInputConnection()`. A command that arrives while no editor is bound is dropped and counted.
 - Display: the per-display IME policy is `LOCAL` ([display-and-windowing.md](display-and-windowing.md) §4), so the IME binds to editors on pool displays.
 - Channel: in the custom image the IME service runs in the Guest Agent process, and IME commands share the input stream (vsock 6101) with pointer events, so ordering is preserved. In development (stock image) the Guest Agent's `app_process` part runs under the shell uid, but the IME must run in the app's own process. The IME therefore listens on its own abstract socket `@apkrun-guest-ime`, reached through an ADB forward (the pattern Chrome's DevTools socket uses). The row is listed in [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1. Pointer/IME ordering across the two channels is not guaranteed in development.
 
@@ -281,7 +281,7 @@ public actor InputRouter {
     public func route(_ batch: [InputEvent], from session: SessionID) async
     public func routeText(_ event: ImeTextEvent, from session: SessionID) async
     public func focusChanged(_ session: SessionID, focused: Bool) async
-    public func sessionEnded(_ session: SessionID) async // closes open gestures and keys
+    public func sessionEnded(_ session: SessionID) async           // closes open gestures and keys
 }
 ```
 
@@ -313,7 +313,7 @@ This avoids stuck keys and half-open gestures in Android.
 
 - **Wrapper → apkrund:** `sendInput([InputEvent])` is batched per run-loop turn. The first event after idle is sent immediately. `sendText` is sent unbatched, in order.
 - **apkrund → guest:** a dedicated input stream (vsock 6101, or its ADB forward in development) carrying `InputBatch{ display_id, events[], host_send_nanos }` and `ImeCommand`, with `TCP_NODELAY`-like behavior (each frame is written immediately; no Nagle on vsock).
-- **Guest injection:** `InputManager.getInstance.injectInputEvent(event, INJECT_INPUT_EVENT_MODE_ASYNC)` after `setDisplayId` (a hidden API reached by reflection, as scrcpy does). `eventTime` = `SystemClock.uptimeMillis` at injection. Relative spacing inside a batch is preserved by offsetting from the batch's first host timestamp.
+- **Guest injection:** `InputManager.getInstance().injectInputEvent(event, INJECT_INPUT_EVENT_MODE_ASYNC)` after `setDisplayId` (a hidden API reached by reflection, as scrcpy does). `eventTime` = `SystemClock.uptimeMillis()` at injection. Relative spacing inside a batch is preserved by offsetting from the batch's first host timestamp.
 - **Budget** (NSEvent received → injected, p95 ≤ 16 ms):
 
 | Segment | Budget (p95) | Measured by |
@@ -386,7 +386,7 @@ This is the list #025 asks for ("Document unsupported IME behavior").
 1. `ApkRunInputMethodService`, editor state events, commands (§5.6). Development channel `@apkrun-guest-ime`. In the custom image (M5) the IME shares the process and the input stream.
 2. `NSTextInputClient` in `IOSurfaceLayerView`, `TextInputModel`, editor/key mode switching (§5.1), and editor commands (§5.4).
 3. The paste policy (§6) and secure input for password fields (§5.5).
-4. Acceptance: with the macOS Japanese input method, typing "にほんご" and converting gives "日本語" in HelloText's field and in a HelloCompose `TextField`. The candidate window is next to the Android cursor. Emoji from the character viewer are inserted. ⌘V pastes Mac text. In a password field, secure input is on (checked with `IsSecureEventInputEnabled` in the UI test) and the input source is Roman. FR-IN-07 and FR-IN-08 are satisfied.
+4. Acceptance: with the macOS Japanese input method, typing "にほんご" and converting gives "日本語" in HelloText's field and in a HelloCompose `TextField`. The candidate window is next to the Android cursor. Emoji from the character viewer are inserted. ⌘V pastes Mac text. In a password field, secure input is on (checked with `IsSecureEventInputEnabled()` in the UI test) and the input source is Roman. FR-IN-07 and FR-IN-08 are satisfied.
 
 ### #030 Routing (M3)
 

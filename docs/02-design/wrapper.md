@@ -39,13 +39,13 @@ WrapperCore runs inside apkrund (RuntimeHost composes it). RuntimeHost builds th
 Discord.app/
 └── Contents/
     ├── Info.plist
-    ├── PkgInfo # "APPL????"
+    ├── PkgInfo                        # "APPL????"
     ├── MacOS/
-    │   └── APKRunLauncher # the shared launcher (arm64), re-signed for this wrapper
+    │   └── APKRunLauncher             # the shared launcher (arm64), re-signed for this wrapper
     ├── Resources/
     │   ├── AppIcon.icns
-    │   ├── wrapper.json # identity + initial preferences (§3)
-    │   └── bootstrap/ # portable and distribution wrappers only (§10)
+    │   ├── wrapper.json               # identity + initial preferences (§3)
+    │   └── bootstrap/                 # portable and distribution wrappers only (§10)
     │       ├── bootstrap.json
     │       ├── base.apk
     │       └── split_*.apk
@@ -87,7 +87,7 @@ Keys that are deliberately absent:
 
 - `LSUIElement`: a wrapper is a regular app with a Dock tile and a Force Quit entry. Background work uses a launch mode instead (§5.8).
 - `NSMicrophoneUsageDescription`, `NSCameraUsageDescription`: the VM's audio input runs in apkrund, so the TCC prompt belongs to APKRun, not to each wrapper ([desktop-integration.md](desktop-integration.md)). Wrappers hold no TCC grants in v1, so regenerating one (new cdhash) loses nothing (§9.3).
-- `CFBundleURLTypes`, `CFBundleDocumentTypes`: v1 wrappers claim no URL schemes or file types. lists "URL handling" as wrapper metadata. Registering an Android app's schemes (for example `discord://`) would take them from the native Mac app of the same service, so it needs an explicit user choice. It is post-v1 and tracked in [../04-plan/open-questions.md](../04-plan/open-questions.md).
+- `CFBundleURLTypes`, `CFBundleDocumentTypes`: v1 wrappers claim no URL schemes or file types. "URL handling" is a natural piece of wrapper metadata. Registering an Android app's schemes (for example `discord://`) would take them from the native Mac app of the same service, so it needs an explicit user choice. It is post-v1 and tracked in [../04-plan/open-questions.md](../04-plan/open-questions.md).
 
 ---
 
@@ -118,9 +118,7 @@ The field-by-field reference with the JSON schema is [../03-reference/wrapper-js
     "mode": "automatic",
     "provider": {
       "type": "direct",
-      "configuration": {
-        "url": "https://updates.example.com/discord/manifest.json"
-      }
+      "configuration": { "url": "https://updates.example.com/discord/manifest.json" }
     }
   },
   "integration": {
@@ -147,14 +145,14 @@ Rules:
 
 ### 4.1 Mapping (FR-WRP-05)
 
-Bundle IDs allow only `A–Z a–z 0–9 -.` and are compared case-insensitively. Android package IDs are dot-separated segments of `[a-zA-Z][a-zA-Z0-9_]*` and never contain `-` (research 2026-09-28).
+Bundle IDs allow only `A–Z a–z 0–9 - .` and are compared case-insensitively. Android package IDs are dot-separated segments of `[a-zA-Z][a-zA-Z0-9_]*` and never contain `-` (research 2026-09-28).
 
 ```text
 map(pkg):
-s = pkg with every "_" replaced by "-" # reversible, because Android IDs never contain "-"
-if pkg contains any character A–Z:
-s = s + "-h" + lowercase hex of the first 4 bytes of SHA-256(UTF-8(pkg))
-return "io.apkrun.android." + s
+  s = pkg with every "_" replaced by "-"          # reversible, because Android IDs never contain "-"
+  if pkg contains any character A–Z:
+      s = s + "-h" + lowercase hex of the first 4 bytes of SHA-256(UTF-8(pkg))
+  return "io.apkrun.android." + s
 ```
 
 | Package ID | Bundle ID |
@@ -209,28 +207,28 @@ The wrapper copy is a byte copy of the generic launcher's executable (`APKRunLau
 ### 5.2 Startup
 
 ```text
-main launchTiming.processStart = kernel start time (WRAPPER_PROCESS_START)
-1. identity = WrapperIdentity.load(Bundle.main)
-Info.plist APKRunPackageID + APKRunWrapperFormat, Resources/wrapper.json (schema check),
-application.packageId == APKRunPackageID else → screen D (§5.4)
-generic launcher: identity from --package <id>
-2. bundle path contains "/AppTranslocation/"? → screen T (§7.4)
-3. NSApplication: activation policy (.regular, or.accessory with --apkrun-background, §5.8),
-menus (§5.6), and one window, not yet ordered front
-frame = autosaved frame, else wrapper.json default size for now (320 × 400 pt minimum)
-4. RuntimeClient.connect(.wrapper(bundleID))
-broker hello → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState) compatibility (§5.3);
-hostState == updating → screen U (§5.4)
-requestEndpoint(.wrapper(bundleID))
-rejected (not in the registry, or cdhash differs) → approval (§7.3)
-no autosaved frame → packageInfo(packageID): size the hidden window from the package settings
-window.defaultWidth/defaultHeight (wrapper.json stays the fallback when the package has no record yet)
-5. openSession(OpenSessionRequest{packageID, geometry, screenSize, launchTiming}) APP_LAUNCH_REQUEST
-packageNotInstalled → bootstrap present? import (§10): screen N
-6. descriptor → surfaces attached ([display-and-windowing.md](display-and-windowing.md) §5)
-order the window front at the first frame, or after 400 ms with the placeholder (§7.3 there),
-whichever comes first; booting(progress) shows the placeholder at once
-7. running … ended(reason) → §5.5
+main()                                                      launchTiming.processStart = kernel start time (WRAPPER_PROCESS_START)
+ 1. identity = WrapperIdentity.load(Bundle.main)
+      Info.plist APKRunPackageID + APKRunWrapperFormat, Resources/wrapper.json (schema check),
+      application.packageId == APKRunPackageID                 else → screen D (§5.4)
+      generic launcher: identity from --package <id>
+ 2. bundle path contains "/AppTranslocation/"?               → screen T (§7.4)
+ 3. NSApplication: activation policy (.regular, or .accessory with --apkrun-background, §5.8),
+    menus (§5.6), and one window, not yet ordered front
+    frame = autosaved frame, else wrapper.json default size for now (320 × 400 pt minimum)
+ 4. RuntimeClient.connect(.wrapper(bundleID))
+      broker hello → HelloReply(runtimeVersion, runtimeBuild, apiVersion, hostState)    compatibility (§5.3);
+      hostState == updating → screen U (§5.4)
+      requestEndpoint(.wrapper(bundleID))
+         rejected (not in the registry, or cdhash differs)      → approval (§7.3)
+      no autosaved frame → packageInfo(packageID): size the hidden window from the package settings
+         window.defaultWidth/defaultHeight (wrapper.json stays the fallback when the package has no record yet)
+ 5. openSession(OpenSessionRequest{packageID, geometry, screenSize, launchTiming})    APP_LAUNCH_REQUEST
+      packageNotInstalled → bootstrap present? import (§10) : screen N
+ 6. descriptor → surfaces attached ([display-and-windowing.md](display-and-windowing.md) §5)
+      order the window front at the first frame, or after 400 ms with the placeholder (§7.3 there),
+      whichever comes first; booting(progress) shows the placeholder at once
+ 7. running … ended(reason) → §5.5
 ```
 
 - The package settings win over `wrapper.json`, which holds only the initial values (§3). The extra `packageInfo` call happens only on a launch without an autosaved frame, normally the first one.
@@ -285,7 +283,7 @@ The launcher shows its own screens in the session window (the same view as the p
 | `ended(.error(f))` | screen E |
 | connection invalidated (apkrund crashed, or exited for an update without `ended(.runtimeUpdating)` reaching the launcher) | "APKRun restarted — reopening…" and `openSession` again with backoff 1, 2, 4 s ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.5) |
 | `windowRequest(.close)` | as ⌘W |
-| `windowRequest(.activate)` | `NSApp.activate` and order the window front |
+| `windowRequest(.activate)` | `NSApp.activate()` and order the window front |
 | `applicationShouldTerminate` from logout or shutdown | `closeSession(.stop)`, then `.terminateNow` after at most 2 s |
 
 The launcher process lives exactly as long as its window. It never keeps running without a window, except in background mode (§5.8).
@@ -296,7 +294,7 @@ Built in code by `LauncherMenus`. The shortcuts come from [input.md](input.md) �
 
 | Menu | Items |
 |---|---|
-| ‹App› | About ‹App› · Settings… (⌘) opens APKRun on the app's settings page · Services · Hide ‹App› (⌘H) · Hide Others (⌥⌘H) · Show All · Quit ‹App› (⌘Q) |
+| ‹App› | About ‹App› · Settings… (⌘,) opens APKRun on the app's settings page · Services · Hide ‹App› (⌘H) · Hide Others (⌥⌘H) · Show All · Quit ‹App› (⌘Q) |
 | File | Close Window (⌘W) |
 | Edit | Undo (⌘Z) · Redo (⇧⌘Z) · Cut (⌘X) · Copy (⌘C) · Paste (⌘V) · Select All (⌘A). AppKit adds Emoji & Symbols and Dictation. The actions follow input.md §6 (editor mode or key mode) |
 | View | Actual Size (⌘0) · Zoom In (⌘=) · Zoom Out (⌘−) · Enter Full Screen (⌃⌘F) · Show Frame Statistics (developer mode only) |
@@ -319,8 +317,8 @@ macOS shows a notification under the name and icon of the process that posts it.
 
 ```text
 NSWorkspace.openApplication(at: wrapperURL, configuration:
-activates = false, hides = true, addsToRecentItems = false,
-arguments = ["--apkrun-background", "notifications"])
+    activates = false, hides = true, addsToRecentItems = false,
+    arguments = ["--apkrun-background", "notifications"])
 ```
 
 - The launcher sets `NSApp.setActivationPolicy(.accessory)` in `applicationWillFinishLaunching`, before a Dock tile appears. It creates no window, connects to its wrapper endpoint, and subscribes to the notification relay. The relay protocol and the notification content rules are in [desktop-integration.md](desktop-integration.md).
@@ -344,36 +342,38 @@ Wrappers have no `.lproj` folders, and the launcher must be able to show screen 
 
 ## 6. Generation
 
-### 6.1 Types, adapted to typed throws and the store-owned settings:
+### 6.1 Types
+
+The types use typed throws and the store-owned settings:
 
 ```swift
 public actor AppWrapperGenerator {
     public func generate(_ request: WrapperGenerationRequest) async throws(WrapperFailure) -> GeneratedWrapper
-    public func refresh(_ packageID: PackageID, _ change: WrapperRefresh) async throws(WrapperFailure) -> GeneratedWrapper // §9.3
+    public func refresh(_ packageID: PackageID, _ change: WrapperRefresh) async throws(WrapperFailure) -> GeneratedWrapper   // §9.3
 }
 
 public struct WrapperConfiguration: Codable, Sendable, Equatable {
     public var packageID: PackageID
     public var displayName: String
-    public var icon: WrapperIconSource //.rendered(IconSet) |.preview(PNG data) |.custom(URL) |.placeholder
+    public var icon: WrapperIconSource          // .rendered(IconSet) | .preview(PNG data) | .custom(URL) | .placeholder
     public var category: AndroidAppCategory?
-    public var window: WindowDefaults // mode, defaultSize, resizable
-    public var updates: WrapperUpdateDefaults // authority, mode, provider: initial values (§3)
+    public var window: WindowDefaults           // mode, defaultSize, resizable
+    public var updates: WrapperUpdateDefaults   // authority, mode, provider: initial values (§3)
     public var integrations: IntegrationDefaults
-    public var kind: WrapperKind //.local |.portable(BootstrapSet) |.distribution(BootstrapSet, DistributionSigning)
+    public var kind: WrapperKind                // .local | .portable(BootstrapSet) | .distribution(BootstrapSet, DistributionSigning)
 }
 
 public struct WrapperGenerationRequest: Sendable {
     public var configuration: WrapperConfiguration
-    public var destination: WrapperDestination //.userApplications (default) |.applications |.directory(URL)
-    public var fileName: String? // override of §4.3
-    public var replace: ReplacePolicy //.never |.sameWrapper
+    public var destination: WrapperDestination  // .userApplications (default) | .applications | .directory(URL)
+    public var fileName: String?                // override of §4.3
+    public var replace: ReplacePolicy           // .never | .sameWrapper
 }
 
 public struct GeneratedWrapper: Codable, Sendable {
     public var bundleURL: URL
     public var bundleID: String
-    public var cdhash: String // 40 hex characters
+    public var cdhash: String                   // 40 hex characters
     public var launcherVersion: String
 }
 ```
@@ -383,27 +383,27 @@ RuntimeHost fills `WrapperConfiguration` from the package record (`displayName`,
 ### 6.2 Sequence
 
 ```text
-generate(request) WRAPPER_GENERATE_START
-1. validate: package ID syntax, a non-empty name after §4.3, icon source readable,
-the launcher template signature valid (strict) and arm64
-2. bundleID = BundleIDMapper.map(packageID); an existing registry entry for bundleID?
-valid wrapper and replace == .never → wrapperExists(path)
-3. resolve the destination directory (§6.3); probe that it is writable; conflicts (§6.4)
-4. staging = Wrappers/staging/<uuid>/<name>.app
-5. write Contents/Info.plist (XML, sorted keys), Contents/PkgInfo, Contents/Resources/wrapper.json
-6. icon (§8) → Contents/Resources/AppIcon.icns
-7. clonefile(template) → Contents/MacOS/APKRunLauncher
-8. portable/distribution: copy the bootstrap set and write bootstrap.json (§10)
-9. sign (§7.1 or §11); verify strictly; read the cdhash
-10. registry: add or update the entry with state "pending" {bundleID, packageID, cdhash, final path, staging path}
-11. place: rename(staging → final). Another volume: copy to "<dest>/.<name>.app.apkrun-<uuid>", then rename
-12. bookmark data for the final URL; registry entry → "active"
-13. LSRegisterURL(final, true); NSWorkspace.shared.noteFileSystemChanged(final path)
-WRAPPER_GENERATE_END {durationMs, kind}
+generate(request)                                                   WRAPPER_GENERATE_START
+  1. validate: package ID syntax, a non-empty name after §4.3, icon source readable,
+     the launcher template signature valid (strict) and arm64
+  2. bundleID = BundleIDMapper.map(packageID); an existing registry entry for bundleID?
+        valid wrapper and replace == .never → wrapperExists(path)
+  3. resolve the destination directory (§6.3); probe that it is writable; conflicts (§6.4)
+  4. staging = Wrappers/staging/<uuid>/<name>.app
+  5. write Contents/Info.plist (XML, sorted keys), Contents/PkgInfo, Contents/Resources/wrapper.json
+  6. icon (§8) → Contents/Resources/AppIcon.icns
+  7. clonefile(template) → Contents/MacOS/APKRunLauncher
+  8. portable/distribution: copy the bootstrap set and write bootstrap.json (§10)
+  9. sign (§7.1 or §11); verify strictly; read the cdhash
+ 10. registry: add or update the entry with state "pending" {bundleID, packageID, cdhash, final path, staging path}
+ 11. place: rename(staging → final). Another volume: copy to "<dest>/.<name>.app.apkrun-<uuid>", then rename
+ 12. bookmark data for the final URL; registry entry → "active"
+ 13. LSRegisterURL(final, true); NSWorkspace.shared.noteFileSystemChanged(final path)
+                                                                    WRAPPER_GENERATE_END {durationMs, kind}
 ```
 
 - Budget: ≤ 2 s p50 without the bootstrap copy (icon ≈ 300 ms, `codesign` ≈ 200 ms).
-- **Crash safety.** The registry's `pending` state is the journal. At apkrund start, `WrapperRegistry.recover` activates a pending entry if the final bundle exists and has the recorded cdhash. Otherwise it deletes the staging directory, removes leftover `.apkrun-<uuid>` items in the destination, and drops the entry (or restores the previous entry after a failed refresh).
+- **Crash safety.** The registry's `pending` state is the journal. At apkrund start, `WrapperRegistry.recover()` activates a pending entry if the final bundle exists and has the recorded cdhash. Otherwise it deletes the staging directory, removes leftover `.apkrun-<uuid>` items in the destination, and drops the entry (or restores the previous entry after a failed refresh).
 - `LSRegisterURL` is the documented registration for apps outside the folders LaunchServices scans at login. If it returns an error, generation still succeeds (Finder registers the app when it sees it), and the result carries a warning. `apkrun doctor --fix` calls `LSRegisterURL` again for the health check `wrappers.registration` ([diagnostics.md](diagnostics.md) §7.5). APKRun never runs the `lsregister` tool.
 - Spotlight indexes the bundle by itself. APKRun does not run `mdimport` or any other indexing tool (#056: "no indexing hacks").
 
@@ -481,10 +481,7 @@ Written only by `WrapperRegistry` in apkrund, with atomic replace (write, `fsync
       "formatVersion": 1,
       "fileName": "Discord",
       "displayName": "Discord",
-      "customization": {
-        "displayName": null,
-        "iconFile": null
-      },
+      "customization": { "displayName": null, "iconFile": null },
       "iconDigest": "sha256:…",
       "approval": "generated",
       "createdAt": "2026-10-01T09:12:00Z",
@@ -493,11 +490,7 @@ Written only by `WrapperRegistry` in apkrund, with atomic replace (write, `fsync
     }
   ],
   "denied": [
-    {
-      "bundleId": "io.apkrun.android.com.example",
-      "cdhash": "…",
-      "until": "2026-10-03T08:00:00Z"
-    }
+    { "bundleId": "io.apkrun.android.com.example", "cdhash": "…", "until": "2026-10-03T08:00:00Z" }
   ]
 }
 ```
@@ -521,23 +514,23 @@ Authorization uses the registry only: a wrapper connection may open sessions for
 A wrapper is unknown when its bundle ID is not in the registry or its cdhash differs. Examples: copied from another Mac, restored from a backup of another Mac, a portable or distribution wrapper, or a wrapper that was modified.
 
 ```text
-launcher: requestEndpoint(.wrapper(bundleID)) →.notRegistered |.cdhashMismatch
-launcher: requestApproval(ApprovalRequest{bundleURL, bundleID, packageID}) (broker)
+launcher: requestEndpoint(.wrapper(bundleID)) → .notRegistered | .cdhashMismatch
+launcher: requestApproval(ApprovalRequest{bundleURL, bundleID, packageID})          (broker)
 apkrund WrapperApprovalService:
-1. static checks of the bundle at bundleURL:
-signature valid (strict), identifier == bundleID, bundleID == map(APKRunPackageID),
-wrapper.json valid, packageID == APKRunPackageID else reject: bundleInvalid
-2. cdhash and signer summary: ad-hoc | Developer ID ‹Team› (notarized: yes/no)
-3. limits: one pending request per bundle ID, 5 per minute in total; a "denied" entry for the
-same cdhash that has not expired → reject at once
-4. ask the user in APKRun.app (connected UI client, or open it with activates = true):
-"Allow “Discord” to open com.discord in APKRun?"
-details: location, signer, whether com.discord is installed, the bundled version (portable),
-and the integrations the app gets (wrapper.json values capped by this Mac's defaults,
-configuration.md §3.3)
-5. Allow → registry entry {approval: user, cdhash} → reply.approved; the launcher repeats requestEndpoint
-Don't Allow → "denied" entry for 24 h (Settings → Privacy can clear it) → reply.denied
-no answer in 10 min →.timedOut
+  1. static checks of the bundle at bundleURL:
+       signature valid (strict), identifier == bundleID, bundleID == map(APKRunPackageID),
+       wrapper.json valid, packageID == APKRunPackageID        else reject: bundleInvalid
+  2. cdhash and signer summary: ad-hoc | Developer ID ‹Team› (notarized: yes/no)
+  3. limits: one pending request per bundle ID, 5 per minute in total; a "denied" entry for the
+     same cdhash that has not expired → reject at once
+  4. ask the user in APKRun.app (connected UI client, or open it with activates = true):
+       "Allow “Discord” to open com.discord in APKRun?"
+       details: location, signer, whether com.discord is installed, the bundled version (portable),
+                and the integrations the app gets (wrapper.json values capped by this Mac's defaults,
+                configuration.md §3.3)
+  5. Allow → registry entry {approval: user, cdhash} → reply .approved; the launcher repeats requestEndpoint
+     Don't Allow → "denied" entry for 24 h (Settings → Privacy can clear it) → reply .denied
+     no answer in 10 min → .timedOut
 ```
 
 - The endpoint requirement contains the cdhash computed in step 2 from the bundle on disk. A process that only claims to be that bundle cannot pass it, because the system checks the connecting process's code.
@@ -569,18 +562,18 @@ The layer size is 1536 px because the visible part of an adaptive icon is the in
 
 ```text
 adaptive:
-draw background, then foreground, on a 1536 px canvas (white under a background with alpha)
-crop the centered 1024 px square (the inner 72 dp)
+  draw background, then foreground, on a 1536 px canvas (white under a background with alpha)
+  crop the centered 1024 px square (the inner 72 dp)
 legacy / host preview bitmap:
-trim the transparent border (alpha < 8)
-if the result is square (aspect 0.97–1.03) and opaque in all four corners (alpha ≥ 250 at 2 % insets):
-scale to 1024 px, full bleed
-else:
-white 1024 px square, image fitted into the centered 820 px box
+  trim the transparent border (alpha < 8)
+  if the result is square (aspect 0.97–1.03) and opaque in all four corners (alpha ≥ 250 at 2 % insets):
+       scale to 1024 px, full bleed
+  else:
+       white 1024 px square, image fitted into the centered 820 px box
 custom (user file):
-used as provided: PNG, JPEG, or HEIC ≥ 512 px and square; or an.icns, which is copied as is
+  used as provided: PNG, JPEG, or HEIC ≥ 512 px and square; or an .icns, which is copied as is
 placeholder (no icon yet):
-the first grapheme of the display name, white, centered on a color chosen by SHA-256(packageID)
+  the first grapheme of the display name, white, centered on a color chosen by SHA-256(packageID)
 ```
 
 - **Why full bleed.** Tested on macOS 27: a full-bleed opaque square `.icns` and one drawn on the Big Sur squircle grid are both masked to the squircle, with no gray plate. A transparent irregular icon (for example a circle) gets the system background plate ("squircle jail"). The composition therefore always produces an opaque square and lets macOS apply the shape. The host does not draw its own squircle.
@@ -590,7 +583,7 @@ the first grapheme of the display name, white, centered on a color chosen by SHA
 
 ### 8.3 `.icns`
 
-1. Downscale the master with Core Graphics (`interpolationQuality =.high`, sRGB, 8 bits per channel) to the iconset sizes: 16, 32, 64, 128, 256, 512, and 1024 px, named `icon_16x16.png`, `icon_16x16@2x.png`, … `icon_512x512@2x.png`.
+1. Downscale the master with Core Graphics (`interpolationQuality = .high`, sRGB, 8 bits per channel) to the iconset sizes: 16, 32, 64, 128, 256, 512, and 1024 px, named `icon_16x16.png`, `icon_16x16@2x.png`, … `icon_512x512@2x.png`.
 2. `/usr/bin/iconutil -c icns -o AppIcon.icns AppIcon.iconset` (part of the base OS, research 2026-09-28).
 3. Delete the iconset.
 
@@ -616,16 +609,16 @@ the first grapheme of the display name, white, centered on a color chosen by SHA
 ```swift
 public struct WrapperStatus: Codable, Sendable, Equatable {
     public var state: WrapperState
-    public var refreshReasons: Set<WrapperRefreshReason> //.launcher(version),.icon,.displayName
+    public var refreshReasons: Set<WrapperRefreshReason>   // .launcher(version), .icon, .displayName
 }
 
 public enum WrapperState: Codable, Sendable, Equatable {
     case valid
-    case moved(URL) // found at a new location; the registry is updated, so this is shown once
-    case missing // no bundle at the bookmark or path, or it is in the Trash
-    case inaccessible // macOS privacy controls deny apkrund access to the location (§6.3)
-    case signatureInvalid // the bundle was modified after signing, or its cdhash differs
-    case unknownPackage // the registry's package has no record in the store any more
+    case moved(URL)          // found at a new location; the registry is updated, so this is shown once
+    case missing             // no bundle at the bookmark or path, or it is in the Trash
+    case inaccessible        // macOS privacy controls deny apkrund access to the location (§6.3)
+    case signatureInvalid    // the bundle was modified after signing, or its cdhash differs
+    case unknownPackage      // the registry's package has no record in the store any more
 }
 ```
 
@@ -676,18 +669,18 @@ A refresh changes the name, the icon, or the launcher. It is always an explicit 
 
 ```text
 refresh(packageID, change{displayName?, icon?, launcher})
-1. the wrapper must not be running (NSRunningApplication for the bundle ID, SessionRegistry)
-running → wrapperRunning; the UI asks "Quit ‹App› to update its Mac app?" and on OK
-repeats the refresh with closeRunningApp; apkrund sends windowRequest(.close),
-waits for the session to end, and continues
-2. the entry must be valid or have refresh reasons (missing → generate instead, §6)
-3. build the new Contents in "<parent>/.apkrun-<uuid>/<name>.app/Contents" (same volume), sign, verify
-4. registry: state "refreshing", pendingCdhash (both cdhashes are accepted until step 7)
-5. renamex_np(new Contents, <bundle>/Contents, RENAME_SWAP) (atomic)
-6. name changed → rename <bundle> to "<new name>.app" (conflict rules of §6.4)
-7. registry: cdhash = pendingCdhash, state "active", refreshedAt, bookmark
-8. delete the old Contents and the temporary directory; touch the bundle;
-LSRegisterURL; noteFileSystemChanged
+  1. the wrapper must not be running (NSRunningApplication for the bundle ID, SessionRegistry)
+       running → wrapperRunning; the UI asks "Quit ‹App› to update its Mac app?" and on OK
+       repeats the refresh with closeRunningApp; apkrund sends windowRequest(.close),
+       waits for the session to end, and continues
+  2. the entry must be valid or have refresh reasons (missing → generate instead, §6)
+  3. build the new Contents in "<parent>/.apkrun-<uuid>/<name>.app/Contents" (same volume), sign, verify
+  4. registry: state "refreshing", pendingCdhash (both cdhashes are accepted until step 7)
+  5. renamex_np(new Contents, <bundle>/Contents, RENAME_SWAP)       (atomic)
+  6. name changed → rename <bundle> to "<new name>.app" (conflict rules of §6.4)
+  7. registry: cdhash = pendingCdhash, state "active", refreshedAt, bookmark
+  8. delete the old Contents and the temporary directory; touch the bundle;
+     LSRegisterURL; noteFileSystemChanged
 ```
 
 - **Swapping `Contents` instead of the whole bundle** keeps the bundle directory's file identity. The Dock's pinned item and Finder aliases resolve by file identity, so they keep working after a rename too. This is verified in #076 (R-20). The fallback is replacing the whole bundle, with a note that a Dock pin may need to be recreated.
@@ -731,20 +724,10 @@ A portable wrapper also carries the APK set, so it can install the app on anothe
   "versionCode": 126012,
   "versionName": "126.12",
   "setDigest": "sha256:…",
-  "signers": [
-    "sha256:…"
-  ],
+  "signers": ["sha256:…"],
   "files": [
-    {
-      "name": "base.apk",
-      "size": 98123456,
-      "sha256": "sha256:…"
-    },
-    {
-      "name": "split_config.arm64_v8a.apk",
-      "size": 23456789,
-      "sha256": "sha256:…"
-    }
+    { "name": "base.apk", "size": 98123456, "sha256": "sha256:…" },
+    { "name": "split_config.arm64_v8a.apk", "size": 23456789, "sha256": "sha256:…" }
   ]
 }
 ```
@@ -762,15 +745,15 @@ A portable wrapper also carries the APK set, so it can install the app on anothe
 1. launcher → unknown wrapper → approval (§7.3); the dialog shows "Includes Discord 126.12"
 2. openSession → packageNotInstalled
 3. screen N with "Install from This App": "Install Discord 126.12 from this Mac app?"
-(on the first run the approval already asked, so this step is skipped)
+   (on the first run the approval already asked, so this step is skipped)
 4. importBootstrap(bootstrap.json, [FileHandle]) on the wrapper endpoint
-apkrund: allowed only if the wrapper is approved, bootstrap.json packageId == registry packageId,
-and the package is not installed (or is uninstalledKeepingData)
-store: copy, SHA-256 against bootstrap.json, all intrinsic checks and the preview
-([package-store.md](package-store.md) §4.1, §4.6); source = wrapperBootstrap
-preview warnings (for example a low targetSdk): APKRun.app shows the install sheet to confirm
+     apkrund: allowed only if the wrapper is approved, bootstrap.json packageId == registry packageId,
+              and the package is not installed (or is uninstalledKeepingData)
+     store: copy, SHA-256 against bootstrap.json, all intrinsic checks and the preview
+            ([package-store.md](package-store.md) §4.1, §4.6); source = wrapperBootstrap
+     preview warnings (for example a low targetSdk): APKRun.app shows the install sheet to confirm
 5. install with wrapper.json "updates" as the initial authority, mode, and provider
-([update-system.md](update-system.md) §2); "window" and "integration" become the package settings
+   ([update-system.md](update-system.md) §2); "window" and "integration" become the package settings
 6. the launcher repeats openSession → normal launch
 ```
 
@@ -786,16 +769,16 @@ A distribution wrapper is a portable wrapper signed with a Developer ID and nota
 
 ```text
 apkrun wrap <package> --distribution --identity "Developer ID Application: Name (TEAMID)"
-[--notarize --keychain-profile <profile>] [--output <dir>]
+            [--notarize --keychain-profile <profile>] [--output <dir>]
 
 1. generate as portable in staging, APKRunWrapperKind = distribution (not placed, not registered)
 2. codesign --force --sign "<identity>" --identifier <bundleID> --options runtime --timestamp <bundle>
 3. verify: codesign --verify --strict; SecStaticCodeCheckValidity
 4. --notarize:
-ditto -c -k --keepParent <bundle> <name>.zip
-xcrun notarytool submit <name>.zip --keychain-profile <profile> --wait --output-format json
-Accepted → xcrun stapler staple <bundle>; zip again → <name>.zip
-Invalid → notarizationFailed(submissionID, log summary from `notarytool log`)
+     ditto -c -k --keepParent <bundle> <name>.zip
+     xcrun notarytool submit <name>.zip --keychain-profile <profile> --wait --output-format json
+     Accepted → xcrun stapler staple <bundle>; zip again → <name>.zip
+     Invalid  → notarizationFailed(submissionID, log summary from `notarytool log`)
 5. spctl --assess --type execute -vv <bundle> → "source=Notarized Developer ID" (only with --notarize)
 6. output: <dir>/<name>.app and <dir>/<name>.zip
 ```
@@ -817,9 +800,9 @@ The DTOs are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md)
 
 | Endpoint | Operation | Behavior | Long |
 |---|---|---|---|
-| `.control` | `createWrapper(WrapperRequest{packageID, destination, fileName?, displayName?, icon?, portable, replace})` | RuntimeHost builds the configuration, §6. A custom icon is a file handle (`icon =.custom(fileIndex:)`), never a path | yes |
+| `.control` | `createWrapper(WrapperRequest{packageID, destination, fileName?, displayName?, icon?, portable, replace})` | RuntimeHost builds the configuration, §6. A custom icon is a file handle (`icon = .custom(fileIndex:)`), never a path | yes |
 | `.control` | `placeStagedWrapper(stagingToken, finalURL, bookmark)` | finishes a client-placed generation (§6.3), or a refresh that APKRun.app swapped (§9.3) | no |
-| `.control` | `listWrappers` → `[WrapperSummary]` | registry entries with `WrapperStatus` (§9.1) | no |
+| `.control` | `listWrappers()` → `[WrapperSummary]` | registry entries with `WrapperStatus` (§9.1) | no |
 | `.control` | `wrapperInfo(packageID)` → `WrapperInfo` | one summary plus paths and signer | no |
 | `.control` | `refreshWrapper(packageID, WrapperRefresh)` | §9.3 | yes |
 | `.control` | `refreshAllWrappers(scope, launcherOnly)` | **Update All Mac Apps** and `apkrun wrapper refresh --all`: every wrapper with a refresh reason, or all. Running wrappers are skipped and listed (§9.4). #076 | yes |
@@ -827,8 +810,8 @@ The DTOs are in [../03-reference/runtime-api.md](../03-reference/runtime-api.md)
 | `.control` | `rescanWrappers(register)` | **Re-register Mac Apps** (§7.2): finds bundles with `APKRunPackageID` in `~/Applications` and `/Applications` and validates them. With `register`, registers them after the client's one confirmation. #076 | no |
 | `.control` | `verifyWrapper(url, deep)` | §9.1 checks for any bundle, registered or not | no |
 | `.control` | `decideApproval(approvalID, allow)` | APKRun.app's answer to §7.3 | no |
-| `.control` | `pendingApprovals` → `[ApprovalPrompt]` | the prompts that were requested before APKRun.app connected (§7.3 step 4). #047 | no |
-| `.control` | `deniedWrappers`, `clearWrapperDenial(bundleID)` | Settings → Privacy → **Mac apps you didn't allow** and its **Remove** (§7.3 step 5, [host-ui.md](host-ui.md) §9.4). #047 | no |
+| `.control` | `pendingApprovals()` → `[ApprovalPrompt]` | the prompts that were requested before APKRun.app connected (§7.3 step 4). #047 | no |
+| `.control` | `deniedWrappers()`, `clearWrapperDenial(bundleID)` | Settings → Privacy → **Mac apps you didn't allow** and its **Remove** (§7.3 step 5, [host-ui.md](host-ui.md) §9.4). #047 | no |
 | `.control` | `approveWrapper(url)` | §7.3 steps 1–3 and 5 without the UI prompt; the CLI has already confirmed (`apkrun wrapper approve`, #044) | no |
 | `.control` | `buildDistributionWrapper(DistributionWrapperRequest)` | §11 (M12, #088). Not placed and not registered; the client places the files when apkrund may not write to the output folder ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §10.8) | yes |
 | broker | `requestApproval(ApprovalRequest)` | §7.3 | waits |
@@ -845,7 +828,7 @@ public enum WrapperChange: Codable, Sendable {
     case refreshed(WrapperSummary)
     case removed(PackageID)
     case statusChanged(PackageID, WrapperStatus)
-    case approvalRequested(ApprovalPrompt) // APKRun.app shows the dialog
+    case approvalRequested(ApprovalPrompt)       // APKRun.app shows the dialog
     case approvalResolved(ApprovalID)
 }
 ```
@@ -856,11 +839,11 @@ The full syntax, exit codes, and JSON output are in [cli.md](cli.md).
 
 ```text
 apkrun wrap <file.apk…|package> [--install] [--output <dir>] [--name <text>] [--icon <file>]
-[--updates automatic|notify|manual] [--provider <spec>]
-[--update-provider <type> --update-url <url>]
-[--window-size <w>x<h>] [--resizable | --no-resizable]
-[--portable] [--replace] [--open] [--yes] [--json]
-apkrun wrap <package> --distribution --identity <name> [--notarize --keychain-profile <p>] (M12)
+            [--updates automatic|notify|manual] [--provider <spec>]
+            [--update-provider <type> --update-url <url>]
+            [--window-size <w>x<h>] [--resizable | --no-resizable]
+            [--portable] [--replace] [--open] [--yes] [--json]
+apkrun wrap <package> --distribution --identity <name> [--notarize --keychain-profile <p>]   (M12)
 apkrun wrapper list [--json]
 apkrun wrapper info <package> [--json]
 apkrun wrapper refresh (<package>… | --all) [--name <text>] [--icon <file> | --android-icon] [--launcher-only]
@@ -897,29 +880,29 @@ public enum WrapperFailure: APKRunError {
     // generation and lifecycle (apkrund)
     case packageNotInstalled(PackageID)
     case invalidName(String)
-    case customIconInvalid(IconInputProblem) // unreadable, not square, smaller than 512 px
-    case iconConversionFailed(String) // iconutil status and message
-    case launcherTemplateInvalid(String) // missing, wrong architecture, signature invalid
+    case customIconInvalid(IconInputProblem)          // unreadable, not square, smaller than 512 px
+    case iconConversionFailed(String)                 // iconutil status and message
+    case launcherTemplateInvalid(String)              // missing, wrong architecture, signature invalid
     case destinationNotWritable(URL)
     case destinationNotAccessible(URL, stagingToken: String)
-    case nameConflict(URL, existing: ExistingItemKind) //.otherWrapper(PackageID),.otherApp,.file
+    case nameConflict(URL, existing: ExistingItemKind) // .otherWrapper(PackageID), .otherApp, .file
     case wrapperExists(PackageID, URL)
     case wrapperRunning(PackageID)
     case wrapperNotFound(PackageID)
     case signingFailed(status: Int32, message: String)
     case verificationFailed(String)
-    case registrationFailed(OSStatus) // LSRegisterURL, reported as a warning
-    case registryUnavailable // unreadable registry.json (kept as.corrupt-<time>)
+    case registrationFailed(OSStatus)                 // LSRegisterURL, reported as a warning
+    case registryUnavailable                          // unreadable registry.json (kept as .corrupt-<time>)
     case refreshBlocked(String, stagingToken: String?) // App Management denial; the token of the staged Contents for APKRun.app (§9.3)
-    case stagingExpired // placeStagedWrapper: unknown token, older than 60 min, or from before an apkrund restart (§6.3, §9.3)
+    case stagingExpired                               // placeStagedWrapper: unknown token, older than 60 min, or from before an apkrund restart (§6.3, §9.3)
     // approval and bootstrap
     case bundleInvalid(URL, reason: BundleProblem)
     case approvalDenied
     case approvalTimedOut
-    case approvalNotFound // decideApproval for an unknown, answered, or expired prompt (§7.3 step 5)
+    case approvalNotFound                             // decideApproval for an unknown, answered, or expired prompt (§7.3 step 5)
     case translocated
-    case bootstrapInvalid(BootstrapProblem) // hash mismatch, package mismatch, bad JSON
-    case bootstrapNotAllowed(BootstrapRefusal) // already installed, not approved
+    case bootstrapInvalid(BootstrapProblem)           // hash mismatch, package mismatch, bad JSON
+    case bootstrapNotAllowed(BootstrapRefusal)        // already installed, not approved
     // launcher (shown as screens, §5.4)
     case runtimeMissing
     case runtimeNotReady
@@ -933,15 +916,15 @@ public enum WrapperFailure: APKRunError {
 }
 
 public enum IconInputProblem: String, Sendable, Codable {
-    case unreadable, notSquare, tooSmall // tooSmall: smaller than 512 px
+    case unreadable, notSquare, tooSmall              // tooSmall: smaller than 512 px
 }
 
-public enum BundleProblem: String, Sendable, Codable { // the static checks of §7.3 step 1
+public enum BundleProblem: String, Sendable, Codable {    // the static checks of §7.3 step 1
     case signatureInvalid, identifierMismatch, bundleIDMismatch, wrapperJSONInvalid, packageMismatch
 }
 
 public enum BootstrapProblem: String, Sendable, Codable {
-    case hashMismatch, packageMismatch, malformed // malformed: bad JSON
+    case hashMismatch, packageMismatch, malformed     // malformed: bad JSON
 }
 
 public enum BootstrapRefusal: String, Sendable, Codable {
@@ -955,7 +938,7 @@ Each case has a stable code, a message, and a remediation in [../03-reference/er
 
 ## 14. Logging, markers, health
 
-- Subsystem `io.apkrun.wrapper`. Categories: `generate`, `sign`, `icon`, `registry`, `approval`, `lifecycle` (apkrund); `launcher`, `window` (wrapper process). Package ID, bundle ID, cdhash, and paths inside the user's home are logged with `privacy:.public` for IDs and `.private` for paths ([diagnostics.md](diagnostics.md) §6).
+- Subsystem `io.apkrun.wrapper`. Categories: `generate`, `sign`, `icon`, `registry`, `approval`, `lifecycle` (apkrund); `launcher`, `window` (wrapper process). Package ID, bundle ID, cdhash, and paths inside the user's home are logged with `privacy: .public` for IDs and `.private` for paths ([diagnostics.md](diagnostics.md) §6).
 - Markers ([diagnostics.md](diagnostics.md) §4): `WRAPPER_PROCESS_START` (launcher `main`, part of the launch budget), `WRAPPER_GENERATE_START` / `WRAPPER_GENERATE_END`, `WRAPPER_REFRESH_END`, `WRAPPER_APPROVAL_END {result}`.
 - Health checks for `apkrun doctor` ([diagnostics.md](diagnostics.md) §7):
 
@@ -999,7 +982,7 @@ The order follows the dependencies: #044 → #045 → #046 → #047 (G8), #055 �
 ### #046 Hello.app: label, icon, ID, ad-hoc signing (M7)
 
 1. `WrapperSigner` ad-hoc (§7.1), cdhash into the registry, `createWrapper` on the control endpoint, and a first `apkrun wrap <package>`.
-2. Acceptance: `HelloText.app` is generated from the installed fixture with its Android label, icon, and bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`. `codesign -dv` shows `Signature=adhoc` and that identifier. `codesign --verify --strict` passes. `open HelloText.app` starts the launcher and opens the app. the plan calls the bundle "Hello.app". The fixture's label decides the name.
+2. Acceptance: `HelloText.app` is generated from the installed fixture with its Android label, icon, and bundle ID `io.apkrun.android.io.apkrun.fixture.hellotext`. `codesign -dv` shows `Signature=adhoc` and that identifier. `codesign --verify --strict` passes. `open HelloText.app` starts the launcher and opens the app. The task title says "Hello.app"; the fixture's label decides the actual name.
 
 ### #047 Double-click a wrapper (M7, gate G8)
 

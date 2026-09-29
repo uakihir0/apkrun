@@ -69,22 +69,21 @@ On a reconnect to apkrund (after a crash or an update), every model reloads its 
 ### 2.3 Source layout
 
 ```text
-Apps/
-├── APKRun/
-│   ├── APKRunApp.swift # scenes, URL and document handling (§3)
-│   ├── Models/ # §2.2
-│   ├── Features/
-│   │   ├── Onboarding/ # §4
-│   │   ├── Home/ # §5
-│   │   ├── AddFlow/ # §6
-│   │   ├── AppPage/ # §7 (one file per settings section)
-│   │   ├── Uninstall/ # §8
-│   │   ├── Settings/ # §9 (one file per pane)
-│   │   ├── Approvals/ # §10
-│   │   └── Troubleshooting/ # §9.8
-│   ├── Components/ # shared views: AppIconView, StatusBadge, ErrorView, ProgressRow, DropZone
-│   └── Resources/ # Localizable.xcstrings, Assets.xcassets, InfoPlist.xcstrings
-└── APKRunMenuBar/ # menu bar UI, described in §12
+Apps/APKRun/
+├── APKRunApp.swift            scenes, URL and document handling (§3)
+├── Models/                    §2.2
+├── Features/
+│   ├── Onboarding/            §4
+│   ├── Home/                  §5
+│   ├── AddFlow/               §6
+│   ├── AppPage/               §7 (one file per settings section)
+│   ├── Uninstall/             §8
+│   ├── Settings/              §9 (one file per pane)
+│   ├── Approvals/             §10
+│   └── Troubleshooting/       §9.8
+├── Components/                shared views: AppIconView, StatusBadge, ErrorView, ProgressRow, DropZone
+└── Resources/                 Localizable.xcstrings, Assets.xcassets, InfoPlist.xcstrings
+Apps/APKRunMenuBar/            §12
 ```
 
 `Components/` is a named owner of shared views inside the app target, not a general utilities folder ([../01-architecture/modules.md](../01-architecture/modules.md) §1).
@@ -137,20 +136,20 @@ Opening a file (double-click, **Open With**, a drop on the Dock icon, or `open -
 Shown as a sheet on the first launch, and whenever setup is not `complete`. It drives the provisioning steps of [runtime-daemon.md](runtime-daemon.md) §9.2 and shows `ProvisioningState`.
 
 ```text
-┌────────────────────────────────────────────────┐
-│ Welcome to APKRun                              │
-│ Run Android apps as Mac apps.                  │
-│ ────────────────────────────────────────────   │
-│ ✓ Background service allowed                   │
-│ ✓ This Mac can run APKRun                      │
-│ ◐ Installing Android… ▓▓▓▓▓░░ 62%              │
-│ ○ Starting Android for the first time          │
-│ ○ Checking that everything works               │
-│ ────────────────────────────────────────────   │
-│ This takes a few minutes. You can close this   │
-│ window. Setup continues when you come back.    │
-│ [ Cancel ]                                     │
-└────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│               Welcome to APKRun               │
+│  Run Android apps as Mac apps.                │
+│                                               │
+│  ✓ Background service allowed                 │
+│  ✓ This Mac can run APKRun                    │
+│  ◐ Installing Android…            ▓▓▓▓▓░░ 62% │
+│  ○ Starting Android for the first time        │
+│  ○ Checking that everything works             │
+│                                               │
+│  This takes a few minutes. You can close this │
+│  window. Setup continues when you come back.  │
+│                                  [ Cancel ]   │
+└───────────────────────────────────────────────┘
 ```
 
 | Step | UI |
@@ -173,19 +172,22 @@ Shown as a sheet on the first launch, and whenever setup is not `complete`. It d
 ### 5.1 Layout
 
 ```text
-┌───────────────┬──────────────────────────────────────────────────────────────────┐
-│ APKRun        │ Android ● Ready · 2 apps running [Stop Android]                  │
-│ ▸ Apps 4      │ Drag APK, APKS, or XAPK files here to add                        │
-│ ▸ Updates 1   │ [icon] Discord ● running                                         │
-│ ▸ Other       │ Android version 245.0 · Updates: Automatic                       │
-│ Android Apps  │ Up to date [Open] [Settings]                                     │
-│               │ [icon] Spotify                                                   │
-│               │ Android version 8.10.2 · Updates: Automatic                      │
-│               │ Update available 8.10.3 [Update Now] [Open]                      │
-│               │ [icon] F-Droid Client                                            │
-│               │ Android version 1.21 · Updates: Notify only                      │
-│               │ ⚠ Mac app not found [Create Mac App] [Open]                      │
-└───────────────┴──────────────────────────────────────────────────────────────────┘
+┌──────────────┬──────────────────────────────────────────────────────────┐
+│ APKRun       │  Android  ● Ready        2 apps running     [Stop Android] │
+│              ├──────────────────────────────────────────────────────────┤
+│ ▸ Apps     4 │ ┌──────────────────────────────────────────────────────┐ │
+│ ▸ Updates  1 │ │        Drag APK, APKS, or XAPK files here to add      │ │
+│ ▸ Other      │ └──────────────────────────────────────────────────────┘ │
+│   Android    │  [icon] Discord            ● running                     │
+│   Apps       │         Android version 245.0 · Updates: Automatic       │
+│              │         Up to date                    [Open] [Settings]  │
+│              │  [icon] Spotify                                          │
+│              │         Android version 8.10.2 · Updates: Automatic      │
+│              │         Update available 8.10.3   [Update Now] [Open]    │
+│              │  [icon] F-Droid Client                                   │
+│              │         Android version 1.21 · Updates: Notify only      │
+│              │         ⚠ Mac app not found     [Create Mac App] [Open]  │
+└──────────────┴──────────────────────────────────────────────────────────┘
 ```
 
 - `NavigationSplitView` with the sidebar sections **Apps** (packages managed by APKRun), **Updates** (packages with an update available, waiting, or failed; badge = count), and **Other Android Apps** (launchable packages that APKRun does not manage, [package-store.md](package-store.md) §9.3).
@@ -203,7 +205,7 @@ Shown as a sheet on the first launch, and whenever setup is not `complete`. It d
 | `failed(f)` | ⚠ Android stopped unexpectedly | **Restart**, **Troubleshooting…** |
 | boot-loop guard active | ⚠ Android failed to start several times | **Restart**, **Start in Graphics Safe Mode**, **Reset Android…** ([runtime-daemon.md](runtime-daemon.md) §3.6) |
 | not provisioned | Setup isn't finished | **Continue Setup** |
-| `booting(phase)` with `bootPurpose =.imageUpdate(A, B)` | ◐ Updating Android… (phase text) | — ([runtime-maintenance.md](runtime-maintenance.md) §4.7) |
+| `booting(phase)` with `bootPurpose = .imageUpdate(A, B)` | ◐ Updating Android… (phase text) | — ([runtime-maintenance.md](runtime-maintenance.md) §4.7) |
 | host state `restartPending` | banner: "APKRun was updated. Restart Android to finish. ‹N› apps will close." | **Restart Now** ([runtime-maintenance.md](runtime-maintenance.md) §3.6, §7.3) |
 | current image too old for this APKRun (`incompatibleProtocol / hostNewer`) | banner: "Android needs an update to work with this version of APKRun." with the download and update progress | — ([runtime-maintenance.md](runtime-maintenance.md) §4.10) |
 | current image needs a newer APKRun (`incompatibleProtocol / guestNewer`, `incompatibleRuntime`) | banner with the entry's own text | **Check for Updates** (`updateAPKRun`, [runtime-maintenance.md](runtime-maintenance.md) §4.10) |
@@ -247,19 +249,19 @@ Packages installed in Android that APKRun does not manage (preinstalled apps, ap
 A sheet with four stages. The GUI passes open file handles; it never passes paths ([package-store.md](package-store.md) §4.1).
 
 ```text
-1 Reading 2 Review 3 Installing 4 Done
-───────── ────────────────────────────── ──────────── ──────────────
-Copying… ▓▓▓░ [icon] Discord Starting Android… ✓ Discord is ready
-Checking… ▓▓▓▓ com.discord · version 245.0 (245000) Installing… ▓▓▓░ [Open Discord]
-Signed by: ‹developer digest› ⓘ Creating Mac app… [Show in Finder]
-[Cancel] Size 142 MB · Needs Android 8.0+ [Done]
-────────────────────────────
-Updates ○ Automatic ○ Notify only ● Manual
-Update source: none [Choose…]
-☑ Create Mac app "Discord"
-Location: Applications (for me) ▾
-▸ Details (files, splits, permissions)
-[Cancel] [Install]
+ 1 Reading            2 Review                               3 Installing          4 Done
+ ─────────            ──────────────────────────────         ────────────          ──────────────
+ Copying… ▓▓▓░        [icon]  Discord                         Starting Android…     ✓ Discord is ready
+ Checking… ▓▓▓▓       com.discord · version 245.0 (245000)    Installing… ▓▓▓░      [Open Discord]
+                      Signed by: ‹developer digest›  ⓘ        Creating Mac app…     [Show in Finder]
+ [Cancel]             Size 142 MB · Needs Android 8.0+                              [Done]
+                      ────────────────────────────
+                      Updates   ○ Automatic  ○ Notify only  ● Manual
+                                Update source: none  [Choose…]
+                      ☑ Create Mac app  "Discord"
+                         Location: Applications (for me) ▾
+                      ▸ Details (files, splits, permissions)
+                                     [Cancel] [Install]
 ```
 
 ### 6.1 Review stage
@@ -322,7 +324,7 @@ A value that comes from the compatibility database, not from the user, shows "Re
 |---|---|---|
 | Default size | `window.defaultWidth`, `window.defaultHeight` | points; **Use Current Size** takes the size of the open window |
 | Resizable | `window.resizable` | on / off |
-| Always on top | `window.alwaysOnTop` | off (default) / on: the window floats above other windows (`NSWindow.level =.floating`, [display-and-windowing.md](display-and-windowing.md) §7.7) |
+| Always on top | `window.alwaysOnTop` | off (default) / on: the window floats above other windows (`NSWindow.level = .floating`, [display-and-windowing.md](display-and-windowing.md) §7.7) |
 | Zoom | `window.zoom` | 75 %–200 % ([display-and-windowing.md](display-and-windowing.md) §6.1) |
 | When I close the window | `window.closeBehavior` | **Quit the app** (`stop`) / **Keep it running in the background** (`keepRunning`). The second is needed for notifications and music while the window is closed ([desktop-integration.md](desktop-integration.md) §5.3) |
 | Window mode | `window.mode` | **Standard** (`secondaryDisplay`) / **Compatibility** (`primaryDisplayCompatibility`) with the explanation of [display-and-windowing.md](display-and-windowing.md) §8 |
@@ -380,9 +382,9 @@ Sizes, **Uninstall…** (§8). For packages in `broken` state, **Repair…** exp
 ```text
 Uninstall “Discord”?
 Discord and its data will be removed from Android.
-☐ Keep app data (reinstalling Discord later restores it)
-☑ Also move the Mac app to the Trash
-[Cancel] [Uninstall]
+  ☐ Keep app data (reinstalling Discord later restores it)
+  ☑ Also move the Mac app to the Trash
+                                       [Cancel] [Uninstall]
 ```
 
 - The choices and defaults are those of [package-store.md](package-store.md) §8. "Also move the Mac app to the Trash" is shown only when a wrapper exists.
@@ -457,20 +459,20 @@ Disk use of images, the Android instance, packages, and caches. **Apps with kept
 apkrund's `WrapperApprovalService` asks through `ApprovalCenter` ([wrapper.md](wrapper.md) §7.3). If APKRun.app is not running, apkrund opens it with `--approve` and `activates = true`.
 
 ```text
-┌──────────────────────────────────────────────────┐
-│ [wrapper icon]                                   │
-│ Allow “Discord” to open com.discord in APKRun?   │
-│ ──────────────────────────────────────────────   │
-│ Location ~/Downloads/Discord.app                 │
-│ Signed by Developer ID: Example Inc. ✓           │
-│ (or: “Not signed by a developer”)                │
-│ Android app installed, version 245.0             │
-│ (or: “not installed. This Mac app                │
-│ contains version 245.0.”                         │
-│ ──────────────────────────────────────────────   │
-│ Only allow Mac apps you trust.                   │
-│ [Don't Allow] [Allow]                            │
-└──────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│ [wrapper icon]                                │
+│ Allow “Discord” to open com.discord in APKRun?│
+│                                               │
+│ Location   ~/Downloads/Discord.app            │
+│ Signed by  Developer ID: Example Inc. ✓       │
+│            (or: “Not signed by a developer”)  │
+│ Android app  installed, version 245.0         │
+│            (or: “not installed. This Mac app  │
+│             contains version 245.0.”)         │
+│                                               │
+│ Only allow Mac apps you trust.                │
+│                   [Don't Allow]   [Allow]     │
+└───────────────────────────────────────────────┘
 ```
 
 - **Allow** is not the default button (Return does not press it), because the prompt comes from a file the user may not have chosen.
@@ -510,29 +512,29 @@ Notification permission is requested for APKRun.app at the end of onboarding, no
 ## 12. Menu bar (#086, FR-UI-05)
 
 ```text
-┌──────────────────────────────────┐
-│ Android ● Ready                  │
-│ (Developer mode on)              │
-│ ──────────────────────────────   │
-│ Apps: 2 running                  │
-│ [icon] Discord                   │
-│ [icon] Spotify 🎙                 │
-│ ──────────────────────────────   │
-│ Updates: 2 available             │
-│ Spotify 8.10.3 Update            │
-│ F-Droid 1.22 Update              │
-│ Update All                       │
-│ ──────────────────────────────   │
-│ APKRun 1.3.0 is available        │
-│ Update…                          │
-│ Android system update ready      │
-│ Update Now                       │
-│ ──────────────────────────────   │
-│ Open APKRun…                     │
-│ Stop Android                     │
-│ ──────────────────────────────   │
-│ Quit Menu Bar Item               │
-└──────────────────────────────────┘
+┌─────────────────────────────────┐
+│ Android            ● Ready      │
+│   (Developer mode on)           │
+│─────────────────────────────────│
+│ Apps: 2 running                 │
+│   [icon] Discord                │
+│   [icon] Spotify   🎙           │
+│─────────────────────────────────│
+│ Updates: 2 available            │
+│   Spotify 8.10.3       Update   │
+│   F-Droid 1.22         Update   │
+│   Update All                    │
+│─────────────────────────────────│
+│ APKRun 1.3.0 is available       │
+│   Update…                       │
+│ Android system update ready     │
+│   Update Now                    │
+│─────────────────────────────────│
+│ Open APKRun…                    │
+│ Stop Android                    │
+│─────────────────────────────────│
+│ Quit Menu Bar Item              │
+└─────────────────────────────────┘
 ```
 
 - The status item is a template image. It is filled while Android runs, outlined while it is stopped or asleep, and has a dot when updates are available, the runtime failed, or a live health check needs attention ([diagnostics.md](diagnostics.md) §7.1). In the last case the menu shows "⚠ Needs attention" under the runtime line, which opens Troubleshooting.
@@ -555,7 +557,7 @@ Notification permission is requested for APKRun.app at the end of onboarding, no
 - Error messages and remediations come from the error catalog keys, so the GUI, the menu bar, and the CLI say the same thing.
 - Plurals use the catalog's plural variants ("1 app running" / "2 apps running"). Sizes use `ByteCountFormatter`, dates `Date.FormatStyle`.
 - CI fails when a catalog has untranslated or stale entries in a release build (#092). A pseudo-language run (`-AppleLanguages "(en-XA)"`, double-length strings) is part of the UI test suite to catch truncation.
-- **Accessibility:** every control has an accessibility label. Icon-only buttons have text labels. Status is never shown by color alone (each colored dot has text). The main window, sheets, and Settings are fully keyboard operable. Each release runs XCUITest's `performAccessibilityAudit` over the main screens. Android apps' own accessibility is out of scope ([display-and-windowing.md](display-and-windowing.md) §7.7).
+- **Accessibility:** every control has an accessibility label. Icon-only buttons have text labels. Status is never shown by color alone (each colored dot has text). The main window, sheets, and Settings are fully keyboard operable. Each release runs XCUITest's `performAccessibilityAudit()` over the main screens. Android apps' own accessibility is out of scope ([display-and-windowing.md](display-and-windowing.md) §7.7).
 
 ### 13.1 Terms
 

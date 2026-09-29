@@ -26,7 +26,7 @@ Each app session gets its own **Android display backed by a virtio-gpu scanout**
 ## Consequences
 
 - There are at most 15 concurrent app windows plus display 0 (the virtio-gpu limit). The DisplayPool reports exhaustion clearly.
-- Some apps assume display 0 (e.g. use `getDefaultDisplay` for metrics). Window mode fallback plus the compatibility DB (#090) handle these.
+- Some apps assume display 0 (e.g. use `getDefaultDisplay()` for metrics). Window mode fallback plus the compatibility DB (#090) handle these.
 - Android's system decorations and IME on secondary displays need configuration (`force_desktop_mode_on_external_displays` / `should_show_system_decorations`, IME policy). This is settled in #029 and in the custom product (#035).
 - Resize means a scanout mode change: a new EDID and display info → Android reconfiguration (#067).
 

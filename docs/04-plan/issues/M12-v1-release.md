@@ -130,18 +130,18 @@ The design steps are [../../02-design/desktop-integration.md](../../02-design/de
    - Check: a T2 test finds the card through `AdbClient`.
 4. **HelloAudio fixture** ([../test-strategy.md](../test-strategy.md) §4.2).
    - If the fixture does not exist, add it to the Gradle project in `Tests/Fixtures/AndroidApps/`. It has buttons and intents for:
-   - a 1 kHz tone;
-   - a sweep;
-   - a click track (one click per second);
-   - a 5 s recording that shows the level.
+     - a 1 kHz tone;
+     - a sweep;
+     - a click track (one click per second);
+     - a 5 s recording that shows the level.
    - It logs `play <name>` when playback starts and `recorded <frames> <peak>` after a recording.
    - Check: `scripts/check-fixtures.sh` passes, and the APK installs on the custom image.
 5. **Acceptance and measurement** (design step 2; [../../02-design/desktop-integration.md](../../02-design/desktop-integration.md) §8.3 #083).
    - T2: HelloAudio plays the tone. During playback the test reads `/proc/asound/card*/pcm*p/sub0/hw_params` and `status` through `AdbClient`. It asserts that the stream is running and logs the negotiated rate and format.
    - T3 on a lab Mac whose default output is a virtual loopback audio device:
-   - Capture the output and detect the 1 kHz tone and the sweep.
-   - Measure the latency as the click onset in the capture minus the time of the `play click` event. The event time is the guest wall clock, which #069 keeps in sync. Record the method and its error bound.
-   - Play for 10 minutes with the VM otherwise idle. The capture has no gap inside the tone. The underrun counter of the playback track in `dumpsys media.audio_flinger` does not increase.
+     - Capture the output and detect the 1 kHz tone and the sweep.
+     - Measure the latency as the click onset in the capture minus the time of the `play click` event. The event time is the guest wall clock, which #069 keeps in sync. Record the method and its error bound.
+     - Play for 10 minutes with the VM otherwise idle. The capture has no gap inside the tone. The underrun counter of the playback track in `dumpsys media.audio_flinger` does not increase.
    - Switch the macOS default output device during playback, and check that the sound moves.
    - Do checklist item C10-5 ([../test-strategy.md](../test-strategy.md) §8.7).
    - Check: the acceptance criteria below. The numbers are recorded in [../../02-design/desktop-integration.md](../../02-design/desktop-integration.md) §8.1.
@@ -203,7 +203,7 @@ An Android app that the user allows can record from the Mac microphone. Every ot
 - Per-package gating with app ops. The Guest Agent's `MicrophoneGate` sets `OP_RECORD_AUDIO` to `MODE_IGNORED` for every user-installed package outside `SetMicrophoneAccess` (op 53). Listed packages get `MODE_ALLOWED` or the default. Android's own `RECORD_AUDIO` dialog still appears.
 - Active recordings from `AudioManager.getActiveRecordingConfigurations`, sent as `RecordingChanged` (event 45). The host side:
   - `recordingChanged` on the `integrations` topic;
-  - `activeRecordings`;
+  - `activeRecordings()`;
   - the menu bar line "‹App› is using the microphone" and the microphone symbol ([../../02-design/host-ui.md](../../02-design/host-ui.md) §12).
 - The macOS permission state:
   - in `integrationStatus`;
@@ -251,11 +251,11 @@ The design steps are [../../02-design/desktop-integration.md](../../02-design/de
    - Check: a Kotlin T0 test of the mode table against a fake `AppOpsManager`. T2: `appops get <pkg> RECORD_AUDIO` shows `ignore` for an unlisted package and `allow` or `default` for a listed one.
 4. **Active-recording events** (design step 1, "active-recording events"; §8.2, §11; [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §8.1 event 45).
    - `MicrophoneGate` registers an `AudioManager.AudioRecordingCallback`. It sends `RecordingChanged(packages)` with the package names from `getActiveRecordingConfigurations`. Grant `MODIFY_AUDIO_ROUTING`, because without it the list is anonymized.
-   - IntegrationCore publishes `recordingChanged([PackageID])` on the `integrations` topic and serves `activeRecordings`. The menu bar shows "‹App› is using the microphone" and marks the app with the microphone symbol ([../../02-design/host-ui.md](../../02-design/host-ui.md) §12).
+   - IntegrationCore publishes `recordingChanged([PackageID])` on the `integrations` topic and serves `activeRecordings()`. The menu bar shows "‹App› is using the microphone" and marks the app with the microphone symbol ([../../02-design/host-ui.md](../../02-design/host-ui.md) §12).
    - Check: a T0 model test of the menu bar with a fake event stream. T2: `recordingChanged` names HelloAudio while it records and is empty afterwards.
 5. **Restart prompt and permission state** (design step 1, "the restart prompt"; §8.2, §11–§13; [../../02-design/host-ui.md](../../02-design/host-ui.md) §7.4, §9.4).
    - The app page shows "Android needs to restart to use the microphone." with **Restart Android Now** and **Later** when the first app turns the microphone on. The last-off change shows the same kind of prompt, so the input stream is removed.
-   - `integrationStatus` reports the macOS permission of apkrund. apkrund reads it with `AVCaptureDevice.authorizationStatus(for:.audio)`.
+   - `integrationStatus` reports the macOS permission of apkrund. apkrund reads it with `AVCaptureDevice.authorizationStatus(for: .audio)`.
    - The app page and Settings → Privacy show the state. Denied shows how to allow it, with **Open System Settings**.
    - The `integrations.microphone` check warns when permission is denied or a restart is pending. Add `microphonePermissionDenied` and `microphoneNeedsRestart`.
    - Check: T0 model tests of the prompt for first-on and last-off, and of the denied state. A T0 test of the health check.
@@ -376,8 +376,8 @@ The design steps are [../../02-design/wrapper.md](../../02-design/wrapper.md) §
    - `DistributionWrapperBuilder` generates a portable wrapper in staging with `APKRunWrapperKind = distribution`. The wrapper is not placed and not registered.
    - `WrapperSigner` signs it with `codesign --force --sign "<identity>" --identifier <bundleID> --options runtime --timestamp`. It then verifies with `codesign --verify --strict` and `SecStaticCodeCheckValidity`.
    - The tool checks come before any work:
-   - `xcrun --find notarytool` and `xcrun --find stapler`. A missing tool gives `distributionToolMissing`.
-   - `security find-identity -v -p codesigning` for the identity. A missing identity gives `identityNotFound`.
+     - `xcrun --find notarytool` and `xcrun --find stapler`. A missing tool gives `distributionToolMissing`.
+     - `security find-identity -v -p codesigning` for the identity. A missing identity gives `identityNotFound`.
    - Check: T0 tests with a fake process runner cover the argument lists, the missing-tool error, and the missing-identity error. A T1 test signs a wrapper with a test identity that it imports into a temporary keychain from `Tests/Fixtures/signing/test-*`, and verifies the seal.
 5. **Notarization and output** (design step 1; §11 steps 4–6).
    - With `--notarize`, the builder zips with `ditto -c -k --keepParent`. It runs `xcrun notarytool submit <name>.zip --keychain-profile <profile> --wait --output-format json`.
@@ -497,10 +497,10 @@ The design steps are [../../02-design/diagnostics.md](../../02-design/diagnostic
    - Check: T0 test T1-10 of [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §12 (signer, version range, narrowest range wins). T0: a corrupt file gives an empty database and no crash.
 3. **Settings resolution and the RuntimeAPI field** (design step 1, "`PackageSettingsResolver`, and the `compatibility` field in the RuntimeAPI package DTOs"; §10.3; [../../03-reference/configuration.md](../../03-reference/configuration.md) §3.2, §3.3).
    - `PackageSettingsResolver` returns the effective value and its source for each key. The first matching rule wins:
-   1. a global switch that is off;
-   2. the value in `settings.json`;
-   3. the recommendation for the installed version;
-   4. the built-in default.
+     1. a global switch that is off;
+     2. the value in `settings.json`;
+     3. the recommendation for the installed version;
+     4. the built-in default.
    - Recommendations are never written. **Reset** removes the stored value. Values from the first record that equal the built-in default are not written.
    - `PackageStore.settings(for:)` uses the resolver, so policy and window code see the recommendation.
    - Add `CompatibilityInfo{level, label, issues, recommendedKeys}` to the package DTOs and to the `inspectFile` result.
@@ -513,11 +513,11 @@ The design steps are [../../02-design/diagnostics.md](../../02-design/diagnostic
    - Check: T0 model tests for the three labels, no entry, and **Install Anyway**. CLI golden files.
 5. **Runs and the first seed** (design step 3; §10.4; [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §8).
    - `run-compatibility.sh` reads `apps.json` (the fixture apps, the 50-APK F-Droid corpus, and the hand-installed sample). For each app it:
-   - installs and launches it in the standard window mode;
-   - checks for a non-blank first frame within 20 s;
-   - runs `monkey` for 60 s with a fixed seed through ADB in developer mode;
-   - checks the integrations the app uses;
-   - repeats in the compatibility window mode when the standard mode fails.
+     - installs and launches it in the standard window mode;
+     - checks for a non-blank first frame within 20 s;
+     - runs `monkey` for 60 s with a fixed seed through ADB in developer mode;
+     - checks the integrations the app uses;
+     - repeats in the compatibility window mode when the standard mode fails.
    - It writes one proposal per app to `Tests/Compatibility/out/`.
    - A maintainer reviews the proposals and commits the seed, together with the #029 results. The nightly `compatibility` job runs the corpus.
    - Check: the first run over the corpus and the fixtures finishes. The committed seed passes the schema check.
@@ -593,10 +593,10 @@ Every trust boundary of [../../01-architecture/security-model.md](../../01-archi
 - The fuzz targets:
   - every target in the list of [../test-strategy.md](../test-strategy.md) §7.2;
   - the other parsers that the design documents assign to #091:
-  - `ResourceTable` and a virgl command-stream fuzzer in a separate test process ([../../02-design/graphics.md](../../02-design/graphics.md) §11);
-  - the aapt2 output parser ([../../02-design/package-store.md](../../02-design/package-store.md) §14);
-  - the Direct manifest parser, the F-Droid index decoder and `entry.jar` parser, and the GitHub release decoder ([../../02-design/update-system.md](../../02-design/update-system.md) §12);
-  - the injector's batch validator in Kotlin ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §16).
+    - `ResourceTable` and a virgl command-stream fuzzer in a separate test process ([../../02-design/graphics.md](../../02-design/graphics.md) §11);
+    - the aapt2 output parser ([../../02-design/package-store.md](../../02-design/package-store.md) §14);
+    - the Direct manifest parser, the F-Droid index decoder and `entry.jar` parser, and the GitHub release decoder ([../../02-design/update-system.md](../../02-design/update-system.md) §12);
+    - the injector's batch validator in Kotlin ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §16).
 - The malicious-agent T2 test of host operations. It extends the #082 test build ([../../02-design/desktop-integration.md](../../02-design/desktop-integration.md) §15).
 - The aapt2 `sandbox-exec` profile, which [package-store.md](../../02-design/package-store.md) §4 lists as a hardening item of this task.
 - Complete tests for NFR-SEC-06 and NFR-SEC-07 ([../test-strategy.md](../test-strategy.md) §7.2).
@@ -630,17 +630,17 @@ Every trust boundary of [../../01-architecture/security-model.md](../../01-archi
 
 1. **Review items** ([../../01-architecture/security-model.md](../../01-architecture/security-model.md) §2–§8; [../../02-design/runtime-maintenance.md](../../02-design/runtime-maintenance.md) §10).
    - Fill in the "Review items" section (§9). It already lists one item (SR-01…SR-11) for each of these:
-   - the XPC broker and endpoints;
-   - the guest → host parsers (virtio-gpu, guest protocol, input);
-   - the agent host operations (clipboard, notifications, links, files, microphone);
-   - APK and container parsing, including aapt2;
-   - provider parsing and the update validation pipeline;
-   - APKRun and image updates;
-   - signing, entitlements, and the release checks;
-   - the custom image's SELinux, vsock, and privileged permissions;
-   - ADB exposure;
-   - secrets in logs and bundles;
-   - keys and secrets storage.
+     - the XPC broker and endpoints;
+     - the guest → host parsers (virtio-gpu, guest protocol, input);
+     - the agent host operations (clipboard, notifications, links, files, microphone);
+     - APK and container parsing, including aapt2;
+     - provider parsing and the update validation pipeline;
+     - APKRun and image updates;
+     - signing, entitlements, and the release checks;
+     - the custom image's SELinux, vsock, and privileged permissions;
+     - ADB exposure;
+     - secrets in logs and bundles;
+     - keys and secrets storage.
    - Each item names its evidence (a test, a fuzz target, or a review note) and has a status.
    - Check: each item names its evidence and has a status.
 2. **Fuzzing infrastructure** ([../../05-development/build-system.md](../../05-development/build-system.md) §15.2).
@@ -658,12 +658,12 @@ Every trust boundary of [../../01-architecture/security-model.md](../../01-archi
    - Check: the targets run in the Gradle test run and in `fuzz-long`. Invalid batches are dropped and counted, never thrown past the decoder.
 5. **APK and provider targets** ([../../02-design/package-store.md](../../02-design/package-store.md) §14; [../../02-design/update-system.md](../../02-design/update-system.md) §12; [../../03-reference/direct-provider-manifest.md](../../03-reference/direct-provider-manifest.md)).
    - Targets:
-   - the `ContainerReader` of APKStoreCore (ZIP, `.apks`, `.xapk`, `.apkm`, ADR-0017);
-   - the APK Signing Block parser of `APKSignatureVerifier`;
-   - the aapt2 output parser, seeded with recorded outputs;
-   - the Direct manifest parser (1 MiB);
-   - the F-Droid index decoder (64 MiB memory) and `entry.jar` parser;
-   - the GitHub release decoder (4 MiB).
+     - the `ContainerReader` of APKStoreCore (ZIP, `.apks`, `.xapk`, `.apkm`, ADR-0017);
+     - the APK Signing Block parser of `APKSignatureVerifier`;
+     - the aapt2 output parser, seeded with recorded outputs;
+     - the Direct manifest parser (1 MiB);
+     - the F-Droid index decoder (64 MiB memory) and `entry.jar` parser;
+     - the GitHub release decoder (4 MiB).
    - Each parser enforces its size limit before parsing.
    - Check: each target runs 60 s without a crash. An oversized input gives the typed error, never a trap.
 6. **aapt2 sandbox** ([../../02-design/package-store.md](../../02-design/package-store.md) §4).
@@ -674,11 +674,11 @@ Every trust boundary of [../../01-architecture/security-model.md](../../01-archi
    - Extend the #082 malicious-agent test build into protocol fuzzing of host operations. It sends mutated requests for every agent → host operation and every integration payload, oversized frames, and floods above the rate limits.
    - The build is test-only and never part of a release image.
    - Complete the NFR-SEC-07 tests:
-   - T1 authorization per endpoint;
-   - T2: another signing identity is refused, a wrapper for another package gets `notAuthorized`, and a modified or re-signed wrapper is refused.
+     - T1 authorization per endpoint;
+     - T2: another signing identity is refused, a wrapper for another package gets `notAuthorized`, and a modified or re-signed wrapper is refused.
    - Complete NFR-SEC-06:
-   - the ADB forward listens on `127.0.0.1` only (`lsof -nP -iTCP -sTCP:LISTEN`);
-   - with developer mode off, nothing listens on vsock 5555.
+     - the ADB forward listens on `127.0.0.1` only (`lsof -nP -iTCP -sTCP:LISTEN`);
+     - with developer mode off, nothing listens on vsock 5555.
    - Check: the T2 tests pass. apkrund survives the malicious agent with no crash, and every rejected request is counted.
 8. **Code audit and long runs** ([../../05-development/coding-conventions.md](../../05-development/coding-conventions.md) §11, §13).
    - List every `// SECURITY:` entry point. Each one must have a fuzz target or a named test. Review every `// UNSAFE:` block.
@@ -753,7 +753,7 @@ With the Mac set to Japanese, every screen of APKRun.app, the menu bar, the laun
   - a label on every control, and text labels on icon-only buttons;
   - no status shown by colour alone;
   - full keyboard operation of the main window, sheets, and Settings;
-  - `performAccessibilityAudit` over the main screens.
+  - `performAccessibilityAudit()` over the main screens.
 - Out of scope ([../../00-product/scope.md](../../00-product/scope.md) §5):
   - Languages other than English and Japanese.
   - Accessibility inside Android apps ([../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §7.7).
@@ -794,7 +794,7 @@ The design steps are [../../02-design/host-ui.md](../../02-design/host-ui.md) §
 6. **Accessibility** (design step 3, "the accessibility audit passes"; §13).
    - Add missing accessibility labels. Give icon-only buttons text labels. Add text to every coloured status dot.
    - Make the main window, sheets, and Settings fully keyboard operable.
-   - Run `performAccessibilityAudit` over the main screens.
+   - Run `performAccessibilityAudit()` over the main screens.
    - Check: the audit passes with no issue. C10-1 (VoiceOver walkthrough) is done.
 7. **Acceptance** (design step 3).
    - With the Mac set to Japanese, check every screen of §4–§12 and every CLI message of the #075 and #059 tests.
@@ -897,9 +897,9 @@ Every component that APKRun.app or the runtime image ships has a known, compatib
    - Check: a release bundle passes ImageCore verification with the notice file. The notices are visible in Android.
 5. **Redistribution review** ([../../01-architecture/decisions/0001-real-android-in-vm.md](../../01-architecture/decisions/0001-real-android-in-vm.md); [../../02-design/wrapper.md](../../02-design/wrapper.md) §11).
    - Confirm three things:
-   - no stock Google-built image is distributed;
-   - no GMS component is in the image;
-   - the distribution wrapper confirmation text states the creator's responsibility.
+     - no stock Google-built image is distributed;
+     - no GMS component is in the image;
+     - the distribution wrapper confirmation text states the creator's responsibility.
    - Record the results in the checklist.
    - Check: each item has a result.
 6. **Legal review and checklist** ([../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md)).

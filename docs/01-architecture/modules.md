@@ -13,31 +13,31 @@ This document is normative. A change to a module's ownership or to the allowed d
 
 ```text
 apkrun/
-├── AGENTS.md # rules for implementers (humans and AI agents)
-├── CLAUDE.md # points to AGENTS.md
+├── AGENTS.md                 # rules for implementers (humans and AI agents)
+├── CLAUDE.md                 # points to AGENTS.md
 ├── README.md
-├── Package.swift # single SwiftPM manifest for all Packages/* targets + CLI
-├── project.yml # XcodeGen spec for app/daemon/launcher targets (see build-system.md)
+├── Package.swift             # single SwiftPM manifest for all Packages/* targets + CLI
+├── project.yml               # XcodeGen spec for app/daemon/launcher targets (see build-system.md)
 │
 ├── Apps/
-│   ├── APKRun/ # main GUI app (SwiftUI)
-│   ├── APKRunMenuBar/ # menu bar extra (login item)
-│   └── APKRunLauncher/ # the wrapper executable (AppKit)
+│   ├── APKRun/               # main GUI app (SwiftUI)
+│   ├── APKRunMenuBar/        # menu bar extra (login item)
+│   └── APKRunLauncher/       # the wrapper executable (AppKit)
 │
 ├── Daemon/
-│   └── apkrund/ # LaunchAgent executable (thin main; logic in RuntimeHost)
+│   └── apkrund/              # LaunchAgent executable (thin main; logic in RuntimeHost)
 │
 ├── CLI/
-│   └── apkrun/ # swift-argument-parser CLI
+│   └── apkrun/               # swift-argument-parser CLI
 │
-├── Packages/ # Swift library targets (one directory per module)
+├── Packages/                 # Swift library targets (one directory per module)
 │   ├── DiagnosticsCore/
 │   ├── VirtioDeviceCore/
 │   ├── VirtualMachineCore/
-│   ├── GraphicsCore/ # includes GraphicsBridge (C / Objective-C++ target)
+│   ├── GraphicsCore/         # includes GraphicsBridge (C / Objective-C++ target)
 │   ├── InputCore/
 │   ├── WindowingCore/
-│   ├── GuestProtocol/ # .proto sources + generated Swift + framing
+│   ├── GuestProtocol/        # .proto sources + generated Swift + framing
 │   ├── ImageCore/
 │   ├── RuntimeAPI/
 │   ├── RuntimeCore/
@@ -47,42 +47,42 @@ apkrun/
 │   ├── UpdateCore/
 │   ├── WrapperCore/
 │   └── IntegrationCore/
+│       # each module: Sources/<Module>/ and Tests/<Module>Tests/ (T0), Tests/<Module>SystemTests/ (T1),
+│       # Tests/<Module>TestSupport/ (fakes), Tests/<Module>Fuzz/ (only with APKRUN_FUZZ=1); build-system.md §2.1
 │
-├── Guest/ # everything that runs inside Android (one Gradle build for the Kotlin parts)
-│   ├── protocol/ # Kotlin: generated protobuf lite + frame codec (from Packages/GuestProtocol/proto)
-│   ├── agentruntime/ # Kotlin: shared runtime of both agents: system-service wrappers, socket server, peer checks, logging
-│   ├── guestd/ # Guest Agent (Kotlin): package io.apkrun.guest, process apkrun_guestd
-│   ├── APKRunStore/ # Store Agent (Kotlin): package io.apkrun.store
-│   ├── vsockd/ # apkrun_vsockd (Rust): vsock ↔ agent local-socket bridge (custom image only)
-│   └── product/ # AOSP product: device makefiles, init.rc, sepolicy, overlays, permissions
+├── Guest/                    # everything that runs inside Android (one Gradle build for the Kotlin parts)
+│   ├── protocol/             # Kotlin: generated protobuf lite + frame codec (from Packages/GuestProtocol/proto)
+│   ├── agentruntime/         # Kotlin: shared runtime of both agents: system-service wrappers, socket server, peer checks, logging
+│   ├── guestd/               # Guest Agent (Kotlin): package io.apkrun.guest, process apkrun_guestd
+│   ├── APKRunStore/          # Store Agent (Kotlin): package io.apkrun.store
+│   ├── vsockd/               # apkrun_vsockd (Rust): vsock ↔ agent local-socket bridge (custom image only)
+│   └── product/              # AOSP product: device makefiles, init .rc, sepolicy, overlays, permissions
 │
 ├── Images/
-│   ├── manifests/ # committed per build: <buildId>/inventory.json and android-image.json
-│   ├── reference/ # committed Cuttlefish reference captures (<buildId>/) and VZ topology (vz/)
-│   └── tools/ # Python tooling: inventory, boot image extraction, bootconfig, disk assembly, bundling
+│   ├── manifests/            # committed per build: <buildId>/inventory.json and android-image.json
+│   ├── reference/            # committed Cuttlefish reference captures (<buildId>/) and VZ topology (vz/)
+│   └── tools/                # Python tooling: inventory, boot image extraction, bootconfig, disk assembly, bundling
 │
 ├── ThirdParty/
-│   ├── ThirdParty.lock.json # pinned revisions, licenses, flags, patches
+│   ├── ThirdParty.lock.json  # pinned revisions, licenses, flags, patches
 │   ├── patches/<name>/*.patch
-│   └── build/ # build scripts for virglrenderer, ANGLE, …
+│   └── build/                # build scripts for virglrenderer, ANGLE, …
 │
 ├── Tests/
-│   ├── IntegrationTests/ # Swift tests that need a real VM (tier T2), one <Area>Tests/ each, including SecurityTests/
-│   ├── AcceptanceTests/ # scripted gate checks (tier T3)
-│   ├── PerformanceTests/ # apkrun-perf harness and per-Mac baselines (diagnostics.md §9)
-│   ├── Compatibility/ # compatibility runs, app list, and the compatibility database source (diagnostics.md §10)
+│   ├── IntegrationTests/     # Swift tests that need a real VM (tier T2), one <Area>Tests/ each, including SecurityTests/
+│   ├── AcceptanceTests/      # scripted gate checks (tier T3)
+│   ├── PerformanceTests/     # apkrun-perf harness and per-Mac baselines (diagnostics.md §9)
+│   ├── Compatibility/        # compatibility runs, app list, and the compatibility database source (diagnostics.md §10)
 │   └── Fixtures/
-│       ├── AndroidApps/ # Gradle project: HelloText, HelloCompose, HelloGL, …
-│       ├── fuzz/<target>/ # fuzz seed corpora and crash reproducers (test-strategy.md §7.2)
-│       ├── signing/ # test-only keystores (never production keys)
-│       └── update-repos/ # LocalProvider / Direct / F-Droid / GitHub fixtures
+│       ├── AndroidApps/      # Gradle project: HelloText, HelloCompose, HelloGL, …
+│       ├── fuzz/<target>/    # fuzz seed corpora and crash reproducers (test-strategy.md §7.2)
+│       ├── signing/          # test-only keystores (never production keys)
+│       └── update-repos/     # LocalProvider / Direct / F-Droid / GitHub fixtures
 │
-├── Experiments/ # spikes; never imported by production targets
-├── scripts/ # developer scripts (bootstrap, lint, fetch artifacts, run gates)
-└── docs/ # the specification (docs/README.md); docs/releases/ holds the release notes
+├── Experiments/              # spikes; never imported by production targets
+├── scripts/                  # developer scripts (bootstrap, lint, fetch artifacts, run gates)
+└── docs/                     # the specification (docs/README.md); docs/releases/ holds the release notes
 ```
-
-Each module contains `Sources/<Module>/` and `Tests/<Module>Tests/` (T0). Modules may also have `Tests/<Module>SystemTests/` (T1), `Tests/<Module>TestSupport/` for fakes, and `Tests/<Module>Fuzz/` when built with `APKRUN_FUZZ=1` ([build-system.md](../05-development/build-system.md) §2.1).
 
 Forbidden: generic dumping grounds such as `Common/`, `Utils/`, `Helpers/`, `Misc/`. A shared abstraction needs a named owner module.
 
@@ -165,40 +165,40 @@ Each module has one owner boundary. "Must not" rules are enforced in code review
 Arrows mean "may import". Anything not listed is forbidden.
 
 ```text
-DiagnosticsCore (leaf)
-GuestProtocol → SwiftProtobuf
-RuntimeAPI → (Foundation, IOSurface)
-VirtioDeviceCore → DiagnosticsCore
-VirtualMachineCore → VirtioDeviceCore, DiagnosticsCore
-GraphicsCore → VirtioDeviceCore, DiagnosticsCore, GraphicsBridge(C)
-InputCore → DiagnosticsCore
-WindowingCore → InputCore, DiagnosticsCore
-ImageCore → VirtualMachineCore (VMDefinition types), DiagnosticsCore
-RuntimeCore → VirtualMachineCore, GraphicsCore, InputCore, GuestProtocol,
-ImageCore, RuntimeAPI, DiagnosticsCore
-APKStoreCore → GuestProtocol, RuntimeAPI, DiagnosticsCore, ZIPFoundation
-UpdateCore → APKStoreCore, RuntimeAPI, DiagnosticsCore, ZIPFoundation
-WrapperCore → RuntimeAPI, DiagnosticsCore
-IntegrationCore → GuestProtocol, RuntimeAPI, DiagnosticsCore
-RuntimeClient → RuntimeAPI, DiagnosticsCore
-RuntimeHost → RuntimeCore, APKStoreCore, UpdateCore, WrapperCore,
-IntegrationCore, ImageCore, InputCore, RuntimeAPI, DiagnosticsCore
+DiagnosticsCore          (leaf)
+GuestProtocol            → SwiftProtobuf
+RuntimeAPI               → (Foundation, IOSurface)
+VirtioDeviceCore         → DiagnosticsCore
+VirtualMachineCore       → VirtioDeviceCore, DiagnosticsCore
+GraphicsCore             → VirtioDeviceCore, DiagnosticsCore, GraphicsBridge(C)
+InputCore                → DiagnosticsCore
+WindowingCore            → InputCore, DiagnosticsCore
+ImageCore                → VirtualMachineCore (VMDefinition types), DiagnosticsCore
+RuntimeCore              → VirtualMachineCore, GraphicsCore, InputCore, GuestProtocol,
+                           ImageCore, RuntimeAPI, DiagnosticsCore
+APKStoreCore             → GuestProtocol, RuntimeAPI, DiagnosticsCore, ZIPFoundation
+UpdateCore               → APKStoreCore, RuntimeAPI, DiagnosticsCore, ZIPFoundation
+WrapperCore              → RuntimeAPI, DiagnosticsCore
+IntegrationCore          → GuestProtocol, RuntimeAPI, DiagnosticsCore
+RuntimeClient            → RuntimeAPI, DiagnosticsCore
+RuntimeHost              → RuntimeCore, APKStoreCore, UpdateCore, WrapperCore,
+                           IntegrationCore, ImageCore, InputCore, RuntimeAPI, DiagnosticsCore
 ```
 
 Executables:
 
 ```text
-apkrund → RuntimeHost
-APKRunLauncher → RuntimeClient, RuntimeAPI, WindowingCore, InputCore, DiagnosticsCore
-APKRun.app → RuntimeClient, RuntimeAPI, DiagnosticsCore, Sparkle (third party; APKRun updates, ADR-0016)
-APKRunMenuBar → RuntimeClient, RuntimeAPI, DiagnosticsCore
-apkrun (CLI) → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser)
-+ RuntimeHost, WindowingCore, InputCore only when built with APKRUN_EMBEDDED_RUNTIME (SwiftPM trait EmbeddedRuntime)
+apkrund          → RuntimeHost
+APKRunLauncher   → RuntimeClient, RuntimeAPI, WindowingCore, InputCore, DiagnosticsCore
+APKRun.app       → RuntimeClient, RuntimeAPI, DiagnosticsCore, Sparkle (third party; APKRun updates, ADR-0016)
+APKRunMenuBar    → RuntimeClient, RuntimeAPI, DiagnosticsCore
+apkrun (CLI)     → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser)
+                   + RuntimeHost, WindowingCore, InputCore only when built with APKRUN_EMBEDDED_RUNTIME (SwiftPM trait EmbeddedRuntime)
 ```
 
 Notes:
 
-- had `APKRun.app → RuntimeCore`. That would let the GUI own the VM, which contradicts. The GUI uses `RuntimeClient` only.
+- An earlier sketch had `APKRun.app → RuntimeCore`. That would let the GUI own the VM, which contradicts ADR-0007. The GUI uses `RuntimeClient` only.
 - Clients import RuntimeAPI directly for the DTOs (for example `WrapperDocument` in the launcher). RuntimeClient does not re-export it.
 - APKStoreCore and IntegrationCore reach the guest through small channel protocols (`StoreAgentChannel`, `IntegrationChannel`) that RuntimeCore implements and RuntimeHost injects. This avoids an `APKStoreCore → RuntimeCore` edge.
 - The dependency rules are checked by `scripts/check-module-deps.sh` in CI (#062). It reads the allowed graph from the two code blocks of this section, then checks the target dependencies from `swift package dump-package`, the Xcode targets from `xcodegen dump`, and the `import` lines of every production source file (SwiftPM lets a target import anything in its dependency closure).

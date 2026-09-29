@@ -32,8 +32,8 @@ The design lives in [../02-design/android-image.md](../02-design/android-image.m
 
 ```text
 YYYY.MM.N-<base>-<arch>
-2026.10.0-cf16373615-arm64 stock image from ci.android.com build 16373615
-2026.10.0-ar000123-arm64 APKRun product image from builder build ar000123
+2026.10.0-cf16373615-arm64      stock image from ci.android.com build 16373615
+2026.10.0-ar000123-arm64        APKRun product image from builder build ar000123
 ```
 
 | Part | Rule | Meaning |
@@ -91,21 +91,21 @@ The layout is fixed by [../01-architecture/filesystem-layout.md](../01-architect
 
 ```text
 Images/<imageVersion>/
-├── manifest.json # §4, §5
-├── manifest.sig # §6.1
-├── SHA256SUMS # §6.2
+├── manifest.json            # §4, §5
+├── manifest.sig             # §6.1
+├── SHA256SUMS               # §6.2
 ├── boot/
-│   ├── kernel # uncompressed arm64 Image
-│   ├── ramdisk.img # vendor ramdisk fragments + generic ramdisk, no bootconfig trailer
-│   ├── bootconfig.txt # bootconfig layers 1 and 2 (§3.2)
-│   └── cmdline.txt # kernel command line (§3.3)
+│   ├── kernel               # uncompressed arm64 Image
+│   ├── ramdisk.img          # vendor ramdisk fragments + generic ramdisk, no bootconfig trailer
+│   ├── bootconfig.txt       # bootconfig layers 1 and 2 (§3.2)
+│   └── cmdline.txt          # kernel command line (§3.3)
 ├── disks/
-│   └── os.img # read-only raw GPT disk: boot and vbmeta partitions, unsparsed super
+│   └── os.img               # read-only raw GPT disk: boot and vbmeta partitions, unsparsed super
 ├── templates/
-│   ├── persistent.img # raw GPT template: misc, metadata, frp (blank)
-│   └── userdata.img # raw GPT template: userdata (§4.5)
+│   ├── persistent.img       # raw GPT template: misc, metadata, frp (blank)
+│   └── userdata.img         # raw GPT template: userdata (§4.5)
 └── legal/
-    └── notice.html # notices and source offers; release bundles only (§4.2)
+    └── notice.html          # notices and source offers; release bundles only (§4.2)
 ```
 
 - The bundle contains exactly these files: the three metadata files plus every path in `files` (§4.10). Anything else is `ImageFailure.unexpectedFile(file)`.
@@ -187,12 +187,7 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
         }
       ]
     },
-    "android": {
-      "release": "17",
-      "sdk": 37,
-      "variant": "userdebug",
-      "securityPatch": "2026-09"
-    },
+    "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-09" },
     "deviceFamily": "cuttlefish-phone-arm64",
     "layout": {
       "path": "Images/tools/layouts/cuttlefish-phone-arm64.json",
@@ -204,41 +199,16 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
       "mkbootimg": "fb725eb84f5db137341aee2a02ee57c0b9fcafed",
       "avbtool": "27dc57bfbba59baa6be09238d4c498a47fbd427f"
     },
-    "revisions": {
-      "imagesTools": "6877b3530a63a713f95c28e652995592dfba95e1",
-      "guest": null
-    },
+    "revisions": { "imagesTools": "6877b3530a63a713f95c28e652995592dfba95e1", "guest": null },
     "pinnedManifestSHA256": null,
     "builderImageDigest": null
   },
-  "guest": {
-    "sdk": 37,
-    "abis": [
-      "arm64-v8a"
-    ],
-    "targetSdkFloor": 24
-  },
+  "guest": { "sdk": 37, "abis": ["arm64-v8a"], "targetSdkFloor": 24 },
   "boot": {
-    "kernel": {
-      "path": "boot/kernel",
-      "size": 43581440,
-      "sha256": "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c"
-    },
-    "ramdisk": {
-      "path": "boot/ramdisk.img",
-      "size": 23068672,
-      "sha256": "b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b"
-    },
-    "bootconfig": {
-      "path": "boot/bootconfig.txt",
-      "size": 1843,
-      "sha256": "e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b"
-    },
-    "cmdline": {
-      "path": "boot/cmdline.txt",
-      "size": 157,
-      "sha256": "5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705"
-    },
+    "kernel": { "path": "boot/kernel", "size": 43581440, "sha256": "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c" },
+    "ramdisk": { "path": "boot/ramdisk.img", "size": 23068672, "sha256": "b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b" },
+    "bootconfig": { "path": "boot/bootconfig.txt", "size": 1843, "sha256": "e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b" },
+    "cmdline": { "path": "boot/cmdline.txt", "size": 157, "sha256": "5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705" },
     "kernelPageSize": 4096,
     "bootconfigOverrides": []
   },
@@ -250,60 +220,15 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
       "identifier": "apkrun-os",
       "logicalSize": 7669284864,
       "partitions": [
-        {
-          "label": "boot_a",
-          "firstLBA": 2048,
-          "size": 67108864,
-          "sha256": "4509beb0ab401d71fa4a5cd94a55c9a74f13332776ae4019c5bfc4c2005157ff"
-        },
-        {
-          "label": "init_boot_a",
-          "firstLBA": 133120,
-          "size": 8388608,
-          "sha256": "cd19026f4b3933f79100922d0383d948b53744aca39b50b44b7e81c021cde3d7"
-        },
-        {
-          "label": "vendor_boot_a",
-          "firstLBA": 149504,
-          "size": 67108864,
-          "sha256": "fce16cbfd9d47eeeb76c893c5bf880dd01cae03cba8e9af0845e4646592aa9f4"
-        },
-        {
-          "label": "vbmeta_a",
-          "firstLBA": 280576,
-          "size": 65536,
-          "sha256": "a0c6f07a4b3a17fb9348db981de3c5602e2685d626599be1bd909195c694a57b"
-        },
-        {
-          "label": "vbmeta_system_a",
-          "firstLBA": 282624,
-          "size": 65536,
-          "sha256": "0ed258163a6ded2b600f003e91e541e90380e52eb1cdac2444d9df1b1daf9996"
-        },
-        {
-          "label": "vbmeta_system_dlkm_a",
-          "firstLBA": 284672,
-          "size": 65536,
-          "sha256": "9754204bb12c6d45da311778c739179c0154ec3fa8f4155d4a51223064e405df"
-        },
-        {
-          "label": "vbmeta_vendor_dlkm_a",
-          "firstLBA": 286720,
-          "size": 65536,
-          "sha256": "560fcdda0d381e5db9c99bb5d872972e4fd70c0e8f4ae7226975823373c74604"
-        },
-        {
-          "label": "super",
-          "firstLBA": 288768,
-          "size": 7516192768,
-          "sha256": "ee505954c0143f13dcb1082a57f545499b9ed0154cc2884fd62ce037b9d346b0"
-        },
-        {
-          "label": "custom",
-          "firstLBA": 14968832,
-          "size": 4194304,
-          "sha256": "6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33"
-        }
+        { "label": "boot_a", "firstLBA": 2048, "size": 67108864, "sha256": "4509beb0ab401d71fa4a5cd94a55c9a74f13332776ae4019c5bfc4c2005157ff" },
+        { "label": "init_boot_a", "firstLBA": 133120, "size": 8388608, "sha256": "cd19026f4b3933f79100922d0383d948b53744aca39b50b44b7e81c021cde3d7" },
+        { "label": "vendor_boot_a", "firstLBA": 149504, "size": 67108864, "sha256": "fce16cbfd9d47eeeb76c893c5bf880dd01cae03cba8e9af0845e4646592aa9f4" },
+        { "label": "vbmeta_a", "firstLBA": 280576, "size": 65536, "sha256": "a0c6f07a4b3a17fb9348db981de3c5602e2685d626599be1bd909195c694a57b" },
+        { "label": "vbmeta_system_a", "firstLBA": 282624, "size": 65536, "sha256": "0ed258163a6ded2b600f003e91e541e90380e52eb1cdac2444d9df1b1daf9996" },
+        { "label": "vbmeta_system_dlkm_a", "firstLBA": 284672, "size": 65536, "sha256": "9754204bb12c6d45da311778c739179c0154ec3fa8f4155d4a51223064e405df" },
+        { "label": "vbmeta_vendor_dlkm_a", "firstLBA": 286720, "size": 65536, "sha256": "560fcdda0d381e5db9c99bb5d872972e4fd70c0e8f4ae7226975823373c74604" },
+        { "label": "super", "firstLBA": 288768, "size": 7516192768, "sha256": "ee505954c0143f13dcb1082a57f545499b9ed0154cc2884fd62ce037b9d346b0" },
+        { "label": "custom", "firstLBA": 14968832, "size": 4194304, "sha256": "6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33" }
       ]
     }
   ],
@@ -315,24 +240,9 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
       "identifier": "apkrun-persist",
       "logicalSize": 71303168,
       "partitions": [
-        {
-          "label": "misc",
-          "firstLBA": 2048,
-          "size": 1048576,
-          "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
-        },
-        {
-          "label": "metadata",
-          "firstLBA": 4096,
-          "size": 67108864,
-          "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351"
-        },
-        {
-          "label": "frp",
-          "firstLBA": 135168,
-          "size": 1048576,
-          "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
-        }
+        { "label": "misc", "firstLBA": 2048, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" },
+        { "label": "metadata", "firstLBA": 4096, "size": 67108864, "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351" },
+        { "label": "frp", "firstLBA": 135168, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" }
       ]
     },
     {
@@ -343,116 +253,31 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
       "logicalSize": 16777216,
       "userdataStrategy": "blankFormattable",
       "partitions": [
-        {
-          "label": "userdata",
-          "firstLBA": 2048,
-          "size": 14680064,
-          "sha256": "e86bae8c0598c4ff83c695f467daa4a1e8fa01d57f9140372993366204022a4d"
-        }
+        { "label": "userdata", "firstLBA": 2048, "size": 14680064, "sha256": "e86bae8c0598c4ff83c695f467daa4a1e8fa01d57f9140372993366204022a4d" }
       ]
     }
   ],
   "consolePorts": [
-    {
-      "index": 0,
-      "role": "systemConsole",
-      "name": "console"
-    },
-    {
-      "index": 1,
-      "role": "silent",
-      "name": "serial"
-    },
-    {
-      "index": 2,
-      "role": "silent",
-      "name": "logcat"
-    },
-    {
-      "index": 3,
-      "role": "silent",
-      "name": "keymaster"
-    },
-    {
-      "index": 4,
-      "role": "silent",
-      "name": "gatekeeper"
-    },
-    {
-      "index": 5,
-      "role": "silent",
-      "name": "bluetooth"
-    },
-    {
-      "index": 6,
-      "role": "silent",
-      "name": "gnss"
-    },
-    {
-      "index": 7,
-      "role": "silent",
-      "name": "location"
-    },
-    {
-      "index": 8,
-      "role": "silent",
-      "name": "confirmationui"
-    },
-    {
-      "index": 9,
-      "role": "silent",
-      "name": "uwb"
-    },
-    {
-      "index": 10,
-      "role": "silent",
-      "name": "oemlock"
-    },
-    {
-      "index": 11,
-      "role": "silent",
-      "name": "keymint"
-    },
-    {
-      "index": 12,
-      "role": "silent",
-      "name": "nfc"
-    },
-    {
-      "index": 13,
-      "role": "silent",
-      "name": "weaver"
-    },
-    {
-      "index": 14,
-      "role": "silent",
-      "name": "mcu_control"
-    },
-    {
-      "index": 15,
-      "role": "silent",
-      "name": "mcu_uart"
-    },
-    {
-      "index": 16,
-      "role": "silent",
-      "name": "ti50_tpm"
-    },
-    {
-      "index": 17,
-      "role": "silent",
-      "name": "jcardsim"
-    },
-    {
-      "index": 18,
-      "role": "silent",
-      "name": "sensors_control"
-    },
-    {
-      "index": 19,
-      "role": "silent",
-      "name": "sensors_data"
-    }
+    { "index": 0, "role": "systemConsole", "name": "console" },
+    { "index": 1, "role": "silent", "name": "serial" },
+    { "index": 2, "role": "silent", "name": "logcat" },
+    { "index": 3, "role": "silent", "name": "keymaster" },
+    { "index": 4, "role": "silent", "name": "gatekeeper" },
+    { "index": 5, "role": "silent", "name": "bluetooth" },
+    { "index": 6, "role": "silent", "name": "gnss" },
+    { "index": 7, "role": "silent", "name": "location" },
+    { "index": 8, "role": "silent", "name": "confirmationui" },
+    { "index": 9, "role": "silent", "name": "uwb" },
+    { "index": 10, "role": "silent", "name": "oemlock" },
+    { "index": 11, "role": "silent", "name": "keymint" },
+    { "index": 12, "role": "silent", "name": "nfc" },
+    { "index": 13, "role": "silent", "name": "weaver" },
+    { "index": 14, "role": "silent", "name": "mcu_control" },
+    { "index": 15, "role": "silent", "name": "mcu_uart" },
+    { "index": 16, "role": "silent", "name": "ti50_tpm" },
+    { "index": 17, "role": "silent", "name": "jcardsim" },
+    { "index": 18, "role": "silent", "name": "sensors_control" },
+    { "index": 19, "role": "silent", "name": "sensors_data" }
   ],
   "gpuProfiles": {
     "drmVirgl": {
@@ -466,10 +291,7 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
         "androidboot.opengles.version": "196608"
       },
       "overrides": [],
-      "requiredHostCapabilities": [
-        "virgl",
-        "edid"
-      ]
+      "requiredHostCapabilities": ["virgl", "edid"]
     },
     "guestSwiftshader": {
       "bootconfig": {
@@ -483,66 +305,24 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
         "androidboot.opengles.version": "196609"
       },
       "overrides": [],
-      "requiredHostCapabilities": [
-        "edid"
-      ]
+      "requiredHostCapabilities": ["edid"]
     }
   },
   "requirements": {
     "minimumRuntimeVersion": "1.0.0",
-    "guestProtocol": {
-      "min": 1,
-      "max": 1
-    },
+    "guestProtocol": { "min": 1, "max": 1 },
     "agents": []
   },
-  "userdata": {
-    "schemaVersion": 1,
-    "upgradableFrom": [
-      1
-    ]
-  },
-  "compatibility": {
-    "upgradeFrom": {
-      "minimumImageVersion": "2026.10.0"
-    }
-  },
+  "userdata": { "schemaVersion": 1, "upgradableFrom": [1] },
+  "compatibility": { "upgradeFrom": { "minimumImageVersion": "2026.10.0" } },
   "files": [
-    {
-      "path": "boot/bootconfig.txt",
-      "size": 1843,
-      "sha256": "e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b"
-    },
-    {
-      "path": "boot/cmdline.txt",
-      "size": 157,
-      "sha256": "5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705"
-    },
-    {
-      "path": "boot/kernel",
-      "size": 43581440,
-      "sha256": "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c"
-    },
-    {
-      "path": "boot/ramdisk.img",
-      "size": 23068672,
-      "sha256": "b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b"
-    },
-    {
-      "path": "disks/os.img",
-      "size": 7669284864,
-      "sha256": "840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6"
-    },
-    {
-      "path": "templates/persistent.img",
-      "size": 71303168,
-      "sha256": "1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e"
-    },
-    {
-      "path": "templates/userdata.img",
-      "size": 16777216,
-      "sha256": "374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b"
-    }
+    { "path": "boot/bootconfig.txt", "size": 1843, "sha256": "e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b" },
+    { "path": "boot/cmdline.txt", "size": 157, "sha256": "5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705" },
+    { "path": "boot/kernel", "size": 43581440, "sha256": "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c" },
+    { "path": "boot/ramdisk.img", "size": 23068672, "sha256": "b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b" },
+    { "path": "disks/os.img", "size": 7669284864, "sha256": "840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6" },
+    { "path": "templates/persistent.img", "size": 71303168, "sha256": "1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e" },
+    { "path": "templates/userdata.img", "size": 16777216, "sha256": "374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b" }
   ]
 }
 ```
@@ -554,28 +334,16 @@ A product image (`kind: apkrun`, M5+) differs in these blocks. The fragment belo
   "imageVersion": "2026.10.0-ar000123-arm64",
   "kind": "apkrun",
   "provenance": {
-    "revisions": {
-      "imagesTools": "6877b3530a63a713f95c28e652995592dfba95e1",
-      "guest": "f3058939c7f1eee9ed6eff33515ce8859dcfe942"
-    },
+    "revisions": { "imagesTools": "6877b3530a63a713f95c28e652995592dfba95e1", "guest": "f3058939c7f1eee9ed6eff33515ce8859dcfe942" },
     "pinnedManifestSHA256": "22f569708cad2f7228fa6fbc11a3f017a3d08f46627c7d1b9f122c81337d6102",
     "builderImageDigest": "sha256:030da9febeafff405e9794f34db3a6ac1dd1e5bccb5be732891b2fb6b5f8af14"
   },
   "requirements": {
     "minimumRuntimeVersion": "1.1.0",
-    "guestProtocol": {
-      "min": 1,
-      "max": 1
-    },
+    "guestProtocol": { "min": 1, "max": 1 },
     "agents": [
-      {
-        "package": "io.apkrun.guest",
-        "versionCode": 12
-      },
-      {
-        "package": "io.apkrun.store",
-        "versionCode": 12
-      }
+      { "package": "io.apkrun.guest", "versionCode": 12 },
+      { "package": "io.apkrun.store", "versionCode": 12 }
     ]
   }
 }
@@ -752,81 +520,25 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
   "title": "APKRun RuntimeImageManifest, schema version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "imageVersion",
-    "kind",
-    "provenance",
-    "guest",
-    "boot",
-    "disks",
-    "templates",
-    "consolePorts",
-    "gpuProfiles",
-    "requirements",
-    "userdata",
-    "compatibility",
-    "files"
-  ],
+  "required": ["schemaVersion", "imageVersion", "kind", "provenance", "guest", "boot", "disks", "templates", "consolePorts", "gpuProfiles", "requirements", "userdata", "compatibility", "files"],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
-    "imageVersion": {
-      "type": "string",
-      "pattern": "^([0-9]{4})\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})-(cf[0-9]{1,20}|ar[0-9]{6})-(arm64)$"
-    },
-    "kind": {
-      "enum": [
-        "stock",
-        "apkrun"
-      ]
-    },
+    "schemaVersion": { "const": 1 },
+    "imageVersion": { "type": "string", "pattern": "^([0-9]{4})\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})-(cf[0-9]{1,20}|ar[0-9]{6})-(arm64)$" },
+    "kind": { "enum": ["stock", "apkrun"] },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "source",
-        "android",
-        "deviceFamily",
-        "layout",
-        "reference",
-        "tools",
-        "revisions",
-        "pinnedManifestSHA256",
-        "builderImageDigest"
-      ],
+      "required": ["source", "android", "deviceFamily", "layout", "reference", "tools", "revisions", "pinnedManifestSHA256", "builderImageDigest"],
       "properties": {
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "origin",
-            "branch",
-            "target",
-            "buildId",
-            "archives"
-          ],
+          "required": ["origin", "branch", "target", "buildId", "archives"],
           "properties": {
-            "origin": {
-              "enum": [
-                "ci.android.com",
-                "apkrun-builder"
-              ]
-            },
-            "branch": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
-            },
-            "target": {
-              "type": "string",
-              "maxLength": 128,
-              "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$"
-            },
-            "buildId": {
-              "type": "string",
-              "pattern": "^([0-9]{1,20}|ar[0-9]{6})$"
-            },
+            "origin": { "enum": ["ci.android.com", "apkrun-builder"] },
+            "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+            "target": { "type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$" },
+            "buildId": { "type": "string", "pattern": "^([0-9]{1,20}|ar[0-9]{6})$" },
             "archives": {
               "type": "array",
               "minItems": 1,
@@ -834,23 +546,11 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "name",
-                  "size",
-                  "sha256"
-                ],
+                "required": ["name", "size", "sha256"],
                 "properties": {
-                  "name": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z0-9._+-]{1,255}$"
-                  },
-                  "size": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
-                  "sha256": {
-                    "$ref": "#/$defs/sha256"
-                  }
+                  "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$" },
+                  "size": { "type": "integer", "minimum": 1 },
+                  "sha256": { "$ref": "#/$defs/sha256" }
                 }
               }
             }
@@ -859,202 +559,76 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
         "android": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "release",
-            "sdk",
-            "variant",
-            "securityPatch"
-          ],
+          "required": ["release", "sdk", "variant", "securityPatch"],
           "properties": {
-            "release": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$"
-            },
-            "sdk": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10000
-            },
-            "variant": {
-              "enum": [
-                "user",
-                "userdebug",
-                "eng"
-              ]
-            },
-            "securityPatch": {
-              "type": "string",
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
-            }
+            "release": { "type": "string", "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$" },
+            "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "variant": { "enum": ["user", "userdebug", "eng"] },
+            "securityPatch": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" }
           }
         },
-        "deviceFamily": {
-          "type": "string",
-          "maxLength": 64,
-          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
-        },
+        "deviceFamily": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
         "layout": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "path",
-            "sha256"
-          ],
+          "required": ["path", "sha256"],
           "properties": {
-            "path": {
-              "$ref": "#/$defs/repoPath"
-            },
-            "sha256": {
-              "$ref": "#/$defs/sha256"
-            }
+            "path": { "$ref": "#/$defs/repoPath" },
+            "sha256": { "$ref": "#/$defs/sha256" }
           }
         },
-        "reference": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/repoPath"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "reference": { "anyOf": [{ "$ref": "#/$defs/repoPath" }, { "type": "null" }] },
         "tools": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "apkrunImage",
-            "mkbootimg",
-            "avbtool"
-          ],
+          "required": ["apkrunImage", "mkbootimg", "avbtool"],
           "properties": {
-            "apkrunImage": {
-              "$ref": "#/$defs/semver"
-            },
-            "mkbootimg": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{40}$"
-            },
-            "avbtool": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{40}$"
-            }
+            "apkrunImage": { "$ref": "#/$defs/semver" },
+            "mkbootimg": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "avbtool": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
           }
         },
         "revisions": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "imagesTools",
-            "guest"
-          ],
+          "required": ["imagesTools", "guest"],
           "properties": {
-            "imagesTools": {
-              "$ref": "#/$defs/treeRevision"
-            },
-            "guest": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/treeRevision"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
+            "imagesTools": { "$ref": "#/$defs/treeRevision" },
+            "guest": { "anyOf": [{ "$ref": "#/$defs/treeRevision" }, { "type": "null" }] }
           }
         },
-        "pinnedManifestSHA256": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/sha256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "builderImageDigest": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
+        "pinnedManifestSHA256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] }
       }
     },
     "guest": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "sdk",
-        "abis",
-        "targetSdkFloor"
-      ],
+      "required": ["sdk", "abis", "targetSdkFloor"],
       "properties": {
-        "sdk": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
+        "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
         "abis": {
           "type": "array",
           "minItems": 1,
           "maxItems": 8,
           "uniqueItems": true,
-          "contains": {
-            "const": "arm64-v8a"
-          },
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9_-]{1,32}$"
-          }
+          "contains": { "const": "arm64-v8a" },
+          "items": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" }
         },
-        "targetSdkFloor": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        }
+        "targetSdkFloor": { "type": "integer", "minimum": 1, "maximum": 10000 }
       }
     },
     "boot": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kernel",
-        "ramdisk",
-        "bootconfig",
-        "cmdline",
-        "kernelPageSize",
-        "bootconfigOverrides"
-      ],
+      "required": ["kernel", "ramdisk", "bootconfig", "cmdline", "kernelPageSize", "bootconfigOverrides"],
       "properties": {
-        "kernel": {
-          "$ref": "#/$defs/bootFile"
-        },
-        "ramdisk": {
-          "$ref": "#/$defs/bootFile"
-        },
-        "bootconfig": {
-          "$ref": "#/$defs/bootFile"
-        },
-        "cmdline": {
-          "$ref": "#/$defs/bootFile"
-        },
-        "kernelPageSize": {
-          "enum": [
-            4096,
-            16384,
-            65536
-          ]
-        },
-        "bootconfigOverrides": {
-          "$ref": "#/$defs/keyList"
-        }
+        "kernel": { "$ref": "#/$defs/bootFile" },
+        "ramdisk": { "$ref": "#/$defs/bootFile" },
+        "bootconfig": { "$ref": "#/$defs/bootFile" },
+        "cmdline": { "$ref": "#/$defs/bootFile" },
+        "kernelPageSize": { "enum": [4096, 16384, 65536] },
+        "bootconfigOverrides": { "$ref": "#/$defs/keyList" }
       }
     },
     "disks": {
@@ -1064,26 +638,14 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "prefixItems": [
         {
           "allOf": [
-            {
-              "$ref": "#/$defs/disk"
-            },
+            { "$ref": "#/$defs/disk" },
             {
               "properties": {
-                "role": {
-                  "const": "os"
-                },
-                "path": {
-                  "pattern": "^disks/"
-                },
-                "readOnly": {
-                  "const": true
-                }
+                "role": { "const": "os" },
+                "path": { "pattern": "^disks/" },
+                "readOnly": { "const": true }
               },
-              "not": {
-                "required": [
-                  "userdataStrategy"
-                ]
-              }
+              "not": { "required": ["userdataStrategy"] }
             }
           ]
         }
@@ -1097,49 +659,27 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "prefixItems": [
         {
           "allOf": [
-            {
-              "$ref": "#/$defs/disk"
-            },
+            { "$ref": "#/$defs/disk" },
             {
               "properties": {
-                "role": {
-                  "const": "persistent"
-                },
-                "path": {
-                  "pattern": "^templates/"
-                },
-                "readOnly": {
-                  "const": false
-                }
+                "role": { "const": "persistent" },
+                "path": { "pattern": "^templates/" },
+                "readOnly": { "const": false }
               },
-              "not": {
-                "required": [
-                  "userdataStrategy"
-                ]
-              }
+              "not": { "required": ["userdataStrategy"] }
             }
           ]
         },
         {
           "allOf": [
-            {
-              "$ref": "#/$defs/disk"
-            },
+            { "$ref": "#/$defs/disk" },
             {
               "properties": {
-                "role": {
-                  "const": "userdata"
-                },
-                "path": {
-                  "pattern": "^templates/"
-                },
-                "readOnly": {
-                  "const": false
-                }
+                "role": { "const": "userdata" },
+                "path": { "pattern": "^templates/" },
+                "readOnly": { "const": false }
               },
-              "required": [
-                "userdataStrategy"
-              ]
+              "required": ["userdataStrategy"]
             }
           ]
         }
@@ -1153,112 +693,58 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "index",
-          "role",
-          "name"
-        ],
+        "required": ["index", "role", "name"],
         "properties": {
-          "index": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 31
-          },
-          "role": {
-            "enum": [
-              "systemConsole",
-              "log",
-              "silent",
-              "service"
-            ]
-          },
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,31}$"
-          }
+          "index": { "type": "integer", "minimum": 0, "maximum": 31 },
+          "role": { "enum": ["systemConsole", "log", "silent", "service"] },
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
         }
       }
     },
     "gpuProfiles": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "drmVirgl",
-        "guestSwiftshader"
-      ],
+      "required": ["drmVirgl", "guestSwiftshader"],
       "properties": {
-        "drmVirgl": {
-          "$ref": "#/$defs/gpuProfile"
-        },
-        "guestSwiftshader": {
-          "$ref": "#/$defs/gpuProfile"
-        },
-        "headless": {
-          "$ref": "#/$defs/gpuProfile"
-        }
+        "drmVirgl": { "$ref": "#/$defs/gpuProfile" },
+        "guestSwiftshader": { "$ref": "#/$defs/gpuProfile" },
+        "headless": { "$ref": "#/$defs/gpuProfile" }
       }
     },
     "requirements": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "minimumRuntimeVersion",
-        "guestProtocol",
-        "agents"
-      ],
+      "required": ["minimumRuntimeVersion", "guestProtocol", "agents"],
       "properties": {
-        "minimumRuntimeVersion": {
-          "$ref": "#/$defs/semver"
-        },
-        "guestProtocol": {
-          "$ref": "#/$defs/protocolRange"
-        },
+        "minimumRuntimeVersion": { "$ref": "#/$defs/semver" },
+        "guestProtocol": { "$ref": "#/$defs/protocolRange" },
         "agents": {
           "type": "array",
           "maxItems": 16,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "package",
-              "versionCode"
-            ],
+            "required": ["package", "versionCode"],
             "properties": {
-              "package": {
-                "type": "string",
-                "maxLength": 255,
-                "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
-              },
-              "versionCode": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9223372036854775807
-              }
+              "package": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+              "versionCode": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 }
             }
           }
         }
       }
     },
-    "userdata": {
-      "$ref": "#/$defs/userdataCompatibility"
-    },
+    "userdata": { "$ref": "#/$defs/userdataCompatibility" },
     "compatibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "upgradeFrom"
-      ],
+      "required": ["upgradeFrom"],
       "properties": {
         "upgradeFrom": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "minimumImageVersion"
-          ],
+          "required": ["minimumImageVersion"],
           "properties": {
-            "minimumImageVersion": {
-              "$ref": "#/$defs/shortImageVersion"
-            }
+            "minimumImageVersion": { "$ref": "#/$defs/shortImageVersion" }
           }
         }
       }
@@ -1266,271 +752,104 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
     "legal": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "notice"
-      ],
+      "required": ["notice"],
       "properties": {
-        "notice": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/fileEntry"
-            },
-            {
-              "properties": {
-                "path": {
-                  "pattern": "^legal/"
-                }
-              }
-            }
-          ]
-        }
+        "notice": { "allOf": [ { "$ref": "#/$defs/fileEntry" }, { "properties": { "path": { "pattern": "^legal/" } } } ] }
       }
     },
     "files": {
       "type": "array",
       "minItems": 1,
       "maxItems": 64,
-      "items": {
-        "$ref": "#/$defs/fileEntry"
-      }
+      "items": { "$ref": "#/$defs/fileEntry" }
     }
   },
   "$defs": {
-    "sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
-    },
-    "semver": {
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-    },
-    "shortImageVersion": {
-      "type": "string",
-      "pattern": "^[0-9]{4}\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})$"
-    },
-    "treeRevision": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}(-dirty)?$"
-    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "shortImageVersion": { "type": "string", "pattern": "^[0-9]{4}\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})$" },
+    "treeRevision": { "type": "string", "pattern": "^[0-9a-f]{40}(-dirty)?$" },
     "repoPath": {
       "type": "string",
       "maxLength": 255,
       "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
-      "not": {
-        "pattern": "(^|/)\\.{1,2}(/|$)"
-      }
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
     },
-    "bundlePath": {
-      "type": "string",
-      "pattern": "^(boot|disks|templates|legal)/[a-z0-9][a-z0-9._-]{0,63}$"
-    },
+    "bundlePath": { "type": "string", "pattern": "^(boot|disks|templates|legal)/[a-z0-9][a-z0-9._-]{0,63}$" },
     "fileEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "path",
-        "size",
-        "sha256"
-      ],
+      "required": ["path", "size", "sha256"],
       "properties": {
-        "path": {
-          "$ref": "#/$defs/bundlePath"
-        },
-        "size": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1099511627776
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256"
-        }
+        "path": { "$ref": "#/$defs/bundlePath" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 1099511627776 },
+        "sha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "bootFile": {
       "allOf": [
-        {
-          "$ref": "#/$defs/fileEntry"
-        },
-        {
-          "properties": {
-            "path": {
-              "pattern": "^boot/"
-            }
-          }
-        }
+        { "$ref": "#/$defs/fileEntry" },
+        { "properties": { "path": { "pattern": "^boot/" } } }
       ]
     },
-    "bootconfigKey": {
-      "type": "string",
-      "maxLength": 256,
-      "pattern": "^[A-Za-z0-9_.-]+$"
-    },
-    "keyList": {
-      "type": "array",
-      "maxItems": 64,
-      "uniqueItems": true,
-      "items": {
-        "$ref": "#/$defs/bootconfigKey"
-      }
-    },
+    "bootconfigKey": { "type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9_.-]+$" },
+    "keyList": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/bootconfigKey" } },
     "gpuProfile": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "bootconfig",
-        "overrides",
-        "requiredHostCapabilities"
-      ],
+      "required": ["bootconfig", "overrides", "requiredHostCapabilities"],
       "properties": {
         "bootconfig": {
           "type": "object",
           "maxProperties": 64,
-          "propertyNames": {
-            "$ref": "#/$defs/bootconfigKey"
-          },
-          "additionalProperties": {
-            "type": "string",
-            "maxLength": 1024,
-            "pattern": "^[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]*$"
-          }
+          "propertyNames": { "$ref": "#/$defs/bootconfigKey" },
+          "additionalProperties": { "type": "string", "maxLength": 1024, "pattern": "^[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]*$" }
         },
-        "overrides": {
-          "$ref": "#/$defs/keyList"
-        },
-        "requiredHostCapabilities": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "enum": [
-              "virgl",
-              "edid"
-            ]
-          }
-        }
+        "overrides": { "$ref": "#/$defs/keyList" },
+        "requiredHostCapabilities": { "type": "array", "uniqueItems": true, "items": { "enum": ["virgl", "edid"] } }
       }
     },
     "partition": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "label",
-        "firstLBA",
-        "size",
-        "sha256"
-      ],
+      "required": ["label", "firstLBA", "size", "sha256"],
       "properties": {
-        "label": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{0,35}$"
-        },
-        "firstLBA": {
-          "type": "integer",
-          "minimum": 2048,
-          "multipleOf": 2048
-        },
-        "size": {
-          "type": "integer",
-          "minimum": 512,
-          "multipleOf": 512
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256"
-        }
+        "label": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
+        "firstLBA": { "type": "integer", "minimum": 2048, "multipleOf": 2048 },
+        "size": { "type": "integer", "minimum": 512, "multipleOf": 512 },
+        "sha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "disk": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "role",
-        "path",
-        "readOnly",
-        "identifier",
-        "logicalSize",
-        "partitions"
-      ],
+      "required": ["role", "path", "readOnly", "identifier", "logicalSize", "partitions"],
       "properties": {
-        "role": {
-          "enum": [
-            "os",
-            "persistent",
-            "userdata"
-          ]
-        },
-        "path": {
-          "$ref": "#/$defs/bundlePath"
-        },
-        "readOnly": {
-          "type": "boolean"
-        },
-        "identifier": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,19}$"
-        },
-        "logicalSize": {
-          "type": "integer",
-          "minimum": 2097152,
-          "maximum": 1099511627776,
-          "multipleOf": 1048576
-        },
-        "userdataStrategy": {
-          "enum": [
-            "blankFormattable",
-            "prebuiltTemplate"
-          ]
-        },
-        "partitions": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 64,
-          "items": {
-            "$ref": "#/$defs/partition"
-          }
-        }
+        "role": { "enum": ["os", "persistent", "userdata"] },
+        "path": { "$ref": "#/$defs/bundlePath" },
+        "readOnly": { "type": "boolean" },
+        "identifier": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,19}$" },
+        "logicalSize": { "type": "integer", "minimum": 2097152, "maximum": 1099511627776, "multipleOf": 1048576 },
+        "userdataStrategy": { "enum": ["blankFormattable", "prebuiltTemplate"] },
+        "partitions": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/partition" } }
       }
     },
     "protocolRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "min",
-        "max"
-      ],
+      "required": ["min", "max"],
       "properties": {
-        "min": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535
-        },
-        "max": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535
-        }
+        "min": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     },
     "userdataCompatibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "upgradableFrom"
-      ],
+      "required": ["schemaVersion", "upgradableFrom"],
       "properties": {
-        "schemaVersion": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "upgradableFrom": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 64,
-          "uniqueItems": true,
-          "items": {
-            "type": "integer",
-            "minimum": 1
-          }
-        }
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "upgradableFrom": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } }
       }
     }
   }
@@ -1566,13 +885,13 @@ signature: Ii6yqtn26gB5SDj+amUWCNjW5BlbZDlJ/oGmsn9o4yQgEhgDNjiHlKbHm1iWq5WHfWuWS
 ### 6.2 `SHA256SUMS`
 
 ```text
-e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b boot/bootconfig.txt
-5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705 boot/cmdline.txt
-6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c boot/kernel
-b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b boot/ramdisk.img
-840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6 disks/os.img
-1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e templates/persistent.img
-374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b templates/userdata.img
+e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b  boot/bootconfig.txt
+5f09fae74bfa7f97e26986705f4d193c67a8f6484fb3c6c4dfc40d011b9e0705  boot/cmdline.txt
+6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c  boot/kernel
+b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b  boot/ramdisk.img
+840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6  disks/os.img
+1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e  templates/persistent.img
+374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b  templates/userdata.img
 ```
 
 - One line per `files` entry, in the same order: 64 lowercase hex, two spaces, the path, LF.
@@ -1596,7 +915,7 @@ The order is fixed: signature, then schema, then files ([../02-design/android-im
 | 7 | the directory holds exactly the metadata files and `files`. Each file's size matches | `missingFile(file)`, `unexpectedFile(file)`, `hashMismatch(file)` for a size difference |
 | 8 | full depth only: each file's SHA-256 matches, and `SHA256SUMS` is consistent (§6.2) | `hashMismatch(file)`, `manifestInvalid` |
 
-- **Quick** verification (`ImageStore.verify(_, depth:.quick)`) runs steps 1–7 before every boot. The result of steps 1–6 is cached for the life of the apkrund process, keyed by the inode, size, and modification time of `manifest.json`.
+- **Quick** verification (`ImageStore.verify(_, depth: .quick)`) runs steps 1–7 before every boot. The result of steps 1–6 is cached for the life of the apkrund process, keyed by the inode, size, and modification time of `manifest.json`.
 - **Full** verification (`.full`) runs steps 1–8 at every install and in `apkrun doctor --deep`.
 - Compatibility checks follow at activation and before every boot ([../02-design/android-image.md](../02-design/android-image.md) §9.3): `incompatibleRuntime(required)`, `incompatibleProtocol(range)`, `userdataSchemaUnsupported(instance, image)`, `migrationSourceTooOld(minimum)` (activation only), `downgradeRejected(from, to)`.
 - Codes, messages, and remediations are in [error-catalog.md](error-catalog.md) (domain `image`).
@@ -1647,7 +966,7 @@ Boot preparation adds the bootconfig and cmdline checks of §3.2 and §3.3 (`boo
 
 ### 8.3 Install
 
-`ImageStore.install(from:.archive(url))` ([../02-design/android-image.md](../02-design/android-image.md) §10.4, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5):
+`ImageStore.install(from: .archive(url))` ([../02-design/android-image.md](../02-design/android-image.md) §10.4, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.5):
 
 1. Check the archive SHA-256 against the feed entry (`imageArchiveHashMismatch`). A manual install (`apkrun image install <file.aar>`, Install from File…) has no feed entry and skips this step. Space: a feed install needs the archive size + `expandedSize` + 10 GiB free. A manual install needs the file size + 10 GiB before step 2, and step 2 stops with `insufficientSpace` when less than 10 GiB would be left ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.4).
 2. Extract with the AppleArchive framework into `Images/.installing-<name>/`. `<name>` is the `imageVersion` of the feed entry, or `manual-` + 16 random hex digits for a manual install. Entry rules: regular files and directories only, relative paths inside the root, no `..`, no absolute paths, symlinks, hard links, devices, or FIFOs (`imageArchiveUnsafeEntry(path)`). Permissions are reset to 0644 and 0755. Extended attributes and ACLs are dropped.
@@ -1678,29 +997,12 @@ This section restates [../02-design/runtime-maintenance.md](../02-design/runtime
       "imageVersion": "2026.10.0-ar000123-arm64",
       "kind": "apkrun",
       "publishedAt": "2026-10-02T09:00:00Z",
-      "archive": {
-        "url": "https://<updates host>/apkrun/images/2026.10.0-ar000123-arm64.aar",
-        "size": 1932735283,
-        "sha256": "…"
-      },
+      "archive": { "url": "https://<updates host>/apkrun/images/2026.10.0-ar000123-arm64.aar",
+                   "size": 1932735283, "sha256": "…" },
       "expandedSize": 9663676416,
-      "requirements": {
-        "minimumRuntimeVersion": "1.1.0",
-        "guestProtocol": {
-          "min": 1,
-          "max": 1
-        }
-      },
-      "userdata": {
-        "schemaVersion": 3,
-        "upgradableFrom": [
-          2,
-          3
-        ]
-      },
-      "upgradeFrom": {
-        "minimumImageVersion": "2026.04.0"
-      },
+      "requirements": { "minimumRuntimeVersion": "1.1.0", "guestProtocol": { "min": 1, "max": 1 } },
+      "userdata": { "schemaVersion": 3, "upgradableFrom": [2, 3] },
+      "upgradeFrom": { "minimumImageVersion": "2026.04.0" },
       "securityPatchLevel": "2026-09-05",
       "tzdataVersion": "2026b",
       "critical": false,

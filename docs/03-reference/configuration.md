@@ -52,26 +52,11 @@ Rules:
 ```json
 {
   "schemaVersion": 1,
-  "runtime": {
-    "memoryGiB": 6,
-    "idleSuspendMinutes": 5
-  },
-  "maintenance": {
-    "channel": "beta"
-  },
-  "integrations": {
-    "enabled": {
-      "microphone": false
-    }
-  },
+  "runtime": { "memoryGiB": 6, "idleSuspendMinutes": 5 },
+  "maintenance": { "channel": "beta" },
+  "integrations": { "enabled": { "microphone": false } },
   "sharedFolders": {
-    "roots": [
-      {
-        "id": "6F1C2A9E-…",
-        "bookmark": "<base64 security-scoped bookmark>",
-        "access": "readOnly"
-      }
-    ]
+    "roots": [ { "id": "6F1C2A9E-…", "bookmark": "<base64 security-scoped bookmark>", "access": "readOnly" } ]
   }
 }
 ```
@@ -94,9 +79,9 @@ The global settings operations are named here. [runtime-api.md](runtime-api.md) 
 
 | Operation | Endpoint | Behavior |
 |---|---|---|
-| `configuration` → `ConfigurationSnapshot` | control | every key of §2 with its effective value, its default, whether it was set, and when a change applies |
+| `configuration()` → `ConfigurationSnapshot` | control | every key of §2 with its effective value, its default, whether it was set, and when a change applies |
 | `updateConfiguration(patch)` | control | a JSON merge patch (RFC 7396) on the nested form of §1.2. `null` removes a key (reset). The whole patch is validated first. If one key fails, nothing is written (§8.1). A patch that contains `sharedFolders` is refused |
-| `sharedFolders`, `addSharedFolder(bookmark, access)`, `removeSharedFolder(id)`, `setSharedFolderAccess(id, access)` | control | the only way to change `sharedFolders.roots` ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §11) |
+| `sharedFolders()`, `addSharedFolder(bookmark, access)`, `removeSharedFolder(id)`, `setSharedFolderAccess(id, access)` | control | the only way to change `sharedFolders.roots` ([../02-design/desktop-integration.md](../02-design/desktop-integration.md) §11) |
 | `packageSettings(id)` → `ResolvedPackageSettings` | control | every key of §3 with its effective value and its source: `globalSwitch`, `user`, `recommended`, or `default` (§3.2) |
 | `updatePackageSettings(id, patch)` | control | a validated JSON merge patch on `PackageSettings` ([../02-design/package-store.md](../02-design/package-store.md) §11.1). `null` removes the user's value (**Reset**) |
 | `setUpdatePolicy(id, UpdatePolicy)` | control | writes the record's authority and provider and `update.mode` together ([../02-design/update-system.md](../02-design/update-system.md) §2.3) |
@@ -136,7 +121,7 @@ The global settings operations are named here. [runtime-api.md](runtime-api.md) 
 - The diagnostics bundle has `config.json` with the global settings and each package's `settings.json` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §6.2).
 - Every key of §2 and §3 is on the allowlist and is copied as is.
 - `sharedFolders.roots` is reduced to a count and the last path component of each root. Bookmarks are never copied.
-- `apkrun config list --json` has the same content as `configuration`.
+- `apkrun config list --json` has the same content as `configuration()`.
 
 ---
 
@@ -545,7 +530,7 @@ This follows [../02-design/runtime-maintenance.md](../02-design/runtime-maintena
 
 - The owning component starts degraded with `maintenance.dataCreatedByNewerVersion(file, schema, supported)`: "This data was created by a newer version of APKRun. Install the latest version of APKRun."
 - The file is never written: not by a migration, not by a change, not by a reset.
-- Global `settings.json`: startup step 4 fails ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.2). apkrund still serves the broker. `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`. `configuration`, `updateConfiguration(patch)`, and every operation that needs settings (such as starting Android) return the same error.
+- Global `settings.json`: startup step 4 fails ([../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.2). apkrund still serves the broker. `runtimeStatus` returns `RuntimeFailure.hostStartupFailed(step:)`. `configuration()`, `updateConfiguration(patch)`, and every operation that needs settings (such as starting Android) return the same error.
 - A package `settings.json`: only that package is affected. It is read-only with `store.metadataUnreadable`, as for a newer `metadata.json`, and the other packages work ([package-metadata-json.md](package-metadata-json.md) §4.2, [../02-design/package-store.md](../02-design/package-store.md) §5.4).
 - apkrund never crash-loops on data it cannot read.
 - A `wrapper.json` with a newer `formatVersion` follows [wrapper-json.md](wrapper-json.md) and [../02-design/wrapper.md](../02-design/wrapper.md) §2.

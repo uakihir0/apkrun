@@ -8,7 +8,7 @@
 
 ## Milestone goal
 
-After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([../roadmap.md](../roadmap.md) §5). #096 decides whether Android apps can get Vulkan through Venus or gfxstream on Metal. the plan calls this "Phase 21". #097 decides whether APKRun can live next to a Google Play that the user brings, without competing with it for update ownership. the plan calls this "Phase 22".
+After v1.0, two optional tracks decide how APKRun grows beyond the v1 scope ([../roadmap.md](../roadmap.md) §5). #096 decides whether Android apps can get Vulkan through Venus or gfxstream on Metal. The roadmap calls this "Phase 21". #097 decides whether APKRun can live next to a Google Play that the user brings, without competing with it for update ownership. The roadmap calls this "Phase 22".
 
 Both tracks work investigation first: spikes, then an ADR, then an implementation only if the ADR decides to implement. Neither track may change the v1 behavior of the GLES path or the update authorities `apkrun`, `manual`, and `external`. Neither may delay a v1.x release. Both follow the scope rules of [../../00-product/scope.md](../../00-product/scope.md):
 - Vulkan is not a v1 blocker ([../../00-product/scope.md](../../00-product/scope.md) §1).
@@ -95,11 +95,11 @@ An ADR decides, with measured spike results, whether APKRun offers Vulkan to And
    - In `Experiments/vulkan/host-renderer/`, build the venus backend of virglrenderer against MoltenVK, from pinned revisions as in [../../05-development/build-system.md](../../05-development/build-system.md) §6.
    - Assess what porting gfxstream's host renderer to this device model needs.
    - For each option, record:
-   - whether it builds reproducibly;
-   - its license;
-   - its size;
-   - the Vulkan version and extensions it exposes;
-   - whether it runs a sample Vulkan workload with blob memory from step 1.
+     - whether it builds reproducibly;
+     - its license;
+     - its size;
+     - the Vulkan version and extensions it exposes;
+     - whether it runs a sample Vulkan workload with blob memory from step 1.
    - Check: a comparison table for Venus on MoltenVK and for gfxstream is recorded in §10.
 3. **Guest spike** (§10; [../../02-design/android-image.md](../../02-design/android-image.md) §6.2, §11).
    - Build a Venus-capable Mesa into a test variant of the custom image. Select it with the bootconfig keys of [../../02-design/android-image.md](../../02-design/android-image.md) §6.2, including the `vulkan` APEX selection. The test variant is never a release image.
@@ -108,19 +108,19 @@ An ADR decides, with measured spike results, whether APKRun offers Vulkan to And
 4. **ADR** ([../../01-architecture/decisions/README.md](../../01-architecture/decisions/README.md)).
    - Write the ADR with the next free number. It has the template sections Context, Decision, Alternatives considered, Consequences, and Verification. The Context has the spike numbers.
    - The Decision picks Venus on MoltenVK, gfxstream, or "not now". The Consequences cover:
-   - the new dependencies;
-   - the image changes;
-   - the added attack surface (§11);
-   - memory (R-08);
-   - R-07;
-   - the effect on the compatibility levels ([../../00-product/scope.md](../../00-product/scope.md) §4).
+     - the new dependencies;
+     - the image changes;
+     - the added attack surface (§11);
+     - memory (R-08);
+     - R-07;
+     - the effect on the compatibility levels ([../../00-product/scope.md](../../00-product/scope.md) §4).
    - Check: the ADR is merged with status Accepted. If its Decision is "not now", the task ends here, and steps 5–7 are filed as a new task for when the ADR is superseded.
 5. **Device and renderer** (§4.1, §4.5, §5.4, §10).
    - Add a GPU profile for Vulkan to the table of §9. Only this profile offers `VIRTIO_GPU_F_RESOURCE_BLOB` and `VIRTIO_GPU_F_CONTEXT_INIT` and attaches the shared memory region. The `drmVirgl` features stay as in §4.1.
    - GraphicsCore adds:
-   - blob resources in `ResourceTable`, with size limits in §5.4;
-   - `CONTEXT_INIT` context types;
-   - per-context fence timelines by `ring_idx`, which remove the in-order fence limitation of §4.5.
+     - blob resources in `ResourceTable`, with size limits in §5.4;
+     - `CONTEXT_INIT` context types;
+     - per-context fence timelines by `ring_idx`, which remove the in-order fence limitation of §4.5.
    - The chosen backend goes into `GraphicsBridge` with pinned dependencies in `ThirdParty/`.
    - Check: T0 tests of the blob and fence-timeline state machines and of the new limits pass. G3 passes unchanged on `drmVirgl`.
 6. **Guest image and profile selection** ([../../02-design/android-image.md](../../02-design/android-image.md) §6.2, §9, §11).
@@ -226,16 +226,16 @@ An ADR decides, with legal and technical evidence, whether APKRun supports packa
 2. **Technical spike** ([../../02-design/update-system.md](../../02-design/update-system.md) §2.1; [../../02-design/package-store.md](../../02-design/package-store.md) §6.3, §9.3; [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §11.4).
    - In `Experiments/google-play/`, use a stand-in installer app on the custom image. It has the package name `com.android.vending`, installs a fixture package, and claims its update ownership, as Google Play would. The image has no Google Play, so the name is free. If step 1 found a lawful test environment with Google Play, repeat the checks there.
    - Record four things:
-   - `installer_of_record` and `update_owner` for a package that the stand-in installed;
-   - whether the stand-in can update a package that `io.apkrun.store` owns;
-   - what op 109 does when an APKRun-owned package changes to `googlePlay`;
-   - whether the stand-in can then take over updates.
+     - `installer_of_record` and `update_owner` for a package that the stand-in installed;
+     - whether the stand-in can update a package that `io.apkrun.store` owns;
+     - what op 109 does when an APKRun-owned package changes to `googlePlay`;
+     - whether the stand-in can then take over updates.
    - Check: the results are recorded in [../../02-design/update-system.md](../../02-design/update-system.md) §2.1 and [../../02-design/package-store.md](../../02-design/package-store.md) §6.3.
 3. **ADR** ([../../01-architecture/decisions/README.md](../../01-architecture/decisions/README.md)).
    - Write the ADR with the next free number. Its Context holds the findings of steps 1–2. Its Decision is "support Play-managed packages" or "not now". Its Consequences name the isolation rules:
-   - only the authority value and the detection change;
-   - no GMS code or data in APKRun;
-   - no new provider.
+     - only the authority value and the detection change;
+     - no GMS code or data in APKRun;
+     - no new provider.
    - Relate it to ADR-0001 and ADR-0010.
    - Check: the ADR is merged with status Accepted. If its Decision is "not now", the task ends here.
 4. **Detection and adoption** ([../../02-design/package-store.md](../../02-design/package-store.md) §9.1–§9.3).
@@ -263,9 +263,9 @@ An ADR decides, with legal and technical evidence, whether APKRun supports packa
 - **T1** (`Packages/UpdateCore/Tests/UpdateCoreSystemTests/`), only if implemented: a counting fake provider shows zero checks for `googlePlay` packages.
 - **T2** (`Tests/IntegrationTests/StoreTests/`, `Tests/IntegrationTests/UpdateTests/`, AndroidCustom suite):
   - only if implemented:
-  - a package that the stand-in installer installed is detected;
-  - after adoption, APKRun installs nothing for it;
-  - a change to `googlePlay` relinquishes ownership (op 109).
+    - a package that the stand-in installer installed is detected;
+    - after adoption, APKRun installs nothing for it;
+    - a change to `googlePlay` relinquishes ownership (op 109).
   - Always: the #039 ownership tests pass unchanged.
 - **T3**:
   - G9 on the reference Mac, unchanged;

@@ -22,17 +22,17 @@
 
 ```text
 [ macOS user session ]
-├── APKRun.app / MenuBar / CLI trusted (our signature)
-├── Wrapper launchers trusted *per registered cdhash* (generated locally)
-├── Other user processes untrusted → only the broker interface
-└── apkrund trusted, holds `com.apple.security.virtualization`
-    └── presents virtio devices and accepts vsock connections from the guest
-[ Android VM ] untrusted as a whole (runs arbitrary APKs)
-├── APKRun agents (platform-signed) semi-trusted: their messages are still validated
-└── Third-party apps untrusted
+   ├─ APKRun.app / MenuBar / CLI          trusted (our signature)
+   ├─ Wrapper launchers                   trusted *per registered cdhash* (generated locally)
+   ├─ other user processes                untrusted → only the broker interface
+   └─ apkrund                             trusted, holds com.apple.security.virtualization
+          │  virtio devices, vsock
+[ Android VM ]                            untrusted as a whole (runs arbitrary APKs)
+   ├─ APKRun agents (platform-signed)     semi-trusted: their messages are still validated
+   └─ third-party apps                    untrusted
 [ Network ]
-├── Update providers supply untrusted content, verified by signature or hash
-└── Runtime image / Sparkle feeds trusted only after signature verification
+   ├─ update providers                    untrusted content, verified by signature/hash
+   └─ runtime image / Sparkle feeds       trusted only after signature verification
 ```
 
 **Principle: the host never trusts the guest.** Every GuestProtocol message is length-checked, schema-validated, and rate-limited. The virtio-gpu device model treats all guest-provided offsets, lengths, and resource IDs as hostile (bounds checks before every memory access, `VZVirtioQueueElement` TOCTOU guidance: copy descriptors into host memory before validating, then use only the copy).

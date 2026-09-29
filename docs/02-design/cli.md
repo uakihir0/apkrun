@@ -55,15 +55,10 @@ This page is the complete command set. Subsystem documents show the commands the
 | stderr | progress, warnings, errors, and prompts |
 
 - Human output adapts to the terminal width and uses color only when stdout is a TTY and `NO_COLOR` is not set (`--no-color` forces it off).
-- `--json` prints exactly one JSON document on stdout and nothing else there. A successful command returns the operation's result DTO in this envelope; the placeholder fields are omitted:
+- `--json` prints one JSON document on stdout and nothing else there:
 
   ```json
-  { "schemaVersion": 1, "result": { "…": "…" } }
-  ```
-
-  An error returns the same envelope with an `error` object:
-
-  ```json
+  { "schemaVersion": 1, "result": { … } }
   { "schemaVersion": 1, "error": { "code": "store.downgradeRefused", "message": "…", "remediation": "…", "operationID": "…" } }
   ```
 
@@ -93,16 +88,16 @@ Errors that the CLI raises itself, before or after a request to apkrund, belong 
 
 ```swift
 public enum CLIFailure: APKRunError {
-    case confirmationRequired(flag: String) // no TTY on stdin and no --yes (§3.4). Exit 1
-    case declined // the user answered no, or did not type Reset (§3.4). Exit 5
-    case invalidPackageName(package: String) // a <package> argument fails the grammar. No request is sent (§3.1). Exit 64
-    case invalidSourceSpec(argument: String) // a <spec> argument matches no update source form (§3.1). Exit 64
-    case invalidArgument(argument: String, reason: String) // another validation the CLI does itself, for example a --since duration. reason is a stable key. Exit 64
-    case fileNotAccessible(file: String, FileProblem) // a file argument can't be opened, or the --output file can't be created. file is the last path component. Exit 1
-    case developerModeRequired(command: String) // apkrun logs --guest while developer.enabled is off (§4.8). Exit 5
-    case logsUnavailable // /usr/bin/log fails and the file mirrors can't be read (§4.8). Exit 1
-    case malformedReply(operation: String) // a reply the CLI can't decode. Exit 70
-    case versionSkew(version: String, found: String) // the CLI's build differs from apkrund's (§2). A warning. Exit 0
+    case confirmationRequired(flag: String)                 // no TTY on stdin and no --yes (§3.4). Exit 1
+    case declined                                           // the user answered no, or did not type Reset (§3.4). Exit 5
+    case invalidPackageName(package: String)                // a <package> argument fails the grammar. No request is sent (§3.1). Exit 64
+    case invalidSourceSpec(argument: String)                // a <spec> argument matches no update source form (§3.1). Exit 64
+    case invalidArgument(argument: String, reason: String)  // another validation the CLI does itself, for example a --since duration. reason is a stable key. Exit 64
+    case fileNotAccessible(file: String, FileProblem)       // a file argument can't be opened, or the --output file can't be created. file is the last path component. Exit 1
+    case developerModeRequired(command: String)             // apkrun logs --guest while developer.enabled is off (§4.8). Exit 5
+    case logsUnavailable                                    // /usr/bin/log fails and the file mirrors can't be read (§4.8). Exit 1
+    case malformedReply(operation: String)                  // a reply the CLI can't decode. Exit 70
+    case versionSkew(version: String, found: String)        // the CLI's build differs from apkrund's (§2). A warning. Exit 0
 }
 
 public enum FileProblem: String, Sendable, Codable {
@@ -275,12 +270,12 @@ Available in development builds only (`APKRUN_EMBEDDED_RUNTIME`). They run the r
 
 ```text
 CLI/apkrun/
-├── main.swift root command, version, global options
-├── Support/ Output (table, key/value, JSON envelope), Prompt, Progress, ExitCodes, OperationWaiter
-├── Commands/ one file per command group: Setup, Status, Runtime, Info, Install, Uninstall, List,
-│ Inspect, Launch, Settings, Update, Wrap, Wrapper, Integrations, SharedFolders,
-│ Config, Image, SelfUpdate, Doctor, Diagnostics, Logs, Operations
-└── Dev/ `apkrun dev …` (compiled only with APKRUN_EMBEDDED_RUNTIME)
+├── main.swift                 root command, version, global options
+├── Support/                   Output (table, key/value, JSON envelope), Prompt, Progress, ExitCodes, OperationWaiter
+├── Commands/                  one file per command group: Setup, Status, Runtime, Info, Install, Uninstall, List,
+│                              Inspect, Launch, Settings, Update, Wrap, Wrapper, Integrations, SharedFolders,
+│                              Config, Image, SelfUpdate, Doctor, Diagnostics, Logs, Operations
+└── Dev/                       `apkrun dev …` (compiled only with APKRUN_EMBEDDED_RUNTIME)
 ```
 
 - Commands are `AsyncParsableCommand`s. They get a `RuntimeService` from a factory, so T0 tests run them against a fake `RuntimeService` and compare stdout, stderr, and the exit code with golden files.

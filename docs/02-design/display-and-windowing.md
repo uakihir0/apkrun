@@ -27,32 +27,17 @@ Invariants:
 3. Pixels reach the window only through the IOSurface pool (no copies, no readbacks; FR-GFX-05, FR-DSP-07).
 4. The wrapper never talks to the guest. apkrund never creates windows (ADR-0006).
 
-```mermaid
-flowchart LR
-  subgraph Wrapper["Wrapper process · Discord.app"]
-    window["SessionWindowController<br/>IOSurfaceLayerView"]
-    input["InputCore · InputSink"]
-    client["RuntimeClient · FrameSource"]
-    input --> window
-    client --> window
-  end
-
-  subgraph Host["apkrund"]
-    session["SessionRegistry<br/>session S1"]
-    pool["DisplayPool<br/>lease: scanout 3 · Android display 7"]
-    scanout["ScanoutController · SurfacePool[3]"]
-    session --> pool --> scanout
-  end
-
-  subgraph Guest["Android guest"]
-    agent["Guest Agent<br/>DisplayListener · launch · density · IME"]
-    surface["SurfaceFlinger"]
-  end
-
-  window <-->|"XPC: frames and input"| session
-  pool <-->|"vsock: display and app control"| agent
-  surface -->|"virtio-gpu scanout 3"| scanout
-  scanout -->|"IOSurface frames"| window
+```text
+Wrapper process (Discord.app)               apkrund                                         guest
+┌───────────────────────────────┐   XPC   ┌──────────────────────────────────────┐  vsock ┌─────────────────────┐
+│ SessionWindowController       │◀───────▶│ SessionRegistry ── session S1         │◀──────▶│ Guest Agent         │
+│  IOSurfaceLayerView (layer)   │ frames  │   │                                   │        │  DisplayListener    │
+│  InputCore → InputSink        │ input   │ DisplayPool: S1 → lease(scanout 3,     │        │  launch on display  │
+│  FrameSource ← RuntimeClient  │         │            androidDisplay 7, pool gen) │        │  set density / IME  │
+└───────────────────────────────┘         │   │                                   │        └─────────────────────┘
+                                          │ ScanoutController (GraphicsCore)      │  virtio-gpu scanout 3
+                                          │   SurfacePool[3] ◀── blit ◀── VirGL   │◀──────── SurfaceFlinger
+                                          └──────────────────────────────────────┘          (Android display 7)
 ```
 
 ---
@@ -74,55 +59,55 @@ Why real displays instead of `VirtualDisplay`: frames of a guest `VirtualDisplay
 
 ```swift
 public struct DisplayGeometry: Sendable, Equatable {
-    public var pointSize: CGSize // window content size in macOS points
-    public var backingScale: Double // NSWindow.backingScaleFactor (1.0 or 2.0 today)
-    public var zoom: Double // per-package preference, 0.75...2.0, default 1.0
+    public var pointSize: CGSize              // window content size in macOS points
+    public var backingScale: Double           // NSWindow.backingScaleFactor (1.0 or 2.0 today)
+    public var zoom: Double                   // per-package preference, 0.75...2.0, default 1.0
 }
 
 public struct DisplayConfiguration: Sendable, Equatable {
     public var geometry: DisplayGeometry
-    public var mode: AndroidWindowMode //.secondaryDisplay |.primaryDisplayCompatibility
+    public var mode: AndroidWindowMode        // .secondaryDisplay | .primaryDisplayCompatibility
 }
 
-public struct ResolvedDisplayMode: Sendable, Equatable { // output of DisplayGeometryResolver (§6)
+public struct ResolvedDisplayMode: Sendable, Equatable {    // output of DisplayGeometryResolver (§6)
     public var pixelSize: PixelSize
     public var densityDpi: Int
-    public var renderScale: Double // ≤ backingScale
-    public var refreshHz: Int // 60
+    public var renderScale: Double            // ≤ backingScale
+    public var refreshHz: Int                 // 60
 }
 
 /// Who holds a display. App sessions have windows. System uses have no window and no client.
 public enum SessionID: Sendable, Hashable, Codable {
-    case app(UUID) // an AppSession (runtime-daemon.md §7)
+    case app(UUID)                                   // an AppSession (runtime-daemon.md §7)
     case system(SystemDisplayUse)
 }
 
 public enum SystemDisplayUse: Sendable, Hashable, Codable {
-    case setupVerification // runtime-daemon.md §9.2
-    case migrationCheck // android-image.md §12.3
-    case updateHealthCheck(PackageID) // update-system.md §8.2
+    case setupVerification                           // runtime-daemon.md §9.2
+    case migrationCheck                              // android-image.md §12.3
+    case updateHealthCheck(PackageID)                // update-system.md §8.2
 }
 
 public struct DisplayLease: Sendable, Equatable {
     public let leaseID: UUID
     public let session: SessionID
     public let scanout: ScanoutID
-    public let androidDisplayID: Int32 // Android's logical display ID, reported by the Guest Agent
+    public let androidDisplayID: Int32        // Android's logical display ID, reported by the Guest Agent
     public let mode: ResolvedDisplayMode
-    public let pool: SurfacePoolHandle // generation + surfaces, sent to the wrapper
+    public let pool: SurfacePoolHandle        // generation + surfaces, sent to the wrapper
 }
 
 public actor DisplayPool {
     public init(scanouts: ScanoutController, guest: any DisplayControlChannel, limits: DisplayPoolLimits)
     public func acquire(for session: SessionID, configuration: DisplayConfiguration) async throws(RuntimeFailure) -> DisplayLease
     public func reconfigure(_ lease: DisplayLease, geometry: DisplayGeometry) async throws(RuntimeFailure) -> DisplayLease
-    public func release(_ lease: DisplayLease) async // never throws; faults are recorded
-    public func snapshot() -> [DisplaySlotSnapshot] // diagnostics, `apkrun info --displays`
-    public nonisolated var events: AsyncStream<DisplayPoolEvent> { get } // slot state changes, faults
+    public func release(_ lease: DisplayLease) async                  // never throws; faults are recorded
+    public func snapshot() -> [DisplaySlotSnapshot]                   // diagnostics, `apkrun info --displays`
+    public nonisolated var events: AsyncStream<DisplayPoolEvent> { get }   // slot state changes, faults
 }
 
-public protocol DisplayControlChannel: Sendable { // implemented over GuestProtocol (guest-protocol.md)
-    var displayEvents: AsyncStream<GuestDisplayEvent> { get } // added / changed / removed, tasks on display
+public protocol DisplayControlChannel: Sendable {                     // implemented over GuestProtocol (guest-protocol.md)
+    var displayEvents: AsyncStream<GuestDisplayEvent> { get }          // added / changed / removed, tasks on display
     func setDisplayPolicy(_ displayID: Int32, density: Int, imePolicy: ImeDisplayPolicy) async throws(RuntimeFailure)
     func clearDisplay(_ displayID: Int32) async throws(RuntimeFailure) // remove or move away every task on it
 }
@@ -152,7 +137,7 @@ Attaches are **serialized** (one `attaching` slot at a time). This makes the sca
 1. Pick the lowest-numbered `free` slot (deterministic slot use helps diagnostics). If none is free, or the soft limit is reached, throw `.displayPoolExhausted`.
 2. Resolve the mode from the geometry (§6). Mark the slot `attaching` and record `reservedBy`.
 3. `ScanoutController.configure(scanout, mode)`. GraphicsCore writes the new EDID and raises the display event.
-4. Wait for `GuestDisplayEvent.added(displayID, info)` where `info.productInfo` matches the scanout (EDID manufacturer `APK`, product code = scanout index; exposed to Android apps through `Display.getDeviceProductInfo`, API 31). The timeout is 5 s ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4). If the product info is missing, the pool falls back to "the only display added while this slot is attaching". It logs that fallback once per boot.
+4. Wait for `GuestDisplayEvent.added(displayID, info)` where `info.productInfo` matches the scanout (EDID manufacturer `APK`, product code = scanout index; exposed to Android apps through `Display.getDeviceProductInfo()`, API 31). The timeout is 5 s ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §4). If the product info is missing, the pool falls back to "the only display added while this slot is attaching". It logs that fallback once per boot.
 5. Check that `info.mode` equals the requested pixel size. A mismatch is logged, and the lease uses Android's actual size.
 6. `setDisplayPolicy(displayID, density:, imePolicy: .local)` (§4).
 7. Allocate a new `SurfacePool` at the pixel size (a new pool per lease, never reused across sessions) and `ScanoutController.attach(pool, to: scanout)`.
@@ -195,7 +180,7 @@ The Guest Agent applies these settings. Their messages are in [guest-protocol.md
 | IME placement | `IWindowManager.setDisplayImePolicy(displayID, DISPLAY_IME_POLICY_LOCAL)` | after `DisplayAdded` | Editors on the app's display get the APKRun IME there instead of on hidden display 0 ([input.md](input.md)) |
 | No system decorations | defaults (external displays have none); the custom image keeps `force_desktop_mode_on_external_displays=0` | image default | No launcher, status bar, or navigation bar inside app windows (#026 "hide unnecessary emulator chrome") |
 | Stay awake, no keyguard | `svc power stayon true`, `locksettings set-disabled true`, screen-off timeout max; the custom image sets them as defaults | Guest Agent start ([guest-components.md](guest-components.md)) | External displays follow the default display's power state, and a keyguard would cover app displays |
-| Launch on a display | `ActivityOptions.makeBasic.setLaunchDisplayId(id)` + `setLaunchWindowingMode(WINDOWING_MODE_FULLSCREEN)`, started with `FLAG_ACTIVITY_NEW_TASK` | `LaunchApplication` | Fullscreen task on the session's display. Allowed for the shell uid and the privileged agent (`INTERNAL_SYSTEM_WINDOW`, `ActivityTaskSupervisor.isCallerAllowedToLaunchOnDisplay`) |
+| Launch on a display | `ActivityOptions.makeBasic().setLaunchDisplayId(id)` + `setLaunchWindowingMode(WINDOWING_MODE_FULLSCREEN)`, started with `FLAG_ACTIVITY_NEW_TASK` | `LaunchApplication` | Fullscreen task on the session's display. Allowed for the shell uid and the privileged agent (`INTERNAL_SYSTEM_WINDOW`, `ActivityTaskSupervisor.isCallerAllowedToLaunchOnDisplay`) |
 | Task tracking | `ITaskStackListener` / `TaskInfo.displayId` | always | Reports `taskAppeared`, `taskVanished`, and `displayEmpty` per display to the host (§7.6) |
 
 Activities started by the app, including other packages' activities (permission dialogs, the DocumentsUI picker, share targets), launch on the caller's display. That is the display of the session, so they appear inside the app's window. URL intents can be redirected to the Mac instead ([desktop-integration.md](desktop-integration.md)).
@@ -212,12 +197,12 @@ The complete list is in [../01-architecture/process-model-and-ipc.md](../01-arch
 
 ```text
 server → wrapper
-SessionDescriptor{ …, surfaces: SurfaceSet{ generation, [IOSurface] (3), pixelSize, densityDpi } }
-frameReady(generation, surfaceIndex, frameSeq, presentationTime)
-surfacesReplaced(SurfaceSet)
+  SessionDescriptor{ …, surfaces: SurfaceSet{ generation, [IOSurface] (3), pixelSize, densityDpi } }
+  frameReady(generation, surfaceIndex, frameSeq, presentationTime)
+  surfacesReplaced(SurfaceSet)
 wrapper → server
-frameDisplayed(generation, frameSeq)
-visibilityChanged(visible: Bool)
+  frameDisplayed(generation, frameSeq)
+  visibilityChanged(visible: Bool)
 ```
 
 `frameSeq` is monotonic per session across generations. `presentationTime` is the host `mach_absolute_time` at GPU completion.
@@ -226,14 +211,12 @@ visibilityChanged(visible: Bool)
 
 Each buffer of a pool is in exactly one state. apkrund owns the state. The wrapper influences it only through `frameDisplayed`.
 
-```mermaid
-stateDiagram-v2
-    [*] --> free
-    free --> rendering: acquireForRender
-    rendering --> offered: GPU blit complete; send frameReady(seq)
-    offered --> displayed: wrapper reports frameDisplayed(seq)
-    offered --> free: superseded by frameDisplayed(seq' > seq) and IOSurfaceIsInUse is false
-    displayed --> free: newer frameDisplayed(seq') and IOSurfaceIsInUse is false
+```text
+          acquireForRender            blit GPU-complete            wrapper frameDisplayed(seq)
+  free ───────────────────▶ rendering ─────────────────▶ offered(seq) ───────────────────────▶ displayed(seq)
+   ▲                                                         │                                    │
+   │         superseded: frameDisplayed(seq' > seq) received │                                    │ frameDisplayed(seq' > seq)
+   └───────────────── (and IOSurfaceIsInUse == false) ◀──────┴────────────────────────────────────┘
 ```
 
 Rules:
@@ -251,12 +234,12 @@ Implemented by `IOSurfaceLayerView` (WindowingCore) on the main thread:
 
 ```text
 on frameReady(gen, i, seq, t):
-if gen != currentGeneration or seq <= lastShownSeq: return // stale or reordered
-CATransaction.begin; CATransaction.setDisableActions(true)
-contentLayer.contents = surfaces[i] // IOSurface as layer contents: zero-copy
-CATransaction.setCompletionBlock { session.frameDisplayed(gen, seq) }
-CATransaction.commit
-lastShownSeq = seq
+    if gen != currentGeneration or seq <= lastShownSeq: return          // stale or reordered
+    CATransaction.begin(); CATransaction.setDisableActions(true)
+    contentLayer.contents = surfaces[i]                                 // IOSurface as layer contents: zero-copy
+    CATransaction.setCompletionBlock { session.frameDisplayed(gen, seq) }
+    CATransaction.commit()
+    lastShownSeq = seq
 ```
 
 - The content layer is a plain `CALayer` with `contents` set to the `IOSurface`. There is no `CAMetalLayer` and no second blit in the wrapper. A buffer is never offered twice in a row, so each assignment is a new object and Core Animation always picks up the change.
@@ -284,10 +267,10 @@ lastShownSeq = seq
 `DisplayGeometryResolver` (RuntimeCore, pure function, T0-tested) maps a `DisplayGeometry` to a `ResolvedDisplayMode`:
 
 ```text
-renderScale = min(backingScale, 4095 / pointWidth, 4095 / pointHeight) // EDID DTD limit, graphics.md §6.4
-pixelSize = (round(pointWidth × renderScale), round(pointHeight × renderScale)) rounded down to even numbers
-densityDpi = round(160 × renderScale × zoom)
-refreshHz = 60
+renderScale = min(backingScale, 4095 / pointWidth, 4095 / pointHeight)        // EDID DTD limit, graphics.md §6.4
+pixelSize   = (round(pointWidth × renderScale), round(pointHeight × renderScale)) rounded down to even numbers
+densityDpi  = round(160 × renderScale × zoom)
+refreshHz   = 60
 ```
 
 Consequences:
@@ -319,17 +302,18 @@ Display 0 boots with the image's default mode and `androidboot.lcd_density = 160
 #023 used a fixed-size development window. From #067 windows are resizable when `window.resizable` is true (default true, or false if #067 has to take fallback B below).
 
 ```text
-wrapper apkrund guest
-windowWillStartLiveResize: gravity=.resizeAspect (last frame scaled, letterboxed black)... user drags...
+wrapper                                  apkrund                                    guest
+windowWillStartLiveResize: gravity=.resizeAspect (last frame scaled, letterboxed black)
+... user drags ...
 windowDidEndLiveResize (+150 ms quiet)
 resize(DisplayGeometry) ─────────────▶ SessionRegistry → DisplayPool.reconfigure(lease, geometry)
-resolve mode (§6.1); ScanoutController.configure(scanout, mode)
-─── new EDID + display event ───▶ HWC / SurfaceFlinger
-◀─────────── GuestDisplayEvent.changed(displayID, newMode) (≤ 3 s)
-setDisplayPolicy(displayID, density) ─────────────────▶ app gets config change
-new SurfacePool (generation+1), attach to scanout
+                                        resolve mode (§6.1); ScanoutController.configure(scanout, mode)
+                                                              ─── new EDID + display event ───▶ HWC / SurfaceFlinger
+                                        ◀─────────── GuestDisplayEvent.changed(displayID, newMode) (≤ 3 s)
+                                        setDisplayPolicy(displayID, density) ─────────────────▶ app gets config change
+                                        new SurfacePool (generation+1), attach to scanout
 ◀────────────── surfacesReplaced(SurfaceSet g+1)
-gravity=.resize; frames of g+1...
+gravity=.resize; frames of g+1 ...
 ```
 
 - During live resize the input mapping uses the letterboxed content rect of the old frame ([input.md](input.md)).
@@ -363,7 +347,7 @@ The chosen behavior is recorded in §11 and in R-04.
 | `ended(.error(...))` | error panel: message, remediation, "Try Again", "Open APKRun" ([../03-reference/error-catalog.md](../03-reference/error-catalog.md)) |
 | `ended(.appCrashed)` | "‹App› stopped unexpectedly" with "Reopen" |
 
-The window is a standard titled window: title = app display name, a black background, `collectionBehavior = [.fullScreenPrimary]`, and `tabbingMode =.disallowed` (one window per app). There is no emulator frame, toolbar, or navigation buttons. Android navigation uses keyboard mappings (Esc → Back, [input.md](input.md)).
+The window is a standard titled window: title = app display name, a black background, `collectionBehavior = [.fullScreenPrimary]`, and `tabbingMode = .disallowed` (one window per app). There is no emulator frame, toolbar, or navigation buttons. Android navigation uses keyboard mappings (Esc → Back, [input.md](input.md)).
 
 ### 7.4 Fullscreen
 
@@ -409,7 +393,7 @@ When the app itself leaves its display (Back from the root activity, or the app 
 | Mode | Display | Limit | Use |
 |---|---|---|---|
 | `secondaryDisplay` (default) | own pool display (scanouts 1–15) | `display.maxSessions` | every app unless it misbehaves |
-| `primaryDisplayCompatibility` | display 0 | one session at a time | apps that assume the default display (for example they use `getDefaultDisplay` metrics, or crash or render blank on a secondary display) |
+| `primaryDisplayCompatibility` | display 0 | one session at a time | apps that assume the default display (for example they use `getDefaultDisplay()` metrics, or crash or render blank on a secondary display) |
 
 - The mode is a per-package setting (`window.mode`) with the default from the compatibility database (#090) or the user (Settings → App → Window mode, #079). It changes at the next session start.
 - A second compatibility session while display 0 is taken fails with `RuntimeFailure.primaryDisplayBusy` and the remediation "Close ‹other app› or switch one of them to the standard window mode".
@@ -458,7 +442,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Question | Task | Result |
 |---|---|---|
 | Does a config-space update raise a display event in Linux and Android? | #019, #028 | pending ([graphics.md](graphics.md) §4.3) |
-| Does `Display.getDeviceProductInfo` expose the EDID product code on pool displays? | #028 | pending |
+| Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays? | #028 | pending |
 | Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | pending (§7.1) |
 | Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | pending (§4, OQ-39) |
 | IME policy `LOCAL` on pool displays works with the APKRun IME | #071 | pending |
@@ -538,7 +522,7 @@ Embedded development mode, display 0, before DisplayPool.
 | Item | Plan |
 |---|---|
 | Does a config-space update raise a display event in Linux and Android (R-01)? | #019 tests it on the test Linux guest and #028 on Android. Fallbacks A, B, and C are in [graphics.md](graphics.md) §4.3. Fallback C (a fixed display count per boot) is also recorded under R-04. The result goes to §11 |
-| Does `Display.getDeviceProductInfo` expose the EDID product code on pool displays (§3.3 step 4)? | #028 checks it. Fallback: the pool takes "the only display added while this slot is attaching" and logs the fallback once per boot. Attaches are serialized, so this match stays unambiguous |
+| Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays (§3.3 step 4)? | #028 checks it. Fallback: the pool takes "the only display added while this slot is attaching" and logs the fallback once per boot. Attaches are serialized, so this match stays unambiguous |
 | Does a mode change keep the Android display ID (§7.1, R-04)? | #067 tests it on display 0, and #028 repeats it on pool displays. Fallback A: re-home the task with `moveRootTaskToDisplay`. Fallback B: fixed-size windows (`window.resizable` false). The result goes to §11 and R-04 |
 | Density on pool displays (§4, OQ-39) | #067 checks the forced density and the EDID physical size on display 0. #028 checks that the forced density replaces the fallback 213 on pool displays without side effects. Working default: set the density with `setDisplayPolicy` only, and record it in [graphics.md](graphics.md) §6.4 |
 | IME policy `LOCAL` on pool displays (§4, R-05) | #071 checks it with the APKRun IME. Fallbacks: the `FALLBACK_DISPLAY` IME policy, and `primaryDisplayCompatibility` for affected apps |

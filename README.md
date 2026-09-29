@@ -33,10 +33,10 @@ The documentation baseline is complete. There is no code yet. Implementation sta
 
 ```text
 Hello.app (thin wrapper: launcher + icon + wrapper.json)
-   │ XPC
+   │  XPC
    ▼
 apkrund (LaunchAgent) ── package store, updates, DisplayPool, graphics, input
-   │ Virtualization.framework: virtio-gpu, virtio-vsock, virtio-blk, virtio-net
+   │  Virtualization.framework: virtio-gpu, virtio-vsock, virtio-blk, virtio-net
    ▼
 Android ARM64 guest (AOSP Cuttlefish based)
    one Android display per Mac window; Guest Agent and Store Agent
@@ -56,7 +56,7 @@ The details are in [docs/01-architecture/overview.md](docs/01-architecture/overv
 
 ## Repository layout
 
-The planned layout is in [docs/01-architecture/modules.md](docs/01-architecture/modules.md) §1. The top-level directories are `Apps/`, `Daemon/`, `CLI/`, `Packages/` (Swift modules), `Guest/` (Android-side code and the AOSP product), `Images/`, `ThirdParty/`, `Tests/`, `Experiments/`, `scripts/`, and `docs/`. The maintained specification is in `docs/`.
+The planned layout is in [docs/01-architecture/modules.md](docs/01-architecture/modules.md) §1. The top-level directories are `Apps/`, `Daemon/`, `CLI/`, `Packages/` (Swift modules), `Guest/` (Android-side code and the AOSP product), `Images/`, `ThirdParty/`, `Tests/`, `Experiments/`, `scripts/`, and `docs/` (the maintained specification).
 
 ## License
 

@@ -138,11 +138,11 @@ Out of scope:
 
 1. **Package manifest.** Write `Package.swift` with the settings of [../../05-development/build-system.md](../../05-development/build-system.md) §2.1.
    - Declare one target per directory in `Packages/`. Declare exactly the edges of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3, with `GuestProtocol → SwiftProtobuf`. GraphicsBridge and its edge come with #020.
-   - The `apkrun` target depends on `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`, and `ArgumentParser` ([../../02-design/cli.md](../../02-design/cli.md) §2). It also depends on `RuntimeHost` and `WindowingCore` only through `condition:.when(traits: ["EmbeddedRuntime"])`, and defines `APKRUN_EMBEDDED_RUNTIME` under the same trait. The trait is off by default.
+   - The `apkrun` target depends on `RuntimeClient`, `RuntimeAPI`, `DiagnosticsCore`, and `ArgumentParser` ([../../02-design/cli.md](../../02-design/cli.md) §2). It also depends on `RuntimeHost` and `WindowingCore` only through `condition: .when(traits: ["EmbeddedRuntime"])`, and defines `APKRUN_EMBEDDED_RUNTIME` under the same trait. The trait is off by default.
    - Pin both third-party packages with `exact:` at their latest releases, and commit `Package.resolved`.
    - Check that the pinned toolchain supports trait-conditioned dependencies between targets of the same package (SE-0450). If it does not, record the fallback in [build-system.md](../../05-development/build-system.md) §2.1 in the same pull request.
 
-     Check: `swift build` and `swift build --traits EmbeddedRuntime` both succeed. `swift package dump-package` shows the trait condition on the two `apkrun` edges only.
+   Check: `swift build` and `swift build --traits EmbeddedRuntime` both succeed. `swift package dump-package` shows the trait condition on the two `apkrun` edges only.
 2. **Placeholders and T0 targets.**
    - Give every module one public placeholder type. GuestProtocol's placeholder imports SwiftProtobuf, so that the edge is real.
    - Give every module a `<Module>Tests` target with one Swift Testing `@Test`.
@@ -150,34 +150,34 @@ Out of scope:
    - Do not create `<Module>SystemTests` or `<Module>TestSupport` targets yet. The tasks that need them add them ([../../05-development/build-system.md](../../05-development/build-system.md) §2.1).
    - Create the directories of the Deliverables with `.gitkeep`. Create no `Common/`, `Utils/`, `Helpers/`, or `Misc/` directory.
 
-     Check: `swift test` runs 17 test targets and passes.
+   Check: `swift test` runs 17 test targets and passes.
 3. **CLI root command.** Build the CLI following [../../02-design/cli.md](../../02-design/cli.md) §6.1.
    - `main.swift` defines the root `AsyncParsableCommand` named `apkrun` with a `version` subcommand and swift-argument-parser's `--help` and `--version`.
    - `Support/Output.swift` writes human output to stdout and the JSON envelope `{ "schemaVersion": 1, "result": … }` ([cli.md](../../02-design/cli.md) §3.2).
    - `Support/ExitCodes.swift` holds the exit codes of [cli.md](../../02-design/cli.md) §3.3 as named constants. #061 adds the mapping from error codes.
    - `Support/Version.swift` reads `CFBundleShortVersionString`, `CFBundleVersion`, and `APKRunBuildIdentity` from `Bundle.main.infoDictionary`, which the embedded Info.plist fills (step 6). #061 replaces this with `BuildInfo`.
    - Outputs:
-   - `apkrun version` prints `apkrun 0.1.0 (1)`.
-   - `apkrun version --json` prints `{"schemaVersion":1,"result":{"cli":{"version":"0.1.0","build":"1"}}}`.
-   - `apkrun --version` prints `0.1.0`.
-   - Without an embedded Info.plist (a plain `swift build`), the version is `0.0.0-dev` and the build is `0`.
+     - `apkrun version` prints `apkrun 0.1.0 (1)`.
+     - `apkrun version --json` prints `{"schemaVersion":1,"result":{"cli":{"version":"0.1.0","build":"1"}}}`.
+     - `apkrun --version` prints `0.1.0`.
+     - Without an embedded Info.plist (a plain `swift build`), the version is `0.0.0-dev` and the build is `0`.
    - The apkrund and image versions of [cli.md](../../02-design/cli.md) §4.1 are added when apkrund is reachable (#032).
    - Commands take the version source as an injected value, so the golden tests are deterministic.
 
-     Check: the golden tests for `version`, `version --json`, `--version`, and `--help` pass.
+   Check: the golden tests for `version`, `version --json`, `--version`, and `--help` pass.
 4. **apkrund.** `Daemon/apkrund/main.swift` is a thin main. All future logic lives in RuntimeHost ([../../05-development/build-system.md](../../05-development/build-system.md) §2.1).
    - `apkrund --version` prints `apkrund 0.1.0 (1)` and exits 0.
    - Without arguments, it installs `DispatchSource` signal handlers for `SIGTERM` and `SIGINT`, calls `dispatchMain()`, and exits 0 when a signal arrives. It does nothing else in M0.
 
-     Check: `apkrund & sleep 1; kill -TERM $!; wait $!` returns 0.
+   Check: `apkrund & sleep 1; kill -TERM $!; wait $!` returns 0.
 5. **Apps.**
    - APKRun is a SwiftUI app with one window titled "APKRun".
    - APKRunMenuBar is a SwiftUI `MenuBarExtra` with a Quit item and `LSUIElement` = YES.
    - APKRunLauncher is an AppKit app (`NSApplication` main, one window) that links only system frameworks. `scripts/check-launcher.sh` enforces this from #068 on.
 
-     None of them imports RuntimeCore ([../../../AGENTS.md](../../../AGENTS.md) §6.1). They link the products listed in [../../05-development/build-system.md](../../05-development/build-system.md) §2.2. Sparkle comes with #057.
+   None of them imports RuntimeCore ([../../../AGENTS.md](../../../AGENTS.md) §6.1). They link the products listed in [../../05-development/build-system.md](../../05-development/build-system.md) §2.2. Sparkle comes with #057.
 
-     Check: each app runs from Xcode.
+   Check: each app runs from Xcode.
 6. **project.yml and embedding.** Write `project.yml` following [../../05-development/build-system.md](../../05-development/build-system.md) §2.2–§2.5.
    - Reference the root package as a local Swift package.
    - Configurations: `Debug` and `Release`. `ReleaseUpdateTest` is added later with the Maintenance suite ([../../05-development/build-system.md](../../05-development/build-system.md) §2.4).
@@ -186,36 +186,36 @@ Out of scope:
    - apkrund is a command-line tool with `CREATE_INFOPLIST_SECTION_IN_BINARY` = YES.
    - Entitlements ([../../05-development/build-system.md](../../05-development/build-system.md) §12.2): `Apps/APKRun/APKRun.entitlements` is an empty dictionary. `Daemon/apkrund/apkrund.entitlements` and `CLI/apkrun/apkrun-dev.entitlements` contain `com.apple.security.virtualization`.
    - The APKRun target has the M0 embed phases of [../../05-development/build-system.md](../../05-development/build-system.md) §11:
-   - Embed Helpers: `Contents/Helpers/apkrund`, `Contents/Helpers/APKRunLauncher.app`.
-   - Embed Login Items: `Contents/Library/LoginItems/APKRunMenuBar.app`.
-   - A run-script phase that calls `scripts/build/embed-cli.sh`.
+     - Embed Helpers: `Contents/Helpers/apkrund`, `Contents/Helpers/APKRunLauncher.app`.
+     - Embed Login Items: `Contents/Library/LoginItems/APKRunMenuBar.app`.
+     - A run-script phase that calls `scripts/build/embed-cli.sh`.
    - `embed-cli.sh`:
-   1. Runs `swift build -c <debug|release> --product apkrun`, adding `--traits EmbeddedRuntime` in Debug.
-   2. Generates an Info.plist with `CFBundleIdentifier` `io.apkrun.cli` (or `io.apkrun.cli.dev`), the two version keys, and `APKRunBuildIdentity`.
-   3. Links the plist into the binary with `-Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker <plist>`.
-   4. Copies the result to `Contents/Resources/bin/apkrun`.
-   5. Signs it with `$EXPANDED_CODE_SIGN_IDENTITY`, adding `apkrun-dev.entitlements` in Debug ([../../05-development/build-system.md](../../05-development/build-system.md) §12.4). When the identity is empty (`CODE_SIGNING_ALLOWED=NO`), it skips signing.
+     1. Runs `swift build -c <debug|release> --product apkrun`, adding `--traits EmbeddedRuntime` in Debug.
+     2. Generates an Info.plist with `CFBundleIdentifier` `io.apkrun.cli` (or `io.apkrun.cli.dev`), the two version keys, and `APKRunBuildIdentity`.
+     3. Links the plist into the binary with `-Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker <plist>`.
+     4. Copies the result to `Contents/Resources/bin/apkrun`.
+     5. Signs it with `$EXPANDED_CODE_SIGN_IDENTITY`, adding `apkrun-dev.entitlements` in Debug ([../../05-development/build-system.md](../../05-development/build-system.md) §12.4). When the identity is empty (`CODE_SIGNING_ALLOWED=NO`), it skips signing.
    - `scripts/generate-project.sh` runs only the pinned XcodeGen from `build/tools/xcodegen-2.44.1/`.
 
-     Check: the Debug build of the APKRun scheme contains the layout of [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §4 for the M0 parts. `codesign -d --entitlements - Contents/Resources/bin/apkrun` shows the virtualization entitlement in Debug and none in Release.
+   Check: the Debug build of the APKRun scheme contains the layout of [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §4 for the M0 parts. `codesign -d --entitlements - Contents/Resources/bin/apkrun` shows the virtualization entitlement in Debug and none in Release.
 7. **Bootstrap.** `scripts/bootstrap` downloads the pinned XcodeGen into `build/tools/`, checks its SHA-256 against `scripts/tool-versions.env`, and then runs the checks. `--check` only checks.
    - M0 implements these rows of [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §7:
-   - Apple silicon and macOS 27+;
-   - Xcode matches `.xcode-version`;
-   - Swift 6.2 or later;
-   - XcodeGen;
-   - nested virtualization (informational);
-   - free disk (warning).
+     - Apple silicon and macOS 27+;
+     - Xcode matches `.xcode-version`;
+     - Swift 6.2 or later;
+     - XcodeGen;
+     - nested virtualization (informational);
+     - free disk (warning).
    - Every other row prints `skip (added by #NNN)` and does not fail. The task that introduces a tool adds its row.
    - Output is one line per check (`ok`, `warning`, `skip`, `FAIL`). The exit status is nonzero only on `FAIL`.
 
-     Check: on a fresh clone, `scripts/bootstrap` followed by `scripts/bootstrap --check` reports no `FAIL`.
+   Check: on a fresh clone, `scripts/bootstrap` followed by `scripts/bootstrap --check` reports no `FAIL`.
 8. **Smoke script.** `scripts/smoke-products.sh <build products dir>` checks the task acceptance criteria outside Xcode:
    - The CLI's `version`, `--version`, and `--help` exit 0 with the expected output.
    - APKRun.app starts. The script uses `open -n`, then `pgrep -x APKRun` within 10 s, then quits it through `osascript` with the bundle ID, and expects the process to be gone within 10 s.
    - apkrund starts, receives `SIGTERM` after 1 s, and exits 0.
 
-     Check: the script passes against a Debug build made with `CODE_SIGN_IDENTITY=-`.
+   Check: the script passes against a Debug build made with `CODE_SIGN_IDENTITY=-`.
 
 ### Tests
 
@@ -302,7 +302,7 @@ Out of scope:
   - `RecordingLogSink`;
   - `FakeLogCommandRunner`;
   - a manual clock;
-  - `DiagnosticsContext.testing`;
+  - `DiagnosticsContext.testing()`;
   - the catalog conformance helper that module tests call with their fixture lists of error values.
 - CLI: `Support/ErrorOutput.swift`, `Support/ExitCodes.swift` extended with the catalog mapping, and `Commands/Logs.swift`.
 - The OQ-04 result in [../open-questions.md](../open-questions.md) and [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §14.
@@ -315,14 +315,14 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
    - `APKRunPaths` resolves every path of [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md). The data root is `~/Library/Application Support/APKRun/`, and the logs root is `~/Library/Logs/APKRun/`. Debug builds use `APKRun-Dev` for both.
    - `APKRunPaths` honors `APKRUN_HOME` only when told to. The CLI tells it to only for `dev` commands ([../../02-design/cli.md](../../02-design/cli.md) §3.6), and tests tell it to always. With `APKRUN_HOME` set, the logs root is `$APKRUN_HOME/Logs/` (see Notes).
    - `BuildInfo` reads these fields from the bundle Info.plist, or from the executable's embedded Info.plist:
-   - `CFBundleShortVersionString` and `CFBundleVersion`;
-   - `APKRunBuildIdentity`;
-   - `APKRunGitCommit`;
-   - the configuration and the embedded-runtime flag.
+     - `CFBundleShortVersionString` and `CFBundleVersion`;
+     - `APKRunBuildIdentity`;
+     - `APKRunGitCommit`;
+     - the configuration and the embedded-runtime flag.
    - `scripts/build/stamp-commit.sh` writes `build/generated/BuildStamp.h` with `#define APKRUN_GIT_COMMIT <7 hex>[-dirty]`. It runs in a `BuildStamp` aggregate target that every target depends on. Every Info.plist uses `INFOPLIST_PREPROCESS` with that prefix header. `embed-cli.sh` reads the same header.
    - Replace the CLI's `Support/Version.swift` with `BuildInfo`.
 
-     Check: `apkrun version --json` shows the commit, and a T0 test decodes `BuildInfo` from a fixture plist.
+   Check: `apkrun version --json` shows the commit, and a T0 test decodes `BuildInfo` from a fixture plist.
 2. **Logging facade.** Build the facade of §3.1–§3.2.
    - `LogSubsystem` is the closed enum of §3.1.
    - Categories are one enum per subsystem.
@@ -330,35 +330,35 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
    - `APKLogger` renders the public text, the U+001F separator, and the full text. It appends ` op=… pkg=… disp=… sess=… err=…` from `OperationContext` and the `error:` argument.
    - `APKLogger` writes through a `LogSink` protocol. The production sink is `os.Logger`. The test sink is `RecordingLogSink`.
    - `LogMirrorWriter` (§3.3):
-   - a serial queue and a 1 MiB buffer;
-   - flushes every 1 s and right after `error` and `fault` entries;
-   - rotation at 10 MiB × 3;
-   - files created with mode 0600;
-   - drops entries when the buffer is full and counts them as `diagnostics.mirrorDropped`.
+     - a serial queue and a 1 MiB buffer;
+     - flushes every 1 s and right after `error` and `fault` entries;
+     - rotation at 10 MiB × 3;
+     - files created with mode 0600;
+     - drops entries when the buffer is full and counts them as `diagnostics.mirrorDropped`.
 
-     Check: T1-1 passes (every privacy mode, U+001F only with private values, structured fields).
+   Check: T1-1 passes (every privacy mode, U+001F only with private values, structured fields).
 3. **Operation IDs (§2.4).**
    - `OperationID` is a lowercase UUID v4. It has `short` (8 hex) and a wire string, parsed with `init?(wire:)`.
    - `OperationContext` is `@TaskLocal static var current`. It has `withNew(_:)`, `withChild(_:)` (the new context records its `parent`), and helpers that read and write the ID as a string. RuntimeAPI (#032) and GuestProtocol (#033) use those helpers for the XPC header and the guest envelope. DiagnosticsCore imports neither.
 
-     Check: T0 shows that a child task inherits the context and that `withChild` records the parent.
+   Check: T0 shows that a child task inherits the context and that `withChild` records the parent.
 4. **Error model and catalog (§2).**
    - Add `APKRunError`, `ErrorDomain`, `ErrorParameter`, `UnderlyingError`, and `RemediationAction` exactly as declared in §2.1 and §2.3.
    - Write `errors.json` with the entry format of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.1, including `variants`, `transparent`, `retired`, and `"cliExit": "cause"`:
-   - All `vm.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5, including the proposed `vm.configurationInvalid`.
-   - The `cli.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §16, at least `cli.confirmationRequired`, `cli.versionSkew` (a warning, exit 0), and the usage error with exit 64. The usage error is `cli.invalidArguments`.
+     - All `vm.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5, including the proposed `vm.configurationInvalid`.
+     - The `cli.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §16, at least `cli.confirmationRequired`, `cli.versionSkew` (a warning, exit 0), and the usage error with exit 64. The usage error is `cli.invalidArguments`.
    - `swift scripts/errorgen.swift` writes `ErrorCatalog.generated.swift` with every language as literals.
    - `--markdown` regenerates the catalog tables of the domains that are in `errors.json`. It replaces only the regions between `<!-- errorgen:begin <domain> -->` and `<!-- errorgen:end <domain> -->` markers, which this step adds to [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md). The other domains stay hand-written until their tasks move them.
    - Columns that the §3.1 entry format does not hold (When raised, Raised by, Ref) go into an optional `doc` member of the entry, which the Swift output ignores.
    - `ErrorPresenter` produces:
-   - the three-line CLI format;
-   - one `hint:` line per item for list cases ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.6);
-   - the JSON `error` object with its `cause` chain;
-   - the GUI title, body, and action;
-   - the Copy Details line (§2.3).
+     - the three-line CLI format;
+     - one `hint:` line per item for list cases ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.6);
+     - the JSON `error` object with its `cause` chain;
+     - the GUI title, body, and action;
+     - the Copy Details line (§2.3).
    - Pick the language from `Locale.preferredLanguages`, falling back to English.
 
-     Check: T1-4 and T1-5 pass. The generated file and the Markdown regions are current.
+   Check: T1-4 and T1-5 pass. The generated file and the Markdown regions are current.
 5. **Performance markers (§4.1).**
    - `PerfMarker` constants for the §4.2 catalogue.
    - `Perf.mark` emits an `OSSignposter` event in category `pointsOfInterest` and appends to `PerfTimeline`, a ring of 2,000 markers with the operation context.
@@ -366,46 +366,46 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
    - The clock is `ContinuousClock`.
    - `PerfRecordWriter` comes with #070.
 
-     Check: T0 shows that the timeline keeps the newest 2,000 markers and that a mark does no I/O (it runs against a sink that fails on any write).
+   Check: T0 shows that the timeline keeps the newest 2,000 markers and that a mark does no I/O (it runs against a sink that fails on any write).
 6. **Health and the diagnostics context (§7.1–§7.3).**
    - Add the types of §7.1 and `HealthCheckRegistry`, with a 2 s timeout for quick checks, 60 s for deep checks, and at most 8 checks at once.
    - Add the verdict function of §7.2.
    - `HostChecks` implements the `host.*` checks and `apkrund.registration` (through `launchctl print gui/<uid>/<label>`, with the label from `BuildInfo`). All system access goes through an injected `HostProbe`, so T0 can drive every result.
    - Define `DiagnosticsContext`, the value that module entry points such as `VMController.init` ([../../02-design/vm.md](../../02-design/vm.md) §2) receive. It is a `Sendable` struct holding:
-   - the `LogSink`;
-   - the `HealthCheckRegistry`;
-   - the `PerfTimeline`;
-   - `APKRunPaths`;
-   - a clock.
-   - `DiagnosticsContext.live(paths:)` builds the production value. `DiagnosticsContext.testing` lives in `DiagnosticsCoreTestSupport`.
+     - the `LogSink`;
+     - the `HealthCheckRegistry`;
+     - the `PerfTimeline`;
+     - `APKRunPaths`;
+     - a clock.
+   - `DiagnosticsContext.live(paths:)` builds the production value. `DiagnosticsContext.testing()` lives in `DiagnosticsCoreTestSupport`.
 
-     Check: T1-6 covers every verdict row, including `graphicsFailure` before `bootFailure` and the stopped suffix.
+   Check: T1-6 covers every verdict row, including `graphicsFailure` before `bootFailure` and the stopped suffix.
 7. **Logging lint.** `scripts/check-logging.sh` fails in two cases:
    - on `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside `Packages/DiagnosticsCore/`;
    - on an `APKLogger` call whose interpolation has no privacy argument, or that unwraps a `Sensitive` value.
 
-     Exemptions: `scripts/`, the `Tests/Fixtures/compile-fail/` fixtures, and the CLI's `Support/Output.swift`, which writes command output to stdout and stderr, not logs. The CLI must use `FileHandle` writes there, not `print(`, so the exemption stays narrow.
+   Exemptions: `scripts/`, the `Tests/Fixtures/compile-fail/` fixtures, and the CLI's `Support/Output.swift`, which writes command output to stdout and stderr, not logs. The CLI must use `FileHandle` writes there, not `print(`, so the exemption stays narrow.
 
-     The `lint` job (#062) runs the script.
+   The `lint` job (#062) runs the script.
 
-     Check: the lint self-test flags a fixture file for each forbidden form and passes the tree.
+   Check: the lint self-test flags a fixture file for each forbidden form and passes the tree.
 8. **CLI presentation and `apkrun logs`.**
    - Every CLI failure goes through `ErrorPresenter`. The root command catches swift-argument-parser errors and prints them as the usage error with exit 64. It never prints the argument text to the log.
    - `Support/ExitCodes.swift` maps each qualified code to its `cliExit`, resolving `"cause"` through the chain.
    - `apkrun logs [--follow] [--since <duration>] [--subsystem <name>] [--level info|debug] [--json]` ([../../02-design/cli.md](../../02-design/cli.md) §4.8) uses `LogReader` in DiagnosticsCore:
-   - It runs `/usr/bin/log show` (or `log stream` with `--follow`) with `--predicate 'subsystem BEGINSWITH "io.apkrun"' --style ndjson`, adding `--info` or `--debug` to match `--level`.
-   - It cuts each message at U+001F and prints time, level, subsystem/category, and message.
-   - The process runner is injected.
-   - If `log` fails, or returns nothing within 30 s, it reads the mirrors under the logs root and says so on stderr ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §3.5).
+     - It runs `/usr/bin/log show` (or `log stream` with `--follow`) with `--predicate 'subsystem BEGINSWITH "io.apkrun"' --style ndjson`, adding `--info` or `--debug` to match `--level`.
+     - It cuts each message at U+001F and prints time, level, subsystem/category, and message.
+     - The process runner is injected.
+     - If `log` fails, or returns nothing within 30 s, it reads the mirrors under the logs root and says so on stderr ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §3.5).
    - `apkrun version` logs one `notice` entry under `io.apkrun.cli`, category `command`.
 
-     Check: `apkrun version` and `apkrun logs --since 1m --subsystem io.apkrun.cli` show that entry.
+   Check: `apkrun version` and `apkrun logs --since 1m --subsystem io.apkrun.cli` show that entry.
 9. **Acceptance and OQ-04.**
    - Run the tests below.
    - On a Mac with macOS 27, run `log show --predicate 'subsystem BEGINSWITH "io.apkrun"' --last 5m` as a standard (non-admin) user and as an administrator. Record whether the standard user gets entries, an error, or nothing.
    - Settle OQ-04 in [../open-questions.md](../open-questions.md) and update [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §3.3, §3.5, and §13.
 
-     Check: every acceptance criterion is checked.
+   Check: every acceptance criterion is checked.
 
 ### Tests
 
@@ -437,7 +437,7 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 - [ ] Logging a `Sensitive` value, or an interpolation without privacy, does not compile.
 - [ ] Every log entry made inside an `OperationContext` carries `op=` with the first 8 hex digits.
 - [ ] `apkrun logs` falls back to the mirrors and says so on stderr when `log` fails or returns nothing within 30 s.
-- [ ] `DiagnosticsContext.testing` is available to other modules' tests through `DiagnosticsCoreTestSupport`.
+- [ ] `DiagnosticsContext.testing()` is available to other modules' tests through `DiagnosticsCoreTestSupport`.
 - [ ] OQ-04 is settled and the result is recorded.
 
 ### Notes
@@ -498,60 +498,60 @@ Out of scope:
 
 1. **Lock file and lock check.** Write the lock file with the two swiftpm entries.
    - `check-lock.swift` enforces the §6.1 rules:
-   - every required field is present;
-   - `kind` and `ships` take only the listed values;
-   - `name` is unique;
-   - `commit` is 40 lowercase hex and `sha256` is 64 hex;
-   - no field holds a branch name or a short hash;
-   - every listed patch exists under `ThirdParty/patches/<name>/`;
-   - every `swiftpm` entry matches the revision in `Package.resolved`, and the exact version in `Package.swift` or `project.yml`;
-   - every Swift package pin in `Package.resolved` has a lock entry.
+     - every required field is present;
+     - `kind` and `ships` take only the listed values;
+     - `name` is unique;
+     - `commit` is 40 lowercase hex and `sha256` is 64 hex;
+     - no field holds a branch name or a short hash;
+     - every listed patch exists under `ThirdParty/patches/<name>/`;
+     - every `swiftpm` entry matches the revision in `Package.resolved`, and the exact version in `Package.swift` or `project.yml`;
+     - every Swift package pin in `Package.resolved` has a lock entry.
    - The script prints one line per violation and exits 1.
    - #020 adds `--apply`, which applies every patch to the checked-out sources in the `third-party` job. #008 adds the vendored-file hashes of `Images/tools/vendor/` ([../../05-development/build-system.md](../../05-development/build-system.md) §6.4).
 
-     Check: the lock fixtures fail, one rule each (a branch name, a short commit, a missing patch, a pin mismatch, an unlisted pin), and the real lock file passes.
+   Check: the lock fixtures fail, one rule each (a branch name, a short commit, a missing patch, a pin mismatch, an unlisted pin), and the real lock file passes.
 2. **Module dependency check.** `check-module-deps.swift` reads the allowed graph from the two code blocks of [../../01-architecture/modules.md](../../01-architecture/modules.md) §3, so the document stays the only source. Then it checks four sources:
    - (a) `swift package dump-package`: every target dependency is an allowed edge. Trait conditions appear only on `apkrun → RuntimeHost` and `apkrun → WindowingCore`, with the trait `EmbeddedRuntime`.
    - (b) `build/tools/xcodegen-2.44.1/bin/xcodegen dump --type json`: the dependencies of the app, daemon, and launcher targets match the executable rows.
    - (c) An import scan of every Swift, C, and Objective-C source of each production target, including `@testable`, `@_exported`, and `@_implementationOnly` imports. SwiftPM lets a target import anything in its dependency closure, so this catches, for example, `import RuntimeCore` in the CLI.
    - (d) Third-party products are used only where the graph allows them: SwiftProtobuf in GuestProtocol, ArgumentParser in `apkrun`, Sparkle in APKRun.
 
-     Test and support targets have their own rules:
+   Test and support targets have their own rules:
    - A `<Module>Tests` or `<Module>SystemTests` target may use its module, that module's dependencies, and their `TestSupport` targets.
    - A `<Module>TestSupport` target may use its module and that module's dependencies.
    - `Tests/IntegrationTests` and `Tests/AcceptanceTests` may use any module.
 
-     Layout rules:
+   Layout rules:
    - No directory named `Common`, `Utils`, `Helpers`, or `Misc` under `Apps/`, `Daemon/`, `CLI/`, or `Packages/`.
    - No production target has sources under `Experiments/`.
    - No production source imports a module defined there.
 
-     Check: with no arguments, the script passes on the tree in under 60 s. Each fixture fails with a message that names the file, the edge, and the modules.md rule: a forbidden edge, a forbidden import, a forbidden trait edge, ArgumentParser in a library, a `Helpers/` directory, and an `Experiments/` import.
+   Check: with no arguments, the script passes on the tree in under 60 s. Each fixture fails with a message that names the file, the edge, and the modules.md rule: a forbidden edge, a forbidden import, a forbidden trait edge, ArgumentParser in a library, a `Helpers/` directory, and an `Experiments/` import.
 3. **TODO check.** `check-todos.sh` scans the files listed by `git ls-files` with these extensions:
    - `swift`, `h`, `c`, `m`, `mm`, `cpp`
    - `kt`, `kts`, `rs`, `py`, `sh`
    - `yml`, `yaml`, `json`
    - `rc`, `te`, `mk`, `bp`
 
-It skips `docs/`, `*.md`, `ThirdParty/patches/`, and `Images/tools/vendor/`. Every `TODO` or `FIXME` must be followed by `(#<digits>)` (NFR-DEV-04).
+   It skips `docs/`, `*.md`, `ThirdParty/patches/`, and `Images/tools/vendor/`. Every `TODO` or `FIXME` must be followed by `(#<digits>)` (NFR-DEV-04).
 
-  Check: the fixtures `TODO: x`, `TODO(#NNN): x`, and `FIXME(x)` fail, `TODO(#123): x` passes, and the tree passes.
+   Check: the fixtures `TODO: x`, `TODO(#NNN): x`, and `FIXME(x)` fail, `TODO(#123): x` passes, and the tree passes.
 4. **Format check.** `check-format.sh` runs `swift format lint --strict --recursive` over `Apps/`, `Daemon/`, `CLI/`, `Packages/`, `Tests/`, and `scripts/`. The ktfmt, `cargo fmt --check`, and `ruff format --check` parts print `skip (<dir> not present)` until `Guest/` and `Images/tools/` have sources.
 
    Check: a badly formatted fixture fails and the tree passes.
 5. **Check runner and code generation.**
    - `scripts/ci/run-checks.sh` runs, in order:
-   1. `scripts/tests/run.sh`;
-   2. `check-module-deps.sh`;
-   3. `check-logging.sh`, if #061 has merged;
-   4. `check-todos.sh`;
-   5. `check-format.sh`;
-   6. `check-lock.sh`.
+     1. `scripts/tests/run.sh`;
+     2. `check-module-deps.sh`;
+     3. `check-logging.sh`, if #061 has merged;
+     4. `check-todos.sh`;
+     5. `check-format.sh`;
+     6. `check-lock.sh`.
 
-      It prints a summary and fails if any check fails.
+     It prints a summary and fails if any check fails.
    - `scripts/ci/codegen.sh` runs every generator of [../../05-development/build-system.md](../../05-development/build-system.md) §4 that exists in the tree (`swift scripts/errorgen.swift` and `--markdown` from #061, `scripts/generate-protos.sh` from #033), then runs `git diff --exit-code`.
 
-     Check: both scripts run locally with no arguments.
+   Check: both scripts run locally with no arguments.
 6. **Workflow.** `.github/workflows/ci.yml` runs on every pull request and on every push to `main`. It uses `runs-on: [self-hosted, apkrun-ci]` and `APKRUN_CI=1`, with `concurrency` per ref.
 
    | Job | Runs |
@@ -564,7 +564,7 @@ It skips `docs/`, `*.md`, `ThirdParty/patches/`, and `Images/tools/vendor/`. Eve
    - Upload the xcresult and JUnit reports on failure ([../test-strategy.md](../test-strategy.md) §3.7).
    - Pin every action by commit SHA, not by tag.
 
-     Check: a pull request shows the four jobs green.
+   Check: a pull request shows the four jobs green.
 7. **Branch protection and a negative test.** On `main`, require the four jobs and one approving review, and forbid force pushes (see [../../05-development/workflow.md](../../05-development/workflow.md)). Open a draft pull request that adds `import RuntimeCore` to `Apps/APKRun/` and a `TODO` without a number. Confirm that `lint` fails with both messages, then close it.
 
    Check: the draft pull request's `lint` result is linked in this task's pull request.
@@ -627,7 +627,7 @@ A `VMDefinition` value describes a VM without Android concepts. `VMDefinitionVal
 
 - The value types of [../../02-design/vm.md](../../02-design/vm.md) §2, and `VMDefinition.summary`.
 - `VMDefinitionValidator` with every rule of §3, the typed failures, and the collection of several failures.
-- The VZ configuration builder (§4 mapping), used by validation to call `VZVirtualMachineConfiguration.validate`, behind a seam.
+- The VZ configuration builder (§4 mapping), used by validation to call `VZVirtualMachineConfiguration.validate()`, behind a seam.
 - `VMState` and its transition table as a pure value ([../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1).
 - Generating and persisting the machine identifier and the MAC address.
 - The `VirtioDeviceDescriptor` and `VirtioDeviceModel` declarations that `VMDefinition.customDevices` needs.
@@ -667,7 +667,7 @@ Out of scope:
    - Add the minimal `VirtioDeviceDescriptor` and `VirtioDeviceModel` of [../../02-design/graphics.md](../../02-design/graphics.md) §3.2 to VirtioDeviceCore, with no VZ adapter yet. #063 completes them.
    - `VMDefinitionSummary` is the `Codable` projection with no device objects: the paths reduced to file names, the disk roles and flags, the port roles, and the custom device names. Log it under `io.apkrun.vm`, category `config`.
 
-     Check: T0 encodes a summary and finds no full path in it.
+   Check: T0 encodes a summary and finds no full path in it.
 2. **Host environment seam.** `VMHostEnvironment` provides:
    - the active processor count;
    - physical memory;
@@ -675,39 +675,39 @@ Out of scope:
    - a file probe (exists, regular file, size, first 64 bytes, readable, writable);
    - the host bundle's `NSMicrophoneUsageDescription`.
 
-     The live implementation uses `ProcessInfo`, VZ, and `FileManager`. The fake lives in `VirtualMachineCoreTestSupport`.
+   The live implementation uses `ProcessInfo`, VZ, and `FileManager`. The fake lives in `VirtualMachineCoreTestSupport`.
 
-     Check: every rule in step 3 reads the host only through this seam.
+   Check: every rule in step 3 reads the host only through this seam.
 3. **Rules (§3).** Implement every row of the §3 table in order.
    - CPU count, memory limits, and the 50 % cap (NFR-RES-01).
    - Kernel checks (`KernelImageInspector`):
-   - `ARM\x64` at 0x38–0x3B is an uncompressed arm64 `Image`.
-   - `1f 8b` is `.gzip`.
-   - `02 21 4c 18` and `04 22 4d 18` are `.lz4`.
-   - `MZ` followed by `zimg` at offset 4 is `.zboot`, an EFI zboot kernel.
-- Anything else is `.unknown`, including unsupported architectures.
-  - initrd at most 512 MiB. Command line at most 2048 bytes, ASCII only.
-  - Disks:
-  - each disk exists and is a regular file;
-  - Android sparse images (magic `0xED26FF3A`) are rejected;
-  - no disk URL appears twice (compared after resolving symlinks);
-  - read-write disks are writable;
-  - identifiers are at most 20 ASCII characters.
-  - Console port 0 is `.systemConsole`.
-  - The MAC is valid: locally administered unicast.
-  - Custom devices: each descriptor passes its own checks (name non-empty, at least one queue). #063 adds the VZ-level checks.
-  - The microphone usage description is present when `sound.input` is set.
-  - Finally, `FrameworkConfigurationValidator` builds the VZ configuration with `VZConfigurationBuilder` and calls `validate`. A failure maps to `.frameworkRejected(underlying:)`, with the domain and code only.
-  - The machine identifier, when present, must decode with `VZGenericMachineIdentifier(dataRepresentation:)`. Otherwise the validator raises `.machineIdentifierInvalid` ([vm.md](../../02-design/vm.md) §3; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2, exit 70).
+     - `ARM\x64` at 0x38–0x3B is an uncompressed arm64 `Image`.
+     - `1f 8b` is `.gzip`.
+     - `02 21 4c 18` and `04 22 4d 18` are `.lz4`.
+     - `MZ` followed by `zimg` at offset 4 is `.zboot`, an EFI zboot kernel.
+     - Anything else is `.unknown`, including unsupported architectures.
+   - initrd at most 512 MiB. Command line at most 2048 bytes, ASCII only.
+   - Disks:
+     - each disk exists and is a regular file;
+     - Android sparse images (magic `0xED26FF3A`) are rejected;
+     - no disk URL appears twice (compared after resolving symlinks);
+     - read-write disks are writable;
+     - identifiers are at most 20 ASCII characters.
+   - Console port 0 is `.systemConsole`.
+   - The MAC is valid: locally administered unicast.
+   - Custom devices: each descriptor passes its own checks (name non-empty, at least one queue). #063 adds the VZ-level checks.
+   - The microphone usage description is present when `sound.input` is set.
+   - Finally, `FrameworkConfigurationValidator` builds the VZ configuration with `VZConfigurationBuilder` and calls `validate()`. A failure maps to `.frameworkRejected(underlying:)`, with the domain and code only.
+   - The machine identifier, when present, must decode with `VZGenericMachineIdentifier(dataRepresentation:)`. Otherwise the validator raises `.machineIdentifierInvalid` ([vm.md](../../02-design/vm.md) §3; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2, exit 70).
 
-    Check: one T0 test per rule passes.
+   Check: one T0 test per rule passes.
 4. **Collecting failures.** `validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every rule before throwing.
    - One failure is thrown as itself.
    - Several failures are thrown as `.configurationInvalid([VMConfigurationFailure])`, the case proposed by [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2. The list is flat, in rule order.
    - `findings(_:) -> [VMConfigurationFailure]` returns the same list without throwing, for `apkrun doctor`.
    - `ValidatedVMDefinition` has an internal initializer, so only the validator can create one.
 
-     Check: T0 shows a definition with three broken rules yielding one `.configurationInvalid` with three items in rule order.
+   Check: T0 shows a definition with three broken rules yielding one `.configurationInvalid` with three items in rule order.
 5. **VZ configuration builder (§4).** `VZConfigurationBuilder` maps the definition to a `VZVirtualMachineConfiguration`:
    - platform with `machineIdentifier`;
    - `VZLinuxBootLoader`;
@@ -720,26 +720,26 @@ Out of scope:
    - balloon;
    - sound.
 
-     Console attachments come from a parameter. Validation passes `FileHandle.nullDevice` pairs, and #003 passes real pipes. Custom devices are left out until #063 adds the adapter.
+   Console attachments come from a parameter. Validation passes `FileHandle.nullDevice` pairs, and #003 passes real pipes. Custom devices are left out until #063 adds the adapter.
 
-     Check: T0 inspects a built configuration: disk order, identifiers, port count, and that there is no graphics, keyboard, or pointing device.
+   Check: T0 inspects a built configuration: disk order, identifiers, port count, and that there is no graphics, keyboard, or pointing device.
 6. **State table.** `VMState` is the enum of [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1. `VMStateTransitions.isAllowed(from:to:)` encodes exactly the table's edges.
 
    Check: T0 iterates every (from, to) pair and asserts that exactly the table's edges are allowed.
 7. **Identity values.**
-   - `MachineIdentity.newMachineIdentifier` returns `VZGenericMachineIdentifier.dataRepresentation`.
-   - `MachineIdentity.newMACAddress` returns `VZMACAddress.randomLocallyAdministered.string`.
+   - `MachineIdentity.newMachineIdentifier()` returns `VZGenericMachineIdentifier().dataRepresentation`.
+   - `MachineIdentity.newMACAddress()` returns `VZMACAddress.randomLocallyAdministered().string`.
    - Both round-trip through `Codable` so that RuntimeCore can store them in `instance.json` (§4, §7).
 
-     Check: the T0 round-trip test passes, and 1,000 generated MACs are all valid under the step 3 rule.
+   Check: the T0 round-trip test passes, and 1,000 generated MACs are all valid under the step 3 rule.
 8. **Errors.**
    - `VMConfigurationFailure` conforms to `APKRunError` with domain `vm` and the codes of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2.
    - `parameters` carry only public-safe values: role names, counts, and byte sizes, never paths ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §2.1).
    - Add the fixture list to the catalog conformance test.
 
-     If #061 step 4 has not been merged yet, the type conforms to `Error, Equatable`, and this step lands when #061 step 4 does. #002 is not done before then.
+   If #061 step 4 has not been merged yet, the type conforms to `Error, Equatable`, and this step lands when #061 step 4 does. #002 is not done before then.
 
-     Check: the catalog conformance test passes for every case.
+   Check: the catalog conformance test passes for every case.
 
 ### Tests
 
@@ -755,7 +755,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - MAC and machine identifier generation, and their round trip;
   - summary privacy;
   - catalog conformance.
-- **T1**: `VZVirtualMachineConfiguration.validate` for real, when the test runner allows it (see Notes). The real file and permission cases come with #005.
+- **T1**: `VZVirtualMachineConfiguration.validate()` for real, when the test runner allows it (see Notes). The real file and permission cases come with #005.
 - **T2**: covered by #003, which validates and boots real definitions.
 - **T3**: none.
 
@@ -778,11 +778,11 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Notes
 
-- **Record:** whether `VZVirtualMachineConfiguration.validate` works under `swift test` without the virtualization entitlement goes into [../../02-design/vm.md](../../02-design/vm.md) §3.
+- **Record:** whether `VZVirtualMachineConfiguration.validate()` works under `swift test` without the virtualization entitlement goes into [../../02-design/vm.md](../../02-design/vm.md) §3.
   - If it works, the T1 test runs it.
   - If it does not, T0 and T1 use the `FrameworkConfigurationValidator` fake, and the real call is covered by #003 in T2.
 - **Pitfall:** Alpine and other distributions may ship arm64 kernels as EFI zboot images, which start with `MZ` rather than the `Image` header. The validator rejects them. `scripts/fetch-test-linux.sh` (#003) must extract the payload.
-- **Pitfall:** creating VZ configuration objects is fine in T0. Never create a `VZVirtualMachine` from a configuration that did not pass `validate`; VZ raises an Objective-C exception instead of throwing.
+- **Pitfall:** creating VZ configuration objects is fine in T0. Never create a `VZVirtualMachine` from a configuration that did not pass `validate()`; VZ raises an Objective-C exception instead of throwing.
 - The zboot detection and `.machineIdentifierInvalid` were added to [vm.md](../../02-design/vm.md) §3 and [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2 for this task.
 
 ---
@@ -805,7 +805,7 @@ A pinned ARM64 Linux kernel and a minimal initramfs boot through `VZLinuxBootLoa
 
 ### Scope
 
-- `VMController` with the API of [../../02-design/vm.md](../../02-design/vm.md) §2 plus `reset` (§9.6), on the private queue `io.apkrun.vm.queue`, behind a `VirtualMachineDriver` seam.
+- `VMController` with the API of [../../02-design/vm.md](../../02-design/vm.md) §2 plus `reset()` (§9.6), on the private queue `io.apkrun.vm.queue`, behind a `VirtualMachineDriver` seam.
 - `VMFailure` and `VZErrorInfo` (§13). The delegate mapping (§9.2).
 - The `vm.state` and `vm.virtualizationSupported` health checks (§14).
 - A minimal `ConsoleChannel` for `hvc0` (read side only). #004 completes it.
@@ -873,106 +873,106 @@ Out of scope:
    - `VMFailure` has the cases of §13 and conforms to `APKRunError`. `underlying` is the domain and code.
    - Add the catalog fixture list.
 
-     Check: catalog conformance passes for `VMFailure`.
+   Check: catalog conformance passes for `VMFailure`.
 2. **Driver seam.**
    - `VirtualMachineDriver` wraps one `VZVirtualMachine`: `start`, `stop`, `requestStop`, `pause`, and `resume`, as async calls. It publishes an `AsyncStream` of `guestDidStop`, `didStopWithError`, and `networkAttachmentDisconnected` events.
    - `VZVirtualMachineDriver` creates the `VZVirtualMachine(configuration:queue:)` on `io.apkrun.vm.queue`. It calls VZ only on that queue, and bridges completion handlers with `withCheckedThrowingContinuation` (§4). In debug builds it asserts the queue with `dispatchPrecondition`.
    - `FakeVirtualMachineDriver` scripts results and events.
 
-     Check: the driver compiles with strict concurrency, and the fake drives every event.
+   Check: the driver compiles with strict concurrency, and the fake drives every event.
 3. **VMController.**
-   - Implement the §2 actor with `reset` added. The state lives only in `VMState`.
+   - Implement the §2 actor with `reset()` added. The state lives only in `VMState`.
    - `stateUpdates` yields every state in order.
-   - `start`:
-   1. Changes `stopped → starting` and records `Perf.mark(.vmStart)`.
-   2. Builds the VZ configuration with real console pipes through `VZConfigurationBuilder`.
-   3. Calls `validate`, creates the driver, and starts it.
-   4. Success leads to `running`. A validation or start error leads to `failed(.startFailed(underlying:))` ([../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1).
-   - `stop` (forced) and `requestGuestStop` change `running` or `paused` to `stopping`. `guestDidStop`, or completion of the forced stop, then leads to `stopped`.
+   - `start()`:
+     1. Changes `stopped → starting` and records `Perf.mark(.vmStart)`.
+     2. Builds the VZ configuration with real console pipes through `VZConfigurationBuilder`.
+     3. Calls `validate()`, creates the driver, and starts it.
+     4. Success leads to `running`. A validation or start error leads to `failed(.startFailed(underlying:))` ([../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1).
+   - `stop()` (forced) and `requestGuestStop()` change `running` or `paused` to `stopping`. `guestDidStop`, or completion of the forced stop, then leads to `stopped`.
    - The forced stop fails with `.stopTimedOut` if it has not completed after 10 s (see Notes).
    - The delegate mapping follows §9.2.
-   - `reset` is allowed only in `failed`. It releases the VZ objects, closes the pipes, and changes the state to `stopped` (§9.6).
+   - `reset()` is allowed only in `failed`. It releases the VZ objects, closes the pipes, and changes the state to `stopped` (§9.6).
    - A public call whose edge is not in the table throws `.invalidTransition(from:to:)` and logs a `fault`. An internal transition that breaks the table raises `assertionFailure` in debug builds ([../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1).
    - Every transition is logged at `info` under `io.apkrun.vm`, category `lifecycle`, with the operation ID.
    - Register `vm.state` and `vm.virtualizationSupported` (`VZVirtualMachineConfiguration.isSupported`).
 
-     Check: the T0 controller tests pass with the fake driver.
+   Check: the T0 controller tests pass with the fake driver.
 4. **Console read side.**
    - `ConsoleChannel` owns two pipes per port (§6.3). It reads the guest-to-host pipe with `DispatchIO` and publishes `AsyncStream<Data>`.
    - The controller creates one channel per `consolePorts` entry. `console(_:)` returns it.
    - `TestGuestLineParser` splits the stream into lines and yields `APKRUN-TEST:` records: `bootOK`, `check(name, ok|fail, detail)`, and `done`.
 
-     Check: T0 parser tests pass, including lines split across reads and an interleaved kernel log.
+   Check: T0 parser tests pass, including lines split across reads and an interleaved kernel log.
 5. **Test guest artifacts** ([../../02-design/vm.md](../../02-design/vm.md) §12, [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §4).
    - `scripts/fetch-test-linux.sh`:
-   1. Downloads the pinned `linux-virt` package and minirootfs into `${APKRUN_TEST_LINUX_DIR:-build/test-linux}/`.
-   2. Verifies their SHA-256 against the lock file.
-   3. Extracts the kernel and modules.
-   4. Makes the kernel an uncompressed `Image`: it gunzips a gzip kernel, and for a zboot kernel it extracts the payload from the offset and size in its header, then decompresses it.
-   5. Fails unless the result has the `ARM\x64` magic.
+     1. Downloads the pinned `linux-virt` package and minirootfs into `${APKRUN_TEST_LINUX_DIR:-build/test-linux}/`.
+     2. Verifies their SHA-256 against the lock file.
+     3. Extracts the kernel and modules.
+     4. Makes the kernel an uncompressed `Image`: it gunzips a gzip kernel, and for a zboot kernel it extracts the payload from the offset and size in its header, then decompresses it.
+     5. Fails unless the result has the `ARM\x64` magic.
    - `scripts/build-test-initramfs.sh` builds `initramfs.cpio.gz` (cpio `newc`, gzip) from:
-   - the minirootfs;
-   - the modules named in `Tests/Fixtures/linux/modules.list`, with their `modules.dep` entries;
-   - the pinned `socat` packages;
-   - `Tests/Fixtures/linux/init`.
+     - the minirootfs;
+     - the modules named in `Tests/Fixtures/linux/modules.list`, with their `modules.dep` entries;
+     - the pinned `socat` packages;
+     - `Tests/Fixtures/linux/init`.
 
      It uses only `cpio` and `gzip` from macOS.
    - `/init`:
-   1. Mounts `proc`, `sys`, and `devtmpfs`.
-   2. Redirects its own stdio to `/dev/hvc0`.
-   3. Loads the modules.
-   4. Starts busybox `acpid`, with the power key mapped to `poweroff -f`, so that `requestGuestStop` works (§9.3).
-   5. Prints `APKRUN-TEST: boot ok`.
-   6. Runs the checks named in `apkrun.test=`. There are none in this task; later tasks add blocks.
-   7. Prints `APKRUN-TEST: done`.
-   8. Powers off when `apkrun.test.poweroff=1`, or otherwise starts a shell on `hvc0`.
+     1. Mounts `proc`, `sys`, and `devtmpfs`.
+     2. Redirects its own stdio to `/dev/hvc0`.
+     3. Loads the modules.
+     4. Starts busybox `acpid`, with the power key mapped to `poweroff -f`, so that `requestGuestStop()` works (§9.3).
+     5. Prints `APKRUN-TEST: boot ok`.
+     6. Runs the checks named in `apkrun.test=`. There are none in this task; later tasks add blocks.
+     7. Prints `APKRUN-TEST: done`.
+     8. Powers off when `apkrun.test.poweroff=1`, or otherwise starts a shell on `hvc0`.
    - Add the lock entries with a `url` member for each download (see Notes).
 
-     Check: both scripts run on a clean clone, twice in a row with the same output hashes.
+   Check: both scripts run on a clean clone, twice in a row with the same output hashes.
 6. **Test guest definition.** `LinuxTestGuest.definition(kernel:initrd:tests:powerOff:extraCommandLine:)` builds a `VMDefinition`:
    - 2 vCPUs, 1 GiB, one `.systemConsole` port, entropy on;
    - no disks, network, or vsock unless a later task's check asks for them;
    - command line `console=hvc0 apkrun.test=<list> apkrun.test.poweroff=<0|1>`.
 
-     The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `build/test-linux/`.
+   The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `build/test-linux/`.
 
-     Check: the definition passes `VMDefinitionValidator` with the fetched artifacts.
+   Check: the definition passes `VMDefinitionValidator` with the fetched artifacts.
 7. **T2 harness.**
    - `APKRunTestHost` is an app with no UI of its own, signed with the virtualization entitlement.
    - `LinuxGuestHarness` does the following:
-   1. Boots a `LinuxTestGuest` through `VMController` (VirtualMachineCore only, §12).
-   2. Collects `hvc0` into memory and into an `XCTAttachment`.
-   3. Fails when a check prints `fail`, when a requested check prints nothing, or when `done` does not appear within 60 s ([../test-strategy.md](../test-strategy.md) §3.4).
+     1. Boots a `LinuxTestGuest` through `VMController` (VirtualMachineCore only, §12).
+     2. Collects `hvc0` into memory and into an `XCTAttachment`.
+     3. Fails when a check prints `fail`, when a requested check prints nothing, or when `done` does not appear within 60 s ([../test-strategy.md](../test-strategy.md) §3.4).
    - Missing artifacts skip the test with a message that names both scripts. With `APKRUN_CI=1`, missing artifacts fail it.
    - `BootTests` covers:
-   - boot ok and done with power-off;
-   - boot with `apkrun.test.poweroff=0`, then `requestGuestStop`;
-   - boot, then `stop`;
-   - a failed start, then `reset`.
+     - boot ok and done with power-off;
+     - boot with `apkrun.test.poweroff=0`, then `requestGuestStop()`;
+     - boot, then `stop()`;
+     - a failed start, then `reset()`.
    - `integration.yml` has the job `linux-guest` on `apkrun-lab`, with the path filter of [../../05-development/build-system.md](../../05-development/build-system.md) §15.1, on pushes to `main` and on the `run-t2` label. The job always runs and decides from the changed files, so that the check can be required. It runs `xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests -configuration Debug -only-test-configuration LinuxGuest` ([../../05-development/build-system.md](../../05-development/build-system.md) §12.4).
 
-     Check: the `LinuxGuest` suite passes on a lab Mac.
+   Check: the `LinuxGuest` suite passes on a lab Mac.
 8. **`apkrun dev linux`.** The path is CLI `Dev/DevLinux.swift` → RuntimeHost `DevLinux` → RuntimeCore `LinuxTestGuestRunner` → VirtualMachineCore, which keeps the edges of [modules.md](../../01-architecture/modules.md) §3.
    - Options are those of [../../02-design/cli.md](../../02-design/cli.md) §5 except `--window`, which comes with #019:
-   - `--kernel`, `--initrd`, `--tests <list>`, and `--timeout <s>` (default 60);
-   - with no `--tests`, only boot ok and done are expected.
+     - `--kernel`, `--initrd`, `--tests <list>`, and `--timeout <s>` (default 60);
+     - with no `--tests`, only boot ok and done are expected.
    - Before booting, RuntimeHost takes `InstanceLock`: `Runtime/instance.lock` under the dev data root, with `flock(LOCK_EX | LOCK_NB)`, holding the owner `apkrun-dev`, the PID, and the binary path ([../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §2.3). A held lock fails with `runtime.instanceLocked`, exit 75. When `APKRUN_HOME` points elsewhere, the command prints the memory warning of [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §2.3. #031 reuses this `InstanceLock`.
    - The command prints the kernel log and the `APKRUN-TEST:` lines as they arrive. It exits 0 only when every requested check printed `ok`. Otherwise it prints the failing lines on stderr and exits 1.
 
-     Check: `apkrun-dev dev linux` exits 0, and a second instance started meanwhile exits 75.
+   Check: `apkrun-dev dev linux` exits 0, and a second instance started meanwhile exits 75.
 9. **G1.**
    - `G1LinuxBootTests` runs these assertions, all on a clean build from `main` on the reference Mac (OQ-02):
-   - (a) Ten boots in a row, each with `apkrun.test.poweroff=0`. Each boot asserts `APKRUN-TEST: boot ok` on `hvc0`, `done`, and then `requestGuestStop`. The state sequence recorded from `stateUpdates` must be exactly `stopped, starting, running, stopping, stopped`.
-   - (b) One failed start (see Notes) must end in `failed(.startFailed)` with a `VZErrorInfo`, and `reset` must then lead to `stopped`.
+     - (a) Ten boots in a row, each with `apkrun.test.poweroff=0`. Each boot asserts `APKRUN-TEST: boot ok` on `hvc0`, `done`, and then `requestGuestStop()`. The state sequence recorded from `stateUpdates` must be exactly `stopped, starting, running, stopping, stopped`.
+     - (b) One failed start (see Notes) must end in `failed(.startFailed)` with a `VZErrorInfo`, and `reset()` must then lead to `stopped`.
    - `scripts/run-gate.sh G<n>`:
-   1. Checks that the tree is clean and is on `main`.
-   2. Runs `scripts/generate-project.sh`, then `xcodebuild test -scheme AcceptanceTests -testPlan AcceptanceTests -only-test-configuration G<n>` with an empty DerivedData.
-   3. Writes a report and the xcresult into `build/gates/G<n>/`.
-   4. Never retries.
+     1. Checks that the tree is clean and is on `main`.
+     2. Runs `scripts/generate-project.sh`, then `xcodebuild test -scheme AcceptanceTests -testPlan AcceptanceTests -only-test-configuration G<n>` with an empty DerivedData.
+     3. Writes a report and the xcresult into `build/gates/G<n>/`.
+     4. Never retries.
    - `nightly.yml`'s `gates` job runs `scripts/run-gate.sh` for every closed gate on `apkrun-reference`.
    - Attach the evidence to the G1 gate issue. Add G1's date, Mac model, and macOS build to the Verification section of ADR-0002.
 
-     Check: `scripts/run-gate.sh G1` passes on the reference Mac.
+   Check: `scripts/run-gate.sh G1` passes on the reference Mac.
 
 ### Tests
 
@@ -982,16 +982,16 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - start success and failure;
   - validation failure at start leading to `failed`;
   - the delegate mapping of §9.2 (`guestDidStop` from running and from stopping; `didStopWithError`; a network disconnect keeping `running`);
-  - `stop` and `requestGuestStop` paths;
+  - `stop()` and `requestGuestStop()` paths;
   - `.stopTimedOut`;
-  - `reset` from `failed` only;
+  - `reset()` from `failed` only;
   - `.invalidTransition` for public calls in the wrong state;
   - the `stateUpdates` order;
   - `TestGuestLineParser`;
   - the `vm.state` health check;
   - catalog conformance of `VMFailure`.
 - **T1** (`Packages/RuntimeHost/Tests/RuntimeHostSystemTests/`): `InstanceLock` contention, using two open file descriptions in one process; release on close.
-- **T2** (`Tests/IntegrationTests/LinuxGuestTests/`, suite `LinuxGuest`): boot and the console marker; `requestGuestStop` and `stop` paths; failed start and `reset`.
+- **T2** (`Tests/IntegrationTests/LinuxGuestTests/`, suite `LinuxGuest`): boot and the console marker; `requestGuestStop()` and `stop()` paths; failed start and `reset()`.
 - **T3** (`Tests/AcceptanceTests/G1LinuxBoot`, through `scripts/run-gate.sh G1`): the G1 pass conditions of [../roadmap.md](../roadmap.md) §2. Manual: `apkrun-dev dev linux` prints the lines and exits 0, and a held lock gives exit 75. Record this in the pull request.
 
 ### Acceptance criteria
@@ -999,7 +999,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - [ ] A minimal ARM64 Linux kernel reaches userspace through `VZLinuxBootLoader`, `VZVirtualMachineConfiguration`, and a minimal initramfs.
 - [ ] The serial output on `hvc0` includes the known boot marker `APKRUN-TEST: boot ok`.
 - [ ] `VMController` goes `stopped → starting → running` on start and `running → stopping → stopped` on stop, as recorded from `stateUpdates`.
-- [ ] A failed start ends in `failed` with a typed `VMFailure` that carries a `VZErrorInfo`. `reset` returns to `stopped`.
+- [ ] A failed start ends in `failed` with a typed `VMFailure` that carries a `VZErrorInfo`. `reset()` returns to `stopped`.
 - [ ] G1 passes on the reference Mac with a clean build from `main`: ten boots in a row, with the evidence attached to the gate issue.
 - [ ] VZ objects are created and called only on `io.apkrun.vm.queue`.
 - [ ] No state is inferred from a nil `VZVirtualMachine` ([../../../AGENTS.md](../../../AGENTS.md) §6.2).
@@ -1013,12 +1013,12 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 - **Record:**
   - The G1 result goes into ADR-0002 Verification and the G1 gate issue.
-  - Whether VZ reports a failed start through the `start` completion or through `validate` goes into [../../02-design/vm.md](../../02-design/vm.md) §9.1.
+  - Whether VZ reports a failed start through the `start` completion or through `validate()` goes into [../../02-design/vm.md](../../02-design/vm.md) §9.1.
   - The measured boot time of the test guest goes into the pull request, for later comparison.
 - **Pitfall:** the initramfs holds no `/dev/console` node, because macOS cannot create device nodes without root. `/init` must mount `devtmpfs` and redirect its stdio before it prints anything.
 - **Pitfall:** check whether `virtio_console`, `virtio_pci`, and `gpio_keys` are built into `linux-virt` or are modules, using the package's kernel config. List only the real modules in `modules.list`. The power key needs `gpio_keys` and `evdev`.
 - **Pitfall:** Alpine `.apk` files are several concatenated gzip streams. Check that macOS `tar` extracts all of the data. If it does not, split the streams in the fetch script.
-- **Pitfall:** the failed-start assertion needs a start that VZ rejects after validation. Validate a copy of the kernel, delete the copy, and then call `start`. If VZ rejects the missing file only when `start` builds the configuration, the result is still `failed(.startFailed)`, as [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 requires.
+- **Pitfall:** the failed-start assertion needs a start that VZ rejects after validation. Validate a copy of the kernel, delete the copy, and then call `start()`. If VZ rejects the missing file only when `start()` builds the configuration, the result is still `failed(.startFailed)`, as [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 requires.
 - The 10 s limit for a forced stop (`.stopTimedOut`) is a choice of this plan. It is recorded in [vm.md](../../02-design/vm.md) §9.3 and [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 (`stopping → failed`).
 - Using a `url` member in prebuilt lock entries is also a choice of this plan. [../../05-development/build-system.md](../../05-development/build-system.md) §6.1 has no field for the download location, so add it there.
 - The CLI command is checked manually in M0. [../../02-design/cli.md](../../02-design/cli.md) §6.2 says each task's T2 test runs through the command, but [../../02-design/vm.md](../../02-design/vm.md) §12 requires the harness to use VirtualMachineCore only. Here the harness follows vm.md.
@@ -1074,44 +1074,44 @@ Out of scope:
    - Each port gets a `VZFileHandleSerialPortAttachment` from two pipes.
    - For `.log` and `.silent` ports, the host keeps the write end of the host-to-guest pipe open and never writes to it, so guest reads block instead of seeing EOF.
    - `.silent` output is discarded and counted.
-   - All pipes are closed on `stop` and `reset` (§9.6).
+   - All pipes are closed on `stop()` and `reset()` (§9.6).
 
-     Check: T1 with real pipes: data arrives on the stream, EOF ends the stream, and a write to a `.log` port is refused.
+   Check: T1 with real pipes: data arrives on the stream, EOF ends the stream, and a write to a `.log` port is refused.
 2. **ConsoleLogWriter (§6.4).**
    - Each record is a line prefixed with the UTC wall time in ISO 8601 with milliseconds, a space, and the host monotonic time since `VM_START` as `+<seconds>.<milliseconds>`, followed by a space. Example: `2026-09-28T10:15:02.123Z +12.345 `.
    - A line without a newline is written at the next flush with its prefix, and its remainder starts a new record. No byte is held back longer than 250 ms.
    - Bytes are written as they are, with no UTF-8 repair, parsing, or redaction.
    - Rotation at 20 MiB keeps five generations: `console.log` and `console.1.log` to `console.4.log`.
    - Each boot also writes `vm/boot-<yyyyMMdd'T'HHmmss'Z'>.log`, and the newest five are kept.
-   - Flush and `fsync` every 250 ms or 64 KiB, whichever comes first. Also flush and `fsync` on `VMState.failed`, `stop`, and `reset`.
+   - Flush and `fsync` every 250 ms or 64 KiB, whichever comes first. Also flush and `fsync` on `VMState.failed`, `stop()`, and `reset()`.
    - Write errors set the `vm.consoleWriter` health check to `warning`. The writer never blocks the console reader. When it falls behind, it counts dropped bytes.
 
-     Check: the T0 writer tests pass with the fake clock and file system.
+   Check: the T0 writer tests pass with the fake clock and file system.
 3. **Wiring.**
    - `VMController` attaches a `ConsoleLogWriter` to port 0, rooted at `APKRunPaths` `vm/`. In a Debug build that is `~/Library/Logs/APKRun-Dev/vm/`; in a release build it is `~/Library/Logs/APKRun/vm/`.
    - `apkrun dev linux` keeps printing the live stream.
 
-     Check: after `apkrun-dev dev linux`, `console.log` and one `boot-*.log` contain every line that was printed.
+   Check: after `apkrun-dev dev linux`, `console.log` and one `boot-*.log` contain every line that was printed.
 4. **Port numbering (§6.2 step 1).**
-   - With `ports` in `apkrun.test`, `LinuxTestGuest` attaches `[.systemConsole,.service("test-1"),.service("test-2")]`.
+   - With `ports` in `apkrun.test`, `LinuxTestGuest` attaches `[.systemConsole, .service("test-1"), .service("test-2")]`.
    - The host writes `APKRUN-PORT-1\n` into port 1 and `APKRUN-PORT-2\n` into port 2. Port 0 is identified by the kernel console output arriving on the port 0 pipe, because the host writes to `.systemConsole` only in the dev console (§6.3).
    - The guest runs `stty -F /dev/hvcN raw -echo` on `hvc1` and `hvc2`, reads one line from each with a 5 s timeout, and prints `APKRUN-TEST: ports ok hvc1=<marker> hvc2=<marker>`, or `fail` with what it saw.
    - The T2 test asserts that `hvcN` received `APKRUN-PORT-N`.
 
-     Check: the `ports` check passes, or the mismatch is recorded (Notes).
+   Check: the `ports` check passes, or the mismatch is recorded (Notes).
 5. **Dev console.** In M0, `apkrun dev console` boots the Linux test guest with `apkrun.test.poweroff=0` and the options of `dev linux` except `--tests`. It puts the terminal in raw mode and connects it to `hvc0` in both directions.
-   - Ctrl-] detaches: the command calls `requestGuestStop`, waits up to 20 s, then calls `stop`, restores the terminal, and exits 0.
+   - Ctrl-] detaches: the command calls `requestGuestStop()`, waits up to 20 s, then calls `stop()`, restores the terminal, and exits 0.
    - `--android-shell` comes with #014.
 
-     Check: typing `echo hi` in the guest shell shows `hi`, and Ctrl-] exits cleanly.
+   Check: typing `echo hi` in the guest shell shows `hi`, and Ctrl-] exits cleanly.
 6. **Crash cases.** Add `apkrun.test.flood` and `apkrun.test.panic` to `/init`. Write three T2 tests:
-   - (a) `stop` while flooding. `console.log` must hold every flood line the stream delivered before the stop, and it must end with a complete record.
+   - (a) `stop()` while flooding. `console.log` must hold every flood line the stream delivered before the stop, and it must end with a complete record.
    - (b) A panic. The kernel panic message and the call trace must be in `console.log` after the test stops the VM.
    - (c) A `failed` transition must flush the writer.
 
-     Manual check: `kill -9` the `apkrun-dev dev linux` process during a flood. The log then holds every line up to at most 250 ms before the kill.
+   Manual check: `kill -9` the `apkrun-dev dev linux` process during a flood. The log then holds every line up to at most 250 ms before the kill.
 
-     Check: the T2 tests pass, and the manual result is recorded in the pull request.
+   Check: the T2 tests pass, and the manual result is recorded in the pull request.
 
 ### Tests
 
@@ -1123,7 +1123,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - rotation at 20 MiB with five generations;
   - per-boot copies with five kept;
   - `fsync` at 250 ms and at 64 KiB;
-  - the flush on `failed`, `stop`, and `reset`;
+  - the flush on `failed`, `stop()`, and `reset()`;
   - invalid UTF-8 written unchanged;
   - write errors reaching `vm.consoleWriter`.
 - **T1** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/`): `ConsoleChannel` with real pipes; `.log` and `.silent` ports never written, and never at EOF on the guest side; `ConsoleLogWriter` against a real directory, with file modes and rotation on disk.
@@ -1216,21 +1216,21 @@ Out of scope:
    - a read-only disk with mode 0444 (accepted);
    - an identifier of 21 characters.
 
-     An unreadable disk (mode 000) fails with `.diskNotReadable(role)` ([vm.md](../../02-design/vm.md) §3; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2, exit 1, grouped with the "Files that Android needs" text).
+   An unreadable disk (mode 000) fails with `.diskNotReadable(role)` ([vm.md](../../02-design/vm.md) §3; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2, exit 1, grouped with the "Files that Android needs" text).
 
-     Check: the T1 tests pass on the CI runner, which does not run as root.
+   Check: the T1 tests pass on the CI runner, which does not run as root.
 2. **Attachments.**
    - `VZConfigurationBuilder` creates `VZDiskImageStorageDeviceAttachment(url:readOnly:cachingMode:synchronizationMode:)` for each disk, in array order, and sets `blockDeviceIdentifier` from `identifier`.
    - `DiskSync.none` is allowed only in tests: the validator rejects it unless a test-only flag is set on the host environment.
    - Log each disk under category `config` with its role, flags, and file name, never the full path.
 
-     Check: T0 inspection of the built configuration.
+   Check: T0 inspection of the built configuration.
 3. **Test disks and packages.**
    - `make-test-disks.sh` writes `ro.img` from the seed and `rw.img` with `mkfile -n 64m`.
    - The fetch and build scripts add `e2fsprogs` (`mkfs.ext4`, `e2fsck`) and its library packages, pinned in the lock file.
    - `LinuxTestGuest` attaches the disks with serials `apkrun-ro` and `apkrun-rw`.
 
-     Check: the initramfs contains `mkfs.ext4` and `e2fsck`, and they run in the guest.
+   Check: the initramfs contains `mkfs.ext4` and `e2fsck`, and they run in the guest.
 4. **Guest `blk` phases.** The guest finds each disk by reading `/sys/block/vd*/serial`, never by letter.
    - `format`: runs `mkfs.ext4 -F` on `apkrun-rw`, mounts it, writes `token` into `/mnt/rw/token`, runs `sync`, and unmounts. It then checks that `apkrun-ro` is read-only, with `blockdev --getro` = 1 and a write attempt that fails, and that `sha256sum` of `apkrun-ro` equals `ro_sha256`.
    - `verify`: mounts `apkrun-rw` and compares the token.
@@ -1238,10 +1238,10 @@ Out of scope:
    - `recover`: runs `e2fsck -fy`, requires an exit code of 0 or 1, mounts the disk, and compares the token.
    - `order`: prints the serials in `vdX` order and compares them with `apkrun.test.blk.order`.
 
-     Each phase prints `APKRUN-TEST: blk ok <phase>` or `fail <phase> <detail>`.
+   Each phase prints `APKRUN-TEST: blk ok <phase>` or `fail <phase> <detail>`.
 
-     Check: each phase passes alone on a lab Mac.
-5. **Reboot and recovery tests.** A "reboot" is a power-off, then a new `VMController` on the same disk files. `BlockTests` runs `format`, then `verify` in a new VM, then `stress` stopped with `stop` after 3 s, then `recover`. The order test boots with `[ro, rw]` and then with `[rw, ro]`, and asserts that `vda` follows the array each time.
+   Check: each phase passes alone on a lab Mac.
+5. **Reboot and recovery tests.** A "reboot" is a power-off, then a new `VMController` on the same disk files. `BlockTests` runs `format`, then `verify` in a new VM, then `stress` stopped with `stop()` after 3 s, then `recover`. The order test boots with `[ro, rw]` and then with `[rw, ro]`, and asserts that `vda` follows the array each time.
 
    Check: `BlockTests` passes within the LinuxGuest budget.
 
@@ -1321,32 +1321,32 @@ Out of scope:
 
 ### Implementation steps
 
-1. **Attachment.** When the definition has `network =.nat(macAddress:)`, the builder adds one virtio-net device with a NAT attachment and the MAC. The MAC is logged under category `config` as `.public`. It is a random, locally administered address, not a hardware identifier.
+1. **Attachment.** When the definition has `network = .nat(macAddress:)`, the builder adds one virtio-net device with a NAT attachment and the MAC. The MAC is logged under category `config` as `.public`. It is a random, locally administered address, not a hardware identifier.
 
    Check: T0 inspection of the built configuration.
 2. **Disconnect handling.**
    - The driver event `networkAttachmentDisconnected(error)` keeps the state `running`.
    - It logs a `warning` under category `network` with the `VZErrorInfo` domain and code.
    - It sets `vm.network` to `degraded` with the remediation from the catalog or health text. `vm.network` is a live check ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §7.1).
-   - A new `start` resets `vm.network` to `pass`.
+   - A new `start()` resets `vm.network` to `pass`.
 
-     Check: T0 with the fake driver.
+   Check: T0 with the fake driver.
 3. **Guest `net` check.**
    - `/init` loads `virtio_net` if it is a module, then runs `udhcpc -i eth0 -q -n -t 5`.
    - The router and DNS server come from the udhcpc script's environment.
    - The check prints the line in Deliverables, or `fail <step> <detail>` for `dhcp`, `http`, `dns`, or `ext`.
 
-     Check: the guest prints `net ok` against a host server on a lab Mac.
+   Check: the guest prints `net ok` against a host server on a lab Mac.
 4. **Host endpoint and logging.**
    - `NetworkTests` starts an HTTP server with Network.framework on `0.0.0.0:<ephemeral port>` that answers `GET /generate_204` with 204. It passes the port to the guest.
-- The harness parses the `net ok` line and logs `lease ip=… gw=… dns=…` under `io.apkrun.vm`, category `network`. Log the interface information when available; the guest's line is the only source.
+   - The harness parses the `net ok` line and logs `lease ip=… gw=… dns=…` under `io.apkrun.vm`, category `network`. Log the interface information when available; the guest's line is the only source.
 
-  Check: the T2 test passes and the log entry is present.
+   Check: the T2 test passes and the log entry is present.
 5. **Nightly external check.**
    - `LinuxGuestNetworkTests` boots with `apkrun.test.net.external=1` and requires `ext=204`.
    - Add the `network` job to `nightly.yml` if it does not exist yet ([../../05-development/build-system.md](../../05-development/build-system.md) §15.1). It runs `Tests/AcceptanceTests/Network` with one retry, and failures are classified `external`.
 
-     Check: one nightly run passes.
+   Check: one nightly run passes.
 
 ### Tests
 
@@ -1395,7 +1395,7 @@ The host opens a vsock connection to a port in the Linux test guest, sends 1 MiB
 
 - One `VZVirtioSocketDeviceConfiguration` when `vsockEnabled` is set (§4). The guest CID is 3 and the host CID is 2.
 - `VMController.connect(vsockPort:timeout:)`: host to guest only, with a timeout implemented as a `Task` race, and a late connection closed at once (§8).
-- `VsockConnection`: a strong reference to `VZVirtioSocketConnection`, `DispatchIO` reads and writes, `close`, and disconnect detection.
+- `VsockConnection`: a strong reference to `VZVirtioSocketConnection`, `DispatchIO` reads and writes, `close()`, and disconnect detection.
 - The error mapping to `.vsockConnectFailed`, `.vsockPortNotListening`, and `.vsockConnectTimedOut`.
 - The guest `vsock` check: an echo service on port 7000 and a closing service on port 7001.
 - A host test client in the T2 tests.
@@ -1409,7 +1409,7 @@ Out of scope:
 
 ### Deliverables
 
-- `Vsock/VsockConnection.swift`, with `read(upTo:)`, `write(_:)`, `close`, and `closed`. `closed` completes when the peer closes the connection or when the VM stops.
+- `Vsock/VsockConnection.swift`, with `read(upTo:)`, `write(_:)`, `close()`, and `closed`. `closed` completes when the peer closes the connection or when the VM stops.
 - `connect(vsockPort:timeout:)` in `VMController`, and the driver's `connect(toPort:)` on the VM queue.
 - The `/init` `vsock` block:
   - `socat VSOCK-LISTEN:7000,fork EXEC:cat &`;
@@ -1428,24 +1428,24 @@ Out of scope:
    - A refused connection throws `.vsockPortNotListening(port:)`.
    - Any other error throws `.vsockConnectFailed(port:underlying:)`.
 
-     Log under category `vsock` with the port and the result. The port is logged, never shown ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.1).
+   Log under category `vsock` with the port and the result. The port is logged, never shown ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.1).
 
-     Check: T0 with the fake driver covers all four outcomes, including a late completion being closed.
+   Check: T0 with the fake driver covers all four outcomes, including a late completion being closed.
 3. **VsockConnection.**
    - The connection holds the `VZVirtioSocketConnection` for its whole life, because the file descriptor is valid only while that object lives. `DispatchIO` uses the descriptor.
    - EOF or an error completes `closed`.
-   - `VMController` closes every open connection on `stop`, `reset`, and `guestDidStop`.
+   - `VMController` closes every open connection on `stop()`, `reset()`, and `guestDidStop`.
 
-     Check: T1 over a `socketpair` stand-in for the descriptor: reads, writes, EOF, and close.
+   Check: T1 over a `socketpair` stand-in for the descriptor: reads, writes, EOF, and close.
 4. **Guest services and tests.**
    - `/init` starts both `socat` listeners when `vsock` is in `apkrun.test`.
    - The host retries `.vsockPortNotListening` with backoff (100 ms, doubling) for up to 5 s, because the listeners start just after `boot ok`.
    - `VsockTests` covers three cases:
-   - (a) Echo: sends 1 MiB of seeded bytes to port 7000 and compares the SHA-256 of what comes back.
-   - (b) An unused port: connects to port 7999 with a 2 s timeout and expects `.vsockPortNotListening` or `.vsockConnectTimedOut` within 2.5 s.
-   - (c) Disconnect: sends 32 bytes to port 7001, receives 16, and expects `closed` within 1 s.
+     - (a) Echo: sends 1 MiB of seeded bytes to port 7000 and compares the SHA-256 of what comes back.
+     - (b) An unused port: connects to port 7999 with a 2 s timeout and expects `.vsockPortNotListening` or `.vsockConnectTimedOut` within 2.5 s.
+     - (c) Disconnect: sends 32 bytes to port 7001, receives 16, and expects `closed` within 1 s.
 
-     Check: `VsockTests` passes on a lab Mac.
+   Check: `VsockTests` passes on a lab Mac.
 
 ### Tests
 
@@ -1505,7 +1505,7 @@ A host-implemented virtio-rng device, built on the macOS 27 custom virtio device
   - `VirtioQueue`, `VirtioElement`, `PendingElement`;
   - `GuestMemory`, `GuestPhysicalRange`, `VirtioFailure`.
 
-    The signature corrections are in step 1.
+  The signature corrections are in step 1.
 - The VZ adapter:
   - it builds `VZCustomVirtioDeviceConfiguration` from a descriptor;
   - it uses one serial device queue per device with `.userInteractive` QoS;
@@ -1539,18 +1539,18 @@ Out of scope:
 These are the design steps of [../../02-design/graphics.md](../../02-design/graphics.md) §12 (#063). Step 1 is the design's step 1 with the corrections below. Steps 2–4 match the design's steps 2–4, and step 5 records the results.
 
 1. **API and VZ adapter (design step 1).** Implement §3.2 with three corrections, which this pull request also writes into [graphics.md](../../02-design/graphics.md) §3.2:
-   - `drain` takes ownership of each element: `func drain(_ body: (consuming VirtioElement) throws -> Void) rethrows`. With `inout`, the body cannot call the `consuming` `complete`.
-   - `defer` becomes `deferCompletion -> PendingElement`, because `defer` is a Swift keyword.
+   - `drain` takes ownership of each element: `func drain(_ body: (consuming VirtioElement) throws -> Void) rethrows`. With `inout`, the body cannot call the `consuming` `complete()`.
+   - `defer()` becomes `deferCompletion() -> PendingElement`, because `defer` is a Swift keyword.
    - The fakes live in `VirtioDeviceCoreTestSupport`, not `VirtioDeviceCoreTesting` ([../test-strategy.md](../test-strategy.md) §3.2).
 
-     Adapter rules:
+   Adapter rules:
    - VZ objects are touched only on the device queue.
    - `queue(_:)` and `negotiatedFeatures` are valid only after `DRIVER_OK`. Before that they fail with `VirtioFailure.notReady`.
    - Guest memory mappings are cached per device and dropped on `WillReset` and `WillStop`.
    - `updateConfigurationSpace` rejects a different size with `.configSizeMismatch`.
    - `VirtioFailure` is internal to device models. Device models convert it into their own domain errors, and it never reaches users (see Notes).
 
-     Check: the module builds, and the adapter builds a `VZCustomVirtioDeviceConfiguration` for a test descriptor.
+   Check: the module builds, and the adapter builds a `VZCustomVirtioDeviceConfiguration` for a test descriptor.
 2. **Fakes and T0 (design step 2).** `FakeVirtioQueue` and `FakeGuestMemory` back the T0 tests:
    - the drain loop runs until the queue is empty;
    - completion happens exactly once, enforced by the type system;
@@ -1559,14 +1559,14 @@ These are the design steps of [../../02-design/graphics.md](../../02-design/grap
    - `copyReadable` takes one snapshot;
    - the feature split into `subset0` and `subset1`.
 
-     Check: the T0 tests pass.
+   Check: the T0 tests pass.
 3. **EntropyTestDevice (design step 3).** The descriptor has deviceID 4, PCI class 0x10, one queue, no features, and an 8-byte configuration space holding a generation counter.
    - The device fills each writable buffer from a deterministic generator (SplitMix64) seeded by the test.
    - On `deviceWillReset`, it drops its mappings and restarts the generator from the seed.
    - It logs `DRIVER_OK`, each notification (count and bytes, at `debug`, with an `info` summary), and each reset. Logs go to `io.apkrun.vm`, category `virtio` ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §3.1).
    - The device never sets `supportsSaveRestore`.
 
-     `/init` `rng` block:
+   `/init` `rng` block:
    1. Loads `virtio_rng` if it is a module.
    2. Checks that `rng_available` lists `virtio_rng.0`.
    3. Reads 64 KiB from `/dev/hwrng` into `/tmp/rng`.
@@ -1574,23 +1574,23 @@ These are the design steps of [../../02-design/graphics.md](../../02-design/grap
    5. Unbinds and rebinds the virtio device from `virtio_rng` through sysfs.
    6. Reads 64 KiB again and prints a second `rng ok` line.
 
-      `LinuxTestGuest` adds the device, sets `entropy = false` when `rng` is requested, and adds `rng_core.default_quality=0` to the command line.
+   `LinuxTestGuest` adds the device, sets `entropy = false` when `rng` is requested, and adds `rng_core.default_quality=0` to the command line.
 
-      Check: the guest prints both `rng ok` lines on a lab Mac.
+   Check: the guest prints both `rng ok` lines on a lab Mac.
 4. **T2 acceptance (design step 4).** `EntropyDeviceTests` checks four things:
    - For each read, the test finds the offset of `head` within the first 1 MiB of the seeded stream. It then requires `sha256` to equal the SHA-256 of 64 KiB from that offset. This tolerates bytes that the kernel took for itself.
    - The host log shows `DRIVER_OK`, notifications, the reset, `DRIVER_OK` again, and more notifications, in that order.
    - Config probe (host side): after `DRIVER_OK`, `updateConfigurationSpace` with 8 new bytes completes, and 4 bytes fail with `.configSizeMismatch`.
    - A validator case: a descriptor that VZ rejects becomes `.customDeviceInvalid`.
 
-     Check: `EntropyDeviceTests` passes.
+   Check: `EntropyDeviceTests` passes.
 5. **VZ reboot behavior and records.**
    - Boot once with `apkrun.test.rng.reboot=1`, where `/init` calls `reboot -f` after the first read. Record what VZ does: whether it restarts the guest (with `WillReset` and a second boot) or reports `guestDidStop`.
    - Record the result in the [../../02-design/graphics.md](../../02-design/graphics.md) §16 verification log, the §3.3 acceptance text, and [../../02-design/vm.md](../../02-design/vm.md) §9. Correct §3.1 of that document where a platform fact differs.
    - Write the #063 part of the R-01 Result line in [../risks.md](../risks.md): what was confirmed about queue validity before `DRIVER_OK`, same-size config updates, resets, and mapping invalidation. R-01 stays `open` for #019 and #028.
    - Add the #063 line to the ADR-0002 Verification section.
 
-     Check: the records are in the pull request.
+   Check: the records are in the pull request.
 
 ### Tests
 

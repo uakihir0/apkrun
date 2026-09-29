@@ -39,7 +39,7 @@ The types `PackageID`, `VersionCode`, `SHA256Digest`, and `Date` are those of [p
 
 | Type | JSON | Rule | Source |
 |---|---|---|---|
-| `BundleID` | string | `io.apkrun.android.` + the mapped package ID. Characters `A–Z a–z 0–9 -.`. At most 255 characters. Compared ignoring case | [../02-design/wrapper.md](../02-design/wrapper.md) §4.1 |
+| `BundleID` | string | `io.apkrun.android.` + the mapped package ID. Characters `A–Z a–z 0–9 - .`. At most 255 characters. Compared ignoring case | [../02-design/wrapper.md](../02-design/wrapper.md) §4.1 |
 | `CDHash` | string | 40 lowercase hex characters (the 20-byte `kSecCodeInfoUnique`) | [../02-design/wrapper.md](../02-design/wrapper.md) §7.1 |
 | `AppVersion` | string | `MAJOR.MINOR.PATCH`, decimal without leading zeros. Compared numerically, component by component. A two-part value such as `1.2` from another source is read as `1.2.0` | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1 |
 | `APIVersion` | string | `MAJOR.MINOR`, decimal without leading zeros | [runtime-api.md](runtime-api.md) §2.1 |
@@ -83,9 +83,7 @@ A portable wrapper for the package of [package-metadata-json.md](package-metadat
     "authority": "apkrun",
     "mode": "notifyOnly",
     "provider": {
-      "configuration": {
-        "url": "https://downloads.example.org/notes/manifest.json"
-      },
+      "configuration": { "url": "https://downloads.example.org/notes/manifest.json" },
       "type": "direct"
     }
   },
@@ -238,150 +236,60 @@ The root schema is the reader's acceptance check: the "schema check" of the laun
   "$id": "urn:apkrun:schema:wrapper-json:1",
   "title": "APKRun wrapper.json, formatVersion 1 (reader acceptance; $defs/generated is the writer contract)",
   "type": "object",
-  "required": [
-    "formatVersion",
-    "kind",
-    "application",
-    "runtime"
-  ],
+  "required": ["formatVersion", "kind", "application", "runtime"],
   "properties": {
-    "formatVersion": {
-      "const": 1
-    },
-    "kind": {
-      "$ref": "#/$defs/kind"
-    },
-    "application": {
-      "$ref": "#/$defs/application"
-    },
-    "runtime": {
-      "$ref": "#/$defs/runtime"
-    },
-    "window": {
-      "type": "object"
-    },
-    "updates": {
-      "type": "object"
-    },
-    "integration": {
-      "type": "object"
-    }
+    "formatVersion": { "const": 1 },
+    "kind": { "$ref": "#/$defs/kind" },
+    "application": { "$ref": "#/$defs/application" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "window": { "type": "object" },
+    "updates": { "type": "object" },
+    "integration": { "type": "object" }
   },
   "$defs": {
-    "packageId": {
-      "type": "string",
-      "maxLength": 255,
-      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
-    },
-    "kind": {
-      "enum": [
-        "local",
-        "portable",
-        "distribution"
-      ]
-    },
-    "appVersion": {
-      "type": "string",
-      "maxLength": 32,
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-    },
-    "apiVersion": {
-      "type": "string",
-      "maxLength": 16,
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-    },
+    "packageId": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+    "kind": { "enum": ["local", "portable", "distribution"] },
+    "appVersion": { "type": "string", "maxLength": 32, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "apiVersion": { "type": "string", "maxLength": 16, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
     "application": {
       "type": "object",
-      "required": [
-        "packageId",
-        "displayName"
-      ],
+      "required": ["packageId", "displayName"],
       "properties": {
-        "packageId": {
-          "$ref": "#/$defs/packageId"
-        },
-        "displayName": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 1024
-        }
+        "packageId": { "$ref": "#/$defs/packageId" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 1024 }
       }
     },
     "runtime": {
       "type": "object",
-      "required": [
-        "minimumVersion",
-        "launcherAPI"
-      ],
+      "required": ["minimumVersion", "launcherAPI"],
       "properties": {
-        "minimumVersion": {
-          "$ref": "#/$defs/appVersion"
-        },
-        "launcherAPI": {
-          "$ref": "#/$defs/apiVersion"
-        }
+        "minimumVersion": { "$ref": "#/$defs/appVersion" },
+        "launcherAPI": { "$ref": "#/$defs/apiVersion" }
       }
     },
     "window": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": {
-          "enum": [
-            "standard",
-            "compatibility"
-          ]
-        },
-        "defaultWidth": {
-          "type": "integer",
-          "minimum": 320,
-          "maximum": 8192
-        },
-        "defaultHeight": {
-          "type": "integer",
-          "minimum": 400,
-          "maximum": 8192
-        },
-        "resizable": {
-          "type": "boolean"
-        }
+        "mode": { "enum": ["standard", "compatibility"] },
+        "defaultWidth": { "type": "integer", "minimum": 320, "maximum": 8192 },
+        "defaultHeight": { "type": "integer", "minimum": 400, "maximum": 8192 },
+        "resizable": { "type": "boolean" }
       }
     },
     "updates": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "authority": {
-          "enum": [
-            "apkrun",
-            "manual"
-          ]
-        },
-        "mode": {
-          "enum": [
-            "automatic",
-            "notifyOnly"
-          ]
-        },
+        "authority": { "enum": ["apkrun", "manual"] },
+        "mode": { "enum": ["automatic", "notifyOnly"] },
         "provider": {
           "oneOf": [
-            {
-              "type": "null"
-            },
+            { "type": "null" },
             {
               "allOf": [
-                {
-                  "$ref": "urn:apkrun:schema:package-record:1#/$defs/updateProvider"
-                },
-                {
-                  "not": {
-                    "properties": {
-                      "type": {
-                        "const": "local"
-                      }
-                    }
-                  }
-                }
+                { "$ref": "urn:apkrun:schema:package-record:1#/$defs/updateProvider" },
+                { "not": { "properties": { "type": { "const": "local" } } } }
               ]
             }
           ]
@@ -392,130 +300,50 @@ The root schema is the reader's acceptance check: the "schema check" of the laun
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "clipboard": {
-          "type": "boolean"
-        },
-        "notifications": {
-          "type": "boolean"
-        },
-        "links": {
-          "enum": [
-            "ask",
-            "mac",
-            "android"
-          ]
-        },
-        "files": {
-          "type": "boolean"
-        },
-        "sharedFolders": {
-          "enum": [
-            "off",
-            "readOnly",
-            "readWrite"
-          ]
-        },
-        "microphone": {
-          "type": "boolean"
-        }
+        "clipboard": { "type": "boolean" },
+        "notifications": { "type": "boolean" },
+        "links": { "enum": ["ask", "mac", "android"] },
+        "files": { "type": "boolean" },
+        "sharedFolders": { "enum": ["off", "readOnly", "readWrite"] },
+        "microphone": { "type": "boolean" }
       }
     },
     "generated": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "formatVersion",
-        "kind",
-        "application",
-        "runtime",
-        "window",
-        "integration"
-      ],
+      "required": ["formatVersion", "kind", "application", "runtime", "window", "integration"],
       "properties": {
-        "formatVersion": {
-          "const": 1
-        },
-        "kind": {
-          "$ref": "#/$defs/kind"
-        },
+        "formatVersion": { "const": 1 },
+        "kind": { "$ref": "#/$defs/kind" },
         "application": {
           "allOf": [
-            {
-              "$ref": "#/$defs/application"
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "packageId": true,
-                "displayName": true
-              }
-            }
+            { "$ref": "#/$defs/application" },
+            { "type": "object", "additionalProperties": false, "properties": { "packageId": true, "displayName": true } }
           ]
         },
         "runtime": {
           "allOf": [
-            {
-              "$ref": "#/$defs/runtime"
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "minimumVersion": true,
-                "launcherAPI": true
-              }
-            }
+            { "$ref": "#/$defs/runtime" },
+            { "type": "object", "additionalProperties": false, "properties": { "minimumVersion": true, "launcherAPI": true } }
           ]
         },
         "window": {
           "allOf": [
-            {
-              "$ref": "#/$defs/window"
-            },
-            {
-              "required": [
-                "mode",
-                "defaultWidth",
-                "defaultHeight",
-                "resizable"
-              ]
-            }
+            { "$ref": "#/$defs/window" },
+            { "required": ["mode", "defaultWidth", "defaultHeight", "resizable"] }
           ]
         },
         "updates": {
           "allOf": [
+            { "$ref": "#/$defs/updates" },
+            { "required": ["authority", "mode", "provider"] },
             {
-              "$ref": "#/$defs/updates"
-            },
-            {
-              "required": [
-                "authority",
-                "mode",
-                "provider"
-              ]
-            },
-            {
-              "if": {
-                "properties": {
-                  "authority": {
-                    "const": "apkrun"
-                  }
-                }
-              },
-              "then": {
-                "properties": {
-                  "provider": {
-                    "type": "object"
-                  }
-                }
-              }
+              "if": { "properties": { "authority": { "const": "apkrun" } } },
+              "then": { "properties": { "provider": { "type": "object" } } }
             }
           ]
         },
-        "integration": {
-          "$ref": "#/$defs/integration"
-        }
+        "integration": { "$ref": "#/$defs/integration" }
       }
     }
   }
@@ -549,9 +377,7 @@ The `current/` set of `org.example.notes` 4.5, from [package-metadata-json.md](p
   "formatVersion": 1,
   "packageId": "org.example.notes",
   "setDigest": "sha256:96bbfcf3145dec90d6fcfbce72677d07cda54ef74eb0e14c6364ba79a92768ad",
-  "signers": [
-    "sha256:d43041c5c08759aeb0aa94c1bb854186b4ab1512364f8dc5c1150ae176e3ec56"
-  ],
+  "signers": ["sha256:d43041c5c08759aeb0aa94c1bb854186b4ab1512364f8dc5c1150ae176e3ec56"],
   "versionCode": 45,
   "versionName": "4.5"
 }
@@ -616,114 +442,45 @@ The store hashes the files while it copies them into `incoming/<ticket>/`. It ne
   "$id": "urn:apkrun:schema:wrapper-bootstrap:1",
   "title": "APKRun wrapper bootstrap/bootstrap.json, formatVersion 1",
   "type": "object",
-  "required": [
-    "formatVersion",
-    "packageId",
-    "versionCode",
-    "setDigest",
-    "signers",
-    "files"
-  ],
+  "required": ["formatVersion", "packageId", "versionCode", "setDigest", "signers", "files"],
   "properties": {
-    "formatVersion": {
-      "const": 1
-    },
-    "packageId": {
-      "type": "string",
-      "maxLength": 255,
-      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
-    },
-    "versionCode": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 9223372036854775807
-    },
-    "versionName": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1024
-    },
-    "setDigest": {
-      "$ref": "#/$defs/sha256Digest"
-    },
-    "signers": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 16,
-      "uniqueItems": true,
-      "items": {
-        "$ref": "#/$defs/sha256Digest"
-      }
-    },
+    "formatVersion": { "const": 1 },
+    "packageId": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+    "versionCode": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "versionName": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "setDigest": { "$ref": "#/$defs/sha256Digest" },
+    "signers": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/sha256Digest" } },
     "files": {
       "type": "array",
       "minItems": 1,
       "maxItems": 256,
       "prefixItems": [
-        {
-          "allOf": [
-            {
-              "$ref": "#/$defs/file"
-            },
-            {
-              "properties": {
-                "name": {
-                  "const": "base.apk"
-                }
-              }
-            }
-          ]
-        }
+        { "allOf": [ { "$ref": "#/$defs/file" }, { "properties": { "name": { "const": "base.apk" } } } ] }
       ],
       "items": {
         "allOf": [
-          {
-            "$ref": "#/$defs/file"
-          },
-          {
-            "properties": {
-              "name": {
-                "pattern": "^split_[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*\\.apk$"
-              }
-            }
-          }
+          { "$ref": "#/$defs/file" },
+          { "properties": { "name": { "pattern": "^split_[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*\\.apk$" } } }
         ]
       }
     }
   },
   "$defs": {
-    "sha256Digest": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
+    "sha256Digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "file": {
       "type": "object",
-      "required": [
-        "name",
-        "size",
-        "sha256"
-      ],
+      "required": ["name", "size", "sha256"],
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 255
-        },
-        "size": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 2147483648
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256Digest"
-        }
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "size": { "type": "integer", "minimum": 1, "maximum": 2147483648 },
+        "sha256": { "$ref": "#/$defs/sha256Digest" }
       }
     }
   }
 }
 ```
 
-The schema cannot express unique names, the total size, or the set digest. `BootstrapManifest.validate` checks them in code.
+The schema cannot express unique names, the total size, or the set digest. `BootstrapManifest.validate()` checks them in code.
 
 ---
 
@@ -750,10 +507,7 @@ The Notes wrapper is active. It was generated after the update to 4.5 (so its `b
       "bundleId": "io.apkrun.android.com.example.chat",
       "cdhash": "93213455ba0e5cb1d4bf87d636d312b4f2e81e1f",
       "createdAt": "2026-10-01T08:05:00.000Z",
-      "customization": {
-        "displayName": null,
-        "iconFile": null
-      },
+      "customization": { "displayName": null, "iconFile": null },
       "displayName": "Chat",
       "fileName": "Chat",
       "formatVersion": 1,
@@ -775,10 +529,7 @@ The Notes wrapper is active. It was generated after the update to 4.5 (so its `b
       "bundleId": "io.apkrun.android.org.example.notes",
       "cdhash": "56f0ed17c766013762ed1638d09318f9536bf76e",
       "createdAt": "2026-10-02T09:30:00.000Z",
-      "customization": {
-        "displayName": null,
-        "iconFile": null
-      },
+      "customization": { "displayName": null, "iconFile": null },
       "displayName": "Notes",
       "fileName": "Notes",
       "formatVersion": 1,
@@ -867,312 +618,77 @@ This schema is the writer's contract. Readers apply §5.3.
   "title": "APKRun Wrappers/registry.json, schemaVersion 1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "wrappers",
-    "denied"
-  ],
+  "required": ["schemaVersion", "wrappers", "denied"],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
-    "wrappers": {
-      "type": "array",
-      "maxItems": 1000,
-      "items": {
-        "$ref": "#/$defs/entry"
-      }
-    },
-    "denied": {
-      "type": "array",
-      "maxItems": 1000,
-      "items": {
-        "$ref": "#/$defs/denied"
-      }
-    }
+    "schemaVersion": { "const": 1 },
+    "wrappers": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/entry" } },
+    "denied": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/denied" } }
   },
   "$defs": {
-    "packageId": {
-      "type": "string",
-      "maxLength": 255,
-      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$"
-    },
-    "bundleId": {
-      "type": "string",
-      "maxLength": 255,
-      "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+$"
-    },
-    "cdhash": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
-    },
-    "sha256Digest": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "date": {
-      "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
-    },
-    "appPath": {
-      "type": "string",
-      "minLength": 6,
-      "maxLength": 1024,
-      "pattern": "^/.*[^/]\\.app$"
-    },
-    "label": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1024
-    },
+    "packageId": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+    "bundleId": { "type": "string", "maxLength": 255, "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+$" },
+    "cdhash": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256Digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$" },
+    "appPath": { "type": "string", "minLength": 6, "maxLength": 1024, "pattern": "^/.*[^/]\\.app$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 1024 },
     "entry": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "bundleId",
-        "packageId",
-        "kind",
-        "state",
-        "path",
-        "cdhash",
-        "launcherVersion",
-        "launcherAPI",
-        "formatVersion",
-        "fileName",
-        "displayName",
-        "customization",
-        "iconDigest",
-        "approval",
-        "createdAt",
-        "refreshedAt",
-        "lastValidatedAt"
-      ],
+      "required": ["bundleId", "packageId", "kind", "state", "path", "cdhash", "launcherVersion", "launcherAPI", "formatVersion", "fileName", "displayName", "customization", "iconDigest", "approval", "createdAt", "refreshedAt", "lastValidatedAt"],
       "properties": {
-        "bundleId": {
-          "$ref": "#/$defs/bundleId"
-        },
-        "packageId": {
-          "$ref": "#/$defs/packageId"
-        },
-        "kind": {
-          "enum": [
-            "local",
-            "portable",
-            "distribution"
-          ]
-        },
-        "state": {
-          "enum": [
-            "active",
-            "pending",
-            "refreshing"
-          ]
-        },
-        "path": {
-          "$ref": "#/$defs/appPath"
-        },
-        "bookmark": {
-          "type": "string",
-          "minLength": 4,
-          "maxLength": 10924,
-          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
-        },
-        "stagingPath": {
-          "$ref": "#/$defs/appPath"
-        },
-        "cdhash": {
-          "$ref": "#/$defs/cdhash"
-        },
-        "pendingCdhash": {
-          "$ref": "#/$defs/cdhash"
-        },
-        "launcherVersion": {
-          "type": "string",
-          "maxLength": 32,
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-        },
-        "launcherAPI": {
-          "type": "string",
-          "maxLength": 16,
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-        },
-        "formatVersion": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "fileName": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 251,
-          "pattern": "^[^/]+$"
-        },
-        "displayName": {
-          "$ref": "#/$defs/label"
-        },
+        "bundleId": { "$ref": "#/$defs/bundleId" },
+        "packageId": { "$ref": "#/$defs/packageId" },
+        "kind": { "enum": ["local", "portable", "distribution"] },
+        "state": { "enum": ["active", "pending", "refreshing"] },
+        "path": { "$ref": "#/$defs/appPath" },
+        "bookmark": { "type": "string", "minLength": 4, "maxLength": 10924, "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
+        "stagingPath": { "$ref": "#/$defs/appPath" },
+        "cdhash": { "$ref": "#/$defs/cdhash" },
+        "pendingCdhash": { "$ref": "#/$defs/cdhash" },
+        "launcherVersion": { "type": "string", "maxLength": 32, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+        "launcherAPI": { "type": "string", "maxLength": 16, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+        "formatVersion": { "type": "integer", "minimum": 1 },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 251, "pattern": "^[^/]+$" },
+        "displayName": { "$ref": "#/$defs/label" },
         "customization": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "displayName",
-            "iconFile"
-          ],
+          "required": ["displayName", "iconFile"],
           "properties": {
-            "displayName": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/$defs/label"
-                }
-              ]
-            },
-            "iconFile": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "string",
-                  "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+\\.png$"
-                }
-              ]
-            }
+            "displayName": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/label" } ] },
+            "iconFile": { "oneOf": [ { "type": "null" }, { "type": "string", "pattern": "^io\\.apkrun\\.android\\.[A-Za-z0-9.-]+\\.png$" } ] }
           }
         },
-        "iconDigest": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/sha256Digest"
-            }
-          ]
-        },
-        "approval": {
-          "enum": [
-            "generated",
-            "user"
-          ]
-        },
-        "createdAt": {
-          "$ref": "#/$defs/date"
-        },
-        "refreshedAt": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/date"
-            }
-          ]
-        },
-        "lastValidatedAt": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/date"
-            }
-          ]
-        }
+        "iconDigest": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/sha256Digest" } ] },
+        "approval": { "enum": ["generated", "user"] },
+        "createdAt": { "$ref": "#/$defs/date" },
+        "refreshedAt": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/date" } ] },
+        "lastValidatedAt": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/date" } ] }
       },
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "state": {
-                "const": "active"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "bookmark"
-            ],
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "stagingPath"
-                  ]
-                },
-                {
-                  "required": [
-                    "pendingCdhash"
-                  ]
-                }
-              ]
-            }
-          }
+          "if": { "properties": { "state": { "const": "active" } } },
+          "then": { "required": ["bookmark"], "not": { "anyOf": [ { "required": ["stagingPath"] }, { "required": ["pendingCdhash"] } ] } }
         },
         {
-          "if": {
-            "properties": {
-              "state": {
-                "const": "pending"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "stagingPath"
-            ],
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "bookmark"
-                  ]
-                },
-                {
-                  "required": [
-                    "pendingCdhash"
-                  ]
-                }
-              ]
-            }
-          }
+          "if": { "properties": { "state": { "const": "pending" } } },
+          "then": { "required": ["stagingPath"], "not": { "anyOf": [ { "required": ["bookmark"] }, { "required": ["pendingCdhash"] } ] } }
         },
         {
-          "if": {
-            "properties": {
-              "state": {
-                "const": "refreshing"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "bookmark",
-              "stagingPath",
-              "pendingCdhash"
-            ]
-          }
+          "if": { "properties": { "state": { "const": "refreshing" } } },
+          "then": { "required": ["bookmark", "stagingPath", "pendingCdhash"] }
         }
       ]
     },
     "denied": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "bundleId",
-        "cdhash",
-        "until"
-      ],
+      "required": ["bundleId", "cdhash", "until"],
       "properties": {
-        "bundleId": {
-          "$ref": "#/$defs/bundleId"
-        },
-        "cdhash": {
-          "$ref": "#/$defs/cdhash"
-        },
-        "until": {
-          "$ref": "#/$defs/date"
-        }
+        "bundleId": { "$ref": "#/$defs/bundleId" },
+        "cdhash": { "$ref": "#/$defs/cdhash" },
+        "until": { "$ref": "#/$defs/date" }
       }
     }
   }
@@ -1262,7 +778,7 @@ No other process reads `registry.json`. APKRun.app and the CLI use `listWrappers
 
 - The diagnostics bundle includes `registry.json` with `path` and `stagingPath` reduced to their last component and `bookmark` removed ([../02-design/diagnostics.md](../02-design/diagnostics.md) §6.2). A host-only bundle omits it.
 - `wrapper.json` and `bootstrap.json` are not collected. `apkrun wrapper verify --json` shows their identity fields.
-- Logs use `privacy:.public` for package IDs, bundle IDs, and cdhashes, and `.private` for paths ([../02-design/wrapper.md](../02-design/wrapper.md) §14).
+- Logs use `privacy: .public` for package IDs, bundle IDs, and cdhashes, and `.private` for paths ([../02-design/wrapper.md](../02-design/wrapper.md) §14).
 - `wrapper.json` never contains a credential. A GitHub token stays in the creator's Keychain, and a Local provider is never written (§2.5).
 
 ---

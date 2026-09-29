@@ -97,29 +97,15 @@ The format is the one of [../02-design/diagnostics.md](../02-design/diagnostics.
 ```json
 {
   "code": "store.guestInstallFailed",
-  "parameters": [
-    "app"
-  ],
-  "message": {
-    "en": "Android couldn't install {app}.",
-    "ja": "…"
-  },
-  "remediation": {
-    "en": "Try again. If it fails again, create a diagnostics report.",
-    "ja": "…"
-  },
+  "parameters": ["app"],
+  "message":     { "en": "Android couldn't install {app}.", "ja": "…" },
+  "remediation": { "en": "Try again. If it fails again, create a diagnostics report.", "ja": "…" },
   "action": "retry",
   "cliExit": 1,
   "variants": {
     "conflict": {
-      "message": {
-        "en": "Android refused {app} because it conflicts with an installed app.",
-        "ja": "…"
-      },
-      "remediation": {
-        "en": "Uninstall the conflicting app, then try again.",
-        "ja": "…"
-      },
+      "message":     { "en": "Android refused {app} because it conflicts with an installed app.", "ja": "…" },
+      "remediation": { "en": "Uninstall the conflicting app, then try again.", "ja": "…" },
       "action": "none"
     }
   }
@@ -265,8 +251,8 @@ Owner: VirtualMachineCore. Design: [../02-design/vm.md](../02-design/vm.md). Use
 | `invalidTransition(from:to:)` | `vm.invalidTransition` | a lifecycle call that `VMState` does not allow. A bug | VMController | "Android is in an unexpected state." | "Restart Android. If this happens again, report the problem." `restartAndroid` | 70 | §9, [../01-architecture/state-machines.md](../01-architecture/state-machines.md) |
 | `startFailed(underlying:)` | `vm.startFailed` | `VZVirtualMachine.start` fails | VMController | "Android couldn't start." | "Try again. If it fails again, create a diagnostics report." `retry` | 1 | §9.1 |
 | `stoppedWithError(underlying:)` | `vm.stoppedWithError` | the delegate reports `didStopWithError` | VMController | "Android stopped unexpectedly." | "Restart Android." `restartAndroid` | 1 | §9.2 |
-| `pauseFailed(underlying:)` | `vm.pauseFailed` | `pause` fails (idle suspend, host sleep) | VMController | "Android couldn't be paused." | "Restart Android if apps stop responding." `restartAndroid` | 1 | §9.4 |
-| `resumeFailed(underlying:)` | `vm.resumeFailed` | `resume` fails | VMController | "Android couldn't resume." | "Restart Android." `restartAndroid` | 1 | §9.4 |
+| `pauseFailed(underlying:)` | `vm.pauseFailed` | `pause()` fails (idle suspend, host sleep) | VMController | "Android couldn't be paused." | "Restart Android if apps stop responding." `restartAndroid` | 1 | §9.4 |
+| `resumeFailed(underlying:)` | `vm.resumeFailed` | `resume()` fails | VMController | "Android couldn't resume." | "Restart Android." `restartAndroid` | 1 | §9.4 |
 | `stopTimedOut` | `vm.stopTimedOut` | the forced stop did not reach `stopped` | VMController | "Android didn't stop in time." | "Try again. If it fails again, quit and reopen APKRun." `retry` | 1 | §9.3 |
 | `vsockConnectFailed(port:underlying:)` | `vm.vsockConnectFailed` | `VZVirtioSocketDevice.connect` fails | VMController | "APKRun couldn't connect to Android." | "Restart Android." `restartAndroid` | 1 | §8 |
 | `vsockPortNotListening(port:)` | `vm.vsockPortNotListening` | no guest listener on the port yet | VMController | "Android isn't ready yet." | "Try again in a moment." `retry` | 75 | §8 |
@@ -300,7 +286,7 @@ The port number is logged, never shown.
 | `machineIdentifierInvalid` | `vm.machineIdentifierInvalid` | the stored machine identifier doesn't decode | 70 |
 | `customDeviceInvalid(name, reason)` | `vm.customDeviceInvalid` | a custom virtio device configuration is rejected | 70 |
 | `microphoneUsageDescriptionMissing` | `vm.microphoneUsageDescriptionMissing` | sound input without `NSMicrophoneUsageDescription` | 70 |
-| `frameworkRejected(underlying)` | `vm.frameworkRejected` | `VZVirtualMachineConfiguration.validate` throws | 70 |
+| `frameworkRejected(underlying)` | `vm.frameworkRejected` | `VZVirtualMachineConfiguration.validate()` throws | 70 |
 | `configurationInvalid([VMConfigurationFailure])` | `vm.configurationInvalid` | more than one rule failed (catalog §3.6) | 70 when every item is 70, otherwise 1 |
 
 Texts:
@@ -752,7 +738,7 @@ Owners: WrapperCore (in apkrund) and APKRunLauncher. Design: [../02-design/wrapp
 | `packageNotInstalled(PackageID)` | `wrapper.packageNotInstalled` | `createWrapper` for a package that is not installed, or `apkrun wrap <file>` without `--install` and without a terminal for the question | AppWrapperGenerator, CLI | "{app} isn't installed in APKRun." | "Install {app} first. apkrun wrap installs it too when you add --install." `none` | 4 | §6.2, §12.2 |
 | `invalidName(String)` | `wrapper.invalidName` | a user-chosen name (name field, `--name`) is empty after the rules of §4.3 | AppWrapperGenerator | "This name can't be used for a Mac app." | "Choose a name that contains letters or digits." `none` | 64 | §4.3, §6.2 step 1 |
 | `customIconInvalid(IconInputProblem)` | `wrapper.customIconInvalid` | a chosen icon file fails the input rules of §8.2 | AppWrapperGenerator | "This image can't be used as an icon." | variants below | 1 | §8.2 |
-| — | `wrapper.customIconInvalid / unreadable` | the file can't be read or decoded | AppWrapperGenerator | "APKRun can't read this image." | "Choose a PNG, JPEG, HEIC, or.icns file." `none` | 1 | §8.2 |
+| — | `wrapper.customIconInvalid / unreadable` | the file can't be read or decoded | AppWrapperGenerator | "APKRun can't read this image." | "Choose a PNG, JPEG, HEIC, or .icns file." `none` | 1 | §8.2 |
 | — | `wrapper.customIconInvalid / notSquare` | width and height differ | AppWrapperGenerator | "This image isn't square." | "Choose a square image of at least 512 × 512 pixels." `none` | 1 | §8.2 |
 | — | `wrapper.customIconInvalid / tooSmall` | smaller than 512 px | AppWrapperGenerator | "This image is smaller than 512 × 512 pixels." | "Choose a square image of at least 512 × 512 pixels." `none` | 1 | §8.2 |
 | `iconConversionFailed(String)` | `wrapper.iconConversionFailed` | `iconutil` fails. Its status and message are logged | AppWrapperGenerator | "APKRun couldn't create the icon of the Mac app." | "Try again. If it fails again, choose another icon or report the problem." `retry` | 1 | §8.3 |
@@ -932,7 +918,7 @@ Owner: RuntimeHost (`MaintenanceService`, `SelfUpdateProbe`, `ImageUpdateCoordin
 | `hostUpdateSessionsOpen([PackageID])` | `maintenance.hostUpdateSessionsOpen` | `prepareForHostUpdate` or `restartForUpdate` with `closeSessions` false while sessions exist | MaintenanceService | "APKRun can't be updated while Android apps are open." | "Close the apps, or choose Close Apps and Install." `none` | 75 | §3.5, §8.1 |
 | `hostUpdateStopFailed(RuntimeFailure)` | `maintenance.hostUpdateStopFailed` | Android does not stop in step 4f. `abortHostUpdate` runs | MaintenanceService | "APKRun couldn't be updated because Android didn't stop." | "Try again. If it fails again, quit and reopen APKRun." `retry` | 1 | §3.5 step 4f |
 | `hostUpdateAbandoned(targetBuild:)` | `maintenance.hostUpdateAbandoned` | APKRun.app starts and finds a marker with a higher `targetBuild` (the install failed after step 4), or apkrund deletes a marker that is 10 minutes old (logged, health warning for 24 h) | SelfUpdateController, RuntimeHost | "APKRun couldn't be updated." | "The installed version still works. Try the update again in Settings → General." `updateAPKRun` | 1 | §3.6 |
-| `agentRegistrationFailed(status:)` | `maintenance.agentRegistrationFailed` | `SMAppService` `register` fails in the first-launch tasks. `{reason}` is the status | AgentRegistrar | "APKRun couldn't set up its background service after the update ({reason})." | "Quit and reopen APKRun. If the service is turned off, allow APKRun in System Settings → General → Login Items & Extensions." `openLoginItemsSettings` | 69 | §3.7 step 2 |
+| `agentRegistrationFailed(status:)` | `maintenance.agentRegistrationFailed` | `SMAppService` `register()` fails in the first-launch tasks. `{reason}` is the status | AgentRegistrar | "APKRun couldn't set up its background service after the update ({reason})." | "Quit and reopen APKRun. If the service is turned off, allow APKRun in System Settings → General → Login Items & Extensions." `openLoginItemsSettings` | 69 | §3.7 step 2 |
 | `dataCreatedByNewerVersion(file:schema:supported:)` | `maintenance.dataCreatedByNewerVersion` | a data file has a newer schema than this build supports. The owning component starts degraded, and the file is never written | RuntimeHost (each store) | "This data was created by a newer version of APKRun." | "Install the latest version of APKRun." `updateAPKRun` | 1 | §5, [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.2 step 4 |
 | `schemaMigrationFailed(file:from:to:detail:)` | `maintenance.schemaMigrationFailed` | a data schema migration fails. The owning component starts degraded. The original file and its backup are unchanged | RuntimeHost (each store) | "APKRun couldn't convert its data for this version." | "Your data is unchanged. Create a diagnostics report and report the problem." `reportProblem` | 1 | §3.9, §5 |
 
@@ -1156,7 +1142,7 @@ Declared in [../01-architecture/state-machines.md](../01-architecture/state-mach
 | `idle`, `checking` | — | feed errors of catalog §14.2 go to health (`maintenance.imageUpdate`) |
 | `available`, `downloading`, `installing` | the progress in Settings → General | download and install failures of catalog §14.2 |
 | `ready` | "Android system update ready" with **Update Now** in the menu bar and as a notification, in ask mode or after 7 days of waiting (runtime-maintenance.md §7.3, §7.4) | — |
-| `applying` | "Updating Android… (‹phase›)" in the runtime header (`bootPurpose =.imageUpdate`), screen U and then the placeholder "Updating Android…" in launchers | — |
+| `applying` | "Updating Android… (‹phase›)" in the runtime header (`bootPurpose = .imageUpdate`), screen U and then the placeholder "Updating Android…" in launchers | — |
 | `failed(candidate, f, retryAt)` | the Settings status line of `f` | `f`, a `maintenance.*` entry. The phase retries at `retryAt` |
 
 - `ImageUpdateOutcome` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §8.3): `installed(version)` has no text. `rejected(version, f)` shows `f` (normally `maintenance.imageMigrationFailed`), and a later apply of that version without `retryRejected` is `maintenance.imageUpdateRejected`. `rolledBack(to:)` is the user's **Go Back…** and has no error.

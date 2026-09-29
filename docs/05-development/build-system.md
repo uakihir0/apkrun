@@ -114,7 +114,7 @@ Each check is a script that CI runs in the `lint` job (§15) and that works loca
 | Script | Checks | Task |
 |---|---|---|
 | `scripts/check-module-deps.sh` | parses `Package.swift` (via `swift package dump-package`) and `project.yml`, and fails on any import edge not in [../01-architecture/modules.md](../01-architecture/modules.md) §3, on third-party products used outside the places the graph names, and on trait-conditioned edges other than `EmbeddedRuntime` → `apkrun` | #062 |
-| `scripts/check-logging.sh` | no `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside DiagnosticsCore; every interpolation in an `APKLogger` call has a privacy argument | #061 |
+| `scripts/check-logging.sh` | no `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside DiagnosticsCore; every inline interpolation in an `APKLogger` call has a privacy argument and does not use a `Sensitive` value; self-test covers each rule | #061 |
 | `scripts/check-launcher.sh` | the built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`, `lipo -archs` is `arm64`, and the minimum OS is 27.0 | #068 |
 | `scripts/check-todos.sh` | every `TODO` and `FIXME` carries an issue number (`TODO(#123): …`), NFR-DEV-04 | #062 |
 | `scripts/check-format.sh` | `swift format lint --strict`, ktfmt check, `cargo fmt --check`, `ruff format --check` ([coding-conventions.md](coding-conventions.md) §2) | #062 |

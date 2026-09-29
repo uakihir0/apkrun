@@ -530,7 +530,7 @@ The report's verdict is the first row that applies:
 
 - `graphicsFailure` comes before `bootFailure`, because a renderer failure also fails the boot, and the graphics verdict carries the better remediation ("Start in Graphics Safe Mode", [graphics.md](graphics.md) §9).
 - When the verdict is `degraded` and Android is stopped, the status line adds "· Android is not running", so the stopped state stays visible.
-- For `degraded`, the status line counts warning rows; if only failures remain it says "Needs attention". For `bootFailure`, a non-empty `runtime.boot.detail` is appended to the status line to show the reached phase.
+- For `degraded`, the status line counts warning rows; if only failures remain it says "Needs attention". For `bootFailure`, a non-empty `runtime.boot.detail` is appended only when that row is a failure, so a previous successful boot cannot supply the phase of a later failure.
 - CLI exit codes ([cli.md](cli.md) §3.3): `healthy` and `stopped` → 0; `degraded` without failures → 3; everything else → 1.
 
 ### 7.3 Host checks (DiagnosticsCore `HostChecks`)
@@ -926,7 +926,7 @@ The database records how well known apps work on APKRun and which settings help.
 4. `APKRunError`, `ErrorDomain`, `ErrorParameter`, `UnderlyingError`, `RemediationAction`. `errors.json` with the first entries (`vm.*`, `cli.*`), `scripts/errorgen.swift` for the Swift and Markdown outputs, and `ErrorPresenter` for the GUI, launcher, and CLI formats of §2.3.
 5. `PerfMarker`, `Perf.mark`, `Perf.interval`, `PerfTimeline`. `PerfRecordWriter` comes with #070.
 6. `HealthCheck`, `HealthResult`, `HealthReport`, `HealthCheckRegistry`, the verdict function (§7.2), and `HostChecks` (§7.3). Modules add their checks as they are built. `DiagnosticsContext` (§1), with `DiagnosticsContext.testing()` in `DiagnosticsCoreTestSupport`.
-7. `scripts/check-logging.sh` (no `os.Logger`, `print`, or `NSLog` outside DiagnosticsCore; no `Sensitive` unwrapping in logging calls) in CI (#062).
+7. `scripts/check-logging.sh` (no `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside DiagnosticsCore; every inline `APKLogger` interpolation has a privacy argument and does not use a `Sensitive` value) in CI (#062). Its self-test checks each forbidden form and an allowed logging fixture.
 8. The CLI uses the error presentation from its first command (`apkrun version`, [cli.md](cli.md) §6.2).
 9. Acceptance: unit tests (§12) pass. `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds. A deliberately invalid CLI argument prints the three-line error format and exits 64.
 

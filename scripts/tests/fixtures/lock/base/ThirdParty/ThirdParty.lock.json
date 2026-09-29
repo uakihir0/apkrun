@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "swift-argument-parser",
+      "group": "swift-runtime",
+      "kind": "swiftpm",
+      "repository": "https://github.com/apple/swift-argument-parser.git",
+      "commit": "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+      "version": "1.8.2",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.txt"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "app"
+    }
+  ]
+}

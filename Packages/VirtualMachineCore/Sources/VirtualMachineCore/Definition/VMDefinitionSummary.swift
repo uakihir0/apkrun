@@ -55,7 +55,7 @@ public struct VMDefinitionSummary: Codable, Equatable, Sendable {
         disks = definition.disks.map {
             DiskSummary(
                 fileName: $0.url.lastPathComponent,
-                role: $0.role,
+                role: VMDiagnosticToken.sanitize($0.role),
                 readOnly: $0.readOnly,
                 caching: $0.caching,
                 synchronization: $0.synchronization
@@ -67,7 +67,9 @@ public struct VMDefinitionSummary: Codable, Equatable, Sendable {
         entropyEnabled = definition.entropy
         memoryBalloonEnabled = definition.memoryBalloon
         sound = definition.sound.map(SoundSummary.init)
-        customDeviceNames = definition.customDevices.map(\.descriptor.name)
+        customDeviceNames = definition.customDevices.map {
+            VMDiagnosticToken.sanitize($0.descriptor.name)
+        }
     }
 
     /// Path-reduced Linux boot metadata.
@@ -119,11 +121,11 @@ public struct VMDefinitionSummary: Codable, Equatable, Sendable {
             case .systemConsole:
                 self = .systemConsole
             case .log(let name):
-                self = .log(name: name)
+                self = .log(name: VMDiagnosticToken.sanitize(name))
             case .silent(let name):
-                self = .silent(name: name)
+                self = .silent(name: VMDiagnosticToken.sanitize(name))
             case .service(let name):
-                self = .service(name: name)
+                self = .service(name: VMDiagnosticToken.sanitize(name))
             }
         }
     }

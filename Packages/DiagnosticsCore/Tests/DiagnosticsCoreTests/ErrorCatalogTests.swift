@@ -11,7 +11,7 @@ import Testing
             "memoryOutOfRange", "memoryExceedsHostCap", "kernelMissing",
             "kernelNotUncompressedImage", "initrdMissing", "initrdTooLarge",
             "commandLineInvalid", "diskMissing", "diskIsAndroidSparse", "duplicateDisk",
-            "diskNotReadable", "diskNotWritable", "diskIdentifierInvalid",
+            "diskNotReadable", "diskNotWritable", "diskSyncModeTestOnly", "diskIdentifierInvalid",
             "missingSystemConsole", "invalidMACAddress", "machineIdentifierInvalid",
             "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
             "configurationInvalid",

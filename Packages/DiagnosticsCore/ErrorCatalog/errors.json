@@ -120,7 +120,9 @@
     },
     {
       "code": "vm.vsockConnectFailed",
-      "parameters": [],
+      "parameters": [
+        "port"
+      ],
       "message": {
         "en": "APKRun couldn't connect to Android."
       },
@@ -139,7 +141,9 @@
     },
     {
       "code": "vm.vsockPortNotListening",
-      "parameters": [],
+      "parameters": [
+        "port"
+      ],
       "message": {
         "en": "Android isn't ready yet."
       },
@@ -158,7 +162,9 @@
     },
     {
       "code": "vm.vsockConnectTimedOut",
-      "parameters": [],
+      "parameters": [
+        "port"
+      ],
       "message": {
         "en": "Android didn't answer in time."
       },
@@ -196,7 +202,10 @@
     },
     {
       "code": "vm.cpuCountOutOfRange",
-      "parameters": [],
+      "parameters": [
+        "requested",
+        "allowed"
+      ],
       "message": {
         "en": "Android's configuration is not valid."
       },
@@ -208,7 +217,7 @@
       "doc": {
         "table": "vmConfiguration",
         "case": "cpuCountOutOfRange(requested, allowed)",
-        "cause": "CPU count outside the VZ and host limits",
+        "cause": "CPU count outside the VZ and host limits; `allowed` is `none` when the interval is empty",
         "exitDisplay": "70"
       }
     },
@@ -232,7 +241,9 @@
     },
     {
       "code": "vm.memoryExceedsHostCap",
-      "parameters": [],
+      "parameters": [
+        "cap"
+      ],
       "message": {
         "en": "The memory set for Android is more than this Mac allows."
       },
@@ -268,7 +279,9 @@
     },
     {
       "code": "vm.kernelNotUncompressedImage",
-      "parameters": [],
+      "parameters": [
+        "detected"
+      ],
       "message": {
         "en": "Android's configuration is not valid."
       },
@@ -340,7 +353,9 @@
     },
     {
       "code": "vm.diskMissing",
-      "parameters": [],
+      "parameters": [
+        "role"
+      ],
       "message": {
         "en": "Files that Android needs are missing, or APKRun can't read or write them."
       },
@@ -358,7 +373,9 @@
     },
     {
       "code": "vm.diskIsAndroidSparse",
-      "parameters": [],
+      "parameters": [
+        "role"
+      ],
       "message": {
         "en": "Android's configuration is not valid."
       },
@@ -376,7 +393,9 @@
     },
     {
       "code": "vm.duplicateDisk",
-      "parameters": [],
+      "parameters": [
+        "role"
+      ],
       "message": {
         "en": "Android's configuration is not valid."
       },
@@ -394,7 +413,9 @@
     },
     {
       "code": "vm.diskNotReadable",
-      "parameters": [],
+      "parameters": [
+        "role"
+      ],
       "message": {
         "en": "Files that Android needs are missing, or APKRun can't read or write them."
       },
@@ -412,7 +433,9 @@
     },
     {
       "code": "vm.diskNotWritable",
-      "parameters": [],
+      "parameters": [
+        "role"
+      ],
       "message": {
         "en": "Files that Android needs are missing, or APKRun can't read or write them."
       },
@@ -426,6 +449,26 @@
         "case": "diskNotWritable(role)",
         "cause": "a read-write disk is not writable",
         "exitDisplay": "1"
+      }
+    },
+    {
+      "code": "vm.diskSyncModeTestOnly",
+      "parameters": [
+        "role"
+      ],
+      "message": {
+        "en": "Android's configuration is not valid."
+      },
+      "remediation": {
+        "en": "Report the problem. The code identifies the rule that failed."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmConfiguration",
+        "case": "diskSyncModeTestOnly(role)",
+        "cause": "the unsynchronized disk mode is reserved for tests",
+        "exitDisplay": "70"
       }
     },
     {
@@ -502,7 +545,10 @@
     },
     {
       "code": "vm.customDeviceInvalid",
-      "parameters": [],
+      "parameters": [
+        "name",
+        "reason"
+      ],
       "message": {
         "en": "Android's configuration is not valid."
       },

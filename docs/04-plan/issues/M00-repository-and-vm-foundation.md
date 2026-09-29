@@ -716,12 +716,13 @@ Out of scope:
      - Android sparse images (magic `0xED26FF3A`) are rejected;
      - no disk URL appears twice (compared after resolving symlinks);
      - read-write disks are writable;
+     - `.none` synchronization is rejected because it is reserved for tests;
      - identifiers are at most 20 ASCII characters.
    - Console port 0 is `.systemConsole`.
    - The MAC is valid: locally administered unicast.
    - Custom devices: each descriptor passes its own checks (name non-empty, at least one queue). #063 adds the VZ-level checks.
    - The microphone usage description is present when `sound.input` is set.
-   - Finally, `FrameworkConfigurationValidator` builds the VZ configuration with `VZConfigurationBuilder` and calls `validate()`. A failure maps to `.frameworkRejected(underlying:)`, with the domain and code only.
+   - When no local rule fails, `FrameworkConfigurationValidator` builds the VZ configuration with `VZConfigurationBuilder` and calls `validate()`. A failure maps to `.frameworkRejected(underlying:)`, with the domain and code only. Skip this check when local rules fail so invalid inputs do not produce secondary framework errors.
    - The machine identifier, when present, must decode with `VZGenericMachineIdentifier(dataRepresentation:)`. Otherwise the validator raises `.machineIdentifierInvalid` ([vm.md](../../02-design/vm.md) §3; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2, exit 70).
 
    Check: one T0 test per rule passes.
@@ -744,7 +745,7 @@ Out of scope:
    - balloon;
    - sound.
 
-   Console attachments come from a parameter. Validation passes `FileHandle.nullDevice` pairs, and #003 passes real pipes. Custom devices are left out until #063 adds the adapter.
+   Console attachments come from a parameter. Validation opens `/dev/null` handles, and #003 passes real pipes. Custom devices are left out until #063 adds the adapter.
 
    Check: T0 inspects a built configuration: disk order, identifiers, port count, and that there is no graphics, keyboard, or pointing device.
 6. **State table.** `VMState` is the enum of [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1. `VMStateTransitions.isAllowed(from:to:)` encodes exactly the table's edges.
@@ -785,20 +786,20 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Acceptance criteria
 
-- [ ] Unit tests cover valid and invalid configurations.
-- [ ] Validation covers:
+- [x] Unit tests cover valid and invalid configurations.
+- [x] Validation covers:
   - the CPU count;
   - memory minimum and maximum;
   - a missing kernel;
   - a missing disk;
   - an invalid architecture (a kernel that is not an uncompressed arm64 `Image`, including gzip, lz4, and zboot).
-- [ ] No `VZVirtualMachine` is created by this task's code.
-- [ ] Every rule of [../../02-design/vm.md](../../02-design/vm.md) §3 has a failure case, a catalog entry, and a T0 test.
-- [ ] Several broken rules produce one `.configurationInvalid` with every failure. One broken rule produces that failure itself.
-- [ ] Only `VMDefinitionValidator` can create a `ValidatedVMDefinition`.
-- [ ] The transition table allows exactly the edges of [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1.
-- [ ] Generated MACs are locally administered unicast addresses. The MAC and the machine identifier survive a `Codable` round trip.
-- [ ] No path appears in an error parameter or in the logged summary.
+- [x] No `VZVirtualMachine` is created by this task's code.
+- [x] Every rule of [../../02-design/vm.md](../../02-design/vm.md) §3 has a failure case, a catalog entry, and a T0 test.
+- [x] Several broken rules produce one `.configurationInvalid` with every failure. One broken rule produces that failure itself.
+- [x] Only `VMDefinitionValidator` can create a `ValidatedVMDefinition`.
+- [x] The transition table allows exactly the edges of [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1.
+- [x] Generated MACs are locally administered unicast addresses. The MAC and the machine identifier survive a `Codable` round trip.
+- [x] No path appears in an error parameter or in the logged summary.
 
 ### Notes
 

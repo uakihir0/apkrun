@@ -269,7 +269,7 @@ The port number is logged, never shown.
 
 | Case | Code | Cause | Exit |
 |---|---|---|---|
-| `cpuCountOutOfRange(requested, allowed)` | `vm.cpuCountOutOfRange` | CPU count outside the VZ and host limits | 70 |
+| `cpuCountOutOfRange(requested, allowed)` | `vm.cpuCountOutOfRange` | CPU count outside the VZ and host limits; `allowed` is `none` when the interval is empty | 70 |
 | `memoryOutOfRange` | `vm.memoryOutOfRange` | memory not a multiple of 1 MiB, or outside the VZ limits | 70 |
 | `memoryExceedsHostCap(cap)` | `vm.memoryExceedsHostCap` | memory above 50 % of physical memory (NFR-RES-01) | 1 |
 | `kernelMissing(url)` | `vm.kernelMissing` | no kernel file | 1 |
@@ -282,6 +282,7 @@ The port number is logged, never shown.
 | `duplicateDisk(role)` | `vm.duplicateDisk` | the same disk URL twice | 70 |
 | `diskNotReadable(role)` | `vm.diskNotReadable` | a disk is not readable | 1 |
 | `diskNotWritable(role)` | `vm.diskNotWritable` | a read-write disk is not writable | 1 |
+| `diskSyncModeTestOnly(role)` | `vm.diskSyncModeTestOnly` | the unsynchronized disk mode is reserved for tests | 70 |
 | `diskIdentifierInvalid` | `vm.diskIdentifierInvalid` | identifier above 20 ASCII characters | 70 |
 | `missingSystemConsole` | `vm.missingSystemConsole` | console port 0 is not the system console | 70 |
 | `invalidMACAddress` | `vm.invalidMACAddress` | not a locally administered unicast address | 70 |
@@ -295,7 +296,7 @@ Texts:
 
 | Entries | Message | Remediation · action |
 |---|---|---|
-| `vm.commandLineInvalid`, `vm.configurationInvalid`, `vm.cpuCountOutOfRange`, `vm.customDeviceInvalid`, `vm.diskIdentifierInvalid`, `vm.diskIsAndroidSparse`, `vm.duplicateDisk`, `vm.frameworkRejected`, `vm.initrdTooLarge`, `vm.invalidMACAddress`, `vm.kernelNotUncompressedImage`, `vm.machineIdentifierInvalid`, `vm.memoryOutOfRange`, `vm.microphoneUsageDescriptionMissing`, `vm.missingSystemConsole` | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.commandLineInvalid`, `vm.configurationInvalid`, `vm.cpuCountOutOfRange`, `vm.customDeviceInvalid`, `vm.diskIdentifierInvalid`, `vm.diskIsAndroidSparse`, `vm.diskSyncModeTestOnly`, `vm.duplicateDisk`, `vm.frameworkRejected`, `vm.initrdTooLarge`, `vm.invalidMACAddress`, `vm.kernelNotUncompressedImage`, `vm.machineIdentifierInvalid`, `vm.memoryOutOfRange`, `vm.microphoneUsageDescriptionMissing`, `vm.missingSystemConsole` | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
 | `vm.diskMissing`, `vm.diskNotReadable`, `vm.diskNotWritable`, `vm.initrdMissing`, `vm.kernelMissing` | "Files that Android needs are missing, or APKRun can't read or write them." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
 | `vm.memoryExceedsHostCap` | "The memory set for Android is more than this Mac allows." | "Choose less memory for Android in Settings → Runtime." `openRuntimeSettings` |
 <!-- errorgen:end vm -->
@@ -1302,7 +1303,7 @@ Variants are listed only when the entry is not.
 | 5 | refused | `runtime.notAuthorized`, `runtime.developerModeRequired`, `image.downgradeRejected`, `store.reservedPackage`, `store.downgradeRefused`, `store.signerMismatch`, `update.downgrade`, `update.signerMismatch`, `update.lineageMissingCapability`, `wrapper.approvalDenied`, `wrapper.bootstrapNotAllowed`, `integration.disabled`, `integration.linkRejected`, `integration.pathRejected`, `integration.folderRefused`, `integration.readOnly`, `maintenance.imageUpdateRejected`, `cli.declined`, `cli.developerModeRequired` |
 | 64 | usage | `runtime.invalidSettingValue`, `store.invalidSettingValue`, `wrapper.invalidName`, `cli.invalidPackageName`, `cli.invalidSourceSpec`, `cli.invalidArgument`, `cli.invalidArguments` |
 | 69 | unavailable | `runtime.hostStartupFailed`, `runtime.notProvisioned`, `runtime.apiVersionMismatch`, `runtime.serviceUnavailable`, `wrapper.runtimeMissing`, `wrapper.runtimeNotReady`, `maintenance.agentRegistrationFailed` |
-| 70 | internal | `vm.invalidTransition`, `vm.cpuCountOutOfRange`, `vm.memoryOutOfRange`, `vm.kernelNotUncompressedImage`, `vm.initrdTooLarge`, `vm.commandLineInvalid`, `vm.diskIsAndroidSparse`, `vm.duplicateDisk`, `vm.diskIdentifierInvalid`, `vm.missingSystemConsole`, `vm.invalidMACAddress`, `vm.machineIdentifierInvalid`, `vm.customDeviceInvalid`, `vm.microphoneUsageDescriptionMissing`, `vm.frameworkRejected`, `vm.configurationInvalid` (only when every item exits 70), `graphics.scanoutInvalid`, `graphics.modeUnsupported`, `runtime.invalidTransition`, `runtime.malformedRequest`, `runtime.internal`, `guestProtocol.frameTooLarge`, `guestProtocol.malformedFrame`, `image.bootconfigConflict`, `image.bootconfigTooLarge`, `image.cmdlineTooLong`, `cli.malformedReply` |
+| 70 | internal | `vm.invalidTransition`, `vm.cpuCountOutOfRange`, `vm.memoryOutOfRange`, `vm.kernelNotUncompressedImage`, `vm.initrdTooLarge`, `vm.commandLineInvalid`, `vm.diskIsAndroidSparse`, `vm.diskSyncModeTestOnly`, `vm.duplicateDisk`, `vm.diskIdentifierInvalid`, `vm.missingSystemConsole`, `vm.invalidMACAddress`, `vm.machineIdentifierInvalid`, `vm.customDeviceInvalid`, `vm.microphoneUsageDescriptionMissing`, `vm.frameworkRejected`, `vm.configurationInvalid` (only when every item exits 70), `graphics.scanoutInvalid`, `graphics.modeUnsupported`, `runtime.invalidTransition`, `runtime.malformedRequest`, `runtime.internal`, `guestProtocol.frameTooLarge`, `guestProtocol.malformedFrame`, `image.bootconfigConflict`, `image.bootconfigTooLarge`, `image.cmdlineTooLong`, `cli.malformedReply` |
 | 75 | try again | `vm.vsockPortNotListening`, `graphics.deviceNotReady`, `runtime.hostShuttingDown`, `runtime.hostUpdating`, `runtime.instanceLocked`, `runtime.busy`, `runtime.guestAgentUnavailable`, `runtime.requestTimedOut`, `guestProtocol.disconnected`, `guestProtocol.agentUnavailable`, `store.operationInProgress`, `store.packageInUse`, `update.providerRateLimited`, `wrapper.wrapperRunning`, `integration.guestUnavailable`, `maintenance.hostUpdateBusy`, `maintenance.hostUpdateSessionsOpen` |
 | 130 | interrupted | `runtime.cancelled`, `update.cancelled`, `maintenance.cancelled` |
 | cause | — | `runtime.image`, `runtime.vm`, `runtime.vmConfiguration`, `runtime.graphics`, `store.runtimeUnavailable`, `update.validation`, `update.intrinsic`, `update.installFailed`, `maintenance.imageInstallFailed` |

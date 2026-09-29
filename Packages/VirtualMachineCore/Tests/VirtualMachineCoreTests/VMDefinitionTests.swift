@@ -76,6 +76,51 @@ import VirtioDeviceCore
     #expect(serialized.contains("private-customer-machine-name") == false)
 }
 
+@Test func definitionSummaryRedactsUntrustedDiagnosticTokens() throws {
+    let definition = VMDefinition(
+        label: "APKRun test",
+        cpuCount: 2,
+        memorySize: 3 * 1_024 * 1_024 * 1_024,
+        boot: .linux(
+            kernel: URL(fileURLWithPath: "/private/alice/Image"),
+            initialRamdisk: nil,
+            commandLine: "console=hvc0"
+        ),
+        disks: [
+            DiskDefinition(
+                url: URL(fileURLWithPath: "/private/alice/data.img"),
+                readOnly: false,
+                role: "/private/alice"
+            )
+        ],
+        consolePorts: [
+            ConsolePortDefinition(role: .systemConsole),
+            ConsolePortDefinition(role: .service(name: "../private/alice")),
+        ],
+        customDevices: [
+            FixtureVirtioDevice(
+                descriptor: VirtioDeviceDescriptor(
+                    name: "private/alice",
+                    deviceID: 4,
+                    pciClass: 0x10,
+                    pciSubclass: 0,
+                    queueCount: 1,
+                    mandatoryFeatures: 0,
+                    optionalFeatures: 0
+                )
+            )
+        ]
+    )
+
+    let summary = definition.summary
+    let serialized = String(decoding: try JSONEncoder().encode(summary), as: UTF8.self)
+
+    #expect(summary.disks.first?.role == "redacted")
+    #expect(summary.consolePorts == [.systemConsole, .service(name: "redacted")])
+    #expect(summary.customDeviceNames == ["redacted"])
+    #expect(!serialized.contains("/private/alice"))
+}
+
 @Test func definitionUsesDocumentedDeviceDefaults() {
     let definition = VMDefinition(
         label: "APKRun test",

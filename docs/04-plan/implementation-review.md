@@ -703,3 +703,167 @@ mapping to #063. No shared-memory region is required for v1.
 caller, while the summary is serialized into logs and diagnostics. The design
 does not require this value in the projection, so omitting it avoids logging
 user-provided text without losing validation or configuration behavior.
+
+## IR-028: Run framework validation only after local rules pass
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** Skip `VZVirtualMachineConfiguration.validate()` whenever any
+local rule fails.
+
+**Reason.** The VZ builder can reject malformed local values itself, which
+would add a misleading `.frameworkRejected` next to the actionable local
+failure. The task's `findings(_:)` API is intended to report causes, so the
+framework check runs only when its inputs passed the explicit rules.
+
+## IR-029: Reject the test-only disk synchronization mode in production
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §2–§3; [error-catalog.md](../03-reference/error-catalog.md) §5.2; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** `VMDefinitionValidator` rejects `.none` with
+`vm.diskSyncModeTestOnly(role)`.
+
+**Reason.** `DiskSync.none` is documented as tests-only, but the original
+validation table had no corresponding rule. Enforcing the existing restriction
+in production prevents callers from accidentally disabling write
+synchronization and gives the failure a typed catalog entry.
+
+## IR-030: Bound and redact caller-supplied diagnostic tokens
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §2–§3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** Disk roles, console names, and custom device names enter summaries
+and failure parameters only if they are at most 64 ASCII letters, digits,
+periods, underscores, or hyphens; other values become `redacted`. Kernel and
+disk file basenames remain in the summary as specified.
+
+**Reason.** These labels come from configuration owners and can otherwise
+contain paths, line breaks, or unbounded text. The allowlist keeps structured
+diagnostics bounded and path-free while retaining the documented basename
+preview.
+
+## IR-031: Snapshot custom-device descriptors in validated definitions
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §2–§3; [graphics.md](../02-design/graphics.md) §3.2 |
+
+**Choice.** A validated definition wraps each custom device with its captured
+descriptor and a strong reference to the underlying model.
+
+**Reason.** `VMDefinition` is a value but its device models are class
+instances. Capturing descriptors ensures the values inspected by validation
+are the values later passed to a controller, and retaining the model leaves
+its future lifecycle implementation available. #063 must forward the added
+device operations through this wrapper.
+
+## IR-032: Represent an empty CPU-count intersection explicitly
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** `cpuCountOutOfRange.allowed` is optional. `nil` means the host's
+active CPU count is below VZ's minimum and no CPU count is valid.
+
+**Reason.** Clamping the maximum up to the minimum incorrectly accepted a
+configuration that the host cannot run. Encoding an empty intersection avoids
+inventing a valid range.
+
+## IR-033: Open real `/dev/null` handles for VZ console validation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §6.3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** Validation opens `/dev/null` separately for reading and writing
+and passes those handles to `VZFileHandleSerialPortAttachment`.
+
+**Reason.** `FileHandle.nullDevice` did not provide valid descriptors for
+`VZFileHandleSerialPortAttachment` on the test host and caused an Objective-C
+exception during construction. Real opened handles satisfy VZ's attachment
+contract without creating pipes that the validator would need to drain.
+
+## IR-034: Generate a missing machine identity during validation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §§2, 4; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** `validate(_:)` generates a machine identifier when the definition
+does not contain one, then stores it in the returned `ValidatedVMDefinition`.
+
+**Reason.** Validation and VM construction must use the same identity. Creating
+it in the validated value gives the caller one stable value to persist in
+`instance.json` and prevents a later builder from silently generating a
+different machine identity.
+
+## IR-035: Probe permissions by opening the resolved file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** The live file probe resolves symlinks, reads the header through an
+opened descriptor, and checks writability by opening without writing. Missing
+or non-file URLs use the existing missing-file failures; unreadable kernels
+and initrds use their respective missing-file cases.
+
+**Reason.** Open operations test the current process's real access, unlike
+metadata-only permission checks, and avoid mutating disk contents. The
+existing catalog has no separate non-file or unreadable-kernel code, so the
+validator uses its established safe missing-file failures.
+
+## IR-036: Count whitespace-only declarations as empty
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §3; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** A custom-device name or microphone usage description containing
+only whitespace is treated as missing.
+
+**Reason.** Trimming before checking avoids accepting values that are
+syntactically nonempty but provide no usable name or user-facing permission
+explanation.
+
+## IR-037: Limit #002 custom-device validation to descriptor facts
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §3; [M00](issues/M00-repository-and-vm-foundation.md) #002 and #063 |
+
+**Choice.** #002 checks that each custom-device descriptor has a nonempty
+name and at least one queue. VZ-level device count and configuration checks
+remain in #063 with the adapter.
+
+**Reason.** #002's task scope explicitly leaves custom VZ devices out until
+#063. Running `VZVirtualMachineConfiguration.validate()` cannot check models
+that the builder does not attach, so describing those checks as part of #002
+would claim coverage the implementation cannot provide.

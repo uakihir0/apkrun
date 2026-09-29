@@ -91,7 +91,7 @@ public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator ca
 
 ## 3. Validation (`VMDefinitionValidator`, #002)
 
-`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every rule below, then builds the `VZVirtualMachineConfiguration` and calls its `validate()`. Errors are collected, not thrown on the first one, so `apkrun doctor` can print them all:
+`VMDefinitionValidator.validate(_:) throws(VMConfigurationFailure) -> ValidatedVMDefinition` runs every local rule below. It builds the `VZVirtualMachineConfiguration` and calls its `validate()` only when the local rules pass; this avoids secondary framework errors from invalid inputs. Errors are collected, not thrown on the first local failure, so `apkrun doctor` can print them all:
 
 - One broken rule is thrown as its own case.
 - Several broken rules are thrown as one `.configurationInvalid([VMConfigurationFailure])`, a flat list in rule order ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §5.2).
@@ -99,7 +99,7 @@ public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator ca
 
 | Rule | Failure case |
 |---|---|
-| `VZVirtualMachineConfiguration.minimumAllowedCPUCount ≤ cpuCount ≤ min(maximumAllowedCPUCount, host active processor count)` | `.cpuCountOutOfRange(requested, allowed)` |
+| `VZVirtualMachineConfiguration.minimumAllowedCPUCount ≤ cpuCount ≤ min(maximumAllowedCPUCount, host active processor count)`; if the intersection is empty, no CPU count is allowed | `.cpuCountOutOfRange(requested, allowed)` (`allowed` is the text `none` for an empty intersection) |
 | `memorySize` is a multiple of 1 MiB, within `minimumAllowedMemorySize…maximumAllowedMemorySize` | `.memoryOutOfRange` |
 | `memorySize ≤ 50 %` of physical memory (NFR-RES-01) | `.memoryExceedsHostCap(cap)` |
 | Kernel exists and is an **uncompressed arm64 `Image`**: bytes 0x38–0x3B are `ARM\x64`. gzip (`1f 8b`), lz4 (`02 21 4c 18` / `04 22 4d 18`), and EFI zboot (`MZ`, then `zimg` at offset 4) are rejected, and so is anything else, including other architectures (VZLinuxBootLoader has no decompressor on arm64; the VM would hang) | `.kernelMissing(url)`, `.kernelNotUncompressedImage(detected)` with `detected` one of `.gzip`, `.lz4`, `.zboot`, `.unknown` |
@@ -109,15 +109,23 @@ public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator ca
 | Every disk is readable by the process | `.diskNotReadable(role)` |
 | No disk URL appears twice, compared after resolving symlinks (VZ would open it twice) | `.duplicateDisk(role)` |
 | A read-write disk is writable by the process; a read-only disk is opened read-only | `.diskNotWritable(role)` |
+| `.none` disk synchronization mode is reserved for tests and rejected in production definitions | `.diskSyncModeTestOnly(role)` |
 | `identifier` ≤ 20 ASCII characters | `.diskIdentifierInvalid` |
 | `consolePorts` is non-empty and `[0]` is `.systemConsole` | `.missingSystemConsole` |
 | MAC address is a valid locally administered unicast address | `.invalidMACAddress` |
 | `machineIdentifier`, when present, decodes with `VZGenericMachineIdentifier(dataRepresentation:)` | `.machineIdentifierInvalid` |
-| Custom device count ≤ what VZ accepts; each model's configuration validates (VirtioDeviceCore) | `.customDeviceInvalid(name, reason)` |
+| Each custom-device descriptor has a nonempty name and at least one queue; VZ adapter count and configuration checks are in #063 | `.customDeviceInvalid(name, reason)` |
 | `sound.input == true` only when `NSMicrophoneUsageDescription` is present in the host bundle | `.microphoneUsageDescriptionMissing` |
-| `VZVirtualMachineConfiguration.validate()` | `.frameworkRejected(underlying)` |
+| `VZVirtualMachineConfiguration.validate()` after local rules pass | `.frameworkRejected(underlying)` |
 
 Tests (T0): one test per rule, including kernel magic detection with real gzip, lz4, and `Image` headers (fixture headers are 64 bytes, not whole kernels).
+
+**Unentitled `swift test` verification:** On macOS 27.0 (build `26A428`) with
+Xcode 27.0 (build `27A266a`), the real
+`VZVirtualMachineConfiguration.validate()` call fails with
+`VZErrorDomain` code 2 because the test process lacks
+`com.apple.security.virtualization`. T0 and T1 therefore inject the framework
+validator fake. The real call is reserved for the signed T2 test host in #003.
 
 ## 4. Mapping to Virtualization.framework
 

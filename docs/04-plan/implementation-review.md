@@ -671,3 +671,35 @@ approval requires removing the label, which reruns the trusted policy
 workflow and fails it. Branch protection independently requires an active PR
 approval. Negative workflow-edit tests and branch-protection setup remain
 unverified without a Git remote.
+
+## IR-026: Define the shared-memory descriptor used by custom virtio devices
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §3.2; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** `SharedMemoryRegionDescriptor` contains a `UInt8 regionID` and a
+`UInt64 sizeBytes`.
+
+**Reason.** The custom-device descriptor already exposed a list of shared
+memory regions but the design did not define that value's fields. The
+macOS 27 Virtualization API identifies each region by an 8-bit ID and a
+byte size, so this value mirrors those inputs and leaves validation and VZ
+mapping to #063. No shared-memory region is required for v1.
+
+## IR-027: Omit the framework label from the diagnostic summary
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected documents | [vm.md](../02-design/vm.md) §2; [M00](issues/M00-repository-and-vm-foundation.md) #002 |
+
+**Choice.** `VMDefinitionSummary` omits `VMDefinition.label`.
+
+**Reason.** The label is an unconstrained string supplied by the definition's
+caller, while the summary is serialized into logs and diagnostics. The design
+does not require this value in the projection, so omitting it avoids logging
+user-provided text without losing validation or configuration behavior.

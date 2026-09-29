@@ -27,7 +27,7 @@ M0 delivers none of the v0.1 items directly ([../roadmap.md](../roadmap.md) §3.
   - `scripts/generate-project.sh`
   - `swift build && swift test`
   - `xcodebuild -project APKRun.xcodeproj -scheme APKRun -configuration Debug build`
-- [ ] The `ci.yml` jobs `lint`, `codegen`, `build`, and `test-swift` are required checks on `main` and are green.
+- [ ] `workflow-policy` and the `ci.yml` jobs `lint`, `codegen`, `build`, and `test-swift` are required checks on `main` and are green.
 - [ ] The `LinuxGuest` T2 suite passes on the reference Mac, and `apkrun-dev dev linux --tests blk,net,vsock,ports,rng` exits 0. Here, `apkrun-dev` means the Debug CLI inside the Debug build of APKRun.app, `Contents/Resources/bin/apkrun`. #031 later links it as `~/.local/bin/apkrun-dev`.
 - [ ] These verification results are recorded where each task's Notes say:
   - console port numbering ([../../02-design/vm.md](../../02-design/vm.md) §6.2);
@@ -223,7 +223,7 @@ Out of scope:
 By tier ([../test-strategy.md](../test-strategy.md)):
 
 - **T0** (`Packages/<Module>/Tests/<Module>Tests/`): one placeholder test per module, so every target exists and runs. (`CLI/apkrun/Tests/`): golden tests of `version`, `version --json`, `--version`, and `--help`, with an injected version source.
-- **T1** (`scripts/smoke-products.sh`, run by the `build` job from #062): the CLI output, the GUI launch and quit, and the apkrund start and clean exit.
+- **T1** (`scripts/smoke-products.sh`, run manually on a real Apple Silicon Mac before merge): the CLI output, the GUI launch and quit, and the apkrund start and clean exit.
 - **T2**: none (no VM).
 - **T3**: none.
 
@@ -247,7 +247,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Record:** the SE-0450 result (trait-conditioned dependencies work, or the fallback) goes into [../../05-development/build-system.md](../../05-development/build-system.md) §2.1.
 - **Pitfall:** Xcode builds local Swift packages only in Debug or Release. Do not put anything into package code that must differ in `ReleaseUpdateTest` ([../../05-development/build-system.md](../../05-development/build-system.md) §2.4).
 - **Pitfall:** `swift build` alone produces a CLI with no embedded Info.plist. Code must handle missing keys (`0.0.0-dev`) and must never crash on them.
-- **Pitfall:** a path-level test such as "the GUI launches" needs a GUI session. The `apkrun-ci` runner has one ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6.2). Hosted macOS runners may run only static checks.
+- **Pitfall:** a path-level test such as "the GUI launches" needs a GUI session. The `apkrun-ci` runner has one ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6.2). Hosted macOS runners may run static checks, builds, and T0 tests; T1 checks need the real Mac host.
 - `components.json` and `scripts/build/write-components.py` ([../../05-development/build-system.md](../../05-development/build-system.md) §5) are added by #057 (M10). They are not part of #001. See the Notes of #061.
 - Verification on 2026-09-29, arm64 macOS 27.0 / Xcode 27.0 / Swift 6.4: bootstrap checks, project generation, default and `EmbeddedRuntime` Swift builds, all 22 Swift tests, Xcode Debug and unsigned Release builds, Debug product smoke, bundle identities, entitlements, and arm64 slices passed.
 
@@ -427,13 +427,13 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 - **T1** (`Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests/`):
   - T1-3 `LogMirrorWriter` (rotation at 10 MiB, drop counting, mode 0600, no private values in the file);
   - T2-2 `apkrun logs` with and without `log show` access, where "without" uses a runner that fails and one that times out, then falls back to the mirrors.
-- **T1** (`scripts/check-compile-fail.sh`, run by `test-swift`): T1-2. Each file in `Tests/Fixtures/compile-fail/` (an interpolation without privacy, an interpolated `Sensitive` value) is type-checked with `swiftc -typecheck` against the built DiagnosticsCore module and must fail with the expected diagnostic.
+- **T1** (`scripts/check-compile-fail.sh`, run manually on a real Apple Silicon Mac before merge): T1-2. Each file in `Tests/Fixtures/compile-fail/` (an interpolation without privacy, an interpolated `Sensitive` value) is type-checked with `swiftc -typecheck` against the built DiagnosticsCore module and must fail with the expected diagnostic.
 - **T2**: none.
 - **T3**: none.
 
 ### Acceptance criteria
 
-- [ ] The T0 and T1 tests above pass. The logging lint and the compile-fail tests run in CI.
+- [ ] The T0 and T1 tests above pass. The logging lint runs in CI; the compile-fail tests run on a real Apple Silicon Mac before merge.
 - [ ] `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §11 step 9).
 - [ ] A deliberately invalid CLI argument prints `error:`, `hint:`, and `code:` lines on stderr and exits 64.
 - [ ] `errors.json` holds every `vm.*` and `cli.*` entry of the catalog. `ErrorCatalog.generated.swift` and the marked catalog tables are current.
@@ -464,12 +464,12 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 | Depends on | #001 |
 | Requirements | NFR-DEV-01, NFR-DEV-02, NFR-DEV-04, NFR-DEV-05 |
 | Design | [../../05-development/build-system.md](../../05-development/build-system.md) §3, §3.1, §4, §6.1, §6.5, §15.1, §15.3; [../../01-architecture/modules.md](../../01-architecture/modules.md) §1, §3; [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6; [../../05-development/workflow.md](../../05-development/workflow.md); [../../../AGENTS.md](../../../AGENTS.md) §6.1, §6.6, §11, §12 |
-| Modules / paths | `ThirdParty/ThirdParty.lock.json`, `scripts/check-module-deps.sh`, `scripts/check-todos.sh`, `scripts/check-format.sh`, `scripts/check-lock.sh`, `scripts/release/check-release-build.sh`, `scripts/tools/` (`check-module-deps.swift`, `check-lock.swift`), `scripts/ci/` (`run-checks.sh`, `codegen.sh`), `scripts/tests/`, `.swift-format`, `.github/workflows/ci.yml` |
-| Risks / questions | None |
+| Modules / paths | `ThirdParty/ThirdParty.lock.json`, `Package.resolved`, `.xcode-version`, `.swift-format`, `.swift-format-tests`, `scripts/tool-versions.env`, `scripts/build/`, `scripts/check-module-deps.sh`, `scripts/check-todos.sh`, `scripts/check-format.sh`, `scripts/check-lock.sh`, `scripts/errorgen.swift`, `scripts/generate-protos.sh`, `scripts/release/check-release-build.sh`, `scripts/tools/` (`check-module-deps.swift`, `check-lock.swift`), `scripts/ci/` (`run-checks.sh`, `codegen.sh`, `check-pr-control-changes.py`), Gradle wrapper, build files, and `buildSrc`/`build-logic` source, `scripts/tests/`, `.github/workflows/ci.yml`, `.github/workflows/ci-policy.yml` |
+| Risks / questions | GitHub-hosted `xcode-27` is Public Preview with limited memory and disk; live Actions verification awaits repository access. The metadata-only `pull_request_target` policy check must never execute PR code. Persistent self-hosted runners must remain disconnected until the owner can enforce workflow-group restrictions. |
 
 ### Goal
 
-Every pull request is checked on the `apkrun-ci` runner. A forbidden import, an unpinned or branch-pinned dependency, a `TODO` without a task number, a formatting error, stale generated code, a failing build, or a failing T0 or T1 test blocks the merge.
+Every pull request gets static checks, builds, and T0 tests on fresh GitHub-hosted runners. T1 tests that need real macOS services run on an Apple Silicon Mac before merge and have their results linked. A forbidden import, an unpinned or branch-pinned dependency, a `TODO` without a task number, a formatting error, stale generated code, a failing build, or a failing required test blocks the merge.
 
 ### Scope
 
@@ -478,8 +478,9 @@ Every pull request is checked on the `apkrun-ci` runner. A forbidden import, an 
 - `scripts/check-todos.sh` and `scripts/check-format.sh`.
 - `scripts/release/check-release-build.sh` with the first two release checks of [../../05-development/build-system.md](../../05-development/build-system.md) §3.1: no test hooks and no test keys in the Release build.
 - Self-tests for the checks, with fixtures.
-- `.github/workflows/ci.yml` with the jobs `lint`, `codegen`, `build`, and `test-swift`.
-- Branch protection on `main` with these four jobs as required checks.
+- `.github/workflows/ci.yml` with the jobs `lint`, `codegen`, `build`, and `test-swift`, on GitHub-hosted macOS 27 VMs.
+- `.github/workflows/ci-policy.yml` and `scripts/ci/check-pr-control-changes.py`, a metadata-only guard that prevents CI control-file changes from suppressing required checks without review.
+- Branch protection on `main` with `workflow-policy` and the four `ci.yml` jobs as required checks.
 
 Out of scope:
 
@@ -556,26 +557,39 @@ Out of scope:
    - `scripts/ci/codegen.sh` runs every generator of [../../05-development/build-system.md](../../05-development/build-system.md) §4 that exists in the tree (`swift scripts/errorgen.swift` and `--markdown` from #061, `scripts/generate-protos.sh` from #033), then runs `git diff --exit-code`.
 
    Check: both scripts run locally with no arguments.
-6. **Workflow.** `.github/workflows/ci.yml` runs on every pull request and on every push to `main`. It uses `runs-on: [self-hosted, apkrun-ci]` and `APKRUN_CI=1`, with `concurrency` per ref.
+6. **Workflow.** `.github/workflows/ci.yml` runs on every `pull_request` and push to `main`. All four jobs use GitHub-hosted `xcode-27` runners, which provide a fresh macOS VM per job. Each job checks out the exact PR head SHA with persisted Git credentials disabled. `lint`, `codegen`, and `build` run `scripts/bootstrap` to install pinned tools before their checks; `build` and `test-swift` cap compiler parallelism at two jobs for the standard runner's memory limit; `test-swift` runs T0 with `swift test --skip 'SystemTests'`. The workflow has only `contents: read`, references no repository secrets, and never uses a self-hosted runner.
+
+   `.github/workflows/ci-policy.yml` runs the required `workflow-policy` job for opened, reopened, synchronized, edited, labeled, and unlabeled pull request events targeting `main`. It checks out only `refs/heads/main` on `ubuntu-latest`, has `contents: read` and `pull-requests: read`, and uses the GitHub API to inspect the event and current head/base, changed paths, and reviews. It reads the revision again after fetching paths and reviews, and fails closed if the head or base changed during verification. Changed paths come from the commit comparison endpoint using the captured base and head SHA pair, so a transient PR update cannot substitute paths from a different revision. It never checks out or executes pull request code. Protected paths include `.github/workflows/`, `.github/actions/`, `gradle/`, `Guest/gradle/`, `scripts/build/`, `scripts/ci/`, `scripts/tests/`, `scripts/tools/`, `scripts/errorgen.swift`, `scripts/generate-protos.sh`, `scripts/tool-versions.env`, any `scripts/check-*` file, every `Package.swift` and `Package.resolved`, every `project.yml`, every `build.gradle` and `settings.gradle` file, Gradle wrapper/configuration files, every `Guest/<module>/gradle.lockfile`, every `buildSrc/` and `build-logic/` tree, every Cargo manifest and lockfile, Rust toolchain and rustfmt/Clippy configuration, `.cargo/` configuration tree, `ThirdParty/ThirdParty.lock.json`, every `Tests/` and `UITests/` tree, `.swift-format`, `.swift-format-tests`, `.xcode-version`, `docs/01-architecture/modules.md`, and the named build scripts. Such changes pass only when a non-author human approves the current head and that same reviewer applies `ci-policy-approved` in a label event for that head. New commits invalidate both conditions. Any new commit, reopening, later label event, or PR edit resets the check; the reviewer removes and reapplies the policy label last. Removing the policy label revokes the check. If the reviewer withdraws the policy approval, they must remove the label; branch protection separately requires an active PR approval. `pull_request_review` is not used because GitHub runs that event's workflow from the PR merge commit. Renames check both the old and new paths; a compare API response containing 300 files is treated as potentially truncated and fails closed, so oversized pull requests must be split.
+
+   Do not use `pull_request_target` to execute PR code. Set `APKRUN_CI=1` and concurrency per pull request or ref. GitHub may hold the first workflow run from a fork for maintainer approval; the fork check below is recorded after that approval.
 
    | Job | Runs |
    |---|---|
    | `lint` | `scripts/ci/run-checks.sh` |
    | `codegen` | `scripts/ci/codegen.sh` |
-   | `build` | `scripts/bootstrap --check`, `scripts/generate-project.sh`, `swift build`, `swift build --traits EmbeddedRuntime`, `xcodebuild` Debug (`CODE_SIGN_IDENTITY=-`), `xcodebuild` Release (`CODE_SIGNING_ALLOWED=NO`), `scripts/release/check-release-build.sh` on the Release APKRun.app, `scripts/smoke-products.sh` on the Debug products |
-   | `test-swift` | `swift test` (T0 and T1), `scripts/check-compile-fail.sh` once #061 has merged |
+   | `build` | `scripts/bootstrap`, `scripts/bootstrap --check`, `scripts/generate-project.sh`, `swift build -j 2`, `swift build -j 2 --traits EmbeddedRuntime`, `xcodebuild` Debug and Release with `-jobs 2`, `scripts/release/check-release-build.sh` on the Release APKRun.app |
+   | `test-swift` | `swift test --skip 'SystemTests' -j 2` (T0 only) |
+   | `workflow-policy` | run `scripts/ci/check-pr-control-changes.py` from `main`; inspect PR metadata only; require a current-head approval and label when CI control files change |
 
    - Upload the xcresult and JUnit reports on failure ([../test-strategy.md](../test-strategy.md) §3.7).
    - Pin every action by commit SHA, not by tag.
 
-   Check: a pull request shows the four jobs green.
-7. **Branch protection and a negative test.** On `main`, require the four jobs and one approving review, and forbid force pushes (see [../../05-development/workflow.md](../../05-development/workflow.md)). Open a draft pull request that adds `import RuntimeCore` to `Apps/APKRun/` and a `TODO` without a number. Confirm that `lint` fails with both messages, then close it.
+   Require `workflow-policy` and all four `ci.yml` jobs in branch protection. The `xcode-27` standard runner currently has limited resources and is in Public Preview; the build removes Debug DerivedData before Release to reduce disk use. Record any resource failure and move only to an adequately sized fresh hosted runner.
 
-   Check: the draft pull request's `lint` result is linked in this task's pull request.
+   Check: same-repository and fork pull requests run the four `ci.yml` jobs on fresh hosted VMs, the policy workflow runs for PRs to `main`, and a push to `main` runs the four CI jobs. Approve a fork workflow run first if GitHub holds it for review.
+   Manual check on a real Apple Silicon Mac before merge: run full `swift test` (including T1 `SystemTests`), `scripts/check-compile-fail.sh`, and `scripts/smoke-products.sh` against the Debug products. Link the results in the task PR; do not run these host-dependent checks on the hosted VM.
+ 7. **Branch protection and negative tests.** On `main`, require the five checks plus one approving review, and forbid force pushes (see [../../05-development/workflow.md](../../05-development/workflow.md)). Open a draft pull request that adds `import RuntimeCore` to `Apps/APKRun/` and a `TODO` without a number. Confirm that `lint` fails with both messages, then close it. Also verify that a pull request changing `.github/workflows/ci.yml` to skip a required job fails `workflow-policy` without a current-head approval and label, and passes that check only after both are present.
+
+   Check: the negative draft PR results for `lint` and `workflow-policy` are linked in this task's pull request.
+   Repository setup: create the `ci-policy-approved` label. The non-author human reviewer applies it last, after approving the exact current head. Removing it revokes the policy check. Any later label event or PR edit resets `workflow-policy`; the same reviewer removes and reapplies this label after confirming the review remains current. If they withdraw the policy approval, they remove the label.
 
 ### Tests
 
 By tier ([../test-strategy.md](../test-strategy.md)):
+
+The workflow-policy fixtures also cover Cargo manifests and locks, the pinned
+Rust toolchain, Cargo config, rustfmt and Clippy settings. These files can
+change the `cargo fmt --check` run when Rust sources are present.
 
 - **T0** (`scripts/tests/`, run by `lint`):
   - `check-module-deps.sh` rejects each forbidden fixture ([../test-strategy.md](../test-strategy.md) §6.1: "rejects a fixture manifest with a forbidden edge") and accepts the valid one;
@@ -584,29 +598,35 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - the TODO rules;
   - the format check;
   - the release checks: a fixture bundle whose binary contains the string `APKRUN_STORE_FAULT` fails, one that contains a public key from `Tests/Fixtures/signing/` fails, and a clean one passes.
-- **T1**: none of its own. `test-swift` runs the other tasks' T1 tests.
+  - the workflow security configuration: every source-executing job uses the fresh `xcode-27` runner; checkout credentials are not persisted; the metadata-only policy job checks out trusted `main` and never PR source; fixtures cover missing, stale, self, withdrawn, bot, and mismatched labeler approvals; base-revision changes; label revocation; code generators, dependency pins, tool-version and formatter settings, Xcode build-phase scripts, Gradle wrapper/build/convention logic, per-module Gradle lockfiles, manifests, test trees, and the module graph; PR edits; renamed control files; and the GitHub compare API changed-file limit.
+- **T1**: no new T1 fixtures. Before merge, run full `swift test`, `scripts/check-compile-fail.sh`, and the Debug product smoke test on a real Apple Silicon Mac; the hosted `test-swift` job runs T0 only.
 - **T2**: none.
 - **T3**: none.
 
 ### Acceptance criteria
 
-- [ ] `ci.yml` runs `lint`, `codegen`, `build`, and `test-swift` on every pull request and push to `main`, and all four are required checks on `main`.
+- [ ] `ci.yml` runs `lint`, `codegen`, `build`, and `test-swift` on every pull request and push to `main`; `workflow-policy` runs for PRs targeting `main`; all five checks are required on `main`.
+- [ ] A PR changing protected control files cannot skip required checks unless the same non-author human approved its current head and applied `ci-policy-approved`; a commit, reopen, edit, or later label event resets the check, and removing the label revokes `workflow-policy`.
+- [ ] Fork pull request source runs only on a fresh GitHub-hosted macOS VM; no `pull_request` job can access a persistent self-hosted runner.
 - [ ] A forbidden import edge, a forbidden trait edge, and a third-party import outside its allowed module each fail `lint` with a message that names the file and the rule.
 - [ ] A `TODO` or `FIXME` without a task number fails `lint` (NFR-DEV-04).
 - [ ] A lock entry pinned by a branch name or a short hash, or a Swift package pin missing from the lock, fails `lint` (NFR-DEV-01).
 - [ ] A `Helpers/`-style directory, or a production import from `Experiments/`, fails `lint` (NFR-DEV-05).
 - [ ] Stale generated code fails `codegen`.
-- [ ] `build` proves a clean checkout builds (NFR-DEV-02), including the CLI with the `EmbeddedRuntime` trait and the product smoke test.
+- [ ] `build` proves a clean checkout builds (NFR-DEV-02), including the CLI with the `EmbeddedRuntime` trait. A real Mac manual check runs `scripts/smoke-products.sh` on Debug products before merge.
+- [ ] Full Swift T0/T1 tests pass on a real Apple Silicon Mac before merge; hosted `test-swift` runs only T0.
 - [ ] `build` runs `check-release-build.sh` on the Release APKRun.app, and a test hook or a test key in it fails the job.
-- [ ] Every check script also runs locally with no arguments.
+- [ ] Local repository checks run with no arguments; the policy check fails closed without GitHub context and its decision logic is covered by offline fixtures.
 - [ ] The negative-test pull request failed as expected.
 
 ### Notes
 
 - **Record:** the required checks and the branch rules go into [../../05-development/workflow.md](../../05-development/workflow.md).
+- **Local verification:** `scripts/ci/run-checks.sh`, `swift test --skip 'SystemTests' -j 2`, full `swift test`, `scripts/smoke-products.sh` on Debug products, and `scripts/release/check-release-build.sh` on the Release app all passed on the Apple Silicon host. Debug and Release `xcodebuild` jobs also passed. The live GitHub Actions run, branch protection, and negative-test pull request remain unverified because this checkout has no Git remote.
 - **Pitfall:** `swift package dump-package` does not show source imports. Without the import scan, the CLI could import RuntimeCore through RuntimeHost unnoticed.
 - **Pitfall:** GitHub keeps a required check "pending" forever when a workflow is skipped by a `paths:` filter. When #003 adds `linux-guest`, it must use a job that always runs and decides from the changed files.
-- **Pitfall:** hosted macOS runners are VMs. Use them for `lint` only, if at all ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6.1).
+- **Pitfall:** hosted macOS runners are VMs. Use them for static checks, builds, and T0 tests only. Run host-dependent T1 checks on a real Apple Silicon Mac ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6).
+- **Pitfall:** `ci-policy-approved` is a narrow CI-control approval, not a substitute for the pull request's required review. The non-author reviewer who approved the exact current head applies it; removing it revokes the policy check. Any new commit, reopen, PR edit, or label event requires a fresh policy-label event.
 - `check-lock.sh` runs in two jobs ([../../05-development/build-system.md](../../05-development/build-system.md) §3, §15.1). The `lint` job runs the file checks. The `third-party` job, from #020 on, runs `check-lock.sh --apply` after it checks out the sources.
 - The allowed graph is parsed from [../../01-architecture/modules.md](../../01-architecture/modules.md) §3, which lists `apkrun → RuntimeAPI` and ArgumentParser. A change to the graph is a change to that document.
 

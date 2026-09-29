@@ -599,25 +599,30 @@ Rules:
 
 CI runs on GitHub Actions with the runners of [environment-setup.md](environment-setup.md) §6. The tiers, budgets, suites, and retry rules are defined in [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2. In short: T0 unit tests without VM, GPU, network, or other processes; T1 host tests with real macOS services, Metal, files, XPC, or local servers, but no VM; T2 tests with a real VM; T3 acceptance, gates, and long or external runs.
 
+Pull request workflows execute source and workflow changes from the pull request, so they run on fresh GitHub-hosted VMs. The required `workflow-policy` job in `ci-policy.yml` checks changes to workflow and CI control files using trusted code from `main`; it does not execute PR source. This gate does not make a persistent self-hosted runner safe for PR jobs. Before registering any persistent runner with GitHub, the repository owner must enforce runner-group access pinned to a separate trusted workflow on `refs/heads/main`, excluding every pull-request workflow. If the account cannot enforce that boundary, do not connect the persistent runner to GitHub Actions. Tests that need self-hosted resources require a separate runner-isolation design before they are added to a pull request gate.
+
+Rows below that use `apkrun-ci` or `apkrun-lab` refer to trusted default-branch or manual runs; use fresh hosted or disposable runners for PR execution. The planned T2 pull-request jobs in `integration.yml` need disposable lab capacity before they can run PR source.
+
 ### 15.1 Workflows and jobs
 
-The table describes the planned workflow as its inputs arrive. #062 creates the initial `lint`, `codegen`, `build`, and `test-swift` jobs; later tasks add the jobs for components and test tiers they introduce. Every job present in `ci.yml` is required by branch protection.
+The table describes the planned workflow as its inputs arrive. #062 creates the initial `lint`, `codegen`, `build`, and `test-swift` jobs, plus the required metadata-only `workflow-policy` job; later tasks add the jobs for components and test tiers they introduce. Every job present in `ci.yml` is required by branch protection, as is `workflow-policy` for pull requests to `main`.
 
 | Workflow | Trigger | Job | Tier | Runner | Content |
 |---|---|---|---|---|---|
-| `ci.yml` | every pull request, push to `main` | `lint` | — | `apkrun-ci` | §3 checks, `buf lint`, `buf breaking` |
-| | | `codegen` | — | `apkrun-ci` | §4 regeneration, `git diff --exit-code` |
-| | | `build` | — | `apkrun-ci` | `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
-| | | `test-swift` | T0, T1 | `apkrun-ci` | `swift test` (`<Module>Tests`, `<Module>SystemTests`, `CLI/apkrun/Tests`); `xcodebuild test` for `Apps/<App>/Tests` and `Apps/<App>/UITests`; GraphicsCore host tests again with `--sanitize=address --sanitize=undefined` |
-| | | `test-guest` | T0, T1 | `apkrun-ci` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
-| | | `test-images` | T0, T1 | `apkrun-ci` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |
+| `ci-policy.yml` | opened, reopened, synchronize, edited, labeled, or unlabeled pull request events targeting `main` | `workflow-policy` | — | `ubuntu-latest` | trusted `main` code checks current PR head/base, changed paths, and reviews through read-only GitHub API; control paths include workflows, Xcode/Gradle build and convention scripts, generators, dependency pins, CI tool/formatter settings, test/build manifests, test trees, and the module graph; the approver must apply `ci-policy-approved`; a new commit, reopen, PR edit, or later label event resets the check, and removing the label revokes it |
+| `ci.yml` | every pull request, push to `main` | `lint` | — | `xcode-27` | §3 checks, `buf lint`, `buf breaking` |
+| | | `codegen` | — | `xcode-27` | §4 regeneration, `git diff --exit-code` |
+| | | `build` | — | `xcode-27` | `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
+| | | `test-swift` | T0 | `xcode-27` | SwiftPM tests excluding `<Module>SystemTests`; no T1 or host-dependent checks |
+| | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
+| | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |
-| | | `third-party` | — | `apkrun-ci` | `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/check-lock.sh --apply`, `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
-| | | `fuzz-short` | T1 | `apkrun-ci` | 60 s per fuzz target whose code the pull request changes (§15.2) |
-| `integration.yml` | pull requests (by path or label), push to `main` | `linux-guest` | T2 | `apkrun-lab` | suite LinuxGuest; pull requests that match the path filter below; every push to `main`; ≤ 15 min |
-| | label `t2-android` or `run-t2` | `android-stock` | T2 | `apkrun-lab` | suite AndroidStock, ≤ 60 min |
-| | label `t2-android` or `run-t2` | `android-custom` | T2 | `apkrun-lab` | suite AndroidCustom, ≤ 90 min, with the latest custom `userdebug` image from `nightly.yml` `aosp-build` |
-| | label `t2-maintenance` or `run-t2` | `maintenance` | T2 | `apkrun-lab`, environment `signing` | suite Maintenance, ≤ 120 min: builds `ReleaseUpdateTest` 9000 and 9001, writes the local appcast, runs N → N+1 and its variants |
+| | | `third-party` | — | `xcode-27` for PRs; `apkrun-ci` on `main` | `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/check-lock.sh --apply`, `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
+| | | `fuzz-short` | T1 | disposable T1 runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code the pull request changes (§15.2) |
+| `integration.yml` | pull requests (by path or label), push to `main` | `linux-guest` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite LinuxGuest; pull requests that match the path filter below; every push to `main`; ≤ 15 min |
+| | label `t2-android` or `run-t2` | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |
+| | label `t2-android` or `run-t2` | `android-custom` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidCustom, ≤ 90 min, with the latest custom `userdebug` image from `nightly.yml` `aosp-build` |
+| | label `t2-maintenance` or `run-t2` | `maintenance` | T2 | reviewed local run for PRs; `apkrun-lab` on `main`, environment `signing` | suite Maintenance, ≤ 120 min: builds `ReleaseUpdateTest` 9000 and 9001, writes the local appcast, runs N → N+1 and its variants |
 | `nightly.yml` | daily at 01:00 UTC, and manually before a release | `aosp-build` | — | `apkrun-aosp` | `scripts/aosp/build-product.sh --variant userdebug` (§9) when `Guest/` changed since the last build. `user` builds never run on a CI runner ([environment-setup.md](environment-setup.md) §5.6) |
 | | | `t2-all` | T2 | `apkrun-lab` | all four T2 suites, including quarantined tests (their results are reported but do not fail the job) |
 | | | `gates` | T3 | `apkrun-reference` | `scripts/run-gate.sh G<n>` for every closed gate |

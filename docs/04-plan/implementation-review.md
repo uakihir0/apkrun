@@ -474,7 +474,9 @@ fingerprints, and the image key ID from supported Ed25519 fixtures under
 `Tests/Fixtures/signing/`, then scans every file in the app bundle for those
 tokens. Unsupported certificate and keystore formats fail the check closed
 until their public material can be extracted. The fixture uses the public RFC
-8032 Ed25519 test vector; no private key is stored.
+8032 Ed25519 test vector; no private key is stored. The `apkrun` and `apkrund`
+Mach-O files must contain a parseable embedded Info.plist whose
+`APKRunBuildIdentity` is exactly `release`; a missing key fails.
 
 **Reason.** Deriving tokens from the fixture directory means adding a test
 key does not require a parallel hard-coded list in the checker. The first
@@ -482,7 +484,10 @@ eight SHA-256 bytes, rendered as 16 hexadecimal characters, follow the image
 manifest key-ID format in [android-image.md](../02-design/android-image.md)
 §10.1. Scanning all bundle files catches raw binary keys and resources with
 extensions other than the usual text formats. Rejecting an unsupported
-keystore keeps a future JKS fixture from silently weakening the check.
+keystore keeps a future JKS fixture from silently weakening the check. A
+release artifact without the embedded identity is ambiguous, so the checker
+fails closed; linked Mach-O fixtures cover both a present release identity
+and the missing-key case.
 
 ## IR-020: Validate generators available in the checkout
 
@@ -493,16 +498,16 @@ keystore keeps a future JKS fixture from silently weakening the check.
 | Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §4, §15.1 |
 
 **Choice.** `codegen.sh` runs each §4 generator that is present, including
-`generate-project.sh`; the compiler-fail check in `test-swift` runs only when
-its script exists.
+`generate-project.sh`. Compiler-fail checks run as T1 on a real Apple Silicon
+Mac before merge.
 
 **Reason.** The task asks CI to validate generators already introduced while
 later tasks own generators and checks not yet in this checkout. Project
 generation is ignored output, so it validates the pinned project generator
-without creating a committed diff. The compiler-fail script is part of #061
-and has not been added to this checkout.
+without creating a committed diff. Compile-fail checks use `swiftc` and are
+classified T1 in the test strategy, so they do not run in the hosted T0 job.
 
-## IR-021: Apply the initial four required checks
+## IR-021: Apply the initial five required checks
 
 | Field | Value |
 |---|---|
@@ -510,14 +515,17 @@ and has not been added to this checkout.
 | Task | #062 |
 | Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [workflow.md](../05-development/workflow.md) §7; [build-system.md](../05-development/build-system.md) §15.1 |
 
-**Choice.** The current branch-protection baseline requires `lint`,
-`codegen`, `build`, and `test-swift`. Planned jobs in §15.1 become required
-when later tasks add them.
+**Choice.** The initial branch-protection baseline requires `workflow-policy`,
+`lint`, `codegen`, `build`, and `test-swift`. Planned jobs in §15.1 become
+required when later tasks add them.
 
-**Reason.** #062 defines these four jobs and requires them on `main`; the
-remaining rows depend on tools and test tiers owned by later tasks. This
-checkout has no Git remote, so applying repository branch protection and
-opening the negative-test pull request remain an external maintainer step.
+**Reason.** #062 defines four source-executing jobs and one metadata-only policy
+job. Source-executing jobs use fresh GitHub-hosted macOS runners so no
+persistent self-hosted machine receives untrusted checkout or execution. The
+policy job is required to detect attempts to disable those source-executing
+checks. This checkout has no Git remote, so applying repository branch
+protection and opening the negative-test pull request remain an external
+maintainer step.
 
 ## IR-022: Fail closed for unclassified and non-graph build dependencies
 
@@ -529,9 +537,14 @@ opening the negative-test pull request remain an external maintainer step.
 
 **Choice.** The module check rejects SwiftPM targets with no role in the
 documented graph, scans their sources with an empty import allowlist, and
-uses each SwiftPM target name for experiment modules whose declared source
-path is under `Experiments/`. XcodeGen app targets accept only graph products
-and the documented non-linking helper target edges; explicit SDK, framework,
+requires each graph module target to live at
+`Packages/<Module>/Sources/<Module>`. It obtains target names from every
+nested `Package.swift` under `Experiments/` using `swift package dump-package`,
+and recognizes backtick-escaped Swift imports. Production SwiftPM sources
+are scanned even under nested `Tests/` directories unless their manifest
+explicitly excludes that path; XcodeGen source roots retain their nested test
+directory exclusion. XcodeGen app targets accept only graph products and the
+documented non-linking helper target edges; explicit SDK, framework,
 Carthage, bundle, or unknown dependency forms fail. A graph-listed external
 product is required when its package is declared in the XcodeGen project.
 
@@ -540,7 +553,10 @@ allow new imports and linked products to avoid the graph check. The package
 availability condition preserves the current staged plan: `Sparkle` appears
 in the architecture graph, while its XcodeGen package is added by #057. Once
 declared in `project.yml`, the product becomes required and an omitted target
-edge fails.
+edge fails. Matching target ownership to its source path and parsing quoted
+identifiers prevents a target or import from borrowing another module's
+allowlist. Nested package manifests are parsed by SwiftPM so an allowed
+product name cannot hide an experiment target's actual module name.
 
 ## IR-023: Validate stable fields in the current Debug version envelope
 
@@ -559,3 +575,99 @@ configuration, and embedded-runtime metadata, so #001's original two-field
 example had become stale and made the required Debug smoke test fail. The
 commit stamp is generated from the checkout and can legitimately include
 `-dirty` in a local run; all other fields remain exact.
+
+## IR-024: Run pull request CI on fresh GitHub-hosted macOS VMs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [workflow.md](../05-development/workflow.md) §7; [build-system.md](../05-development/build-system.md) §15.1; [test-strategy.md](test-strategy.md) §§2–3; [environment-setup.md](../05-development/environment-setup.md) §§1, 6; [scripts/ci/check-pr-control-changes.py](../../scripts/ci/check-pr-control-changes.py) |
+
+**Choice.** The four #062 source-executing jobs use the unprivileged
+`pull_request` event and GitHub-hosted `xcode-27` runners. Each gets a fresh
+macOS VM, checks out the exact head SHA with persisted credentials disabled,
+and has only `contents: read`. The workflow does not reference secrets or a
+self-hosted runner. It runs T0 Swift tests; T1 suites and the GUI product
+smoke check run on a real Apple Silicon Mac before merge. A separate
+`pull_request_target` workflow runs `workflow-policy` for PRs to `main`; it
+checks out `refs/heads/main`, reads PR metadata through the API, and never
+checks out or executes PR code.
+
+**Reason.** GitHub's
+[secure use guidance](https://docs.github.com/en/actions/reference/security/secure-use)
+warns against checking out and running pull request code in
+`pull_request_target` and against persistent self-hosted runners for untrusted
+workflow code. A maintainer-applied label does not make executing fork source
+in that privileged event a sound boundary, so the earlier label-gate design
+was discarded before commit. The final policy workflow uses the event only to
+run trusted `main` code, and requires both a non-author approval review on the
+exact head SHA and the `ci-policy-approved` label event before changes to
+protected CI paths pass. Rename source and destination paths are checked, and
+the checker fails closed at the GitHub compare API's 300-file limit. A fresh
+hosted VM limits persistence between source-executing jobs and avoids giving fork
+code access to a reusable runner. GitHub's `xcode-27` runner entered Public
+Preview on 10 September 2026; its standard image has 3 M1 cores, 7 GB RAM, and
+14 GB SSD. Larger suites may need an adequately sized hosted runner before
+they are added to this workflow. The runner availability and resource limits
+are documented in
+[GitHub's macOS 27 runner image](https://github.com/actions/runner-images/blob/main/images/macos/macos-27-Readme.md).
+The policy self-test verifies the trusted base-branch workflow and exercises
+the metadata decision logic. Applying branch protection and validating a
+negative PR still require repository access. GitHub runner groups can pin
+workflow access to a branch; do not register the planned persistent Macs
+until the owner pins access to a separate trusted workflow on
+`refs/heads/main`. If this account cannot enforce that policy, leave those
+runners disconnected.
+
+## IR-025: Guard required CI workflows against pull request edits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [workflow.md](../05-development/workflow.md) §7; [build-system.md](../05-development/build-system.md) §15.1; [environment-setup.md](../05-development/environment-setup.md) §6; [test-strategy.md](test-strategy.md) §3 |
+
+**Choice.** The required `workflow-policy` check runs from trusted `main` on
+`pull_request_target` for PRs to `main`. It fetches the current PR metadata,
+changed paths, and review history through read-only GitHub API endpoints. It
+does not fetch or run PR source. It compares event and API head/base revisions,
+then reads the revision again after fetching changed paths and reviews. Changed
+paths come from
+[GitHub's commit comparison endpoint](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
+using the captured base and head SHA pair, so they remain bound to that
+immutable revision even if the PR temporarily moves while the check runs.
+Changes to workflow/local-action directories, CI/code-generation/test scripts,
+Xcode build-phase scripts, Gradle wrappers/build logic including `buildSrc` and `build-logic`,
+per-module Gradle lockfiles, Swift resolution and third-party lock files, tool-version
+and Xcode pins, formatter settings,
+every Swift and Cargo manifest and lockfile, Rust toolchain, Cargo config,
+rustfmt and Clippy config, every XcodeGen `project.yml`, all `Tests/` and
+`UITests/` trees, the module dependency graph, any `scripts/check-*` file, and
+named build scripts require a non-author human
+approval review on the exact current head. That same reviewer must apply
+`ci-policy-approved`. Removing the label revokes the policy check; a new
+commit, reopen, later label event, or PR edit requires the reviewer to remove
+and reapply it.
+
+**Reason.** Required GitHub Actions jobs can be bypassed if a pull request
+edits their workflow definition to skip them. Repository-local tests cannot
+protect a workflow from edits in the same pull request. The separate base-code
+job checks the control-path diff before those source-executing jobs can satisfy
+branch protection. The review and label are tied to the current commit and
+base revision; file renames check both paths, and an oversized/truncated API
+response or a revision change during verification fails closed. The compare
+endpoint returns at most 300 changed files; a 300-file response is treated as
+potentially truncated and fails closed. Requiring the approver to apply the
+label makes the policy actor explicit without granting
+the workflow broader repository permissions. The label is a narrow
+control-file approval and does not replace the normal pull request review or
+approval rules. GitHub runs `pull_request_review` workflows from the PR merge
+commit, so the policy does not subscribe to that event and execute a
+PR-controlled workflow definition in its metadata-only gate, following
+[GitHub's event security guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
+The policy label is the separate authorization state: withdrawing that
+approval requires removing the label, which reruns the trusted policy
+workflow and fails it. Branch protection independently requires an active PR
+approval. Negative workflow-edit tests and branch-protection setup remain
+unverified without a Git remote.

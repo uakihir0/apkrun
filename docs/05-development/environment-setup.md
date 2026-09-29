@@ -18,7 +18,8 @@ This guide lists every machine and tool needed to build and test APKRun, and how
 | Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization Linux VM (#064) | M3 or later, 24 GB RAM recommended | §3.3 |
 | Linux x86_64 AOSP builder | building the APKRun AOSP product (#035); as CI runner `apkrun-aosp`: nightly `userdebug` builds | ≥ 64 GB RAM, ≥ 400 GB disk | §5, §6.1 |
 | Image build machine | `user` release images, signed with the offline AOSP release keys; a maintainer-controlled AOSP builder that is never a CI runner | as the AOSP builder | §5.6 |
-| CI Macs (`apkrun-ci`) | self-hosted runners for T0/T1 and static checks on pull requests | bare-metal Apple Silicon, macOS 27 | §6 |
+| GitHub-hosted macOS runner (`xcode-27`) | repository static checks, builds, and Swift T0 tests on pull requests and pushes to `main`; one fresh VM per job | Apple Silicon M1, 3 cores, 7 GB RAM, 14 GB SSD; Public Preview since 10 September 2026 | §6 |
+| CI Macs (`apkrun-ci`) | self-hosted runners for trusted default-branch jobs and hardware-specific checks | bare-metal Apple Silicon, macOS 27 | §6 |
 | Lab Macs (`apkrun-lab`) | self-hosted runners for T2 suites, nightly T3, performance for information, nightly notarization | bare-metal Apple Silicon (M1 or later), macOS 27; at least one with M3 or later | §6 |
 | Reference Mac (`apkrun-reference`) | the lab Mac whose numbers count: gate checks, NFR numbers, the release smoke matrix, manual checklists | the reference Mac of OQ-02 (M1, 16 GB), public macOS release only | §6 |
 | Seed lab Mac (`apkrun-seed`) | a lab Mac that installs every macOS 27.x beta and release and runs the full T2 set and gate checks (R-16) | as a lab Mac | §6 |
@@ -334,19 +335,25 @@ A build log stays on the builder under `~/aosp/logs/<BUILD_NUMBER>.log`, and its
 
 | Label | Machine | Jobs |
 |---|---|---|
-| `apkrun-ci` | a bare-metal Apple Silicon Mac on macOS 27 with the §2 toolchain, a logged-in CI user, and an APFS scratch volume | T0 and T1 on every pull request, static checks, short fuzz runs ([build-system.md](build-system.md) §15) |
-| `apkrun-lab` | every lab Mac, set up as in [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.6 | T2 suites on `main` and on labelled pull requests, nightly T3, performance for information, nightly notarization |
+| `xcode-27` | GitHub-hosted Apple Silicon macOS 27 VM; fresh instance per job | pull request and `main` jobs in `ci.yml`, including static checks, builds, and T0 Swift tests ([build-system.md](build-system.md) §15); no host-dependent T1 tests |
+| `apkrun-ci` | a bare-metal Apple Silicon Mac on macOS 27 with the §2 toolchain, a logged-in CI user, and an APFS scratch volume | trusted default-branch jobs and controlled workflows only; never a `pull_request` runner |
+| `apkrun-lab` | every lab Mac, set up as in [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.6 | trusted `main` T2 suites, nightly T3, performance for information, nightly notarization |
 | `apkrun-reference` | the reference Mac (OQ-02); it also carries `apkrun-lab` | gate checks G1–G9, NFR numbers, the release smoke matrix |
 | `apkrun-seed` | the seed lab Mac | the full T2 set and the closed gate checks on each new macOS build (`macos-seed.yml`) |
 | `apkrun-aosp` | the AOSP builder of §5 (the development builder, not the image build machine) | nightly `userdebug` product builds |
 
-GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs: `cargo test` with the T1 `vsock_loopback` test, `ruff`, JSON schema checks, the F-Droid test repository build, the upstream security check, and the weekly feed re-signing. Hosted macOS runners are VMs, so they may run static checks only ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.1). `user` release images are built by a maintainer on the image build machine (§5.6), never by a runner.
+GitHub-hosted `ubuntu-latest` runners take the Linux-only jobs: `cargo test` with the T1 `vsock_loopback` test, `ruff`, JSON schema checks, the F-Droid test repository build, the upstream security check, and the weekly feed re-signing. The `xcode-27` runner is a fresh macOS 27 VM for each job and runs repository builds and Swift T0 tests. GitHub's standard macOS 27 runner entered Public Preview on 10 September 2026. Its standard image is a 3-core M1 VM with 7 GB RAM and 14 GB SSD; this resource limit is a risk for later, larger suites. Public repositories have unlimited standard-runner minutes; private repositories consume their plan's hosted-runner minutes. `user` release images are built by a maintainer on the image build machine (§5.6), never by a runner.
 
 A lab Mac has one runner slot, so it runs one job, and therefore one VM, at a time.
 
+`ci.yml` uses the unprivileged `pull_request` event. Every job runs on a fresh GitHub-hosted macOS 27 VM, checks out the exact PR head SHA with persisted Git credentials disabled, and has only `contents: read`. It does not reference repository secrets or self-hosted runners. Do not switch these jobs to `pull_request_target`: that event has elevated trust and must not check out and execute PR code.
+
+`ci-policy.yml` is the narrow exception that uses `pull_request_target` for pull requests to `main`. It checks out only `refs/heads/main`, reads pull request metadata, changed paths, and reviews through the read-only API, and never checks out or executes pull request code. Changes to CI control files pass only after a non-author human approves the current head and that same reviewer applies `ci-policy-approved` to it. The policy protects workflows, Xcode build-phase scripts, the Gradle wrapper, build scripts and `buildSrc`/`build-logic` conventions, code-generation and test scripts, dependency pins, tool-version and Xcode pins, formatter configurations, every `Package.swift` and `project.yml`, every `Tests/` and `UITests/` tree, and the module dependency graph. It compares the event's head and base with the current pull request and reads the revision again after fetching paths and reviews; any revision change during verification fails closed. Any new commit, reopening, later label event, or PR edit resets the check for control-file changes; the reviewer removes and reapplies the policy label last. Removing the approval label revokes the check. A reviewer who withdraws the policy approval must remove that label; branch protection separately requires an active PR approval. The policy does not subscribe to `pull_request_review`, whose workflow definition comes from the PR merge commit; review-event evaluation therefore cannot remain within the trusted-main workflow boundary. Require its `workflow-policy` job in branch protection. Public repository administrators must permit the `pull_request_target` workflow event under repository Actions policy before enabling this check.
+
 ### 6.2 Runner setup
 
-- Create a dedicated macOS user `apkrun-ci` with automatic login. The runner runs as a LaunchAgent in that user's GUI session, because T1/T2/T3 need Metal, windows, `SMAppService` registration, and a user launchd domain.
+- Create a dedicated macOS user `apkrun-ci` with automatic login. The runner runs as a LaunchAgent in that user's GUI session, because some future T1/T2/T3 checks need Metal, windows, `SMAppService` registration, and a user launchd domain.
+- Before registering any persistent runner with GitHub, verify the account supports runner-group workflow access pinned to the exact default-branch ref. Allow only a separate trusted workflow, for example `<owner>/<repo>/.github/workflows/ci-trusted.yml@refs/heads/main`, and exclude `ci.yml`, `ci-policy.yml`, and every pull-request workflow. GitHub documents this workflow pinning in its [runner-group access guide](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/managing-access-to-self-hosted-runners-using-groups). A pull request can change its workflow file and request `self-hosted`, so the checked-in YAML is not the security boundary. If the account cannot enforce default-branch-only workflow access, keep the runner disconnected and run host-dependent checks manually or provision disposable hardware.
 - Install the §2 toolchain for that user and run `scripts/bootstrap --check` (§7).
 - Disable sleep and screen lock (`sudo pmset -a sleep 0 displaysleep 0 disksleep 0`). Sleep and wake behavior is tested with simulated power events (T1) and manual T3 checks, not by sleeping the runner.
 - Free disk: ≥ 200 GB. The third-party cache (`ThirdParty/out/`), image bundles, and the APK corpus stay between runs.
@@ -374,7 +381,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 | Image Ed25519 signing key | environment `release` | image release and feed re-signing jobs only ([workflow.md](workflow.md) §10) |
 
 - The environment `release` accepts only tags `v*` and `image-*` and the `main` branch, and every job waits for a maintainer's approval.
-- The environment `signing` accepts `main` and pull requests with the label `t2-maintenance` or `run-t2`. A pull request job waits for a maintainer's approval before it gets the certificate.
+- The environment `signing` accepts only trusted `main` and release workflows. Pull-request jobs never receive signing credentials; maintenance tests that need Developer ID signing run manually on a reviewed commit or wait for a separately reviewed disposable signing environment.
 - Pull request jobs never see release secrets. Tests that need a secret skip with a message when it is absent, except on runners with `APKRUN_CI=1`, where the job fails instead.
 
 ---

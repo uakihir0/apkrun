@@ -39,11 +39,11 @@ This is the one test strategy for APKRun. The design documents list what each mo
 | Tier | Name | Needs | Location ([../01-architecture/modules.md](../01-architecture/modules.md) §1) | Runner | Trigger | Budget | Required to merge |
 |---|---|---|---|---|---|---|---|
 | T0 | Unit and model | only the test process: no VM, GPU, network, other processes, or XPC | next to the code (§2.2) | `swift test`, Gradle JVM `test`, `cargo test`, `pytest` | every PR, every push to `main` | ≤ 10 min | yes |
-| T1 | Component and host integration | real host resources, no VM | next to the code, `<Module>SystemTests` targets and UI test bundles (§2.3) | `swift test`, `xcodebuild test` (UI), Gradle, `fuzz-short` | every PR, every push to `main` | ≤ 20 min | yes |
-| T2 | VM integration | a real VM: the Linux test guest or an Android image | `Tests/IntegrationTests/` | `xcodebuild test -scheme IntegrationTests` on `apkrun-lab` | push to `main`; PRs with the label `run-t2`; nightly (§2.4) | per suite, ≤ 15–120 min | not a merge check; the PR that closes a task must pass the suites the task lists |
+| T1 | Component and host integration | real host resources, no VM | next to the code, `<Module>SystemTests` targets and UI test bundles (§2.3) | `swift test`, `xcodebuild test` (UI), Gradle, `fuzz-short` | trusted `main` runs when provisioned; otherwise run on a real Apple Silicon Mac before merge; PR automation needs disposable capacity | ≤ 20 min | yes |
+| T2 | VM integration | a real VM: the Linux test guest or an Android image | `Tests/IntegrationTests/` | `xcodebuild test -scheme IntegrationTests` on `apkrun-lab` | push to `main`; nightly; PRs only on disposable lab capacity (§2.4) | per suite, ≤ 15–120 min | not a merge check; the PR that closes a task must pass the suites the task lists |
 | T3 | Acceptance | T2 plus the reference Mac, the network, credentials, long runs, or a person | `Tests/AcceptanceTests/`, `Tests/PerformanceTests/`, `Tests/Compatibility/`, checklists in §8 | `nightly.yml` jobs, gate scripts, people | nightly, gate closing, release candidates | nightly ≤ 8 h | no; gate checks close gates, release checks gate releases |
 
-The CI workflows and jobs that run each tier are in [../05-development/build-system.md](../05-development/build-system.md) §15. A pull request merges only when every `ci.yml` job passes. The static checks of [build-system.md](../05-development/build-system.md) §3 run in its `lint` job. This plan adds three checks to that job: the raw-ADB lint (§3.3), the compatibility database schema check (#090), and the release checks of §3.3 (in the `build` job for the Release configuration).
+The CI workflows and jobs that run each tier are in [../05-development/build-system.md](../05-development/build-system.md) §15. A pull request merges only when every required CI check passes. The initial `ci.yml` workflow runs static checks, builds, and T0 tests on fresh GitHub-hosted VMs; it does not claim to run T1. T1 suites that need real host resources pass on a developer or reference Mac before merge, with the result linked to the pull request. PR automation for T1 requires disposable capacity. The static checks of [build-system.md](../05-development/build-system.md) §3 run in its `lint` job. This plan adds three checks to that job: the raw-ADB lint (§3.3), the compatibility database schema check (#090), and the release checks of §3.3 (in the `build` job for the Release configuration).
 
 ### 2.2 T0: unit and model tests
 
@@ -54,7 +54,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
   - Kotlin: pure Kotlin modules that use no Android API (`Guest/protocol`), in `src/test/`.
   - Rust: `cargo test` in `Guest/vsockd`.
   - Python: `Images/tools/tests/` (pytest).
-- **Runner.** Swift (`test-swift`), Kotlin (`test-guest`), and Python (`test-images`) on `apkrun-ci`. Rust (`test-linux`) on `ubuntu-latest` (§3.1). `swift test` passes on a clean checkout without Gradle, AOSP, or network (NFR-DEV-02). T0 tests that read APKs use the committed copies of §4.1.
+- **Runner.** Swift T0 (`test-swift`), Kotlin T0 (`test-guest`), and Python T0 (`test-images`) may run on fresh GitHub-hosted macOS VMs. Rust (`test-linux`) runs on `ubuntu-latest` (§3.1). `swift test` passes on a clean checkout without Gradle, AOSP, or network (NFR-DEV-02). T0 tests that read APKs use the committed copies of §4.1.
 - **Budget.** The whole T0 set finishes in 10 minutes. A single test takes at most 1 s. A slower test moves to T1 or gets faster.
 - **Flakiness.** None tolerated. No automatic retry. A flaky T0 test is a bug (§2.7).
 - **Required to merge.** Yes.
@@ -73,7 +73,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
   - Linux: the `vsock_loopback` test of `apkrun_vsockd`;
   - short fuzz runs (§7.2).
 - **Location.** Swift: SwiftPM targets `Packages/<Module>/Tests/<Module>SystemTests/` next to `<Module>Tests` ([../05-development/build-system.md](../05-development/build-system.md) §2.1). UI tests: `Apps/<App>/UITests/`. Kotlin: `src/test/` of `Guest/agentruntime`, `Guest/guestd`, and `Guest/APKRunStore`. Fuzz targets: `Packages/<Module>/Tests/<Module>Fuzz/`, with corpora in `Tests/Fixtures/fuzz/<target>/`.
-- **Runner.** `apkrun-ci`, an Apple Silicon Mac with a logged-in GUI session (§3.1). The `vsock_loopback` test runs in `test-linux` on `ubuntu-latest`. A T1 test whose resource is missing (Metal device, GUI session, APFS scratch volume) skips with a message that names the resource, so that `swift test` still works on any Mac ([build-system.md](../05-development/build-system.md) §15). CI runners always have these resources, so in CI a skip for a missing resource fails the job.
+- **Runner.** A bare-metal `apkrun-ci` Mac with a logged-in GUI session (§3.1), or the developer's Apple Silicon Mac before merge. The `vsock_loopback` test runs in `test-linux` on `ubuntu-latest`. A T1 test whose resource is missing (Metal device, GUI session, APFS scratch volume) skips with a message that names the resource, so that `swift test` still works on any Mac ([build-system.md](../05-development/build-system.md) §15). A skip for a missing resource fails the job when the test is run on its required runner.
 - **Budget.** 20 minutes for the PR set. Fuzz targets run 60 s each in the `fuzz-short` job. Long fuzz runs are T3 (§2.5).
 - **Flakiness.** No automatic retry (§2.7).
 - **Required to merge.** Yes.
@@ -92,8 +92,8 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 | AndroidCustom | custom `userdebug` image (from #035): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
 | Maintenance | APKRun N → N+1 and its variants (`ReleaseUpdateTest`), feed-driven image update | `maintenance` | ≤ 120 min |
 
-- **Triggers.** The jobs are in `integration.yml` ([build-system.md](../05-development/build-system.md) §15.1). `linux-guest` runs on every push to `main` and on pull requests that match its path filter. On pull requests, the label `t2-android` adds `android-stock` and `android-custom`, `t2-maintenance` adds `maintenance`, and `run-t2` runs all four. The nightly `t2-all` job runs all four suites on `main`.
-- **Before a task closes.** The pull request that closes a task carries `run-t2`, runs every suite the task lists, and links the result. A reviewer does not approve it without that result.
+- **Triggers.** The jobs are in `integration.yml` ([build-system.md](../05-development/build-system.md) §15.1). `linux-guest` runs on every push to `main`; its path-filtered pull-request run requires disposable lab capacity. The labels `t2-android`, `t2-maintenance`, and `run-t2` request the corresponding PR suites only when that disposable capacity exists. The nightly `t2-all` job runs all four suites on `main`.
+- **Before a task closes.** The pull request that closes a task runs every suite the task lists on disposable lab capacity, or a maintainer runs the reviewed commit on the reference Mac and links the result. A label alone never authorizes unreviewed code on a persistent self-hosted runner.
 - **New macOS builds.** The full T2 set runs on every new macOS build on the seed lab Mac (R-16, §9.4).
 - **Flakiness.** One automatic retry per test. The report marks every "passed on retry" (§2.7).
 
@@ -152,13 +152,14 @@ Runner labels and setup are in [../05-development/environment-setup.md](../05-de
 | Machine | Description | Runs |
 |---|---|---|
 | `ubuntu-latest` | a hosted Linux runner | `test-linux`: `cargo test`, the T1 `vsock_loopback` test; the F-Droid test repository build (`fdroid update`) |
-| `apkrun-ci` | a self-hosted Apple Silicon Mac, macOS 27, the toolchain of [environment-setup.md](../05-development/environment-setup.md) §2, a dedicated user `apkrun-ci` with automatic login and a GUI session, an APFS scratch volume | `ci.yml`: static checks, T0 and T1 for Swift, Kotlin, and Python, XCUITest, `fuzz-short`; nightly `fuzz-long` |
-| `apkrun-lab`, the reference Mac | the reference Mac of OQ-02 in [open-questions.md](open-questions.md) (M1, 16 GB), bare metal, set up as in §3.6 | T2, nightly T3, gate checks, NFR numbers and baselines, release smoke matrix, notarization, manual checklists |
+| `xcode-27` | a fresh GitHub-hosted macOS 27 VM | `ci.yml`: static checks, builds, and T0 Swift tests |
+| `apkrun-ci` | a self-hosted Apple Silicon Mac, macOS 27, the toolchain of [environment-setup.md](../05-development/environment-setup.md) §2, a dedicated user `apkrun-ci` with automatic login and a GUI session, an APFS scratch volume | trusted default-branch/manual T1 Swift, Kotlin, and Python checks, XCUITest, `fuzz-short`; nightly `fuzz-long` |
+| `apkrun-lab`, the reference Mac | the reference Mac of OQ-02 in [open-questions.md](open-questions.md) (M1, 16 GB), bare metal, set up as in §3.6 | trusted `main`/nightly runs, gate checks, NFR numbers and baselines, release smoke matrix, notarization, manual checklists |
 | Seed lab Mac | an extra bare-metal Apple Silicon Mac that installs every macOS 27.x beta and release | the full T2 set and the gate checks on each new build (R-16, §9.4) |
 | Information Mac (optional) | an extra lab Mac with an M3 or later chip | the nightly T2 set; its performance numbers are for information only |
 | AOSP builder | the x86-64 Linux builder of [environment-setup.md](../05-development/environment-setup.md) §5 ([../00-product/scope.md](../00-product/scope.md) §1) | custom image builds and test image bundles (§3.5) |
 
-T2 and T3 never run inside a VM (P3). Hosted macOS runners are VMs, so no tier runs on them.
+T2 and T3 never run inside a VM (P3). Hosted macOS VMs may run T0 tests that need only the process and ordinary temporary files. T1 requires its declared host resources, and T2/T3 require bare-metal Apple Silicon. A pull-request T1/T2/T3 job must use a disposable runner; until one is provisioned, run the reviewed commit manually on the required Mac and attach the result.
 
 ### 3.2 Fakes
 

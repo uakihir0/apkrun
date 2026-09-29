@@ -122,8 +122,8 @@ The template `app-compatibility.md` is added by #090. Its fields map to a databa
 | `bug`, `compatibility` | user reports (§3.2, §3.3) | templates, maintainers |
 | `security` | a security finding filed as a task (#091) | maintainers |
 | `security-review` | the pull request needs the security review of §6.3 | author or reviewer |
-| `run-t2` | run every T2 suite on the pull request | author |
-| `t2-android`, `t2-maintenance` | run only those T2 suites ([build-system.md](build-system.md) §15.1) | author |
+| `run-t2` | request every T2 suite for the pull request; execution needs disposable lab capacity or a maintainer-run reviewed commit | author |
+| `t2-android`, `t2-maintenance` | request only those T2 suites; execution needs disposable lab capacity or a maintainer-run reviewed commit ([build-system.md](build-system.md) §15.1) | author |
 | `release`, `image-release` | release issues (§9, §10) | release manager |
 | `release-blocker` | must be fixed before the named release is promoted | maintainers |
 | `nightly-failure` | a failure on `main` or in a nightly run (§7.4) | CI |
@@ -239,7 +239,7 @@ A commit that touches two modules uses the scope of the module whose behavior ch
 - Aim for at most about 600 changed lines, not counting generated files, fixtures, and lock files.
 - Documentation changes go in the same pull request as the code that needs them ([../../AGENTS.md](../../AGENTS.md) §14).
 - New third-party code is pinned in `ThirdParty/ThirdParty.lock.json` in the same pull request, with an ADR where one is needed ([build-system.md](build-system.md) §6.8, [legal-and-licensing.md](legal-and-licensing.md) §4).
-- The pull request that closes a task carries the label `run-t2`, runs every T2 suite that the task lists, and links the result ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4). Add the label when the pull request is ready, not on every push: lab Macs run one job at a time.
+- The pull request that closes a task carries the label `run-t2`, runs every T2 suite that the task lists on disposable lab capacity, or has a maintainer-run result for the reviewed commit linked ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4). Add the label when the pull request is ready, not on every push: lab Macs run one job at a time.
 
 ### 5.2 Definition of Done
 
@@ -248,7 +248,7 @@ A task is done when all of [../../AGENTS.md](../../AGENTS.md) §12 holds. The pu
 | Condition | Evidence in the pull request |
 |---|---|
 | every acceptance criterion of the task entry is met | the checked criteria in the task entry, and "Implementation steps covered" |
-| the tests of every tier the entry lists pass | the Tests table: T0 and T1 from `ci.yml`, T2 from the linked `integration.yml` run, T3 and manual results with their records |
+| the tests of every tier the entry lists pass | the Tests table: T0 from hosted CI; T1 from trusted main jobs, disposable PR capacity, or linked real-Mac manual results; T2 from the linked `integration.yml` run; T3 and other manual results with their records |
 | logging and typed errors are in place | review ([coding-conventions.md](coding-conventions.md) §5); new user-visible errors are in `errors.json` with a remediation, and the generated error catalog is committed |
 | non-obvious behavior is documented, and the design documents describe what was built | the changed documents in the diff |
 | the manual checks the entry requires are recorded | "Verification results to record": each result and where it was written |
@@ -318,13 +318,14 @@ Rules:
 
 All of these hold:
 
-1. Every `ci.yml` job passes. The initial required jobs are `lint`, `codegen`, `build`, and `test-swift`; later tasks add their jobs and make them required ([build-system.md](build-system.md) §15.1).
+1. Every required CI check passes. The initial required checks are `workflow-policy`, `lint`, `codegen`, `build`, and `test-swift`; later tasks add their jobs and make them required ([build-system.md](build-system.md) §15.1).
 2. `linux-guest` passes when its path filter matches ([build-system.md](build-system.md) §15.1).
 3. The pull request that closes a task has passed every T2 suite that the task lists, and the result is linked (§5.1).
-4. One maintainer approval (§6.1), and the security review where §6.3 requires it.
-5. No unresolved review thread.
-6. The branch is rebased on the current `main`.
-7. `main` is not blocked by a failure in the affected area (§7.4).
+4. Host-dependent T1 suites that cannot run on the hosted VM pass on a real Apple Silicon Mac, and their result is linked in the pull request.
+5. One maintainer approval (§6.1), and the security review where §6.3 requires it.
+6. No unresolved review thread.
+7. The branch is rebased on the current `main`.
+8. `main` is not blocked by a failure in the affected area (§7.4).
 
 T2 suites are not a merge check for other pull requests. T3 runs nightly and gates releases, not merges ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.1).
 
@@ -347,13 +348,13 @@ T2 suites are not a merge check for other pull requests. T3 runs nightly and gat
 |---|---|
 | Require a pull request before merging | on, 1 approval |
 | Dismiss stale approvals when new commits are pushed | on |
-| Required status checks | `lint`, `codegen`, `build`, and `test-swift`; the branch must be up to date |
+| Required status checks | `workflow-policy`, `lint`, `codegen`, `build`, and `test-swift`; the branch must be up to date |
 | Require linear history | on |
 | Require conversation resolution | on |
 | Force pushes and deletion | blocked |
 | Apply to administrators | on |
 
-`linux-guest` is not a required status check, because it runs only when its path filter matches. The reviewer checks it for matching pull requests.
+`linux-guest` is not a required status check, because it runs only when its path filter matches. The reviewer checks it for matching pull requests. `workflow-policy` is the required metadata-only check for pull requests targeting `main`; it runs trusted code from `main` and checks that CI control changes have an approved review on the current head and that the same human reviewer applied `ci-policy-approved`. Removing that label revokes the check. Any new commit, reopening, later label event, or PR edit resets this check; the reviewer removes and reapplies the policy label last. To revoke the CI-policy approval, remove the label. Branch protection separately requires an active PR approval.
 
 ### 7.4 A red `main`
 
@@ -627,7 +628,7 @@ A task may start before its dependency merges only when the dependency's pull re
 
 ### 11.4 Shared machines
 
-- Lab Macs run one job at a time. Label `run-t2` only when the pull request is ready (§5.1).
+- Lab Macs run one job at a time. Label `run-t2` only when the pull request is ready (§5.1); a label never enables unreviewed PR code on a persistent runner.
 - The reference Mac is also a lab Mac. Gate checks and release testing have priority on it. A release manager may pause the T2 queue during release testing.
 - The AOSP builder is shared. Nightly `aosp-build` has priority. A long manual build is announced in the task's issue.
 

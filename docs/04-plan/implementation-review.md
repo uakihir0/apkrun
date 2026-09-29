@@ -867,3 +867,20 @@ remain in #063 with the adapter.
 #063. Running `VZVirtualMachineConfiguration.validate()` cannot check models
 that the builder does not attach, so describing those checks as part of #002
 would claim coverage the implementation cannot provide.
+
+## IR-038: Keep VZ descriptions in the private diagnostic path
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §13–§14; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** `VMFailure` stores a `VZErrorInfo` value copy containing the
+framework error's domain, code, and localized description. The catalog-facing
+`underlying` value exposes only domain and code; the description is reserved
+for private diagnostic logs.
+
+**Reason.** Keeping the description supports useful framework diagnostics
+without adding potentially path-bearing text to user-visible error parameters
+or copied catalog details.

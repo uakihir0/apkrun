@@ -469,14 +469,22 @@ import Virtualization
             .kernelMissing(URL(fileURLWithPath: "/private/Image"))
         ]),
         VMFailure.invalidTransition(from: .stopped, to: .starting),
-        VMFailure.startFailed(underlying: UnderlyingError(domain: "VZErrorDomain", code: 2)),
-        VMFailure.stoppedWithError(underlying: UnderlyingError(domain: "VZErrorDomain", code: 3)),
-        VMFailure.pauseFailed(underlying: UnderlyingError(domain: "VZErrorDomain", code: 4)),
-        VMFailure.resumeFailed(underlying: UnderlyingError(domain: "VZErrorDomain", code: 5)),
+        VMFailure.startFailed(
+            underlying: VZErrorInfo(domain: "VZErrorDomain", code: 2, description: "private path")
+        ),
+        VMFailure.stoppedWithError(
+            underlying: VZErrorInfo(domain: "VZErrorDomain", code: 3, description: "private path")
+        ),
+        VMFailure.pauseFailed(
+            underlying: VZErrorInfo(domain: "VZErrorDomain", code: 4, description: "private path")
+        ),
+        VMFailure.resumeFailed(
+            underlying: VZErrorInfo(domain: "VZErrorDomain", code: 5, description: "private path")
+        ),
         VMFailure.stopTimedOut,
         VMFailure.vsockConnectFailed(
             port: 7000,
-            underlying: UnderlyingError(domain: "VZErrorDomain", code: 6)
+            underlying: VZErrorInfo(domain: "VZErrorDomain", code: 6, description: "private path")
         ),
         VMFailure.vsockPortNotListening(port: 7000),
         VMFailure.vsockConnectTimedOut(port: 7000),

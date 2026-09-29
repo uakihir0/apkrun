@@ -4,12 +4,12 @@ import Foundation
 /// Lifecycle and health failures owned by VirtualMachineCore.
 public enum VMFailure: APKRunError, Equatable {
     indirect case invalidTransition(from: VMState, to: VMState)
-    case startFailed(underlying: UnderlyingError)
-    case stoppedWithError(underlying: UnderlyingError)
-    case pauseFailed(underlying: UnderlyingError)
-    case resumeFailed(underlying: UnderlyingError)
+    case startFailed(underlying: VZErrorInfo)
+    case stoppedWithError(underlying: VZErrorInfo)
+    case pauseFailed(underlying: VZErrorInfo)
+    case resumeFailed(underlying: VZErrorInfo)
     case stopTimedOut
-    case vsockConnectFailed(port: UInt32, underlying: UnderlyingError)
+    case vsockConnectFailed(port: UInt32, underlying: VZErrorInfo)
     case vsockPortNotListening(port: UInt32)
     case vsockConnectTimedOut(port: UInt32)
     case virtualizationUnavailable
@@ -81,7 +81,7 @@ public enum VMFailure: APKRunError, Equatable {
             .pauseFailed(let error),
             .resumeFailed(let error),
             .vsockConnectFailed(_, let error):
-            error
+            error.underlying
         case .invalidTransition,
             .stopTimedOut,
             .vsockPortNotListening,

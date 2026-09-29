@@ -1,0 +1,12 @@
+OVERVIEW: Run Android apps as Mac apps.
+
+USAGE: apkrun <subcommand>
+
+OPTIONS:
+  --version               Show the version.
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  version                 Show APKRun version information.
+
+  See 'apkrun help <subcommand>' for detailed help.

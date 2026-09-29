@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+/build/
+APKRun.xcodeproj/
+DerivedData/
+*.xcresult
+Images/work/
+ThirdParty/out/
+Guest/build/
+Guest/local.properties
+Tests/Fixtures/AndroidApps/out/
+Tests/Fixtures/AndroidApps/local.properties

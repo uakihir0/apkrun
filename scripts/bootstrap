@@ -1,0 +1,182 @@
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+# shellcheck disable=SC1091
+source "$script_dir/tool-versions.env"
+
+check_only=0
+case "${1:-}" in
+    "")
+        ;;
+    --check)
+        check_only=1
+        ;;
+    --help|-h)
+        cat <<'HELP'
+Usage: scripts/bootstrap [--check]
+
+Install the pinned M0 tools and check the developer environment.
+With --check, inspect the environment without installing or downloading tools.
+HELP
+        exit 0
+        ;;
+    *)
+        printf 'Usage: scripts/bootstrap [--check]\n' >&2
+        exit 64
+        ;;
+esac
+
+failures=0
+
+report() {
+    local state="$1"
+    local name="$2"
+    local detail="$3"
+    printf '%-7s %s: %s\n' "$state" "$name" "$detail"
+}
+
+check_xcodegen() {
+    local executable="$repo_root/build/tools/xcodegen-$XCODEGEN_VERSION/bin/xcodegen"
+    if [[ ! -x "$executable" ]]; then
+        report FAIL "XcodeGen" "missing pinned $XCODEGEN_VERSION; run scripts/bootstrap"
+        failures=$((failures + 1))
+        return
+    fi
+
+    local found
+    found="$("$executable" --version 2>/dev/null | awk '{ print $NF }' | tail -n 1 | tr -d '\r')"
+    if [[ "$found" == "$XCODEGEN_VERSION" ]]; then
+        report ok "XcodeGen" "$found"
+    else
+        report FAIL "XcodeGen" "expected $XCODEGEN_VERSION, found ${found:-unknown}"
+        failures=$((failures + 1))
+    fi
+}
+
+install_xcodegen() {
+    local tools_dir="$repo_root/build/tools/xcodegen-$XCODEGEN_VERSION"
+    local executable="$tools_dir/bin/xcodegen"
+    if [[ -x "$executable" ]] \
+        && [[ "$("$executable" --version 2>/dev/null | awk '{ print $NF }' | tail -n 1)" == "$XCODEGEN_VERSION" ]]; then
+        return
+    fi
+
+    local temporary_dir archive extracted binary actual_sha
+    temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-xcodegen.XXXXXX")"
+    archive="$temporary_dir/xcodegen.zip"
+    extracted="$temporary_dir/extracted"
+    mkdir -p "$extracted"
+
+    if ! curl --fail --location --retry 4 --retry-all-errors \
+        --connect-timeout 20 --max-time 240 \
+        "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+        --output "$archive"; then
+        report FAIL "XcodeGen" "download failed"
+        failures=$((failures + 1))
+        rm -rf "$temporary_dir"
+        return
+    fi
+
+    actual_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
+    if [[ "$actual_sha" != "$XCODEGEN_SHA256" ]]; then
+        report FAIL "XcodeGen" "SHA-256 mismatch for pinned archive"
+        failures=$((failures + 1))
+        rm -rf "$temporary_dir"
+        return
+    fi
+
+    if ! unzip -q "$archive" -d "$extracted"; then
+        report FAIL "XcodeGen" "archive extraction failed"
+        failures=$((failures + 1))
+        rm -rf "$temporary_dir"
+        return
+    fi
+
+    binary="$(find "$extracted" -type f -name xcodegen -print -quit)"
+    if [[ -z "$binary" ]]; then
+        report FAIL "XcodeGen" "pinned archive does not contain the xcodegen executable"
+        failures=$((failures + 1))
+        rm -rf "$temporary_dir"
+        return
+    fi
+
+    mkdir -p "$tools_dir/bin"
+    install -m 0755 "$binary" "$executable"
+    rm -rf "$temporary_dir"
+}
+
+if [[ "$check_only" -eq 0 ]]; then
+    install_xcodegen
+fi
+
+machine="$(uname -m 2>/dev/null || true)"
+if [[ "$machine" != "arm64" ]]; then
+    report FAIL "Apple Silicon" "expected arm64, found ${machine:-unknown}"
+    failures=$((failures + 1))
+else
+    report ok "Apple Silicon" "$machine"
+fi
+
+macos_version="$(sw_vers -productVersion 2>/dev/null || true)"
+macos_major="${macos_version%%.*}"
+if [[ "$macos_major" =~ ^[0-9]+$ ]] && (( macos_major >= 27 )); then
+    report ok "macOS" "$macos_version"
+else
+    report FAIL "macOS" "requires 27.0 or later; found ${macos_version:-unknown}"
+    failures=$((failures + 1))
+fi
+
+expected_xcode="$(tr -d '[:space:]' < "$repo_root/.xcode-version")"
+found_xcode="$(xcodebuild -version 2>/dev/null | awk '/^Xcode / { print $2; exit }' || true)"
+if [[ "$found_xcode" == "$expected_xcode" ]]; then
+    report ok "Xcode" "$found_xcode"
+else
+    report FAIL "Xcode" "expected $expected_xcode, found ${found_xcode:-unknown}"
+    failures=$((failures + 1))
+fi
+
+swift_version="$(swift --version 2>/dev/null | sed -nE 's/.*Apple Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -n 1)"
+if [[ "$swift_version" =~ ^[0-9]+\.[0-9]+$ ]] \
+    && awk -v version="$swift_version" 'BEGIN { split(version, v, "."); exit !((v[1] > 6) || (v[1] == 6 && v[2] >= 2)) }'; then
+    report ok "Swift" "$swift_version (6.2 or later)"
+else
+    report FAIL "Swift" "requires 6.2 or later; found ${swift_version:-unknown}"
+    failures=$((failures + 1))
+fi
+
+check_xcodegen
+
+nested_virtualization="$(xcrun swift -e 'import Virtualization; print(VZGenericPlatformConfiguration.isNestedVirtualizationSupported ? "supported" : "unsupported")' 2>/dev/null || true)"
+case "$nested_virtualization" in
+    supported)
+        report ok "Nested virtualization" "supported"
+        ;;
+    unsupported)
+        report warning "Nested virtualization" "not supported on this Mac; informational"
+        ;;
+    *)
+        report warning "Nested virtualization" "could not be queried; informational"
+        ;;
+esac
+
+available_kib="$(df -Pk "$repo_root" | awk 'END { print $4 }')"
+if [[ "$available_kib" =~ ^[0-9]+$ ]] && (( available_kib >= 146484375 )); then
+    report ok "Free disk" "at least 150 GB available"
+else
+    report warning "Free disk" "less than 150 GB is available; image and graphics builds need substantial space"
+fi
+
+report skip "Metal toolchain" "added by #020"
+report skip "Homebrew packages" "added by #020"
+report skip "Python image tooling" "added by #008"
+report skip "JDK and Android SDK" "added by #015"
+report skip "Rust and cargo-ndk" "added by #034"
+report skip "protoc and buf" "added by #033"
+report skip "Android Build API key" "added by #008"
+
+if (( failures > 0 )); then
+    exit 1
+fi

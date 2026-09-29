@@ -1,0 +1,169 @@
+name: APKRun
+
+options:
+  bundleIdPrefix: io.apkrun
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  APKRun:
+    path: .
+
+settings:
+  base:
+    ARCHS: arm64
+    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    SWIFT_VERSION: "6.0"
+    ALWAYS_SEARCH_USER_PATHS: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
+    GCC_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
+  configs:
+    Debug:
+      APKRUN_BUILD_IDENTITY: dev
+    Release:
+      APKRUN_BUILD_IDENTITY: release
+
+targets:
+  APKRun:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/APKRun
+    settings:
+      base:
+        PRODUCT_NAME: APKRun
+        ENABLE_APP_SANDBOX: NO
+        INFOPLIST_FILE: Apps/APKRun/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/APKRun/APKRun.entitlements
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRun.dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRun
+    dependencies:
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: DiagnosticsCore
+      - target: apkrund
+        embed: false
+        link: false
+      - target: APKRunLauncher
+        embed: false
+        link: false
+      - target: APKRunMenuBar
+        embed: false
+        link: false
+    postCompileScripts:
+      - name: Embed CLI
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/embed-cli.sh"
+        inputFiles:
+          - "$(SRCROOT)/Package.swift"
+          - "$(SRCROOT)/Package.resolved"
+          - "$(SRCROOT)/CLI/apkrun"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/bin/apkrun"
+    postBuildScripts:
+      - name: Embed Helpers
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          helper_directory="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Helpers"
+          mkdir -p "$helper_directory"
+          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/apkrund" "$helper_directory/apkrund"
+          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/APKRunLauncher.app" "$helper_directory/APKRunLauncher.app"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers/apkrund"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers/APKRunLauncher.app"
+      - name: Embed Login Items
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          login_items_directory="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/LoginItems"
+          mkdir -p "$login_items_directory"
+          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/APKRunMenuBar.app" "$login_items_directory/APKRunMenuBar.app"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
+    scheme:
+      testTargets: []
+
+  APKRunMenuBar:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/APKRunMenuBar
+    settings:
+      base:
+        PRODUCT_NAME: APKRunMenuBar
+        ENABLE_APP_SANDBOX: NO
+        INFOPLIST_FILE: Apps/APKRunMenuBar/Info.plist
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunMenuBar.dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunMenuBar
+    dependencies:
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: DiagnosticsCore
+
+  APKRunLauncher:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/APKRunLauncher
+    settings:
+      base:
+        PRODUCT_NAME: APKRunLauncher
+        ENABLE_APP_SANDBOX: NO
+        INFOPLIST_FILE: Apps/APKRunLauncher/Info.plist
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunLauncher.dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.APKRunLauncher
+    dependencies:
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: WindowingCore
+      - package: APKRun
+        product: InputCore
+      - package: APKRun
+        product: DiagnosticsCore
+
+  apkrund:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Daemon/apkrund
+    settings:
+      base:
+        PRODUCT_NAME: apkrund
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        INFOPLIST_FILE: Daemon/apkrund/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Daemon/apkrund/apkrund.entitlements
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.apkrund.dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.apkrund
+    dependencies:
+      - package: APKRun
+        product: RuntimeHost

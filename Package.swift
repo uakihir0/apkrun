@@ -192,8 +192,22 @@ let package = Package(
         ),
         .testTarget(
             name: "VirtualMachineCoreTests",
-            dependencies: ["VirtualMachineCore"],
-            path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests"
+            dependencies: [
+                "DiagnosticsCore",
+                "DiagnosticsCoreTestSupport",
+                "VirtualMachineCore",
+                "VirtioDeviceCore",
+                "VirtualMachineCoreTestSupport",
+            ],
+            path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests",
+            resources: [
+                .copy("Fixtures/kernel-headers"),
+            ]
+        ),
+        .target(
+            name: "VirtualMachineCoreTestSupport",
+            dependencies: ["DiagnosticsCore", "VirtualMachineCore", "VirtioDeviceCore"],
+            path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreTestSupport"
         ),
         .testTarget(
             name: "GraphicsCoreTests",

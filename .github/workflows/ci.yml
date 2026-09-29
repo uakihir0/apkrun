@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APKRUN_CI: "1"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: [self-hosted, apkrun-ci]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Run repository checks
+        run: scripts/ci/run-checks.sh
+
+  codegen:
+    name: codegen
+    runs-on: [self-hosted, apkrun-ci]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Check generated files
+        run: scripts/ci/codegen.sh
+
+  build:
+    name: build
+    runs-on: [self-hosted, apkrun-ci]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Prepare result directories
+        run: mkdir -p build/ci
+      - name: Check build environment
+        run: scripts/bootstrap --check
+      - name: Generate Xcode project
+        run: scripts/generate-project.sh
+      - name: Build Swift package
+        run: swift build
+      - name: Build embedded runtime CLI
+        run: swift build --traits EmbeddedRuntime
+      - name: Build Debug products
+        run: >-
+          xcodebuild -project APKRun.xcodeproj -scheme APKRun
+          -configuration Debug -derivedDataPath build/DebugDerivedData
+          -resultBundlePath build/ci/APKRun-Debug.xcresult
+          CODE_SIGN_IDENTITY=- build
+      - name: Build Release products
+        run: >-
+          xcodebuild -project APKRun.xcodeproj -scheme APKRun
+          -configuration Release -derivedDataPath build/ReleaseDerivedData
+          -resultBundlePath build/ci/APKRun-Release.xcresult
+          CODE_SIGNING_ALLOWED=NO build
+      - name: Check Release bundle
+        run: scripts/release/check-release-build.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app
+      - name: Smoke test Debug products
+        run: scripts/smoke-products.sh build/DebugDerivedData/Build/Products/Debug
+      - name: Upload build results on failure
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: build-results
+          path: build/ci/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+  test-swift:
+    name: test-swift
+    runs-on: [self-hosted, apkrun-ci]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Prepare result directory
+        run: mkdir -p build/ci
+      - name: Run Swift T0 and T1 tests
+        run: swift test --xunit-output build/ci/swift-tests.xml
+      - name: Run compiler-fail checks when available
+        if: ${{ hashFiles('scripts/check-compile-fail.sh') != '' }}
+        run: scripts/check-compile-fail.sh
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: swift-test-results
+          path: |
+            build/ci/*.xcresult
+            build/ci/*.xml
+          if-no-files-found: warn
+          retention-days: 14

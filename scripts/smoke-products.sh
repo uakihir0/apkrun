@@ -46,7 +46,36 @@ if [[ "$version_output" != "apkrun 0.1.0 (1)" ]]; then
 fi
 
 json_output="$("$cli" version --json)"
-if [[ "$json_output" != '{"schemaVersion":1,"result":{"cli":{"version":"0.1.0","build":"1"}}}' ]]; then
+if ! python3 - "$json_output" <<'PY'
+import json
+import re
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+    cli = payload["result"]["cli"]
+except (KeyError, TypeError, json.JSONDecodeError):
+    raise SystemExit("invalid version JSON envelope")
+
+expected = {
+    "version": "0.1.0",
+    "build": "1",
+    "buildIdentity": "dev",
+    "configuration": "debug",
+    "embeddedRuntime": True,
+}
+if payload.get("schemaVersion") != 1:
+    raise SystemExit("unexpected version JSON schema")
+if any(cli.get(key) != value for key, value in expected.items()):
+    raise SystemExit("unexpected version JSON build fields")
+if set(cli) != {*expected, "commit"}:
+    raise SystemExit("unexpected version JSON keys")
+if not isinstance(cli.get("commit"), str) or re.fullmatch(
+    r"[0-9a-f]{7}(?:-dirty)?", cli["commit"]
+) is None:
+    raise SystemExit("invalid version JSON commit stamp")
+PY
+then
     printf 'Unexpected apkrun JSON output: %s\n' "$json_output" >&2
     exit 1
 fi

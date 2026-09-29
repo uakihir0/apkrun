@@ -318,7 +318,7 @@ Rules:
 
 All of these hold:
 
-1. Every `ci.yml` job passes: `lint`, `codegen`, `build`, `test-swift`, `test-guest`, `test-images`, `test-linux`, `third-party`, and `fuzz-short` ([build-system.md](build-system.md) §15.1).
+1. Every `ci.yml` job passes. The initial required jobs are `lint`, `codegen`, `build`, and `test-swift`; later tasks add their jobs and make them required ([build-system.md](build-system.md) §15.1).
 2. `linux-guest` passes when its path filter matches ([build-system.md](build-system.md) §15.1).
 3. The pull request that closes a task has passed every T2 suite that the task lists, and the result is linked (§5.1).
 4. One maintainer approval (§6.1), and the security review where §6.3 requires it.
@@ -347,7 +347,7 @@ T2 suites are not a merge check for other pull requests. T3 runs nightly and gat
 |---|---|
 | Require a pull request before merging | on, 1 approval |
 | Dismiss stale approvals when new commits are pushed | on |
-| Required status checks | the nine `ci.yml` jobs of §7.1; the branch must be up to date |
+| Required status checks | `lint`, `codegen`, `build`, and `test-swift`; the branch must be up to date |
 | Require linear history | on |
 | Require conversation resolution | on |
 | Force pushes and deletion | blocked |

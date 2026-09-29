@@ -601,6 +601,8 @@ CI runs on GitHub Actions with the runners of [environment-setup.md](environment
 
 ### 15.1 Workflows and jobs
 
+The table describes the planned workflow as its inputs arrive. #062 creates the initial `lint`, `codegen`, `build`, and `test-swift` jobs; later tasks add the jobs for components and test tiers they introduce. Every job present in `ci.yml` is required by branch protection.
+
 | Workflow | Trigger | Job | Tier | Runner | Content |
 |---|---|---|---|---|---|
 | `ci.yml` | every pull request, push to `main` | `lint` | — | `apkrun-ci` | §3 checks, `buf lint`, `buf breaking` |

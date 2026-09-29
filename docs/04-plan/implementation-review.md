@@ -417,3 +417,145 @@ process from retaining diagnostic output indefinitely. Distinguishing
 readable output from process exit status avoids discarding useful partial
 records and avoids claiming a mirror fallback when no mirror file was
 accessible.
+
+## IR-017: Normalize locked repository URLs conservatively
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §6.1 |
+
+**Choice.** Lock validation accepts only parseable HTTPS repository URLs
+without credentials, queries, or fragments. It normalizes the scheme and
+host, removes trailing slashes and a trailing `.git` suffix, and preserves
+repository path casing and all other path characters. It removes an explicit
+default HTTPS port (`443`).
+
+**Reason.** Git hosting treats the host as case-insensitive, while repository
+paths identify the project and should compare exactly. Removing every `.git`
+substring or lowercasing the complete URL could make a different repository
+appear to match the manifest. A fallback that lowercased unparsable URLs
+could also make different malformed paths appear equal; parseable URLs with
+an empty host or an out-of-range port must fail too. Hostile review
+reproduced these cases; the lock fixtures now ensure they fail. Normalizing
+port 443 allows the equivalent HTTPS URLs with and without that default port
+to match.
+
+## IR-018: Read dependency declarations from normalized tool output
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §6.1 |
+
+**Choice.** The lock checker obtains Swift package declarations from
+`swift package dump-package` and XcodeGen package declarations from its pinned
+`dump --type parsed-json` output.
+
+**Reason.** Searching manifest text for `.package(...)` can mistake comments,
+multiline strings, variables, or raw string literals for active declarations,
+and can miss values brought in by XcodeGen includes. The official tools
+evaluate their supported syntax and expose resolved declaration fields, so
+the checker compares actual packages and exact requirements rather than
+approximate source text.
+
+## IR-019: Derive release test-key markers from committed fixtures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §3.1; [test-strategy.md](test-strategy.md) §3.3 |
+
+**Choice.** The Release checker derives searchable key encodings, SHA-256
+fingerprints, and the image key ID from supported Ed25519 fixtures under
+`Tests/Fixtures/signing/`, then scans every file in the app bundle for those
+tokens. Unsupported certificate and keystore formats fail the check closed
+until their public material can be extracted. The fixture uses the public RFC
+8032 Ed25519 test vector; no private key is stored.
+
+**Reason.** Deriving tokens from the fixture directory means adding a test
+key does not require a parallel hard-coded list in the checker. The first
+eight SHA-256 bytes, rendered as 16 hexadecimal characters, follow the image
+manifest key-ID format in [android-image.md](../02-design/android-image.md)
+§10.1. Scanning all bundle files catches raw binary keys and resources with
+extensions other than the usual text formats. Rejecting an unsupported
+keystore keeps a future JKS fixture from silently weakening the check.
+
+## IR-020: Validate generators available in the checkout
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §4, §15.1 |
+
+**Choice.** `codegen.sh` runs each §4 generator that is present, including
+`generate-project.sh`; the compiler-fail check in `test-swift` runs only when
+its script exists.
+
+**Reason.** The task asks CI to validate generators already introduced while
+later tasks own generators and checks not yet in this checkout. Project
+generation is ignored output, so it validates the pinned project generator
+without creating a committed diff. The compiler-fail script is part of #061
+and has not been added to this checkout.
+
+## IR-021: Apply the initial four required checks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [workflow.md](../05-development/workflow.md) §7; [build-system.md](../05-development/build-system.md) §15.1 |
+
+**Choice.** The current branch-protection baseline requires `lint`,
+`codegen`, `build`, and `test-swift`. Planned jobs in §15.1 become required
+when later tasks add them.
+
+**Reason.** #062 defines these four jobs and requires them on `main`; the
+remaining rows depend on tools and test tiers owned by later tasks. This
+checkout has no Git remote, so applying repository branch protection and
+opening the negative-test pull request remain an external maintainer step.
+
+## IR-022: Fail closed for unclassified and non-graph build dependencies
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [modules.md](../01-architecture/modules.md) §3 |
+
+**Choice.** The module check rejects SwiftPM targets with no role in the
+documented graph, scans their sources with an empty import allowlist, and
+uses each SwiftPM target name for experiment modules whose declared source
+path is under `Experiments/`. XcodeGen app targets accept only graph products
+and the documented non-linking helper target edges; explicit SDK, framework,
+Carthage, bundle, or unknown dependency forms fail. A graph-listed external
+product is required when its package is declared in the XcodeGen project.
+
+**Reason.** Skipping unknown target roles or XcodeGen dependency shapes would
+allow new imports and linked products to avoid the graph check. The package
+availability condition preserves the current staged plan: `Sparkle` appears
+in the architecture graph, while its XcodeGen package is added by #057. Once
+declared in `project.yml`, the product becomes required and an omitted target
+edge fails.
+
+## IR-023: Validate stable fields in the current Debug version envelope
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #001 and #062; [build-system.md](../05-development/build-system.md) §15.1 |
+
+**Choice.** The product smoke check validates the complete current CLI JSON
+key set and stable Debug values, while accepting either a clean seven-digit
+commit stamp or the same stamp with `-dirty`.
+
+**Reason.** #061 extended the version envelope with build identity, commit,
+configuration, and embedded-runtime metadata, so #001's original two-field
+example had become stale and made the required Debug smoke test fail. The
+commit stamp is generated from the checkout and can legitimately include
+`-dirty` in a local run; all other fields remain exact.

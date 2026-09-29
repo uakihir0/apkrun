@@ -159,7 +159,7 @@ Out of scope:
    - `Support/Version.swift` reads `CFBundleShortVersionString`, `CFBundleVersion`, and `APKRunBuildIdentity` from `Bundle.main.infoDictionary`, which the embedded Info.plist fills (step 6). #061 replaces this with `BuildInfo`.
    - Outputs:
      - `apkrun version` prints `apkrun 0.1.0 (1)`.
-     - `apkrun version --json` prints `{"schemaVersion":1,"result":{"cli":{"version":"0.1.0","build":"1"}}}`.
+     - `apkrun version --json` prints the JSON envelope with version, build, build identity, commit, configuration, and embedded-runtime fields (the latter four are added by #061; see the golden at `CLI/apkrun/Tests/Golden/version-json.txt`).
      - `apkrun --version` prints `0.1.0`.
      - Without an embedded Info.plist (a plain `swift build`), the version is `0.0.0-dev` and the build is `0`.
    - The apkrund and image versions of [cli.md](../../02-design/cli.md) §4.1 are added when apkrund is reachable (#032).

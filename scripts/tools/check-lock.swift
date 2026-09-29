@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 struct CheckFailure: Error, CustomStringConvertible {
@@ -11,9 +12,19 @@ struct LockPackage {
     let revision: String
 }
 
+struct PackageDeclaration {
+    let repository: String
+    let exactVersion: String?
+    let source: URL
+}
+
 func readJSON(_ path: URL) throws -> Any {
-    let data = try Data(contentsOf: path)
-    return try JSONSerialization.jsonObject(with: data)
+    do {
+        let data = try Data(contentsOf: path)
+        return try JSONSerialization.jsonObject(with: data)
+    } catch {
+        throw CheckFailure(description: "\(path.path): invalid JSON: \(error)")
+    }
 }
 
 func string(_ value: Any?) -> String? {
@@ -24,38 +35,263 @@ func arrayOfStrings(_ value: Any?) -> [String]? {
     value as? [String]
 }
 
+func repositoryPort(in value: String) -> (present: Bool, port: Int?)? {
+    guard let schemeEnd = value.range(of: "://")?.upperBound else { return nil }
+    let remainder = value[schemeEnd...]
+    let authorityEnd = remainder.firstIndex(where: { "/?#".contains($0) }) ?? remainder.endIndex
+    let authority = remainder[..<authorityEnd]
+    guard !authority.isEmpty, !authority.contains("@") else { return nil }
+
+    let portText: Substring
+    if authority.first == "[" {
+        guard let closingBracket = authority.firstIndex(of: "]") else { return nil }
+        let suffix = authority[authority.index(after: closingBracket)...]
+        if suffix.isEmpty { return (false, nil) }
+        guard suffix.first == ":" else { return nil }
+        portText = suffix.dropFirst()
+    } else if let colon = authority.lastIndex(of: ":") {
+        guard !authority[..<colon].contains(":") else { return nil }
+        portText = authority[authority.index(after: colon)...]
+    } else {
+        return (false, nil)
+    }
+
+    guard !portText.isEmpty,
+        portText.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+        let port = Int(portText),
+        (1...65_535).contains(port)
+    else {
+        return nil
+    }
+    return (true, port)
+}
+
+func normalizedRepositoryURL(_ value: String) -> String? {
+    guard let explicitPort = repositoryPort(in: value) else { return nil }
+    guard var components = URLComponents(string: value),
+        let scheme = components.scheme,
+        let host = components.host,
+        !host.isEmpty,
+        components.url != nil,
+        !components.percentEncodedPath.isEmpty,
+        components.user == nil,
+        components.password == nil,
+        components.query == nil,
+        components.fragment == nil,
+        scheme.caseInsensitiveCompare("https") == .orderedSame
+    else {
+        return nil
+    }
+    guard components.port == explicitPort.port else { return nil }
+
+    components.scheme = "https"
+    components.host = host.lowercased()
+    if explicitPort.port == 443 {
+        components.port = nil
+    }
+    var path = components.percentEncodedPath
+    while path.hasSuffix("/") {
+        path.removeLast()
+    }
+    guard !path.isEmpty else { return nil }
+    if path.hasSuffix(".git") {
+        path = String(path.dropLast(4))
+    }
+    guard !path.isEmpty else { return nil }
+    components.percentEncodedPath = path
+    return components.string
+}
+
 func identityKey(_ value: String) -> String {
-    value.lowercased().replacingOccurrences(of: ".git", with: "")
+    value.lowercased()
 }
 
 func safeRelativePath(_ value: String) -> Bool {
     guard !value.isEmpty, !value.hasPrefix("/") else { return false }
-    return value.split(separator: "/").allSatisfy { $0 != "." && $0 != ".." }
+    return value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+        !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\")
+    }
 }
 
-func exactManifestVersion(
-    repository: String,
-    manifest: String
-) -> String? {
-    let packageBlocks = manifest.components(separatedBy: ".package(").dropFirst()
-    for block in packageBlocks where block.localizedCaseInsensitiveContains(repository) {
-        guard
-            let exactRange = block.range(
-                of: #"exact\s*:\s*"([^"]+)""#,
-                options: .regularExpression
-            )
-        else {
-            continue
-        }
-        let exactClause = String(block[exactRange])
-        guard let quote = exactClause.firstIndex(of: "\""),
-            let endQuote = exactClause[exactClause.index(after: quote)...].firstIndex(of: "\"")
-        else {
-            continue
-        }
-        return String(exactClause[exactClause.index(after: quote)..<endQuote])
+func runJSONCommand(
+    executable: URL,
+    arguments: [String],
+    workingDirectory: URL,
+    inputFile: URL
+) throws -> Any {
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = arguments
+    process.currentDirectoryURL = workingDirectory
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = output
+
+    do {
+        try process.run()
+    } catch {
+        throw CheckFailure(
+            description: "\(inputFile.path): couldn't run \(executable.path): \(error)"
+        )
     }
-    return nil
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let details = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        throw CheckFailure(
+            description: "\(inputFile.path): command failed (\(process.terminationStatus)): \(details)"
+        )
+    }
+    do {
+        return try JSONSerialization.jsonObject(with: data)
+    } catch {
+        throw CheckFailure(description: "\(inputFile.path): command returned invalid JSON: \(error)")
+    }
+}
+
+func swiftPackageDeclarations(root: URL, manifest: URL) throws -> [PackageDeclaration] {
+    let dump = try runJSONCommand(
+        executable: URL(fileURLWithPath: "/usr/bin/xcrun"),
+        arguments: ["swift", "package", "dump-package", "--package-path", root.path],
+        workingDirectory: root,
+        inputFile: manifest
+    )
+    guard let package = dump as? [String: Any],
+        let dependencies = package["dependencies"] as? [[String: Any]]
+    else {
+        throw CheckFailure(description: "\(manifest.path): swift package dump-package omitted dependencies")
+    }
+
+    var declarations: [PackageDeclaration] = []
+    for dependency in dependencies {
+        guard let sourceControl = dependency["sourceControl"] as? [[String: Any]] else {
+            continue
+        }
+        for package in sourceControl {
+            guard let location = package["location"] as? [String: Any],
+                let remote = location["remote"] as? [[String: Any]],
+                let repository = remote.first?["urlString"] as? String,
+                let requirement = package["requirement"] as? [String: Any]
+            else {
+                throw CheckFailure(
+                    description: "\(manifest.path): malformed source-control package in SwiftPM dump"
+                )
+            }
+            let exactVersions = requirement["exact"] as? [String]
+            declarations.append(
+                PackageDeclaration(
+                    repository: repository,
+                    exactVersion: exactVersions?.count == 1 ? exactVersions?.first : nil,
+                    source: manifest
+                )
+            )
+        }
+    }
+    return declarations
+}
+
+func capturedVersion(from versions: String) -> String? {
+    guard let expression = try? NSRegularExpression(pattern: #"(?m)^XCODEGEN_VERSION=([0-9.]+)$"#),
+        let match = expression.firstMatch(
+            in: versions,
+            range: NSRange(versions.startIndex..<versions.endIndex, in: versions)
+        ),
+        let range = Range(match.range(at: 1), in: versions)
+    else {
+        return nil
+    }
+    return String(versions[range])
+}
+
+func xcodegenExecutable(root: URL) -> URL? {
+    if let configuredPath = ProcessInfo.processInfo.environment["APKRUN_XCODEGEN"] {
+        let configured = URL(fileURLWithPath: configuredPath)
+        return FileManager.default.isExecutableFile(atPath: configured.path) ? configured : nil
+    }
+    let versionsURL = root.appending(path: "scripts/tool-versions.env")
+    guard let versions = try? String(contentsOf: versionsURL, encoding: .utf8),
+        let version = capturedVersion(from: versions)
+    else {
+        return nil
+    }
+    let path = root.appending(path: "build/tools/xcodegen-\(version)/bin/xcodegen")
+    return FileManager.default.isExecutableFile(atPath: path.path) ? path : nil
+}
+
+func projectPackageDeclarations(
+    root: URL,
+    project: URL,
+    executable: URL
+) throws -> [PackageDeclaration] {
+    let dump = try runJSONCommand(
+        executable: executable,
+        arguments: [
+            "dump", "--type", "parsed-json", "--spec", project.path, "--project-root", root.path,
+        ],
+        workingDirectory: root,
+        inputFile: project
+    )
+    guard let projectSpec = dump as? [String: Any],
+        let packages = projectSpec["packages"] as? [String: Any]
+    else {
+        throw CheckFailure(description: "\(project.path): parsed XcodeGen spec omitted packages")
+    }
+
+    return packages.compactMap { _, value in
+        guard let package = value as? [String: Any] else {
+            return nil
+        }
+        let repository =
+            string(package["url"])
+            ?? string(package["git"])
+            ?? string(package["github"]).map { "https://github.com/\($0)" }
+        guard let repository else { return nil }
+        return PackageDeclaration(
+            repository: repository,
+            exactVersion: string(package["exactVersion"]) ?? string(package["version"]),
+            source: project
+        )
+    }
+}
+
+func isDescendant(_ candidate: URL, of directory: URL) -> Bool {
+    let candidatePath = candidate.resolvingSymlinksInPath().standardizedFileURL.path
+    let directoryPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
+    let prefix = directoryPath.hasSuffix("/") ? directoryPath : "\(directoryPath)/"
+    return candidatePath.hasPrefix(prefix)
+}
+
+func hasSymlinkComponent(_ path: URL, within root: URL) -> Bool {
+    let rootPath = root.standardizedFileURL.path
+    let pathValue = path.standardizedFileURL.path
+    let prefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
+    guard pathValue.hasPrefix(prefix) else { return true }
+
+    var current = root
+    for component in pathValue.dropFirst(prefix.count).split(separator: "/") {
+        current.appendPathComponent(String(component))
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: current.path)) != nil {
+            return true
+        }
+    }
+    return false
+}
+
+func isSafeFile(_ file: URL, under directory: URL, within root: URL) -> Bool {
+    guard !hasSymlinkComponent(directory, within: root),
+        !hasSymlinkComponent(file, within: root)
+    else {
+        return false
+    }
+    let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
+    guard isDescendant(directory, of: resolvedRoot),
+        isDescendant(file, of: directory)
+    else {
+        return false
+    }
+    var isDirectory = ObjCBool(false)
+    return FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory)
+        && !isDirectory.boolValue
 }
 
 func decodePackages(_ object: Any, path: URL) throws -> [LockPackage] {
@@ -65,6 +301,7 @@ func decodePackages(_ object: Any, path: URL) throws -> [LockPackage] {
         throw CheckFailure(description: "\(path.path): expected a pins array")
     }
 
+    var identities: Set<String> = []
     return try pins.map { pin in
         guard let identity = string(pin["identity"]),
             let location = string(pin["location"]),
@@ -73,6 +310,9 @@ func decodePackages(_ object: Any, path: URL) throws -> [LockPackage] {
             let revision = string(state["revision"])
         else {
             throw CheckFailure(description: "\(path.path): malformed Swift package pin")
+        }
+        guard identities.insert(identityKey(identity)).inserted else {
+            throw CheckFailure(description: "\(path.path): duplicate Swift package pin '\(identity)'")
         }
         return LockPackage(
             identity: identity,
@@ -87,6 +327,7 @@ func check(root: URL) throws -> [String] {
     let lockURL = root.appending(path: "ThirdParty/ThirdParty.lock.json")
     let resolvedURL = root.appending(path: "Package.resolved")
     let manifestURL = root.appending(path: "Package.swift")
+    let projectURL = root.appending(path: "project.yml")
     guard FileManager.default.fileExists(atPath: lockURL.path) else {
         throw CheckFailure(description: "\(lockURL.path): file is missing")
     }
@@ -98,15 +339,29 @@ func check(root: URL) throws -> [String] {
     }
 
     guard let lock = try readJSON(lockURL) as? [String: Any],
-        let schemaVersion = lock["schemaVersion"] as? Int,
-        schemaVersion == 1,
+        let schemaVersion = lock["schemaVersion"] as? NSNumber,
+        CFGetTypeID(schemaVersion) != CFBooleanGetTypeID(),
+        ["c", "s", "i", "l", "q"].contains(String(cString: schemaVersion.objCType)),
+        schemaVersion.intValue == 1,
         let components = lock["components"] as? [[String: Any]]
     else {
         throw CheckFailure(description: "\(lockURL.path): expected schemaVersion 1 and components")
     }
 
     let resolvedPackages = try decodePackages(try readJSON(resolvedURL), path: resolvedURL)
-    let manifest = try String(contentsOf: manifestURL, encoding: .utf8)
+    var packageDeclarations = try swiftPackageDeclarations(root: root, manifest: manifestURL)
+    if FileManager.default.fileExists(atPath: projectURL.path) {
+        guard let xcodegen = xcodegenExecutable(root: root) else {
+            throw CheckFailure(
+                description: "\(projectURL.path): pinned XcodeGen is missing; run scripts/bootstrap"
+            )
+        }
+        packageDeclarations += try projectPackageDeclarations(
+            root: root,
+            project: projectURL,
+            executable: xcodegen
+        )
+    }
     var failures: [String] = []
     var names: Set<String> = []
     var swiftPMNames: Set<String> = []
@@ -114,8 +369,8 @@ func check(root: URL) throws -> [String] {
         "source", "prebuilt", "vendored", "swiftpm", "gradle", "cargo",
     ]
     let allowedShips: Set<String> = ["app", "image", "tooling", "derived"]
-    let lowerHex40 = try NSRegularExpression(pattern: "^[0-9a-f]{40}$")
-    let hex64 = try NSRegularExpression(pattern: "^[0-9a-fA-F]{64}$")
+    let lowerHex40 = try NSRegularExpression(pattern: "^[0-9a-f]{40}\\z")
+    let hex64 = try NSRegularExpression(pattern: "^[0-9a-fA-F]{64}\\z")
 
     func matches(_ expression: NSRegularExpression, _ value: String) -> Bool {
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
@@ -159,7 +414,9 @@ func check(root: URL) throws -> [String] {
         }
 
         let licenseFiles = arrayOfStrings(component["licenseFiles"]) ?? []
-        if licenseFiles.isEmpty {
+        if component["licenseFiles"] == nil || arrayOfStrings(component["licenseFiles"]) == nil {
+            failures.append("\(lockURL.path): \(label) requires a 'licenseFiles' string array")
+        } else if licenseFiles.isEmpty {
             failures.append("\(lockURL.path): \(label) is missing 'licenseFiles'")
         }
         for licenseFile in licenseFiles {
@@ -168,20 +425,25 @@ func check(root: URL) throws -> [String] {
                 continue
             }
             let licenseURL = root.appending(path: "ThirdParty/licenses/\(name)/\(licenseFile)")
-            var isDirectory = ObjCBool(false)
-            if !FileManager.default.fileExists(atPath: licenseURL.path, isDirectory: &isDirectory)
-                || isDirectory.boolValue
-            {
+            if !FileManager.default.fileExists(atPath: licenseURL.path) {
                 failures.append("\(lockURL.path): \(label) license file is missing: \(licenseURL.path)")
+            } else if !isSafeFile(
+                licenseURL,
+                under: root.appending(path: "ThirdParty/licenses/\(name)"),
+                within: root
+            ) {
+                failures.append(
+                    "\(lockURL.path): \(label) license path is not a regular file within its allowed directory: \(licenseURL.path)"
+                )
             }
         }
 
         if arrayOfStrings(component["buildFlags"]) == nil {
-            failures.append("\(lockURL.path): \(label) is missing a 'buildFlags' array")
+            failures.append("\(lockURL.path): \(label) requires a 'buildFlags' string array")
         }
         let patches = arrayOfStrings(component["patches"]) ?? []
-        if component["patches"] == nil {
-            failures.append("\(lockURL.path): \(label) is missing a 'patches' array")
+        if component["patches"] == nil || arrayOfStrings(component["patches"]) == nil {
+            failures.append("\(lockURL.path): \(label) requires a 'patches' string array")
         }
         for patch in patches {
             guard safeRelativePath(patch), patch.hasPrefix("\(name)/") else {
@@ -189,20 +451,25 @@ func check(root: URL) throws -> [String] {
                 continue
             }
             let patchURL = root.appending(path: "ThirdParty/patches/\(patch)")
-            var isDirectory = ObjCBool(false)
-            if !FileManager.default.fileExists(atPath: patchURL.path, isDirectory: &isDirectory)
-                || isDirectory.boolValue
-            {
+            if !FileManager.default.fileExists(atPath: patchURL.path) {
                 failures.append("\(lockURL.path): \(label) patch is missing: \(patchURL.path)")
+            } else if !isSafeFile(
+                patchURL,
+                under: root.appending(path: "ThirdParty/patches/\(name)"),
+                within: root
+            ) {
+                failures.append(
+                    "\(lockURL.path): \(label) patch is not a regular file within its allowed directory: \(patchURL.path)"
+                )
             }
         }
 
         let repository = string(component["repository"])
         let commit = string(component["commit"])
         if ["source", "vendored", "swiftpm"].contains(kind),
-            repository?.hasPrefix("https://") != true
+            repository.flatMap(normalizedRepositoryURL) == nil
         {
-            failures.append("\(lockURL.path): \(label) requires an HTTPS repository")
+            failures.append("\(lockURL.path): \(label) requires a valid HTTPS repository URL")
         }
         if let commit, !matches(lowerHex40, commit) {
             failures.append("\(lockURL.path): \(label) commit must be 40 lowercase hexadecimal characters")
@@ -216,8 +483,8 @@ func check(root: URL) throws -> [String] {
             failures.append("\(lockURL.path): \(label) sha256 must be 64 hexadecimal characters")
         }
         if kind == "prebuilt" {
-            if string(component["url"])?.hasPrefix("https://") != true {
-                failures.append("\(lockURL.path): \(label) requires an HTTPS download URL")
+            if string(component["url"]).flatMap(normalizedRepositoryURL) == nil {
+                failures.append("\(lockURL.path): \(label) requires a valid HTTPS download URL")
             }
             if string(component["sha256"]) == nil {
                 failures.append("\(lockURL.path): \(label) is missing its sha256")
@@ -239,7 +506,7 @@ func check(root: URL) throws -> [String] {
                 "\(resolvedURL.path): \(name) revision \(resolved.revision) does not match lock commit \(commit ?? "<missing>")"
             )
         }
-        if identityKey(resolved.location) != identityKey(repository) {
+        if normalizedRepositoryURL(resolved.location) != normalizedRepositoryURL(repository) {
             failures.append(
                 "\(resolvedURL.path): \(name) repository \(resolved.location) does not match lock repository \(repository)"
             )
@@ -249,18 +516,47 @@ func check(root: URL) throws -> [String] {
                 "\(resolvedURL.path): \(name) version \(resolved.version) does not match lock version \(string(component["version"]) ?? "<missing>")"
             )
         }
-        if let manifestVersion = exactManifestVersion(
-            repository: repository,
-            manifest: manifest
-        ) {
-            if manifestVersion != string(component["version"]) {
-                failures.append(
-                    "\(manifestURL.path): \(name) exact version \(manifestVersion) does not match lock version \(string(component["version"]) ?? "<missing>")"
-                )
-            }
-        } else {
+    }
+
+    let swiftPMComponents = components.filter { string($0["kind"]) == "swiftpm" }
+    for declaration in packageDeclarations {
+        let component = swiftPMComponents.first {
+            normalizedRepositoryURL(string($0["repository"]) ?? "")
+                == normalizedRepositoryURL(declaration.repository)
+                && normalizedRepositoryURL(declaration.repository) != nil
+        }
+        guard let component else {
             failures.append(
-                "\(manifestURL.path): \(name) must use an exact version requirement"
+                "\(declaration.source.path): Swift package '\(declaration.repository)' has no ThirdParty lock entry"
+            )
+            continue
+        }
+        let name = string(component["name"]) ?? declaration.repository
+        guard let exactVersion = declaration.exactVersion else {
+            failures.append(
+                "\(declaration.source.path): \(name) must use an exact version requirement"
+            )
+            continue
+        }
+        if exactVersion != string(component["version"]) {
+            failures.append(
+                "\(declaration.source.path): \(name) exact version \(exactVersion) does not match lock version \(string(component["version"]) ?? "<missing>")"
+            )
+        }
+    }
+
+    for component in swiftPMComponents {
+        guard let name = string(component["name"]),
+            let repository = string(component["repository"])
+        else {
+            continue
+        }
+        if !packageDeclarations.contains(where: {
+            normalizedRepositoryURL($0.repository) == normalizedRepositoryURL(repository)
+                && normalizedRepositoryURL($0.repository) != nil
+        }) {
+            failures.append(
+                "\(manifestURL.path): Swift package '\(name)' must be declared in Package.swift or project.yml"
             )
         }
     }

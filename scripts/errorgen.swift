@@ -1,5 +1,4 @@
 #!/usr/bin/env swift
-
 import Foundation
 
 struct CatalogVariant {
@@ -77,7 +76,7 @@ func validateNonemptyTexts(_ values: [String: String]?, _ context: String) {
 
 func nonemptyText(_ value: String?) -> String? {
     guard let value,
-          !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
         return nil
     }
@@ -87,8 +86,8 @@ func nonemptyText(_ value: String?) -> String? {
 func loadEntries(release: Bool) throws -> [CatalogEntry] {
     let data = try Data(contentsOf: jsonURL)
     guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          document["version"] as? Int == 1,
-          let rawEntries = document["errors"] as? [[String: Any]]
+        document["version"] as? Int == 1,
+        let rawEntries = document["errors"] as? [[String: Any]]
     else {
         fail("errors.json must have version 1 and an errors array")
     }
@@ -98,10 +97,11 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
     var codes = Set<String>()
     for raw in rawEntries {
         let code = requireString(raw["code"], "code", "entry")
-        guard code.range(
-            of: #"^[A-Za-z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*$"#,
-            options: .regularExpression
-        ) != nil
+        guard
+            code.range(
+                of: #"^[A-Za-z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*$"#,
+                options: .regularExpression
+            ) != nil
         else {
             fail("\(code) is not a valid qualified error code")
         }
@@ -112,7 +112,7 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
             fail("duplicate code \(code)")
         }
         guard let parameters = raw["parameters"] as? [String],
-              Set(parameters).count == parameters.count
+            Set(parameters).count == parameters.count
         else {
             fail("\(code).parameters must be a unique string array")
         }
@@ -134,7 +134,8 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
             guard table == "vmFailure" || table == "vmConfiguration" else {
                 fail("\(code).doc.table must be vmFailure or vmConfiguration")
             }
-            let requiredFields = table == "vmFailure"
+            let requiredFields =
+                table == "vmFailure"
                 ? ["case", "when", "raisedBy", "ref"]
                 : ["case", "cause", "exitDisplay"]
             for field in requiredFields {
@@ -161,7 +162,7 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         }
         if release {
             guard message?["ja"] != nil || transparent,
-                  remediation == nil || remediation?["ja"] != nil
+                remediation == nil || remediation?["ja"] != nil
             else {
                 fail("\(code): release entries need Japanese message and remediation")
             }
@@ -180,8 +181,8 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         }
         if let cliExitRule {
             guard cliExitRule == "allConfigurationItemsInternalOrFailure",
-                  code == "vm.configurationInvalid",
-                  (cliExit as? Int) == 1
+                code == "vm.configurationInvalid",
+                (cliExit as? Int) == 1
             else {
                 fail("\(code): unsupported cliExitRule \(cliExitRule)")
             }
@@ -222,7 +223,7 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
             }
             if release {
                 guard variantMessage == nil || variantMessage?["ja"] != nil,
-                      variantRemediation == nil || variantRemediation?["ja"] != nil
+                    variantRemediation == nil || variantRemediation?["ja"] != nil
                 else {
                     fail("\(code).variants.\(name) needs Japanese text for release")
                 }
@@ -249,7 +250,8 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
                 guard let texts else { continue }
                 for (language, text) in texts {
                     for placeholder in placeholders(in: text) where !parameters.contains(placeholder) {
-                        fail("\(code).variants.\(variant.name).\(textName).\(language) uses undeclared {\(placeholder)}")
+                        fail(
+                            "\(code).variants.\(variant.name).\(textName).\(language) uses undeclared {\(placeholder)}")
                     }
                 }
             }
@@ -292,7 +294,9 @@ func swiftLiteral(_ string: String) -> String {
 
 func swiftStrings(_ values: [String: String]?) -> String {
     guard let values else { return "nil" }
-    let contents = values.keys.sorted().map { "\(swiftLiteral($0)): \(swiftLiteral(values[$0]!))" }
+    let contents = values.sorted(by: { $0.key < $1.key }).map {
+        "\(swiftLiteral($0.key)): \(swiftLiteral($0.value))"
+    }
     return "[" + contents.joined(separator: ", ") + "]"
 }
 
@@ -495,13 +499,14 @@ func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
         let begin = "<!-- errorgen:begin \(domain) -->"
         let end = "<!-- errorgen:end \(domain) -->"
         guard let beginRange = result.range(of: begin),
-              let endRange = result.range(of: end),
-              beginRange.upperBound <= endRange.lowerBound
+            let endRange = result.range(of: end),
+            beginRange.upperBound <= endRange.lowerBound
         else {
             fail("error-catalog.md is missing ordered markers for \(domain)")
         }
         let domainEntries = entries.filter { $0.code.hasPrefix("\(domain).") }
-        let body = domain == "vm"
+        let body =
+            domain == "vm"
             ? renderVMMarkdown(domainEntries)
             : renderCLIMarkdown(domainEntries)
         result.replaceSubrange(beginRange.upperBound..<endRange.lowerBound, with: "\n\(body)\n")

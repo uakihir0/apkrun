@@ -11,4 +11,4 @@ if [[ -x "$xcodegen" ]]; then
     export APKRUN_XCODEGEN="$xcodegen"
 fi
 
-exec swift "$repo_root/scripts/tools/check-lock.swift" --root "$repo_root" "$@"
+exec swift "$repo_root/scripts/tools/check-module-deps.swift" --root "$repo_root" "$@"

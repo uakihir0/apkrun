@@ -169,11 +169,21 @@ let package = Package(
         ),
         .testTarget(
             name: "DiagnosticsCoreTests",
-            dependencies: ["DiagnosticsCore"],
+            dependencies: ["DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests",
             resources: [
                 .copy("Fixtures"),
             ]
+        ),
+        .target(
+            name: "DiagnosticsCoreTestSupport",
+            dependencies: ["DiagnosticsCore"],
+            path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreTestSupport"
+        ),
+        .testTarget(
+            name: "DiagnosticsCoreSystemTests",
+            dependencies: ["DiagnosticsCore"],
+            path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests"
         ),
         .testTarget(
             name: "VirtioDeviceCoreTests",

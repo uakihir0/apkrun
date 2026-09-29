@@ -371,9 +371,9 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
 
    Check: T0 shows that the timeline keeps the newest 2,000 markers, validates bounded marker attributes, and that `interval` never appends to the timeline. Implementation review confirms that `mark` has no filesystem, mirror-writer, or `LogSink` dependency; its only effects are the in-memory timeline append and the required `OSSignposter` event.
 6. **Health and the diagnostics context (§7.1–§7.3).**
-   - Add the types of §7.1 and `HealthCheckRegistry`, with a 2 s timeout for quick checks, 60 s for deep checks, and at most 8 checks at once.
+   - Add the types of §7.1 and `HealthCheckRegistry`, with a 2 s timeout for quick checks, 60 s for deep checks (including time waiting for a concurrency slot), and at most 8 checks at once.
    - Add the verdict function of §7.2.
-   - `HostChecks` implements the `host.*` checks and `apkrund.registration` (through `launchctl print gui/<uid>/<label>`, with the label from `BuildInfo`). All system access goes through an injected `HostProbe`, so T0 can drive every result.
+   - `HostChecks` implements the `host.*` checks and `apkrund.registration` (through `launchctl print gui/<uid>/<label>`, with the label from `BuildInfo`). All system access goes through an injected `HostProbe`, so T0 can drive every result. The component-version check reads embedded signing metadata and never executes the bundled CLI or daemon.
    - Define `DiagnosticsContext`, the value that module entry points such as `VMController.init` ([../../02-design/vm.md](../../02-design/vm.md) §2) receive. It is a `Sendable` struct holding:
      - the `LogSink`;
      - the `HealthCheckRegistry`;
@@ -382,7 +382,7 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
      - a clock.
    - `DiagnosticsContext.live(paths:)` builds the production value. `DiagnosticsContext.testing()` lives in `DiagnosticsCoreTestSupport`.
 
-   Check: T1-6 covers every verdict row, including `graphicsFailure` before `bootFailure` and the stopped suffix.
+   Check: T1-6 covers every verdict row, including `runtime.provisioning`, `runtime.state`, `runtime.boot`, `graphicsFailure` before `bootFailure`, agent failures, and the stopped suffix. T0 also drives each `HostChecks` outcome through `FakeHostProbe`, verifies timeout (including permit waiting), cancellation, and eight-check concurrency limits, and confirms that deep and unavailable requirements are skipped without system access.
 7. **Logging lint.** `scripts/check-logging.sh` fails in two cases:
    - on `os.Logger`, `Logger(`, `print(`, `NSLog`, or `os_log` outside `Packages/DiagnosticsCore/`;
    - on an `APKLogger` call whose interpolation has no privacy argument, or that unwraps a `Sensitive` value.

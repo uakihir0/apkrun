@@ -1404,7 +1404,7 @@ The first column links the check to its owner. "Fix" marks the checks of diagnos
 | `maintenance.imageUpdate` | warning | ready for more than 14 days: `maintenance.imageUpdateWaiting` †. The last migration was rejected: `maintenance.imageMigrationFailed`. The feed: `maintenance.imageFeedSignatureInvalid`, `maintenance.imageFeedReplayed`, `maintenance.imageFeedExpired`, `maintenance.imageFeedInvalid / schemaVersion`. No successful feed check for 7 days: `maintenance.imageCheckOverdue` †. Not enough space: `maintenance.insufficientSpace` | — |
 | `maintenance.imageUpdate` | failure | the current image can't boot with this APKRun: `image.incompatibleProtocol / hostNewer` or `image.incompatibleRuntime`. No compatible image in the feed: `maintenance.noCompatibleImage` | — |
 
-When apkrund is unreachable, every check other than the host checks is `skipped` with "Background service not running" and carries the `runtime.serviceUnavailable` entry of `apkrund.registration` or `apkrund.reachable` (diagnostics.md §7.3).
+When apkrund is unreachable, every non-host check other than `apkrund.registration` is `skipped` with "Background service not running" and no `error`. The failed `apkrund.registration` or `apkrund.reachable` row carries the `runtime.serviceUnavailable` entry and its remediation (diagnostics.md §7.1, §7.3).
 
 ### 20.3 Health-only finding codes
 

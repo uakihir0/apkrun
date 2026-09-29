@@ -235,3 +235,40 @@ not append events.
 unused failing sink would be disconnected from the code path and would give
 a false-positive test. The task check now matches the actual effects without
 adding a production dependency solely for a test seam.
+
+## IR-013: Make health verdict inputs and skipped-check behavior explicit
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §§7.1–7.3; [error-catalog.md](../03-reference/error-catalog.md) §20.1–20.2; [M00](issues/M00-repository-and-vm-foundation.md) #061 step 6 |
+
+**Choice.** The verdict takes an explicit runtime-state context containing
+provisioning completion, boot-loop state, and the last boot error code.
+Unrecognized runtime states resolve to `degraded` rather than `healthy`.
+When apkrund is unavailable, non-host checks are skipped without an
+`ErrorInfo`; the separate `apkrund.registration` or `apkrund.reachable`
+failure row supplies remediation. The memory check warns below 8 GiB, while
+16 GiB remains the recommended amount. `BuildInfo.launchAgentLabel` maps the
+known `dev` and `updatetest` identities to their separate LaunchAgent labels
+and defaults other identities to the release label. Component-version checks
+read build numbers from embedded signing metadata instead of executing
+unverified bundled binaries. A check's timeout budget includes waiting for a
+concurrency slot; caller cancellation returns no partial report.
+
+**Reason.** The health design specified verdict conditions but did not define
+their input model or what to do for transitional runtime states. Returning
+`degraded` avoids claiming a healthy runtime when its state is not recognized.
+The diagnostics text also said both that skipped rows have no error and that
+unavailable-service skips carry a service error. Keeping the explicit
+no-error rule avoids duplicating remediation on every skipped row; the
+registration/reachability row remains actionable. The 8 GiB threshold follows
+the host-check pass condition, and the 16 GiB recommendation remains visible
+in the warning text. Build identities are mapped through a closed set so
+caller-supplied identity text is never used as a `launchctl` label. Reading
+build metadata without starting the daemon or CLI keeps a health check from
+executing application code before the separate deep signature check. Including
+permit wait in the same deadline makes the documented timeout a bound on the
+entire check, while returning an empty report on caller cancellation avoids
+presenting a misleading partial health result.

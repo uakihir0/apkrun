@@ -29,6 +29,18 @@ public struct BuildInfo: Codable, Equatable, Sendable {
     /// Whether this executable includes the development-only embedded runtime.
     public let usesEmbeddedRuntime: Bool
 
+    /// The LaunchAgent label associated with this build identity.
+    public var launchAgentLabel: String {
+        switch buildIdentity {
+        case "dev":
+            "io.apkrun.apkrund.dev"
+        case "updatetest":
+            "io.apkrun.apkrund.updatetest"
+        default:
+            "io.apkrun.apkrund"
+        }
+    }
+
     /// Metadata decoded from the current executable's Info.plist.
     public static let current = BuildInfo(infoDictionary: Bundle.main.infoDictionary ?? [:])
 

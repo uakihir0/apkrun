@@ -476,6 +476,7 @@ public protocol HealthCheck: Sendable {
     var requirement: HealthRequirement { get }
     var cost: HealthCost { get }
     var fix: HealthFix? { get }                     // a safe automatic fix, if any (§7.5)
+    var title: LocalizedText { get }
     func run(_ context: HealthContext) async -> HealthResult
 }
 
@@ -503,8 +504,12 @@ public struct HealthReport: Sendable, Codable {
 
 - Each process has a `HealthCheckRegistry`. apkrund's registry is filled at startup by RuntimeHost with the checks of every module. The CLI and APKRun.app have a registry with only the host checks (§7.3).
 - `HealthResult.error` is empty for `pass`, `info`, and `skipped` results. A `warning` or `failure` carries it whenever there is a next step: the GUI shows its remediation and action on the row, and `apkrun doctor` prints its hint. The entry of each check is listed in [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §20.2.
-- A quick check must finish in 2 s. A deep check has 60 s. A check that times out returns `warning` with `detail = "check timed out"` and no `error`. Checks run concurrently, at most 8 at a time. Checks that need the guest share one agent round trip where possible (`Health`, [guest-protocol.md](guest-protocol.md) §7.4).
+- A quick check must finish in 2 s. A deep check has 60 s. The budget includes time spent waiting for a concurrency slot. A check that times out returns `warning` with `detail = "check timed out"` and no `error`. Checks run concurrently, at most 8 at a time. Checks that need the guest share one agent round trip where possible (`Health`, [guest-protocol.md](guest-protocol.md) §7.4).
 - Checks with `requirement == .runningRuntime` never start Android. While Android is stopped they return `skipped` with "Android is not running" and `lastKnown` (for example "last boot completed in 31 s, today 10:02"). Opening Troubleshooting or running `apkrun doctor` does not start Android ([host-ui.md](host-ui.md) §1).
+- A check with `cost == .deep` is `skipped` unless `--deep` was requested. Checks with `.daemon` or `.runningRuntime` are skipped when apkrund is unavailable; host checks and `apkrund.registration` still run. Skipped results have no `error`. The failed registration or reachability row carries the service remediation.
+- `HealthCheckRegistry.run(deep:context:)` preserves registration order within each `HealthGroup` and sorts groups by `HealthGroup.allCases`. Check IDs are unique in a registry. The production concurrency limit is 8. Caller cancellation returns an empty result; a timed-out check is cancelled, and a task that does not cooperate with cancellation continues to hold its slot until it exits.
+- `HealthContext` supplies daemon/runtime availability, the prior result map, `BuildInfo`, `APKRunPaths`, a diagnostics clock, and a `HostProbe`. All host reads, process invocations, and Security/ServiceManagement calls made by `HostChecks` go through that injected probe.
+- The verdict input contains the runtime state (`stopped`, `ready`, `suspended`, `failed`, or `other`), provisioning completion, the boot-loop guard, and the last boot error code. `other` with no higher-priority finding yields `degraded`; it never claims the runtime is healthy.
 - **Live checks.** A subset re-evaluates when its source state changes (no polling) and publishes `healthChanged(HealthResult)` on the `health` topic of `subscribe` ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.4): `runtime.state`, `runtime.boot`, `agent.*`, `vm.network`, `graphics.renderer`, `graphics.memory`, `runtime.memoryPressure`, `store.packages`, `store.hostSpace`, `wrappers.status`. The main window header and the menu bar show "Needs attention" while any live check is `warning` or `failure` ([host-ui.md](host-ui.md) §5, §12).
 
 ### 7.2 Verdict (FR-OPS-01)
@@ -525,6 +530,7 @@ The report's verdict is the first row that applies:
 
 - `graphicsFailure` comes before `bootFailure`, because a renderer failure also fails the boot, and the graphics verdict carries the better remediation ("Start in Graphics Safe Mode", [graphics.md](graphics.md) §9).
 - When the verdict is `degraded` and Android is stopped, the status line adds "· Android is not running", so the stopped state stays visible.
+- For `degraded`, the status line counts warning rows; if only failures remain it says "Needs attention". For `bootFailure`, a non-empty `runtime.boot.detail` is appended to the status line to show the reached phase.
 - CLI exit codes ([cli.md](cli.md) §3.3): `healthy` and `stopped` → 0; `degraded` without failures → 3; everything else → 1.
 
 ### 7.3 Host checks (DiagnosticsCore `HostChecks`)
@@ -538,17 +544,17 @@ These need neither apkrund nor RuntimeHost. The CLI and APKRun.app run them dire
 | `host.hypervisor` | virtualization | `sysctl kern.hv_support == 1`. apkrund additionally checks `VZVirtualMachine.isSupported` as `vm.virtualizationSupported` | "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine)" |
 | `host.appLocation` | host | APKRun.app is in `/Applications` or `~/Applications` and not translocated | "Move APKRun to the Applications folder" |
 | `host.appSignature` (deep) | host | `SecStaticCodeCheckValidity` of APKRun.app with its designated requirement, including nested code | "Reinstall APKRun" |
-| `host.componentVersions` | host | apkrund, the CLI, and the generic launcher in the bundle all have the same build as APKRun.app | "Reinstall APKRun" |
+| `host.componentVersions` | host | apkrund, the CLI, and the generic launcher in the bundle all have the same build as APKRun.app; executable build numbers come from embedded signing-information metadata, without running the bundled executables | "Reinstall APKRun" |
 | `host.dataVolume` | host | the data root is on APFS and has at least 10 GiB free (warning below) | "Free up space" / "Move APKRun's data to an APFS volume" |
-| `host.memory` | host | physical memory ≥ 8 GiB (warning only) | "APKRun works best with 16 GB or more" |
-| `apkrund.registration` | backgroundService | APKRun.app: `SMAppService.status == .enabled`. CLI: `launchctl print gui/<uid>/io.apkrun.apkrund` succeeds | `requiresApproval` → "Allow APKRun in System Settings → General → Login Items & Extensions" (`openLoginItemsSettings`); not registered → "Open APKRun to finish setup" |
+| `host.memory` | host | physical memory ≥ 8 GiB; below 8 GiB is a warning | "APKRun works best with 16 GB or more" |
+| `apkrund.registration` | backgroundService | APKRun.app: `SMAppService.status == .enabled`. CLI: `launchctl print gui/<uid>/<label>` succeeds, with `<label>` from `BuildInfo` | `requiresApproval` → "Allow APKRun in System Settings → General → Login Items & Extensions" (`openLoginItemsSettings`); not registered → "Open APKRun to finish setup" |
 | `apkrund.reachable` | backgroundService | broker `hello` answers within 5 s with the same API major version | "Restart the background service" (Troubleshooting) |
 | `apkrund.version` | backgroundService | apkrund's build equals the client's build | while apkrund is in `restartPending` ([runtime-maintenance.md](runtime-maintenance.md) §3.6): "An APKRun update is waiting for your Android apps to close. Close them, or choose Restart Now." Otherwise "Quit and reopen APKRun" |
 | `apkrund.crashLoop` | backgroundService | fewer than 3 unclean exits in 10 minutes ([runtime-daemon.md](runtime-daemon.md) §2.5). Without apkrund: counted from `~/Library/Logs/DiagnosticReports/apkrund-*.ips` | "Create a diagnostics report and report the problem" |
 
 The `HealthResult.error` of these checks is `runtime.hostRequirementsNotMet` with one item (`host.appleSilicon`, `host.macOSVersion`, `host.hypervisor`, and `host.dataVolume` on a volume that is not APFS), `runtime.serviceUnavailable` (`apkrund.registration`, `apkrund.reachable`), or a finding of `DiagnosticsFailure` (§2.1) for the other checks.
 
-When apkrund is unreachable, the report lists every other check as `skipped` with "Background service not running" and the remediation of `apkrund.registration` or `apkrund.reachable`.
+When apkrund is unreachable, the report lists every non-host check other than `apkrund.registration` as `skipped` with "Background service not running". Skipped results have no `error`; the failed `apkrund.registration` or `apkrund.reachable` row carries the service remediation. The host checks run directly in the client.
 
 ### 7.4 Check catalogue
 

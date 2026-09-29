@@ -435,6 +435,629 @@ expect_module_fail "unclassified target dependency and import" "HiddenFixture.*R
 experiment_target_root="$(new_module_fixture experiment-target-name-mismatch)"
 expect_module_fail "Experiments import uses declared target name" "imports Experiments module 'HiddenExperiment'" "$experiment_target_root"
 
+nested_experiment_root="$(new_module_fixture experiments-nested-package)"
+expect_module_fail "nested Experiments product hides its target module" "imports Experiments module 'HiddenExperiment'" "$nested_experiment_root"
+
+backtick_import_root="$(new_module_fixture backtick-import)"
+expect_module_fail "backtick-escaped forbidden import" "forbidden import edge 'DiagnosticsCore -> RuntimeCore'" "$backtick_import_root"
+
+nested_tests_import_root="$(new_module_fixture production-nested-tests-import)"
+expect_module_fail "production import under nested Tests directory" "forbidden import edge 'RuntimeHost -> GraphicsCore'" "$nested_tests_import_root"
+
+target_owner_root="$(new_module_fixture target-owner-path-mismatch)"
+expect_module_fail "module target cannot inherit another owner path" "module target 'GraphicsCore' must be under.*Packages/GraphicsCore" "$target_owner_root"
+
+ruby - "$repo_root/.github/workflows/ci.yml" "$repo_root/.github/workflows/ci-policy.yml" <<'RUBY'
+require "yaml"
+
+workflow = YAML.load_file(ARGV.fetch(0))
+jobs = workflow.fetch("jobs")
+trigger_key = workflow.key?("on") ? "on" : true
+triggers = workflow.fetch(trigger_key)
+
+def workflow_errors(workflow, trigger_key)
+  errors = []
+  triggers = workflow.fetch(trigger_key)
+  unless triggers.key?("pull_request") && !triggers.key?("pull_request_target")
+    errors << "pull requests must use the unprivileged pull_request event"
+  end
+  unless triggers.dig("push", "branches") == ["main"]
+    errors << "push checks must run only for main"
+  end
+  workflow.fetch("jobs").each do |job_name, job|
+    unless job["runs-on"] == "xcode-27"
+      errors << "#{job_name} must use a fresh GitHub-hosted macOS 27 runner"
+    end
+    checkout = job.fetch("steps").find do |step|
+      step["uses"]&.start_with?("actions/checkout@")
+    end
+    inputs = checkout&.fetch("with", {})
+    unless inputs && inputs["persist-credentials"] == false
+      errors << "#{job_name} checkout must not persist credentials"
+    end
+    unless inputs && inputs["ref"].include?("pull_request.head.sha")
+      errors << "#{job_name} checkout must pin the pull request head SHA"
+    end
+    if inputs && inputs.key?("allow-unsafe-pr-checkout")
+      errors << "#{job_name} must not enable unsafe pull request checkout"
+    end
+  end
+  {
+    "lint" => "scripts/ci/run-checks.sh",
+    "codegen" => "scripts/ci/codegen.sh",
+    "build" => "scripts/generate-project.sh",
+  }.each do |job_name, check_command|
+    steps = workflow.fetch("jobs").fetch(job_name).fetch("steps")
+    bootstrap_index = steps.index { |step| step["run"] == "scripts/bootstrap" }
+    check_index = steps.index { |step| step["run"] == check_command }
+    unless bootstrap_index && check_index && bootstrap_index < check_index
+      errors << "#{job_name} must install pinned tools before #{check_command}"
+    end
+  end
+  build_commands = workflow.fetch("jobs").fetch("build").fetch("steps").map { |step| step["run"] }.compact
+  build_parallelism_valid = build_commands.include?("swift build -j 2") &&
+    build_commands.include?("swift build -j 2 --traits EmbeddedRuntime") &&
+    build_commands.count { |command| command.include?("-jobs 2") } == 2
+  unless build_parallelism_valid
+    errors << "build parallelism must stay within the hosted runner memory budget"
+  end
+  test_commands = workflow.fetch("jobs").fetch("test-swift").fetch("steps").map { |step| step["run"] }.compact
+  unless test_commands.any? { |command| command.include?("--skip 'SystemTests' -j 2") }
+    errors << "test-swift must run T0 only and cap build parallelism"
+  end
+  unless workflow.fetch("permissions") == { "contents" => "read" }
+    errors << "workflow permissions must remain contents: read"
+  end
+  expected_jobs = %w[lint codegen build test-swift]
+  unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
+    errors << "only the four initial required CI jobs may be configured here"
+  end
+  unless test_commands.none? { |command| command.include?("check-compile-fail.sh") }
+    errors << "T1 compiler-fail checks must not run in the hosted T0 job"
+  end
+  errors << "workflow must not reference repository secrets" if workflow.to_s.include?("secrets.")
+  errors
+end
+
+errors = workflow_errors(workflow, trigger_key)
+unless errors.empty?
+  abort("FAIL workflow security fixture:\n#{errors.map { |error| "  #{error}" }.join("\n")}")
+end
+puts("PASS workflow security fixture uses ephemeral GitHub-hosted pull request jobs")
+
+unsafe_workflow = Marshal.load(Marshal.dump(workflow))
+unsafe_workflow.fetch("jobs").fetch("lint")["runs-on"] = ["self-hosted", "apkrun-ci"]
+unless workflow_errors(unsafe_workflow, trigger_key).any? { |error| error.include?("lint must use") }
+  abort("FAIL workflow security fixture: accepted a persistent self-hosted runner")
+end
+puts("PASS workflow security fixture rejects a persistent self-hosted runner")
+
+unsafe_workflow = Marshal.load(Marshal.dump(workflow))
+unsafe_triggers = unsafe_workflow.fetch(trigger_key)
+unsafe_triggers.delete("pull_request")
+unsafe_triggers["pull_request_target"] = {}
+unless workflow_errors(unsafe_workflow, trigger_key).any? { |error| error.include?("unprivileged pull_request") }
+  abort("FAIL workflow security fixture: accepted pull_request_target")
+end
+puts("PASS workflow security fixture rejects pull_request_target")
+
+unsafe_workflow = Marshal.load(Marshal.dump(workflow))
+unsafe_workflow["env"] = { "LEAK" => "${{ secrets.TEST_SECRET }}" }
+unless workflow_errors(unsafe_workflow, trigger_key).any? { |error| error.include?("repository secrets") }
+  abort("FAIL workflow security fixture: accepted a repository secret reference")
+end
+puts("PASS workflow security fixture rejects repository secret references")
+
+unsafe_workflow = Marshal.load(Marshal.dump(workflow))
+unsafe_workflow.fetch("jobs").fetch("codegen").fetch("steps").reject! do |step|
+  step["run"] == "scripts/bootstrap"
+end
+unless workflow_errors(unsafe_workflow, trigger_key).any? { |error| error.include?("install pinned tools") }
+  abort("FAIL workflow bootstrap fixture: accepted a clean runner without pinned tool setup")
+end
+puts("PASS workflow bootstrap fixture requires clean runners to install pinned tools")
+
+policy_workflow = YAML.load_file(ARGV.fetch(1))
+policy_trigger_key = policy_workflow.key?("on") ? "on" : true
+policy_trigger = policy_workflow.fetch(policy_trigger_key).fetch("pull_request_target")
+required_policy_events = %w[opened reopened synchronize edited labeled unlabeled]
+unless (required_policy_events - policy_trigger.fetch("types")).empty?
+  abort("FAIL CI policy workflow fixture: missing revision or label revocation event")
+end
+policy_checkout = policy_workflow.fetch("jobs").fetch("workflow-policy").fetch("steps").find do |step|
+  step["uses"]&.start_with?("actions/checkout@")
+end
+unless policy_checkout&.dig("with", "ref") == "refs/heads/main"
+  abort("FAIL CI policy workflow fixture: policy job must use trusted main")
+end
+puts("PASS CI policy workflow reruns on edits and label revocation using trusted main")
+RUBY
+
+python3 - "$repo_root/scripts/ci/check-pr-control-changes.py" <<'PY'
+import importlib.util
+import json
+import os
+import pathlib
+import sys
+import tempfile
+from unittest import mock
+
+script = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("check_pr_control_changes", script)
+if spec is None or spec.loader is None:
+    raise SystemExit("FAIL CI policy fixture: unable to load policy checker")
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+repository = "owner/repository"
+head_sha = "a" * 40
+base = {"ref": "main", "sha": "b" * 40, "repo": {"full_name": repository}}
+
+def pull_request(sha=head_sha, labels=None, base_info=base):
+    return {
+        "head": {"sha": sha},
+        "base": base_info,
+        "user": {"login": "contributor"},
+        "labels": [{"name": name} for name in (labels or [])],
+    }
+
+def event(action, sha=head_sha, label=None, base_info=base, sender_login="maintainer"):
+    result = {
+        "action": action,
+        "pull_request": {"head": {"sha": sha}, "base": base_info},
+        "sender": {"login": sender_login, "type": "User"},
+    }
+    if label is not None:
+        result["label"] = {"name": label}
+    return result
+
+def authorized(action, paths, *, event_sha=head_sha, current_sha=head_sha,
+               labels=None, label=None, base_info=base, current_base=base,
+               reviews=None, sender_login="maintainer"):
+    current = pull_request(current_sha, labels, current_base)
+    payload = event(action, event_sha, label, base_info, sender_login)
+    return policy.is_authorized(
+        "pull_request_target", payload, current, paths, reviews or [], repository
+    )
+
+assert authorized("opened", ["README.md"])
+print("PASS CI policy fixture allows pull requests without control-file changes")
+
+assert policy.is_control_path(".swift-format")
+assert policy.is_control_path(".swift-format-tests")
+assert policy.is_control_path(".xcode-version")
+assert policy.is_control_path("scripts/tool-versions.env")
+assert policy.is_control_path(".github/actions/ci/action.yml")
+assert policy.is_control_path("scripts/check-new-rule.sh")
+assert policy.is_control_path("scripts/build/embed-cli.sh")
+assert policy.is_control_path("gradlew")
+assert policy.is_control_path("gradle/wrapper/gradle-wrapper.jar")
+assert policy.is_control_path("Guest/build.gradle.kts")
+assert policy.is_control_path("Guest/settings.gradle.kts")
+assert policy.is_control_path("Guest/gradle/libs.versions.toml")
+assert policy.is_control_path("Guest/guestd/gradle.lockfile")
+assert policy.is_control_path("Guest/buildSrc/src/main/kotlin/BuildConvention.kt")
+assert policy.is_control_path("build-logic/src/main/kotlin/Rules.kt")
+assert policy.is_control_path("Guest/vsockd/Cargo.toml")
+assert policy.is_control_path("Guest/vsockd/Cargo.lock")
+assert policy.is_control_path("Guest/vsockd/rust-toolchain.toml")
+assert policy.is_control_path("Guest/vsockd/rustfmt.toml")
+assert policy.is_control_path("Guest/vsockd/.rustfmt.toml")
+assert policy.is_control_path("Guest/vsockd/clippy.toml")
+assert policy.is_control_path("Guest/vsockd/.clippy.toml")
+assert policy.is_control_path("Guest/vsockd/.cargo/config.toml")
+assert policy.is_control_path("scripts/errorgen.swift")
+assert policy.is_control_path("scripts/generate-protos.sh")
+assert policy.is_control_path("Package.swift")
+assert policy.is_control_path("Packages/RuntimeCore/Package.swift")
+assert policy.is_control_path("Package.resolved")
+assert policy.is_control_path("ThirdParty/ThirdParty.lock.json")
+assert policy.is_control_path("Packages/RuntimeCore/Tests/RuntimeCoreTests/Test.swift")
+assert policy.is_control_path("Apps/APKRun/UITests/SmokeTests.swift")
+assert policy.is_control_path("project.yml")
+assert policy.is_control_path("docs/01-architecture/modules.md")
+print("PASS CI policy fixture protects generators, manifests, tests, and module policy")
+
+assert not authorized(
+    "opened",
+    ["Package.resolved", "ThirdParty/ThirdParty.lock.json"],
+)
+print("PASS CI policy fixture gates paired Swift dependency pin changes")
+
+assert not authorized("opened", ["scripts/build/embed-cli.sh"])
+assert not authorized(
+    "opened",
+    ["gradlew", "Guest/build.gradle.kts", "Guest/gradle/libs.versions.toml"],
+)
+print("PASS CI policy fixture gates Xcode and Gradle build code")
+
+assert not authorized("opened", [".github/workflows/ci.yml"])
+print("PASS CI policy fixture blocks unreviewed CI control-file changes")
+
+assert authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+print("PASS CI policy fixture accepts the current reviewer applying the label")
+
+assert not authorized(
+    "edited",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+print("PASS CI policy fixture requires label re-application after a pull request edit")
+
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    sender_login="different-maintainer",
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    sender_login="contributor",
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer-bot", "type": "Bot"},
+        }
+    ],
+)
+assert not authorized(
+    "unlabeled",
+    [".github/workflows/ci.yml"],
+    labels=[],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+print("PASS CI policy fixture binds label authority to its human approver and revokes on removal")
+
+assert not authorized(
+    "synchronize",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    event_sha="b" * 40,
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": "b" * 40,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "contributor", "type": "User"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "review-bot", "type": "Bot"},
+        }
+    ],
+)
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        },
+        {
+            "state": "CHANGES_REQUESTED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        },
+    ],
+)
+print("PASS CI policy fixture rejects missing, stale, self, and withdrawn approvals")
+
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    base_info={"ref": "feature", "repo": {"full_name": repository}},
+    current_base={"ref": "feature", "repo": {"full_name": repository}},
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+print("PASS CI policy fixture only trusts pull requests targeting main")
+
+advanced_base = {"ref": "main", "sha": "c" * 40, "repo": {"full_name": repository}}
+assert not authorized(
+    "labeled",
+    [".github/workflows/ci.yml"],
+    labels=[policy.APPROVAL_LABEL],
+    label=policy.APPROVAL_LABEL,
+    base_info=base,
+    current_base=advanced_base,
+    reviews=[
+        {
+            "state": "APPROVED",
+            "commit_id": head_sha,
+            "user": {"login": "maintainer", "type": "User"},
+        }
+    ],
+)
+assert not policy.same_pull_request_revision(
+    pull_request(),
+    pull_request(base_info=advanced_base),
+)
+event_payload = {
+    "number": 1,
+    "pull_request": {
+        "head": {"sha": head_sha},
+        "base": base,
+    },
+}
+final_pull_request = pull_request(
+    labels=[policy.APPROVAL_LABEL],
+    base_info=advanced_base,
+)
+with tempfile.TemporaryDirectory() as temporary_directory:
+    event_path = pathlib.Path(temporary_directory) / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+    api_responses = [
+        pull_request(labels=[policy.APPROVAL_LABEL]),
+        {"files": [{"filename": ".github/workflows/ci.yml"}]},
+        [
+            {
+                "state": "APPROVED",
+                "commit_id": head_sha,
+                "user": {"login": "maintainer", "type": "User"},
+            }
+        ],
+        final_pull_request,
+    ]
+    with mock.patch.object(policy, "api_json", side_effect=api_responses):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GITHUB_EVENT_PATH": str(event_path),
+                "GITHUB_TOKEN": "fixture-token",
+                "GITHUB_REPOSITORY": repository,
+                "GITHUB_EVENT_NAME": "pull_request_target",
+            },
+        ):
+            assert policy.main() == 2
+print("PASS CI policy fixture rejects base-ref changes and unstable API snapshots")
+
+renamed = [
+    {
+        "filename": "docs/renamed-workflow.md",
+        "previous_filename": ".github/workflows/ci.yml",
+    }
+]
+with mock.patch.object(policy, "api_json", return_value={"files": renamed}):
+    renamed_paths = policy.changed_files(repository, base["sha"], head_sha, "token")
+assert ".github/workflows/ci.yml" in renamed_paths
+assert policy.is_control_path(".github/workflows/ci.yml")
+print("PASS CI policy fixture checks both sides of renamed files")
+
+compare_limit = {
+    "files": [{"filename": f"docs/file-{index}.md"} for index in range(300)]
+}
+with mock.patch.object(policy, "api_json", return_value=compare_limit):
+    try:
+        policy.changed_files(repository, base["sha"], head_sha, "token")
+    except ValueError as error:
+        assert "300" in str(error)
+    else:
+        raise SystemExit("FAIL CI policy fixture: accepted a capped compare response")
+print("PASS CI policy fixture fails closed at the GitHub compare file limit")
+
+compare_url = (
+    f"https://api.github.com/repos/{repository}/compare/"
+    f"{base['sha']}...{head_sha}?per_page=100&page=1"
+)
+assert policy.commit_compare_api_url(repository, base["sha"], head_sha) == compare_url
+for invalid_sha in ("main", "a" * 39, "g" * 40):
+    try:
+        policy.commit_compare_api_url(repository, invalid_sha, head_sha)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("FAIL CI policy fixture: accepted a non-commit base SHA")
+
+# Model a live PR moving A -> B -> A while the file list is requested. The
+# compare URL must remain bound to A, so B's protected path cannot be mistaken
+# for the files in the final A revision.
+race_event = {
+    "number": 1,
+    "action": "opened",
+    "pull_request": {"head": {"sha": head_sha}, "base": base},
+    "sender": {"login": "contributor", "type": "User"},
+}
+transient_base = {
+    "ref": "main",
+    "sha": "d" * 40,
+    "repo": {"full_name": repository},
+}
+race_pull_requests = iter(
+    [
+        pull_request(),
+        pull_request(sha="c" * 40, base_info=transient_base),
+        pull_request(),
+    ]
+)
+race_urls = []
+
+def race_api_json(url, token):
+    race_urls.append(url)
+    if url == compare_url:
+        transient_revision = next(race_pull_requests)
+        assert transient_revision["head"]["sha"] != head_sha
+        assert transient_revision["base"]["sha"] != base["sha"]
+        assert policy.is_control_path(".github/workflows/ci.yml")
+        return {"files": [{"filename": "README.md"}]}
+    return next(race_pull_requests)
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    event_path = pathlib.Path(temporary_directory) / "event.json"
+    event_path.write_text(json.dumps(race_event), encoding="utf-8")
+    with mock.patch.object(policy, "api_json", side_effect=race_api_json):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GITHUB_EVENT_PATH": str(event_path),
+                "GITHUB_TOKEN": "fixture-token",
+                "GITHUB_REPOSITORY": repository,
+                "GITHUB_EVENT_NAME": "pull_request_target",
+            },
+        ):
+            assert policy.main() == 0
+assert race_urls == [
+    f"https://api.github.com/repos/{repository}/pulls/1",
+    compare_url,
+    f"https://api.github.com/repos/{repository}/pulls/1",
+]
+assert all("/files?" not in url for url in race_urls)
+print("PASS CI policy fixture pins changed paths to the captured commit pair")
+PY
+
+ruby - "$repo_root/.github/workflows/ci-policy.yml" <<'RUBY'
+require "yaml"
+
+workflow = YAML.load_file(ARGV.fetch(0))
+trigger_key = workflow.key?("on") ? "on" : true
+triggers = workflow.fetch(trigger_key)
+target = triggers.fetch("pull_request_target")
+job = workflow.fetch("jobs").fetch("workflow-policy")
+steps = job.fetch("steps")
+checkout = steps.find { |step| step["uses"]&.start_with?("actions/checkout@") }
+
+errors = []
+errors << "policy must target pull requests to main only" unless target["branches"] == ["main"]
+unless target["types"].sort == %w[opened reopened synchronize edited labeled unlabeled].sort
+  errors << "policy must run on revision, label approval, and label revocation events"
+end
+errors << "policy token permissions must be read-only" unless
+  workflow["permissions"] == { "contents" => "read", "pull-requests" => "read" }
+errors << "policy job must run on GitHub-hosted Ubuntu" unless job["runs-on"] == "ubuntu-latest"
+if job.key?("if") || job["continue-on-error"]
+  errors << "policy job must not be conditional or ignore failures"
+end
+unless checkout && checkout["uses"].match?(/\Aactions\/checkout@[0-9a-f]{40}/)
+  errors << "policy must pin checkout to an action commit"
+end
+inputs = checkout&.fetch("with", {})
+unless inputs && inputs.keys.sort == %w[persist-credentials ref] &&
+       inputs["ref"] == "refs/heads/main" && inputs["persist-credentials"] == false
+  errors << "policy must check out trusted main code without persisted credentials"
+end
+unless steps.length == 2 &&
+       steps[1]["run"] == "python3 scripts/ci/check-pr-control-changes.py" &&
+       steps[1]["env"] == { "GITHUB_TOKEN" => "${{ github.token }}" }
+  errors << "policy must run the base-branch control-file checker"
+end
+unless workflow.fetch("jobs").keys == ["workflow-policy"] && triggers.keys == ["pull_request_target"]
+  errors << "policy must contain only the pull_request_target policy job"
+end
+unless workflow["concurrency"]&.fetch("cancel-in-progress") == true &&
+       workflow["concurrency"]["group"].include?("pull_request.number")
+  errors << "policy runs must serialize per pull request and cancel stale runs"
+end
+if workflow.to_s.include?("pull_request.head") || workflow.to_s.include?("self-hosted") ||
+   workflow.to_s.include?("secrets.")
+  errors << "policy must not check out PR code, use persistent runners, or reference secrets"
+end
+unless errors.empty?
+  abort("FAIL CI policy workflow fixture:\n#{errors.map { |error| "  #{error}" }.join("\n")}")
+end
+puts("PASS CI policy workflow uses read-only metadata checks on trusted main code")
+RUBY
+
 python3 - "$repo_root/scripts/check-todos.sh" "$temporary_root/todos" <<'PY'
 import pathlib
 import subprocess
@@ -593,6 +1216,63 @@ for name, marker, identity, resource_suffix, should_pass, expected in cases:
         output = result.stdout + result.stderr
         if expected not in output:
             raise SystemExit(f"FAIL release fixture {name}: missing {expected!r}\n{output}")
+    print(f"PASS release fixture {name}")
+
+for name, embedded_identity, should_pass in (
+    ("embedded-release-identity", "release", True),
+    ("embedded-missing-identity", None, False),
+):
+    app = pathlib.Path(sys.argv[2]) / f"{name}.app"
+    contents = app / "Contents"
+    binary = contents / "MacOS/apkrun"
+    binary.parent.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": "io.apkrun.release-check-fixture",
+                "APKRunBuildIdentity": "release",
+            }
+        )
+    )
+    embedded_info = {}
+    if embedded_identity is not None:
+        embedded_info["APKRunBuildIdentity"] = embedded_identity
+    embedded_plist = contents / "embedded-info.plist"
+    embedded_plist.write_bytes(plistlib.dumps(embedded_info))
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-arch",
+            "arm64",
+            str(source),
+            f"-Wl,-sectcreate,__TEXT,__info_plist,{embedded_plist}",
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    section = subprocess.run(
+        ["otool", "-s", "__TEXT", "__info_plist", str(binary)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if section.returncode != 0 or "__info_plist" not in section.stdout:
+        raise SystemExit(f"FAIL release fixture {name}: embedded plist section was not created")
+    result = subprocess.run(
+        [str(checker), str(app)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if should_pass:
+        if result.returncode != 0:
+            raise SystemExit(f"FAIL release fixture {name}: expected pass\n{result.stdout}{result.stderr}")
+    else:
+        output = result.stdout + result.stderr
+        if result.returncode == 0 or "embedded Release APKRunBuildIdentity" not in output:
+            raise SystemExit(f"FAIL release fixture {name}: expected missing embedded identity rejection\n{output}")
     print(f"PASS release fixture {name}")
 
 unsupported_repo = pathlib.Path(sys.argv[2]).parent / "unsupported-signing-fixture-repo"

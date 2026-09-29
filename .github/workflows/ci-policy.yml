@@ -1,0 +1,35 @@
+name: CI policy
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-policy:
+    name: workflow-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Check CI control-file changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/check-pr-control-changes.py

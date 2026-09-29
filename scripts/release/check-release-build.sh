@@ -217,7 +217,12 @@ for binary in macho_files:
             failures.append(f"{binary}: missing or unreadable embedded Info.plist")
         continue
     build_identity = info.get("APKRunBuildIdentity")
-    if build_identity is not None and build_identity != "release":
+    if binary.name in {"apkrund", "apkrun"} and build_identity != "release":
+        failures.append(
+            f"{binary}: embedded Release APKRunBuildIdentity must be 'release', "
+            + f"found {build_identity!r}"
+        )
+    elif build_identity is not None and build_identity != "release":
         failures.append(
             f"{binary}: embedded Release APKRunBuildIdentity must be 'release', "
             + f"found {build_identity!r}"

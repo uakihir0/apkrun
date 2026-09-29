@@ -63,6 +63,7 @@ struct SourceRoot {
     let role: TargetRole
     let production: Bool
     let excludedRelativePaths: Set<String>
+    let skipNestedTestDirectories: Bool
 }
 
 func readText(_ url: URL) throws -> String {
@@ -444,13 +445,18 @@ func targetRoles(
         }
         let module = components[1]
         if target.name == module {
-            return .module(module)
+            return normalizedPath == "Packages/\(module)/Sources/\(module)"
+                ? .module(module)
+                : .unlisted(target.name)
         }
         if target.name == "\(module)TestSupport" {
             return .testSupport(module)
         }
         if target.name == "\(module)Tests" || target.name == "\(module)SystemTests" {
             return .test(module)
+        }
+        if knownModules.contains(target.name) {
+            return .unlisted(target.name)
         }
         if components.contains("Sources"), knownInternalTargets.contains(target.name) {
             return .module(module)
@@ -496,7 +502,7 @@ func sourceFiles(under root: URL, excluding excludedPaths: Set<String> = []) -> 
     }
     var files: [URL] = []
     for case let url as URL in enumerator {
-        let relative = String(url.path.dropFirst(root.path.count + 1))
+        guard let relative = relativePath(of: url, under: root) else { continue }
         if excludedPaths.contains(relative) {
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 enumerator.skipDescendants()
@@ -511,6 +517,13 @@ func sourceFiles(under root: URL, excluding excludedPaths: Set<String> = []) -> 
         }
     }
     return files
+}
+
+func relativePath(of file: URL, under root: URL) -> String? {
+    let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+    let filePath = file.resolvingSymlinksInPath().standardizedFileURL.path
+    guard filePath.hasPrefix(rootPath + "/") else { return nil }
+    return String(filePath.dropFirst(rootPath.count + 1))
 }
 
 func tokenize(_ source: String) -> [SourceToken] {
@@ -695,6 +708,13 @@ func importReferences(in source: String) -> [ImportReference] {
             moduleName = token.value.split(separator: "/").first.map {
                 String($0).split(separator: ".").first.map(String.init) ?? String($0)
             }
+        } else if token.value == "`",
+            tokens.indices.contains(candidate + 1),
+            tokens.indices.contains(candidate + 2),
+            tokens[candidate + 2].value == "`",
+            isIdentifierStartByte(tokens[candidate + 1].value)
+        {
+            moduleName = tokens[candidate + 1].value
         } else if isIdentifierStartByte(token.value) {
             moduleName = token.value
         } else {
@@ -813,10 +833,10 @@ func forbiddenDirectories(root: URL) -> [String] {
     return failures
 }
 
-func experimentModules(root: URL, packageTargets: [PackageTarget]) -> Set<String> {
+func experimentModules(root: URL, rootTargets: [PackageTarget]) throws -> Set<String> {
     let experiments = root.appending(path: "Experiments")
     var modules = Set(
-        packageTargets
+        rootTargets
             .filter { pathIsInsideExperiments(root.appending(path: $0.path), root: root) }
             .map(\.name)
     )
@@ -830,6 +850,17 @@ func experimentModules(root: URL, packageTargets: [PackageTarget]) -> Set<String
         return modules
     }
     for case let url as URL in enumerator {
+        if url.lastPathComponent == "Package.swift" {
+            let packageRoot = url.deletingLastPathComponent()
+            let dump = try runJSONCommand(
+                executable: URL(fileURLWithPath: "/usr/bin/xcrun"),
+                arguments: ["swift", "package", "dump-package", "--package-path", packageRoot.path],
+                workingDirectory: packageRoot,
+                source: url
+            )
+            let nestedTargets = try packageTargets(from: dump, source: url)
+            modules.formUnion(nestedTargets.map(\.name))
+        }
         let components = url.pathComponents
         if let sourceIndex = components.lastIndex(of: "Sources"),
             components.indices.contains(sourceIndex + 1)
@@ -991,6 +1022,12 @@ func checkPackageDependencies(
         let productDependencies = Set(target.dependencies.filter(\.product).map(\.name))
 
         if case .unlisted(let targetName) = role {
+            if graph.moduleTargets.contains(targetName) {
+                failures.append(
+                    "\(targetFile): module target '\(targetName)' must be under "
+                        + "'Packages/\(targetName)/Sources/\(targetName)' by modules.md §3"
+                )
+            }
             failures.append(
                 "\(targetFile): unclassified SwiftPM target at '\(target.path)' has no rule in modules.md §3"
             )
@@ -1349,7 +1386,8 @@ func packageSourceRoots(
                     false
                 }
             }(),
-            excludedRelativePaths: target.excludes
+            excludedRelativePaths: target.excludes,
+            skipNestedTestDirectories: false
         )
     }
 }
@@ -1373,12 +1411,27 @@ func xcodeSourceRoots(
                     url: root.appending(path: path),
                     role: .executable(roleName),
                     production: true,
-                    excludedRelativePaths: []
+                    excludedRelativePaths: [],
+                    skipNestedTestDirectories: true
                 )
             )
         }
     }
     return roots
+}
+
+func shouldSkipNestedTestFile(_ file: URL, in sourceRoot: SourceRoot) -> Bool {
+    guard sourceRoot.production else { return false }
+    guard let relative = relativePath(of: file, under: sourceRoot.url) else { return false }
+    let components = relative.split(separator: "/").map(String.init)
+    guard let index = components.firstIndex(where: { $0 == "Tests" || $0 == "UITests" }) else {
+        return false
+    }
+    let testDirectory = components[...index].joined(separator: "/")
+    return sourceRoot.skipNestedTestDirectories
+        || sourceRoot.excludedRelativePaths.contains {
+            testDirectory == $0 || testDirectory.hasPrefix($0 + "/")
+        }
 }
 
 func check(
@@ -1387,6 +1440,7 @@ func check(
     packageTargets: [PackageTarget],
     xcodeTargets: [String: [String: Any]],
     xcodePackages: Set<String>,
+    experimentModuleNames: Set<String>,
     packageURL: URL,
     projectURL: URL
 ) -> [String] {
@@ -1399,7 +1453,6 @@ func check(
         source: projectURL
     )
 
-    let experimentModuleNames = experimentModules(root: root, packageTargets: packageTargets)
     let testSupportNames = Set(packageTargets.filter { $0.name.hasSuffix("TestSupport") }.map(\.name))
     var sourceRoots = packageSourceRoots(targets: packageTargets, graph: graph, root: root)
     sourceRoots += xcodeSourceRoots(targets: xcodeTargets, root: root)
@@ -1413,10 +1466,10 @@ func check(
         for file in sourceFiles(
             under: sourceRoot.url,
             excluding: sourceRoot.excludedRelativePaths
-        )
-        where !sourceRoot.production
-            || !file.pathComponents.contains(where: { $0 == "Tests" || $0 == "UITests" })
-        {
+        ) {
+            if shouldSkipNestedTestFile(file, in: sourceRoot) {
+                continue
+            }
             failures += reportImports(
                 in: file,
                 owner: sourceRoot.role,
@@ -1477,12 +1530,14 @@ do {
     )
     let targets = try xcodeTargets(from: projectDump, source: projectURL)
     let xcodePackages = try xcodePackageNames(from: projectDump, source: projectURL)
+    let experimentModuleNames = try experimentModules(root: root, rootTargets: packageTargets)
     let failures = check(
         root: root,
         graph: graph,
         packageTargets: packageTargets,
         xcodeTargets: targets,
         xcodePackages: xcodePackages,
+        experimentModuleNames: experimentModuleNames,
         packageURL: packageURL,
         projectURL: projectURL
     )

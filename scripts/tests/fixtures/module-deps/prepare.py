@@ -88,6 +88,44 @@ elif mode == "experiments-import":
     experiment_source.parent.mkdir(parents=True)
     experiment_source.write_text("public struct SpikeFixture {}\n")
     diagnostics_source.write_text("import SpikeKit\n" + diagnostics_source.read_text())
+elif mode == "experiments-nested-package":
+    package_path = destination / "Experiments/HiddenExperiment"
+    (package_path / "Sources/Core").mkdir(parents=True)
+    (package_path / "Package.swift").write_text(
+        "// swift-tools-version: 6.2\n"
+        "import PackageDescription\n"
+        "let package = Package(\n"
+        '    name: "HiddenExperiment",\n'
+        '    products: [.library(name: "SwiftProtobuf", targets: ["HiddenExperiment"])],\n'
+        '    targets: [.target(name: "HiddenExperiment", path: "Sources/Core")]\n'
+        ")\n"
+    )
+    (package_path / "Sources/Core/Hidden.swift").write_text(
+        "public struct HiddenExperimentFixture {}\n"
+    )
+    manifest = manifest.replace(
+        '        .package(\n'
+        '            url: "https://github.com/weichsel/ZIPFoundation.git",\n'
+        '            exact: "0.9.20"\n'
+        "        ),",
+        '        .package(\n'
+        '            url: "https://github.com/weichsel/ZIPFoundation.git",\n'
+        '            exact: "0.9.20"\n'
+        "        ),\n"
+        '        .package(path: "Experiments/HiddenExperiment"),',
+        1,
+    )
+    manifest = manifest.replace(
+        '.product(name: "SwiftProtobuf", package: "swift-protobuf")',
+        '.product(name: "SwiftProtobuf", package: "HiddenExperiment")',
+        1,
+    )
+    guest_protocol_source = (
+        destination / "Packages/GuestProtocol/Sources/GuestProtocol/GuestProtocol.swift"
+    )
+    guest_protocol_source.write_text(
+        "import HiddenExperiment\n" + guest_protocol_source.read_text()
+    )
 elif mode == "unclassified-target":
     marker = "\n    ],\n    swiftLanguageModes:"
     insertion = (
@@ -120,6 +158,40 @@ elif mode == "experiment-target-name-mismatch":
     experiment_source.parent.mkdir(parents=True)
     experiment_source.write_text("public struct SpikeFixture {}\n")
     diagnostics_source.write_text("import HiddenExperiment\n" + diagnostics_source.read_text())
+elif mode == "backtick-import":
+    diagnostics_source.write_text("import `RuntimeCore`\n" + diagnostics_source.read_text())
+elif mode == "production-nested-tests-import":
+    hidden_source = (
+        destination / "Packages/RuntimeHost/Sources/RuntimeHost/Tests/Hidden.swift"
+    )
+    hidden_source.parent.mkdir(parents=True)
+    hidden_source.write_text("import GraphicsCore\n")
+elif mode == "target-owner-path-mismatch":
+    old_declaration = (
+        '.target(\n'
+        '            name: "GraphicsCore",\n'
+        '            dependencies: ["VirtioDeviceCore", "DiagnosticsCore"],\n'
+        '            path: "Packages/GraphicsCore/Sources/GraphicsCore"\n'
+        "        )"
+    )
+    new_declaration = (
+        '.target(\n'
+        '            name: "GraphicsCore",\n'
+        '            dependencies: [\n'
+        '                "VirtualMachineCore", "GraphicsCore", "InputCore", "GuestProtocol",\n'
+        '                "ImageCore", "RuntimeAPI", "DiagnosticsCore",\n'
+        "            ],\n"
+        '            path: "Packages/RuntimeCore/Sources/GraphicsCore"\n'
+        "        )"
+    )
+    if old_declaration not in manifest:
+        raise SystemExit("could not relocate GraphicsCore target in fixture manifest")
+    manifest = manifest.replace(old_declaration, new_declaration, 1)
+    old_source = destination / "Packages/GraphicsCore/Sources/GraphicsCore"
+    moved_source = destination / "Packages/RuntimeCore/Sources/GraphicsCore"
+    shutil.copytree(old_source, moved_source)
+    moved_module = moved_source / "GraphicsCore.swift"
+    moved_module.write_text("import RuntimeAPI\n" + moved_module.read_text())
 elif mode == "forbidden-import":
     diagnostics_source.write_text("@_implementationOnly import RuntimeCore\n" + diagnostics_source.read_text())
 elif mode != "valid":

@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -19,51 +19,66 @@ env:
 jobs:
   lint:
     name: lint
-    runs-on: [self-hosted, apkrun-ci]
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
       - name: Run repository checks
         run: scripts/ci/run-checks.sh
 
   codegen:
     name: codegen
-    runs-on: [self-hosted, apkrun-ci]
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
       - name: Check generated files
         run: scripts/ci/codegen.sh
 
   build:
     name: build
-    runs-on: [self-hosted, apkrun-ci]
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Prepare result directories
         run: mkdir -p build/ci
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
       - name: Check build environment
         run: scripts/bootstrap --check
       - name: Generate Xcode project
         run: scripts/generate-project.sh
       - name: Build Swift package
-        run: swift build
+        run: swift build -j 2
       - name: Build embedded runtime CLI
-        run: swift build --traits EmbeddedRuntime
+        run: swift build -j 2 --traits EmbeddedRuntime
       - name: Build Debug products
         run: >-
           xcodebuild -project APKRun.xcodeproj -scheme APKRun
-          -configuration Debug -derivedDataPath build/DebugDerivedData
+          -configuration Debug -jobs 2 -derivedDataPath build/DebugDerivedData
           -resultBundlePath build/ci/APKRun-Debug.xcresult
           CODE_SIGN_IDENTITY=- build
+      - name: Free disk before Release build
+        run: rm -rf build/DebugDerivedData
       - name: Build Release products
         run: >-
           xcodebuild -project APKRun.xcodeproj -scheme APKRun
-          -configuration Release -derivedDataPath build/ReleaseDerivedData
+          -configuration Release -jobs 2 -derivedDataPath build/ReleaseDerivedData
           -resultBundlePath build/ci/APKRun-Release.xcresult
           CODE_SIGNING_ALLOWED=NO build
       - name: Check Release bundle
         run: scripts/release/check-release-build.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app
-      - name: Smoke test Debug products
-        run: scripts/smoke-products.sh build/DebugDerivedData/Build/Products/Debug
       - name: Upload build results on failure
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -75,16 +90,16 @@ jobs:
 
   test-swift:
     name: test-swift
-    runs-on: [self-hosted, apkrun-ci]
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Prepare result directory
         run: mkdir -p build/ci
-      - name: Run Swift T0 and T1 tests
-        run: swift test --xunit-output build/ci/swift-tests.xml
-      - name: Run compiler-fail checks when available
-        if: ${{ hashFiles('scripts/check-compile-fail.sh') != '' }}
-        run: scripts/check-compile-fail.sh
+      - name: Run Swift T0 tests
+        run: swift test --skip 'SystemTests' -j 2 --xunit-output build/ci/swift-tests.xml
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

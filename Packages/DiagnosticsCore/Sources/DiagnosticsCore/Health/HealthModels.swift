@@ -280,7 +280,9 @@ public enum HealthVerdict: String, CaseIterable, Equatable, Sendable, Codable {
         case .graphicsFailure:
             return "Graphics failed to start"
         case .bootFailure:
-            if let detail = results.first(where: { $0.id == "runtime.boot" })?.detail,
+            if let bootResult = results.first(where: { $0.id == "runtime.boot" }),
+               bootResult.state == .failure,
+               let detail = bootResult.detail,
                !detail.isEmpty
             {
                 return "Android failed to start · \(detail)"

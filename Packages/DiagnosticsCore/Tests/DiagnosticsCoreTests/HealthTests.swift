@@ -105,6 +105,17 @@ import Testing
             runtimeState: .failed
         ) == "Android failed to start · stopped at systemServer after 180 s"
     )
+    let previousSuccessfulBoot = healthResult(
+        "runtime.boot",
+        .pass,
+        detail: "last boot completed in 31 s"
+    )
+    #expect(
+        HealthVerdict.bootFailure.statusLine(
+            results: [previousSuccessfulBoot],
+            runtimeState: .failed
+        ) == "Android failed to start"
+    )
 }
 
 @Test func healthVerdictHasStableStatusLineForEveryVerdict() {

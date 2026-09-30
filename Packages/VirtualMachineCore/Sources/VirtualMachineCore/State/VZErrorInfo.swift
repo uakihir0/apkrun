@@ -6,7 +6,7 @@ import Foundation
 /// The description may contain paths or other host-specific details. Callers
 /// should write it only to a private diagnostic log field; catalog errors use
 /// `underlying` so their public representation contains only domain and code.
-public struct VZErrorInfo: Equatable, Sendable {
+public struct VZErrorInfo: Error, Equatable, Sendable {
     /// The system error namespace.
     public let domain: String
 

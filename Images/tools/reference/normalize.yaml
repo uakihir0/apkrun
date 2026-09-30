@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "substitutions": [
+    {
+      "pattern": "(?i)(\\b(?:androidboot\\.|ro\\.)?serial(?:_?number|no)?\\b[\\\"']?\\s*\\]?\\s*[=:]\\s*[\\\"']?\\[?)([^\\]\\s,;\\\"']+)",
+      "replacement": "\\1<SERIAL>"
+    },
+    {
+      "pattern": "\\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\\b",
+      "replacement": "<MAC>"
+    },
+    {
+      "pattern": "(?<![A-Za-z0-9_])(?:/home|/Users)/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "<HOST_HOME_PATH>"
+    },
+    {
+      "pattern": "(?<![A-Za-z0-9_])/(?:root|tmp|var/tmp)/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "<HOST_TEMP_PATH>"
+    },
+    {
+      "pattern": "(?<![A-Za-z0-9_])/(?:mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "<HOST_PATH>",
+      "files": [
+        "crosvm-command-line.txt",
+        "cuttlefish_config.json",
+        "composite-disk-specs.json",
+        "kernel.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "host.json"
+      ]
+    },
+    {
+      "pattern": "(?i)([\\\"']?\\[?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*\\]?[\\\"']?\\s*[=:]\\s*\")(?:\\\\.|[^\"\\\\])*(\")",
+      "replacement": "\\1<REDACTED>\\2"
+    },
+    {
+      "pattern": "(?i)([\\\"']?\\[?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*\\]?[\\\"']?\\s*[=:]\\s*')(?:(?:\\\\.)|[^'\\\\])*(')",
+      "replacement": "\\1<REDACTED>\\2"
+    },
+    {
+      "pattern": "(?i)([\\\"']?\\[?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*\\]?[\\\"']?\\s*[=:]\\s*\\[?)([^\\]\\s,;\\\"']+)",
+      "replacement": "\\1<REDACTED>"
+    },
+    {
+      "pattern": "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+      "replacement": "<REDACTED_PRIVATE_KEY>"
+    }
+  ]
+}

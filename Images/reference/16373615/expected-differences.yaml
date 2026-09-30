@@ -1,0 +1,2 @@
+# Expected reference-to-VZ differences: JSON-compatible YAML keeps the parser dependency-free.
+[]

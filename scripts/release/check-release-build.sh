@@ -82,6 +82,41 @@ def parse_ed25519_public_key(data):
                 return key
     return None
 
+def parse_pkcs8_private_key(data):
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 3 or lines[0] != "-----BEGIN PRIVATE KEY-----" or lines[-1] != "-----END PRIVATE KEY-----":
+        return None
+    try:
+        decoded = base64.b64decode("".join(lines[1:-1]), validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if len(decoded) < 16 or decoded[0] != 0x30 or b"\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01" not in decoded:
+        return None
+    return decoded
+
+def parse_avb_public_key(data):
+    if len(data) < 8:
+        return None
+    key_bits = int.from_bytes(data[:4], "big")
+    if key_bits not in {2048, 4096, 8192}:
+        return None
+    if len(data) != 8 + 2 * (key_bits // 8):
+        return None
+    return data
+
+def add_material_tokens(tokens, binary_tokens, material):
+    fingerprint = hashlib.sha256(material).hexdigest()
+    tokens.add(material.hex())
+    tokens.add(base64.b64encode(material).decode("ascii"))
+    tokens.add(fingerprint)
+    tokens.add(fingerprint[:16])
+    tokens.add(":".join(fingerprint[index : index + 2] for index in range(0, 64, 2)))
+    binary_tokens.add(material)
+
 def add_key_tokens(path):
     data = path.read_bytes()
     tokens = set()
@@ -91,24 +126,25 @@ def add_key_tokens(path):
             tokens.add(token)
 
     unsupported = None
+    raw_public_key = None
+    private_key = None
+    avb_public_key = None
     if path.suffix.lower() in {".jks", ".keystore", ".p12", ".pfx", ".der", ".crt", ".cer"}:
         unsupported = f"{path}: unsupported binary or certificate signing fixture format"
-        raw_public_key = None
     elif b"-----BEGIN CERTIFICATE-----" in data:
         unsupported = f"{path}: certificate signing fixture cannot be inspected"
-        raw_public_key = None
     else:
         raw_public_key = parse_ed25519_public_key(data)
+        private_key = parse_pkcs8_private_key(data) if path.suffix.lower() == ".pem" else None
+        avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None
 
     binary_tokens = set()
     if raw_public_key is not None:
-        fingerprint = hashlib.sha256(raw_public_key).hexdigest()
-        tokens.add(raw_public_key.hex())
-        tokens.add(base64.b64encode(raw_public_key).decode("ascii"))
-        tokens.add(fingerprint)
-        tokens.add(fingerprint[:16])
-        tokens.add(":".join(fingerprint[index : index + 2] for index in range(0, 64, 2)))
-        binary_tokens.add(raw_public_key)
+        add_material_tokens(tokens, binary_tokens, raw_public_key)
+    elif unsupported is None and private_key is not None:
+        add_material_tokens(tokens, binary_tokens, private_key)
+    elif unsupported is None and avb_public_key is not None:
+        add_material_tokens(tokens, binary_tokens, avb_public_key)
     elif unsupported is None:
         unsupported = f"{path}: unrecognized test signing fixture format"
     return tokens, binary_tokens, unsupported

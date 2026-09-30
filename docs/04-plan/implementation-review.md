@@ -1155,3 +1155,24 @@ There is not enough evidence to attribute the missing bytes to guest shutdown,
 the parser, or console buffering. Adding a delay or retry to make the test
 green could hide lost serial output; maintainers should review the evidence
 and re-open the investigation if it recurs.
+
+## IR-053: Record libgpiod's library and tool licenses
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4; `ThirdParty/ThirdParty.lock.json`; `ThirdParty/licenses/alpine-libgpiod/` |
+
+**Choice.** Lock Alpine's `libgpiod` package as
+`GPL-2.0-or-later AND LGPL-2.1-or-later`, and include its upstream `COPYING`,
+GPL, LGPL, and Linux syscall-note license texts. Keep it as downloaded
+`tooling`; do not expand the tooling allowlist.
+
+**Reason.** Alpine's package metadata names the library license, while upstream
+`COPYING` distinguishes the LGPL library from the GPL GPIO tools, including
+`gpiomon`. The upstream notice also identifies Linux UAPI headers under the
+syscall-note exception. The lock records the library and tool licenses and
+retains that exception's text for review; maintainers should confirm whether
+the exception applies to the packaged binaries before #003 closes. The package
+is confined to the test guest and never enters APKRun.app.

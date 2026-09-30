@@ -81,6 +81,7 @@ for component in \
     alpine-minirootfs \
     alpine-socat \
     alpine-libcrypto3 \
+    alpine-libgpiod \
     alpine-libssl3 \
     alpine-readline \
     alpine-libncursesw \

@@ -189,7 +189,7 @@ The tooling list is allowed only for `ships: tooling` entries with `kind: prebui
 | AndroidX, Compose, Kotlin in the fixture apps | tooling, committed | Apache-2.0 | inside the committed APKs of `Tests/Fixtures/apks/`; locked in `Tests/Fixtures/AndroidApps/<module>/gradle.lockfile` |
 | Mesa (virgl driver), `kmscube` | tooling | MIT | Alpine packages in the test initramfs; the recorded `kmscube` stream in `Tests/Fixtures/graphics/` is committed |
 | Alpine `linux-virt` kernel | tooling, downloaded | GPL-2.0-only | never committed or published (§4.4) |
-| Alpine minirootfs and Linux test packages (`socat`, `libcrypto3`, `libssl3`, `readline`, `libncursesw`, `ncurses-terminfo-base`) | tooling, downloaded | the `AND` of the package licenses in Alpine's index; `socat` GPL-2.0-only WITH OpenSSL-Exception; `libcrypto3` and `libssl3` Apache-2.0; `readline` GPL-3.0-or-later; ncurses packages X11 | same |
+| Alpine minirootfs and Linux test packages (`socat`, `libcrypto3`, `libgpiod`, `libssl3`, `readline`, `libncursesw`, `ncurses-terminfo-base`) | tooling, downloaded | the `AND` of the package licenses in Alpine's index; `socat` GPL-2.0-only WITH OpenSSL-Exception; `libcrypto3` and `libssl3` Apache-2.0; `libgpiod` GPL-2.0-or-later AND LGPL-2.1-or-later; `readline` GPL-3.0-or-later; ncurses packages X11 | same |
 | depot_tools | tooling, downloaded | BSD-3-Clause | ANGLE build only |
 
 - Tools that only run (Xcode, protoc, buf, XcodeGen, ruff, ktfmt, bundletool, the Android SDK build tools) are not lock entries and are never committed or redistributed. Each developer accepts their terms when installing them ([environment-setup.md](environment-setup.md)).

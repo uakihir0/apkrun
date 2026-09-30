@@ -104,6 +104,24 @@
       "ships": "tooling"
     },
     {
+      "name": "alpine-libgpiod",
+      "group": "test-linux",
+      "kind": "prebuilt",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/aarch64/libgpiod-2.2.4-r0.apk",
+      "version": "2.2.4-r0",
+      "sha256": "6c6ee588d6385f2bf55b2d3baed61942a76ca7c1ee64750c98a33aaf31769d28",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "licenseFiles": [
+        "COPYING",
+        "LICENSES/GPL-2.0-only.txt",
+        "LICENSES/LGPL-2.1-or-later.txt",
+        "LICENSES/Linux-syscall-note.txt"
+      ],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
       "name": "alpine-libssl3",
       "group": "test-linux",
       "kind": "prebuilt",

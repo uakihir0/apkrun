@@ -268,7 +268,7 @@ scripts/build-third-party.sh virgl-runtime
 | Input | Kind | Ships | Notes |
 |---|---|---|---|
 | aapt2 (`com.android.tools.build:aapt2:8.9.1-12782657:osx` from Google Maven) | prebuilt | app (`Resources/tools/aapt2`) | its arm64 slice is checked with `lipo`; golden tests pin its output format; it runs under `sandbox-exec` ([../02-design/package-store.md](../02-design/package-store.md) §4.3) |
-| Alpine `linux-virt` kernel and minirootfs, `socat` | prebuilt | tooling | the test Linux guest ([../02-design/vm.md](../02-design/vm.md) §12); never shipped |
+| Alpine `linux-virt` kernel and minirootfs, `socat`, `libgpiod` | prebuilt | tooling | the test Linux guest ([../02-design/vm.md](../02-design/vm.md) §12); never shipped |
 | RiftVM `v1.0.4` (`github.com/riftvm/riftvm`, commit hash) | source, pinned as `riftvm` | derived | read for #018; copied or adapted files keep its MIT notice ([../02-design/graphics.md](../02-design/graphics.md) §2.3) |
 | apksig test vectors | vendored | tooling | Apache-2.0, `Packages/APKStoreCore/Tests/APKStoreCoreTests/Resources/apksig/` ([../02-design/package-store.md](../02-design/package-store.md) §4.5) |
 | swift-protobuf, swift-argument-parser, ZIPFoundation | swiftpm | app | exact versions in `Package.swift` (ZIPFoundation: ADR-0017) |

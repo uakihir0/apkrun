@@ -73,6 +73,7 @@ tar -xzf "$rootfs_archive" -C "$root"
 for component in \
     alpine-socat \
     alpine-libcrypto3 \
+    alpine-libgpiod \
     alpine-libssl3 \
     alpine-readline \
     alpine-libncursesw \

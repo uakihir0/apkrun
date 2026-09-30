@@ -611,7 +611,11 @@ The reference host installs the Cuttlefish host tools (`cvd`, from the android-c
 | `target` | `--gpu_mode=drm_virgl --secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure --cpus 4 --memory_mb 4096` | the configuration APKRun reproduces on VZ |
 | `swiftshader` | `--gpu_mode=guest_swiftshader` + the `target` HAL flags | the fallback GPU profile ([graphics.md](graphics.md) §9) |
 
-If the reference host cannot run `drm_virgl` (it needs host virglrenderer with EGL; Mesa llvmpipe may be enough), the `target` capture is taken with `guest_swiftshader`, and the graphics props for `drm_virgl` come from the Cuttlefish source (`bootconfig_args.cpp`) instead.
+The `target` profile defaults to `drm_virgl`. If the reference host cannot
+run it (it needs host virglrenderer with EGL; Mesa llvmpipe may be enough),
+the operator must explicitly select the `guest_swiftshader` fallback using
+the environment variables in §8.3. The fallback records its source-derived
+`drm_virgl` properties separately.
 
 ### 8.3 What is captured
 
@@ -620,7 +624,7 @@ If the reference host cannot run `drm_virgl` (it needs host virglrenderer with E
 | Host side | Guest side (via `adb`) |
 |---|---|
 | crosvm command line (from `launcher.log` / `ps -ww`) | `/proc/cmdline`, `/proc/bootconfig` |
-| `cuttlefish_runtime/instances/cvd-1/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
+| `cuttlefish_runtime/instances/cvd-<n>/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
 | composite disk specs (`os_composite`, persistent composite) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
 | `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
@@ -630,11 +634,101 @@ If the reference host cannot run `drm_virgl` (it needs host virglrenderer with E
 | | `/proc/asound/cards`, `getenforce`, AVC denials |
 | | `VIRTUAL_DEVICE_*` markers with timestamps |
 
-Serial numbers, MAC addresses, and host paths are normalized by `normalize.yaml` before committing. The captures contain no secrets.
+Instance numbering and ADB port selection follow the
+[Cuttlefish multi-tenancy documentation](https://source.android.com/docs/devices/cuttlefish/multi-tenancy).
+
+`capture.sh` runs only on Linux with Python 3.12 from `Images/tools/.venv`. It
+requires the extracted guest image directory in `ANDROID_PRODUCT_OUT`, verifies
+all artifacts against the checked-in build 16373615 manifest, and uses
+`launch_cvd`, `stop_cvd`, and `adb` from the matching Cuttlefish host tools on
+`PATH`. The host must have no ADB devices or crosvm processes attached, and
+only one reference profile can capture at a time. It uses Cuttlefish instance
+1 by default, or accepts `APKRUN_CVD_INSTANCE_NUM` for another provisioned
+number. Each run gets a private temporary Cuttlefish `HOME`, which isolates
+its runtime files and instance group from other Cuttlefish sessions. Guest
+commands are sent only to the `localhost` or `127.0.0.1` ADB serial for that
+instance's port; network ADB devices are not selected. Shutdown runs in the
+same private `HOME`, which contains only the one instance group created by
+this run. Host artifacts are read only from its newly written
+`cuttlefish_runtime/instances/cvd-<n>/` directory. The private `HOME` is
+removed after a successful shutdown. If launch fails, cleanup still targets
+that private group; the directory is preserved with its path printed only if
+shutdown or removal fails. A host-wide lock under `/tmp` serializes
+captures across checkouts on the host, so only one profile capture can run at
+a time. Shutdown is bounded by
+`APKRUN_CVD_STOP_TIMEOUT_SECONDS` (120 seconds by default, followed by a
+10-second forced-stop grace period). An abnormal exit normalizes and moves
+staging data under `incomplete/`. If raw logcat cannot be removed, the script
+tries to discard the whole stage and never publishes it. If the host
+filesystem also refuses stage deletion, the script prints the remaining
+private staging path for manual cleanup. A profile directory is never
+overwritten. Every failed collection is named with a reason in `MISSING.txt`;
+an incomplete, normalized capture is moved to
+`Images/reference/16373615/incomplete/` and exits nonzero so the canonical
+profile can be retried. If normalization fails, raw staging data is never
+published; failed stage deletion is reported for manual cleanup.
+`host.json` records the host OS, kernel,
+architecture, CVD package version and instance number, CPU count,
+nested-virtualization availability, and capture duration.
+
+When the host cannot run `drm_virgl`, the `target` fallback is explicit:
+`APKRUN_TARGET_GPU_MODE=guest_swiftshader`,
+`APKRUN_DRM_VIRGL_SOURCE_REVISION=<revision>`, and
+`APKRUN_DRM_VIRGL_PROPS_FILE=<file>` are required. The source-derived graphics
+properties are copied into `graphics-props-from-source.txt`; the mode and
+revision are recorded in `host.json`.
+
+The host capture also stores `crosvm-command-line.txt`,
+`internal-bootconfig.txt` (UTF-8 bootconfig with a valid AVB footer removed),
+`composite-disk-specs.json`, `cuttlefish_config.json`, `kernel.log`, and
+`launcher.log`. The runtime paths are discovered below
+`$HOME/cuttlefish_runtime`, and stale files from previous runs are excluded.
+
+`guest-capture.txt` is a tab-separated list of output filename and shell
+command. Each command uses plain `sh` syntax and runs through `adb exec-out`;
+the commands are intended to work in the serial shell used by #014, but that
+path remains unverified until the T3 console check. `logcat` is
+compressed on the host with deterministic gzip metadata. The comparator refuses
+gzip artifacts whose compressed or decompressed size exceeds 64 MiB. Serial
+numbers, MAC addresses, common host paths, and complete quoted or unquoted
+secret-keyed values are normalized by
+`normalize.yaml`. The capture is taken from a fresh development guest and must
+not contain secrets or user app data.
 
 ### 8.4 Diff against the VZ boot
 
-`compare_boot.py <reference dir> <vz capture dir>` runs the same guest-side capture against the VZ boot (through the hvc1 serial shell in M1, because ADB arrives in #015; the Guest Agent later), normalizes both, and writes a report by category (cmdline, bootconfig, props, block devices, mounts, modules, HALs, hvc users, network, SELinux).
+`compare_boot.py <reference dir> <vz capture dir>` compares normalized guest
+artifacts and writes `report.json` and `report.txt` in the VZ capture directory.
+The comparison categories and their input files are:
+
+| Category | Files |
+|---|---|
+| `cmdline` | `cmdline.txt` |
+| `bootconfig` | `bootconfig.txt` |
+| `props` | `properties.txt` |
+| `block devices` | `block-by-name.txt`, `block-sysfs.txt`, `block-sizes.txt` |
+| `mounts` | `mounts.txt`, `fstab.txt` |
+| `modules` | `modules.txt`, `first-stage-init.txt` |
+| `HALs` | `lshal.txt`, `services.txt`, `apex.txt`, `features.txt`, `audio-cards.txt` |
+| `hvc users` | `hvc-devices.txt`, `hvc-users.txt` |
+| `network` | `ip-addr.txt`, `ip-route.txt`, `ip-link.txt`, `connectivity.txt` |
+| `SELinux` | `selinux-mode.txt`, `avc-denials.txt` |
+
+The comparator applies the same normalization rules in memory, so it does not
+modify either input. It writes each report with an atomic replacement; report
+symlinks are replaced without following their targets, and a symlink report
+directory is rejected. `Images/tools/reference/compare_boot.py normalize <dir>` writes
+normalization into a capture before it is committed. An empty category on
+either side is reported as an unexplained missing capture input. Expected
+differences are exact `{category, key, reason, design}` matches in
+`Images/reference/<buildId>/expected-differences.yaml`; unused entries produce
+warnings. Unexplained differences exit 1. The YAML files use the JSON-compatible
+subset of YAML so the image tools need no additional parser dependency.
+
+Full `dmesg`, `logcat`, `kernel.log`, and `launcher.log` are kept for diagnosis;
+only the focused files in the table are compared automatically. The raw logs
+include volatile startup details and are reviewed when recording boot markers
+and phase timings.
 
 Every difference must be listed in `Images/reference/<buildId>/expected-differences.yaml` with a reason (for example "slot_suffix: no U-Boot, fixed `_a`"). An unexplained difference fails the T3 check that belongs to gate G2. This is the verification in [ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md).
 

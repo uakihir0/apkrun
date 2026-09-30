@@ -215,10 +215,55 @@ The reference boot capture ([../02-design/android-image.md](../02-design/android
 |---|---|
 | VM | arm64 Debian 12 or Ubuntu 24.04 in any VZ-based VM tool that sets `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled` (check `VZGenericPlatformConfiguration.isNestedVirtualizationSupported` first). 8 vCPUs, 16 GB RAM, 120 GB disk. |
 | KVM | `ls -l /dev/kvm` must exist inside the VM. Add the user to the `kvm` group. |
-| Host tools | install `cuttlefish-base` and `cuttlefish-user` from the android-cuttlefish arm64 packages, then reboot the VM |
+| Host tools | install `cuttlefish-base` and `cuttlefish-user` from the android-cuttlefish arm64 packages, then reboot the VM; `timeout` from GNU coreutils must be on `PATH` |
 | Artifacts | the same build as §3.2, plus `cvd-host_package.tar.gz` of that build |
 | Capture | `Images/tools/reference/capture.sh <profile>` for `default`, `target`, `swiftshader` ([../02-design/android-image.md](../02-design/android-image.md) §8.2) |
 | Output | copy the capture to `Images/reference/<buildId>/<profile>/` on the Mac and commit it |
+
+Extract the guest image archive and point the capture script at its product
+output directory. Activate the tools' Python environment and ensure
+`launch_cvd`, `stop_cvd`, and `adb` from the matching host tools are on `PATH`.
+Stop any running Cuttlefish guests and disconnect all ADB devices before
+capturing:
+
+```bash
+source Images/tools/.venv/bin/activate
+export ANDROID_PRODUCT_OUT=/path/to/extracted/aosp_cf_arm64_only_phone
+export APKRUN_CVD_PACKAGE_VERSION='<matching host package version>'
+Images/tools/reference/capture.sh default
+Images/tools/reference/capture.sh target
+Images/tools/reference/capture.sh swiftshader
+```
+
+`APKRUN_CVD_PACKAGE_VERSION` is optional when `dpkg-query` can report the
+installed `cuttlefish-base` version. The script checks every guest artifact
+against the checked-in build 16373615 manifest before launch. Each run creates
+a private temporary Cuttlefish `HOME` under your home directory, uses instance
+1 by default, and shuts down within that private `HOME`. Set
+`APKRUN_CVD_INSTANCE_NUM` to use another provisioned number. Guest commands
+use only the `localhost` or `127.0.0.1` ADB serial matching that instance's
+port. A host-wide lock under `/tmp` allows only one reference capture across
+checkouts and users at a time. A forced kill can leave that lock; after
+confirming that no capture or Cuttlefish process is running, the lock owner
+or an administrator can remove `/tmp/apkrun-cvd-capture.lock`. Shutdown is
+bounded by
+`APKRUN_CVD_STOP_TIMEOUT_SECONDS` (120 seconds by default, followed by a
+10-second forced-stop grace period). The private `HOME` is removed after a
+successful shutdown and retained with its path printed if shutdown or removal
+fails. Even after a failed launch, the script tries to stop the group in its
+private `HOME`. It refuses to overwrite an existing profile.
+Gzip inputs or decompressed outputs larger than 64 MiB are rejected. A failed
+or partial collection is retained under
+`Images/reference/16373615/incomplete/` with a per-item reason in `MISSING.txt`
+and a nonzero exit status. The script never publishes raw logcat. If both raw
+file removal and stage deletion fail, it prints the unpublished staging path;
+remove that directory manually before reviewing or committing captures. The
+script discards staging data and publishes nothing when normalization fails;
+if filesystem permissions prevent deletion, it prints the path for manual
+cleanup. Select the `target` fallback explicitly by setting
+`APKRUN_TARGET_GPU_MODE=guest_swiftshader`,
+`APKRUN_DRM_VIRGL_SOURCE_REVISION=<revision>`, and
+`APKRUN_DRM_VIRGL_PROPS_FILE=<path to source-derived properties>`.
 
 Without an M3 Mac, use an arm64 Linux machine (bare metal or cloud), or as a last resort an x86_64 Linux host with QEMU TCG.
 

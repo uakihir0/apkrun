@@ -224,7 +224,7 @@ format checks, and `git diff --check` passed. Regenerating the inventory from
 | Depends on | #008 |
 | Requirements | None named in requirements.md. Provides the ground truth for FR-VM-08 |
 | Design | [../../02-design/android-image.md](../../02-design/android-image.md) §7.7, §8; [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3; [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §3.3; [../../01-architecture/decisions/0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
-| Modules / paths | `Images/tools/reference/{capture.sh,compare_boot.py,normalize.yaml,guest-capture.txt}`, `Images/reference/16373615/{default,target,swiftshader}/`, `Images/reference/16373615/expected-differences.yaml`, `Images/tools/tests/test_compare_boot.py` |
+| Modules / paths | `Images/tools/reference/{capture.sh,compare_boot.py,normalize.yaml,guest-capture.txt}`, `Images/reference/16373615/{default,target,swiftshader}/`, `Images/reference/16373615/expected-differences.yaml`, `Images/tools/tests/{test_compare_boot.py,test_reference_capture.py}` |
 | Risks / questions | R-06, R-11 |
 
 ### Goal
@@ -247,8 +247,8 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
 
 - `Images/tools/reference/guest-capture.txt`: one entry per guest-side item, as an output file name and a shell command. Both channels execute it: `adb shell` here, and the serial shell in #014.
 - `Images/tools/reference/capture.sh`, `compare_boot.py`, and `normalize.yaml`.
-- `Images/reference/16373615/<profile>/` for the three profiles, each with a `host.json` that records the host kind, OS, kernel, cvd package version, CPU count, and nested virtualization on or off.
-- `Images/reference/16373615/expected-differences.yaml`. At this point it has only the header comment and no entries.
+- `Images/reference/16373615/<profile>/` for the three profiles, each with a `host.json` that records the host kind, OS, kernel, CVD package version and instance number, CPU count, and nested virtualization on or off.
+- `Images/reference/16373615/expected-differences.yaml`. Initially it contains a header comment and an empty array.
 - Verified strings in [../../02-design/android-image.md](../../02-design/android-image.md) §7.7 and [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3.
 
 ### Implementation steps
@@ -265,20 +265,20 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
      - `ip addr`, `ip route`, `ip link`, the `dumpsys connectivity` summary;
      - `/proc/asound/cards`, `getenforce`, AVC denials, and the `VIRTUAL_DEVICE_*` lines with timestamps.
    - Commands that need root are prefixed with `su 0`. This works on userdebug over both `adb shell` and the serial console.
-   - Only toybox commands are used, so the same list runs over the serial shell in #014.
-   - Check: every §8.3 guest item has exactly one entry.
+   - Use plain `sh` syntax and Android's built-in diagnostic commands, so the same list runs over `adb exec-out` and the serial shell in #014.
+   - Check: every §8.3 guest item has exactly one tab-separated entry; T0 checks every command with `sh -n`.
 3. **`capture.sh <profile>`.**
    - Launch `launch_cvd` with the flags of §8.2 and wait for `sys.boot_completed=1`.
    - Collect the host side: the crosvm command line, `internal/bootconfig` with the AVB footer stripped, the composite disk specs, `cuttlefish_config.json`, `kernel.log`, and `launcher.log`.
-   - Run `guest-capture.txt` through `adb shell` and stop the device.
-   - Run `compare_boot.py normalize <dir>`, which applies `normalize.yaml` to serial numbers, MAC addresses, and host paths. Then write `Images/reference/16373615/<profile>/`.
+   - Run `guest-capture.txt` through `adb exec-out` and stop the device.
+   - Run `compare_boot.py normalize <dir>`, which applies `normalize.yaml` to serial numbers, MAC addresses, host paths, and key-shaped secrets. Publish only a fully normalized capture under `Images/reference/16373615/<profile>/`; retain incomplete normalized captures under `Images/reference/16373615/incomplete/`.
    - Check: every §8.3 item is present in the directory, or a `MISSING.txt` there gives the reason. A search for the device serial, MAC addresses, and `/home/` finds nothing.
 4. **Capture the three profiles.**
    - Capture `default`, `target`, and `swiftshader`.
-   - If `drm_virgl` does not run on the reference host, capture `target` with `guest_swiftshader`. Then write the `drm_virgl` graphics properties from `bootconfig_args.cpp`, at the revision that belongs to build 16373615, into `target/graphics-props-from-source.txt` (§8.2).
+   - If `drm_virgl` does not run on the reference host, explicitly set `APKRUN_TARGET_GPU_MODE=guest_swiftshader`, provide the matching `bootconfig_args.cpp` revision and source-derived properties file, and write them into `target/graphics-props-from-source.txt` (§8.2).
    - Check: the three directories are committed together with their `host.json`.
 5. **`compare_boot.py <reference dir> <vz capture dir>`.**
-   - Normalize both sides and compare them in the categories cmdline, bootconfig, props, block devices, mounts, modules, HALs, hvc users, network, and SELinux.
+   - Normalize both sides in memory and compare them in the categories cmdline, bootconfig, props, block devices, mounts, modules, HALs, hvc users, network, and SELinux. A category with no captured input is an unexplained difference.
    - Read `Images/reference/<buildId>/expected-differences.yaml`, a list of `{category, key, reason, design}` entries where `design` is a link to the section that explains the difference.
    - Write `report.json` and a text report.
    - Exit 1 on any unexplained difference. Warn about entries that no longer match a difference.
@@ -297,19 +297,24 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
 
 See [../test-strategy.md](../test-strategy.md).
 
-- **T0** (`Images/tools/tests/test_compare_boot.py`), over synthetic capture pairs:
+- **T0** (`Images/tools/tests/test_compare_boot.py` and `test_reference_capture.py`), over synthetic capture pairs and fake Linux host tools:
   - Identical captures exit 0.
   - One unexplained difference per category exits 1 and names the category and the key.
   - An explained difference exits 0.
   - A stale entry produces a warning.
-  - Normalization removes serials, MACs, and host paths.
+  - Normalization removes serials, MACs, host paths, and key-shaped secrets; comparison normalizes without modifying either capture.
+  - The capture script's loopback ADB selection, host-wide capture lock, private Cuttlefish HOME cleanup, instance-scoped host collection, profile flags, AVB footer stripping, and missing-item reporting are exercised without Cuttlefish.
+  - An interrupted capture is normalized into `incomplete/` or discarded if normalization fails; raw logcat that cannot be removed prevents publication and triggers stage deletion, and a failed launch still attempts bounded cleanup inside its private HOME.
+  - A Linux-only integration case runs the real GNU `timeout` against a stop command that ignores TERM; it is skipped on macOS.
+  - Compound quoted secrets are fully redacted, compressed and decompressed gzip sizes are bounded, and report symlinks cannot overwrite their targets.
+  - Every guest command and `capture.sh` pass `sh -n`; the Linux-only guard is checked on macOS.
 - **T3** (manual, on the reference host): the capture itself, with `host.json` attached to the pull request. It is repeated whenever the pinned build changes.
 
 ### Acceptance criteria
 
 - [ ] The `default`, `target`, and `swiftshader` profiles are captured and committed with every item of §8.3, or with a recorded reason for each missing item.
 - [ ] The captures are normalized and contain no serial numbers, MAC addresses, host paths, or keys.
-- [ ] `compare_boot.py` reports by the ten categories, fails on unexplained differences, and passes its T0 tests.
+- [x] `compare_boot.py` reports by the ten categories, fails on unexplained differences, and passes its T0 tests.
 - [ ] `guest-capture.txt` runs unchanged over `adb shell` and over a plain `sh` console.
 - [ ] The exact `VIRTUAL_DEVICE_*` strings and their timing are in [android-image.md](../../02-design/android-image.md) §7.7. The boot signals in [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 are confirmed or corrected.
 - [ ] Each profile has a `host.json`.
@@ -318,6 +323,10 @@ See [../test-strategy.md](../test-strategy.md).
 
 - A TCG capture takes hours. Record its duration in `host.json` so that timing comparisons skip it.
 - #012 copies each profile's normalized `kernel.log` into the BootSignals golden fixtures.
+- **Verification (2026-09-30).** The comparison and capture tooling passes its synthetic T0 suite. The capture script was run with fake Linux host tools; no Cuttlefish VM was started. The current checkout is macOS and has neither `launch_cvd` nor `adb`, so the three real profile captures, T3 checks, marker timings, and guest command execution remain open. Do not treat the synthetic capture as a reference profile.
+- **Local checks (2026-09-30).** The final Python image-tools suite passed 278 tests; one Linux-only GNU `timeout` integration test was skipped on macOS. The focused capture suite passed 19 tests with that same one skip. Ruff lint and format passed, `git diff --check` passed, and `scripts/ci/run-checks.sh` passed all six checks.
+- **Adversarial review (2026-09-30).** Reviews found and fixed cross-checkout lock ownership, interruption cleanup, raw logcat publication, shutdown timeout, and documentation mismatches. The final review found no remaining P1/P2 findings.
+- **Follow-up.** Run the three profiles on the Linux reference host from [environment-setup.md](../../05-development/environment-setup.md) §3.3, review/redact each capture, and then record the real boot findings in the design sections listed in step 6.
 
 ---
 

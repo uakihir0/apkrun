@@ -1619,3 +1619,109 @@ defaults pending maintainer review and the #064 reference capture. A vbmeta
 that disables verification cannot supply the AVB-derived boot properties:
 libavb deliberately emits none, so APKRun fails instead of generating values
 that could misrepresent the image's verification state.
+
+## IR-071: Keep reference-capture YAML dependency-free
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/{normalize.yaml,compare_boot.py}` |
+
+**Choice.** Store normalization rules and expected differences as
+JSON-compatible YAML and parse them with Python's standard `json` module after
+removing full-line YAML comments.
+
+**Reason.** The reference tool needs only objects, arrays, strings, and numeric
+schema versions. Adding a YAML parser solely for this configuration would add
+a dependency to the image tooling and its third-party lock. JSON documents are
+valid YAML, remain easy to review, and keep the parser surface small. The T0
+tests exercise comments, normalization rules, and expected-difference entries.
+
+## IR-072: Do not synthesize reference captures or silently change GPU profile
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh` |
+
+**Choice.** Keep the `target` profile on the documented `drm_virgl` flags and
+do not check in fake profile directories when no Linux Cuttlefish host is
+available. A `target` run that cannot start is retained as incomplete with
+`MISSING.txt` and a nonzero status; the `guest_swiftshader` fallback and its
+source-derived graphics properties must be selected and recorded explicitly
+on the reference host.
+
+**Reason.** The three committed profiles are ground truth used by #010–#014
+and R-06/R-11. Synthetic outputs can test the tooling but cannot establish
+boot behavior. Automatically replacing `drm_virgl` with SwiftShader would
+make a profile appear to represent the target configuration while omitting
+the required graphics properties from the pinned Cuttlefish source. The
+current macOS checkout has no `launch_cvd` or `adb`, so real captures and boot
+timings remain unverified.
+
+## IR-073: Isolate Cuttlefish capture ownership and bound published artifacts
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [environment-setup.md](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/{capture.sh,compare_boot.py,normalize.yaml}` |
+
+**Choices.**
+
+- Launch one explicit Cuttlefish instance in a private temporary CVD `HOME`,
+  bind ADB commands to that instance's loopback port, and stop within the same
+  `HOME`, including after a failed launch. Bound `stop_cvd` to 120 seconds by
+  default with a 10-second forced-stop grace period. The private `HOME` is
+  removed after successful cleanup and retained for inspection or cleanup if
+  shutdown or removal fails.
+- Use one atomic capture lock directory under `/tmp` so separate checkouts and
+  users on the reference host cannot run overlapping profiles. A forced kill
+  may leave this shared lock; the setup guide records the safe cleanup step.
+- Store the footer-stripped internal bootconfig as UTF-8 text so it receives
+  the same secret normalization and bootconfig comparison as guest
+  `/proc/bootconfig`.
+- Redact complete quoted secret values, underscore/camel-case compound secret
+  keys, and common host paths including `/run`, `/var/...`, `/srv`, and
+  `/usr/local/google/home` in host-only capture files.
+- Reject gzip artifacts whose compressed input or decompressed output exceeds
+  64 MiB. Write reports through atomic file replacement so a report symlink
+  cannot redirect writes.
+- Scope host logs and config copies to the chosen instance directory, filter
+  crosvm command lines by the private runtime path, and record individual
+  file-copy failures in `MISSING.txt`.
+- On abnormal exit, remove any raw logcat file before normalization. If it
+  cannot be removed, try to discard the entire stage and never publish it.
+  Report the private staging path for manual cleanup if the host filesystem
+  also refuses stage deletion. Otherwise normalize and retain the stage as
+  incomplete; normalization failures also prevent publication.
+
+**Reason.** A sole-device ADB snapshot does not establish which launch owns
+that device, and an unqualified shutdown can affect another Cuttlefish guest.
+The private `HOME` isolates the runtime directory and the single-instance
+group, so group-scoped Cuttlefish shutdown stays within this capture. The
+explicit instance number provides identity for launch and loopback-only ADB
+selection. The runtime path is also required when selecting a crosvm process;
+matching the instance number alone could mix processes from another HOME.
+Separate worktrees and users can share an Android host, so one host-wide lock
+in shared `/tmp` prevents overlapping profile captures. A bounded shutdown
+lets signal cleanup continue to normalize or discard staging data and release
+the lock if `stop_cvd` hangs.
+Internal bootconfig values may contain the same identifiers or secrets as
+guest bootconfig, so keeping it binary bypassed normalization. Quoted values
+can contain spaces, and host logs can include system runtime paths outside the
+home and temporary roots. Finally, compressed logs are untrusted input and
+may be unusually large or expand far beyond their on-disk size; separate
+fixed caps keep normalization bounded. Atomic replacement protects files
+outside the report directory even when an existing report name is a symlink.
+Raw logcat remains unnormalized until compression; refusing publication when
+it cannot be deleted prevents that private data from entering an incomplete
+capture. If the filesystem prevents both file and stage deletion, the script
+cannot remove those bytes but reports the remaining path and still refuses
+publication. A forced kill can leave a stale `/tmp` lock, which the setup
+guide explains how the lock owner or an administrator can remove after
+confirming that no capture is active.
+T0 coverage exercises these boundaries, while real host behavior remains
+subject to the open #064 T3 run.

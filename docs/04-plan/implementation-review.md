@@ -1527,3 +1527,44 @@ concatenated members/frames are valid inputs for the declared compression
 formats. The pinned build's 42,031,616-byte kernel section and 42,795,008-byte
 effective image size fit comfortably; no source artifact is modified. Keep
 the cap reviewable in case later supported Android kernels need a larger image.
+
+## IR-067: Roll back extraction output publication
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.1; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/apkrun_image/extract.py` |
+
+**Choice.** Stage the five extracted files and `extraction.json`, move any
+existing known outputs into a temporary backup directory, publish the new
+files, and publish `extraction.json` last. If a rename fails, remove files
+already published and restore the prior set. Keep the backup directory and
+withhold the metadata marker if rollback itself fails.
+
+**Reason.** The output directory may contain files owned by adjacent image
+build steps, so replacing the directory as a whole would remove unrelated
+outputs. Per-file replacement without rollback can leave a mixture of old and
+new boot artifacts after a disk or permission error. A regression test injects
+a mid-publication failure and verifies that the previous set and unrelated
+files remain intact.
+
+## IR-068: Mark the pinned command-line measurement provisional
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §§4.1, 6.4, 8; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/layouts/cuttlefish-phone-arm64.json` |
+
+**Choice.** Record the pinned build's 157-byte command line from the real
+extraction with only the required `console=hvc0` layout addition, and label it
+provisional. Do not add any other reference-derived command-line arguments or
+layer-2 bootconfig values while `Images/reference/16373615/target/` is absent.
+
+**Reason.** The design identifies the #064 target capture as the source for
+those values. Guessing them would make the recorded measurement and layout
+look complete without evidence. The measurement confirms the current vendor
+and boot command lines plus the mandatory console fit the limit; the final
+command-line length and reference-backed layout remain open until that capture
+exists.

@@ -32,6 +32,9 @@ class FakeBuildAPI:
         self.interrupted = False
         self.include_digest = True
         self.download_bytes = ARTIFACT_BYTES
+        self.redirect_download = False
+        self.redirect_download_same_origin = False
+        self.redirect_api = False
 
         owner = self
 
@@ -40,6 +43,11 @@ class FakeBuildAPI:
                 parsed = urlparse(self.path)
                 if parsed.path.endswith("/attempts/latest/artifacts"):
                     assert parse_qs(parsed.query)["key"] == ["test-secret"]
+                    if owner.redirect_api:
+                        self.send_response(302)
+                        self.send_header("Location", "http://example.invalid/metadata")
+                        self.end_headers()
+                        return
                     metadata = {
                         "name": ARTIFACT_NAME,
                         "size": len(ARTIFACT_BYTES),
@@ -56,9 +64,19 @@ class FakeBuildAPI:
                     return
                 if parsed.path.endswith(f"/artifacts/{ARTIFACT_NAME}/url"):
                     assert parse_qs(parsed.query)["key"] == ["test-secret"]
+                    endpoint = "/redirect" if owner.redirect_download else "/download"
                     self.send_json(
-                        {"signedUrl": f"http://127.0.0.1:{self.server.server_port}/download"}
+                        {"signedUrl": (f"http://127.0.0.1:{self.server.server_port}{endpoint}")}
                     )
+                    return
+                if parsed.path == "/redirect":
+                    self.send_response(302)
+                    if owner.redirect_download_same_origin:
+                        target = f"http://127.0.0.1:{self.server.server_port}/download"
+                    else:
+                        target = "http://example.invalid/artifact"
+                    self.send_header("Location", target)
+                    self.end_headers()
                     return
                 if parsed.path == "/download":
                     range_header = self.headers.get("Range")
@@ -136,6 +154,7 @@ def fetch_arguments(directory: Path, api_key: str | None) -> dict[str, Any]:
         "pattern": "aosp_cf_arm64_only_phone-img-*.zip",
         "output_directory": directory,
         "api_key": api_key,
+        "allow_loopback_http_for_testing": True,
     }
 
 
@@ -294,6 +313,222 @@ def test_api_artifact_sizes_reject_fractional_numbers() -> None:
         fetch_module._positive_size(1.9, ARTIFACT_NAME)
 
     assert fetch_module._positive_size("19", ARTIFACT_NAME) == 19
+    assert fetch_module._positive_size(fetch_module.MAX_ARTIFACT_SIZE, ARTIFACT_NAME) == (
+        fetch_module.MAX_ARTIFACT_SIZE
+    )
+    with pytest.raises(FetchError, match="download limit"):
+        fetch_module._positive_size(fetch_module.MAX_ARTIFACT_SIZE + 1, ARTIFACT_NAME)
+    with pytest.raises(FetchError, match="invalid size"):
+        fetch_module._positive_size("9" * 4301, ARTIFACT_NAME)
+
+
+def test_existing_file_verification_stops_if_the_open_file_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hash reader is bounded even when a file grows after it is opened."""
+    path = tmp_path / ARTIFACT_NAME
+    path.write_bytes(b"four")
+    real_hash_descriptor = fetch_module._sha256_descriptor
+
+    def grow_then_hash(descriptor: int, *, maximum_size: int) -> str:
+        with path.open("ab") as stream:
+            stream.write(b"!")
+        return real_hash_descriptor(descriptor, maximum_size=maximum_size)
+
+    monkeypatch.setattr(fetch_module, "_sha256_descriptor", grow_then_hash)
+
+    with pytest.raises(FetchError, match="grew beyond its expected size"):
+        fetch_module._verify_file(
+            path,
+            Artifact(name=ARTIFACT_NAME, size=4),
+            record=None,
+        )
+
+
+def test_partial_finalization_stops_if_the_open_file_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publishing reads at most one excess byte from a concurrently grown partial."""
+    path = tmp_path / f"{ARTIFACT_NAME}.partial"
+    path.write_bytes(b"four")
+    expected_identity = fetch_module._file_identity(path.stat())
+    real_read = fetch_module.os.read
+    real_write = fetch_module.os.write
+    requested_read_sizes: list[int] = []
+    staged_writes: list[bytes] = []
+    grew = False
+
+    def grow_then_read(descriptor: int, size: int) -> bytes:
+        nonlocal grew
+        identity = fetch_module._file_identity(fetch_module.os.fstat(descriptor))
+        if identity == expected_identity:
+            requested_read_sizes.append(size)
+        if identity == expected_identity and not grew:
+            grew = True
+            append_descriptor = fetch_module.os.open(
+                path,
+                fetch_module.os.O_WRONLY | fetch_module.os.O_APPEND,
+            )
+            try:
+                real_write(append_descriptor, b"!")
+            finally:
+                fetch_module.os.close(append_descriptor)
+        return real_read(descriptor, size)
+
+    def capture_stage_write(descriptor: int, data: bytes | memoryview) -> int:
+        if fetch_module._file_identity(fetch_module.os.fstat(descriptor)) != expected_identity:
+            staged_writes.append(bytes(data))
+        return real_write(descriptor, data)
+
+    monkeypatch.setattr(fetch_module.os, "read", grow_then_read)
+    monkeypatch.setattr(fetch_module.os, "write", capture_stage_write)
+
+    with pytest.raises(FetchError, match="grew beyond its expected size"):
+        fetch_module._publish_partial(
+            path,
+            Artifact(name=ARTIFACT_NAME, size=4),
+            expected_sha256=None,
+            expected_identity=expected_identity,
+        )
+
+    assert grew
+    assert requested_read_sizes == [5]
+    assert staged_writes == []
+    assert path.read_bytes() == b"four!"
+    assert not (tmp_path / ARTIFACT_NAME).exists()
+
+
+def test_download_rejects_oversized_artifact_before_creating_partial(tmp_path: Path) -> None:
+    """Direct callers cannot bypass the API size ceiling."""
+    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
+
+    with pytest.raises(FetchError, match="download limit"):
+        fetch_module._download(
+            url="https://artifact.example/download",
+            partial_path=partial,
+            artifact=Artifact(name=ARTIFACT_NAME, size=fetch_module.MAX_ARTIFACT_SIZE + 1),
+        )
+
+    assert not partial.exists()
+
+
+def test_download_redirect_rejects_non_loopback_http_destination(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+) -> None:
+    """A loopback test endpoint cannot redirect the client to an external HTTP host."""
+    fake_api.redirect_download = True
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    with pytest.raises(FetchError, match="redirected to an unsafe URL"):
+        fetch_artifacts(**arguments)
+
+    assert not (tmp_path / ARTIFACT_NAME).exists()
+    assert not (tmp_path / f"{ARTIFACT_NAME}.partial").exists()
+
+
+def test_download_redirect_allows_same_loopback_origin(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+) -> None:
+    """A local Build API test endpoint can redirect within its own origin."""
+    fake_api.redirect_download = True
+    fake_api.redirect_download_same_origin = True
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    records = fetch_artifacts(**arguments)
+
+    assert (tmp_path / ARTIFACT_NAME).read_bytes() == ARTIFACT_BYTES
+    assert records[0].size == len(ARTIFACT_BYTES)
+
+
+def test_download_redirect_rejects_https_to_loopback_http() -> None:
+    """An HTTPS artifact host cannot downgrade even to a local HTTP endpoint."""
+    handler = fetch_module._SafeRedirectHandler(allow_loopback_http_for_testing=True)
+
+    with pytest.raises(FetchError, match="redirected to an unsafe URL"):
+        handler.redirect_request(
+            Request("https://artifacts.example/download"),
+            None,
+            302,
+            "Found",
+            {},
+            "http://127.0.0.1/private",
+        )
+
+
+def test_loopback_redirect_cannot_change_ports() -> None:
+    """Local test endpoints cannot use a redirect to reach another local service."""
+    handler = fetch_module._SafeRedirectHandler(allow_loopback_http_for_testing=True)
+
+    with pytest.raises(FetchError, match="redirected to an unsafe URL"):
+        handler.redirect_request(
+            Request("http://127.0.0.1:8000/metadata"),
+            None,
+            302,
+            "Found",
+            {},
+            "http://127.0.0.1:8001/private",
+        )
+
+
+def test_api_request_rejects_unsafe_redirect(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+) -> None:
+    """Build API JSON redirects are checked before a second request is opened."""
+    fake_api.redirect_api = True
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    with pytest.raises(FetchError, match="redirected to an unsafe URL"):
+        fetch_artifacts(**arguments)
+
+    assert not fake_api.download_requests
+
+
+def test_api_request_rejects_loopback_http_without_test_override(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+) -> None:
+    """Production callers cannot direct the Build API client to local HTTP."""
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+    del arguments["allow_loopback_http_for_testing"]
+
+    with pytest.raises(FetchError, match="request URL is unsafe"):
+        fetch_artifacts(**arguments)
+
+
+def test_signed_url_rejects_loopback_http_without_test_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An API response cannot make production downloads target loopback HTTP."""
+    request_options: list[dict[str, object]] = []
+
+    def return_loopback_signed_url(
+        _url: str,
+        **options: object,
+    ) -> dict[str, str]:
+        request_options.append(options)
+        return {"signedUrl": "http://127.0.0.1:8080/artifact"}
+
+    monkeypatch.setattr(fetch_module, "_request_json", return_loopback_signed_url)
+
+    with pytest.raises(FetchError, match="unsafe download URL"):
+        fetch_module._signed_url(
+            base_url="https://build-api.example/v4",
+            api_key="test-secret",
+            build_id="16373615",
+            target="aosp_cf_arm64_only_phone-userdebug",
+            artifact_name=ARTIFACT_NAME,
+        )
+
+    assert request_options == [{"allow_loopback_http_for_testing": False}]
 
 
 def test_api_json_response_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,12 +546,47 @@ def test_api_json_response_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
             requested_sizes.append(size)
             return b"x" * size
 
-    monkeypatch.setattr(fetch_module, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
+    monkeypatch.setattr(
+        fetch_module,
+        "_open_validated_url",
+        lambda *_args, **_kwargs: OversizedResponse(),
+    )
 
     with pytest.raises(FetchError, match="response exceeds"):
-        fetch_module._request_json("http://127.0.0.1/metadata")
+        fetch_module._request_json(
+            "http://127.0.0.1/metadata",
+            allow_loopback_http_for_testing=True,
+        )
 
     assert requested_sizes == [fetch_module.MAX_API_RESPONSE_SIZE + 1]
+
+
+def test_api_json_translates_extreme_integer_parse_errors_to_fetch_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A huge JSON integer cannot escape the fetch CLI as a raw ValueError."""
+
+    class NumericResponse:
+        def __enter__(self) -> NumericResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _size: int = -1) -> bytes:
+            return b'{"size":' + b"9" * 4301 + b"}"
+
+    monkeypatch.setattr(
+        fetch_module,
+        "_open_validated_url",
+        lambda *_args, **_kwargs: NumericResponse(),
+    )
+
+    with pytest.raises(FetchError, match="invalid JSON"):
+        fetch_module._request_json(
+            "http://127.0.0.1/metadata",
+            allow_loopback_http_for_testing=True,
+        )
 
 
 def test_api_pagination_has_a_page_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -439,7 +709,7 @@ def test_interrupted_download_keeps_writing_to_the_open_partial_file(
     victim = tmp_path / "outside"
     victim.write_bytes(b"keep me")
     partial = tmp_path / f"{ARTIFACT_NAME}.partial"
-    real_urlopen = fetch_module.urlopen
+    real_open_validated_url = fetch_module._open_validated_url
 
     class SwappingResponse:
         def __init__(self, response: object) -> None:
@@ -463,13 +733,22 @@ def test_interrupted_download_keeps_writing_to_the_open_partial_file(
                 raise http.client.IncompleteRead(ARTIFACT_BYTES[:7], len(ARTIFACT_BYTES) - 7)
             return cast(bytes, getattr(self.response, "read")(_size))
 
-    def urlopen_with_swap(request: Request, *, timeout: float) -> object:
-        response = real_urlopen(request, timeout=timeout)
+    def open_with_swap(
+        request: Request,
+        *,
+        timeout: float,
+        allow_loopback_http_for_testing: bool = False,
+    ) -> object:
+        response = real_open_validated_url(
+            request,
+            timeout=timeout,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
+        )
         if urlparse(request.full_url).path == "/download":
             return SwappingResponse(response)
         return response
 
-    monkeypatch.setattr(fetch_module, "urlopen", urlopen_with_swap)
+    monkeypatch.setattr(fetch_module, "_open_validated_url", open_with_swap)
     arguments = fetch_arguments(tmp_path, "test-secret")
     arguments["api_base_url"] = fake_api.base_url
 
@@ -490,7 +769,7 @@ def test_finalization_rejects_a_partial_path_swapped_to_a_symlink(
     victim = tmp_path / "outside"
     victim.write_bytes(b"x" * len(ARTIFACT_BYTES))
     partial = tmp_path / f"{ARTIFACT_NAME}.partial"
-    real_urlopen = fetch_module.urlopen
+    real_open_validated_url = fetch_module._open_validated_url
 
     class SwappingResponse:
         def __init__(self, response: object) -> None:
@@ -514,13 +793,22 @@ def test_finalization_rejects_a_partial_path_swapped_to_a_symlink(
                 partial.symlink_to(victim)
             return chunk
 
-    def urlopen_with_swap(request: Request, *, timeout: float) -> object:
-        response = real_urlopen(request, timeout=timeout)
+    def open_with_swap(
+        request: Request,
+        *,
+        timeout: float,
+        allow_loopback_http_for_testing: bool = False,
+    ) -> object:
+        response = real_open_validated_url(
+            request,
+            timeout=timeout,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
+        )
         if urlparse(request.full_url).path == "/download":
             return SwappingResponse(response)
         return response
 
-    monkeypatch.setattr(fetch_module, "urlopen", urlopen_with_swap)
+    monkeypatch.setattr(fetch_module, "_open_validated_url", open_with_swap)
     arguments = fetch_arguments(tmp_path, "test-secret")
     arguments["api_base_url"] = fake_api.base_url
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
 
 API_BASE_URL = "https://androidbuild-pa.googleapis.com/v4"
 API_KEY_ENV = "APKRUN_ANDROID_BUILD_API_KEY"
@@ -28,6 +28,7 @@ CHUNK_SIZE = 1024 * 1024
 MAX_API_RESPONSE_SIZE = 1024 * 1024
 MAX_API_PAGES = 100
 MAX_PAGE_TOKEN_SIZE = 4096
+MAX_ARTIFACT_SIZE = 16 * 1024**3
 USER_AGENT = "APKRun-Image-Tools/0.1.0"
 
 
@@ -79,16 +80,110 @@ def _artifact_name(value: object) -> str:
 
 
 def _positive_size(value: object, name: str) -> int:
-    """Parse a positive byte count from the API response."""
+    """Parse a bounded byte count from API metadata or a local record."""
     if isinstance(value, int) and not isinstance(value, bool):
         size = value
     elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        if len(value) > len(str(MAX_ARTIFACT_SIZE)):
+            raise FetchError(f"Android Build API returned an invalid size for {name}.")
         size = int(value)
     else:
         raise FetchError(f"Android Build API returned an invalid size for {name}.")
     if size < 0:
         raise FetchError(f"Android Build API returned an invalid size for {name}.")
+    if size > MAX_ARTIFACT_SIZE:
+        raise FetchError(f"Artifact {name} exceeds the {MAX_ARTIFACT_SIZE}-byte download limit.")
     return size
+
+
+def _loopback_http_url(url: str) -> bool:
+    """Return whether a URL is plain HTTP on an explicit loopback host."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        return (
+            parsed.scheme == "http"
+            and hostname is not None
+            and hostname.lower() in {"127.0.0.1", "::1", "localhost"}
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return False
+
+
+def _safe_download_url(url: str, *, allow_loopback_http_for_testing: bool = False) -> bool:
+    """Allow HTTPS URLs and explicitly enabled loopback HTTP test URLs."""
+    try:
+        parsed = urlparse(url)
+        if not parsed.netloc or parsed.hostname is None:
+            return False
+        parsed.port
+        if parsed.username is not None or parsed.password is not None:
+            return False
+        return parsed.scheme == "https" or (
+            allow_loopback_http_for_testing and _loopback_http_url(url)
+        )
+    except ValueError:
+        return False
+
+
+def _url_origin(url: str) -> tuple[str, str, int | None]:
+    """Return a normalized origin for a valid HTTP(S) URL."""
+    parsed = urlparse(url)
+    if parsed.hostname is None:
+        raise ValueError("URL has no host")
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme, parsed.hostname.lower(), port
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    """Reject unsafe or cross-origin loopback redirects before opening the next hop."""
+
+    def __init__(self, *, allow_loopback_http_for_testing: bool = False) -> None:
+        super().__init__()
+        self.allow_loopback_http_for_testing = allow_loopback_http_for_testing
+
+    def redirect_request(
+        self,
+        request: Request,
+        response: object,
+        code: int,
+        message: str,
+        headers: Mapping[str, str],
+        new_url: str,
+    ) -> Request | None:
+        """Permit HTTPS redirects and same-origin loopback HTTP redirects only."""
+        current_url = request.full_url
+        target_url = new_url
+        if not _safe_download_url(
+            target_url,
+            allow_loopback_http_for_testing=self.allow_loopback_http_for_testing,
+        ):
+            raise FetchError("Request redirected to an unsafe URL.")
+        if _loopback_http_url(current_url) and (
+            not _loopback_http_url(target_url)
+            or _url_origin(current_url) != _url_origin(target_url)
+        ):
+            raise FetchError("Request redirected to an unsafe URL.")
+        if not _loopback_http_url(current_url) and urlparse(target_url).scheme != "https":
+            raise FetchError("Request redirected to an unsafe URL.")
+        return super().redirect_request(request, response, code, message, headers, target_url)
+
+
+def _open_validated_url(
+    request: Request,
+    *,
+    timeout: float,
+    allow_loopback_http_for_testing: bool = False,
+) -> object:
+    """Open an HTTP(S) URL with redirect validation enabled."""
+    opener: OpenerDirector = build_opener(
+        _SafeRedirectHandler(allow_loopback_http_for_testing=allow_loopback_http_for_testing)
+    )
+    return opener.open(request, timeout=timeout)
 
 
 def _sha256_value(value: object, name: str) -> str | None:
@@ -104,15 +199,22 @@ def _request_json(
     url: str,
     *,
     timeout: float = 60.0,
+    allow_loopback_http_for_testing: bool = False,
 ) -> Mapping[str, Any]:
     """Read an API JSON response without exposing its query string on errors."""
+    if not _safe_download_url(url, allow_loopback_http_for_testing=allow_loopback_http_for_testing):
+        raise FetchError("Android Build API request URL is unsafe.")
     request = Request(
         url,
         headers={"Accept": "application/json", "User-Agent": USER_AGENT},
         method="GET",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _open_validated_url(
+            request,
+            timeout=timeout,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
+        ) as response:
             payload = response.read(MAX_API_RESPONSE_SIZE + 1)
             if len(payload) > MAX_API_RESPONSE_SIZE:
                 raise FetchError(
@@ -124,7 +226,7 @@ def _request_json(
         raise FetchError("Could not reach the Android Build API.") from None
     try:
         value = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError):
         raise FetchError("Android Build API returned invalid JSON.") from None
     if not isinstance(value, dict):
         raise FetchError("Android Build API returned an unexpected response.")
@@ -145,6 +247,7 @@ def _list_artifacts(
     build_id: str,
     target: str,
     pattern: str,
+    allow_loopback_http_for_testing: bool = False,
 ) -> list[Artifact]:
     """Resolve an artifact glob across all pages of the Build API response."""
     path = f"/builds/{quote(build_id, safe='')}/{quote(target, safe='')}/attempts/latest/artifacts"
@@ -164,6 +267,7 @@ def _list_artifacts(
         parameters = {"pageToken": page_token} if page_token else {}
         response = _request_json(
             _api_url(base_url, path, api_key, parameters),
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
         )
         artifacts = response.get("artifacts")
         if not isinstance(artifacts, list):
@@ -207,41 +311,36 @@ def _signed_url(
     build_id: str,
     target: str,
     artifact_name: str,
+    allow_loopback_http_for_testing: bool = False,
 ) -> str:
     """Request a time-limited download URL for one artifact."""
     path = (
         f"/builds/{quote(build_id, safe='')}/{quote(target, safe='')}"
         f"/attempts/latest/artifacts/{quote(artifact_name, safe='')}/url"
     )
-    response = _request_json(_api_url(base_url, path, api_key, {}))
+    response = _request_json(
+        _api_url(base_url, path, api_key, {}),
+        allow_loopback_http_for_testing=allow_loopback_http_for_testing,
+    )
     value = response.get("signedUrl", response.get("url"))
     if not isinstance(value, str):
         raise FetchError(f"Android Build API returned no download URL for {artifact_name}.")
-    parsed = urlparse(value)
-    loopback_http = parsed.scheme == "http" and parsed.hostname in {
-        "127.0.0.1",
-        "::1",
-        "localhost",
-    }
-    if (parsed.scheme != "https" and not loopback_http) or not parsed.netloc:
+    if not _safe_download_url(
+        value, allow_loopback_http_for_testing=allow_loopback_http_for_testing
+    ):
         raise FetchError(f"Android Build API returned an unsafe download URL for {artifact_name}.")
     return value
 
 
-def _sha256_file(path: Path) -> str:
-    """Hash a file incrementally."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(CHUNK_SIZE):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _sha256_descriptor(descriptor: int) -> str:
-    """Hash an already-open file without resolving its path again."""
+def _sha256_descriptor(descriptor: int, *, maximum_size: int) -> str:
+    """Hash one opened file, stopping as soon as it exceeds the declared size."""
     digest = hashlib.sha256()
     os.lseek(descriptor, 0, os.SEEK_SET)
-    while chunk := os.read(descriptor, CHUNK_SIZE):
+    total = 0
+    while chunk := os.read(descriptor, min(CHUNK_SIZE, maximum_size - total + 1)):
+        total += len(chunk)
+        if total > maximum_size:
+            raise FetchError("Artifact grew beyond its expected size during verification.")
         digest.update(chunk)
     return digest.hexdigest()
 
@@ -404,9 +503,17 @@ def _publish_partial(
             digest_builder = hashlib.sha256()
             copied_size = 0
             os.lseek(descriptor, 0, os.SEEK_SET)
-            while chunk := os.read(descriptor, CHUNK_SIZE):
-                digest_builder.update(chunk)
+            while chunk := os.read(
+                descriptor,
+                min(CHUNK_SIZE, artifact.size - copied_size + 1),
+            ):
                 copied_size += len(chunk)
+                if copied_size > artifact.size:
+                    raise FetchError(
+                        f"The partial download for {artifact.name} grew beyond its "
+                        "expected size during finalization."
+                    )
+                digest_builder.update(chunk)
                 view = memoryview(chunk)
                 while view:
                     written = os.write(staging_descriptor, view)
@@ -628,15 +735,33 @@ def _write_manifest(
 
 def _verify_file(path: Path, artifact: Artifact, record: DownloadRecord | None) -> DownloadRecord:
     """Verify size and digest for an already downloaded artifact."""
-    if not path.is_file() or path.is_symlink():
-        raise FetchError(f"{path.name} is not a regular artifact file.")
-    size = path.stat().st_size
-    if size != artifact.size:
-        raise FetchError(
-            f"{path.name} has size {size}, expected {artifact.size}; "
-            "remove the damaged file and run fetch again."
-        )
-    digest = _sha256_file(path)
+    _positive_size(artifact.size, artifact.name)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise FetchError(f"{path.name} is not a regular artifact file.") from None
+    try:
+        opened_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_nlink != 1:
+            raise FetchError(f"{path.name} is not a regular artifact file.")
+        if opened_stat.st_size != artifact.size:
+            raise FetchError(
+                f"{path.name} has size {opened_stat.st_size}, expected {artifact.size}; "
+                "remove the damaged file and run fetch again."
+            )
+        digest = _sha256_descriptor(descriptor, maximum_size=artifact.size)
+        verified_stat = os.fstat(descriptor)
+        try:
+            named_stat = path.lstat()
+        except OSError:
+            raise FetchError(f"{path.name} changed during verification.") from None
+        if _file_version(opened_stat) != _file_version(verified_stat) or _file_version(
+            named_stat
+        ) != _file_version(verified_stat):
+            raise FetchError(f"{path.name} changed during verification.")
+        size = verified_stat.st_size
+    finally:
+        os.close(descriptor)
     expected = artifact.sha256 or (record.sha256 if record is not None else None)
     if expected is not None and digest != expected:
         raise FetchError(
@@ -657,8 +782,12 @@ def _download(
     artifact: Artifact,
     expected_sha256: str | None = None,
     timeout: float = 120.0,
+    allow_loopback_http_for_testing: bool = False,
 ) -> DownloadRecord:
     """Resume a signed artifact download and atomically publish verified bytes."""
+    _positive_size(artifact.size, artifact.name)
+    if not _safe_download_url(url, allow_loopback_http_for_testing=allow_loopback_http_for_testing):
+        raise FetchError(f"Android Build API returned an unsafe download URL for {artifact.name}.")
     digest_to_check = artifact.sha256 or expected_sha256
     try:
         partial_stat = partial_path.lstat()
@@ -697,7 +826,11 @@ def _download(
         headers["Range"] = f"bytes={offset}-"
     request = Request(url, headers=headers, method="GET")
     try:
-        response = urlopen(request, timeout=timeout)
+        response = _open_validated_url(
+            request,
+            timeout=timeout,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
+        )
     except HTTPError as error:
         raise FetchError(
             f"Artifact download failed with HTTP {error.code}; run fetch again to resume."
@@ -798,6 +931,7 @@ def fetch_artifacts(
     output_directory: Path,
     api_key: str | None,
     api_base_url: str = API_BASE_URL,
+    allow_loopback_http_for_testing: bool = False,
 ) -> list[DownloadRecord]:
     """Serialize fetches in one parent directory so concurrent runs cannot race cleanup."""
     if not branch or not target or not build_id or not pattern:
@@ -824,6 +958,7 @@ def fetch_artifacts(
             output_directory=output_directory,
             api_key=api_key,
             api_base_url=api_base_url,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
         )
     finally:
         try:
@@ -841,6 +976,7 @@ def _fetch_artifacts_locked(
     output_directory: Path,
     api_key: str | None,
     api_base_url: str = API_BASE_URL,
+    allow_loopback_http_for_testing: bool = False,
 ) -> list[DownloadRecord]:
     """Fetch all artifacts matching a pattern, or verify manual downloads."""
     if not branch or not target or not build_id or not pattern:
@@ -859,7 +995,7 @@ def _fetch_artifacts_locked(
                 name=path.name,
                 size=old_records[path.name].size
                 if path.name in old_records
-                else path.stat().st_size,
+                else _positive_size(path.stat().st_size, path.name),
             )
             for path in output_directory.iterdir()
             if path.is_file() and not path.is_symlink() and fnmatch.fnmatchcase(path.name, pattern)
@@ -877,6 +1013,7 @@ def _fetch_artifacts_locked(
             build_id=build_id,
             target=target,
             pattern=pattern,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
         )
         if not artifacts:
             raise FetchError(
@@ -909,6 +1046,7 @@ def _fetch_artifacts_locked(
             build_id=build_id,
             target=target,
             artifact_name=artifact.name,
+            allow_loopback_http_for_testing=allow_loopback_http_for_testing,
         )
         records.append(
             _download(
@@ -916,6 +1054,7 @@ def _fetch_artifacts_locked(
                 partial_path=output_directory / f"{artifact.name}.partial",
                 artifact=artifact,
                 expected_sha256=old_record.sha256 if old_record is not None else None,
+                allow_loopback_http_for_testing=allow_loopback_http_for_testing,
             )
         )
 

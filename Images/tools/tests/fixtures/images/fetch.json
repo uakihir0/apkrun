@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "branchProvenance": "caller-asserted",
+  "branch": "aosp-android-latest-release",
+  "buildId": "16373615",
+  "target": "aosp_cf_arm64_only_phone-userdebug",
+  "artifacts": [
+    {
+      "name": "aosp_cf_arm64_only_phone-img-fixture.zip",
+      "size": 2214949,
+      "sha256": "2440caf4f526937bc570b9593e2a25d6d1c59e125c11d3c3b1a8a28506b3eba7"
+    }
+  ]
+}

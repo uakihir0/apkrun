@@ -20,6 +20,7 @@ PINNED_ARCHIVE = (
 PINNED_LAYOUT = REPOSITORY_ROOT / "Images/tools/layouts/cuttlefish-phone-arm64.json"
 FIXTURE_ROOT = Path(__file__).parent / "fixtures/manifests"
 FIXTURE_ARCHIVE = Path(__file__).parent / "fixtures/images/aosp_cf_arm64_only_phone-img-fixture.zip"
+FIXTURE_FETCH_METADATA = Path(__file__).parent / "fixtures/images/fetch.json"
 FIXTURE_INVENTORY = FIXTURE_ROOT / "fixture-inventory.json"
 FIXTURE_MANIFEST = FIXTURE_ROOT / "valid/fixture-build.json"
 
@@ -222,6 +223,7 @@ def test_extract_rejects_output_inside_source_directory(tmp_path: Path) -> None:
     source_directory = tmp_path / "source"
     source_directory.mkdir()
     shutil.copyfile(FIXTURE_ARCHIVE, source_directory / FIXTURE_ARCHIVE.name)
+    shutil.copyfile(FIXTURE_FETCH_METADATA, source_directory / "fetch.json")
     layout = _layout(tmp_path / "layout.json")
 
     with pytest.raises(ExtractError, match="outside the source image directory"):
@@ -253,6 +255,7 @@ def test_extract_rejects_input_archive_hash_mismatch(
     """M4 validation prevents extraction when a source archive changed."""
     source = tmp_path / FIXTURE_ARCHIVE.name
     shutil.copyfile(FIXTURE_ARCHIVE, source)
+    shutil.copyfile(FIXTURE_FETCH_METADATA, tmp_path / "fetch.json")
     layout = _layout(tmp_path / "layout.json")
     validate_manifest = extract_module.validate_manifest
     calls = 0

@@ -758,6 +758,44 @@ def test_download_directory_rejects_archive_that_differs_from_fetch_manifest(
         inventory(download)
 
 
+@pytest.mark.parametrize(
+    "separator",
+    ("\n", "\u2028", "\u2029", "\ud800"),
+    ids=("line-feed", "line-separator", "paragraph-separator", "surrogate"),
+)
+def test_download_directory_rejects_control_characters_in_fetch_archive_name(
+    tmp_path: Path,
+    separator: str,
+) -> None:
+    """Fetch sidecar names cannot inject controls into missing-archive errors."""
+    download = tmp_path / "download"
+    download.mkdir()
+    (download / "fetch.json").write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "name": f"missing{separator}INJECTED.zip",
+                        "sha256": "0" * 64,
+                        "size": 1,
+                    }
+                ],
+                "branch": "branch",
+                "branchProvenance": "caller-asserted",
+                "buildId": "16373615",
+                "schemaVersion": 2,
+                "target": "target-userdebug",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InventoryError, match="unsafe artifact name") as error:
+        inventory(download)
+
+    assert separator not in str(error.value)
+
+
 def test_inventory_rejects_archive_replaced_after_hashing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

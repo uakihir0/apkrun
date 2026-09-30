@@ -104,6 +104,24 @@ func androidImageManifestRejectsNewerSchemaVersionsBeforeUnknownKeys() throws {
 }
 
 @Test
+func androidImageManifestReportsJSONTypeMismatchesAsTypedFailures() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"sdk\": 37",
+        with: "\"sdk\": \"37\""
+    )
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason:
+                "android-image.json:android.sdk: expected Int, found an incompatible JSON type. Correct the field type to match schema version 1."
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
 func androidImageManifestRejectsUnknownKeysAtEveryFixedObjectLevel() throws {
     let invalidJSON = [
         validManifestJSON.replacingOccurrences(
@@ -145,6 +163,188 @@ func androidImageManifestRejectsUnknownKeysAtEveryFixedObjectLevel() throws {
             try decodeManifest(json)
         }
     }
+}
+
+@Test
+func androidImageManifestEscapesControlCharactersInUnknownFieldNames() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"schemaVersion\": 1,",
+        with: "\"schemaVersion\": 1, \"future\\nINJECTED\": true,"
+    )
+    let expectedReason =
+        "android-image.json: unknown field \"future\\u{A}INJECTED\". "
+        + "Remove it or use schema version 1."
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason: expectedReason
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
+func androidImageManifestEscapesControlCharactersInAndroidInfoKeys() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"androidInfo\": {}",
+        with: "\"androidInfo\": {\"x\\nINJECTED\": \"37\"}"
+    )
+    let expectedReason =
+        "android-image.json: androidInfo must be keys of 1–64 ASCII letters, digits, "
+        + "underscores, dots, or hyphens; found \"x\\u{A}INJECTED\"."
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason: expectedReason
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
+func androidImageManifestRejectsAndroidInfoKeysWithTrailingLineFeeds() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"androidInfo\": {}",
+        with: "\"androidInfo\": {\"x\\n\": \"37\"}"
+    )
+    let expectedReason =
+        "android-image.json: androidInfo must be keys of 1–64 ASCII letters, digits, "
+        + "underscores, dots, or hyphens; found \"x\\u{A}\"."
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason: expectedReason
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
+func androidImageManifestRejectsTrailingLineFeedsInPatternFields() throws {
+    let sha256 = String(repeating: "0", count: 64)
+    let invalidJSON = [
+        validManifestJSON.replacingOccurrences(
+            of: "\"branch\": \"aosp-android-latest-release\"",
+            with: "\"branch\": \"aosp-android-latest-release\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"target\": \"aosp_cf_arm64_only_phone-userdebug\"",
+            with: "\"target\": \"aosp_cf_arm64_only_phone-userdebug\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"buildId\": \"16373615\"",
+            with: "\"buildId\": \"16373615\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"name\": \"archive.zip\"",
+            with: "\"name\": \"archive.zip\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"release\": \"17\"",
+            with: "\"release\": \"17\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"securityPatch\": \"2026-09\"",
+            with: "\"securityPatch\": \"2026-09\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"architecture\": \"arm64\"",
+            with: "\"architecture\": \"arm64\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"deviceFamily\": \"cuttlefish-phone-arm64\"",
+            with: "\"deviceFamily\": \"cuttlefish-phone-arm64\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"id\": \"boot\"",
+            with: "\"id\": \"boot\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"file\": \"boot.img\"",
+            with: "\"file\": \"boot.img\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"sha256\": \"\(sha256)\"",
+            with: "\"sha256\": \"\(sha256)\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"partition\": \"boot\"",
+            with: "\"partition\": \"boot\\n\""
+        ),
+        validManifestJSON.replacingOccurrences(
+            of: "\"name\": \"system_a\"",
+            with: "\"name\": \"system_a\\n\""
+        ),
+    ]
+
+    for json in invalidJSON {
+        #expect(throws: ImageFailure.self) {
+            try decodeManifest(json)
+        }
+    }
+}
+
+@Test
+func androidImageManifestEscapesAndroidInfoKeysInDecodingPaths() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"androidInfo\": {}",
+        with: "\"androidInfo\": {\"x\\nINJECTED\": 37}"
+    )
+    let expectedReason =
+        "android-image.json:androidInfo.x\\u{A}INJECTED: expected String, "
+        + "found an incompatible JSON type. Correct the field type to match schema version 1."
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason: expectedReason
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
+func androidImageManifestEscapesInvalidFixedFieldValues() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"variant\": \"userdebug\"",
+        with: "\"variant\": \"bad\\nINJECTED\""
+    )
+    let expectedReason =
+        "android-image.json: android.variant must be user, userdebug, or eng; "
+        + "found \"bad\\u{A}INJECTED\"."
+
+    #expect(
+        throws: ImageFailure.manifestInvalid(
+            path: "android-image.json",
+            reason: expectedReason
+        )
+    ) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
+func androidImageManifestBoundsUntrustedDiagnosticValues() {
+    let value = String(repeating: "x", count: 129)
+
+    #expect(manifestDiagnosticValue(value) == String(repeating: "x", count: 128) + "…")
+}
+
+@Test
+func androidImageManifestEscapesBidirectionalFormattingControls() {
+    let value = "before\u{061C}\u{202E}middle\u{2066}after"
+
+    #expect(
+        manifestDiagnosticValue(value)
+            == "before\\u{61C}\\u{202E}middle\\u{2066}after"
+    )
 }
 
 @Test

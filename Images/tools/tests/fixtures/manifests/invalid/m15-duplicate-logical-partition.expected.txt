@@ -1,0 +1,1 @@
+logicalPartitions[2].name "system_a" duplicates logicalPartitions[0].name. Use a unique logical partition name.

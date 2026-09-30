@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import struct
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -44,6 +46,31 @@ def _load_json(path: Path) -> dict[str, object]:
     return value
 
 
+def _write_fetch_metadata(
+    archive_path: Path,
+    manifest_source: dict[str, object],
+) -> None:
+    """Attach pinned build metadata to a synthetic archive used as file-check input."""
+    fetch_metadata = {
+        "schemaVersion": 2,
+        "branchProvenance": "caller-asserted",
+        "branch": manifest_source["branch"],
+        "buildId": manifest_source["buildId"],
+        "target": manifest_source["target"],
+        "artifacts": [
+            {
+                "name": archive_path.name,
+                "size": archive_path.stat().st_size,
+                "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+            }
+        ],
+    }
+    (archive_path.parent / "fetch.json").write_text(
+        json.dumps(fetch_metadata),
+        encoding="utf-8",
+    )
+
+
 def _python_only_fixtures() -> set[str]:
     path = FIXTURE_ROOT / "invalid/python-only.txt"
     return {
@@ -66,9 +93,10 @@ def _fixture_source_for_m6(manifest: dict[str, object], directory: Path) -> tupl
                     content = bytes(mutable)
                 output.writestr(item, content)
 
-    modified_inventory = inventory(modified_archive)
     manifest_source = manifest["source"]
     assert isinstance(manifest_source, dict)
+    _write_fetch_metadata(modified_archive, manifest_source)
+    modified_inventory = inventory(modified_archive)
     source_archive = manifest_source["archives"][0]
     assert isinstance(source_archive, dict)
     modified_source = modified_inventory["source"]
@@ -120,7 +148,7 @@ def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
 
 
 def test_invalid_manifest_only_fixtures_match_their_expected_messages() -> None:
-    """Python and Swift share exact expected messages for M1–M3, M5, and M7–M9."""
+    """Python and Swift share exact expected messages for all manifest-only checks."""
     python_only = _python_only_fixtures()
     invalid_directory = FIXTURE_ROOT / "invalid"
     for path in sorted(invalid_directory.glob("*.json")):
@@ -137,6 +165,97 @@ def test_manifest_model_round_trips_with_deterministic_json() -> None:
     document = _load_json(FIXTURE_MANIFEST)
 
     assert json.loads(serialize_manifest(document)) == document
+
+
+def test_schema_diagnostics_escape_invalid_android_info_keys() -> None:
+    """Schema diagnostics cannot echo control characters from AndroidInfo keys."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    manifest["androidInfo"] = {"x\nINJECTED": "37"}
+
+    failures = validate_manifest(manifest)
+
+    assert len(failures) == 1
+    assert "x\\\\nINJECTED" in failures[0]
+    assert "\n" not in failures[0]
+
+
+def test_android_info_key_validation_rejects_trailing_line_feed() -> None:
+    """The androidInfo key pattern rejects a trailing line feed."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    manifest["androidInfo"] = {"x\n": "37"}
+
+    failures = validate_manifest(manifest)
+
+    assert len(failures) == 1
+    assert failures[0].startswith("androidInfo:")
+    assert "\n" not in failures[0]
+
+
+def test_schema_patterns_reject_trailing_linefeeds() -> None:
+    """Every anchored manifest pattern requires the actual end of its string."""
+    invalid_values: list[tuple[tuple[str | int, ...], str]] = [
+        (("source", "branch"), "aosp-android-latest-release\n"),
+        (("source", "target"), "aosp_cf_arm64_only_phone-userdebug\n"),
+        (("source", "buildId"), "16373615\n"),
+        (("source", "archives", 0, "name"), "archive.zip\n"),
+        (("source", "archives", 0, "sha256"), f"{'0' * 64}\n"),
+        (("android", "release"), "17\n"),
+        (("android", "securityPatch"), "2026-09\n"),
+        (("architecture",), "arm64\n"),
+        (("deviceFamily",), "cuttlefish-phone-arm64\n"),
+        (("artifacts", 0, "id"), "boot\n"),
+        (("artifacts", 0, "file"), "boot.img\n"),
+        (("artifacts", 0, "sha256"), f"{'0' * 64}\n"),
+        (("artifacts", 0, "partition"), "boot\n"),
+        (("roles", "kernel"), "boot\n"),
+        (("logicalPartitions", 0, "name"), "system_a\n"),
+        (("blankPartitions", 0, "partition"), "misc\n"),
+        (("androidInfo",), "x\n"),
+    ]
+
+    for path, value in invalid_values:
+        manifest = _load_json(FIXTURE_MANIFEST)
+        if path == ("androidInfo",):
+            manifest["androidInfo"] = {value: "37"}
+        else:
+            parent: Any = manifest
+            for component in path[:-1]:
+                parent = parent[component]
+            parent[path[-1]] = value
+
+        failures = validate_manifest(manifest)
+
+        assert failures, path
+        assert all("\n" not in failure for failure in failures), path
+
+
+def test_file_checks_escape_source_directory_inventory_errors(tmp_path: Path) -> None:
+    """Inventory errors cannot return path newlines raw."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    source = manifest["source"]
+    assert isinstance(source, dict)
+    source_archives = source["archives"]
+    assert isinstance(source_archives, list)
+    source_archive = source_archives[0]
+    assert isinstance(source_archive, dict)
+    source_directory = tmp_path / "source\nINJECTED"
+    source_directory.mkdir()
+    (source_directory / source_archive["name"]).write_text(
+        "this file is not a zip archive",
+        encoding="utf-8",
+    )
+
+    failures = validate_manifest(
+        manifest,
+        include_files=True,
+        source=source_directory,
+        inventory_path=FIXTURE_INVENTORY,
+    )
+
+    assert len(failures) == 1
+    assert "source\\nINJECTED" in failures[0]
+    assert "neither a directory nor a readable zip archive" in failures[0]
+    assert "\n" not in failures[0]
 
 
 def test_generator_matches_the_shared_fixture_manifest() -> None:
@@ -208,6 +327,213 @@ def test_file_backed_fixture_manifest_passes_m4_and_m6_to_m13() -> None:
     assert failures == []
 
 
+def test_file_checks_reject_boot_and_init_boot_role_swaps() -> None:
+    """File-backed M6 validation binds each boot image role to its header kind."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    artifacts = manifest["artifacts"]
+    kernel = next(item for item in artifacts if item["id"] == "boot")
+    generic_ramdisk = next(item for item in artifacts if item["id"] == "init_boot")
+    for field in ("file", "sha256", "size"):
+        kernel[field], generic_ramdisk[field] = generic_ramdisk[field], kernel[field]
+
+    failures = validate_manifest(
+        manifest,
+        include_files=True,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=FIXTURE_INVENTORY,
+    )
+
+    assert (
+        "init_boot.img bootKind init_boot does not match roles.kernel (needs boot). "
+        "Check the manifest role mapping."
+    ) in failures
+    assert (
+        "boot.img bootKind boot does not match roles.genericRamdisk (needs init_boot). "
+        "Check the manifest role mapping."
+    ) in failures
+
+
+def test_file_checks_reject_inventory_archive_fingerprint_mismatch(tmp_path: Path) -> None:
+    """The recorded inventory fingerprint must agree with source.archives."""
+    recorded_inventory = _load_json(FIXTURE_INVENTORY)
+    recorded_inventory["source"]["sha256"] = "0" * 64
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        serialize_inventory(recorded_inventory),
+        encoding="utf-8",
+    )
+
+    failures = validate_manifest(
+        _load_json(FIXTURE_MANIFEST),
+        include_files=True,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=inventory_path,
+    )
+
+    assert failures == [
+        'inventory.json: source archive "aosp_cf_arm64_only_phone-img-fixture.zip" '
+        "sha256 does not match source.archives. Re-run inventory or manifest generation."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value"),
+    (
+        ("branch", "aosp-another-release"),
+        ("buildId", "16373616"),
+        ("target", "aosp_cf_arm64_only_tablet-userdebug"),
+    ),
+)
+def test_file_checks_reject_provenance_that_disagrees_with_fetched_archive(
+    tmp_path: Path,
+    field: str,
+    tampered_value: str,
+) -> None:
+    """Manifest and inventory cannot jointly override the fetched build metadata."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    manifest_source = manifest["source"]
+    assert isinstance(manifest_source, dict)
+    archive_name = manifest_source["archives"][0]["name"]
+    assert isinstance(archive_name, str)
+
+    download_dir = tmp_path / "download"
+    download_dir.mkdir()
+    archive_path = download_dir / archive_name
+    archive_path.write_bytes(FIXTURE_ARCHIVE.read_bytes())
+    archive_size = archive_path.stat().st_size
+    archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    fetch_metadata = {
+        "schemaVersion": 2,
+        "branchProvenance": "caller-asserted",
+        "branch": manifest_source["branch"],
+        "buildId": manifest_source["buildId"],
+        "target": manifest_source["target"],
+        "artifacts": [
+            {
+                "name": archive_name,
+                "size": archive_size,
+                "sha256": archive_sha256,
+            }
+        ],
+    }
+    (download_dir / "fetch.json").write_text(
+        json.dumps(fetch_metadata),
+        encoding="utf-8",
+    )
+
+    recorded_inventory = _load_json(FIXTURE_INVENTORY)
+    recorded_source = recorded_inventory["source"]
+    assert isinstance(recorded_source, dict)
+    recorded_source[field] = tampered_value
+    manifest_source[field] = tampered_value
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        serialize_inventory(recorded_inventory),
+        encoding="utf-8",
+    )
+
+    failures = validate_manifest(
+        manifest,
+        include_files=True,
+        source=download_dir,
+        inventory_path=inventory_path,
+    )
+
+    assert failures == [
+        f'source.{field} "{tampered_value}" does not match the fetched archive metadata '
+        f'"{fetch_metadata[field]}". Re-run inventory or manifest generation.'
+    ]
+
+
+def test_file_checks_reject_joint_provenance_edits_without_fetch_metadata(
+    tmp_path: Path,
+) -> None:
+    """An archive and edited metadata cannot invent build provenance without fetch.json."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    manifest_source = manifest["source"]
+    assert isinstance(manifest_source, dict)
+    manifest_source["branch"] = "aosp-another-release"
+    recorded_inventory = _load_json(FIXTURE_INVENTORY)
+    recorded_source = recorded_inventory["source"]
+    assert isinstance(recorded_source, dict)
+    recorded_source["branch"] = "aosp-another-release"
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        serialize_inventory(recorded_inventory),
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / FIXTURE_ARCHIVE.name
+    archive_path.write_bytes(FIXTURE_ARCHIVE.read_bytes())
+
+    failures = validate_manifest(
+        manifest,
+        include_files=True,
+        source=archive_path,
+        inventory_path=inventory_path,
+    )
+
+    assert failures == [
+        "source: actual archive inventory is missing complete fetched build metadata "
+        "(branch, buildId, target). Pass the fetched download directory or create a "
+        "valid fetch.json."
+    ]
+
+
+def test_file_checks_escape_control_characters_in_inventory_provenance(
+    tmp_path: Path,
+) -> None:
+    """Untrusted inventory source values cannot forge diagnostic lines."""
+    recorded_inventory = _load_json(FIXTURE_INVENTORY)
+    recorded_source = recorded_inventory["source"]
+    assert isinstance(recorded_source, dict)
+    recorded_source["branch"] = "bad\nINJECTED"
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        serialize_inventory(recorded_inventory),
+        encoding="utf-8",
+    )
+
+    failures = validate_manifest(
+        _load_json(FIXTURE_MANIFEST),
+        include_files=True,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=inventory_path,
+    )
+
+    assert failures == [
+        'source.branch "aosp-android-latest-release" does not match inventory.json '
+        'source.branch "bad\\nINJECTED". Re-run manifest generation.'
+    ]
+
+
+def test_file_checks_reject_directory_inventory_for_archive_manifest(tmp_path: Path) -> None:
+    """Directory metadata cannot replace the declared archive provenance."""
+    recorded_inventory = _load_json(FIXTURE_INVENTORY)
+    source = recorded_inventory["source"]
+    assert isinstance(source, dict)
+    source["type"] = "directory"
+    source.pop("name")
+    source.pop("size")
+    source.pop("sha256")
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        serialize_inventory(recorded_inventory),
+        encoding="utf-8",
+    )
+
+    failures = validate_manifest(
+        _load_json(FIXTURE_MANIFEST),
+        include_files=True,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=inventory_path,
+    )
+
+    assert failures == [
+        'inventory.json: source type must be "zip" to match source.archives. '
+        "Re-run inventory on the fetched archive."
+    ]
+
+
 def test_file_checks_reject_vbmeta_roles_out_of_descriptor_order() -> None:
     """A file-backed manifest must preserve the top-level chain descriptor order."""
     if not PINNED_ARCHIVE.is_file():
@@ -242,9 +568,10 @@ def test_file_checks_reject_source_vbmeta_omitted_from_manifest_and_roles(
                 output.writestr(item, original.read(item))
             output.writestr("vbmeta_unlisted.img", b"AVB0" + bytes(252))
 
-    modified_inventory = inventory(modified_archive)
     manifest_source = manifest["source"]
     assert isinstance(manifest_source, dict)
+    _write_fetch_metadata(modified_archive, manifest_source)
+    modified_inventory = inventory(modified_archive)
     archive_declarations = manifest_source["archives"]
     assert isinstance(archive_declarations, list)
     archive_declaration = archive_declarations[0]

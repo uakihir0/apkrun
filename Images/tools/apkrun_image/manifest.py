@@ -647,6 +647,26 @@ def _validate_inventory_records(
 
     artifacts = document.get("artifacts", [])
     artifact_by_id = _artifacts_by_id(document)
+    manifest_vbmeta_paths: set[str] = set()
+    if isinstance(artifacts, list):
+        manifest_vbmeta_paths = {
+            artifact["file"]
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+            and artifact.get("kind") == "vbmeta"
+            and isinstance(artifact.get("file"), str)
+        }
+    for _archive_name, entry, _source in entries:
+        path = entry.get("path")
+        if (
+            entry.get("kind") == "vbmeta"
+            and isinstance(path, str)
+            and path not in manifest_vbmeta_paths
+        ):
+            failures.append(
+                f'inventory.json: vbmeta file "{path}" is missing from artifacts and '
+                "roles.vbmeta. Regenerate the manifest."
+            )
     for index, artifact in enumerate(artifacts if isinstance(artifacts, list) else []):
         if not isinstance(artifact, dict):
             continue
@@ -727,11 +747,42 @@ def _validate_inventory_records(
         top_entries = actual_by_path.get(str(top_file), [])
         details = top_entries[0][1].get("details") if len(top_entries) == 1 else None
         descriptors = details.get("descriptors", []) if isinstance(details, dict) else []
-        chain_partitions = {
+        chain_partitions = [
             item.get("partition")
             for item in descriptors
-            if isinstance(item, dict) and item.get("type") == "chainPartition"
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "chainPartition"
+                and isinstance(item.get("partition"), str)
+            )
+        ]
+        vbmeta_id_by_partition = {
+            artifact.get("partition"): artifact.get("id")
+            for artifact in document.get("artifacts", [])
+            if (
+                isinstance(artifact, dict)
+                and artifact.get("kind") == "vbmeta"
+                and isinstance(artifact.get("partition"), str)
+                and isinstance(artifact.get("id"), str)
+            )
         }
+        ordered_child_ids = [
+            vbmeta_id_by_partition[partition]
+            for partition in chain_partitions
+            if partition in vbmeta_id_by_partition
+        ]
+        expected_vbmeta_ids = [vbmeta_ids[0], *ordered_child_ids]
+        child_roles_are_chained = all(
+            isinstance(artifact_id, str)
+            and (found := artifact_by_id.get(artifact_id)) is not None
+            and found[1].get("partition") in chain_partitions
+            for artifact_id in vbmeta_ids[1:]
+        )
+        if child_roles_are_chained and vbmeta_ids != expected_vbmeta_ids:
+            failures.append(
+                f"roles.vbmeta order {vbmeta_ids} does not match top-level chain descriptor "
+                f"order {expected_vbmeta_ids}."
+            )
         for position, artifact_id in enumerate(vbmeta_ids[1:], start=1):
             found = artifact_by_id.get(artifact_id) if isinstance(artifact_id, str) else None
             if found and found[1].get("partition") not in chain_partitions:
@@ -903,6 +954,57 @@ def _artifact_candidates(files: Sequence[Mapping[str, Any]]) -> list[dict[str, A
     return artifacts
 
 
+def _ordered_vbmeta_roles(
+    artifacts: Sequence[Mapping[str, Any]],
+    inventory_by_path: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Order available vbmeta artifacts by the top-level chain descriptor table."""
+    vbmeta_artifacts = [artifact for artifact in artifacts if artifact.get("kind") == "vbmeta"]
+    top = next(
+        (artifact for artifact in vbmeta_artifacts if artifact.get("partition") == "vbmeta"),
+        None,
+    )
+    if top is None:
+        raise ManifestError("inventory.json: cannot identify the top-level vbmeta artifact.")
+
+    vbmeta_by_partition: dict[str, Mapping[str, Any]] = {}
+    for artifact in vbmeta_artifacts:
+        partition = artifact.get("partition")
+        if not isinstance(partition, str) or partition in vbmeta_by_partition:
+            raise ManifestError("inventory.json: vbmeta artifacts have duplicate partitions.")
+        vbmeta_by_partition[partition] = artifact
+
+    top_entry = inventory_by_path.get(str(top.get("file")))
+    descriptors = _classification_details(top_entry or {}).get("descriptors")
+    if not isinstance(descriptors, list):
+        raise ManifestError("inventory.json: top-level vbmeta has no descriptor table.")
+
+    ordered = [str(top["id"])]
+    for descriptor in descriptors:
+        if not isinstance(descriptor, dict) or descriptor.get("type") != "chainPartition":
+            continue
+        partition = descriptor.get("partition")
+        child = vbmeta_by_partition.get(partition) if isinstance(partition, str) else None
+        if child is not None:
+            artifact_id = str(child["id"])
+            if artifact_id in ordered:
+                raise ManifestError(
+                    "inventory.json: top-level vbmeta has duplicate chain descriptors for "
+                    f"partition {partition}."
+                )
+            ordered.append(artifact_id)
+
+    unchained = sorted(
+        str(artifact["id"]) for artifact in vbmeta_artifacts if artifact.get("id") not in ordered
+    )
+    if unchained:
+        raise ManifestError(
+            "inventory.json: vbmeta artifacts have no top-level chain descriptor: "
+            f"{', '.join(unchained)}."
+        )
+    return ordered
+
+
 def _select_role(
     artifacts: Sequence[Mapping[str, Any]],
     inventory_by_path: Mapping[str, Mapping[str, Any]],
@@ -1032,15 +1134,9 @@ def generate_manifest(
             "inventory.json: cannot uniquely identify the super artifact with liblp metadata."
         )
     roles["super"] = str(super_candidates[0]["id"])
-    vbmeta_ids = sorted(
-        str(artifact["id"]) for artifact in artifacts if artifact.get("kind") == "vbmeta"
-    )
-    if not vbmeta_ids:
+    if not any(artifact.get("kind") == "vbmeta" for artifact in artifacts):
         raise ManifestError("inventory.json: no vbmeta artifacts were found.")
-    top_vbmeta = next((item for item in vbmeta_ids if item == "vbmeta"), None)
-    if top_vbmeta is None:
-        raise ManifestError("inventory.json: cannot identify the top-level vbmeta artifact.")
-    roles["vbmeta"] = [top_vbmeta, *(item for item in vbmeta_ids if item != top_vbmeta)]
+    roles["vbmeta"] = _ordered_vbmeta_roles(artifacts, by_path)
     userdata_candidates: list[str] = []
     for artifact in artifacts:
         if artifact.get("id") != "userdata":

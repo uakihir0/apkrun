@@ -15,6 +15,7 @@ from apkrun_image.__main__ import main as package_main
 from apkrun_image.inventory import inventory, serialize_inventory
 from apkrun_image.manifest import (
     ManifestError,
+    _ordered_vbmeta_roles,
     generate_manifest,
     serialize_manifest,
     validate_manifest,
@@ -148,6 +149,41 @@ def test_generator_matches_the_shared_fixture_manifest() -> None:
     assert {item["name"] for item in generated["logicalPartitions"]} == {"system_a", "vendor_a"}
 
 
+def test_vbmeta_role_order_follows_top_level_descriptor_order() -> None:
+    """Chain role order comes from the top-level vbmeta descriptors, not IDs."""
+    artifacts = [
+        {"file": "vbmeta.img", "id": "vbmeta", "kind": "vbmeta", "partition": "vbmeta"},
+        {
+            "file": "vbmeta_system.img",
+            "id": "vbmeta_system",
+            "kind": "vbmeta",
+            "partition": "vbmeta_system",
+        },
+        {
+            "file": "vbmeta_vendor.img",
+            "id": "vbmeta_vendor",
+            "kind": "vbmeta",
+            "partition": "vbmeta_vendor",
+        },
+    ]
+    inventory_by_path = {
+        "vbmeta.img": {
+            "details": {
+                "descriptors": [
+                    {"partition": "vbmeta_vendor", "type": "chainPartition"},
+                    {"partition": "vbmeta_system", "type": "chainPartition"},
+                ]
+            }
+        }
+    }
+
+    assert _ordered_vbmeta_roles(artifacts, inventory_by_path) == [
+        "vbmeta",
+        "vbmeta_vendor",
+        "vbmeta_system",
+    ]
+
+
 def test_generator_rejects_stale_inventory_entries() -> None:
     """Draft generation refuses hashes that do not match the inspected source."""
     inventory_document = _load_json(FIXTURE_INVENTORY)
@@ -170,6 +206,67 @@ def test_file_backed_fixture_manifest_passes_m4_and_m6_to_m13() -> None:
     )
 
     assert failures == []
+
+
+def test_file_checks_reject_vbmeta_roles_out_of_descriptor_order() -> None:
+    """A file-backed manifest must preserve the top-level chain descriptor order."""
+    if not PINNED_ARCHIVE.is_file():
+        pytest.skip("pinned Cuttlefish archive is not downloaded")
+    manifest = _load_json(PINNED_MANIFEST)
+    vbmeta_roles = manifest["roles"]["vbmeta"]
+    if len(vbmeta_roles) < 3:
+        pytest.skip("pinned Cuttlefish build has fewer than two chained vbmeta images")
+    vbmeta_roles[1:] = reversed(vbmeta_roles[1:])
+
+    failures = validate_manifest(
+        manifest,
+        include_files=True,
+        source=PINNED_ARCHIVE,
+        inventory_path=PINNED_INVENTORY,
+    )
+
+    assert len(failures) == 1
+    assert failures[0].startswith("roles.vbmeta order ")
+    assert "does not match top-level chain descriptor order" in failures[0]
+
+
+def test_file_checks_reject_source_vbmeta_omitted_from_manifest_and_roles(
+    tmp_path: Path,
+) -> None:
+    """Every source vbmeta image must survive manifest and chain selection."""
+    manifest = _load_json(FIXTURE_MANIFEST)
+    modified_archive = tmp_path / FIXTURE_ARCHIVE.name
+    with zipfile.ZipFile(FIXTURE_ARCHIVE, "r") as original:
+        with zipfile.ZipFile(modified_archive, "w", compression=zipfile.ZIP_STORED) as output:
+            for item in original.infolist():
+                output.writestr(item, original.read(item))
+            output.writestr("vbmeta_unlisted.img", b"AVB0" + bytes(252))
+
+    modified_inventory = inventory(modified_archive)
+    manifest_source = manifest["source"]
+    assert isinstance(manifest_source, dict)
+    archive_declarations = manifest_source["archives"]
+    assert isinstance(archive_declarations, list)
+    archive_declaration = archive_declarations[0]
+    assert isinstance(archive_declaration, dict)
+    inventory_source = modified_inventory["source"]
+    assert isinstance(inventory_source, dict)
+    for field in ("branch", "buildId", "target"):
+        inventory_source[field] = manifest_source[field]
+    archive_declaration["size"] = inventory_source["size"]
+    archive_declaration["sha256"] = inventory_source["sha256"]
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(serialize_inventory(modified_inventory), encoding="utf-8")
+
+    assert validate_manifest(
+        manifest,
+        include_files=True,
+        source=modified_archive,
+        inventory_path=inventory_path,
+    ) == [
+        'inventory.json: vbmeta file "vbmeta_unlisted.img" is missing from artifacts and '
+        "roles.vbmeta. Regenerate the manifest."
+    ]
 
 
 def test_python_only_invalid_fixtures_match_file_check_messages() -> None:

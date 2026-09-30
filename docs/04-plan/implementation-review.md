@@ -1725,3 +1725,25 @@ guide explains how the lock owner or an administrator can remove after
 confirming that no capture is active.
 T0 coverage exercises these boundaries, while real host behavior remains
 subject to the open #064 T3 run.
+
+## IR-074: Keep the initial device layout free of unverified reference values
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §§4.1, 6.2, 6.4; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/layouts/cuttlefish-phone-arm64.json` |
+
+**Choice.** Commit the initial phone layout with only the image bootconfig
+values already decided or verified by the design and ADR-0015, plus the
+mandatory `console=hvc0` command-line addition. Omit every key marked
+`reference` until the #064 `target` capture exists, and leave AVB-derived
+properties to `avb.py` rather than duplicating them in the static layout.
+
+**Reason.** `extract` requires the committed default layout, and the selected
+image has a usable baseline from source and accepted boot decisions. The
+reference-dependent values cannot be established on this macOS host because
+no Linux Cuttlefish reference VM is available. Shipping this incomplete
+baseline makes extraction reproducible while keeping guessed boot properties
+out of the image. The Android bootconfig is not complete until the reference
+capture fills the omitted entries; #010 remains open.

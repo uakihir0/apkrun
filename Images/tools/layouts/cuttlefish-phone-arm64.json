@@ -1,0 +1,19 @@
+{
+  "bootconfig": {
+    "image": {
+      "androidboot.hypervisor.vm.supported": "0",
+      "androidboot.slot_suffix": "_a",
+      "androidboot.vbmeta.device_state": "unlocked",
+      "androidboot.verifiedbootstate": "orange"
+    }
+  },
+  "cmdline": {
+    "additions": [
+      {
+        "comment": "The VZ direct-kernel path requires the documented hvc0 guest console (ADR-0015; android-image.md §6.4).",
+        "value": "console=hvc0"
+      }
+    ]
+  },
+  "deviceFamily": "cuttlefish-phone-arm64"
+}

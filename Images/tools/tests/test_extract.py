@@ -17,6 +17,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PINNED_ARCHIVE = (
     REPOSITORY_ROOT / "Images/work/16373615/download/aosp_cf_arm64_only_phone-img-16373615.zip"
 )
+PINNED_LAYOUT = REPOSITORY_ROOT / "Images/tools/layouts/cuttlefish-phone-arm64.json"
 FIXTURE_ROOT = Path(__file__).parent / "fixtures/manifests"
 FIXTURE_ARCHIVE = Path(__file__).parent / "fixtures/images/aosp_cf_arm64_only_phone-img-fixture.zip"
 FIXTURE_INVENTORY = FIXTURE_ROOT / "fixture-inventory.json"
@@ -377,30 +378,44 @@ def test_extract_rolls_back_previous_outputs_when_publish_fails(
     not PINNED_ARCHIVE.is_file(),
     reason="the pinned Android archive is optional in a clean checkout",
 )
-def test_real_archive_extraction_is_available_when_fetched(tmp_path: Path) -> None:
-    """The pinned build parses from ZIP streams without extracting its archive."""
+def test_real_archive_extraction_uses_committed_default_layout(tmp_path: Path) -> None:
+    """The default CLI layout extracts the pinned boot artifacts without overrides."""
     manifest_path = REPOSITORY_ROOT / "Images/manifests/16373615/android-image.json"
     inventory_path = REPOSITORY_ROOT / "Images/manifests/16373615/inventory.json"
-    layout = _layout(
-        tmp_path / "layout.json",
-        [
-            {
-                "comment": "Keep the real archive smoke test below the documented cmdline limit.",
-                "value": "apkrun.test=enabled",
-            }
-        ],
-    )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert isinstance(manifest, dict)
     output = tmp_path / "real-build"
-    result = extract_images(
-        manifest,
-        output_directory=output,
-        layout_path=layout,
-        inventory_path=inventory_path,
+    assert PINNED_LAYOUT.is_file()
+    result = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--source",
+            str(PINNED_ARCHIVE),
+            "--inventory",
+            str(inventory_path),
+            "--out",
+            str(output),
+        ]
     )
 
-    assert result["kernel"]["compression"] == "none"
+    assert result == 0
+    expected_outputs = {
+        "cmdline.txt",
+        "dtb",
+        "extraction.json",
+        "kernel",
+        "ramdisk.img",
+        "vendor-bootconfig.txt",
+    }
+    assert {path.name for path in output.iterdir()} == expected_outputs
     assert len((output / "kernel").read_bytes()) == 42_031_616
-    assert result["cmdlineLength"] <= 2048
-    assert "androidboot." not in (output / "cmdline.txt").read_text(encoding="utf-8")
+    assert (output / "cmdline.txt").read_text(encoding="utf-8") == (
+        "printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 "
+        "firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig "
+        "console=hvc0"
+    )
+    metadata = json.loads((output / "extraction.json").read_text(encoding="utf-8"))
+    assert metadata["kernel"]["compression"] == "none"
+    assert metadata["cmdlineLength"] == 157
+    for name, details in metadata["outputs"].items():
+        assert (output / name).stat().st_size == details["size"]
+        assert _sha256(output / name) == details["sha256"]

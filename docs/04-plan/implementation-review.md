@@ -1568,3 +1568,25 @@ look complete without evidence. The measurement confirms the current vendor
 and boot command lines plus the mandatory console fit the limit; the final
 command-line length and reference-backed layout remain open until that capture
 exists.
+
+## IR-069: Enforce bootconfig parser structure limits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.1; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/apkrun_image/bootconfig.py` |
+
+**Choice.** Count one node for every distinct component in dotted keys and one
+value node per key, and reject a merged block above 1024 nodes. Parse full-line
+and inline `#` comments, but reject array and statement-separator syntax
+because the layer model stores one string value per key. Require the
+`bootconfig` command-line token before `--`.
+
+**Reason.** The documented kernel parser limit is structural as well as
+byte-based, so a small block with many short keys can still fail during boot.
+The documented 1024-node bound is applied conservatively across kernel
+branches. Treating arrays as strings would change their meaning, and a
+`bootconfig` token after the kernel command-line separator is not an enabling
+option. These boundaries are covered by independent node-count, comment,
+array, and separator tests.

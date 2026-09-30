@@ -423,6 +423,7 @@ Merge rules:
 - A key may appear in exactly one layer. An identical duplicate is dropped with a debug log.
 - A key in a later layer that conflicts with an earlier one is an error (`ImageFailure.bootconfigConflict(key, layerA, layerB)`), unless the later layer lists the key in its `overrides` array. Overrides are rare and each one carries a comment in the layout file.
 - Keys must match `[A-Za-z0-9_.-]+`. Values must be printable ASCII without `"`, backslash, or newline, and are always written double-quoted.
+- The key/value tree must contain at most 1024 nodes, counting each distinct dotted-key component once and one value node per key. The tool checks this independently of byte size.
 - The serialized block must be at most 32 KiB (kernel limit). The build tool fails above 16 KiB to leave room for layers 3–4.
 
 ### 6.2 Key catalogue (initial)

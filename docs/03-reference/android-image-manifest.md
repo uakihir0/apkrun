@@ -480,7 +480,7 @@ slot.
 | `roles` | object (§6.5) | yes | | which artifact plays which part in the boot |
 | `logicalPartitions` | array (§6.6) | yes | 1 to 64 items | the non-empty logical partitions inside `super` |
 | `blankPartitions` | array (§6.7) | yes | 0 to 32 items | partitions created empty (no image in the archive) |
-| `androidInfo` | object of string | yes | keys `[A-Za-z0-9_.-]+`, values at most 1024 characters | the key/values of `android-info.txt`, copied from the inventory |
+| `androidInfo` | object of string | yes | keys of 1–64 ASCII letters, digits, underscores, dots, or hyphens; values at most 1024 characters | the key/values of `android-info.txt`, copied from the inventory |
 
 Unknown fields are rejected at every level (§10).
 
@@ -574,9 +574,9 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
       "required": ["origin", "branch", "target", "buildId", "archives"],
       "properties": {
         "origin": { "enum": ["ci.android.com", "apkrun-builder"] },
-        "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
-        "target": { "type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$" },
-        "buildId": { "type": "string", "pattern": "^([0-9]{1,20}|ar[0-9]{6})$" },
+        "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$(?![\\s\\S])" },
+        "target": { "type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$(?![\\s\\S])" },
+        "buildId": { "type": "string", "pattern": "^([0-9]{1,20}|ar[0-9]{6})$(?![\\s\\S])" },
         "archives": {
           "type": "array",
           "minItems": 1,
@@ -586,7 +586,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
             "additionalProperties": false,
             "required": ["name", "size", "sha256"],
             "properties": {
-              "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$" },
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$(?![\\s\\S])" },
               "size": { "type": "integer", "minimum": 1 },
               "sha256": { "$ref": "#/$defs/sha256" }
             }
@@ -599,14 +599,14 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
       "additionalProperties": false,
       "required": ["release", "sdk", "variant", "securityPatch"],
       "properties": {
-        "release": { "type": "string", "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$" },
+        "release": { "type": "string", "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$(?![\\s\\S])" },
         "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
         "variant": { "enum": ["user", "userdebug", "eng"] },
-        "securityPatch": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" }
+        "securityPatch": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$(?![\\s\\S])" }
       }
     },
-    "architecture": { "type": "string", "pattern": "^[a-z0-9_]{1,32}$" },
-    "deviceFamily": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "architecture": { "type": "string", "pattern": "^[a-z0-9_]{1,32}$(?![\\s\\S])" },
+    "deviceFamily": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$(?![\\s\\S])" },
     "artifacts": {
       "type": "array",
       "minItems": 1,
@@ -620,7 +620,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
           "file": {
             "type": "string",
             "maxLength": 255,
-            "pattern": "^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$",
+            "pattern": "^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$(?![\\s\\S])",
             "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
           },
           "sha256": { "$ref": "#/$defs/sha256" },
@@ -652,7 +652,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
         "additionalProperties": false,
         "required": ["name", "size", "filesystem"],
         "properties": {
-          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$(?![\\s\\S])" },
           "size": { "type": "integer", "minimum": 512, "multipleOf": 512 },
           "filesystem": { "enum": ["ext4", "erofs", "f2fs", "unknown"] }
         }
@@ -673,21 +673,26 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
     },
     "androidInfo": {
       "type": "object",
-      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$(?![\\s\\S])" },
       "additionalProperties": { "type": "string", "maxLength": 1024 }
     }
   },
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "artifactId": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
-    "partition": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,33}$" }
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$(?![\\s\\S])" },
+    "artifactId": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$(?![\\s\\S])" },
+    "partition": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,33}$(?![\\s\\S])" }
   }
 }
 ```
 
 ## 8. Validation rules
 
-Order: M1 first (so a newer file gets a useful message and not a list of unknown fields), then the schema (§7), then M2–M13. `manifest --check` reports every failure. The other commands stop at the first one. M1–M3, M5, and M7–M9 need only the manifest. M4, M6, and M10–M13 read the files. `--no-files` skips them.
+Order: M1 first (so a newer file gets a useful message and not a list of unknown fields), then the schema (§7), then M2–M15. `manifest --check` reports every failure. The other commands stop at the first one. M1–M3, M5, M7–M9, and M14–M15 need only the manifest. M4, M6, and M10–M13 read the files. `--no-files` skips them.
+
+Every anchored string pattern in the schema includes an end-of-input
+assertion. A plain `$` can match before a final line terminator, so the
+patterns also assert that no character follows. Swift validation additionally
+requires each regular-expression match to cover the complete input string.
 
 The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-design/android-image.md) §3.3. M8–M13 follow the same style. Each message is shown with example values.
 
@@ -698,16 +703,19 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 | M3 | artifact kind matches the role (§6.5) | `artifacts[2] (role vendorBoot): expected kind vendorBootImage v4, found bootImage v4. Is the file swapped?` |
 | M4 | the file exists, and size and SHA-256 match | `super.img: SHA-256 mismatch (expected …, got …). Re-run fetch or re-inventory.` |
 | M5 | `architecture` is `arm64` | `architecture x86_64 is not supported. Use an arm64 target.` |
-| M6 | boot header versions: boot and init_boot v4, vendor_boot v4 | `vendor_boot.img header v3 is not supported (needs v4 ramdisk table).` |
+| M6 | boot and init_boot are header v4 and match the `boot` and `init_boot` role kinds; vendor_boot is header v4 | `vendor_boot.img header v3 is not supported (needs v4 ramdisk table).` |
 | M7 | no duplicate partition names across `artifacts` and `blankPartitions` | `partition "misc" appears in artifacts[7] and blankPartitions[0].` |
 | M8 | artifact ids are unique | `artifact id "vbmeta" appears in artifacts[3] and artifacts[4].` |
 | M9 | `android.variant` equals the suffix of `source.target` | `android.variant "user" does not match target aosp_cf_arm64_only_phone-userdebug.` |
-| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind | `artifacts[8] (cuttlefish_example_custom.img): kind filesystem does not match the inventory (unknown). Re-run the inventory.` |
+| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind; the recorded inventory is archive-backed, its archive name, size, and hash match `source.archives`, and its branch, build ID, and target match the fetched archive metadata in a valid `fetch.json` | `artifacts[8] (cuttlefish_example_custom.img): kind filesystem does not match the inventory (unknown). Re-run the inventory.` |
 | M11 | every source inventory vbmeta file is a `kind: vbmeta` artifact listed in `roles.vbmeta`; chain items follow item 0's descriptor order | `roles.vbmeta[2] = "vbmeta_system_dlkm": vbmeta.img has no chain descriptor for partition vbmeta_system_dlkm.` |
 | M12 | `logicalPartitions` equals the non-empty partitions in the super metadata (name, size, filesystem) | `logicalPartitions: system_dlkm_a is in super.img but not in the manifest.` |
 | M13 | `android.release` and `securityPatch` equal the `roles.kernel` boot header `os_version`, and `sdk` equals the table entry for `release` | `android.release "16" does not match boot.img os_version 17.0.0.` |
+| M14 | `source.buildId` format matches `source.origin`: numeric for `ci.android.com`, or `ar` plus six digits for `apkrun-builder` | `source.buildId "16373615" does not match origin apkrun-builder. Use an ar-prefixed six-digit build ID.` |
+| M15 | logical partition names are unique | `logicalPartitions[1].name "system_a" duplicates logicalPartitions[0].name. Use a unique logical partition name.` |
 
 - A message always names the file or field, what was expected, what was found, and the fix.
+- For M10, a recorded inventory with `source.type` other than `zip` fails because it cannot establish the archive fingerprint declared by the manifest. The actual archive must also have matching `fetch.json` metadata with branch, build ID, and target; missing provenance fails closed. Those values are checked directly against the archive record, so editing both `inventory.json` and the manifest cannot override them. Use `fetch` without an API key to record a manual download before inventorying it.
 - The layout check is part of `disks` and `bundle`: `layout cuttlefish-tablet-arm64 does not match deviceFamily cuttlefish-phone-arm64.` Every partition the layout names must be an artifact `partition` or a `blankPartitions` entry: `layout partition "custom" has no artifact or blank partition.`
 
 ## 9. Consumers
@@ -726,7 +734,7 @@ The layout file never names a file. It names partitions, and this manifest maps 
 
 - `AndroidImageManifest.schemaVersion` is an integer. Only `1` is defined.
 - A reader refuses a newer version with M1. `Images/tools` reads only the current version. A change that raises the version also rewrites every committed manifest, in the same change.
-- Unknown fields are rejected. This file is ours and reviewed by a human, so a typo must fail. (The Direct provider manifest does the opposite, because third parties write it: [direct-provider-manifest.md](direct-provider-manifest.md) §9.)
+- Unknown fields are rejected. This file is ours and reviewed by a human, so a typo must fail. (The Direct provider manifest does the opposite, because third parties write it: [direct-provider-manifest.md](direct-provider-manifest.md) §9.) ImageCore converts JSON decoding errors to typed manifest failures without including decoder debug descriptions or raw values. It escapes control, quoting, and bidirectional-formatting characters in input-derived paths and values, and limits each displayed value to 128 Unicode scalars.
 - Any change to the schema, even an optional field, raises `schemaVersion`. The schema `$id` carries the version.
 - `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current; it adds the bounded AVB footer `vbmetaSize` and `version` fields, plus checked `fetch.json` build provenance in `source`. Inventory files are regenerated, never migrated.
 
@@ -747,7 +755,7 @@ The layout file never names a file. It names partitions, and this manifest maps 
 |---|---|---|
 | T0 | the inventory of the fixture zip is byte-identical on a second run | #008 |
 | T0 | kind detection for every row of §4.4, including a `boot.img` that is really a vendor boot image (`nameMismatch: true`) | #008 |
-| T0 | every file in `Images/tools/tests/fixtures/manifests/invalid/` fails with its expected message in Python, and in Swift except the image-file checks listed in `invalid/python-only.txt` | #009 |
+| T0 | every file in `Images/tools/tests/fixtures/manifests/invalid/` fails with its expected message in Python, and in Swift except the image-file checks listed in `invalid/python-only.txt`; malformed JSON field types become typed manifest errors, and input-derived field paths and diagnostic values are escaped and bounded | #009 |
 | T0 | the Swift `Codable` model accepts every valid fixture and every committed manifest | #009 |
 | T1 | `manifest --check` passes on the committed `16373615` manifest with the real archive | #009 |
 

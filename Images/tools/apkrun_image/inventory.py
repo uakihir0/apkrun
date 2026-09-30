@@ -10,6 +10,7 @@ import stat
 import struct
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -960,6 +961,10 @@ def _fetch_context(
             or PurePosixPath(name).name != name
             or "\\" in name
             or name in {".", ".."}
+            or any(
+                unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                for character in name
+            )
         ):
             raise InventoryError(f"{manifest_path}: unsafe artifact name")
         if expected_name is not None and name != expected_name:

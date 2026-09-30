@@ -85,7 +85,7 @@ def _schema_errors(document: object) -> list[str]:
     errors.sort(key=lambda error: (tuple(str(part) for part in error.absolute_path), error.message))
     output: list[str] = []
     for error in errors:
-        path = ".".join(str(part) for part in error.absolute_path) or "manifest"
+        path = ".".join(_safe_diagnostic_value(part) for part in error.absolute_path) or "manifest"
         if error.validator == "additionalProperties":
             message = f"{path}: contains an unknown field. Remove it or update the manifest schema."
         elif error.validator == "required":
@@ -94,7 +94,10 @@ def _schema_errors(document: object) -> list[str]:
                 f"{path}: missing required field {', '.join(missing)}. Add the required field."
             )
         else:
-            message = f"{path}: {error.message}. Correct this value to match the manifest schema."
+            message = (
+                f"{path}: {_safe_diagnostic_value(error.message)}. "
+                "Correct this value to match the manifest schema."
+            )
         output.append(message)
     return output
 
@@ -156,7 +159,7 @@ def _found_kind(artifact: Mapping[str, Any]) -> str:
 
 
 def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
-    """Run M2, M3, M5, M7, M8, and M9 without reading image files."""
+    """Run manifest-only rules, including exact androidInfo key validation."""
     failures: list[str] = []
     artifact_index = _artifacts_by_id(document)
     artifact_ids = list(artifact_index)
@@ -168,8 +171,9 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
         if artifact_id not in artifact_index:
             index_text = f"[{role_index}]" if role_index is not None else ""
             failures.append(
-                f'roles.{role}{index_text} = "{artifact_id}": no artifact with that id. '
-                f"Known ids: {', '.join(artifact_ids)}."
+                f'roles.{role}{index_text} = "{_safe_diagnostic_value(artifact_id)}": '
+                "no artifact with that id. "
+                f"Known ids: {', '.join(_safe_diagnostic_value(value) for value in artifact_ids)}."
             )
 
     for role, (expected_kind, expected_partition) in ROLE_KINDS.items():
@@ -190,7 +194,8 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
             failures.append(
                 f"artifacts[{index}] (role {role}): expected kind {expected_kind_label} on "
                 f"partition {expected_partition}, found {_found_kind(artifact)} on "
-                f"partition {artifact.get('partition')}. Is the file swapped?"
+                f"partition {_safe_diagnostic_value(artifact.get('partition'))}. "
+                "Is the file swapped?"
             )
 
     vbmeta_ids = roles.get("vbmeta")
@@ -207,7 +212,7 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
                 failures.append(
                     f"artifacts[{index}] (role roles.vbmeta[{position}]): expected kind vbmeta"
                     f"{expected_partition}, found {_found_kind(artifact)} on partition "
-                    f"{artifact.get('partition')}. Is the file swapped?"
+                    f"{_safe_diagnostic_value(artifact.get('partition'))}. Is the file swapped?"
                 )
 
         listed_vbmeta_ids = set(vbmeta_ids)
@@ -230,13 +235,17 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
                     and artifact.get("id") not in listed_vbmeta_ids
                 ):
                     failures.append(
-                        f'artifacts[{index}] (vbmeta): id "{artifact.get("id")}" is missing '
+                        f"artifacts[{index}] (vbmeta): id "
+                        f'"{_safe_diagnostic_value(artifact.get("id"))}" is missing '
                         "from roles.vbmeta. Add it to the chain order."
                     )
 
     architecture = document.get("architecture")
     if architecture != "arm64":
-        failures.append(f"architecture {architecture} is not supported. Use an arm64 target.")
+        failures.append(
+            f"architecture {_safe_diagnostic_value(architecture)} is not supported. "
+            "Use an arm64 target."
+        )
 
     partitions: dict[str, tuple[str, int]] = {}
     artifacts = document.get("artifacts")
@@ -248,7 +257,8 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
             if partition in partitions:
                 previous_kind, previous_index = partitions[partition]
                 failures.append(
-                    f'partition "{partition}" appears in {previous_kind}[{previous_index}] '
+                    f'partition "{_safe_diagnostic_value(partition)}" appears in '
+                    f"{previous_kind}[{previous_index}] "
                     f"and artifacts[{index}]."
                 )
             else:
@@ -264,7 +274,8 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
             if partition in partitions:
                 previous_kind, previous_index = partitions[partition]
                 failures.append(
-                    f'partition "{partition}" appears in {previous_kind}[{previous_index}] '
+                    f'partition "{_safe_diagnostic_value(partition)}" appears in '
+                    f"{previous_kind}[{previous_index}] "
                     f"and blankPartitions[{index}]."
                 )
             else:
@@ -278,7 +289,8 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
             artifact_id = artifact["id"]
             if artifact_id in seen_ids:
                 failures.append(
-                    f'artifact id "{artifact_id}" appears in artifacts[{seen_ids[artifact_id]}] '
+                    f'artifact id "{_safe_diagnostic_value(artifact_id)}" appears in '
+                    f"artifacts[{seen_ids[artifact_id]}] "
                     f"and artifacts[{index}]."
                 )
             else:
@@ -292,7 +304,44 @@ def _manifest_only_checks(document: Mapping[str, Any]) -> list[str]:
         if isinstance(variant, str) and isinstance(target, str):
             target_variant = target.rsplit("-", 1)[-1]
             if variant != target_variant:
-                failures.append(f'android.variant "{variant}" does not match target {target}.')
+                failures.append(
+                    f'android.variant "{_safe_diagnostic_value(variant)}" does not match '
+                    f"target {_safe_diagnostic_value(target)}."
+                )
+
+        origin = source.get("origin")
+        build_id = source.get("buildId")
+        if isinstance(origin, str) and isinstance(build_id, str):
+            expected_format = (
+                "a numeric build ID"
+                if origin == "ci.android.com"
+                else "an ar-prefixed six-digit build ID"
+            )
+            valid_pair = (
+                origin == "ci.android.com" and re.fullmatch(r"[0-9]{1,20}", build_id) is not None
+            ) or (origin == "apkrun-builder" and re.fullmatch(r"ar[0-9]{6}", build_id) is not None)
+            if not valid_pair:
+                failures.append(
+                    f'source.buildId "{_safe_diagnostic_value(build_id)}" does not match '
+                    f"origin {_safe_diagnostic_value(origin)}. "
+                    f"Use {expected_format}."
+                )
+
+    logical_partitions = document.get("logicalPartitions")
+    if isinstance(logical_partitions, list):
+        logical_partition_locations: dict[str, int] = {}
+        for index, partition in enumerate(logical_partitions):
+            if not isinstance(partition, dict) or not isinstance(partition.get("name"), str):
+                continue
+            name = partition["name"]
+            if name in logical_partition_locations:
+                failures.append(
+                    f'logicalPartitions[{index}].name "{_safe_diagnostic_value(name)}" duplicates '
+                    f"logicalPartitions[{logical_partition_locations[name]}].name. "
+                    "Use a unique logical partition name."
+                )
+            else:
+                logical_partition_locations[name] = index
     return failures
 
 
@@ -339,7 +388,7 @@ def _read_actual_inventories(
         try:
             inventory_document = create_inventory(source)
         except InventoryError as error:
-            raise ManifestError(str(error)) from error
+            raise ManifestError(_safe_diagnostic_text(str(error))) from error
         source_name = inventory_document.get("source", {}).get("name")
         actual_inventories = [inventory_document]
         source_record = inventory_document.get("source")
@@ -358,7 +407,7 @@ def _read_actual_inventories(
             try:
                 inventory_document = create_inventory(path)
             except InventoryError as error:
-                raise ManifestError(str(error)) from error
+                raise ManifestError(_safe_diagnostic_text(str(error))) from error
             actual_inventories.append(inventory_document)
             source_record = inventory_document.get("source")
             if isinstance(source_record, dict):
@@ -524,7 +573,12 @@ def validate_manifest(
         if not isinstance(recorded_inventory, dict):
             file_failures.append("inventory.json: top level must be an object.")
         else:
-            _validate_inventory_provenance(document, recorded_inventory, file_failures)
+            _validate_inventory_provenance(
+                document,
+                recorded_inventory,
+                actual_inventories,
+                file_failures,
+            )
             if actual_inventories and all(
                 item.get("source", {}).get("type") != "directory" for item in actual_inventories
             ):
@@ -546,6 +600,7 @@ def validate_manifest(
 def _validate_inventory_provenance(
     document: Mapping[str, Any],
     inventory_document: Mapping[str, Any],
+    actual_inventories: Sequence[Mapping[str, Any]],
     failures: list[str],
 ) -> None:
     """Ensure the manifest does not misstate its fetched build provenance."""
@@ -554,6 +609,21 @@ def _validate_inventory_provenance(
     if not isinstance(manifest_source, dict) or not isinstance(inventory_source, dict):
         failures.append("inventory.json: source metadata is missing. Re-run inventory.")
         return
+    actual_sources = [
+        actual_inventory.get("source") if isinstance(actual_inventory.get("source"), dict) else {}
+        for actual_inventory in actual_inventories
+    ]
+    has_complete_fetched_provenance = bool(actual_sources) and all(
+        isinstance(actual_source.get(field), str) and actual_source[field]
+        for actual_source in actual_sources
+        for field in ("branch", "buildId", "target")
+    )
+    if not has_complete_fetched_provenance:
+        failures.append(
+            "source: actual archive inventory is missing complete fetched build metadata "
+            "(branch, buildId, target). Pass the fetched download directory or create a "
+            "valid fetch.json."
+        )
     for field in ("branch", "buildId", "target"):
         expected = inventory_source.get(field)
         found = manifest_source.get(field)
@@ -564,9 +634,81 @@ def _validate_inventory_provenance(
             )
         elif found != expected:
             failures.append(
-                f'source.{field} "{found}" does not match inventory.json source.{field} '
-                f'"{expected}". Re-run manifest generation.'
+                f'source.{field} "{_safe_diagnostic_value(found)}" does not match '
+                f'inventory.json source.{field} "{_safe_diagnostic_value(expected)}". '
+                "Re-run manifest generation."
             )
+        elif isinstance(found, str):
+            for actual_source in actual_sources:
+                actual_value = actual_source.get(field)
+                if (
+                    has_complete_fetched_provenance
+                    and isinstance(actual_value, str)
+                    and found != actual_value
+                ):
+                    failures.append(
+                        f'source.{field} "{_safe_diagnostic_value(found)}" does not match '
+                        "the fetched archive metadata "
+                        f'"{_safe_diagnostic_value(actual_value)}". '
+                        "Re-run inventory or manifest generation."
+                    )
+
+    if inventory_source.get("type") != "zip":
+        failures.append(
+            'inventory.json: source type must be "zip" to match source.archives. '
+            "Re-run inventory on the fetched archive."
+        )
+        return
+
+    archive_name = inventory_source.get("name")
+    archives = manifest_source.get("archives")
+    archive = (
+        next(
+            (
+                item
+                for item in archives
+                if isinstance(item, dict) and item.get("name") == archive_name
+            ),
+            None,
+        )
+        if isinstance(archives, list)
+        else None
+    )
+    if not isinstance(archive_name, str) or archive is None:
+        failures.append(
+            "inventory.json: source archive is not declared in source.archives. "
+            "Re-run manifest generation."
+        )
+    else:
+        for field in ("size", "sha256"):
+            expected = inventory_source.get(field)
+            found = archive.get(field)
+            if expected != found:
+                failures.append(
+                    f"inventory.json: source archive "
+                    f'"{_safe_diagnostic_value(archive_name)}" {field} '
+                    f"does not match source.archives. Re-run inventory or manifest "
+                    "generation."
+                )
+
+
+def _safe_diagnostic_value(value: object) -> str:
+    """Escape and bound an untrusted value before adding it to a diagnostic."""
+    if not isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"))[:128]
+    truncated = value[:128]
+    escaped = json.dumps(truncated, ensure_ascii=True, separators=(",", ":"))[1:-1]
+    if len(value) > len(truncated):
+        escaped += "…"
+    return escaped
+
+
+def _safe_diagnostic_text(value: str) -> str:
+    """Escape a diagnostic and retain both ends when its untrusted text is long."""
+    escaped = json.dumps(value, ensure_ascii=True, separators=(",", ":"))[1:-1]
+    if len(escaped) > 512:
+        escaped = f"{escaped[:255]}…{escaped[-256:]}"
+    return escaped
 
 
 def _read_logical_partitions(
@@ -626,6 +768,7 @@ def _validate_inventory_records(
         if not isinstance(archive, dict):
             continue
         name = archive.get("name")
+        display_name = _safe_diagnostic_value(name)
         actual = next(
             (
                 item.get("source")
@@ -639,13 +782,13 @@ def _validate_inventory_records(
                 item.get("source", {}).get("type") == "directory" for item in actual_inventories
             ):
                 failures.append(
-                    f"{name}: source archive is missing. Re-run fetch or pass --source."
+                    f"{display_name}: source archive is missing. Re-run fetch or pass --source."
                 )
         elif actual.get("type") != "directory":
             if actual.get("size") != archive.get("size"):
-                failures.append(f"{name}: archive size does not match source.archives.")
+                failures.append(f"{display_name}: archive size does not match source.archives.")
             if actual.get("sha256") != archive.get("sha256"):
-                failures.append(f"{name}: archive SHA-256 does not match source.archives.")
+                failures.append(f"{display_name}: archive SHA-256 does not match source.archives.")
 
     artifacts = document.get("artifacts", [])
     artifact_by_id = _artifacts_by_id(document)
@@ -666,7 +809,8 @@ def _validate_inventory_records(
             and path not in manifest_vbmeta_paths
         ):
             failures.append(
-                f'inventory.json: vbmeta file "{path}" is missing from artifacts and '
+                f'inventory.json: vbmeta file "{_safe_diagnostic_value(path)}" is missing '
+                "from artifacts and "
                 "roles.vbmeta. Regenerate the manifest."
             )
     for index, artifact in enumerate(artifacts if isinstance(artifacts, list) else []):
@@ -674,22 +818,26 @@ def _validate_inventory_records(
             continue
         path = artifact.get("file")
         candidates = actual_by_path.get(path, []) if isinstance(path, str) else []
+        display_path = _safe_diagnostic_value(path)
         if len(candidates) != 1:
-            failures.append(f"{path}: expected exactly one archive entry, found {len(candidates)}.")
+            failures.append(
+                f"{display_path}: expected exactly one archive entry, found {len(candidates)}."
+            )
             continue
         entry = candidates[0][1]
         if artifact.get("size") != entry.get("size"):
             failures.append(
-                f"{path}: size mismatch (expected {artifact.get('size')}, got {entry.get('size')})."
+                f"{display_path}: size mismatch "
+                f"(expected {artifact.get('size')}, got {entry.get('size')})."
             )
         if artifact.get("sha256") != entry.get("sha256"):
             failures.append(
-                f"{path}: SHA-256 mismatch (expected {artifact.get('sha256')}, "
+                f"{display_path}: SHA-256 mismatch (expected {artifact.get('sha256')}, "
                 f"got {entry.get('sha256')}). Re-run fetch or re-inventory."
             )
         if artifact.get("kind") != entry.get("kind"):
             failures.append(
-                f"artifacts[{index}] ({path}): kind {artifact.get('kind')} does not match "
+                f"artifacts[{index}] ({display_path}): kind {artifact.get('kind')} does not match "
                 f"the inventory ({entry.get('kind')}). Re-run the inventory."
             )
 
@@ -727,6 +875,7 @@ def _validate_inventory_records(
             "Re-run manifest generation."
         )
 
+    expected_boot_kinds = {"kernel": "boot", "genericRamdisk": "init_boot"}
     for role in ("kernel", "genericRamdisk", "vendorBoot"):
         artifact_id = document.get("roles", {}).get(role)
         found = artifact_by_id.get(artifact_id) if isinstance(artifact_id, str) else None
@@ -737,10 +886,20 @@ def _validate_inventory_records(
         details = entry[0][1].get("details") if len(entry) == 1 else None
         version = details.get("headerVersion") if isinstance(details, dict) else None
         if version != 4:
+            display_file = _safe_diagnostic_value(artifact.get("file"))
             failures.append(
-                f"{artifact.get('file')} header v{version} is not supported "
-                "(needs v4 ramdisk table)."
+                f"{display_file} header v{version} is not supported (needs v4 ramdisk table)."
             )
+        expected_boot_kind = expected_boot_kinds.get(role)
+        if expected_boot_kind is not None:
+            boot_kind = details.get("bootKind") if isinstance(details, dict) else None
+            if boot_kind != expected_boot_kind:
+                found_boot_kind = boot_kind if isinstance(boot_kind, str) else "unknown"
+                failures.append(
+                    f"{_safe_diagnostic_value(artifact.get('file'))} bootKind "
+                    f"{_safe_diagnostic_value(found_boot_kind)} does not match "
+                    f"roles.{role} (needs {expected_boot_kind}). Check the manifest role mapping."
+                )
 
     vbmeta_ids = document.get("roles", {}).get("vbmeta")
     if isinstance(vbmeta_ids, list) and vbmeta_ids:
@@ -781,16 +940,21 @@ def _validate_inventory_records(
             for artifact_id in vbmeta_ids[1:]
         )
         if child_roles_are_chained and vbmeta_ids != expected_vbmeta_ids:
+            display_vbmeta_ids = [_safe_diagnostic_value(artifact_id) for artifact_id in vbmeta_ids]
+            display_expected_vbmeta_ids = [
+                _safe_diagnostic_value(artifact_id) for artifact_id in expected_vbmeta_ids
+            ]
             failures.append(
-                f"roles.vbmeta order {vbmeta_ids} does not match top-level chain descriptor "
-                f"order {expected_vbmeta_ids}."
+                f"roles.vbmeta order {display_vbmeta_ids} does not match top-level chain "
+                f"descriptor order {display_expected_vbmeta_ids}."
             )
         for position, artifact_id in enumerate(vbmeta_ids[1:], start=1):
             found = artifact_by_id.get(artifact_id) if isinstance(artifact_id, str) else None
             if found and found[1].get("partition") not in chain_partitions:
                 failures.append(
-                    f'roles.vbmeta[{position}] = "{artifact_id}": {top_file} has no chain '
-                    f"descriptor for partition {found[1].get('partition')}."
+                    f'roles.vbmeta[{position}] = "{_safe_diagnostic_value(artifact_id)}": '
+                    f"{_safe_diagnostic_value(top_file)} has no chain descriptor for partition "
+                    f"{_safe_diagnostic_value(found[1].get('partition'))}."
                 )
 
     super_found = artifact_by_id.get(document.get("roles", {}).get("super"))
@@ -822,7 +986,8 @@ def _validate_inventory_records(
                         actual_partitions = _read_logical_partitions(stream, sparse=sparse)
                         if actual_partitions is None:
                             failures.append(
-                                f"{super_artifact.get('file')}: liblp metadata is missing."
+                                f"{_safe_diagnostic_value(super_artifact.get('file'))}: "
+                                "liblp metadata is missing."
                             )
                         else:
                             manifest_values = {
@@ -832,21 +997,25 @@ def _validate_inventory_records(
                             }
                             for name in sorted(set(actual_partitions) - set(manifest_values)):
                                 failures.append(
-                                    f"logicalPartitions: {name} is in {super_artifact.get('file')} "
+                                    f"logicalPartitions: {_safe_diagnostic_value(name)} is in "
+                                    f"{_safe_diagnostic_value(super_artifact.get('file'))} "
                                     "but not in the manifest."
                                 )
                             for name in sorted(set(manifest_values) - set(actual_partitions)):
                                 failures.append(
-                                    f"logicalPartitions: {name} is in the manifest but not in "
-                                    f"{super_artifact.get('file')}."
+                                    f"logicalPartitions: {_safe_diagnostic_value(name)} is in the "
+                                    "manifest but not in "
+                                    f"{_safe_diagnostic_value(super_artifact.get('file'))}."
                                 )
                             for name in sorted(set(actual_partitions) & set(manifest_values)):
                                 if manifest_values[name] != actual_partitions[name]:
+                                    display_expected = _safe_diagnostic_value(manifest_values[name])
+                                    display_actual = _safe_diagnostic_value(actual_partitions[name])
                                     failures.append(
-                                        f"logicalPartitions: {name} expected "
-                                        f"{manifest_values[name]}, found "
-                                        f"{actual_partitions[name]} in "
-                                        f"{super_artifact.get('file')}."
+                                        f"logicalPartitions: {_safe_diagnostic_value(name)} "
+                                        f"expected {display_expected}, found {display_actual} "
+                                        "in "
+                                        f"{_safe_diagnostic_value(super_artifact.get('file'))}."
                                     )
                 except (
                     OSError,
@@ -857,8 +1026,8 @@ def _validate_inventory_records(
                     zipfile.BadZipFile,
                 ) as error:
                     failures.append(
-                        f"{super_artifact.get('file')}: could not inspect "
-                        f"logical partitions: {error}."
+                        f"{_safe_diagnostic_value(super_artifact.get('file'))}: could not "
+                        f"inspect logical partitions: {_safe_diagnostic_value(str(error))}."
                     )
 
     kernel_found = artifact_by_id.get(document.get("roles", {}).get("kernel"))
@@ -875,19 +1044,23 @@ def _validate_inventory_records(
             )
             if android.get("release") != expected_release:
                 failures.append(
-                    f'android.release "{android.get("release")}" does not match '
-                    f"{kernel_file} os_version {raw_release}."
+                    f'android.release "{_safe_diagnostic_value(android.get("release"))}" does '
+                    f"not match {_safe_diagnostic_value(kernel_file)} "
+                    f"os_version {_safe_diagnostic_value(raw_release)}."
                 )
             if android.get("securityPatch") != os_version.get("securityPatch"):
                 failures.append(
-                    f'android.securityPatch "{android.get("securityPatch")}" does not match '
-                    f"{kernel_file} os_version security patch {os_version.get('securityPatch')}."
+                    f"android.securityPatch "
+                    f'"{_safe_diagnostic_value(android.get("securityPatch"))}" does not match '
+                    f"{_safe_diagnostic_value(kernel_file)} os_version security patch "
+                    f"{_safe_diagnostic_value(os_version.get('securityPatch'))}."
                 )
             expected_sdk = SDK_BY_RELEASE.get(str(expected_release))
             if android.get("sdk") != expected_sdk:
                 failures.append(
-                    f"android.sdk {android.get('sdk')} does not match release "
-                    f"{android.get('release')} (expected {expected_sdk}). Update the SDK table."
+                    f"android.sdk {_safe_diagnostic_value(android.get('sdk'))} does not match "
+                    f"release {_safe_diagnostic_value(android.get('release'))} "
+                    f"(expected {expected_sdk}). Update the SDK table."
                 )
 
 

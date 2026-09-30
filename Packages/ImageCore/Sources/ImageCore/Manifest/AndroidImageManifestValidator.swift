@@ -5,7 +5,7 @@ public struct AndroidImageManifestValidator: Sendable {
     /// Creates a stateless manifest validator.
     public init() {}
 
-    /// Validates the manifest-only M1–M3, M5, and M7–M9 rules.
+    /// Validates the manifest-only M1–M3, M5, M7–M9, M14, and M15 rules.
     public func validate(_ manifest: AndroidImageManifest) throws(ImageFailure) {
         guard manifest.schemaVersion == 1 else {
             let reason =
@@ -38,7 +38,10 @@ public struct AndroidImageManifestValidator: Sendable {
             let known = knownIDs.isEmpty ? "none" : knownIDs
             throw .manifestInvalid(
                 path: "android-image.json",
-                reason: "\(role) = \"\(identifier)\": no artifact with that id. Known ids: \(known)."
+                reason:
+                    "\(role) = \"\(manifestDiagnosticValue(identifier))\": "
+                    + "no artifact with that id. Known ids: "
+                    + "\(manifestDiagnosticValue(known))."
             )
         }
 
@@ -63,7 +66,9 @@ public struct AndroidImageManifestValidator: Sendable {
                 throw .manifestInvalid(
                     path: "android-image.json",
                     reason:
-                        "artifacts[\(index)] (role \(role)): expected kind \(expected), found \(artifact.kind) on partition \(artifact.partition). Is the file swapped?"
+                        "artifacts[\(index)] (role \(role)): expected kind \(expected), "
+                        + "found \(manifestDiagnosticValue(artifact.kind)) on partition "
+                        + "\(manifestDiagnosticValue(artifact.partition)). Is the file swapped?"
                 )
             }
         }
@@ -80,7 +85,10 @@ public struct AndroidImageManifestValidator: Sendable {
                 throw .manifestInvalid(
                     path: "android-image.json",
                     reason:
-                        "artifacts[\(index)] (role roles.vbmeta[\(position)]): expected kind vbmeta\(expectedPartition), found \(artifact.kind) on partition \(artifact.partition). Is the file swapped?"
+                        "artifacts[\(index)] (role roles.vbmeta[\(position)]): expected "
+                        + "kind vbmeta\(expectedPartition), found "
+                        + "\(manifestDiagnosticValue(artifact.kind)) on partition "
+                        + "\(manifestDiagnosticValue(artifact.partition)). Is the file swapped?"
                 )
             }
         }
@@ -91,14 +99,18 @@ public struct AndroidImageManifestValidator: Sendable {
             throw .manifestInvalid(
                 path: "android-image.json",
                 reason:
-                    "artifacts[\(index)] (vbmeta): id \"\(artifact.id)\" is missing from roles.vbmeta. Add it to the chain order."
+                    "artifacts[\(index)] (vbmeta): id "
+                    + "\"\(manifestDiagnosticValue(artifact.id))\" is missing from "
+                    + "roles.vbmeta. Add it to the chain order."
             )
         }
 
         guard manifest.architecture == "arm64" else {
             throw .manifestInvalid(
                 path: "android-image.json",
-                reason: "architecture \(manifest.architecture) is not supported. Use an arm64 target."
+                reason:
+                    "architecture \(manifestDiagnosticValue(manifest.architecture)) "
+                    + "is not supported. Use an arm64 target."
             )
         }
 
@@ -108,7 +120,9 @@ public struct AndroidImageManifestValidator: Sendable {
             if let previous = partitionLocations[artifact.partition] {
                 throw .manifestInvalid(
                     path: "android-image.json",
-                    reason: "partition \"\(artifact.partition)\" appears in \(previous) and \(location)."
+                    reason:
+                        "partition \"\(manifestDiagnosticValue(artifact.partition))\" "
+                        + "appears in \(previous) and \(location)."
                 )
             }
             partitionLocations[artifact.partition] = location
@@ -118,7 +132,9 @@ public struct AndroidImageManifestValidator: Sendable {
             if let previous = partitionLocations[partition.partition] {
                 throw .manifestInvalid(
                     path: "android-image.json",
-                    reason: "partition \"\(partition.partition)\" appears in \(previous) and \(location)."
+                    reason:
+                        "partition \"\(manifestDiagnosticValue(partition.partition))\" "
+                        + "appears in \(previous) and \(location)."
                 )
             }
             partitionLocations[partition.partition] = location
@@ -129,7 +145,9 @@ public struct AndroidImageManifestValidator: Sendable {
             if let previous = artifactIDLocations[artifact.id] {
                 throw .manifestInvalid(
                     path: "android-image.json",
-                    reason: "artifact id \"\(artifact.id)\" appears in artifacts[\(previous)] and artifacts[\(index)]."
+                    reason:
+                        "artifact id \"\(manifestDiagnosticValue(artifact.id))\" appears in "
+                        + "artifacts[\(previous)] and artifacts[\(index)]."
                 )
             }
             artifactIDLocations[artifact.id] = index
@@ -140,8 +158,50 @@ public struct AndroidImageManifestValidator: Sendable {
             throw .manifestInvalid(
                 path: "android-image.json",
                 reason:
-                    "android.variant \"\(manifest.android.variant)\" does not match target \(manifest.source.target)."
+                    "android.variant \"\(manifestDiagnosticValue(manifest.android.variant))\" "
+                    + "does not match target "
+                    + "\(manifestDiagnosticValue(manifest.source.target))."
             )
+        }
+
+        let buildIDBytes = Array(manifest.source.buildId.utf8)
+        let isNumericBuildID =
+            !buildIDBytes.isEmpty && buildIDBytes.allSatisfy { (48...57).contains($0) }
+        let builderBuildIDSuffix = buildIDBytes.dropFirst(2)
+        let isBuilderBuildID =
+            buildIDBytes.starts(with: [97, 114])
+            && builderBuildIDSuffix.count == 6
+            && builderBuildIDSuffix.allSatisfy { (48...57).contains($0) }
+        let buildIDMatchesOrigin =
+            (manifest.source.origin == "ci.android.com" && isNumericBuildID)
+            || (manifest.source.origin == "apkrun-builder" && isBuilderBuildID)
+        if !buildIDMatchesOrigin {
+            let expectedFormat =
+                manifest.source.origin == "ci.android.com"
+                ? "a numeric build ID"
+                : "an ar-prefixed six-digit build ID"
+            throw .manifestInvalid(
+                path: "android-image.json",
+                reason:
+                    "source.buildId \"\(manifestDiagnosticValue(manifest.source.buildId))\" "
+                    + "does not match origin "
+                    + "\(manifestDiagnosticValue(manifest.source.origin)). Use \(expectedFormat)."
+            )
+        }
+
+        var logicalPartitionLocations: [String: Int] = [:]
+        for (index, partition) in manifest.logicalPartitions.enumerated() {
+            if let previous = logicalPartitionLocations[partition.name] {
+                throw .manifestInvalid(
+                    path: "android-image.json",
+                    reason:
+                        "logicalPartitions[\(index)].name "
+                        + "\"\(manifestDiagnosticValue(partition.name))\" duplicates "
+                        + "logicalPartitions[\(previous)].name. "
+                        + "Use a unique logical partition name."
+                )
+            }
+            logicalPartitionLocations[partition.name] = index
         }
     }
 }

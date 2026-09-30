@@ -280,32 +280,41 @@ public struct AndroidImageManifest: Codable, Equatable, Sendable {
 
     /// Decodes the schema version first, then the closed schema and its field constraints.
     public init(from decoder: any Decoder) throws {
-        let dynamicContainer = try decoder.container(keyedBy: ManifestCodingKey.self)
-        let schemaVersion = try dynamicContainer.decode(
-            Int.self,
-            forKey: ManifestCodingKey(string: "schemaVersion")
-        )
-        guard schemaVersion == 1 else {
-            let reason =
-                schemaVersion > 1
-                ? "android-image.json: schemaVersion \(schemaVersion) is newer than this tool supports (1). Update Images/tools."
-                : "android-image.json: schemaVersion \(schemaVersion) is invalid; supported version is 1."
-            throw ImageFailure.manifestInvalid(path: "android-image.json", reason: reason)
-        }
+        do {
+            let dynamicContainer = try decoder.container(keyedBy: ManifestCodingKey.self)
+            let schemaVersion = try dynamicContainer.decode(
+                Int.self,
+                forKey: ManifestCodingKey(string: "schemaVersion")
+            )
+            guard schemaVersion == 1 else {
+                let reason =
+                    schemaVersion > 1
+                    ? "android-image.json: schemaVersion \(schemaVersion) is newer than this tool supports (1). Update Images/tools."
+                    : "android-image.json: schemaVersion \(schemaVersion) is invalid; supported version is 1."
+                throw ImageFailure.manifestInvalid(path: "android-image.json", reason: reason)
+            }
 
-        try rejectUnknownKeys(in: decoder, allowed: CodingKeys.allCases)
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.schemaVersion = schemaVersion
-        source = try container.decode(Source.self, forKey: .source)
-        android = try container.decode(Android.self, forKey: .android)
-        architecture = try container.decode(String.self, forKey: .architecture)
-        deviceFamily = try container.decode(String.self, forKey: .deviceFamily)
-        artifacts = try container.decode([Artifact].self, forKey: .artifacts)
-        roles = try container.decode(Roles.self, forKey: .roles)
-        logicalPartitions = try container.decode([LogicalPartition].self, forKey: .logicalPartitions)
-        blankPartitions = try container.decode([BlankPartition].self, forKey: .blankPartitions)
-        androidInfo = try container.decode([String: String].self, forKey: .androidInfo)
-        try validateSchema(self)
+            try rejectUnknownKeys(in: decoder, allowed: CodingKeys.allCases)
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.schemaVersion = schemaVersion
+            source = try container.decode(Source.self, forKey: .source)
+            android = try container.decode(Android.self, forKey: .android)
+            architecture = try container.decode(String.self, forKey: .architecture)
+            deviceFamily = try container.decode(String.self, forKey: .deviceFamily)
+            artifacts = try container.decode([Artifact].self, forKey: .artifacts)
+            roles = try container.decode(Roles.self, forKey: .roles)
+            logicalPartitions = try container.decode(
+                [LogicalPartition].self,
+                forKey: .logicalPartitions
+            )
+            blankPartitions = try container.decode([BlankPartition].self, forKey: .blankPartitions)
+            androidInfo = try container.decode([String: String].self, forKey: .androidInfo)
+            try validateSchema(self)
+        } catch let failure as ImageFailure {
+            throw failure
+        } catch {
+            throw manifestDecodingFailure(error)
+        }
     }
 }
 
@@ -332,6 +341,47 @@ private struct ManifestCodingKey: CodingKey {
     }
 }
 
+private func manifestDecodingFailure(_ error: any Error) -> ImageFailure {
+    let reason: String
+    switch error {
+    case DecodingError.typeMismatch(let type, let context):
+        let location = manifestDecodingLocation(context.codingPath)
+        reason =
+            "\(location): expected \(String(describing: type)), found an incompatible JSON type. "
+            + "Correct the field type to match schema version 1."
+    case DecodingError.valueNotFound(let type, let context):
+        let location = manifestDecodingLocation(context.codingPath)
+        reason =
+            "\(location): expected \(String(describing: type)), found null. "
+            + "Provide a value matching schema version 1."
+    case DecodingError.keyNotFound(let key, let context):
+        let location = manifestDecodingLocation(context.codingPath + [key])
+        reason = "\(location): required field is missing. Add this field to the manifest."
+    case DecodingError.dataCorrupted(let context):
+        let location = manifestDecodingLocation(context.codingPath)
+        reason = "\(location): value is malformed for schema version 1. Check the field format."
+    default:
+        reason =
+            "android-image.json: could not decode the document as schema version 1. "
+            + "Check its JSON structure and field types."
+    }
+    return .manifestInvalid(path: "android-image.json", reason: reason)
+}
+
+private func manifestDecodingLocation(_ codingPath: [any CodingKey]) -> String {
+    var location = "android-image.json"
+    for key in codingPath {
+        if let index = key.intValue {
+            location += "[\(index)]"
+        } else if location == "android-image.json" {
+            location += ":\(manifestDiagnosticValue(key.stringValue))"
+        } else {
+            location += ".\(manifestDiagnosticValue(key.stringValue))"
+        }
+    }
+    return location
+}
+
 private func rejectUnknownKeys<Key: CodingKey>(
     in decoder: any Decoder,
     allowed: [Key]
@@ -348,11 +398,37 @@ private func rejectUnknownKeys<Key: CodingKey>(
         return
     }
 
-    let objectPath = decoder.codingPath.map(\.stringValue).joined(separator: ".")
+    let objectPath = decoder.codingPath
+        .map { manifestDiagnosticValue($0.stringValue) }
+        .joined(separator: ".")
     let location = objectPath.isEmpty ? "android-image.json" : "android-image.json:\(objectPath)"
     let reason =
-        "\(location): unknown field \"\(unknownKey)\". Remove it or use schema version 1."
+        "\(location): unknown field \"\(manifestDiagnosticValue(unknownKey))\". "
+        + "Remove it or use schema version 1."
     throw ImageFailure.manifestInvalid(path: "android-image.json", reason: reason)
+}
+
+func manifestDiagnosticValue(_ value: String) -> String {
+    let scalars = Array(value.unicodeScalars.prefix(128))
+    var escaped = ""
+    for scalar in scalars {
+        switch scalar.value {
+        case 0x22:
+            escaped += "\\\""
+        case 0x5C:
+            escaped += "\\\\"
+        case 0x00...0x1F, 0x7F...0x9F, 0x061C, 0x200E, 0x200F, 0x2028, 0x2029,
+            0x202A...0x202E, 0x2066...0x2069:
+            let codePoint = String(scalar.value, radix: 16).uppercased()
+            escaped += "\\u{\(codePoint)}"
+        default:
+            escaped.unicodeScalars.append(scalar)
+        }
+    }
+    if value.unicodeScalars.count > scalars.count {
+        escaped += "…"
+    }
+    return escaped
 }
 
 private func validateSchema(_ manifest: AndroidImageManifest) throws {
@@ -604,7 +680,7 @@ private func validateSchema(_ manifest: AndroidImageManifest) throws {
         )
         try requireManifest(
             value.unicodeScalars.count <= 1_024,
-            path: "androidInfo.\(key)",
+            path: "androidInfo.\(manifestDiagnosticValue(key))",
             expected: "a string of at most 1024 characters",
             found: "\(value.unicodeScalars.count) characters"
         )
@@ -612,7 +688,10 @@ private func validateSchema(_ manifest: AndroidImageManifest) throws {
 }
 
 private func matches(_ value: String, pattern: String) -> Bool {
-    value.range(of: pattern, options: .regularExpression) != nil
+    guard let match = value.range(of: pattern, options: .regularExpression) else {
+        return false
+    }
+    return match.lowerBound == value.startIndex && match.upperBound == value.endIndex
 }
 
 private func isSHA256(_ value: String) -> Bool {
@@ -628,6 +707,8 @@ private func requireManifest(
     guard !condition else {
         return
     }
-    let reason = "android-image.json: \(path) must be \(expected); found \"\(found)\"."
+    let reason =
+        "android-image.json: \(path) must be \(expected); "
+        + "found \"\(manifestDiagnosticValue(found))\"."
     throw ImageFailure.manifestInvalid(path: "android-image.json", reason: reason)
 }

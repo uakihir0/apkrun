@@ -255,6 +255,11 @@ let package = Package(
             path: "Packages/RuntimeHost/Tests/RuntimeHostTests"
         ),
         .testTarget(
+            name: "RuntimeHostSystemTests",
+            dependencies: ["RuntimeHost", "DiagnosticsCore"],
+            path: "Packages/RuntimeHost/Tests/RuntimeHostSystemTests"
+        ),
+        .testTarget(
             name: "APKStoreCoreTests",
             dependencies: ["APKStoreCore"],
             path: "Packages/APKStoreCore/Tests/APKStoreCoreTests"

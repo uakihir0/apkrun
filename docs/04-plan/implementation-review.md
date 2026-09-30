@@ -1881,3 +1881,36 @@ violating their documented formats. Applying the exact-end rule across every
 anchored pattern closes the same gap for build identifiers, targets,
 partitions, hashes, and file paths as well. The schema remains portable and
 continues to be the shared source of string constraints.
+
+## IR-080: Bound Cuttlefish startup by the reference boot deadline
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py` |
+
+**Choice.** Start the configurable boot deadline (600 seconds by default)
+immediately before `cvd create`. Bound `cvd create`, the named-group
+`cvd start`, ADB connection and discovery, `sys.boot_completed`,
+`wait-for-device`, and retry sleeps by that same remaining time. Give each
+boot command a two-second TERM grace before GNU `timeout` sends KILL. Bound
+the initial host-wide `adb devices` preflight separately to ten seconds with
+the same two-second grace. If Android is not ready or `wait-for-device`
+fails, record the missing guest data and skip further ADB collection. Keep
+group removal on its separate shutdown timeout and grace period.
+
+**Reason.** A real reference run spent 1,029 seconds inside `cvd start` before
+reporting `VIRTUAL_DEVICE_BOOT_FAILED`; the capture script's former boot
+deadline began only after `cvd start` returned and therefore could not bound
+this wait. Bounded ADB calls and retry sleeps ensure a stalled server cannot
+prevent cleanup before or after VM startup. Skipping guest collection after a
+readiness failure avoids replacing the recorded timeout with another
+unbounded ADB command. The two-second TERM grace caps time spent waiting for
+an unresponsive boot command before forced termination; group removal retains
+its longer independent shutdown allowance. The same real run logged an
+invalid logical-partition geometry signature, but Cuttlefish continued into
+Android service startup and the converted super image had the expected
+geometry magic at offset 4096. The available evidence does not show whether
+that warning contributed to the later boot failure, so its cause remains open
+pending a successful boot.

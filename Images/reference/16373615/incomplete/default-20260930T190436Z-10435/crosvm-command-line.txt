@@ -1,0 +1,2 @@
+    PID COMMAND
+  11157 awk -v instance_path=<HOST_TEMP_PATH>    NR == 1 { header = $0; next }   {     path_offset = index($0, instance_path)     path_match = 0     if (path_offset > 0) {       path_suffix = substr($0, path_offset + length(instance_path), 1)       path_match = path_suffix == "" || path_suffix == "/" ||         path_suffix ~ /[[:space:]":,]/     }   }   index($0, "crosvm") && path_match {       lines = lines $0 "\n"       found = 1     }   END {     if (!found) exit 1     print header     printf "%s", lines   }

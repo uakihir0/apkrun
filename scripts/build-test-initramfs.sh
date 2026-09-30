@@ -6,13 +6,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 output_dir="${APKRUN_TEST_LINUX_DIR:-/tmp/apkrun-test-linux}"
 
-if [[ "$output_dir" != /* ]]; then
-    printf 'build-test-initramfs: APKRUN_TEST_LINUX_DIR must be an absolute path: %s\n' "$output_dir" >&2
-    exit 64
-fi
-
+output_dir="$(python3 "$script_dir/tools/validate-test-linux-dir.py" "$output_dir")"
 mkdir -p "$output_dir"
-output_dir="$(cd "$output_dir" && pwd -P)"
 if [[ "${APKRUN_TEST_LINUX_LOCK_HELD:-0}" != 1 ]]; then
     exec python3 "$script_dir/tools/with-file-lock.py" \
         "$output_dir/.artifacts.lock" "$0" "$@"

@@ -1,3 +1,4 @@
+import Darwin
 import DiagnosticsCore
 import Foundation
 import XCTest
@@ -290,24 +291,25 @@ enum LinuxGuestHarness {
 
     private static func artifactURLs() throws -> (kernel: URL, initrd: URL) {
         let artifactDirectory: URL
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let documentsDirectory =
+            homeDirectory
+            .appendingPathComponent("Documents", isDirectory: true)
         let configuredDirectory =
             ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
             ?? Bundle.main.object(forInfoDictionaryKey: "APKRUN_TEST_LINUX_DIR") as? String
-        if let override = configuredDirectory, !override.isEmpty {
-            guard override.hasPrefix("/") else {
-                throw HarnessFailure.invalidArtifactDirectory(
-                    "APKRUN_TEST_LINUX_DIR must be an absolute path, such as /tmp/apkrun-test-linux."
-                )
-            }
-            artifactDirectory =
-                URL(
-                    fileURLWithPath: override,
-                    isDirectory: true
-                ).standardizedFileURL
-        } else {
-            artifactDirectory = URL(
+        artifactDirectory = try selectedArtifactDirectory(
+            configuredDirectory: configuredDirectory,
+            defaultDirectory: URL(
                 fileURLWithPath: "/tmp/apkrun-test-linux",
                 isDirectory: true
+            ),
+            homeDirectory: homeDirectory
+        )
+        guard !isLexicallyWithin(artifactDirectory, directory: documentsDirectory) else {
+            throw HarnessFailure.invalidArtifactDirectory(
+                "APKRUN_TEST_LINUX_DIR must be outside ~/Documents to avoid macOS "
+                    + "file-access approval prompts."
             )
         }
         let kernel = artifactDirectory.appendingPathComponent("Image")
@@ -327,6 +329,225 @@ enum LinuxGuestHarness {
             throw XCTSkip(message)
         }
         return (kernel, initrd)
+    }
+
+    static func isLexicallyWithin(_ url: URL, directory: URL) -> Bool {
+        let path = lexicallyStandardizedPath(url.path).lowercased()
+        let root = lexicallyStandardizedPath(directory.path).lowercased()
+        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    static func resolvedArtifactDirectory(
+        _ url: URL,
+        homeDirectory: URL
+    ) throws -> URL {
+        let documentsDirectory =
+            homeDirectory
+            .appendingPathComponent("Documents", isDirectory: true)
+        guard !isLexicallyWithin(url, directory: documentsDirectory) else {
+            throw HarnessFailure.invalidArtifactDirectory(
+                "APKRUN_TEST_LINUX_DIR must be outside ~/Documents to avoid macOS "
+                    + "file-access approval prompts."
+            )
+        }
+        let resolvedHomeDirectory = try resolvePathWithoutEnteringProtected(
+            homeDirectory,
+            protectedDirectories: []
+        )
+        let protectedDirectories = [
+            documentsDirectory,
+            resolvedHomeDirectory.appendingPathComponent("Documents", isDirectory: true),
+        ]
+        return try resolvePathWithoutEnteringProtected(
+            url,
+            protectedDirectories: protectedDirectories
+        )
+    }
+
+    static func selectedArtifactDirectory(
+        configuredDirectory: String?,
+        defaultDirectory: URL,
+        homeDirectory: URL
+    ) throws -> URL {
+        let requestedDirectory: URL
+        if let override = configuredDirectory, !override.isEmpty {
+            guard override.hasPrefix("/") else {
+                throw HarnessFailure.invalidArtifactDirectory(
+                    "APKRUN_TEST_LINUX_DIR must be an absolute path, such as /tmp/apkrun-test-linux."
+                )
+            }
+            requestedDirectory = URL(fileURLWithPath: override, isDirectory: true)
+        } else {
+            requestedDirectory = defaultDirectory
+        }
+        return try resolvedArtifactDirectory(requestedDirectory, homeDirectory: homeDirectory)
+    }
+
+    private static func resolvePathWithoutEnteringProtected(
+        _ url: URL,
+        protectedDirectories: [URL]
+    ) throws -> URL {
+        var resolvedPath = "/"
+        var unresolvedComponents: [String] = []
+        var remainingComponents = url.path.split(separator: "/").map(String.init)
+        var followedLinks = 0
+
+        while !remainingComponents.isEmpty {
+            let component = remainingComponents.removeFirst()
+            if component.isEmpty || component == "." {
+                continue
+            }
+            if !unresolvedComponents.isEmpty {
+                if component == ".." {
+                    unresolvedComponents.removeLast()
+                } else {
+                    unresolvedComponents.append(component)
+                }
+                let unresolvedPath = unresolvedComponents.reduce(resolvedPath) {
+                    $0 == "/" ? "/\($1)" : "\($0)/\($1)"
+                }
+                guard
+                    !protectedDirectories.contains(where: {
+                        isPathWithin(unresolvedPath, directory: $0.path)
+                    })
+                else {
+                    throw HarnessFailure.invalidArtifactDirectory(
+                        "APKRUN_TEST_LINUX_DIR must be outside ~/Documents to avoid macOS "
+                            + "file-access approval prompts."
+                    )
+                }
+                continue
+            }
+            if component == ".." {
+                resolvedPath = (resolvedPath as NSString).deletingLastPathComponent
+                guard
+                    !protectedDirectories.contains(where: {
+                        isPathWithin(resolvedPath, directory: $0.path)
+                    })
+                else {
+                    throw HarnessFailure.invalidArtifactDirectory(
+                        "APKRUN_TEST_LINUX_DIR must be outside ~/Documents to avoid macOS "
+                            + "file-access approval prompts."
+                    )
+                }
+                continue
+            }
+
+            let candidatePath = resolvedPath == "/" ? "/\(component)" : "\(resolvedPath)/\(component)"
+            guard
+                !protectedDirectories.contains(where: {
+                    isPathWithin(candidatePath, directory: $0.path)
+                })
+            else {
+                throw HarnessFailure.invalidArtifactDirectory(
+                    "APKRUN_TEST_LINUX_DIR must be outside ~/Documents to avoid macOS "
+                        + "file-access approval prompts."
+                )
+            }
+
+            var fileStatus = stat()
+            let status = candidatePath.withCString { lstat($0, &fileStatus) }
+            if status != 0 {
+                guard errno == ENOENT || errno == ENOTDIR else {
+                    throw HarnessFailure.invalidArtifactDirectory(
+                        "Could not safely resolve APKRUN_TEST_LINUX_DIR."
+                    )
+                }
+                unresolvedComponents.append(component)
+                continue
+            }
+
+            if (fileStatus.st_mode & S_IFMT) == S_IFLNK {
+                followedLinks += 1
+                guard followedLinks <= 40 else {
+                    throw HarnessFailure.invalidArtifactDirectory(
+                        "Could not safely resolve APKRUN_TEST_LINUX_DIR."
+                    )
+                }
+                var targetBuffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+                let targetLength = candidatePath.withCString { path in
+                    targetBuffer.withUnsafeMutableBufferPointer { buffer in
+                        readlink(path, buffer.baseAddress, buffer.count)
+                    }
+                }
+                guard targetLength >= 0, targetLength < targetBuffer.count else {
+                    throw HarnessFailure.invalidArtifactDirectory(
+                        "Could not safely resolve APKRUN_TEST_LINUX_DIR."
+                    )
+                }
+                let target = String(
+                    decoding: targetBuffer[..<targetLength].map { UInt8(bitPattern: $0) },
+                    as: UTF8.self
+                )
+                if target.hasPrefix("/") {
+                    resolvedPath = "/"
+                }
+                remainingComponents =
+                    target.split(separator: "/").map(String.init)
+                    + remainingComponents
+                continue
+            }
+
+            resolvedPath = candidatePath
+        }
+
+        let finalPath = unresolvedComponents.reduce(resolvedPath) {
+            $0 == "/" ? "/\($1)" : "\($0)/\($1)"
+        }
+        return URL(fileURLWithPath: finalPath, isDirectory: true)
+    }
+
+    private static func isPathWithin(_ path: String, directory: String) -> Bool {
+        let candidate = lexicallyStandardizedPath(path).lowercased()
+        let root = lexicallyStandardizedPath(directory).lowercased()
+        return candidate == root || candidate.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    private static func lexicallyStandardizedPath(_ path: String) -> String {
+        var components: [Substring] = []
+        for component in path.split(separator: "/") {
+            switch component {
+            case ".", "":
+                continue
+            case "..":
+                if !components.isEmpty {
+                    components.removeLast()
+                }
+            default:
+                components.append(component)
+            }
+        }
+        return "/" + components.joined(separator: "/")
+    }
+
+    static func isWithin(_ url: URL, directory: URL) -> Bool {
+        let path = resolvedPath(url).path.lowercased()
+        let root = resolvedPath(directory).path.lowercased()
+        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    private static func resolvedPath(_ url: URL) -> URL {
+        let standardizedURL = url.standardizedFileURL
+        var existingPath = standardizedURL.path
+        var missingComponents: [String] = []
+
+        while !FileManager.default.fileExists(atPath: existingPath) {
+            let existingURL = URL(fileURLWithPath: existingPath, isDirectory: true)
+            let component = existingURL.lastPathComponent
+            guard !component.isEmpty, component != "/" else {
+                return standardizedURL
+            }
+            missingComponents.insert(component, at: 0)
+            existingPath = existingURL.deletingLastPathComponent().path
+        }
+
+        var resolvedURL = URL(fileURLWithPath: existingPath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        for component in missingComponents {
+            resolvedURL.appendPathComponent(component)
+        }
+        return resolvedURL.standardizedFileURL
     }
 
     private static func recordsUntilDone(

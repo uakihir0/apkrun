@@ -10,6 +10,8 @@ trap 'rm -rf "$temporary_root"' EXIT
 checker="$repo_root/scripts/check-lock.sh"
 module_checker="$repo_root/scripts/check-module-deps.sh"
 
+python3 "$script_dir/test_test_linux_directory.py"
+
 expect_pass() {
     local name="$1"
     local root="$2"

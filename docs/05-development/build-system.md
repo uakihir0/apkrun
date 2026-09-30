@@ -534,9 +534,14 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
   read it from `APKRunTestHost.app/Contents/Info.plist`; a shell export alone
   is not forwarded to the hosted test process. The test host can then open the
   kernel without a macOS Documents-folder access prompt. CI uses `$RUNNER_TEMP`
-  for the same reason and passes it as a build setting. Overrides must be
-  absolute paths so the scripts, CLI, and hosted tests select the same
-  directory from different working directories.
+  for the same reason and passes it as a build setting. Test artifact path
+  overrides must be absolute and outside the current account's `~/Documents`,
+  even if the shell overrides `HOME`. The fetch/build scripts and test host
+  reject direct paths and symlink aliases before looking up anything inside
+  Documents or creating artifacts. They resolve external aliases
+  component-by-component and stop before a protected Documents lookup. This
+  keeps the selected directory consistent when the scripts and test host run
+  from different working directories.
 - The team and certificate fingerprint come from `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; CI reads them from repository variables. Xcode's generic `Apple Development` identity name does not reliably select the lab certificate for a manually signed test host, so the fingerprint is explicit.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime to allow XCTest to load the test bundle into the entitled host. This setting is limited to test targets; product targets retain the common hardened-runtime setting of §2.5.
 - The test plan `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per suite of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4 (`LinuxGuest`, `AndroidStock`, `AndroidCustom`, `Maintenance`), each with the test classes and the environment it needs. It sets the automatic retry to one attempt for T2 ([test-strategy.md](../04-plan/test-strategy.md) §2.7).

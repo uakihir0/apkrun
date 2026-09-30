@@ -960,7 +960,7 @@ Out of scope:
    - no disks, network, or vsock unless a later task's check asks for them;
    - command line `console=hvc0 apkrun.test=<list> apkrun.test.poweroff=<0|1>`.
 
-   The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `/tmp/apkrun-test-linux/`; an override must be an absolute path.
+   The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `/tmp/apkrun-test-linux/`; an override must be absolute and outside `~/Documents`, including through symlink aliases. The fetch/build scripts and hosted test reject a Documents path before accessing guest artifacts.
 
    Check: the definition passes `VMDefinitionValidator` with the fetched artifacts.
 7. **T2 harness.**
@@ -1051,6 +1051,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Local verification:** hosted VZ tests require `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; neither is committed. See [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §2.8.
 - **G1 progress:** the initial 2026-09-30 T2 run timed out after `requestGuestStop()`. A later hvc0 capture identified `gpiochip0 [20060000.pl061]` and a rising event on offset 6. With a line-owner readiness check, the complete T2 suite and direct ten-boot G1 acceptance test passed on branch `codex`; a signed `apkrun-dev dev linux` smoke from `/tmp` printed boot, powerinput, and done, then exited 0. The clean-`main` `scripts/run-gate.sh G1` run remains pending, so #003 stays open.
 - **TCC-safe test artifacts:** the local default is `/tmp/apkrun-test-linux`. Pass `APKRUN_TEST_LINUX_DIR` and `APKRUN_CI` as `xcodebuild` build settings; the hosted tests read them from `APKRunTestHost.app/Contents/Info.plist`.
+- **TCC path-guard verification (2026-09-30):** seven script tests reject direct Documents paths, symlink aliases, a missing-component/parent-reference alias, and an overridden `HOME` before creating artifacts; three path-only `LinuxGuestArtifactDirectoryTests` XTests passed on macOS 27.0 with no VM start. The Swift default path is also symlink-resolved before use. `APKRUN_TEST_LINUX_DIR`, DerivedData, and the result bundle were under `/tmp`; no file-access prompt appeared.
 - **Review before merge:** the pinned `socat` and ncurses tooling license expressions are outside the current §4.4 allowlist. The allowlist was not expanded; maintainers must resolve the dependency or accept a policy change before #003 can close.
 - **Review before merge:** `linux-guest` currently runs only on trusted `main` pushes or manual dispatch. PR execution stays disabled until disposable lab runner capacity is available; meanwhile the task-closing PR must link a maintainer-run result for its reviewed commit, per [../../05-development/build-system.md](../../05-development/build-system.md) §15.1.
 - **Local T2 setup:** place guest artifacts under `${TMPDIR}/apkrun-test-linux` when running the signed test host from a checkout under `~/Documents`; reading the kernel from the checkout can trigger macOS file-access approval. `scripts/run-gate.sh` and `integration.yml` select a temporary artifact directory automatically.

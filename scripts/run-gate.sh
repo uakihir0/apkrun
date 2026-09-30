@@ -39,7 +39,11 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
 fi
 
 gate_dir="$repo_root/build/gates/$gate"
-export APKRUN_TEST_LINUX_DIR="${APKRUN_TEST_LINUX_DIR:-${TMPDIR:-/tmp}/apkrun-test-linux}"
+APKRUN_TEST_LINUX_DIR="${APKRUN_TEST_LINUX_DIR:-${TMPDIR:-/tmp}/apkrun-test-linux}"
+APKRUN_TEST_LINUX_DIR="$(
+    python3 "$script_dir/tools/validate-test-linux-dir.py" "$APKRUN_TEST_LINUX_DIR"
+)"
+export APKRUN_TEST_LINUX_DIR
 mkdir -p "$gate_dir"
 rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/G1.xcresult"
 report="$gate_dir/report.txt"

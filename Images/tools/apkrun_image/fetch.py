@@ -9,7 +9,9 @@ import http.client
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,9 +110,7 @@ def _request_json(
         with urlopen(request, timeout=timeout) as response:
             payload = response.read()
     except HTTPError as error:
-        raise FetchError(
-            f"Android Build API request failed with HTTP {error.code}."
-        ) from None
+        raise FetchError(f"Android Build API request failed with HTTP {error.code}.") from None
     except (URLError, TimeoutError, OSError):
         raise FetchError("Could not reach the Android Build API.") from None
     try:
@@ -138,10 +138,7 @@ def _list_artifacts(
     pattern: str,
 ) -> list[Artifact]:
     """Resolve an artifact glob across all pages of the Build API response."""
-    path = (
-        f"/builds/{quote(build_id, safe='')}/{quote(target, safe='')}"
-        "/attempts/latest/artifacts"
-    )
+    path = f"/builds/{quote(build_id, safe='')}/{quote(target, safe='')}/attempts/latest/artifacts"
     page_token = ""
     seen_page_tokens: set[str] = set()
     matches: dict[str, Artifact] = {}
@@ -159,9 +156,12 @@ def _list_artifacts(
         for value in artifacts:
             if not isinstance(value, dict):
                 raise FetchError("Android Build API returned malformed artifact metadata.")
-            name = _artifact_name(value.get("name"))
-            if not fnmatch.fnmatchcase(name, pattern):
+            raw_name = value.get("name")
+            if not isinstance(raw_name, str):
+                raise FetchError("Android Build API returned an artifact without a name.")
+            if not fnmatch.fnmatchcase(raw_name, pattern):
                 continue
+            name = _artifact_name(raw_name)
             size = _positive_size(value.get("size"), name)
             digest = _sha256_value(
                 value.get("sha256", value.get("sha256Digest")),
@@ -217,6 +217,248 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha256_descriptor(descriptor: int) -> str:
+    """Hash an already-open file without resolving its path again."""
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while chunk := os.read(descriptor, CHUNK_SIZE):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    """Return the filesystem identity used to detect path replacement."""
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _file_version(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return identity and timestamps used to detect in-place mutation."""
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _unlink_if_identity_matches(path: Path, expected_identity: tuple[int, int]) -> None:
+    """Remove only the path entry created by this finalization attempt."""
+    try:
+        file_stat = path.lstat()
+        if _file_identity(file_stat) == expected_identity:
+            path.unlink()
+    except OSError:
+        return
+
+
+def _publish_partial(
+    partial_path: Path,
+    artifact: Artifact,
+    expected_sha256: str | None,
+    expected_identity: tuple[int, int],
+) -> DownloadRecord:
+    """Copy, verify, then publish a partial without following a swapped path."""
+    try:
+        descriptor = os.open(partial_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise FetchError(
+            f"The partial download for {artifact.name} changed during finalization."
+        ) from None
+
+    final_path = partial_path.with_suffix("")
+    staging_path: Path | None = None
+    staging_descriptor = -1
+    staging_identity: tuple[int, int] | None = None
+    linked_identity: tuple[int, int] | None = None
+    try:
+        with os.fdopen(descriptor, "rb"):
+            opened_stat = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened_stat.st_mode)
+                or opened_stat.st_nlink != 1
+                or _file_identity(opened_stat) != expected_identity
+            ):
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during finalization."
+                )
+            if opened_stat.st_size != artifact.size:
+                raise FetchError(
+                    f"Download of {artifact.name} stopped at {opened_stat.st_size} "
+                    f"of {artifact.size} bytes; run fetch again to resume."
+                )
+            try:
+                path_stat = partial_path.lstat()
+            except OSError:
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during finalization."
+                ) from None
+            if (
+                stat.S_ISLNK(path_stat.st_mode)
+                or path_stat.st_nlink != 1
+                or _file_identity(path_stat) != expected_identity
+            ):
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during finalization."
+                )
+
+            staging_descriptor, staging_name = tempfile.mkstemp(
+                prefix=f".{artifact.name}.",
+                suffix=".finalizing",
+                dir=partial_path.parent,
+            )
+            staging_path = Path(staging_name)
+            staging_initial_stat = os.fstat(staging_descriptor)
+            staging_identity = _file_identity(staging_initial_stat)
+            if (
+                not stat.S_ISREG(staging_initial_stat.st_mode)
+                or staging_initial_stat.st_nlink != 1
+                or staging_initial_stat.st_size != 0
+            ):
+                raise FetchError(
+                    f"The staged artifact {artifact.name} changed during finalization."
+                )
+            digest_builder = hashlib.sha256()
+            copied_size = 0
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            while chunk := os.read(descriptor, CHUNK_SIZE):
+                digest_builder.update(chunk)
+                copied_size += len(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(staging_descriptor, view)
+                    view = view[written:]
+            digest = digest_builder.hexdigest()
+            if copied_size != artifact.size:
+                raise FetchError(
+                    f"Download of {artifact.name} changed during finalization; run fetch again."
+                )
+            if expected_sha256 is not None and digest != expected_sha256:
+                raise FetchError(
+                    f"{artifact.name} SHA-256 mismatch; remove its .partial file and "
+                    "run fetch again."
+                )
+            os.fsync(staging_descriptor)
+            staging_stat = os.fstat(staging_descriptor)
+            if (
+                not stat.S_ISREG(staging_stat.st_mode)
+                or staging_stat.st_nlink != 1
+                or _file_identity(staging_stat) != staging_identity
+                or staging_stat.st_size != artifact.size
+            ):
+                raise FetchError(
+                    f"The staged artifact {artifact.name} changed during finalization."
+                )
+            try:
+                staging_path_stat = staging_path.lstat()
+                partial_path_stat = partial_path.lstat()
+            except OSError:
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during finalization."
+                ) from None
+            if (
+                stat.S_ISLNK(staging_path_stat.st_mode)
+                or _file_identity(staging_path_stat) != staging_identity
+                or stat.S_ISLNK(partial_path_stat.st_mode)
+                or _file_identity(partial_path_stat) != expected_identity
+            ):
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during finalization."
+                )
+
+            try:
+                os.link(staging_path, final_path, follow_symlinks=False)
+            except FileExistsError:
+                raise FetchError(
+                    f"The destination for {artifact.name} already exists; "
+                    "verify or remove it first."
+                ) from None
+            except OSError:
+                raise FetchError(
+                    f"Could not safely publish the downloaded artifact {artifact.name}."
+                ) from None
+            try:
+                linked_stat = final_path.lstat()
+                linked_identity = _file_identity(linked_stat)
+                if (
+                    stat.S_ISLNK(linked_stat.st_mode)
+                    or not stat.S_ISREG(linked_stat.st_mode)
+                    or linked_identity != staging_identity
+                ):
+                    raise FetchError(
+                        f"The downloaded artifact {artifact.name} changed during finalization."
+                    )
+                published_descriptor = os.open(final_path, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(published_descriptor, "rb"):
+                    published_stat = os.fstat(published_descriptor)
+                    if (
+                        not stat.S_ISREG(published_stat.st_mode)
+                        or published_stat.st_nlink < 2
+                        or _file_identity(published_stat) != staging_identity
+                        or published_stat.st_size != artifact.size
+                    ):
+                        raise FetchError(
+                            f"The downloaded artifact {artifact.name} changed during finalization."
+                        )
+                    published_digest = _sha256_descriptor(published_descriptor)
+                    if published_digest != digest or (
+                        expected_sha256 is not None and published_digest != expected_sha256
+                    ):
+                        raise FetchError(
+                            f"{artifact.name} changed while it was being finalized; "
+                            "run fetch again."
+                        )
+                    hashed_stat = os.fstat(published_descriptor)
+                    if _file_version(hashed_stat) != _file_version(published_stat):
+                        raise FetchError(
+                            f"{artifact.name} changed while it was being finalized; "
+                            "run fetch again."
+                        )
+                    try:
+                        final_path_stat = final_path.lstat()
+                    except OSError:
+                        raise FetchError(
+                            f"The downloaded artifact {artifact.name} changed during finalization."
+                        ) from None
+                    if (
+                        stat.S_ISLNK(final_path_stat.st_mode)
+                        or not stat.S_ISREG(final_path_stat.st_mode)
+                        or _file_version(final_path_stat) != _file_version(hashed_stat)
+                    ):
+                        raise FetchError(
+                            f"The downloaded artifact {artifact.name} changed during finalization."
+                        )
+            except FetchError:
+                if linked_identity is not None:
+                    _unlink_if_identity_matches(final_path, linked_identity)
+                    if staging_path is not None:
+                        _unlink_if_identity_matches(staging_path, linked_identity)
+                raise
+            except OSError:
+                if linked_identity is not None:
+                    _unlink_if_identity_matches(final_path, linked_identity)
+                    if staging_path is not None:
+                        _unlink_if_identity_matches(staging_path, linked_identity)
+                raise FetchError(
+                    f"The downloaded artifact {artifact.name} changed during finalization."
+                ) from None
+
+            try:
+                partial_path_stat = partial_path.lstat()
+                if _file_identity(partial_path_stat) == expected_identity:
+                    partial_path.unlink()
+            except OSError:
+                pass
+            digest = published_digest
+    finally:
+        if staging_descriptor >= 0:
+            os.close(staging_descriptor)
+        if staging_path is not None and staging_identity is not None:
+            _unlink_if_identity_matches(staging_path, staging_identity)
+
+    return DownloadRecord(name=artifact.name, size=artifact.size, sha256=digest)
+
+
 def _load_existing_records(
     path: Path,
     *,
@@ -225,6 +467,8 @@ def _load_existing_records(
     build_id: str,
 ) -> dict[str, DownloadRecord]:
     """Load and validate the prior fetch manifest, if present."""
+    if path.is_symlink():
+        raise FetchError(f"{path} must not be a symbolic link.")
     if not path.exists():
         return {}
     try:
@@ -234,7 +478,7 @@ def _load_existing_records(
     if (
         not isinstance(value, dict)
         or isinstance(value.get("schemaVersion"), bool)
-        or value.get("schemaVersion") != 1
+        or value.get("schemaVersion") != 2
     ):
         raise FetchError(f"{path} has an unsupported format; remove it and run fetch again.")
     if any(
@@ -281,16 +525,31 @@ def _write_manifest(
             for item in sorted(records, key=lambda record: record.name)
         ],
         "branch": branch,
+        "branchProvenance": "caller-asserted",
         "buildId": build_id,
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "target": target,
     }
-    temporary = path.with_name(f".{path.name}.partial")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".partial",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        raise FetchError(f"Could not safely write {path.name}.") from None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _verify_file(path: Path, artifact: Artifact, record: DownloadRecord | None) -> DownloadRecord:
@@ -322,23 +581,42 @@ def _download(
     url: str,
     partial_path: Path,
     artifact: Artifact,
+    expected_sha256: str | None = None,
     timeout: float = 120.0,
 ) -> DownloadRecord:
     """Resume a signed artifact download and atomically publish verified bytes."""
-    offset = partial_path.stat().st_size if partial_path.exists() else 0
+    digest_to_check = artifact.sha256 or expected_sha256
+    try:
+        partial_stat = partial_path.lstat()
+    except FileNotFoundError:
+        partial_stat = None
+    except OSError:
+        raise FetchError(f"Could not inspect the partial download for {artifact.name}.") from None
+    if partial_stat is not None and (
+        stat.S_ISLNK(partial_stat.st_mode)
+        or not stat.S_ISREG(partial_stat.st_mode)
+        or partial_stat.st_nlink != 1
+    ):
+        raise FetchError(f"The partial download path for {artifact.name} must be a regular file.")
+    reset_partial = False
+    if partial_stat is not None and digest_to_check is None:
+        # Without a server or manifest digest, an existing prefix cannot be authenticated.
+        reset_partial = True
+    offset = partial_stat.st_size if partial_stat is not None else 0
     if offset > artifact.size:
-        partial_path.unlink()
+        reset_partial = True
+        offset = 0
+    if reset_partial:
         offset = 0
     if offset == artifact.size:
-        digest = _sha256_file(partial_path)
-        if artifact.sha256 is not None and digest != artifact.sha256:
-            raise FetchError(
-                f"Resumed {artifact.name} has a SHA-256 mismatch; "
-                "remove its .partial file and run fetch again."
-            )
-        final_path = partial_path.with_suffix("")
-        os.replace(partial_path, final_path)
-        return DownloadRecord(name=artifact.name, size=artifact.size, sha256=digest)
+        if partial_stat is None:
+            raise FetchError(f"Could not inspect the partial download for {artifact.name}.")
+        return _publish_partial(
+            partial_path,
+            artifact,
+            digest_to_check,
+            _file_identity(partial_stat),
+        )
 
     headers = {"User-Agent": USER_AGENT}
     if offset:
@@ -348,8 +626,7 @@ def _download(
         response = urlopen(request, timeout=timeout)
     except HTTPError as error:
         raise FetchError(
-            f"Artifact download failed with HTTP {error.code}; "
-            "run fetch again to resume."
+            f"Artifact download failed with HTTP {error.code}; run fetch again to resume."
         ) from None
     except (URLError, TimeoutError, OSError):
         raise FetchError("Artifact download failed; run fetch again to resume.") from None
@@ -373,55 +650,68 @@ def _download(
             mode = "wb"
             expected_remaining = artifact.size
         else:
-            raise FetchError(
-                f"Artifact server returned HTTP {status} for {artifact.name}."
-            )
+            raise FetchError(f"Artifact server returned HTTP {status} for {artifact.name}.")
 
         received = 0
+        descriptor = -1
         try:
-            with partial_path.open(mode) as output:
-                while chunk := response.read(CHUNK_SIZE):
-                    received += len(chunk)
-                    if received > expected_remaining:
-                        raise FetchError(
-                            f"Artifact server sent too many bytes for {artifact.name}."
-                        )
-                    output.write(chunk)
+            flags = os.O_RDWR | os.O_NOFOLLOW
+            flags |= os.O_APPEND if mode == "ab" else 0
+            flags |= os.O_CREAT | os.O_EXCL if partial_stat is None else 0
+            descriptor = os.open(partial_path, flags, 0o600)
+            opened_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_nlink != 1:
+                raise FetchError(
+                    f"The partial download path for {artifact.name} must be a regular file."
+                )
+            if partial_stat is not None and (
+                _file_identity(opened_stat) != _file_identity(partial_stat)
+            ):
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during transfer."
+                )
+            if mode == "wb":
+                os.ftruncate(descriptor, 0)
+            elif opened_stat.st_size != offset:
+                raise FetchError(
+                    f"The partial download for {artifact.name} changed during transfer."
+                )
+            writer_identity = _file_identity(os.fstat(descriptor))
+            output_stream = os.fdopen(descriptor, mode)
+            descriptor = -1
+            with output_stream as output:
+                try:
+                    while chunk := response.read(CHUNK_SIZE):
+                        received += len(chunk)
+                        if received > expected_remaining:
+                            raise FetchError(
+                                f"Artifact server sent too many bytes for {artifact.name}."
+                            )
+                        output.write(chunk)
+                except http.client.IncompleteRead as error:
+                    if error.partial:
+                        received += len(error.partial)
+                        if received > expected_remaining:
+                            raise FetchError(
+                                f"Artifact server sent too many bytes for {artifact.name}."
+                            ) from None
+                        output.write(error.partial)
+                    output.flush()
+                    os.fsync(output.fileno())
+                    raise FetchError(
+                        f"Download of {artifact.name} was interrupted; run fetch again to resume."
+                    ) from None
                 output.flush()
                 os.fsync(output.fileno())
         except FetchError:
             raise
-        except http.client.IncompleteRead as error:
-            if error.partial:
-                try:
-                    with partial_path.open("ab") as output:
-                        output.write(error.partial)
-                        output.flush()
-                        os.fsync(output.fileno())
-                except OSError:
-                    raise FetchError(
-                        "Could not save the interrupted download; run fetch again."
-                    ) from None
-            raise FetchError(
-                f"Download of {artifact.name} was interrupted; run fetch again to resume."
-            ) from None
         except OSError:
             raise FetchError("Could not write the artifact; run fetch again to resume.") from None
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
-    actual_size = partial_path.stat().st_size
-    if actual_size != artifact.size:
-        raise FetchError(
-            f"Download of {artifact.name} stopped at {actual_size} of {artifact.size} bytes; "
-            "run fetch again to resume."
-        )
-    digest = _sha256_file(partial_path)
-    if artifact.sha256 is not None and digest != artifact.sha256:
-        raise FetchError(
-            f"{artifact.name} SHA-256 mismatch; remove its .partial file and run fetch again."
-        )
-    final_path = partial_path.with_suffix("")
-    os.replace(partial_path, final_path)
-    return DownloadRecord(name=artifact.name, size=artifact.size, sha256=digest)
+    return _publish_partial(partial_path, artifact, digest_to_check, writer_identity)
 
 
 def fetch_artifacts(
@@ -454,9 +744,7 @@ def fetch_artifacts(
                 else path.stat().st_size,
             )
             for path in output_directory.iterdir()
-            if path.is_file()
-            and not path.is_symlink()
-            and fnmatch.fnmatchcase(path.name, pattern)
+            if path.is_file() and not path.is_symlink() and fnmatch.fnmatchcase(path.name, pattern)
         ]
         if not artifacts:
             raise FetchError(
@@ -481,10 +769,17 @@ def fetch_artifacts(
     records: list[DownloadRecord] = []
     for artifact in artifacts:
         final_path = output_directory / artifact.name
+        if final_path.is_symlink():
+            raise FetchError(f"{artifact.name} must not be a symbolic link.")
         old_record = old_records.get(artifact.name)
         if final_path.exists():
-            records.append(_verify_file(final_path, artifact, old_record))
-            continue
+            if api_key is None or artifact.sha256 is not None or old_record is not None:
+                records.append(_verify_file(final_path, artifact, old_record))
+                continue
+            raise FetchError(
+                f"{artifact.name} exists without a verifiable SHA-256; move it aside or "
+                "run fetch without an API key to record a manual download."
+            )
         if api_key is None:
             raise FetchError(
                 f"{artifact.name} is recorded in fetch.json but is missing; "
@@ -502,6 +797,7 @@ def fetch_artifacts(
                 url=signed_url,
                 partial_path=output_directory / f"{artifact.name}.partial",
                 artifact=artifact,
+                expected_sha256=old_record.sha256 if old_record is not None else None,
             )
         )
 

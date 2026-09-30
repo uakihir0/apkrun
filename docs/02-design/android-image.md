@@ -273,6 +273,18 @@ Command: `python3 -m apkrun_image extract --manifest Images/manifests/<buildId>/
 
 #010 acceptance: output includes kernel, ramdisk, extraction metadata, and hashes. Inputs are opened read-only and re-hashed after extraction to prove they were not changed. #010 records the kernel compression, the fragment list, and the command-line length of the pinned build in the verification log (§17).
 
+`bootimg.py` accepts only boot/init_boot v4 and vendor_boot v4. It bounds every
+header, payload, table, and fragment range against the source file before
+reading it. Vendor page sizes follow the pinned `mkbootimg.py` choices
+(2048, 4096, 8192, or 16384 bytes). The table byte size must equal its entry
+count times entry size. Fragment ranges retain table order and must cover the
+vendor ramdisk exactly without gaps or overlap. Table parsing uses the same
+16 MiB and 4096-entry caps as inventory. Fixture section bytes are compared
+with the vendored AOSP `unpack_bootimg.py`; the pinned archive is also parsed
+through seekable ZIP member streams without extracting the full archive.
+Fragment names and command lines use strict UTF-8 decoding to match the
+vendored AOSP tools.
+
 The ramdisk fragment policy (all non-recovery fragments, table order) is what a default AOSP bootloader does when no board-specific selection applies. #013 confirms it against the reference capture by comparing the first-stage module list (`lsmod` and the first-stage init log).
 
 ### 4.2 Disk plan (#011)

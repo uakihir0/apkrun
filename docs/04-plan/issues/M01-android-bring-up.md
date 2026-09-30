@@ -513,6 +513,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 - `extract` does not write the bundle's `boot/bootconfig.txt`. The `bundle` command (#012, #065) writes it: the `[vendor]` section from `vendor-bootconfig.txt`, and the `[image]` section from the layout plus the `avb.py` values.
 - #013 confirms that leaving out the RECOVERY fragment is correct, using `lsmod` and the first-stage init log.
+- **Step 1 verification (2026-09-30):** `bootimg.py` parses boot/init_boot v4 and vendor_boot v4 headers, bounds all exposed sections, enforces pinned AOSP page/table dimensions, verifies exact fragment coverage, and decodes fragment names and command lines as UTF-8 while preserving table order. Seventeen focused tests passed: fixture payloads matched the vendored AOSP unpacker, temporary non-empty-DTB/UTF-8-name/UTF-8-command-line images matched AOSP parsing, malformed layouts were rejected, and the pinned archive parsed via seekable ZIP streams. The full Python image suite passed 138 tests, and `scripts/ci/run-checks.sh` passed. The remaining #010 steps and acceptance criteria are still open.
 
 ---
 

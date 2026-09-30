@@ -1467,6 +1467,34 @@ redirect, and rejected external, cross-port, and downgrade redirects. Reject
 overlong decimal sizes before integer conversion and convert JSON integer
 parser failures into actionable `FetchError` diagnostics.
 
+## IR-065: Bound vendor_boot table parsing to inventory limits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.1; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/apkrun_image/bootimg.py` |
+
+**Choice.** Parse only boot/init_boot v4 and vendor_boot v4 for this task.
+Validate each section against the source file before reading it. Restrict
+vendor page sizes to the pinned `mkbootimg.py` choices, require the table byte
+size to match `entry_count * entry_size`, and require fragment ranges to
+cover the vendor ramdisk exactly without gaps or overlap. Cap the table at
+16 MiB and 4096 entries, matching the existing inventory parser. Decode
+fragment names and command lines as UTF-8, matching `mkbootimg.py` and
+`unpack_bootimg.py`.
+
+**Reason.** #010 and M6 require these v4 formats. The selected Cuttlefish
+archive uses boot page size 4096 and vendor_boot page size 2048; offsets must
+therefore follow each format's page-alignment rules rather than fixed
+filenames or assumed offsets. A bounded table prevents malformed metadata
+from causing large allocations or excessive entry loops. Exact fragment
+coverage prevents extraction from silently omitting or duplicating bytes.
+UTF-8 text preserves values accepted by the vendored writer. Fixture outputs
+are checked against the vendored AOSP unpacker, including a non-empty DTB,
+UTF-8 name, and UTF-8 command-line case; the pinned ZIP member streams are
+parsed without extracting the entire archive.
+
 **Reason.** Inventory rejects a file larger than 16 GiB, so the fetcher must
 not download or trust a declaration that inventory will later reject.
 Redirecting an API or signed artifact URL to an unsafe origin can expose

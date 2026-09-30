@@ -1671,12 +1671,14 @@ timings remain unverified.
 
 **Choices.**
 
-- Launch one explicit Cuttlefish instance in a private temporary CVD `HOME`,
-  bind ADB commands to that instance's loopback port, and stop within the same
-  `HOME`, including after a failed launch. Bound `stop_cvd` to 120 seconds by
-  default with a 10-second forced-stop grace period. The private `HOME` is
-  removed after successful cleanup and retained for inspection or cleanup if
-  shutdown or removal fails.
+- Launch one explicit Cuttlefish instance in a private temporary CVD `HOME`
+  and base directory, connect ADB to that instance's loopback port while
+  waiting for boot, and disconnect that serial before group removal with a
+  10-second timeout and 2-second forced-stop grace period. Assign a unique CVD
+  group name and remove only that group, including after a failed launch. Bound
+  `cvd remove` to 120 seconds by default with a 10-second forced-stop grace
+  period. The private `HOME` is removed after successful cleanup and retained
+  for inspection or cleanup if removal fails.
 - Use one atomic capture lock directory under `/tmp` so separate checkouts and
   users on the reference host cannot run overlapping profiles. A forced kill
   may leave this shared lock; the setup guide records the safe cleanup step.
@@ -1700,11 +1702,16 @@ timings remain unverified.
 
 **Reason.** A sole-device ADB snapshot does not establish which launch owns
 that device, and an unqualified shutdown can affect another Cuttlefish guest.
-The private `HOME` isolates the runtime directory and the single-instance
-group, so group-scoped Cuttlefish shutdown stays within this capture. The
-explicit instance number provides identity for launch and loopback-only ADB
-selection. The runtime path is also required when selecting a crosvm process;
-matching the instance number alone could mix processes from another HOME.
+Cuttlefish keeps group registration outside its runtime directory, so a private
+`HOME` alone does not isolate group lifecycle operations. A unique group name
+lets cleanup target only this run; a private base directory keeps its runtime
+artifacts beneath the temporary `HOME`. The explicit instance number provides
+identity for launch and ADB selection. Connecting and disconnecting the
+selected loopback serial makes capture independent of a prior manual
+`adb connect` and avoids leaving a stale host-side device after shutdown. The
+bounded disconnect ensures a stuck ADB command cannot prevent group cleanup.
+The runtime path is also required when selecting a crosvm process; matching the
+instance number alone could mix processes from another group.
 Separate worktrees and users can share an Android host, so one host-wide lock
 in shared `/tmp` prevents overlapping profile captures. A bounded shutdown
 lets signal cleanup continue to normalize or discard staging data and release
@@ -1747,3 +1754,130 @@ no Linux Cuttlefish reference VM is available. Shipping this incomplete
 baseline makes extraction reproducible while keeping guessed boot properties
 out of the image. The Android bootconfig is not complete until the reference
 capture fills the omitted entries; #010 remains open.
+
+## IR-075: Normalize manifest decoding errors without echoing input values
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §12; [M01](issues/M01-android-bring-up.md) #009; `Images/tools/apkrun_image/manifest.py`; `Packages/ImageCore/Sources/ImageCore/Manifest/{AndroidImageManifest.swift,AndroidImageManifestValidator.swift}` |
+
+**Choice.** Convert `DecodingError` cases into `ImageFailure.manifestInvalid`
+with the manifest field path, the expected static type where available, and a
+short remediation. Do not include `DecodingError.debugDescription` or raw
+input values in the reported reason. Escape control, quoting, and
+bidirectional-formatting characters in input-derived field-path components,
+unknown JSON field names, invalid `androidInfo` keys, and other displayed
+values; limit each displayed value to 128 Unicode scalars. Python manifest
+checks use exact full-string build ID matching and escape manifest-controlled
+values in schema, semantic, and file-backed diagnostics.
+
+**Reason.** ImageCore promises one typed failure for invalid manifests, while
+decoder diagnostics may include attacker-controlled content. Unknown JSON
+field names and `androidInfo` keys are input-controlled too, so raw newlines
+could forge additional log lines or visually reorder text. Other invalid
+fields can also contain control characters, and decoder paths can include an
+arbitrary dictionary key. Escaping and length limits keep diagnostics
+single-line, visually stable, and bounded; the field path and expected type
+still identify what to fix.
+
+## IR-076: Pass Cuttlefish artifact roots and private runtime paths
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh` |
+
+**Choice.** Require `CVD_HOST_DIR` to name the matching host package and pass
+`--host_path`, `--product_path`, `--base_directory`, and a unique
+`--group_name` through one shared helper for every profile. Create each group
+with `--nostart`, then start it by the unique group name.
+
+**Reason.** The capture uses a private `HOME` to isolate temporary Cuttlefish
+state. With the installed Cuttlefish CLI, starting from that empty home fails
+to locate the host tools unless both artifact roots are explicit. Cuttlefish
+also places runtime data under a global default directory unless
+`--base_directory` is passed, but this version's `launch_cvd` wrapper rejects
+that option and forwards it to the lower-level start command. Creating the
+group without starting it records the private base directory before a
+separately selected start. Group cleanup also needs an explicit unique
+selector. Passing these values lets all profiles use the pinned build while
+keeping runtime files and cleanup scoped to the temporary capture.
+
+## IR-077: Require archive-backed manifest inventory provenance
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §8; [M01](issues/M01-android-bring-up.md) #009; `Images/tools/apkrun_image/{inventory.py,manifest.py}` |
+
+**Choice.** File-backed manifest validation requires the recorded inventory
+source type to be `zip` before comparing its archive name, size, and hash with
+`source.archives`. It also compares `source.branch`, `source.buildId`, and
+`source.target` against the actual inventory generated from the fetched
+archive's `fetch.json`, even if both the manifest and recorded inventory agree
+on altered values. Fail closed when actual archive inventory lacks any fetched
+provenance field; an absent `fetch.json` is not independent confirmation.
+Escape and bound inventory-derived values in diagnostics, and reject control,
+format, surrogate, line-separator, and paragraph-separator characters in
+fetched archive names before using them as paths.
+
+**Reason.** Manifest generation only accepts an inventory of a fetched
+archive, and M10 requires its recorded archive fingerprint to match the
+manifest. Accepting `directory` here would let an edited inventory remove its
+archive name and fingerprints while retaining fetched build metadata, bypassing
+the provenance check. Comparing the build identifiers to the re-read archive
+inventory prevents a jointly edited manifest and inventory from overriding
+the fetch record. Control, format, surrogate, line-separator, and
+paragraph-separator characters in fetched archive names could forge diagnostics
+or make a path unencodable, so inventory rejects them before path use. Escaping
+metadata values prevents malformed local inventory files from forging log
+lines.
+
+## IR-078: Give Cuttlefish a writable copy of the product images
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh` |
+
+**Choice.** Reject symbolic links in the verified `ANDROID_PRODUCT_OUT`, copy
+its contents into the capture's private temporary Cuttlefish `HOME`, make the
+copy writable, check that the copy contains no symbolic links, re-verify every
+manifest-pinned artifact's size and SHA-256, and pass that directory to
+`cvd create`.
+
+**Reason.** The first real Cuttlefish launch expanded `super.img` and
+`userdata.img` in the product directory and rewrote vbmeta images before the
+capture script's integrity check could run. Passing a private writable copy
+keeps later profile runs reproducible and leaves the downloaded, verified
+artifacts intact. `cp -a` preserves absolute symbolic links, which could make
+Cuttlefish write through the copy into the source tree or another target.
+Rejecting links before copying, and verifying the copied tree and hashes
+before launch, keeps the writable boundary explicit and detects source changes
+during the copy. T0 simulates an in-place image modification, verifies the
+source remains unchanged, and proves that a modified copy is rejected before
+Cuttlefish starts.
+
+## IR-079: Require exact end-of-input for manifest string patterns
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §§6.1, 8; [M01](issues/M01-android-bring-up.md) #009; `Images/tools/apkrun_image/manifest.py`; `Packages/ImageCore/Sources/ImageCore/Manifest/AndroidImageManifest.swift` |
+
+**Choice.** Append an end-of-input assertion to every anchored string pattern
+in the shared JSON Schema. The Swift `matches` helper also requires the
+regular-expression match to cover the complete input string.
+
+**Reason.** Regex `$` can match immediately before a final line terminator,
+letting values such as archive names or `androidInfo` keys pass despite
+violating their documented formats. Applying the exact-end rule across every
+anchored pattern closes the same gap for build identifiers, targets,
+partitions, hashes, and file paths as well. The schema remains portable and
+continues to be the shared source of string constraints.

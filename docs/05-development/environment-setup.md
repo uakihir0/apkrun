@@ -214,44 +214,72 @@ The reference boot capture ([../02-design/android-image.md](../02-design/android
 | Step | Detail |
 |---|---|
 | VM | arm64 Debian 12 or Ubuntu 24.04 in any VZ-based VM tool that sets `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled` (check `VZGenericPlatformConfiguration.isNestedVirtualizationSupported` first). 8 vCPUs, 16 GB RAM, 120 GB disk. |
-| KVM | `ls -l /dev/kvm` must exist inside the VM. Add the user to the `kvm` group. |
+| KVM | `ls -l /dev/kvm` must exist inside the VM. Add the user to the `kvm`, `cvdnetwork`, and `render` groups. |
 | Host tools | install `cuttlefish-base` and `cuttlefish-user` from the android-cuttlefish arm64 packages, then reboot the VM; `timeout` from GNU coreutils must be on `PATH` |
 | Artifacts | the same build as §3.2, plus `cvd-host_package.tar.gz` of that build |
 | Capture | `Images/tools/reference/capture.sh <profile>` for `default`, `target`, `swiftshader` ([../02-design/android-image.md](../02-design/android-image.md) §8.2) |
 | Output | copy the capture to `Images/reference/<buildId>/<profile>/` on the Mac and commit it |
 
-Extract the guest image archive and point the capture script at its product
-output directory. Activate the tools' Python environment and ensure
-`launch_cvd`, `stop_cvd`, and `adb` from the matching host tools are on `PATH`.
-Stop any running Cuttlefish guests and disconnect all ADB devices before
-capturing:
+Extract the guest image archive and matching host package into separate
+directories. Activate the tools' Python environment and put the host package's
+`bin/` directory on `PATH`. Stop any running Cuttlefish guests and disconnect
+all ADB devices before capturing:
 
 ```bash
+mkdir -p "$HOME/cuttlefish/16373615/host" "$HOME/cuttlefish/16373615/product"
+export CVD_HOST_DIR="$HOME/cuttlefish/16373615/host"
+cvd fetch --target_directory="$CVD_HOST_DIR" \
+  --host_package_build=16373615/aosp_cf_arm64_only_phone-userdebug \
+  --keep_downloaded_archives
+unzip /path/to/aosp_cf_arm64_only_phone-img-16373615.zip \
+  -d "$HOME/cuttlefish/16373615/product"
 source Images/tools/.venv/bin/activate
-export ANDROID_PRODUCT_OUT=/path/to/extracted/aosp_cf_arm64_only_phone
+export PATH="$CVD_HOST_DIR/bin:$PATH"
+export ANDROID_PRODUCT_OUT="$HOME/cuttlefish/16373615/product"
 export APKRUN_CVD_PACKAGE_VERSION='<matching host package version>'
 Images/tools/reference/capture.sh default
 Images/tools/reference/capture.sh target
 Images/tools/reference/capture.sh swiftshader
 ```
 
+Use `cvd-host_package.tar.gz` from the same build as the guest image archive.
+`cvd fetch` retrieves and extracts it into `CVD_HOST_DIR`. It provides the
+matching `launch_cvd`, `cvd`, and `adb` commands under `bin/`. The Debian
+Cuttlefish packages install host dependencies and configure the Linux VM;
+their `cvd` command is not a replacement for the build-matched host tools in
+the reference capture. `capture.sh` passes both `CVD_HOST_DIR` and
+`ANDROID_PRODUCT_OUT` to the host package's `cvd create` command, along with a
+private base directory and unique group name for each run. It creates the
+group with `--nostart`, then starts it by its unique group name because this
+Cuttlefish version's `launch_cvd` wrapper does not expose
+`--base_directory`. It copies the verified product images into that private
+`HOME` before launch because Cuttlefish may resize images in place. It rejects
+symbolic links in the product tree and verifies every manifest-pinned image
+hash both before and after copying, so a file change during the copy prevents
+Cuttlefish from starting. The capture connects ADB to the selected
+`127.0.0.1` instance port while waiting for boot and disconnects that serial
+before removing its Cuttlefish group. The disconnect is bounded to 10 seconds
+with a 2-second forced-stop grace period, so a stuck ADB command cannot block
+group cleanup. The downloaded product files remain unchanged.
+
 `APKRUN_CVD_PACKAGE_VERSION` is optional when `dpkg-query` can report the
 installed `cuttlefish-base` version. The script checks every guest artifact
 against the checked-in build 16373615 manifest before launch. Each run creates
-a private temporary Cuttlefish `HOME` under your home directory, uses instance
-1 by default, and shuts down within that private `HOME`. Set
-`APKRUN_CVD_INSTANCE_NUM` to use another provisioned number. Guest commands
-use only the `localhost` or `127.0.0.1` ADB serial matching that instance's
-port. A host-wide lock under `/tmp` allows only one reference capture across
+a private temporary Cuttlefish `HOME` under `TMPDIR` (default `/tmp`), uses
+instance 1 by default, and removes only its uniquely named Cuttlefish group.
+Set `APKRUN_CVD_INSTANCE_NUM` to use another provisioned number. Guest
+commands use only the `localhost` or `127.0.0.1` ADB serial matching that
+instance's port. A host-wide lock under `/tmp` allows only one reference capture across
 checkouts and users at a time. A forced kill can leave that lock; after
 confirming that no capture or Cuttlefish process is running, the lock owner
 or an administrator can remove `/tmp/apkrun-cvd-capture.lock`. Shutdown is
 bounded by
 `APKRUN_CVD_STOP_TIMEOUT_SECONDS` (120 seconds by default, followed by a
 10-second forced-stop grace period). The private `HOME` is removed after a
-successful shutdown and retained with its path printed if shutdown or removal
-fails. Even after a failed launch, the script tries to stop the group in its
-private `HOME`. It refuses to overwrite an existing profile.
+successful group removal and retained with its path printed if removal fails.
+Even after a failed launch, the script attempts removal by the unique group
+name, without targeting other Cuttlefish guests. It refuses to overwrite an
+existing profile.
 Gzip inputs or decompressed outputs larger than 64 MiB are rejected. A failed
 or partial collection is retained under
 `Images/reference/16373615/incomplete/` with a per-item reason in `MISSING.txt`

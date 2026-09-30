@@ -268,9 +268,9 @@ A committed, normalized record of how real Cuttlefish boots build 16373615 in th
    - Use plain `sh` syntax and Android's built-in diagnostic commands, so the same list runs over `adb exec-out` and the serial shell in #014.
    - Check: every §8.3 guest item has exactly one tab-separated entry; T0 checks every command with `sh -n`.
 3. **`capture.sh <profile>`.**
-   - Launch `launch_cvd` with the flags of §8.2 and wait for `sys.boot_completed=1`.
+   - Use the pinned host package's `cvd create --nostart` with the host and product paths, private base directory, unique group name, instance number, and profile flags of §8.2. Start the group by its name, connect ADB on the instance's loopback port, and wait for `sys.boot_completed=1`.
    - Collect the host side: the crosvm command line, `internal/bootconfig` with the AVB footer stripped, the composite disk specs, `cuttlefish_config.json`, `kernel.log`, and `launcher.log`.
-   - Run `guest-capture.txt` through `adb exec-out` and stop the device.
+  - Run `guest-capture.txt` through `adb exec-out`, disconnect the selected ADB serial with a bounded timeout, then remove only this group with a bounded timeout.
    - Run `compare_boot.py normalize <dir>`, which applies `normalize.yaml` to serial numbers, MAC addresses, host paths, and key-shaped secrets. Publish only a fully normalized capture under `Images/reference/16373615/<profile>/`; retain incomplete normalized captures under `Images/reference/16373615/incomplete/`.
    - Check: every §8.3 item is present in the directory, or a `MISSING.txt` there gives the reason. A search for the device serial, MAC addresses, and `/home/` finds nothing.
 4. **Capture the three profiles.**
@@ -303,9 +303,13 @@ See [../test-strategy.md](../test-strategy.md).
   - An explained difference exits 0.
   - A stale entry produces a warning.
   - Normalization removes serials, MACs, host paths, and key-shaped secrets; comparison normalizes without modifying either capture.
-  - The capture script's loopback ADB selection, host-wide capture lock, private Cuttlefish HOME cleanup, instance-scoped host collection, profile flags, AVB footer stripping, and missing-item reporting are exercised without Cuttlefish.
-  - An interrupted capture is normalized into `incomplete/` or discarded if normalization fails; raw logcat that cannot be removed prevents publication and triggers stage deletion, and a failed launch still attempts bounded cleanup inside its private HOME.
-  - A Linux-only integration case runs the real GNU `timeout` against a stop command that ignores TERM; it is skipped on macOS.
+  - The capture script's loopback ADB connection, selection and cleanup, host-wide capture lock, private Cuttlefish HOME cleanup, instance-scoped host collection, all three profile flags, AVB footer stripping, and missing-item reporting are exercised without Cuttlefish.
+  - Every profile starts the uniquely named group with the matching host package, a writable private copy of verified product output, and a private Cuttlefish base directory.
+  - Product output with an absolute symbolic link is rejected, and any change to a manifest-pinned image during the copy is detected by the post-copy size and SHA-256 check before `cvd create`.
+  - Fetched archive branch, build ID, and target metadata remain authoritative if both the manifest and recorded inventory are edited together. Missing `fetch.json` provenance fails closed, and manifest or inventory-derived diagnostics escape controls and bidi formatting characters.
+  - Normal and interrupted capture disconnect the selected ADB serial with a bounded timeout before removing the group; cleanup continues if ADB hangs.
+  - An interrupted capture is normalized into `incomplete/` or discarded if normalization fails; raw logcat that cannot be removed prevents publication and triggers stage deletion, and a failed launch still attempts bounded group-scoped cleanup.
+  - A Linux-only integration case runs the real GNU `timeout` against group removal that ignores TERM; it is skipped on macOS.
   - Compound quoted secrets are fully redacted, compressed and decompressed gzip sizes are bounded, and report symlinks cannot overwrite their targets.
   - Every guest command and `capture.sh` pass `sh -n`; the Linux-only guard is checked on macOS.
 - **T3** (manual, on the reference host): the capture itself, with `host.json` attached to the pull request. It is repeated whenever the pinned build changes.
@@ -323,10 +327,10 @@ See [../test-strategy.md](../test-strategy.md).
 
 - A TCG capture takes hours. Record its duration in `host.json` so that timing comparisons skip it.
 - #012 copies each profile's normalized `kernel.log` into the BootSignals golden fixtures.
-- **Verification (2026-09-30).** The comparison and capture tooling passes its synthetic T0 suite. The capture script was run with fake Linux host tools; no Cuttlefish VM was started. The current checkout is macOS and has no Linux Cuttlefish host tools or reference VM; the installed macOS `adb` 37.0.1 client does not provide them. The three real profile captures, T3 checks, marker timings, and guest command execution remain open. Do not treat the synthetic capture as a reference profile.
-- **Local checks (2026-09-30).** The final Python image-tools suite passed 278 tests; one Linux-only GNU `timeout` integration test was skipped on macOS. The focused capture suite passed 19 tests with that same one skip. Ruff lint and format passed, `git diff --check` passed, and `scripts/ci/run-checks.sh` passed all six checks.
-- **Adversarial review (2026-09-30).** Reviews found and fixed cross-checkout lock ownership, interruption cleanup, raw logcat publication, shutdown timeout, and documentation mismatches. The final review found no remaining P1/P2 findings.
-- **Follow-up.** Run the three profiles on the Linux reference host from [environment-setup.md](../../05-development/environment-setup.md) §3.3, review/redact each capture, and then record the real boot findings in the design sections listed in step 6.
+- **Verification (2026-09-30).** The comparison and capture tooling passes its synthetic T0 suite. The reference host is a nested-virtualization Ubuntu 24.04 arm64 VM with the matching Cuttlefish host tools and `adb` installed. An end-to-end `default` capture did not publish a profile: Cuttlefish reported `Logical partition metadata has invalid geometry magic signature`, then `run_cvd returned 10` and exited with status 255. The normalized incomplete record is retained in the VM's `Images/reference/16373615/incomplete/`; the guest runtime files were not available for collection. Do not treat it as a reference profile. The three profile captures, T3 checks, marker timings, and guest command execution remain open.
+- **Local checks (2026-09-30).** The Python image-tools suite passed 299 tests; one Linux-only GNU `timeout` integration test was skipped on macOS. The focused Swift manifest suite passed 23 tests. `scripts/ci/run-checks.sh` passed all six checks. Ruff lint and format, strict `swift-format` lint, `sh -n` for `capture.sh`, and `git diff --check` passed.
+- **Adversarial review (2026-09-30).** Previous reviews found and fixed cross-checkout lock ownership, interruption cleanup, raw logcat publication, shutdown timeout, and documentation mismatches. A fresh review of the latest hardening changes is pending.
+- **Follow-up.** Diagnose why the build-matched Cuttlefish host rejects the supplied `super.img` geometry before retrying the three profiles. Then review/redact the captures and record the real boot findings in the design sections listed in step 6.
 
 ---
 
@@ -348,7 +352,7 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
 ### Scope
 
 - The JSON Schema, copied byte for byte from reference §7.
-- The draft generator (`manifest`) and the checker (`manifest --check`) with checks M1–M13 of reference §8.
+- The draft generator (`manifest`) and the checker (`manifest --check`) with checks M1–M15 of reference §8 and the complete schema constraints.
 - The Swift `AndroidImageManifest` (`Codable`) in ImageCore, which accepts exactly the same documents.
 - The invalid-manifest fixtures, shared by Python and Swift.
 - The committed manifest for 16373615.
@@ -368,7 +372,7 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
 
 1. **Schema and model.**
    - Commit the schema.
-   - `manifest.py` loads the file. It runs M1 first, then the schema, then M2–M13 (reference §8).
+   - `manifest.py` loads the file. It runs M1 first, then the schema, then M2–M15 (reference §8).
    - `manifest --check` reports every failure. The other commands stop at the first one.
    - Each invalid fixture is a pair: `<name>.json` and `<name>.expected.txt` (the exact message).
    - Check: T0 passes over all pairs.
@@ -387,7 +391,7 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
    - Check: T1 `manifest --check` passes with the real archive. That run includes the file checks M4, M6, and M10–M13.
 4. **Swift model.**
    - `AndroidImageManifest` (`Codable`, `Sendable`) rejects unknown fields and newer `schemaVersion` values.
-   - `AndroidImageManifestValidator` runs the checks that need only the manifest (M1–M3, M5, M7–M9). It uses the same message text and throws `ImageFailure.manifestInvalid(path, reason)`.
+   - `AndroidImageManifestValidator` runs the checks that need only the manifest (M1–M3, M5, M7–M9, M14–M15). It uses the same message text and throws `ImageFailure.manifestInvalid(path, reason)`. JSON primitive type errors are converted to this typed failure without including input values. Regex validation requires full-string matches.
    - Checks that read image files stay in Python. Their fixtures are listed in `invalid/python-only.txt`, and the Swift test skips them.
    - The Swift tests find the shared fixture directory through a path relative to `#filePath`.
    - Check: T0 Swift tests pass.
@@ -399,8 +403,8 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
 
 See [../test-strategy.md](../test-strategy.md).
 
-- **T0 Python:** every valid fixture passes. Every invalid fixture fails with exactly its expected message. A source vbmeta omitted from both `artifacts` and `roles.vbmeta` is rejected; generation follows the top-level descriptor order. The model round-trips: load, dump with sorted keys, load again, and the result is equal. The no-file-names test.
-- **T0 Swift** (`Packages/ImageCore/Tests/ImageCoreTests/AndroidImageManifestTests.swift`): decoding and encoding round trip. Every valid fixture and every committed manifest is accepted. The manifest-only invalid fixtures fail with the same message as in Python.
+- **T0 Python:** every valid fixture passes. Every invalid fixture fails with exactly its expected message. A source vbmeta omitted from both `artifacts` and `roles.vbmeta` is rejected; generation follows the top-level descriptor order. The model round-trips: load, dump with sorted keys, load again, and the result is equal. File checks reject swapped boot roles, stale inventory archive fingerprints, directory inventory provenance substituted for the declared archive, manifest plus inventory provenance that disagrees with the fetched `fetch.json`, and jointly edited provenance when actual `fetch.json` metadata is missing. Schema, semantic, and file-backed diagnostics escape manifest-controlled newlines. Inventory rejects fetch-sidecar archive names containing control, format, surrogate, line-separator, or paragraph-separator characters; inventory-derived diagnostic values escape controls and are bounded. The no-file-names test.
+- **T0 Swift** (`Packages/ImageCore/Tests/ImageCoreTests/AndroidImageManifestTests.swift`): decoding and encoding round trip. Every valid fixture and every committed manifest is accepted. The manifest-only invalid fixtures fail with the same message as in Python. JSON primitive type mismatches throw `ImageFailure.manifestInvalid`; input-derived paths and values are escaped and bounded, including control, quoting, and bidirectional-formatting characters. Trailing line feeds are rejected for every anchored string-pattern field.
 - **T1:** `manifest --check Images/manifests/16373615/android-image.json` passes with the real archive. It is skipped when the archive is absent.
 
 ### Acceptance criteria
@@ -411,13 +415,14 @@ See [../test-strategy.md](../test-strategy.md).
 - [x] JSON encode and decode work in Python and in Swift.
 - [x] The committed manifest describes the #008 set. Every artifact matches its inventory entry in size, hash, and kind (M10).
 - [x] Invalid manifests fail with actionable errors. Each message names the file or field, what was expected, what was found, and the fix. Each invalid fixture has its expected message.
+- [x] Source origin and build ID agree, logical partition names are unique, archive provenance cannot be replaced by directory metadata or supplied without fetched metadata, and malformed or adversarial JSON values become safe typed manifest errors.
 - [x] No Python or Swift code opens an image file by a literal name.
 
 ### Notes
 
 - The `blankPartitions` sizes are placeholders until #011 replaces them with the sizes from the #064 `target` capture.
 - The design sketch in [android-image.md](../../02-design/android-image.md) §3.2 is abbreviated. Reference §5 is the complete example.
-- **Verification (2026-09-30):** Python tests cover all M1–M13 fixture pairs, including source vbmeta completeness, descriptor-order generation and validation, deterministic generation, the committed build manifest, stale-inventory rejection, and file checks against the pinned archive. The full image test suite passed 121 tests; Swift ImageCore manifest tests passed 14 tests; the T1 real archive check passed. The manifest has 10 artifacts and all 9 non-empty liblp partitions.
+- **Verification (2026-09-30):** Python tests cover M1–M15, including fetched-source provenance, diagnostic escaping, strict end-of-input matching for every schema pattern, source vbmeta completeness, descriptor-order generation and validation, deterministic generation, and file checks against the pinned archive. The full image-tools suite passed 299 tests; Swift ImageCore manifest tests passed 23 tests; `manifest --check` passed against the real pinned archive. A broader Swift package run also failed the unrelated `DiagnosticsCoreTests.logReaderFallsBackToPublicRotatingMirrorsOnTimeout` test, including when run alone. The manifest has 10 artifacts and all 9 non-empty liblp partitions.
 - **Maintainer review pending:** the manifest is generated from the pinned inventory and its file checks pass, but a human maintainer still needs to review its source-derived values before treating the draft as approved; see IR-062.
 
 ---

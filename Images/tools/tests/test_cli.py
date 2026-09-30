@@ -20,6 +20,7 @@ def test_help_lists_initial_commands(capsys: pytest.CaptureFixture[str]) -> None
     assert "fetch" in output
     assert "inventory" in output
     assert "inspect" in output
+    assert "extract" in output
 
 
 def test_inventory_help_dispatches_to_command_parser(capsys: pytest.CaptureFixture[str]) -> None:

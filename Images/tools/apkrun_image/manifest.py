@@ -64,6 +64,8 @@ def _load_json(path: Path, *, description: str) -> object:
             return json.load(stream)
     except OSError as error:
         raise ManifestError(f"{description} {path} could not be read: {error}") from error
+    except UnicodeDecodeError:
+        raise ManifestError(f"{description} {path} is not valid UTF-8.") from None
     except json.JSONDecodeError as error:
         raise ManifestError(
             f"{description} {path} is not valid JSON at line {error.lineno}, "

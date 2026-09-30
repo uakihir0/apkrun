@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 
 COMMANDS = {
+    "extract": "Extract verified Android boot artifacts.",
     "fetch": "Fetch and verify Android build artifacts.",
     "inventory": "Classify every file in an Android build by content.",
     "inspect": "Inspect an Android image file.",

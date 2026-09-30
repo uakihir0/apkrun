@@ -248,9 +248,19 @@ def test_capture_script_uses_each_profile_launch_configuration(
             #!/bin/sh
             [ -f "$APKRUN_PROFILE_INSTANCE_FILE" ] || exit 0
             instance=$(cat "$APKRUN_PROFILE_INSTANCE_FILE")
-            printf 'PID COMMAND\\n100 crosvm run --socket=%s/vsock.sock\\n' "$instance"
+            if [ "${2:-}" = -eo ] && [ "${3:-}" = pid= ]; then
+              printf '      100\\n'
+              exit 0
+            fi
+            if [ "${2:-}" = -p ] && [ "${3:-}" = 100 ]; then
+              printf 'crosvm run --socket=%s/vsock.sock\\n' "$instance"
+            fi
             """
         ),
+        encoding="utf-8",
+    )
+    (fake_bin / "readlink").write_text(
+        "#!/bin/sh\n[ \"$1\" = /proc/100/exe ] || exit 1\nprintf '/opt/crosvm\\n'\n",
         encoding="utf-8",
     )
     (fake_bin / "timeout").write_text(
@@ -978,12 +988,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               fi
               exit 0
             fi
-            for argument in "$@"; do
+              for argument in "$@"; do
               if [ "$argument" = start ]; then
                 if [ "${FAKE_CVD_START_HANG:-0}" = 1 ]; then
                   trap '' TERM
                   while :; do sleep 1; done
                 fi
+                : > "$HOME/cvd-started.txt"
                 exit 0
               fi
             done
@@ -1167,14 +1178,49 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         '  instance_num=$(cat "$cvd_home/instance-num.txt")\n'
         '  instance_runtime=$(cat "$cvd_home/instance-runtime.txt")\n'
         "  other_instance=$((instance_num + 4))\n"
-        "  printf 'PID COMMAND\\n'\n"
-        '  printf "100 crosvm run --instance_num=%s --serial=OTHER\\n" "$other_instance"\n'
-        '  printf "101 crosvm run --socket=%s0/vsock.sock\\n" "$instance_runtime"\n'
-        '  printf "123 crosvm run --instance_num=%s --serial=EXTERNAL-SAME-NUMBER\\n" '
-        '"$instance_num"\n'
-        '  printf "124 crosvm run --instance_num=%s --socket=%s/vsock.sock\\n" '
-        '"$instance_num" "$instance_runtime"\n'
+        '  if [ "${1:-}" = -ww ] && [ "${2:-}" = -eo ] && [ "${3:-}" = pid= ]; then\n'
+        '    printf "      125\\n      126\\n"\n'
+        '    if [ -f "$cvd_home/cvd-started.txt" ]; then\n'
+        '      printf "      100\\n      101\\n      123\\n      124\\n      127\\n      128\\n"\n'
+        "    fi\n"
+        "    exit 0\n"
+        "  fi\n"
+        '  if [ "${1:-}" = -ww ] && [ "${2:-}" = -p ] && [ "${4:-}" = -o ]; then\n'
+        '    case "$3" in\n'
+        '      100) printf "crosvm run --instance_num=%s --serial=OTHER\\n" "$other_instance" ;;\n'
+        '      101) printf "crosvm run --socket=%s0/vsock.sock\\n" "$instance_runtime" ;;\n'
+        '      123) printf "crosvm run --instance_num=%s --serial=EXTERNAL-SAME-NUMBER\\n" "$instance_num" ;;\n'
+        '      124) printf "crosvm run --instance_num=%s --socket=%s/vsock.sock\\n" "$instance_num" "$instance_runtime" ;;\n'
+        '      127) printf "crosvm run --label=x%s/vsock.sock\\n" "$instance_runtime" ;;\n'
+        '      128) printf "crosvm run --label=x%s --socket=%s/vsock.sock\\n" "$instance_runtime" "$instance_runtime" ;;\n'
+        '      125) printf "awk -v instance_path=%s \\"crosvm\\"\\n" "$instance_runtime" ;;\n'
+        '      126) printf "crosvm helper --socket=%s/vsock.sock\\n" "$instance_runtime" ;;\n'
+        "    esac\n"
+        "    exit 0\n"
+        "  fi\n"
         "fi\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "readlink").write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            case "${1:-}" in
+              /proc/100/exe|/proc/101/exe|/proc/123/exe|/proc/124/exe|/proc/127/exe|/proc/128/exe)
+                printf '/var/tmp/cvd/host_tools/bin/crosvm\\n'
+                ;;
+              /proc/125/exe)
+                printf '/usr/bin/awk\\n'
+                ;;
+              /proc/126/exe)
+                printf '/usr/bin/crosvm-helper\\n'
+                ;;
+              *)
+                exit 1
+                ;;
+            esac
+            """
+        ),
         encoding="utf-8",
     )
     (fake_bin / "mv").write_text(
@@ -1246,9 +1292,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_ADB_WAIT_TIMEOUT": ("1" if boot_timeout_case == "adb-wait-for-device" else "0"),
             "FAKE_ADB_NO_DEVICE": "1" if boot_timeout_case == "adb-no-device" else "0",
             "FAKE_CVD_CREATE_DELAY_SECONDS": (
-                "2"
-                if boot_timeout_case
-                in {"cvd-start", "adb-getprop", "shared-deadline", "adb-no-device"}
+                "1"
+                if boot_timeout_case == "cvd-start"
+                else "2"
+                if boot_timeout_case in {"adb-getprop", "shared-deadline", "adb-no-device"}
                 else "0"
             ),
             "FAKE_USE_REAL_TIMEOUT": (
@@ -1465,6 +1512,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 diagnostic in missing
                 for diagnostic in (
                     "sys.boot_completed did not become 1 within 5s",
+                    "ADB did not respond before APKRUN_BOOT_TIMEOUT_SECONDS expired",
                     "ADB did not report sys.boot_completed before "
                     "APKRUN_BOOT_TIMEOUT_SECONDS expired",
                 )
@@ -1497,6 +1545,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert (
                 "Cuttlefish create or start exceeded the "
                 f"{expected_timeout_seconds}-second boot deadline"
+            ) in missing
+            assert (
+                "crosvm-command-line.txt\tno crosvm process matched the private Cuttlefish HOME"
             ) in missing
             timeout_calls = [
                 shlex.split(line.split("\t", maxsplit=1)[1])
@@ -1603,6 +1654,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert f"--instance_num={expected_instance}" in crosvm_command
     assert f"--instance_num={expected_instance + 4}" not in crosvm_command
     assert "EXTERNAL-SAME-NUMBER" not in crosvm_command
+    assert "125 awk" not in crosvm_command
+    assert "127 crosvm run --label=x" not in crosvm_command
+    assert "128 crosvm run --label=x" in crosvm_command
     assert f"/instances/cvd-{expected_instance}0/" not in crosvm_command
     launch_arguments = launch_log.read_text(encoding="utf-8").split()
     assert f"--gpu_mode={gpu_mode}" in launch_arguments

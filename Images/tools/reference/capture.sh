@@ -38,7 +38,7 @@ fi
 PATH="$CVD_HOST_DIR/bin:$PATH"
 export PATH
 
-for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk; do
+for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required host tool not found on PATH: %s\n' "$tool" >&2
     exit 2
@@ -692,29 +692,46 @@ copy_first_match() {
   fi
 }
 
-ps -ww -eo pid,args | awk \
-  -v instance_path="$instance_runtime" '
-  NR == 1 { header = $0; next }
-  {
-    path_offset = index($0, instance_path)
-    path_match = 0
-    if (path_offset > 0) {
-      path_suffix = substr($0, path_offset + length(instance_path), 1)
-      path_match = path_suffix == "" || path_suffix == "/" ||
-        path_suffix ~ /[[:space:]":,]/
-    }
-  }
-  index($0, "crosvm") && path_match {
-      lines = lines $0 "\n"
-      found = 1
-    }
-  END {
-    if (!found) exit 1
-    print header
-    printf "%s", lines
-  }
-' > "$stage/crosvm-command-line.txt" || true
-if [ ! -s "$stage/crosvm-command-line.txt" ]; then
+crosvm_process_rows=$(
+  ps -ww -eo pid= | while IFS= read -r candidate_pid; do
+    # procps right-aligns PIDs even when the column header is suppressed.
+    candidate_pid_prefix=${candidate_pid%%[![:space:]]*}
+    candidate_pid=${candidate_pid#"$candidate_pid_prefix"}
+    [ -n "$candidate_pid" ] || continue
+    candidate_executable=$(readlink "/proc/$candidate_pid/exe" 2>/dev/null || true)
+    candidate_executable_name=${candidate_executable##*/}
+    [ "$candidate_executable_name" = crosvm ] || continue
+    candidate_command=$(ps -ww -p "$candidate_pid" -o args= 2>/dev/null || true)
+    [ -n "$candidate_command" ] || continue
+    if printf '%s\n' "$candidate_command" | awk -v instance_path="$instance_runtime" '
+      {
+        search_start = 1
+        while (search_start <= length($0)) {
+          relative_offset = index(substr($0, search_start), instance_path)
+          if (relative_offset == 0) {
+            break
+          }
+          path_offset = search_start + relative_offset - 1
+          path_prefix = path_offset == 1 ? "" : substr($0, path_offset - 1, 1)
+          path_suffix = substr($0, path_offset + length(instance_path), 1)
+          if ((path_prefix == "" || path_prefix ~ /[[:space:]":,=]/) &&
+              (path_suffix == "" || path_suffix == "/" ||
+               path_suffix ~ /[[:space:]":,]/)) {
+            matched = 1
+            break
+          }
+          search_start = path_offset + 1
+        }
+      }
+      END { exit !matched }
+    '; then
+      printf '%s %s\n' "$candidate_pid" "$candidate_command"
+    fi
+  done
+)
+if [ -n "$crosvm_process_rows" ]; then
+  printf 'PID COMMAND\n%s\n' "$crosvm_process_rows" > "$stage/crosvm-command-line.txt"
+else
   record_missing "crosvm-command-line.txt" \
     "no crosvm process matched the private Cuttlefish HOME in ps output"
 fi

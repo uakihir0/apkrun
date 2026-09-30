@@ -1,0 +1,28 @@
+# Output filename<TAB>guest shell command. Commands run unchanged through adb or a plain sh console.
+cmdline.txt	cat /proc/cmdline
+bootconfig.txt	su 0 cat /proc/bootconfig
+properties.txt	getprop
+by-name-list.txt	su 0 ls -l /dev/block/by-name/
+block-by-name.txt	su 0 sh -c 'found=0; for p in /dev/block/by-name/*; do [ -e "$p" ] || continue; found=1; printf "%s -> %s\n" "${p##*/}" "$(readlink -f "$p")"; done; [ "$found" -eq 1 ]'
+block-sysfs.txt	su 0 sh -c 'found=0; for d in /sys/block/vd*; do [ -e "$d" ] || continue; found=1; printf "%s -> %s\n" "${d##*/}" "$(readlink -f "$d")"; done; [ "$found" -eq 1 ]'
+block-sizes.txt	su 0 sh -c 'found=0; for d in /sys/block/vd*; do [ -r "$d/size" ] || continue; found=1; printf "disk:%s sectors=%s\n" "${d##*/}" "$(cat "$d/size")"; for p in "$d"/*; do [ -r "$p/size" ] || continue; printf "partition:%s sectors=%s\n" "${p##*/}" "$(cat "$p/size")"; done; done; [ "$found" -eq 1 ]'
+mounts.txt	su 0 cat /proc/mounts
+fstab.txt	su 0 sh -c 'found=0; for f in /vendor/etc/fstab.*; do [ -f "$f" ] || continue; found=1; printf "# %s\n" "$f"; cat "$f"; done; [ "$found" -eq 1 ]'
+dmesg.txt	su 0 dmesg
+modules.txt	su 0 lsmod
+first-stage-init.txt	su 0 sh -c "dmesg | grep -E 'init: init first stage|init: .*first stage' || printf '(no matching first-stage init lines)\\n'"
+hvc-devices.txt	su 0 sh -c 'found=0; for p in /dev/hvc*; do [ -e "$p" ] || continue; found=1; ls -l "$p"; done; [ "$found" -eq 1 ]'
+hvc-users.txt	su 0 sh -c 'found=0; for fd in /proc/[0-9]*/fd/*; do target=$(readlink "$fd" 2>/dev/null) || continue; case "$target" in /dev/hvc*) pid=${fd#/proc/}; pid=${pid%%/*}; number=${fd##*/}; name=$(cat "/proc/$pid/comm" 2>/dev/null); printf "%s fd=%s -> %s\n" "${name:-unknown}" "$number" "$target"; found=1;; esac; done; [ "$found" -eq 1 ] || printf "(no hvc file descriptor holders)\\n"'
+logcat.txt.gz	logcat -d -b all
+lshal.txt	lshal
+services.txt	service list
+apex.txt	ls -l /apex
+features.txt	pm list features
+ip-addr.txt	ip addr
+ip-route.txt	ip route
+ip-link.txt	ip link
+connectivity.txt	dumpsys connectivity
+audio-cards.txt	cat /proc/asound/cards
+selinux-mode.txt	getenforce
+avc-denials.txt	su 0 sh -c "dmesg | grep -i 'avc: denied' || printf '(no AVC denials)\\n'"
+boot-markers.txt	su 0 sh -c "dmesg | grep -E 'VIRTUAL_DEVICE_|Booting Linux on physical CPU|init: init first stage started!|init: starting service .zygote.' || printf '(no requested boot markers)\\n'"

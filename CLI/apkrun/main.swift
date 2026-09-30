@@ -5,12 +5,23 @@ import Foundation
 
 @main
 struct APKRunCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "apkrun",
-        abstract: "Run Android apps as Mac apps.",
-        version: Output.versionFlag(BuildInfo.current),
-        subcommands: [VersionCommand.self, LogsCommand.self]
-    )
+    static var configuration: CommandConfiguration {
+        #if APKRUN_EMBEDDED_RUNTIME
+            CommandConfiguration(
+                commandName: "apkrun",
+                abstract: "Run Android apps as Mac apps.",
+                version: Output.versionFlag(BuildInfo.current),
+                subcommands: [VersionCommand.self, LogsCommand.self, DevCommand.self]
+            )
+        #else
+            CommandConfiguration(
+                commandName: "apkrun",
+                abstract: "Run Android apps as Mac apps.",
+                version: Output.versionFlag(BuildInfo.current),
+                subcommands: [VersionCommand.self, LogsCommand.self]
+            )
+        #endif
+    }
 
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())

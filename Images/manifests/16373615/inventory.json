@@ -1,0 +1,438 @@
+{
+  "files": [
+    {
+      "details": {
+        "values": {
+          "config": "phone",
+          "gfxstream": "supported",
+          "gfxstream_gl_program_binary_link_status": "supported"
+        }
+      },
+      "kind": "text",
+      "path": "android-info.txt",
+      "probablePurpose": "device information key/value metadata",
+      "sha256": "9e65df4d6461e776a29250602980d7f9fbc3d4e12cf66af759dcc38df02b33ee",
+      "size": 83
+    },
+    {
+      "details": {
+        "avbFooter": {
+          "originalSize": 42037248,
+          "vbmetaOffset": 42037248,
+          "vbmetaSize": 2432,
+          "version": "1.0"
+        },
+        "bootKind": "boot",
+        "cmdline": "",
+        "headerVersion": 4,
+        "kernelSize": 42031616,
+        "osVersion": {
+          "release": "17.0.0",
+          "securityPatch": "2026-06"
+        },
+        "ramdiskSize": 0
+      },
+      "kind": "bootImage",
+      "path": "boot.img",
+      "probablePurpose": "boot partition (kernel)",
+      "sha256": "a8fb0875277c99d40154e03416010c496c22395bb4dd6b399ddeef69f5a833ac",
+      "size": 67108864
+    },
+    {
+      "details": {
+        "size": 1048576,
+        "type": "ext4"
+      },
+      "kind": "filesystem",
+      "path": "cuttlefish_example_custom.img",
+      "probablePurpose": "ext4 filesystem image",
+      "sha256": "3d17578db83de489aafbd421d98d2596cf4d486639c2802f4df7e9ac9e231847",
+      "size": 1048576
+    },
+    {
+      "details": {
+        "lines": [
+          "# cuttlefish",
+          "version 1",
+          "flash boot",
+          "flash init_boot",
+          "flash vendor_boot",
+          "flash --apply-vbmeta vbmeta",
+          "flash vbmeta_system",
+          "flash vbmeta_vendor_dlkm",
+          "flash vbmeta_system_dlkm",
+          "reboot fastboot",
+          "update-super",
+          "flash super",
+          "if-wipe erase userdata",
+          "if-wipe erase metadata"
+        ]
+      },
+      "kind": "text",
+      "path": "fastboot-info.txt",
+      "probablePurpose": "build metadata text",
+      "sha256": "14d1f1edc164429e94adc30977850a86648fd90645a3d3122e73bbd6b18baa15",
+      "size": 252
+    },
+    {
+      "details": {
+        "avbFooter": {
+          "originalSize": 2998272,
+          "vbmetaOffset": 2998272,
+          "vbmetaSize": 2432,
+          "version": "1.0"
+        },
+        "bootKind": "init_boot",
+        "cmdline": "",
+        "headerVersion": 4,
+        "kernelSize": 0,
+        "osVersion": {
+          "release": "17.0.0",
+          "securityPatch": "2026-06"
+        },
+        "ramdiskSize": 2992407
+      },
+      "kind": "bootImage",
+      "path": "init_boot.img",
+      "probablePurpose": "generic ramdisk partition",
+      "sha256": "df1a2fc8aa21b5df13a2dcea50cdf90ac2ad222f19fb5a70877a16130e374e54",
+      "size": 8388608
+    },
+    {
+      "details": {
+        "blockSize": 4096,
+        "chunkCount": 278,
+        "content": {
+          "details": {
+            "blockDeviceSize": 8589934592,
+            "logicalPartitions": [
+              {
+                "group": "google_vendor_dynamic_partitions_a",
+                "name": "odm_a",
+                "size": 520192
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_b",
+                "name": "odm_b",
+                "size": 0
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_a",
+                "name": "odm_dlkm_a",
+                "size": 348160
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_b",
+                "name": "odm_dlkm_b",
+                "size": 0
+              },
+              {
+                "group": "google_system_dynamic_partitions_a",
+                "name": "product_a",
+                "size": 232157184
+              },
+              {
+                "group": "google_system_dynamic_partitions_b",
+                "name": "product_b",
+                "size": 0
+              },
+              {
+                "group": "google_system_dynamic_partitions_a",
+                "name": "system_a",
+                "size": 959066112
+              },
+              {
+                "group": "google_system_dynamic_partitions_b",
+                "name": "system_b",
+                "size": 4747264
+              },
+              {
+                "group": "google_system_dynamic_partitions_a",
+                "name": "system_dlkm_a",
+                "size": 8568832
+              },
+              {
+                "group": "google_system_dynamic_partitions_b",
+                "name": "system_dlkm_b",
+                "size": 0
+              },
+              {
+                "group": "google_system_dynamic_partitions_a",
+                "name": "system_ext_a",
+                "size": 258179072
+              },
+              {
+                "group": "google_system_dynamic_partitions_b",
+                "name": "system_ext_b",
+                "size": 0
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_a",
+                "name": "vendor_a",
+                "size": 291229696
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_b",
+                "name": "vendor_b",
+                "size": 0
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_a",
+                "name": "vendor_dlkm_a",
+                "size": 1695744
+              },
+              {
+                "group": "google_vendor_dynamic_partitions_b",
+                "name": "vendor_dlkm_b",
+                "size": 0
+              }
+            ],
+            "metadataSlots": 3
+          },
+          "kind": "dynamicPartitions"
+        },
+        "logicalSize": 8589934592,
+        "totalBlocks": 2097152
+      },
+      "kind": "sparse",
+      "path": "super.img",
+      "probablePurpose": "sparse image containing dynamicPartitions",
+      "sha256": "54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05",
+      "size": 1746554644
+    },
+    {
+      "details": {
+        "blockSize": 4096,
+        "chunkCount": 22,
+        "content": {
+          "details": {
+            "size": 8589934592,
+            "type": "f2fs"
+          },
+          "kind": "filesystem"
+        },
+        "logicalSize": 8589934592,
+        "totalBlocks": 2097152
+      },
+      "kind": "sparse",
+      "path": "userdata.img",
+      "probablePurpose": "sparse image containing filesystem",
+      "sha256": "f61bf108a6681bfd40f43e288a68bc623f1218d6d0d1840be87cb278b6093034",
+      "size": 2249012
+    },
+    {
+      "details": {
+        "algorithm": "SHA256_RSA4096",
+        "descriptors": [
+          {
+            "partition": "boot",
+            "type": "chainPartition"
+          },
+          {
+            "partition": "init_boot",
+            "type": "chainPartition"
+          },
+          {
+            "partition": "vbmeta_system",
+            "type": "chainPartition"
+          },
+          {
+            "partition": "vbmeta_system_dlkm",
+            "type": "chainPartition"
+          },
+          {
+            "partition": "vbmeta_vendor_dlkm",
+            "type": "chainPartition"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "partition": "vendor_boot",
+            "type": "hash"
+          },
+          {
+            "partition": "odm",
+            "type": "hashtree"
+          },
+          {
+            "partition": "odm_dlkm",
+            "type": "hashtree"
+          },
+          {
+            "partition": "vendor",
+            "type": "hashtree"
+          }
+        ],
+        "flags": 0,
+        "rollbackIndex": 1780617600
+      },
+      "kind": "vbmeta",
+      "path": "vbmeta.img",
+      "probablePurpose": "Android Verified Boot metadata",
+      "sha256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+      "size": 12288
+    },
+    {
+      "details": {
+        "algorithm": "SHA256_RSA4096",
+        "descriptors": [
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "partition": "product",
+            "type": "hashtree"
+          },
+          {
+            "partition": "system",
+            "type": "hashtree"
+          },
+          {
+            "partition": "system_ext",
+            "type": "hashtree"
+          }
+        ],
+        "flags": 0,
+        "rollbackIndex": 1780617600
+      },
+      "kind": "vbmeta",
+      "path": "vbmeta_system.img",
+      "probablePurpose": "Android Verified Boot metadata",
+      "sha256": "8cd7110a0a15dbde66c91789e227bfe6a67b8381466815185a9bb5a0b161173d",
+      "size": 4096
+    },
+    {
+      "details": {
+        "algorithm": "SHA256_RSA4096",
+        "descriptors": [
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "partition": "system_dlkm",
+            "type": "hashtree"
+          }
+        ],
+        "flags": 0,
+        "rollbackIndex": 1780617600
+      },
+      "kind": "vbmeta",
+      "path": "vbmeta_system_dlkm.img",
+      "probablePurpose": "Android Verified Boot metadata",
+      "sha256": "1c86b6c6b979860ee5e9f67387f0f152c4db39274520de812858ce3b6fec989a",
+      "size": 4096
+    },
+    {
+      "details": {
+        "algorithm": "SHA256_RSA4096",
+        "descriptors": [
+          {
+            "type": "property"
+          },
+          {
+            "type": "property"
+          },
+          {
+            "partition": "vendor_dlkm",
+            "type": "hashtree"
+          }
+        ],
+        "flags": 0,
+        "rollbackIndex": 1780617600
+      },
+      "kind": "vbmeta",
+      "path": "vbmeta_vendor_dlkm.img",
+      "probablePurpose": "Android Verified Boot metadata",
+      "sha256": "beeda4df61c649a7c74a5a296d910b310b9abb26bd2d81ff9b634008148dbc11",
+      "size": 4096
+    },
+    {
+      "details": {
+        "avbFooter": {
+          "originalSize": 18827264,
+          "vbmetaOffset": 18829312,
+          "vbmetaSize": 640,
+          "version": "1.0"
+        },
+        "bootconfigSize": 117,
+        "cmdline": "printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig",
+        "dtbSize": 72,
+        "headerVersion": 4,
+        "pageSize": 2048,
+        "ramdisks": [
+          {
+            "name": "",
+            "size": 18816072,
+            "type": "PLATFORM"
+          }
+        ]
+      },
+      "kind": "vendorBootImage",
+      "path": "vendor_boot.img",
+      "probablePurpose": "vendor boot partition (vendor ramdisk, cmdline, and bootconfig)",
+      "sha256": "02b2af631eb4868ea2163b9de0773ab3b17bf1f5ddca5ab4e2a0258777f46f3f",
+      "size": 67108864
+    }
+  ],
+  "generator": "apkrun_image.inventory 0.1.0",
+  "schemaVersion": 2,
+  "source": {
+    "branch": "aosp-android-latest-release",
+    "branchProvenance": "caller-asserted",
+    "buildId": "16373615",
+    "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
+    "sha256": "051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18",
+    "size": 1101175103,
+    "target": "aosp_cf_arm64_only_phone-userdebug",
+    "type": "zip"
+  }
+}

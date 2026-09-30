@@ -33,17 +33,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch to a command module."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    if not arguments:
+    if not arguments or arguments[0] in {"-h", "--help"}:
         parser.print_help()
         return 0
-
-    namespace, command_arguments = parser.parse_known_args(arguments)
-    if namespace.command is None:
-        return 0
-
-    module = importlib.import_module(f".{namespace.command}", package=__package__)
+    command = arguments[0]
+    if command not in COMMANDS:
+        parser.error(f"invalid choice: {command!r} (choose from {', '.join(COMMANDS)})")
+    module = importlib.import_module(f".{command}", package=__package__)
     command_main = getattr(module, "main")
-    return int(command_main(command_arguments))
+    return int(command_main(arguments[1:]))
 
 
 if __name__ == "__main__":

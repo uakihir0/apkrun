@@ -1,0 +1,2 @@
+flash boot boot.img
+reboot

@@ -145,7 +145,9 @@ The product build compiles the same crate with the Rust prebuilt of the pinned A
 | `ANDROID_HOME`, `ANDROID_NDK_HOME` | §2.5 | Gradle, cargo-ndk, `adb` |
 | `APKRUN_ANDROID_BUILD_API_KEY` | §3.1 | `apkrun_image fetch` |
 | `APKRUN_HOME` | unset (Debug builds default to `~/Library/Application Support/APKRun-Dev/`, [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6) | host tools, tests |
-| `APKRUN_TEST_LINUX_DIR` | unset (default `build/test-linux/`) | T2 Linux guest tests (§4) |
+| `APKRUN_TEST_LINUX_DIR` | unset (default `/tmp/apkrun-test-linux/`) | T2 Linux guest tests (§4) |
+| `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID for the lab test host | signed T2 and G1 VM tests |
+| `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 VM tests |
 | `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder | `scripts/aosp/remote-build.sh` (§5.5) |
 | `APKRUN_CI` | `1` on CI runners only | turns "skip with a message" into a failure (§6.4) |
 
@@ -227,16 +229,20 @@ Without an M3 Mac, use an arm64 Linux machine (bare metal or cloud), or as a las
 M0 (#003–#007, then #063 and #019) boots a small Linux guest before Android ([../02-design/vm.md](../02-design/vm.md) §12).
 
 ```bash
+export APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux"
 scripts/fetch-test-linux.sh          # Alpine linux-virt kernel, hash from ThirdParty.lock.json, decompressed
 scripts/build-test-initramfs.sh      # pinned minirootfs + modules + socat + Tests/Fixtures/linux/init
 xcodebuild test -scheme IntegrationTests \
-  -only-testing:IntegrationTests/LinuxGuestTests   # T2, 60 s timeout per boot
+  -only-test-configuration LinuxGuest \
+  APKRUN_TEST_LINUX_DIR="$APKRUN_TEST_LINUX_DIR" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" \
+  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
 ```
 
-- Both scripts write to `build/test-linux/` (override with `APKRUN_TEST_LINUX_DIR`). The initramfs build runs on macOS with `cpio` and `gzip` from the base system and needs no Linux machine.
+- Both scripts default to `/tmp/apkrun-test-linux/` (override with an absolute `APKRUN_TEST_LINUX_DIR`). The hosted test reads this path from `APKRunTestHost.app/Contents/Info.plist`; pass it as an `xcodebuild` build setting as shown, because Xcode does not forward the invoking shell's custom environment to the hosted test process. Keeping guest artifacts in a temporary directory prevents macOS file-access approval prompts for checkouts under `~/Documents`. The initramfs build runs on macOS with `cpio` and `gzip` from the base system and needs no Linux machine.
 - The tests look for `APKRUN-TEST: boot ok`, one `APKRUN-TEST: <name> ok` per requested check (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`), and `APKRUN-TEST: done`, with `apkrun.test.poweroff=1`.
-- When the artifacts are missing, the tests skip with a message that names the two scripts. With `APKRUN_CI=1` a missing artifact is a failure.
-- VM tests need `com.apple.security.virtualization`. They therefore run inside the signed test host `APKRunTestHost`, not under `swift test` ([build-system.md](build-system.md) §12.4).
+- When the artifacts are missing, the tests skip with a message that names the two scripts. Pass `APKRUN_CI=1` as an `xcodebuild` build setting to make missing artifacts fail.
+- VM tests need `com.apple.security.virtualization`. They therefore run inside the signed test host `APKRunTestHost`, not under `swift test` ([build-system.md](build-system.md) §12.4). Set the two signing variables above to a matching lab development certificate and team.
 
 ---
 

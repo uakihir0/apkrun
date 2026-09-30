@@ -1,0 +1,71 @@
+#!/bin/sh
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+export PATH
+
+fail() {
+    printf 'APKRUN-TEST: init fail %s\n' "$*" > /dev/hvc0 2>/dev/null || :
+    /sbin/poweroff -f 2>/dev/null || :
+    exec /bin/sh
+}
+
+mount -t proc proc /proc || exit 1
+mount -t sysfs sysfs /sys || exit 1
+mount -t devtmpfs devtmpfs /dev || exit 1
+mkdir -p /dev/pts || exit 1
+mount -t devpts devpts /dev/pts || exit 1
+
+exec </dev/hvc0 >/dev/hvc0 2>&1
+
+if [ ! -r /etc/apkrun/modules.list ]; then
+    fail missing-module-list
+fi
+
+while IFS= read -r module || [ -n "$module" ]; do
+    case "$module" in
+        ""|\#*) continue ;;
+    esac
+    if ! /sbin/modprobe "$module"; then
+        fail "module-$module"
+    fi
+done < /etc/apkrun/modules.list
+
+mkdir -p /etc/acpi/events
+cat > /etc/acpi/events/power <<'EOF'
+event=button/power.*
+action=/etc/acpi/power-button.sh
+EOF
+cat > /etc/acpi/power-button.sh <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    *button/power*) /sbin/poweroff -f ;;
+esac
+EOF
+chmod 755 /etc/acpi/power-button.sh
+/sbin/acpid -f &
+
+requested_tests=
+poweroff_after_tests=0
+for argument in $(cat /proc/cmdline); do
+    case "$argument" in
+        apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
+        apkrun.test.poweroff=*) poweroff_after_tests="${argument#apkrun.test.poweroff=}" ;;
+    esac
+done
+
+printf 'APKRUN-TEST: boot ok\n'
+if [ -n "$requested_tests" ]; then
+    previous_ifs=$IFS
+    IFS=,
+    for test_name in $requested_tests; do
+        printf 'APKRUN-TEST: %s fail unsupported test in this guest build\n' "$test_name"
+    done
+    IFS=$previous_ifs
+fi
+printf 'APKRUN-TEST: done\n'
+
+if [ "$poweroff_after_tests" = 1 ]; then
+    /sbin/poweroff -f
+fi
+
+exec /bin/sh

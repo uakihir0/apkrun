@@ -716,7 +716,7 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 |---|---|---|
 | `extract` (#010) | `roles.kernel`, `roles.genericRamdisk`, `roles.vendorBoot` | `Images/work/<buildId>/boot/`: `kernel` (decompressed, `ARM\x64` at 0x38), `ramdisk.img` (vendor fragments in table order without `RECOVERY`, then `init_boot`), `vendor-bootconfig.txt`, `cmdline.txt`, `dtb`, `extraction.json` |
 | `disks` (#011) | `artifacts[].partition`, `roles.super` (unsparsed into `os.img`), `blankPartitions`, `roles.userdataTemplate` (fallback A only), and the layout | `os.img`, `persistent.img`, `userdata.img`, `disks.json` |
-| bootconfig baseline (#012/#013) | `roles.vbmeta` in order | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` |
+| bootconfig baseline (#012/#013) | top-level vbmeta chain descriptors in order, with raw vbmeta artifacts checked against `roles.vbmeta` and footer-backed images resolved from their manifest artifacts | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` |
 | `bundle` (#065) | `source`, `android` | the runtime manifest `provenance` ([runtime-image-manifest.md](runtime-image-manifest.md) §4). The ImageVersion base is `cf` + `buildId` for `ci.android.com`, or `buildId` itself for `apkrun-builder` |
 | ImageCore `AndroidImageManifest` (Swift `Codable`) | `source`, `android` inside `provenance` | diagnostics and `apkrun image list`. ImageCore never reads `android-image.json` from the source tree at run time |
 

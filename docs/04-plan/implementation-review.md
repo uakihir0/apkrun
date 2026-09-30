@@ -1590,3 +1590,32 @@ branches. Treating arrays as strings would change their meaning, and a
 `bootconfig` token after the kernel command-line separator is not an enabling
 option. These boundaries are covered by independent node-count, comment,
 array, and separator tests.
+
+## IR-070: Include footer-backed images in the AVB chain digest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.2; [android-image-manifest.md](../03-reference/android-image-manifest.md) §9; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/apkrun_image/avb.py` |
+
+**Choice.** Follow the top-level vbmeta chain descriptors in descriptor order.
+Use `roles.vbmeta` to validate the relative order of raw vbmeta artifacts, and
+resolve other chain entries, including `boot` and `init_boot`, through their
+manifest artifacts and AVB footer offsets. Hash each AVB0 header,
+authentication block, and auxiliary block, excluding partition padding and
+the footer. Report AVB version 1.4 from the pinned toolchain, and default the
+hashtree error policy to `restart_and_invalidate`. Reject a top-level vbmeta
+with `VERIFICATION_DISABLED`.
+
+**Reason.** The pinned Android build has AVB footers on `boot.img` and
+`init_boot.img`, while the manifest correctly classifies those files as
+`bootImage` artifacts rather than adding them to `roles.vbmeta`. Omitting their
+footer-referenced metadata produces a digest that differs from the vendored
+`avbtool`. Descriptor order reproduces that tool's chained-image digest. The
+manifest does not encode the runtime libavb version or hashtree error mode, so
+the pinned toolchain version and explicit fail-closed policy are deterministic
+defaults pending maintainer review and the #064 reference capture. A vbmeta
+that disables verification cannot supply the AVB-derived boot properties:
+libavb deliberately emits none, so APKRun fails instead of generating values
+that could misrepresent the image's verification state.

@@ -438,7 +438,7 @@ Merge rules:
 | `androidboot.force_normal_boot` | `1` | 2 | reference |
 | `androidboot.verifiedbootstate` | `orange` | 2 | decided for dev images; production in §11.4 |
 | `androidboot.vbmeta.device_state` | `unlocked` | 2 | same |
-| `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` | computed by `avb.py` (`avbtool calculate_vbmeta_digest` over vbmeta and its chained images) | 2 | computed at build time |
+| `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` | computed by `avb.py` from top-level vbmeta and every chained vbmeta blob | 2 | computed at build time |
 | `androidboot.fstab_suffix` | one of `cf.f2fs.hctr2`, `cf.f2fs.cts`, `cf.ext4.hctr2`, `cf.ext4.cts` | 2 | reference |
 | `androidboot.console`, `androidboot.serialconsole` | reference (the Android shell console is on hvc1) | 2 | reference |
 | `androidboot.hw_timeout_multiplier` | reference; may be raised while #095 investigates slow HALs | 2 | reference |
@@ -458,6 +458,21 @@ Merge rules:
 | `androidboot.apkrun.devmode` | `0` or `1` (custom image only, §11.3) | 4 | decided |
 | `androidboot.apkrun.image` | `imageVersion` | 4 | decided |
 | `androidboot.apkrun.test.*` | test image bundles only, never in release bundles (a CI check on the release manifest): `marker=<value>` identifies a test bundle in the migration test (§12.4); `fail_health=1` makes the Guest Agent report unhealthy (§12.4); `fail_boot=1` makes the product's init stop `zygote` before `sys.boot_completed`, so the boot times out ([diagnostics.md](diagnostics.md) §12 T2-4) | 2 (test layout of test bundles) | decided |
+
+AVB metadata follows the top-level vbmeta chain descriptors in their stored
+order. `roles.vbmeta` lists the raw vbmeta artifacts in that same relative
+order. Other chained partitions, such as `boot` and `init_boot`, remain their
+own manifest artifacts; if they carry an AVB footer, `avb.py` reads the
+footer-referenced vbmeta blob at its declared offset. The digest covers each
+AVB0 header, authentication block, and auxiliary block, in chain order, and
+excludes partition padding and the footer. `hash_alg` follows the top-level
+signature algorithm (`NONE` uses SHA-256), and `size` is the sum of those
+metadata blob sizes. `avb_version` follows the pinned AVB 1.4 toolchain. The
+build uses the explicit `restart_and_invalidate` hashtree policy by default;
+`invalidate_on_error` is `yes` for that policy and `no` when the top-level
+vbmeta disables hashtrees or another policy is selected. `avb.py` rejects a
+top-level vbmeta with `VERIFICATION_DISABLED`; libavb emits no AVB-derived
+`androidboot.*` options when that flag is set.
 
 ### 6.3 Trailer and per-boot initrd
 

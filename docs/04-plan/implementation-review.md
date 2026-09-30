@@ -1467,6 +1467,17 @@ redirect, and rejected external, cross-port, and downgrade redirects. Reject
 overlong decimal sizes before integer conversion and convert JSON integer
 parser failures into actionable `FetchError` diagnostics.
 
+**Reason.** Inventory rejects a file larger than 16 GiB, so the fetcher must
+not download or trust a declaration that inventory will later reject.
+Redirecting an API or signed artifact URL to an unsafe origin can expose
+metadata or bypass the initial URL checks. Checking each redirect before
+opening the next hop keeps remote requests encrypted and retains only an
+explicit, same-origin loopback HTTP test path. Descriptor-based hashing and
+bounded finalization constrain concurrent file growth and avoid hashing a
+replacement opened through the same path. Bounding decimal strings before
+conversion prevents malformed metadata from escaping the typed CLI error
+path.
+
 ## IR-065: Bound vendor_boot table parsing to inventory limits
 
 | Field | Value |
@@ -1493,15 +1504,26 @@ coverage prevents extraction from silently omitting or duplicating bytes.
 UTF-8 text preserves values accepted by the vendored writer. Fixture outputs
 are checked against the vendored AOSP unpacker, including a non-empty DTB,
 UTF-8 name, and UTF-8 command-line case; the pinned ZIP member streams are
-parsed without extracting the entire archive.
+parsed without extracting the full archive.
 
-**Reason.** Inventory rejects a file larger than 16 GiB, so the fetcher must
-not download or trust a declaration that inventory will later reject.
-Redirecting an API or signed artifact URL to an unsafe origin can expose
-metadata or bypass the initial URL checks. Checking each redirect before
-opening the next hop keeps remote requests encrypted and retains only an
-explicit, same-origin loopback HTTP test path. Descriptor-based hashing and
-bounded finalization constrain concurrent file growth and avoid hashing a
-replacement opened through the same path. Bounding decimal strings before
-conversion prevents malformed metadata from escaping the typed CLI error
-path.
+## IR-066: Cap decompressed kernel output
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.1; [M01](issues/M01-android-bring-up.md) #010; `Images/tools/apkrun_image/kernel.py` |
+
+**Choice.** Stream kernel decompression with a 1 GiB maximum output size.
+Limit decompressed output to 8 MiB per legacy LZ4 block, and require each
+non-final block to expand to the full block size. Decode concatenated gzip
+members and LZ4 frames as one kernel stream.
+
+**Reason.** The kernel section comes from a downloaded archive and may be
+malformed. A strict aggregate output ceiling bounds disk use and decompression
+work, while chunked decoding avoids loading the complete result into memory.
+The per-block bound follows the legacy container's fixed block format, and
+concatenated members/frames are valid inputs for the declared compression
+formats. The pinned build's 42,031,616-byte kernel section and 42,795,008-byte
+effective image size fit comfortably; no source artifact is modified. Keep
+the cap reviewable in case later supported Android kernels need a larger image.

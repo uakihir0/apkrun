@@ -264,7 +264,7 @@ Command: `python3 -m apkrun_image extract --manifest Images/manifests/<buildId>/
 
 | Output | How it is made |
 |---|---|
-| `kernel` | Kernel section of the `roles.kernel` boot image. Compression is detected by magic: gzip `1f 8b`, LZ4 legacy `02 21 4c 18`, LZ4 frame `04 22 4d 18`. The kernel is decompressed if needed, because the arm64 kernel has no self-decompressor and `VZLinuxBootLoader` hangs on a compressed kernel. The result must have the arm64 Image magic `ARM\x64` at offset 0x38. `text_offset`, `image_size`, and the page-size bits of `flags` (bits 1–2: 4K/16K/64K) are recorded. |
+| `kernel` | Kernel section of the `roles.kernel` boot image. Compression is detected by magic: gzip `1f 8b`, LZ4 legacy `02 21 4c 18`, LZ4 frame `04 22 4d 18`. The kernel is decompressed if needed, because the arm64 kernel has no self-decompressor and `VZLinuxBootLoader` hangs on a compressed kernel. The result must have the arm64 Image magic `ARM\x64` at offset 0x38. `text_offset`, `image_size`, and the page-size bits of `flags` are recorded: code 0 is unspecified, 1 is 4 KiB, 2 is 16 KiB, and 3 is 64 KiB. |
 | `ramdisk.img` | Vendor ramdisk fragments from the `vendor_boot` v4 table, in table order, excluding type `RECOVERY`, followed by the generic ramdisk from `init_boot`. This matches the load order vendor ramdisks → generic ramdisk → bootconfig. Fragments are concatenated byte for byte, as a bootloader does; the kernel unpacks concatenated compressed cpio archives. |
 | `vendor-bootconfig.txt` | The bootconfig section of `vendor_boot` (for build 16373615: `androidboot.hardware=cutf_cvm` and `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384`). It becomes layer 1 of the bootconfig merge (§6.1). `extract` does not write the bundle's `boot/bootconfig.txt`; `bundle` (§10.2) writes it from this file and the layout. |
 | `cmdline.txt` | Vendor cmdline (`printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig`) + the boot image cmdline (normally empty) + the APKRun additions, `cmdline.additions` of the layout file (§6.4). |
@@ -284,6 +284,15 @@ with the vendored AOSP `unpack_bootimg.py`; the pinned archive is also parsed
 through seekable ZIP member streams without extracting the full archive.
 Fragment names and command lines use strict UTF-8 decoding to match the
 vendored AOSP tools.
+
+`kernel.py` streams decompression and limits output to 1 GiB. Concatenated gzip
+members, standard LZ4 frames, and legacy LZ4 frames are decoded as one kernel.
+Legacy LZ4 is decoded as size-prefixed blocks with an 8 MiB maximum output per
+block; only the final block of each frame may be shorter. The selected build
+16373615 kernel is uncompressed: its boot section is 42,031,616 bytes, with
+`text_offset` 0, `image_size` 42,795,008, and `flags` 10 (4 KiB page size).
+The section can be shorter than `image_size`; that field describes the
+effective memory size and is recorded separately from the bytes extracted.
 
 The ramdisk fragment policy (all non-recovery fragments, table order) is what a default AOSP bootloader does when no board-specific selection applies. #013 confirms it against the reference capture by comparing the first-stage module list (`lsmod` and the first-stage init log).
 

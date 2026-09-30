@@ -105,8 +105,8 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         else {
             fail("\(code) is not a valid qualified error code")
         }
-        guard code.hasPrefix("vm.") || code.hasPrefix("cli.") else {
-            fail("\(code) is outside the #061 vm/cli scope")
+        guard code.hasPrefix("vm.") || code.hasPrefix("runtime.") || code.hasPrefix("cli.") else {
+            fail("\(code) is outside the vm/runtime/cli catalog scope")
         }
         guard codes.insert(code).inserted else {
             fail("duplicate code \(code)")
@@ -495,7 +495,7 @@ func renderCLIMarkdown(_ entries: [CatalogEntry]) -> String {
 
 func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
     var result = source
-    for domain in ["vm", "cli"] {
+    for domain in ["vm", "runtime", "cli"] {
         let begin = "<!-- errorgen:begin \(domain) -->"
         let end = "<!-- errorgen:end \(domain) -->"
         guard let beginRange = result.range(of: begin),

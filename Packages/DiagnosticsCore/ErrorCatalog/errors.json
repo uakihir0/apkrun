@@ -622,6 +622,184 @@
       "cliExitRule": "allConfigurationItemsInternalOrFailure"
     },
     {
+      "code": "runtime.instanceLocked",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "Another APKRun process is using Android.",
+        "ja": "別の APKRun プロセスが Android を使用しています。"
+      },
+      "remediation": {
+        "en": "Try again when it has finished.",
+        "ja": "処理が終わってからもう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "instanceLocked(owner:)",
+        "when": "another process holds `Runtime/instance.lock`",
+        "raisedBy": "RuntimeHost, `apkrun dev`",
+        "ref": "§2.3"
+      },
+      "variants": {
+        "apkrund": {
+          "message": {
+            "en": "APKRun's background service is using Android.",
+            "ja": "APKRun のバックグラウンドサービスが Android を使用しています。"
+          },
+          "remediation": {
+            "en": "Quit APKRun and its Mac apps, or set APKRUN_HOME to another folder.",
+            "ja": "APKRun と Mac アプリを終了するか、別のフォルダを指すように APKRUN_HOME を設定してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "`apkrun dev` finds apkrund running on the same data root",
+            "raisedBy": "`apkrun dev`",
+            "ref": "§2.3, §2.6"
+          }
+        },
+        "apkrunDev": {
+          "message": {
+            "en": "A development session (apkrun dev) is using Android.",
+            "ja": "開発セッション（apkrun dev）が Android を使用しています。"
+          },
+          "remediation": {
+            "en": "Stop the development session, then try again.",
+            "ja": "開発セッションを停止してから、もう一度お試しください。"
+          },
+          "action": "retry",
+          "doc": {
+            "when": "apkrund finds an `apkrun dev` session",
+            "raisedBy": "RuntimeHost",
+            "ref": "§2.3"
+          }
+        }
+      }
+    },
+    {
+      "code": "runtime.instanceLockFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't reserve the Android instance.",
+        "ja": "APKRun が Android インスタンスを確保できませんでした。"
+      },
+      "remediation": {
+        "en": "Check permissions for APKRun's data folder, then try again.",
+        "ja": "APKRun データフォルダのアクセス権を確認してから、もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "instanceLockFailed(underlying:)",
+        "when": "the lock directory or file cannot be opened or updated",
+        "raisedBy": "RuntimeHost",
+        "ref": "§2.3"
+      }
+    },
+    {
+      "code": "runtime.devLinuxTimedOut",
+      "parameters": [
+        "seconds"
+      ],
+      "message": {
+        "en": "The Linux test guest didn't finish within {seconds} seconds.",
+        "ja": "Linux テストゲストが {seconds} 秒以内に完了しませんでした。"
+      },
+      "remediation": {
+        "en": "Inspect the guest console output and run the test again.",
+        "ja": "ゲストのコンソール出力を確認し、テストをもう一度実行してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devLinuxTimedOut(seconds:)",
+        "when": "`apkrun dev linux` does not receive the `done` marker before its timeout",
+        "raisedBy": "`apkrun dev linux`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devLinuxInvalidOptions",
+      "parameters": [],
+      "message": {
+        "en": "The Linux development command options are invalid.",
+        "ja": "Linux 開発コマンドのオプションが正しくありません。"
+      },
+      "remediation": {
+        "en": "Use a timeout from 1 to 86400 seconds and comma-separated test names containing only letters, digits, hyphens, and underscores.",
+        "ja": "タイムアウトは 1～86400 秒にし、テスト名は英数字、ハイフン、アンダースコアだけの名前をカンマ区切りで指定してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "devLinuxInvalidOptions",
+        "when": "`apkrun dev linux` receives an invalid timeout or test name",
+        "raisedBy": "`apkrun dev linux`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devLinuxArtifactDirectoryMustBeAbsolute",
+      "parameters": [],
+      "message": {
+        "en": "APKRUN_TEST_LINUX_DIR must be an absolute path.",
+        "ja": "APKRUN_TEST_LINUX_DIR には絶対パスを指定してください。"
+      },
+      "remediation": {
+        "en": "Set it to an absolute path such as /tmp/apkrun-test-linux.",
+        "ja": "/tmp/apkrun-test-linux のような絶対パスを指定してください。"
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "devLinuxArtifactDirectoryMustBeAbsolute",
+        "when": "`APKRUN_TEST_LINUX_DIR` is set to a relative path",
+        "raisedBy": "`apkrun dev linux`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devLinuxCheckFailed",
+      "parameters": [],
+      "message": {
+        "en": "A Linux test guest check failed.",
+        "ja": "Linux テストゲストのチェックが失敗しました。"
+      },
+      "remediation": {
+        "en": "Inspect the guest console output, then fix or retry the requested check.",
+        "ja": "ゲストのコンソール出力を確認し、チェックを修正するか再実行してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devLinuxCheckFailed",
+        "when": "the guest reports a requested check as failed",
+        "raisedBy": "`apkrun dev linux`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devLinuxDidNotFinish",
+      "parameters": [],
+      "message": {
+        "en": "The Linux test guest exited before finishing its checks.",
+        "ja": "Linux テストゲストがチェックを完了する前に終了しました。"
+      },
+      "remediation": {
+        "en": "Inspect the guest console output and run the test again.",
+        "ja": "ゲストのコンソール出力を確認し、テストをもう一度実行してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devLinuxDidNotFinish",
+        "when": "the console stream ends without the `done` marker",
+        "raisedBy": "`apkrun dev linux`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
       "code": "cli.confirmationRequired",
       "parameters": [
         "flag"

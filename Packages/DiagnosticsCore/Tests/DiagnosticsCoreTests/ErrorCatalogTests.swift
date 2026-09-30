@@ -21,6 +21,11 @@ import Testing
                 "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
                 "malformedReply", "versionSkew", "invalidArguments",
             ].map { "cli.\($0)" }
+            + [
+                "instanceLocked", "instanceLockFailed", "devLinuxTimedOut",
+                "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
+                "devLinuxCheckFailed", "devLinuxDidNotFinish",
+            ].map { "runtime.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(ErrorCatalog.entries.values.allSatisfy { $0.message?["en"] != nil })
@@ -33,7 +38,11 @@ import Testing
     ]
     for entry in ErrorCatalog.entries.values {
         #expect(!healthCheckIDs.contains(entry.code))
-        #expect(entry.code.hasPrefix("vm.") || entry.code.hasPrefix("cli."))
+        #expect(
+            entry.code.hasPrefix("vm.")
+                || entry.code.hasPrefix("cli.")
+                || entry.code.hasPrefix("runtime.")
+        )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             #expect(entry.parameters.isSuperset(of: placeholders(in: text)))

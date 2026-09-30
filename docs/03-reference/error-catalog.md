@@ -337,11 +337,24 @@ Owners: RuntimeCore and RuntimeHost. Design: [../02-design/runtime-daemon.md](..
 | `hostStartupFailed(step:underlying:)` | `runtime.hostStartupFailed` | a degraded startup step (§2.2 steps 4–7, 9) failed. `runtimeStatus` and every operation that needs the component return it | RuntimeHost | "Part of APKRun's background service couldn't start: {cause}" | — (the cause's) | 69 | §2.2, [configuration.md](configuration.md) §8.1 |
 | `hostShuttingDown` | `runtime.hostShuttingDown` | apkrund is exiting (logout, `SIGTERM`, idle exit) and answers pending requests | RuntimeHost | "APKRun's background service is stopping." | "Try again in a moment." `retry` | 75 | §2.4 |
 | `hostUpdating` | `runtime.hostUpdating` | the host state `updating` or `restartPending` refuses the operation ([runtime-api.md](runtime-api.md) §3.7) | RuntimeHost | "APKRun is updating." | "Try again in a minute." `retry` | 75 | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.6 |
-| `instanceLocked(owner:)` | `runtime.instanceLocked` | another process holds `Runtime/instance.lock` | RuntimeHost, `apkrun dev` | "Another APKRun process is using Android." | "Try again when it has finished." `retry` | 75 | §2.3 |
-| `instanceLocked(.apkrund)` | `runtime.instanceLocked / apkrund` | `apkrun dev` finds apkrund running on the same data root | `apkrun dev` | "APKRun's background service is using Android." | "Quit APKRun and its Mac apps, or set APKRUN_HOME to another folder." `none` | 75 | §2.3, §2.6 |
-| `instanceLocked(.apkrunDev)` | `runtime.instanceLocked / apkrunDev` | apkrund finds an `apkrun dev` session | RuntimeHost | "A development session (apkrun dev) is using Android." | "Stop the apkrun dev session, then try again." `retry` | 75 | §2.3 |
 | `notProvisioned` | `runtime.notProvisioned` | Android is not set up yet: first-run provisioning is incomplete (§9) | RuntimeSupervisor | "APKRun needs to finish setup." | "Open APKRun to finish setup, or run: apkrun setup" `none` | 69 | §3.2 step 0, §9.2 |
 | `hostRequirementsNotMet([HostRequirement])` | `runtime.hostRequirementsNotMet` | `HostRequirementsCheck` finds one or more failed requirements. The list has one item per failure | HostRequirementsCheck | "APKRun can't run on this Mac." | one line per item (catalog §7.5) `none` | 1 | §9.1 |
+
+### 7.6 Development and instance-lock errors implemented by #003
+
+<!-- errorgen:begin runtime -->
+| Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
+|---|---|---|---|---|---|---|---|
+| `instanceLocked(owner:)` | `runtime.instanceLocked` | another process holds `Runtime/instance.lock` | RuntimeHost, `apkrun dev` | "Another APKRun process is using Android." | "Try again when it has finished." `retry` | 75 | §2.3 |
+| — | `runtime.instanceLocked / apkrunDev` | apkrund finds an `apkrun dev` session | RuntimeHost | "A development session (apkrun dev) is using Android." | "Stop the development session, then try again." `retry` | 75 | §2.3 |
+| — | `runtime.instanceLocked / apkrund` | `apkrun dev` finds apkrund running on the same data root | `apkrun dev` | "APKRun's background service is using Android." | "Quit APKRun and its Mac apps, or set APKRUN_HOME to another folder." `none` | 75 | §2.3, §2.6 |
+| `instanceLockFailed(underlying:)` | `runtime.instanceLockFailed` | the lock directory or file cannot be opened or updated | RuntimeHost | "APKRun couldn't reserve the Android instance." | "Check permissions for APKRun's data folder, then try again." `retry` | 1 | §2.3 |
+| `devLinuxTimedOut(seconds:)` | `runtime.devLinuxTimedOut` | `apkrun dev linux` does not receive the `done` marker before its timeout | `apkrun dev linux` | "The Linux test guest didn't finish within {seconds} seconds." | "Inspect the guest console output and run the test again." `retry` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
+| `devLinuxInvalidOptions` | `runtime.devLinuxInvalidOptions` | `apkrun dev linux` receives an invalid timeout or test name | `apkrun dev linux` | "The Linux development command options are invalid." | "Use a timeout from 1 to 86400 seconds and comma-separated test names containing only letters, digits, hyphens, and underscores." `none` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
+| `devLinuxArtifactDirectoryMustBeAbsolute` | `runtime.devLinuxArtifactDirectoryMustBeAbsolute` | `APKRUN_TEST_LINUX_DIR` is set to a relative path | `apkrun dev linux` | "APKRUN_TEST_LINUX_DIR must be an absolute path." | "Set it to an absolute path such as /tmp/apkrun-test-linux." `none` | 64 | [../02-design/cli.md](../02-design/cli.md) §5 |
+| `devLinuxCheckFailed` | `runtime.devLinuxCheckFailed` | the guest reports a requested check as failed | `apkrun dev linux` | "A Linux test guest check failed." | "Inspect the guest console output, then fix or retry the requested check." `retry` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
+| `devLinuxDidNotFinish` | `runtime.devLinuxDidNotFinish` | the console stream ends without the `done` marker | `apkrun dev linux` | "The Linux test guest exited before finishing its checks." | "Inspect the guest console output and run the test again." `retry` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
+<!-- errorgen:end runtime -->
 
 ### 7.2 Runtime lifecycle
 

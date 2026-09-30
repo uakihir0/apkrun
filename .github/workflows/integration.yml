@@ -1,0 +1,77 @@
+name: Integration tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/integration.yml"
+      - "Packages/VirtualMachineCore/**"
+      - "Packages/RuntimeCore/**"
+      - "Packages/RuntimeHost/**"
+      - "Tests/Fixtures/linux/**"
+      - "Tests/IntegrationTests/**"
+      - "ThirdParty/ThirdParty.lock.json"
+      - "project.yml"
+      - "scripts/build-test-initramfs.sh"
+      - "scripts/fetch-test-linux.sh"
+      - "scripts/tools/with-file-lock.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-guest:
+    name: linux-guest
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-lab
+    timeout-minutes: 15
+    env:
+      APKRUN_CI: "1"
+      APKRUN_TEST_DEVELOPMENT_TEAM: ${{ vars.APKRUN_TEST_DEVELOPMENT_TEAM }}
+      APKRUN_TEST_CODE_SIGN_IDENTITY: ${{ vars.APKRUN_TEST_CODE_SIGN_IDENTITY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check test signing configuration
+        run: |
+          if [[ -z "$APKRUN_TEST_DEVELOPMENT_TEAM" || -z "$APKRUN_TEST_CODE_SIGN_IDENTITY" ]]; then
+            printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
+            exit 1
+          fi
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Set temporary guest artifact directory
+        run: echo "APKRUN_TEST_LINUX_DIR=$RUNNER_TEMP/apkrun-test-linux" >> "$GITHUB_ENV"
+      - name: Build pinned Linux guest artifacts
+        run: scripts/build-test-initramfs.sh
+      - name: Generate Xcode project
+        run: scripts/generate-project.sh
+      - name: Run LinuxGuest T2 suite
+        run: >-
+          xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests
+          -testPlan IntegrationTests -configuration Debug
+          -only-test-configuration LinuxGuest -jobs 1
+          -derivedDataPath build/IntegrationDerivedData
+          -resultBundlePath build/LinuxGuest.xcresult
+          APKRUN_TEST_LINUX_DIR="$APKRUN_TEST_LINUX_DIR" APKRUN_CI=1
+          DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM"
+          CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
+      - name: Upload LinuxGuest result
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: linux-guest-${{ github.sha }}
+          path: build/LinuxGuest.xcresult
+          if-no-files-found: warn
+          retention-days: 30

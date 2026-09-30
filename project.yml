@@ -190,3 +190,71 @@ targets:
         link: false
       - package: APKRun
         product: RuntimeHost
+
+  APKRunTestHost:
+    type: application
+    platform: macOS
+    sources:
+      - path: Tests/IntegrationTests/Host/APKRunTestHost.swift
+    settings:
+      base:
+        PRODUCT_NAME: APKRunTestHost
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.testhost
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        INFOPLIST_FILE: Tests/IntegrationTests/Host/Info.plist
+        INFOPLIST_EXPAND_BUILD_SETTINGS: YES
+        CODE_SIGN_ENTITLEMENTS: Tests/IntegrationTests/Host/APKRunTestHost.entitlements
+
+  IntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/IntegrationTests/LinuxGuestTests
+    settings:
+      base:
+        PRODUCT_NAME: IntegrationTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.integration-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/APKRunTestHost.app/Contents/MacOS/APKRunTestHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: APKRunTestHost
+      - package: APKRun
+        product: VirtualMachineCore
+      - package: APKRun
+        product: DiagnosticsCore
+    scheme:
+      testTargets:
+        - IntegrationTests
+      testPlans:
+        - path: Tests/IntegrationTests/IntegrationTests.xctestplan
+          defaultPlan: true
+
+  AcceptanceTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/AcceptanceTests
+      - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHarness.swift
+    settings:
+      base:
+        PRODUCT_NAME: AcceptanceTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.acceptance-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/APKRunTestHost.app/Contents/MacOS/APKRunTestHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: APKRunTestHost
+      - package: APKRun
+        product: VirtualMachineCore
+      - package: APKRun
+        product: DiagnosticsCore
+    scheme:
+      testTargets:
+        - AcceptanceTests
+      testPlans:
+        - path: Tests/AcceptanceTests/AcceptanceTests.xctestplan
+          defaultPlan: true

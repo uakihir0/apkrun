@@ -1,0 +1,50 @@
+name: Nightly acceptance gates
+
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-gates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gates:
+    name: gates
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-reference
+    timeout-minutes: 45
+    env:
+      APKRUN_CI: "1"
+      APKRUN_TEST_DEVELOPMENT_TEAM: ${{ vars.APKRUN_TEST_DEVELOPMENT_TEAM }}
+      APKRUN_TEST_CODE_SIGN_IDENTITY: ${{ vars.APKRUN_TEST_CODE_SIGN_IDENTITY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check test signing configuration
+        run: |
+          if [[ -z "$APKRUN_TEST_DEVELOPMENT_TEAM" || -z "$APKRUN_TEST_CODE_SIGN_IDENTITY" ]]; then
+            printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
+            exit 1
+          fi
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Run closed acceptance gates
+        run: scripts/run-gate.sh G1
+      - name: Upload G1 evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: gate-G1-${{ github.sha }}
+          path: build/gates/G1
+          if-no-files-found: warn
+          retention-days: 30

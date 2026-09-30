@@ -1,0 +1,26 @@
+{
+  "configurations" : [
+    {
+      "id" : "00300001-0000-4000-8000-000000000001",
+      "name" : "G1",
+      "options" : {
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "maximumTestExecutionTimeAllowance" : 1800,
+    "testTimeoutsEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:APKRun.xcodeproj",
+        "identifier" : "B7A78BC626A509F5435EA189",
+        "name" : "AcceptanceTests"
+      },
+      "parallelizable" : false,
+      "skippedTests" : [ ]
+    }
+  ],
+  "version" : 1
+}

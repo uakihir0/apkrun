@@ -1,0 +1,28 @@
+{
+  "configurations" : [
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003003",
+      "name" : "LinuxGuest",
+      "options" : {
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "maximumTestExecutionTimeAllowance" : 900,
+    "testTimeoutsEnabled" : true,
+    "testRepetitionMode" : "retryOnFailure",
+    "maximumTestRepetitions" : 1
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:APKRun.xcodeproj",
+        "identifier" : "ED9E247DF5B14612D27ADA78",
+        "name" : "IntegrationTests"
+      },
+      "parallelizable" : false,
+      "skippedTests" : [ ]
+    }
+  ],
+  "version" : 1
+}

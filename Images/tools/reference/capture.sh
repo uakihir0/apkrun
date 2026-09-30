@@ -194,7 +194,16 @@ if [ -e "$destination" ]; then
   exit 2
 fi
 mkdir -p "$reference_root"
-adb_devices=$(adb devices | awk 'NR > 1 && NF >= 2 { print $1 "\t" $2 }')
+adb_preflight_timeout_seconds=10
+if adb_device_list=$(timeout --kill-after=2s "$adb_preflight_timeout_seconds" adb devices); then
+  :
+else
+  printf 'ADB did not respond during the %s-second preflight; check the ADB server and retry.\n' \
+    "$adb_preflight_timeout_seconds" >&2
+  exit 1
+fi
+adb_devices=$(printf '%s\n' "$adb_device_list" |
+  awk 'NR > 1 && NF >= 2 { print $1 "\t" $2 }')
 if [ -n "$adb_devices" ]; then
   printf 'ADB already has attached devices; disconnect them before capturing:\n%s\n' \
     "$adb_devices" >&2
@@ -215,6 +224,7 @@ preserve_cvd_home=0
 started=0
 cvd_group_name=
 capture_failed=0
+boot_deadline_expired=0
 capture_lock_owned=0
 lock_initializing=0
 pending_signal_status=
@@ -227,6 +237,42 @@ exec 3>&2
 remove_cvd_group_bounded() {
   HOME="$cvd_home" timeout --kill-after=10s "$stop_timeout_seconds" \
     cvd --group_name="$cvd_group_name" remove
+}
+
+run_with_boot_deadline() {
+  deadline_program=$1
+  shift
+  deadline_now=$(date +%s)
+  deadline_remaining=$((boot_timeout_deadline - deadline_now))
+  if [ "$deadline_remaining" -le 0 ]; then
+    boot_deadline_expired=1
+    return 124
+  fi
+  if HOME="$cvd_home" timeout --kill-after=2s "$deadline_remaining" \
+    "$deadline_program" "$@"; then
+    return 0
+  else
+    deadline_status=$?
+    if { [ "$deadline_status" -eq 124 ] || [ "$deadline_status" -eq 137 ]; } \
+      && [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
+      boot_deadline_expired=1
+    fi
+    return "$deadline_status"
+  fi
+}
+
+sleep_for_boot_retry() {
+  sleep_now=$(date +%s)
+  sleep_remaining=$((boot_timeout_deadline - sleep_now))
+  if [ "$sleep_remaining" -le 0 ]; then
+    boot_deadline_expired=1
+    return 124
+  fi
+  sleep_duration=2
+  if [ "$sleep_remaining" -lt "$sleep_duration" ]; then
+    sleep_duration=$sleep_remaining
+  fi
+  run_with_boot_deadline sleep "$sleep_duration"
 }
 
 disconnect_adb_bounded() {
@@ -446,7 +492,7 @@ if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
 fi
 
 create_cvd_group_with_common_options() {
-  HOME="$cvd_home" cvd create \
+  run_with_boot_deadline cvd create \
     --host_path="$CVD_HOST_DIR" \
     --product_path="$private_product_out" \
     --base_directory="$runtime_root" \
@@ -455,7 +501,7 @@ create_cvd_group_with_common_options() {
     --num_instances=1 \
     --nostart \
     "$@" \
-    && HOME="$cvd_home" cvd --group_name="$cvd_group_name" start
+    && run_with_boot_deadline cvd --group_name="$cvd_group_name" start
 }
 
 launch_profile() {
@@ -484,10 +530,17 @@ capture_adb() {
   HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"
 }
 
+boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
 preserve_cvd_home=1
 started=1
 if ! launch_profile > "$stage/cvd-create-console.log" 2>&1; then
-  record_missing "guest" "Cuttlefish group create or start failed; see cvd-create-console.log"
+  if [ "$boot_deadline_expired" -eq 1 ]; then
+    record_missing "guest" \
+      "Cuttlefish create or start exceeded the ${timeout_seconds}-second boot deadline; see cvd-create-console.log"
+  else
+    record_missing "guest" \
+      "Cuttlefish group create or start failed; see cvd-create-console.log"
+  fi
 else
   preserve_cvd_home=0
   discovered_instance_runtime=$(find "$runtime_root" -type d \
@@ -498,14 +551,35 @@ else
     record_missing "instance-runtime" \
       "Cuttlefish did not create the selected instance directory under its private base directory"
   fi
-  boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
   booted=0
   device_invalid=0
+  adb_poll_failed=0
   adb_serial=
   while [ "$(date +%s)" -lt "$boot_timeout_deadline" ]; do
     adb_connect_attempted=1
-    capture_adb connect "127.0.0.1:$adb_port" >/dev/null 2>&1 || true
-    adb_serial=$(capture_adb devices |
+    run_with_boot_deadline adb connect "127.0.0.1:$adb_port" \
+      >/dev/null 2>&1 || true
+    if adb_devices=$(run_with_boot_deadline adb devices 2>/dev/null); then
+      :
+    else
+      adb_status=$?
+      if [ "$adb_status" -eq 124 ] \
+        || [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
+        boot_deadline_expired=1
+        record_missing "guest" \
+          "ADB did not respond before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+        adb_poll_failed=1
+        break
+      fi
+      if ! sleep_for_boot_retry; then
+        record_missing "guest" \
+          "ADB did not respond before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+        adb_poll_failed=1
+        break
+      fi
+      continue
+    fi
+    adb_serial=$(printf '%s\n' "$adb_devices" |
       awk -v port="$adb_port" \
         'NR > 1 && $2 == "device" && $1 ~ ("^(127[.]0[.]0[.]1|localhost):" port "$") { print $1 }')
     device_count=$(printf '%s\n' "$adb_serial" | awk 'NF { count++ } END { print count+0 }')
@@ -515,62 +589,92 @@ else
       break
     fi
     if [ "$device_count" -eq 1 ]; then
-      boot_state=$(capture_adb -s "$adb_serial" shell getprop sys.boot_completed 2>/dev/null |
-        tr -d '\r' || true)
-      if [ "$boot_state" = 1 ]; then
-        booted=1
-        break
+      if boot_state=$(run_with_boot_deadline adb -s "$adb_serial" \
+        shell getprop sys.boot_completed 2>/dev/null); then
+        boot_state=$(printf '%s' "$boot_state" | tr -d '\r')
+        if [ "$boot_state" = 1 ]; then
+          booted=1
+          break
+        fi
+      else
+        adb_status=$?
+        if [ "$adb_status" -eq 124 ] \
+          || [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
+          boot_deadline_expired=1
+          record_missing "guest" \
+            "ADB did not report sys.boot_completed before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+          adb_poll_failed=1
+          break
+        fi
       fi
     fi
-    sleep 2
+    if ! sleep_for_boot_retry; then
+      record_missing "guest" \
+        "ADB did not report sys.boot_completed before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+      adb_poll_failed=1
+      break
+    fi
   done
-  if [ "$device_invalid" -eq 0 ] && [ "$booted" -ne 1 ]; then
+  if [ "$adb_poll_failed" -eq 1 ]; then
+    :
+  elif [ "$device_invalid" -eq 0 ] && [ "$booted" -ne 1 ]; then
     record_missing "guest" "sys.boot_completed did not become 1 within ${timeout_seconds}s"
   elif [ "$booted" -eq 1 ]; then
-    capture_adb -s "$adb_serial" wait-for-device >/dev/null 2>&1 ||
-      record_missing "guest" "adb wait-for-device failed"
-    tab=$(printf '\t')
-    while IFS="$tab" read -r output_file guest_command || [ -n "${output_file:-}" ]; do
-      case "${output_file:-}" in
-        ''|'#'*) continue ;;
-      esac
-      case "$output_file" in
-        */*|*..*)
-          record_missing "$output_file" "unsafe output filename in guest-capture.txt"
-          continue
-          ;;
-      esac
-      if [ -z "${guest_command:-}" ]; then
-        record_missing "$output_file" "missing guest command in guest-capture.txt"
-        continue
+    guest_ready=1
+    if ! run_with_boot_deadline adb -s "$adb_serial" wait-for-device \
+      >/dev/null 2>&1; then
+      guest_ready=0
+      if [ "$boot_deadline_expired" -eq 1 ]; then
+        record_missing "guest" \
+          "ADB wait-for-device did not finish before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+      else
+        record_missing "guest" "adb wait-for-device failed"
       fi
-      if [ "$output_file" = logcat.txt.gz ]; then
-        raw_log="$stage/.logcat.raw"
-        if capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
-          > "$raw_log" 2>/dev/null; then
-          if gzip -n -c "$raw_log" > "$stage/$output_file"; then
-            if ! remove_raw_logcat; then
-              exit 1
+    fi
+    if [ "$guest_ready" -eq 1 ]; then
+      tab=$(printf '\t')
+      while IFS="$tab" read -r output_file guest_command || [ -n "${output_file:-}" ]; do
+        case "${output_file:-}" in
+          ''|'#'*) continue ;;
+        esac
+        case "$output_file" in
+          */*|*..*)
+            record_missing "$output_file" "unsafe output filename in guest-capture.txt"
+            continue
+            ;;
+        esac
+        if [ -z "${guest_command:-}" ]; then
+          record_missing "$output_file" "missing guest command in guest-capture.txt"
+          continue
+        fi
+        if [ "$output_file" = logcat.txt.gz ]; then
+          raw_log="$stage/.logcat.raw"
+          if capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
+            > "$raw_log" 2>/dev/null; then
+            if gzip -n -c "$raw_log" > "$stage/$output_file"; then
+              if ! remove_raw_logcat; then
+                exit 1
+              fi
+            else
+              rm -f "$stage/$output_file" >/dev/null 2>&1 || true
+              if ! remove_raw_logcat; then
+                exit 1
+              fi
+              record_missing "$output_file" "could not gzip guest logcat output"
             fi
           else
-            rm -f "$stage/$output_file" >/dev/null 2>&1 || true
             if ! remove_raw_logcat; then
               exit 1
             fi
-            record_missing "$output_file" "could not gzip guest logcat output"
+            record_missing "$output_file" "guest logcat command failed"
           fi
-        else
-          if ! remove_raw_logcat; then
-            exit 1
-          fi
-          record_missing "$output_file" "guest logcat command failed"
+        elif ! capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
+          > "$stage/$output_file" 2>/dev/null; then
+          rm -f "$stage/$output_file"
+          record_missing "$output_file" "guest command failed: $guest_command"
         fi
-      elif ! capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
-        > "$stage/$output_file" 2>/dev/null; then
-        rm -f "$stage/$output_file"
-        record_missing "$output_file" "guest command failed: $guest_command"
-      fi
-    done < "$script_dir/guest-capture.txt"
+      done < "$script_dir/guest-capture.txt"
+    fi
   fi
 fi
 

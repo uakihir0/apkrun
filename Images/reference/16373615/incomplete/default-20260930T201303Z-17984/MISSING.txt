@@ -1,4 +1,4 @@
-guest	Cuttlefish group create or start failed; see cvd-create-console.log
+guest	Cuttlefish create or start exceeded the 600-second boot deadline; see cvd-create-console.log
 crosvm-command-line.txt	prior collector matched its own awk scanner; no verified crosvm command line was captured
 internal-bootconfig.txt	not found in the selected Cuttlefish instance runtime
 cuttlefish_config.json	not found in the selected Cuttlefish instance runtime

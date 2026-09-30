@@ -1914,3 +1914,54 @@ Android service startup and the converted super image had the expected
 geometry magic at offset 4096. The available evidence does not show whether
 that warning contributed to the later boot failure, so its cause remains open
 pending a successful boot.
+
+## IR-081: Verify Cuttlefish command-line records by executable
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Images/reference/16373615/incomplete/` |
+
+**Choice.** Enumerate PIDs, require `/proc/<pid>/exe` to resolve to an
+executable whose basename is exactly `crosvm`, and then require its command
+line as rendered by `ps` to contain the selected Cuttlefish instance between
+accepted text delimiters. Trim procps's leading PID padding before constructing
+the `/proc` path. Remove earlier `crosvm-command-line.txt` files that contain
+only the scanner's own `awk` process, and record the unavailable command line
+in each affected `MISSING.txt`.
+
+**Reason.** The previous filter searched each full command line for the word
+`crosvm`. Its own `awk` program contained that word and the instance path in
+its arguments, so failed and timed-out captures could publish the scanner as
+the VM's command line. Parsing `comm` from a whitespace-delimited `ps` row is
+also ambiguous because Linux process names may contain spaces or change.
+Checking the executable target excludes the scanner and similarly named
+helpers. The `ps` text delimiters are a best-effort diagnostic heuristic:
+commas and colons can occur inside an argument, so this does not prove
+NUL-delimited `argv` boundaries and must not authorize an operation. A
+regression fixture includes both rows that would match the old filter, uses
+procps-style padded PIDs, rejects an instance path embedded in ordinary
+surrounding text, and verifies that failed startup records missing crosvm data.
+
+## IR-082: Keep the 600-second reference run inconclusive
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/reference/16373615/incomplete/default-20260930T201303Z-17984/` |
+
+**Choice.** Retain the 600-second run as an incomplete diagnostic record and
+keep its result separate from the earlier 1,029-second run that reported
+`VIRTUAL_DEVICE_BOOT_FAILED`. Record the observed Android-init, `/metadata`,
+ADB, and host-graphics messages without naming any as the root cause.
+
+**Reason.** The 600-second run ended when the configured deadline terminated
+`cvd start`; Cuttlefish then removed the live instance logs. The guest had
+progressed into init and service startup, `/metadata` was later mounted, and
+the ADB transport was not stably available. These observations neither
+confirm `sys.boot_completed` nor establish a fatal failure. The host's missing
+GLES support is also only a candidate until the selected graphics path and
+guest-side errors are captured together. Keep the boot cause open until a
+repeat run preserves the live logs and ADB server state before cleanup.

@@ -97,7 +97,7 @@ The identity (bundle ID suffix, LaunchAgent label, Mach service name) is written
 | `ARCHS` | `arm64` only |
 | `SWIFT_VERSION` | `6` |
 | `SWIFT_TREAT_WARNINGS_AS_ERRORS`, `GCC_TREAT_WARNINGS_AS_ERRORS` | `YES` in CI (`APKRUN_CI=1`), `NO` locally |
-| `ENABLE_HARDENED_RUNTIME` | `YES` for every target |
+| `ENABLE_HARDENED_RUNTIME` | `YES` for product targets; see §12.4 for the hosted VM test exception |
 | `DEAD_CODE_STRIPPING` | `YES` |
 | `MARKETING_VERSION` | `project.yml`, the next release version (MAJOR.MINOR.PATCH) |
 | `CURRENT_PROJECT_VERSION` | `1` locally; the release workflow passes the build number ([workflow.md](workflow.md) §8) |
@@ -513,9 +513,24 @@ Paths are relative to `APKRun.app` in the sketch. #057 step 1 confirms the Spark
 
 ```bash
 xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
-  -configuration Debug -only-test-configuration LinuxGuest
+  -configuration Debug -only-test-configuration LinuxGuest \
+  APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux" APKRUN_CI=1 \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY"
 ```
 
+- Build the Linux test artifacts in a private temporary directory for local
+  T2 runs from `~/Documents`: set `APKRUN_TEST_LINUX_DIR` to
+  `${TMPDIR:-/tmp}/apkrun-test-linux` before running the fetch/build scripts,
+  and pass the same value as an `xcodebuild` build setting. The hosted tests
+  read it from `APKRunTestHost.app/Contents/Info.plist`; a shell export alone
+  is not forwarded to the hosted test process. The test host can then open the
+  kernel without a macOS Documents-folder access prompt. CI uses `$RUNNER_TEMP`
+  for the same reason and passes it as a build setting. Overrides must be
+  absolute paths so the scripts, CLI, and hosted tests select the same
+  directory from different working directories.
+- The team and certificate fingerprint come from `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; CI reads them from repository variables. Xcode's generic `Apple Development` identity name does not reliably select the lab certificate for a manually signed test host, so the fingerprint is explicit.
+- `APKRunTestHost` and the hosted test bundles disable hardened runtime to allow XCTest to load the test bundle into the entitled host. This setting is limited to test targets; product targets retain the common hardened-runtime setting of §2.5.
 - The test plan `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per suite of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4 (`LinuxGuest`, `AndroidStock`, `AndroidCustom`, `Maintenance`), each with the test classes and the environment it needs. It sets the automatic retry to one attempt for T2 ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 - The test plan `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`, each added by its gate task), plus `ReleaseSmoke` and `Network`. Automatic retry is off, except one retry for `Network` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.7).
 - Tests that go through apkrund use the installed Debug identities (§13). The Maintenance suite builds and installs `ReleaseUpdateTest` bundles instead.
@@ -619,7 +634,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |
 | | | `third-party` | — | `xcode-27` for PRs; `apkrun-ci` on `main` | `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/check-lock.sh --apply`, `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
 | | | `fuzz-short` | T1 | disposable T1 runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code the pull request changes (§15.2) |
-| `integration.yml` | pull requests (by path or label), push to `main` | `linux-guest` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite LinuxGuest; pull requests that match the path filter below; every push to `main`; ≤ 15 min |
+| `integration.yml` | matching pushes to `main`; manual dispatch from `main` | `linux-guest` | T2 | persistent `apkrun-lab`, trusted `main` only | suite LinuxGuest; exact path filter below; ≤ 15 min. Pull-request runs remain disabled until disposable lab capacity is provisioned |
 | | label `t2-android` or `run-t2` | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |
 | | label `t2-android` or `run-t2` | `android-custom` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidCustom, ≤ 90 min, with the latest custom `userdebug` image from `nightly.yml` `aosp-build` |
 | | label `t2-maintenance` or `run-t2` | `maintenance` | T2 | reviewed local run for PRs; `apkrun-lab` on `main`, environment `signing` | suite Maintenance, ≤ 120 min: builds `ReleaseUpdateTest` 9000 and 9001, writes the local appcast, runs N → N+1 and its variants |
@@ -640,18 +655,23 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `image-feed-resign.yml` | weekly (Monday 03:00 UTC) | `resign` | — | `ubuntu-latest`, environment `release` | re-signs both channels' feeds ([workflow.md](workflow.md) §10) |
 | `third-party-security.yml` | daily | `upstream` | — | `ubuntu-latest` | §6.7 |
 
-Path filter of `linux-guest` ([test-strategy.md](../04-plan/test-strategy.md) §2.4):
+The current `linux-guest` trigger uses this path filter for pushes to `main`.
+Enable the same filter for pull requests only after a disposable lab runner is
+available ([test-strategy.md](../04-plan/test-strategy.md) §2.4):
 
 ```yaml
 paths:
+  - .github/workflows/integration.yml
   - Packages/VirtualMachineCore/**
-  - Packages/VirtioDeviceCore/**
-  - Packages/GraphicsCore/**
-  - Packages/ImageCore/**
+  - Packages/RuntimeCore/**
+  - Packages/RuntimeHost/**
   - Tests/Fixtures/linux/**
-  - Tests/IntegrationTests/LinuxGuestTests/**
-  - scripts/fetch-test-linux.sh
+  - Tests/IntegrationTests/**
+  - ThirdParty/ThirdParty.lock.json
+  - project.yml
   - scripts/build-test-initramfs.sh
+  - scripts/fetch-test-linux.sh
+  - scripts/tools/with-file-lock.py
 ```
 
 - The label `run-t2` runs every T2 suite. The labels `t2-android` and `t2-maintenance` run only their suites.
@@ -676,8 +696,8 @@ paths:
 
 ### 15.3 Rules
 
-- A pull request can merge only when every `ci.yml` job passes and, when its path filter matches, `linux-guest` passes ([workflow.md](workflow.md) §7).
-- The pull request that closes a task runs every T2 suite the task lists and links the result ([test-strategy.md](../04-plan/test-strategy.md) §2.4).
+- A pull request can merge only when every required `ci.yml` job passes. Until disposable lab capacity is provisioned, the closing pull request must link a maintainer-run result for every T2 suite listed by the task, run against the reviewed commit ([workflow.md](workflow.md) §7; [test-strategy.md](../04-plan/test-strategy.md) §2.4).
+- The pull request that closes a task includes a linked result for every T2 suite the task lists. Use the `integration.yml` run when it executes on disposable capacity; otherwise link a maintainer-run result for the reviewed commit ([test-strategy.md](../04-plan/test-strategy.md) §2.4).
 - T0 and T1 have no automatic retry. T2 has one automatic retry per test, and the report marks every "passed on retry". Gate checks and the release smoke matrix are never retried.
 - A runner that lacks a resource a T1 test needs (Metal device, GUI session, APFS scratch volume, a permission) fails the test with `runnerMissing<Resource>`. It never skips it.
 - A T2 failure on `main` blocks every merge until the change is fixed or reverted ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.7).

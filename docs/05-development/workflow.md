@@ -248,7 +248,7 @@ A task is done when all of [../../AGENTS.md](../../AGENTS.md) §12 holds. The pu
 | Condition | Evidence in the pull request |
 |---|---|
 | every acceptance criterion of the task entry is met | the checked criteria in the task entry, and "Implementation steps covered" |
-| the tests of every tier the entry lists pass | the Tests table: T0 from hosted CI; T1 from trusted main jobs, disposable PR capacity, or linked real-Mac manual results; T2 from the linked `integration.yml` run; T3 and other manual results with their records |
+| the tests of every tier the entry lists pass | the Tests table: T0 from hosted CI; T1 from trusted main jobs, disposable PR capacity, or linked real-Mac manual results; T2 from the linked `integration.yml` run when available, or a maintainer-run result for the reviewed commit; T3 and other manual results with their records |
 | logging and typed errors are in place | review ([coding-conventions.md](coding-conventions.md) §5); new user-visible errors are in `errors.json` with a remediation, and the generated error catalog is committed |
 | non-obvious behavior is documented, and the design documents describe what was built | the changed documents in the diff |
 | the manual checks the entry requires are recorded | "Verification results to record": each result and where it was written |
@@ -319,7 +319,7 @@ Rules:
 All of these hold:
 
 1. Every required CI check passes. The initial required checks are `workflow-policy`, `lint`, `codegen`, `build`, and `test-swift`; later tasks add their jobs and make them required ([build-system.md](build-system.md) §15.1).
-2. `linux-guest` passes when its path filter matches ([build-system.md](build-system.md) §15.1).
+2. Until a disposable lab runner is provisioned, `linux-guest` is not a pull-request status check; the task-closing PR links a maintainer-run result for its reviewed commit (§5.1, [build-system.md](build-system.md) §15.1).
 3. The pull request that closes a task has passed every T2 suite that the task lists, and the result is linked (§5.1).
 4. Host-dependent T1 suites that cannot run on the hosted VM pass on a real Apple Silicon Mac, and their result is linked in the pull request.
 5. One maintainer approval (§6.1), and the security review where §6.3 requires it.
@@ -354,7 +354,7 @@ T2 suites are not a merge check for other pull requests. T3 runs nightly and gat
 | Force pushes and deletion | blocked |
 | Apply to administrators | on |
 
-`linux-guest` is not a required status check, because it runs only when its path filter matches. The reviewer checks it for matching pull requests. `workflow-policy` is the required metadata-only check for pull requests targeting `main`; it runs trusted code from `main` and checks that CI control changes have an approved review on the current head and that the same human reviewer applied `ci-policy-approved`. Removing that label revokes the check. Any new commit, reopening, later label event, or PR edit resets this check; the reviewer removes and reapplies the policy label last. To revoke the CI-policy approval, remove the label. Branch protection separately requires an active PR approval.
+`linux-guest` is not a required pull-request status check while `integration.yml` has no pull-request trigger and uses the persistent lab Mac only for trusted `main` code. Until disposable lab capacity is available, the reviewer checks the maintainer-run T2 result linked from each task-closing PR. Once disposable capacity is provisioned, enable the matching pull-request trigger and require its check for matching changes. `workflow-policy` is the required metadata-only check for pull requests targeting `main`; it runs trusted code from `main` and checks that CI control changes have an approved review on the current head and that the same human reviewer applied `ci-policy-approved`. Removing that label revokes the check. Any new commit, reopening, later label event, or PR edit resets this check; the reviewer removes and reapplies the policy label last. To revoke the CI-policy approval, remove the label. Branch protection separately requires an active PR approval.
 
 ### 7.4 A red `main`
 

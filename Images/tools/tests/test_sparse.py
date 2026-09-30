@@ -20,6 +20,7 @@ from apkrun_image.sparse import (
     iter_chunks,
     read_header,
     read_range,
+    read_ranges,
     validate,
 )
 
@@ -71,6 +72,20 @@ def test_sparse_range_expands_raw_fill_and_dont_care_chunks() -> None:
 
     assert read_range(io.BytesIO(raw), 0, len(expanded)) == expanded
     assert read_range(io.BytesIO(raw), 2, 8) == expanded[2:10]
+
+
+def test_sparse_ranges_merge_overlaps_and_read_in_one_pass() -> None:
+    """Multiple requested ranges preserve caller order across sparse chunk types."""
+    raw, expanded = sparse_fixture()
+    ranges = [(2, 8), (0, 4), (12, 0), (4, 8), (1, 3)]
+
+    assert read_ranges(io.BytesIO(raw), ranges) == [
+        expanded[2:10],
+        expanded[0:4],
+        b"",
+        expanded[4:12],
+        expanded[1:4],
+    ]
 
 
 @pytest.mark.parametrize(

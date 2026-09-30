@@ -7,6 +7,7 @@ import http.client
 import json
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
@@ -177,6 +178,189 @@ def test_build_api_downloads_signed_artifact_and_writes_hash(
     assert records[0].sha256 == expected_digest
     assert fake_api.download_requests == [None]
     assert not (tmp_path / f"{ARTIFACT_NAME}.partial").exists()
+
+
+def test_concurrent_fetches_for_one_directory_are_serialized(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+) -> None:
+    """Concurrent callers share one verified download and its manifest record."""
+    output_directory = tmp_path / "download"
+    arguments = fetch_arguments(output_directory, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(fetch_artifacts, **arguments) for _ in range(2)]
+        results = [future.result() for future in futures]
+
+    assert results[0] == results[1]
+    assert fake_api.download_requests == [None]
+    assert (output_directory / ARTIFACT_NAME).read_bytes() == ARTIFACT_BYTES
+    assert not (output_directory / f"{ARTIFACT_NAME}.partial").exists()
+    assert not (tmp_path / ".download.apkrun-fetch.lock").exists()
+
+
+def test_fetch_lock_stays_stable_if_the_output_directory_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Renaming the output directory cannot bypass its parent-directory lock."""
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release_first = threading.Event()
+    call_count = 0
+
+    def blocked_fetch(**_arguments: object) -> list[object]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_entered.set()
+        return []
+
+    monkeypatch.setattr(fetch_module, "_fetch_artifacts_locked", blocked_fetch)
+    output_directory = tmp_path / "download"
+    arguments = fetch_arguments(output_directory, "test-secret")
+    output_directory = arguments["output_directory"]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(fetch_artifacts, **arguments)
+        assert first_entered.wait(timeout=5)
+        output_directory.rename(tmp_path / "moved-output")
+        output_directory.mkdir()
+        second = executor.submit(fetch_artifacts, **arguments)
+
+        assert not second_entered.wait(timeout=0.1)
+        release_first.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    assert second_entered.is_set()
+
+
+def test_partial_cleanup_preserves_a_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup restores a replacement when the partial path changes before rename."""
+    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
+    partial.write_bytes(b"owned partial")
+    expected_identity = fetch_module._file_identity(partial.stat())
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"other process")
+    real_rename = fetch_module.os.rename
+    swapped = False
+
+    def swap_then_rename(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped
+        if source == partial.name and ".cleanup-" in destination and not swapped:
+            swapped = True
+            replacement.replace(partial)
+        real_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(fetch_module.os, "rename", swap_then_rename)
+    directory_descriptor = fetch_module.os.open(tmp_path, fetch_module.os.O_RDONLY)
+    try:
+        fetch_module._cleanup_owned_partial(
+            directory_descriptor,
+            partial.name,
+            expected_identity,
+        )
+    finally:
+        fetch_module.os.close(directory_descriptor)
+
+    assert swapped
+    assert partial.read_bytes() == b"other process"
+    assert not list(tmp_path.glob("*.cleanup-*"))
+    assert not list(tmp_path.glob(".*.cleanup-*"))
+
+
+def test_api_artifact_sizes_reject_fractional_numbers() -> None:
+    """A fractional JSON number cannot be truncated into a different size."""
+    with pytest.raises(FetchError, match="invalid size"):
+        fetch_module._positive_size(1.9, ARTIFACT_NAME)
+
+    assert fetch_module._positive_size("19", ARTIFACT_NAME) == 19
+
+
+def test_api_json_response_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API metadata is read with a hard byte limit."""
+    requested_sizes: list[int] = []
+
+    class OversizedResponse:
+        def __enter__(self) -> OversizedResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, size: int) -> bytes:
+            requested_sizes.append(size)
+            return b"x" * size
+
+    monkeypatch.setattr(fetch_module, "urlopen", lambda *_args, **_kwargs: OversizedResponse())
+
+    with pytest.raises(FetchError, match="response exceeds"):
+        fetch_module._request_json("http://127.0.0.1/metadata")
+
+    assert requested_sizes == [fetch_module.MAX_API_RESPONSE_SIZE + 1]
+
+
+def test_api_pagination_has_a_page_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unique continuation tokens cannot make metadata listing run indefinitely."""
+    page_count = 0
+
+    def next_page(*_arguments: object, **_keywords: object) -> dict[str, object]:
+        nonlocal page_count
+        page_count += 1
+        return {"artifacts": [], "nextPageToken": f"page-{page_count}"}
+
+    monkeypatch.setattr(fetch_module, "_request_json", next_page)
+
+    with pytest.raises(FetchError, match="more than 100 artifact pages"):
+        fetch_module._list_artifacts(
+            base_url="http://127.0.0.1",
+            api_key="test",
+            build_id="1",
+            target="target-userdebug",
+            pattern="*.zip",
+        )
+
+    assert page_count == fetch_module.MAX_API_PAGES
+
+
+def test_api_pagination_rejects_oversized_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Continuation tokens cannot grow retained state without a bound."""
+    monkeypatch.setattr(
+        fetch_module,
+        "_request_json",
+        lambda *_arguments, **_keywords: {
+            "artifacts": [],
+            "nextPageToken": "x" * (fetch_module.MAX_PAGE_TOKEN_SIZE + 1),
+        },
+    )
+
+    with pytest.raises(FetchError, match="pagination token exceeds"):
+        fetch_module._list_artifacts(
+            base_url="http://127.0.0.1",
+            api_key="test",
+            build_id="1",
+            target="target-userdebug",
+            pattern="*.zip",
+        )
 
 
 def test_interrupted_download_resumes_with_http_range(
@@ -353,111 +537,170 @@ def test_finalization_does_not_publish_a_staging_symlink(
     fake_api: FakeBuildAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A source swap at the atomic link cannot publish or overwrite an artifact."""
-    fake_api.include_digest = False
+    """A private read-only staging directory blocks path replacement."""
     victim = tmp_path / "outside"
     victim.write_bytes(b"keep the victim intact")
+    final = tmp_path / ARTIFACT_NAME
+    real_link = fetch_module.os.link
+    replacement_was_blocked = False
+
+    def link_after_swap_attempt(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal replacement_was_blocked
+        staging_path = next(tmp_path.glob(".*.finalizing")) / source
+        try:
+            staging_path.unlink()
+            staging_path.symlink_to(victim)
+        except PermissionError:
+            replacement_was_blocked = True
+        real_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(fetch_module.os, "link", link_after_swap_attempt)
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    fetch_artifacts(**arguments)
+
+    assert replacement_was_blocked
+    assert victim.read_bytes() == b"keep the victim intact"
+    assert final.read_bytes() == ARTIFACT_BYTES
+    assert not list(tmp_path.glob(".*.finalizing"))
+
+
+def test_finalization_rejects_staged_inode_writes(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private staged inode is read-only before its final link is published."""
+    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
+    final = tmp_path / ARTIFACT_NAME
+    real_link = fetch_module.os.link
+    write_was_blocked = False
+
+    def link_after_write_attempt(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal write_was_blocked
+        staging_path = next(tmp_path.glob(".*.finalizing")) / source
+        try:
+            with staging_path.open("r+b") as staged:
+                staged.write(b"x" * len(ARTIFACT_BYTES))
+        except PermissionError:
+            write_was_blocked = True
+        real_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(fetch_module.os, "link", link_after_write_attempt)
+    arguments = fetch_arguments(tmp_path, "test-secret")
+    arguments["api_base_url"] = fake_api.base_url
+
+    fetch_artifacts(**arguments)
+
+    assert write_was_blocked
+    assert final.read_bytes() == ARTIFACT_BYTES
+    assert not partial.exists()
+
+
+def test_finalization_preserves_a_competing_final_path(
+    tmp_path: Path,
+    fake_api: FakeBuildAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A competing final path is preserved when it replaces our atomic link."""
+    final = tmp_path / ARTIFACT_NAME
+    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
+    replacement = b"replacement at the final path"
     real_link = fetch_module.os.link
 
-    def link_after_swap(source: Path, destination: Path, *, follow_symlinks: bool) -> None:
-        Path(source).unlink()
-        Path(source).symlink_to(victim)
-        real_link(source, destination, follow_symlinks=follow_symlinks)
+    def link_then_replace_path(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        real_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+        final.unlink()
+        final.write_bytes(replacement)
 
-    monkeypatch.setattr(fetch_module.os, "link", link_after_swap)
+    monkeypatch.setattr(fetch_module.os, "link", link_then_replace_path)
     arguments = fetch_arguments(tmp_path, "test-secret")
     arguments["api_base_url"] = fake_api.base_url
 
     with pytest.raises(FetchError, match="changed during finalization"):
         fetch_artifacts(**arguments)
 
-    assert victim.read_bytes() == b"keep the victim intact"
-    assert not (tmp_path / ARTIFACT_NAME).exists()
-    assert not list(tmp_path.glob(".*.finalizing"))
-
-
-def test_finalization_rehashes_the_staged_inode(
-    tmp_path: Path,
-    fake_api: FakeBuildAPI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Same-size writes after the copy hash fail the post-publication hash check."""
-    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
-    real_link = fetch_module.os.link
-    replacement = b"x" * len(ARTIFACT_BYTES)
-
-    def link_after_mutation(source: Path, destination: Path, *, follow_symlinks: bool) -> None:
-        with Path(source).open("r+b") as staged:
-            staged.write(replacement)
-            staged.flush()
-        real_link(source, destination, follow_symlinks=follow_symlinks)
-
-    monkeypatch.setattr(fetch_module.os, "link", link_after_mutation)
-    arguments = fetch_arguments(tmp_path, "test-secret")
-    arguments["api_base_url"] = fake_api.base_url
-
-    with pytest.raises(FetchError, match="changed while it was being finalized"):
-        fetch_artifacts(**arguments)
-
-    assert not (tmp_path / ARTIFACT_NAME).exists()
-    assert partial.read_bytes() == ARTIFACT_BYTES
-
-
-def test_finalization_rechecks_the_path_after_hashing(
-    tmp_path: Path,
-    fake_api: FakeBuildAPI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replacing the final path while its descriptor is hashed cannot pass."""
-    final = tmp_path / ARTIFACT_NAME
-    partial = tmp_path / f"{ARTIFACT_NAME}.partial"
-    replacement = b"replacement at the final path"
-    real_hash = fetch_module._sha256_descriptor
-
-    def hash_then_replace_path(descriptor: int) -> str:
-        digest = real_hash(descriptor)
-        final.unlink()
-        final.write_bytes(replacement)
-        return digest
-
-    monkeypatch.setattr(fetch_module, "_sha256_descriptor", hash_then_replace_path)
-    arguments = fetch_arguments(tmp_path, "test-secret")
-    arguments["api_base_url"] = fake_api.base_url
-
-    with pytest.raises(FetchError, match="changed while it was being finalized"):
-        fetch_artifacts(**arguments)
-
     assert final.read_bytes() == replacement
     assert partial.read_bytes() == ARTIFACT_BYTES
 
 
-def test_finalization_detects_in_place_writes_after_hashing(
+def test_interruption_after_atomic_publication_leaves_a_complete_artifact(
     tmp_path: Path,
     fake_api: FakeBuildAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A same-inode write after hashing is detected by the post-hash stat."""
+    """An interruption after link publication cannot expose truncated bytes."""
     final = tmp_path / ARTIFACT_NAME
     partial = tmp_path / f"{ARTIFACT_NAME}.partial"
-    replacement = b"x" * len(ARTIFACT_BYTES)
-    real_hash = fetch_module._sha256_descriptor
+    real_link = fetch_module.os.link
 
-    def hash_then_mutate_inode(descriptor: int) -> str:
-        digest = real_hash(descriptor)
-        with final.open("r+b") as stream:
-            stream.write(replacement)
-            stream.flush()
-        return digest
+    def link_then_interrupt(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        real_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+        raise KeyboardInterrupt
 
-    monkeypatch.setattr(fetch_module, "_sha256_descriptor", hash_then_mutate_inode)
+    monkeypatch.setattr(fetch_module.os, "link", link_then_interrupt)
     arguments = fetch_arguments(tmp_path, "test-secret")
     arguments["api_base_url"] = fake_api.base_url
 
-    with pytest.raises(FetchError, match="changed while it was being finalized"):
+    with pytest.raises(KeyboardInterrupt):
         fetch_artifacts(**arguments)
 
-    assert not final.exists()
+    assert final.read_bytes() == ARTIFACT_BYTES
     assert partial.read_bytes() == ARTIFACT_BYTES
+    assert not list(tmp_path.glob(".*.finalizing"))
 
 
 def test_finalization_never_overwrites_an_existing_artifact(tmp_path: Path) -> None:

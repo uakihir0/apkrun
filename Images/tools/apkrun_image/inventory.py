@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -30,6 +31,12 @@ from apkrun_image.sparse import (
 MAX_TEXT_SIZE = 1024 * 1024
 MAX_VENDOR_RAMDISK_TABLE_SIZE = 16 * 1024 * 1024
 MAX_VENDOR_RAMDISK_ENTRIES = 4096
+MAX_ARCHIVE_SIZE = 16 * 1024 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 4096
+MAX_CENTRAL_DIRECTORY_SIZE = 64 * 1024 * 1024
+MAX_ZIP64_RECORD_SIZE = 1024 * 1024
+MAX_MEMBER_SIZE = 16 * 1024 * 1024 * 1024
+MAX_TOTAL_INPUT_SIZE = 64 * 1024 * 1024 * 1024
 HASH_CHUNK_SIZE = 1024 * 1024
 VENDOR_RAMDISK_TYPES = {
     0: "NONE",
@@ -78,6 +85,8 @@ class InputFile:
     path: str
     size: int
     open_stream: Callable[[], BinaryIO]
+    source_path: Path | None = None
+    expected_version: tuple[int, int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -462,7 +471,7 @@ def _parse_filesystem_at(
     magic = struct.unpack_from("<I", superblock, 0)[0]
     if magic == 0xE0F5E1E2:
         block_size_bits = superblock[12]
-        block_count = struct.unpack_from("<I", superblock, 32)[0]
+        block_count = struct.unpack_from("<I", superblock, 36)[0]
         if block_size_bits > 16:
             raise InventoryError(f"invalid EROFS block size {block_size_bits}")
         filesystem_size = block_count << block_size_bits
@@ -694,13 +703,21 @@ def _with_avb_footer(
     )
 
 
-def _hash_stream(stream: BinaryIO, expected_size: int, path: str) -> str:
+def _hash_stream(
+    stream: BinaryIO,
+    expected_size: int,
+    path: str,
+    *,
+    maximum_size: int | None = None,
+) -> str:
     """Hash an input file and verify that it did not change while being read."""
     digest = hashlib.sha256()
     size = 0
     while chunk := stream.read(HASH_CHUNK_SIZE):
         digest.update(chunk)
         size += len(chunk)
+        if size > expected_size or (maximum_size is not None and size > maximum_size):
+            raise InventoryError(f"{path}: input expanded beyond its declared size limit")
     if size != expected_size:
         raise InventoryError(f"{path}: changed size while the inventory was being generated")
     try:
@@ -714,8 +731,34 @@ def _inventory_file(entry: InputFile) -> dict[str, object]:
     """Hash and classify one regular file using read-only access."""
     try:
         with entry.open_stream() as stream:
-            digest = _hash_stream(stream, entry.size, entry.path)
+            initial_version = entry.expected_version
+            if entry.source_path is not None:
+                opened_stat = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(opened_stat.st_mode)
+                    or initial_version is None
+                    or _file_version(opened_stat) != initial_version
+                ):
+                    raise InventoryError(f"{entry.path}: input file changed before inventory")
+            digest = _hash_stream(
+                stream,
+                entry.size,
+                entry.path,
+                maximum_size=MAX_MEMBER_SIZE,
+            )
             classification = _classify(stream, entry.size, entry.path)
+            if entry.source_path is not None:
+                final_stat = os.fstat(stream.fileno())
+                path_stat = entry.source_path.lstat()
+                if (
+                    initial_version is None
+                    or _file_version(final_stat) != initial_version
+                    or _file_version(path_stat) != initial_version
+                    or not stat.S_ISREG(path_stat.st_mode)
+                ):
+                    raise InventoryError(f"{entry.path}: input file changed during inventory")
+    except InventoryError:
+        raise
     except (OSError, RuntimeError, zipfile.BadZipFile) as error:
         raise InventoryError(f"{entry.path}: could not read input file: {error}") from error
     return classification.as_dict(entry.path, entry.size, digest)
@@ -734,18 +777,42 @@ def _validate_member_path(value: str) -> str:
 def _directory_entries(directory: Path) -> list[InputFile]:
     """Collect regular files without following symlinks."""
     entries: list[InputFile] = []
+    total_size = 0
     for path in directory.rglob("*"):
-        if path.is_symlink():
+        try:
+            path_stat = path.lstat()
+        except OSError as error:
+            raise InventoryError(f"{path}: input path changed during inventory") from error
+        if stat.S_ISLNK(path_stat.st_mode):
             raise InventoryError(f"input directory contains a symbolic link: {path}")
-        if not path.is_file():
+        if not stat.S_ISREG(path_stat.st_mode):
             continue
+        if len(entries) >= MAX_ARCHIVE_ENTRIES:
+            raise InventoryError(f"input directory exceeds the {MAX_ARCHIVE_ENTRIES}-file limit")
+        if path_stat.st_size > MAX_MEMBER_SIZE:
+            raise InventoryError(
+                f"{path}: file exceeds the {MAX_MEMBER_SIZE}-byte member-size limit"
+            )
+        total_size += path_stat.st_size
+        if total_size > MAX_TOTAL_INPUT_SIZE:
+            raise InventoryError(
+                f"input directory exceeds the {MAX_TOTAL_INPUT_SIZE}-byte total-size limit"
+            )
         member = path.relative_to(directory).as_posix()
-        file_size = path.stat().st_size
+        expected_version = _file_version(path_stat)
         entries.append(
             InputFile(
                 path=member,
-                size=file_size,
-                open_stream=lambda file_path=path: file_path.open("rb"),
+                size=path_stat.st_size,
+                open_stream=partial(
+                    _open_directory_file,
+                    directory,
+                    member,
+                    path,
+                    expected_version,
+                ),
+                source_path=path,
+                expected_version=expected_version,
             )
         )
     return sorted(entries, key=lambda entry: entry.path.encode("utf-8"))
@@ -755,7 +822,20 @@ def _zip_entries(archive: zipfile.ZipFile) -> list[InputFile]:
     """Collect regular archive entries and reject unsafe or duplicate paths."""
     entries: list[InputFile] = []
     seen: set[str] = set()
-    for info in archive.infolist():
+    infos = archive.infolist()
+    if len(infos) > MAX_ARCHIVE_ENTRIES:
+        raise InventoryError(f"zip archive exceeds the {MAX_ARCHIVE_ENTRIES}-entry limit")
+    total_size = 0
+    for info in infos:
+        if info.file_size > MAX_MEMBER_SIZE:
+            raise InventoryError(
+                f"{info.filename}: zip entry exceeds the {MAX_MEMBER_SIZE}-byte size limit"
+            )
+        total_size += info.file_size
+        if total_size > MAX_TOTAL_INPUT_SIZE:
+            raise InventoryError(
+                f"zip archive exceeds the {MAX_TOTAL_INPUT_SIZE}-byte expanded-size limit"
+            )
         if info.is_dir():
             continue
         member = _validate_member_path(info.filename)
@@ -787,6 +867,50 @@ def _file_version(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
         file_stat.st_mtime_ns,
         file_stat.st_ctime_ns,
     )
+
+
+def _open_directory_file(
+    root: Path,
+    relative_path: str,
+    path: Path,
+    expected_version: tuple[int, int, int, int, int],
+) -> BinaryIO:
+    """Open one inventoried path without following swapped directory symlinks."""
+    directory_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0)
+    directory_descriptor = -1
+    file_descriptor = -1
+    try:
+        directory_descriptor = os.open(root, directory_flags)
+        if not stat.S_ISDIR(os.fstat(directory_descriptor).st_mode):
+            raise InventoryError(f"{path}: input directory changed before it could be opened")
+        components = PurePosixPath(relative_path).parts
+        for component in components[:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptor,
+            )
+            previous_descriptor = directory_descriptor
+            directory_descriptor = next_descriptor
+            os.close(previous_descriptor)
+        file_descriptor = os.open(
+            components[-1],
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_descriptor,
+        )
+        opened_stat = os.fstat(file_descriptor)
+        if not stat.S_ISREG(opened_stat.st_mode) or _file_version(opened_stat) != expected_version:
+            raise InventoryError(f"{path}: input file changed before it could be opened")
+        stream = os.fdopen(file_descriptor, "rb")
+        file_descriptor = -1
+        return stream
+    except OSError as error:
+        raise InventoryError(f"{path}: input file changed before it could be opened") from error
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
 
 
 def _fetch_context(
@@ -884,6 +1008,180 @@ def _fetch_context(
     }
 
 
+def _zip_entry_count(stream: BinaryIO, source: Path) -> int:
+    """Count central-directory records before ZipFile materializes them."""
+    try:
+        original_position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        source_size = stream.tell()
+        tail_size = min(source_size, 22 + 0xFFFF + 20 + 56)
+        stream.seek(source_size - tail_size)
+        tail = stream.read(tail_size)
+    except OSError as error:
+        raise InventoryError(f"{source}: could not inspect zip directory bounds") from error
+    finally:
+        try:
+            stream.seek(original_position)
+        except (OSError, UnboundLocalError):
+            pass
+
+    end_signature = b"PK\x05\x06"
+    offset = len(tail)
+    end_record_offset = -1
+    total_entries = -1
+    while True:
+        offset = tail.rfind(end_signature, 0, offset)
+        if offset < 0:
+            break
+        if offset + 22 <= len(tail):
+            comment_size = struct.unpack_from("<H", tail, offset + 20)[0]
+            if offset + 22 + comment_size == len(tail):
+                end_record_offset = offset
+                total_entries = struct.unpack_from("<H", tail, offset + 10)[0]
+                break
+        if offset == 0:
+            break
+    if end_record_offset < 0:
+        raise InventoryError(f"{source}: zip archive has no valid end-of-directory record")
+    absolute_end_record = source_size - tail_size + end_record_offset
+    (
+        _signature,
+        disk_number,
+        directory_disk,
+        entries_on_disk,
+        total_entries,
+        directory_size,
+        directory_offset,
+        _comment_size,
+    ) = struct.unpack_from("<4s4H2IH", tail, end_record_offset)
+    directory_end = absolute_end_record
+
+    zip64_sentinels = (
+        entries_on_disk == 0xFFFF
+        or total_entries == 0xFFFF
+        or directory_size == 0xFFFFFFFF
+        or directory_offset == 0xFFFFFFFF
+    )
+    if zip64_sentinels:
+        locator_offset = absolute_end_record - 20
+        if locator_offset < 0:
+            raise InventoryError(f"{source}: zip64 archive has no locator")
+        try:
+            stream.seek(locator_offset)
+            locator = stream.read(20)
+            if len(locator) != 20:
+                raise InventoryError(f"{source}: zip64 locator is truncated")
+            locator_signature, locator_disk, zip64_offset, disk_count = struct.unpack(
+                "<4sIQI", locator
+            )
+            if locator_signature != b"PK\x06\x07" or locator_disk != 0 or disk_count != 1:
+                raise InventoryError(f"{source}: zip64 archive has no valid single-disk locator")
+            if zip64_offset > source_size - 56:
+                raise InventoryError(f"{source}: zip64 directory record is out of bounds")
+        except OSError as error:
+            raise InventoryError(f"{source}: could not inspect zip64 directory bounds") from error
+
+        zip64_record_offset = -1
+        zip64_record = b""
+        search_start = max(0, locator_offset - MAX_ZIP64_RECORD_SIZE - 12)
+        try:
+            stream.seek(search_start)
+            search_region = stream.read(locator_offset - search_start)
+        except OSError as error:
+            raise InventoryError(f"{source}: could not inspect zip64 directory bounds") from error
+        signature_offset = len(search_region)
+        while True:
+            signature_offset = search_region.rfind(b"PK\x06\x06", 0, signature_offset)
+            if signature_offset < 0:
+                break
+            absolute_offset = search_start + signature_offset
+            if signature_offset + 12 <= len(search_region):
+                record_size = struct.unpack_from("<Q", search_region, signature_offset + 4)[0]
+                if (
+                    44 <= record_size <= MAX_ZIP64_RECORD_SIZE
+                    and absolute_offset + 12 + record_size == locator_offset
+                ):
+                    zip64_record_offset = absolute_offset
+                    zip64_record = search_region[signature_offset : signature_offset + 56]
+                    break
+            if signature_offset == 0:
+                break
+
+        if len(zip64_record) != 56:
+            raise InventoryError(f"{source}: zip64 directory record is truncated")
+        (
+            zip64_signature,
+            record_size,
+            _version_made,
+            _version_needed,
+            zip64_disk_number,
+            zip64_directory_disk,
+            entries_on_disk,
+            total_entries,
+            directory_size,
+            directory_offset,
+        ) = struct.unpack("<4sQ2H2I4Q", zip64_record)
+        if (
+            zip64_signature != b"PK\x06\x06"
+            or record_size != 44
+            or zip64_record_offset + 12 + record_size != locator_offset
+        ):
+            raise InventoryError(
+                f"{source}: zip64 end records with extensible data are unsupported"
+            )
+        if zip64_disk_number != 0 or zip64_directory_disk != 0:
+            raise InventoryError(f"{source}: multi-disk zip archives are unsupported")
+        directory_end = zip64_record_offset
+    elif disk_number != 0 or directory_disk != 0:
+        raise InventoryError(f"{source}: multi-disk zip archives are unsupported")
+
+    if entries_on_disk != total_entries:
+        raise InventoryError(f"{source}: multi-disk zip archives are unsupported")
+    if directory_size > MAX_CENTRAL_DIRECTORY_SIZE:
+        raise InventoryError(
+            f"{source}: zip central directory exceeds the {MAX_CENTRAL_DIRECTORY_SIZE}-byte limit"
+        )
+    directory_start = directory_end - directory_size
+    if directory_start < 0 or directory_offset > directory_start:
+        raise InventoryError(f"{source}: zip central-directory bounds are invalid")
+
+    actual_entries = 0
+    cursor = directory_start
+    while cursor < directory_end:
+        try:
+            stream.seek(cursor)
+            header = stream.read(46)
+        except OSError as error:
+            raise InventoryError(f"{source}: could not inspect zip central directory") from error
+        if len(header) < 6:
+            raise InventoryError(f"{source}: zip central-directory record is truncated")
+        signature = header[:4]
+        if signature == b"PK\x05\x05":
+            signature_size = struct.unpack_from("<H", header, 4)[0]
+            if cursor + 6 + signature_size != directory_end:
+                raise InventoryError(f"{source}: zip central-directory signature is invalid")
+            cursor = directory_end
+            break
+        if len(header) != 46 or signature != b"PK\x01\x02":
+            raise InventoryError(f"{source}: zip central-directory record is invalid")
+        name_size, extra_size, comment_size = struct.unpack_from("<HHH", header, 28)
+        next_cursor = cursor + 46 + name_size + extra_size + comment_size
+        if next_cursor > directory_end:
+            raise InventoryError(f"{source}: zip central-directory record is out of bounds")
+        actual_entries += 1
+        if actual_entries > MAX_ARCHIVE_ENTRIES:
+            stream.seek(original_position)
+            return actual_entries
+        cursor = next_cursor
+
+    if cursor != directory_end or actual_entries != total_entries:
+        raise InventoryError(
+            f"{source}: zip central-directory entry count does not match its end record"
+        )
+    stream.seek(original_position)
+    return actual_entries
+
+
 def _inventory_archive(
     source: Path,
     fetch_context: dict[str, object] | None,
@@ -898,6 +1196,15 @@ def _inventory_archive(
         if not stat.S_ISREG(initial_stat.st_mode):
             raise InventoryError(f"{source}: zip archive must be a regular file")
         archive_size = initial_stat.st_size
+        if archive_size > MAX_ARCHIVE_SIZE:
+            raise InventoryError(
+                f"{source}: zip archive exceeds the {MAX_ARCHIVE_SIZE}-byte input limit"
+            )
+        entry_count = _zip_entry_count(stream, source)
+        if entry_count > MAX_ARCHIVE_ENTRIES:
+            raise InventoryError(
+                f"{source}: zip archive exceeds the {MAX_ARCHIVE_ENTRIES}-entry limit"
+            )
         archive_sha256 = _hash_stream(stream, archive_size, str(source))
         source_info: dict[str, object] = {
             "name": source.name,
@@ -949,6 +1256,8 @@ def _inventory_archive(
 def inventory(source_path: Path) -> dict[str, object]:
     """Build a deterministic inventory from a zip archive or unpacked directory."""
     source = source_path.expanduser()
+    if source.is_symlink():
+        raise InventoryError(f"{source}: input must not be a symbolic link")
     if source.is_dir():
         fetch_context = _fetch_context(source)
         if fetch_context is not None:
@@ -1040,7 +1349,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stdout.write(output)
         else:
             output_path = arguments.out.expanduser()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
             source_path = arguments.source.expanduser()
             resolved_output = output_path.resolve()
             resolved_source = source_path.resolve()
@@ -1048,6 +1356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise InventoryError("inventory output must be outside the input directory")
             if source_path.is_file() and resolved_output == resolved_source:
                 raise InventoryError("inventory output must not replace the input archive")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             _write_inventory(output_path, output)
     except (InventoryError, LpMetadataError, SparseImageError, OSError) as error:
         print(

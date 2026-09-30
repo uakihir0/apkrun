@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from apkrun_image.sparse import read_range as read_sparse_range
+from apkrun_image.sparse import (
+    read_range as read_sparse_range,
+)
+from apkrun_image.sparse import (
+    read_ranges as read_sparse_ranges,
+)
 
 LP_GEOMETRY_MAGIC = 0x616C4467
 LP_METADATA_MAGIC = 0x414C5030
@@ -38,12 +44,28 @@ class Geometry:
 
 
 @dataclass(frozen=True)
+class Extent:
+    """One ordered liblp extent mapping logical sectors to a backing device."""
+
+    sector_count: int
+    target_type: int
+    target_data: int
+    target_source: int
+
+    @property
+    def size(self) -> int:
+        """Return this extent's logical size in bytes."""
+        return self.sector_count * SECTOR_SIZE
+
+
+@dataclass(frozen=True)
 class LogicalPartition:
-    """A logical partition and its group."""
+    """A logical partition, its group, and its ordered backing extents."""
 
     name: str
     size: int
     group: str
+    extents: tuple[Extent, ...]
 
 
 @dataclass(frozen=True)
@@ -217,13 +239,15 @@ def parse_metadata(data: bytes, geometry: Geometry) -> Metadata:
             raise LpMetadataError(f"liblp block device {index} has a zero size")
         device_sizes.append(device_size)
 
-    extent_sizes: list[int] = []
+    parsed_extents: list[Extent] = []
     extent_offset, extent_count, extent_entry_size = extents
     for index in range(extent_count):
         entry_offset = extent_offset + index * extent_entry_size
         sector_count, target_type, target_data, target_source = struct.unpack_from(
             "<QIQI", tables, entry_offset
         )
+        if sector_count == 0:
+            raise LpMetadataError(f"liblp extent {index} has a zero sector count")
         if target_type == 0:
             if target_source >= len(device_sizes):
                 raise LpMetadataError(f"liblp linear extent {index} references a missing device")
@@ -234,7 +258,14 @@ def parse_metadata(data: bytes, geometry: Geometry) -> Metadata:
                 )
         elif target_type != 1:
             raise LpMetadataError(f"liblp extent {index} has unsupported target type {target_type}")
-        extent_sizes.append(sector_count * SECTOR_SIZE)
+        parsed_extents.append(
+            Extent(
+                sector_count=sector_count,
+                target_type=target_type,
+                target_data=target_data,
+                target_source=target_source,
+            )
+        )
 
     logical_partitions: list[LogicalPartition] = []
     partition_names: set[str] = set()
@@ -251,13 +282,19 @@ def parse_metadata(data: bytes, geometry: Geometry) -> Metadata:
         _attributes, first_extent, extent_count, group_index = struct.unpack_from(
             "<IIII", tables, entry_offset + 36
         )
-        if first_extent > len(extent_sizes) or extent_count > len(extent_sizes) - first_extent:
+        if first_extent > len(parsed_extents) or extent_count > len(parsed_extents) - first_extent:
             raise LpMetadataError(f"liblp partition {name!r} references missing extents")
         if group_index >= len(group_names):
             raise LpMetadataError(f"liblp partition {name!r} references a missing group")
-        size = sum(extent_sizes[first_extent : first_extent + extent_count])
+        partition_extents = tuple(parsed_extents[first_extent : first_extent + extent_count])
+        size = sum(extent.size for extent in partition_extents)
         logical_partitions.append(
-            LogicalPartition(name=name, size=size, group=group_names[group_index])
+            LogicalPartition(
+                name=name,
+                size=size,
+                group=group_names[group_index],
+                extents=partition_extents,
+            )
         )
 
     first_device = tables[device_offset : device_offset + device_entry_size]
@@ -303,3 +340,147 @@ def read_dynamic_partitions(stream: BinaryIO, *, sparse: bool = False) -> Metada
     if metadata.block_device_size > image_size:
         raise LpMetadataError("liblp block device size exceeds the image")
     return metadata
+
+
+def read_partition_range(
+    stream: BinaryIO,
+    partition: LogicalPartition,
+    offset: int,
+    size: int,
+    *,
+    sparse: bool = False,
+) -> bytes:
+    """Read a partition-relative range across its ordered liblp extents."""
+    if offset < 0 or size < 0:
+        raise LpMetadataError("logical partition range cannot be negative")
+    if offset > partition.size or size > partition.size - offset:
+        raise LpMetadataError(f"logical partition {partition.name!r} range extends past its size")
+    if size == 0:
+        return b""
+
+    output = bytearray()
+    requested_end = offset + size
+    logical_offset = 0
+    for extent_index, extent in enumerate(partition.extents):
+        extent_end = logical_offset + extent.size
+        start = max(offset, logical_offset)
+        end = min(requested_end, extent_end)
+        if start < end:
+            extent_offset = start - logical_offset
+            extent_size = end - start
+            if extent.target_type == 1:
+                output.extend(b"\0" * extent_size)
+            elif extent.target_type == 0:
+                if extent.target_source != 0:
+                    raise LpMetadataError(
+                        f"logical partition {partition.name!r} extent {extent_index} "
+                        f"uses external block device {extent.target_source}"
+                    )
+                image_offset = extent.target_data * SECTOR_SIZE + extent_offset
+                if sparse:
+                    output.extend(read_sparse_range(stream, image_offset, extent_size))
+                else:
+                    stream.seek(image_offset)
+                    chunk = stream.read(extent_size)
+                    if len(chunk) != extent_size:
+                        raise LpMetadataError(
+                            f"logical partition {partition.name!r} extent {extent_index} "
+                            "is truncated"
+                        )
+                    output.extend(chunk)
+            else:
+                raise LpMetadataError(
+                    f"logical partition {partition.name!r} has unsupported target type "
+                    f"{extent.target_type}"
+                )
+        logical_offset = extent_end
+        if len(output) == size:
+            return bytes(output)
+
+    raise LpMetadataError(
+        f"logical partition {partition.name!r} extents supplied {len(output)} "
+        f"of {size} requested bytes"
+    )
+
+
+def read_partition_ranges(
+    stream: BinaryIO,
+    partitions: Sequence[LogicalPartition],
+    offset: int,
+    size: int,
+    *,
+    sparse: bool = False,
+) -> list[bytes]:
+    """Read the same partition-relative range from several partitions in one pass."""
+    if offset < 0 or size < 0:
+        raise LpMetadataError("logical partition range cannot be negative")
+    outputs = [bytearray(size) for _ in partitions]
+    pending_reads: list[tuple[int, int, int, int]] = []
+
+    for partition_index, partition in enumerate(partitions):
+        if offset > partition.size or size > partition.size - offset:
+            raise LpMetadataError(
+                f"logical partition {partition.name!r} range extends past its size"
+            )
+        if size == 0:
+            continue
+
+        requested_end = offset + size
+        logical_offset = 0
+        supplied = 0
+        for extent_index, extent in enumerate(partition.extents):
+            extent_end = logical_offset + extent.size
+            start = max(offset, logical_offset)
+            end = min(requested_end, extent_end)
+            if start < end:
+                extent_offset = start - logical_offset
+                extent_size = end - start
+                output_offset = start - offset
+                supplied += extent_size
+                if extent.target_type == 1:
+                    outputs[partition_index][output_offset : output_offset + extent_size] = (
+                        b"\0" * extent_size
+                    )
+                elif extent.target_type == 0:
+                    if extent.target_source != 0:
+                        raise LpMetadataError(
+                            f"logical partition {partition.name!r} extent {extent_index} "
+                            f"uses external block device {extent.target_source}"
+                        )
+                    physical_offset = extent.target_data * SECTOR_SIZE + extent_offset
+                    pending_reads.append(
+                        (partition_index, output_offset, physical_offset, extent_size)
+                    )
+                else:
+                    raise LpMetadataError(
+                        f"logical partition {partition.name!r} has unsupported target type "
+                        f"{extent.target_type}"
+                    )
+            logical_offset = extent_end
+            if logical_offset >= requested_end:
+                break
+        if supplied != size:
+            raise LpMetadataError(
+                f"logical partition {partition.name!r} extents supplied {supplied} "
+                f"of {size} requested bytes"
+            )
+
+    if sparse and pending_reads:
+        ranges = [
+            (physical_offset, byte_count) for _, _, physical_offset, byte_count in pending_reads
+        ]
+        contents = read_sparse_ranges(stream, ranges)
+    else:
+        contents = []
+        for _, _, physical_offset, byte_count in pending_reads:
+            stream.seek(physical_offset)
+            chunk = stream.read(byte_count)
+            if len(chunk) != byte_count:
+                raise LpMetadataError("logical partition extent is truncated")
+            contents.append(chunk)
+
+    for (partition_index, output_offset, _physical_offset, byte_count), content in zip(
+        pending_reads, contents, strict=True
+    ):
+        outputs[partition_index][output_offset : output_offset + byte_count] = content
+    return [bytes(output) for output in outputs]

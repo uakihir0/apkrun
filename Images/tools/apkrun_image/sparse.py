@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -349,3 +349,140 @@ def read_range(stream: BinaryIO, offset: int, size: int) -> bytes:
             return bytes(output)
 
     raise SparseImageError(f"sparse chunks supplied {len(output)} of {size} requested bytes")
+
+
+def read_ranges(stream: BinaryIO, ranges: Sequence[tuple[int, int]]) -> list[bytes]:
+    """Read several expanded-image ranges in one forward pass."""
+    header = read_header(stream)
+    ordered: list[tuple[int, int, int]] = []
+    for index, (offset, size) in enumerate(ranges):
+        if offset < 0 or size < 0:
+            raise SparseImageError("sparse image range cannot be negative")
+        if offset > header.logical_size or size > header.logical_size - offset:
+            raise SparseImageError("sparse image range extends past the expanded image")
+        ordered.append((offset, offset + size, index))
+    ordered.sort()
+
+    merged: list[tuple[int, int]] = []
+    request_segments: list[tuple[int, int | None, int]] = [
+        (index, None, 0) for index in range(len(ranges))
+    ]
+    for start, end, index in ordered:
+        if start == end:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end))
+        segment_index = len(merged) - 1
+        request_segments[index] = (index, segment_index, start - merged[segment_index][0])
+
+    output = [bytearray() for _ in merged]
+    segment_index = 0
+    logical_offset = 0
+    for chunk_index in range(header.total_chunks):
+        raw_header = _read_exact(stream, header.chunk_header_size, f"chunk {chunk_index} header")
+        chunk_type, reserved, block_count, total_size = struct.unpack_from("<HHII", raw_header)
+        if reserved != 0:
+            raise SparseImageError(f"sparse chunk {chunk_index} has nonzero reserved bits")
+        payload_size = total_size - header.chunk_header_size
+        if payload_size < 0:
+            raise SparseImageError(f"sparse chunk {chunk_index} has an invalid total size")
+        payload_offset = stream.tell()
+        logical_size = block_count * header.block_size
+        logical_end = logical_offset + logical_size
+        if chunk_type != CHUNK_CRC32:
+            completed_blocks = logical_offset // header.block_size
+            if block_count > header.total_blocks - completed_blocks:
+                raise SparseImageError(
+                    f"sparse chunk {chunk_index} exceeds the declared output block count"
+                )
+
+        if chunk_type == CHUNK_RAW:
+            if payload_size != logical_size:
+                raise SparseImageError(
+                    f"raw sparse chunk {chunk_index} has an invalid payload size"
+                )
+            while segment_index < len(merged) and merged[segment_index][0] < logical_end:
+                start, end = merged[segment_index]
+                overlap_start = max(start, logical_offset)
+                overlap_end = min(end, logical_end)
+                if overlap_start < overlap_end:
+                    source_offset = payload_offset + overlap_start - logical_offset
+                    stream.seek(source_offset)
+                    output[segment_index].extend(
+                        _read_exact(
+                            stream,
+                            overlap_end - overlap_start,
+                            f"raw range in chunk {chunk_index}",
+                        )
+                    )
+                if end <= logical_end:
+                    segment_index += 1
+                else:
+                    break
+            stream.seek(payload_offset + payload_size)
+        elif chunk_type == CHUNK_FILL:
+            if block_count == 0 or payload_size != 4:
+                raise SparseImageError(f"fill sparse chunk {chunk_index} has an invalid size")
+            pattern = _read_exact(stream, 4, f"fill pattern for chunk {chunk_index}")
+            while segment_index < len(merged) and merged[segment_index][0] < logical_end:
+                start, end = merged[segment_index]
+                overlap_start = max(start, logical_offset)
+                overlap_end = min(end, logical_end)
+                if overlap_start < overlap_end:
+                    phase = (overlap_start - logical_offset) % len(pattern)
+                    repeated = pattern[phase:] + pattern * (
+                        (overlap_end - overlap_start) // len(pattern) + 1
+                    )
+                    output[segment_index].extend(repeated[: overlap_end - overlap_start])
+                if end <= logical_end:
+                    segment_index += 1
+                else:
+                    break
+        elif chunk_type == CHUNK_DONT_CARE:
+            if payload_size != 0:
+                raise SparseImageError(f"don't-care sparse chunk {chunk_index} has a payload")
+            while segment_index < len(merged) and merged[segment_index][0] < logical_end:
+                start, end = merged[segment_index]
+                overlap_start = max(start, logical_offset)
+                overlap_end = min(end, logical_end)
+                if overlap_start < overlap_end:
+                    output[segment_index].extend(b"\0" * (overlap_end - overlap_start))
+                if end <= logical_end:
+                    segment_index += 1
+                else:
+                    break
+        elif chunk_type == CHUNK_CRC32:
+            if block_count != 0 or payload_size != 4:
+                raise SparseImageError(f"CRC32 sparse chunk {chunk_index} has an invalid size")
+            _read_exact(stream, 4, f"CRC32 chunk {chunk_index}")
+            continue
+        else:
+            raise SparseImageError(f"unsupported Android sparse chunk type 0x{chunk_type:04x}")
+
+        logical_offset = logical_end
+
+    if logical_offset != header.logical_size:
+        raise SparseImageError(
+            f"sparse chunks describe {logical_offset} bytes, expected {header.logical_size}"
+        )
+    if segment_index != len(merged):
+        raise SparseImageError("sparse chunks did not supply all requested ranges")
+    for request_index, segment_index, relative_offset in request_segments:
+        if segment_index is None:
+            continue
+        requested_size = ranges[request_index][1]
+        if len(output[segment_index]) < relative_offset + requested_size:
+            raise SparseImageError("sparse chunks supplied a truncated requested range")
+
+    result = [b""] * len(ranges)
+    for request_index, segment_index, relative_offset in request_segments:
+        if segment_index is None:
+            continue
+        requested_size = ranges[request_index][1]
+        result[request_index] = bytes(
+            output[segment_index][relative_offset : relative_offset + requested_size]
+        )
+    return result

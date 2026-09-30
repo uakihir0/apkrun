@@ -17,6 +17,8 @@ from apkrun_image.lp import (
     METADATA_START,
     LpMetadataError,
     read_dynamic_partitions,
+    read_partition_range,
+    read_partition_ranges,
 )
 from apkrun_image.sparse import CHUNK_RAW, SPARSE_MAGIC
 
@@ -34,18 +36,32 @@ def build_metadata(
     block_device_size: int = 2 * 1024 * 1024,
     first_extent_target_data: int = 2048,
     first_extent_target_source: int = 0,
+    split_system_extent: bool = False,
 ) -> bytes:
     """Create one checksummed metadata slot with two logical partitions."""
     groups = struct.pack("<36sIQ", b"google_dynamic_partitions_a", 0, 0)
-    extents = struct.pack(
+    first_extent = struct.pack(
         "<QIQI",
-        2048,
+        1024 if split_system_extent else 2048,
         0,
         first_extent_target_data,
         first_extent_target_source,
-    ) + struct.pack("<QIQI", 1024, 0, 2048, 0)
-    partitions = struct.pack("<36sIIII", b"system_a", 0, 0, 1, 0) + struct.pack(
-        "<36sIIII", b"vendor_a", 0, 1, 1, 0
+    )
+    if split_system_extent:
+        second_extent_target_data = first_extent_target_data + 1024
+        extents = (
+            first_extent
+            + struct.pack("<QIQI", 1024, 0, second_extent_target_data, 0)
+            + struct.pack("<QIQI", 1024, 0, first_extent_target_data + 2048, 0)
+        )
+        system_extent_count = 2
+        vendor_first_extent = 2
+    else:
+        extents = first_extent + struct.pack("<QIQI", 1024, 0, 2048, 0)
+        system_extent_count = 1
+        vendor_first_extent = 1
+    partitions = struct.pack("<36sIIII", b"system_a", 0, 0, system_extent_count, 0) + struct.pack(
+        "<36sIIII", b"vendor_a", 0, vendor_first_extent, 1, 0
     )
     device = struct.pack("<QIIQ36sI", 0, 0, 0, block_device_size, b"super", 0)
     tables = partitions + extents + groups + device
@@ -55,7 +71,7 @@ def build_metadata(
     header[48:80] = hashlib.sha256(tables).digest()
     descriptors = [
         (0, 2, 52),
-        (len(partitions), 2, 24),
+        (len(partitions), 3 if split_system_extent else 2, 24),
         (len(partitions) + len(extents), 1, 48),
         (len(partitions) + len(extents) + len(groups), 1, 64),
     ]
@@ -69,6 +85,7 @@ def raw_super_fixture(
     block_device_size: int = 2 * 1024 * 1024,
     first_extent_target_data: int = 2048,
     first_extent_target_source: int = 0,
+    split_system_extent: bool = False,
 ) -> bytes:
     """Place a valid geometry pair and slot-zero metadata in a raw super image."""
     geometry = build_geometry(4096, 2)
@@ -76,8 +93,14 @@ def raw_super_fixture(
         block_device_size,
         first_extent_target_data,
         first_extent_target_source,
+        split_system_extent,
     )
-    image = bytearray(2 * 1024 * 1024)
+    image = bytearray(min(block_device_size, 3 * 1024 * 1024))
+    if split_system_extent:
+        first_boundary = (first_extent_target_data + 1024) * 512
+        second_start = first_boundary
+        image[first_boundary - 512 : first_boundary] = b"A" * 512
+        image[second_start : second_start + 512] = b"B" * 512
     image[GEOMETRY_OFFSET : GEOMETRY_OFFSET + GEOMETRY_SIZE] = geometry
     image[GEOMETRY_OFFSET + GEOMETRY_SIZE : METADATA_START] = geometry
     image[METADATA_START : METADATA_START + len(metadata)] = metadata
@@ -126,6 +149,36 @@ def test_reads_dynamic_partitions_from_sparse_image() -> None:
 
     assert metadata is not None
     assert [partition.name for partition in metadata.logical_partitions] == ["system_a", "vendor_a"]
+
+
+def test_partition_range_maps_across_multiple_extents() -> None:
+    """Logical reads cross extent boundaries in the partition's declared order."""
+    image = raw_super_fixture(block_device_size=3 * 1024 * 1024, split_system_extent=True)
+    metadata = read_dynamic_partitions(io.BytesIO(image))
+
+    assert metadata is not None
+    system = next(
+        partition for partition in metadata.logical_partitions if partition.name == "system_a"
+    )
+    assert len(system.extents) == 2
+    assert read_partition_range(io.BytesIO(image), system, system.extents[0].size - 512, 1024) == (
+        b"A" * 512 + b"B" * 512
+    )
+
+
+def test_partition_ranges_read_multiple_partitions_in_one_batch() -> None:
+    """A batch read preserves partition order and maps each requested extent."""
+    image = raw_super_fixture(block_device_size=3 * 1024 * 1024, split_system_extent=True)
+    metadata = read_dynamic_partitions(io.BytesIO(image))
+
+    assert metadata is not None
+    system, vendor = metadata.logical_partitions
+    assert read_partition_ranges(
+        io.BytesIO(image),
+        (system, vendor),
+        system.extents[0].size - 512,
+        512,
+    ) == [b"A" * 512, b"\0" * 512]
 
 
 def test_non_liblp_image_returns_none() -> None:

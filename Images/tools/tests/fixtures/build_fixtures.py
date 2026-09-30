@@ -169,7 +169,7 @@ def filesystem_images() -> dict[str, bytes]:
     erofs = bytearray(BLOCK_SIZE)
     struct.pack_into("<I", erofs, 1024, 0xE0F5E1E2)
     erofs[1024 + 12] = 12
-    struct.pack_into("<I", erofs, 1024 + 32, 1)
+    struct.pack_into("<I", erofs, 1024 + 36, 1)
 
     f2fs = bytearray(BLOCK_SIZE)
     struct.pack_into("<I", f2fs, 1024, 0xF2F52010)

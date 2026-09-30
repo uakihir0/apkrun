@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import struct
 import zipfile
@@ -166,7 +167,8 @@ def erofs_image() -> bytes:
     image = bytearray(4096)
     struct.pack_into("<I", image, 1024, 0xE0F5E1E2)
     image[1024 + 12] = 12
-    struct.pack_into("<I", image, 1024 + 32, 1)
+    struct.pack_into("<I", image, 1024 + 32, 7)
+    struct.pack_into("<I", image, 1024 + 36, 1)
     return bytes(image)
 
 
@@ -329,6 +331,239 @@ def test_pinned_aosp_fixture_archive_classifies_every_generated_image() -> None:
     assert files["unknown.bin"]["kind"] == "unknown"
 
 
+def test_zip_inventory_rejects_excessive_entry_count(tmp_path: Path) -> None:
+    """The central-directory count is bounded before ZipFile loads its entries."""
+    archive_path = tmp_path / "many-files.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        for index in range(inventory_module.MAX_ARCHIVE_ENTRIES + 1):
+            archive.writestr(f"entry-{index}", b"")
+
+    with pytest.raises(InventoryError, match="exceeds the 4096-entry limit"):
+        inventory(archive_path)
+
+
+def test_zip_inventory_rejects_an_underreported_entry_count(tmp_path: Path) -> None:
+    """The actual central-directory records are bounded even if EOCD lies."""
+    archive_path = tmp_path / "underreported-files.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        for index in range(inventory_module.MAX_ARCHIVE_ENTRIES + 1):
+            archive.writestr(f"entry-{index}", b"")
+
+    with archive_path.open("r+b") as stream:
+        stream.seek(0, 2)
+        tail_size = min(stream.tell(), 22 + 0xFFFF + 20 + 56)
+        stream.seek(-tail_size, 2)
+        tail = stream.read(tail_size)
+        end_record = tail.rfind(b"PK\x05\x06")
+        assert end_record >= 0
+        stream.seek(-tail_size + end_record + 8, 2)
+        stream.write(struct.pack("<HH", 1, 1))
+
+    with pytest.raises(InventoryError, match="exceeds the 4096-entry limit"):
+        inventory(archive_path)
+
+
+def test_zip_central_directory_size_is_bounded_before_zipfile_loads_it() -> None:
+    """The byte limit protects ZipFile from large per-entry metadata allocations."""
+    end_record = struct.pack(
+        "<4s4H2IH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0,
+        0,
+        inventory_module.MAX_CENTRAL_DIRECTORY_SIZE + 1,
+        0,
+        0,
+    )
+
+    with pytest.raises(InventoryError, match="central directory exceeds the"):
+        inventory_module._zip_entry_count(io.BytesIO(end_record), Path("large-directory.zip"))
+
+
+def test_zip64_entry_count_rejects_record_overlapping_its_locator() -> None:
+    """A ZIP64 record cannot claim bytes occupied by its following locator."""
+    record = struct.pack(
+        "<4sQ2H2I4Q",
+        b"PK\x06\x06",
+        60,
+        45,
+        45,
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0,
+        0,
+    )
+    locator = struct.pack("<4sIQI", b"PK\x06\x07", 0, 0, 1)
+    end_record = struct.pack(
+        "<4s4H2IH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0,
+        0,
+        0,
+    )
+    stream = io.BytesIO(record + locator + end_record)
+
+    with pytest.raises(InventoryError, match="zip64 directory record is truncated"):
+        inventory_module._zip_entry_count(stream, Path("overlap.zip"))
+
+
+def test_zip64_entry_count_rejects_extensible_data_before_zipfile() -> None:
+    """CPython's fixed-size ZIP64 reader is not given extensible end records."""
+    record = (
+        struct.pack(
+            "<4sQ2H2I4Q",
+            b"PK\x06\x06",
+            45,
+            45,
+            45,
+            0,
+            0,
+            0xFFFF,
+            0xFFFF,
+            0,
+            0,
+        )
+        + b"x"
+    )
+    locator = struct.pack("<4sIQI", b"PK\x06\x07", 0, 0, 1)
+    end_record = struct.pack(
+        "<4s4H2IH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0,
+        0,
+        0,
+    )
+    stream = io.BytesIO(record + locator + end_record)
+
+    with pytest.raises(InventoryError, match="extensible data are unsupported"):
+        inventory_module._zip_entry_count(stream, Path("zip64-extension.zip"))
+
+
+def test_zip64_entry_count_scans_the_actual_directory() -> None:
+    """A valid ZIP64 end record is cross-checked with its central directory."""
+    ordinary_stream = io.BytesIO()
+    with zipfile.ZipFile(ordinary_stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("entry.bin", b"content")
+    ordinary_archive = ordinary_stream.getvalue()
+    end_record_offset = ordinary_archive.rfind(b"PK\x05\x06")
+    assert end_record_offset >= 0
+    directory_size = struct.unpack_from("<I", ordinary_archive, end_record_offset + 12)[0]
+    directory_offset = struct.unpack_from("<I", ordinary_archive, end_record_offset + 16)[0]
+    zip64_offset = end_record_offset
+    zip64_record = struct.pack(
+        "<4sQ2H2I4Q",
+        b"PK\x06\x06",
+        44,
+        45,
+        45,
+        0,
+        0,
+        1,
+        1,
+        directory_size,
+        directory_offset,
+    )
+    locator = struct.pack("<4sIQI", b"PK\x06\x07", 0, zip64_offset, 1)
+    end_record = struct.pack(
+        "<4s4H2IH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0,
+    )
+    stream = io.BytesIO(ordinary_archive[:end_record_offset] + zip64_record + locator + end_record)
+
+    assert inventory_module._zip_entry_count(stream, Path("zip64.zip")) == 1
+
+
+def test_zip64_entry_count_handles_a_self_extracting_prefix() -> None:
+    """ZIP64 offsets are relative to the archive start after an SFX prefix."""
+    ordinary_stream = io.BytesIO()
+    with zipfile.ZipFile(ordinary_stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("entry.bin", b"content")
+    ordinary_archive = ordinary_stream.getvalue()
+    end_record_offset = ordinary_archive.rfind(b"PK\x05\x06")
+    directory_size = struct.unpack_from("<I", ordinary_archive, end_record_offset + 12)[0]
+    directory_offset = struct.unpack_from("<I", ordinary_archive, end_record_offset + 16)[0]
+    zip64_record = struct.pack(
+        "<4sQ2H2I4Q",
+        b"PK\x06\x06",
+        44,
+        45,
+        45,
+        0,
+        0,
+        1,
+        1,
+        directory_size,
+        directory_offset,
+    )
+    locator = struct.pack("<4sIQI", b"PK\x06\x07", 0, end_record_offset, 1)
+    end_record = struct.pack(
+        "<4s4H2IH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0,
+    )
+    zip64_archive = ordinary_archive[:end_record_offset] + zip64_record + locator + end_record
+    prefixed_archive = b"self-extracting-prefix" + zip64_archive
+
+    assert (
+        inventory_module._zip_entry_count(
+            io.BytesIO(prefixed_archive),
+            Path("zip64-sfx.zip"),
+        )
+        == 1
+    )
+
+
+def test_zip_entry_limits_reject_a_declared_oversized_member() -> None:
+    """A member-size claim is rejected before the decompressor is opened."""
+    info = zipfile.ZipInfo("large.bin")
+    info.file_size = inventory_module.MAX_MEMBER_SIZE + 1
+
+    class FakeArchive:
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            return [info]
+
+    with pytest.raises(InventoryError, match="zip entry exceeds"):
+        inventory_module._zip_entries(FakeArchive())  # type: ignore[arg-type]
+
+
+def test_zip_entry_limits_reject_excessive_total_expansion() -> None:
+    """Many individually bounded files cannot exceed the total expansion cap."""
+    infos = [zipfile.ZipInfo(f"large-{index}.bin") for index in range(5)]
+    for info in infos:
+        info.file_size = inventory_module.MAX_MEMBER_SIZE - 1
+
+    class FakeArchive:
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            return infos
+
+    with pytest.raises(InventoryError, match="expanded-size limit"):
+        inventory_module._zip_entries(FakeArchive())  # type: ignore[arg-type]
+
+
 def test_directory_inventory_lists_only_regular_files(tmp_path: Path) -> None:
     """Unpacked inputs use relative POSIX paths and omit directory entries."""
     root = tmp_path / "download"
@@ -340,6 +575,115 @@ def test_directory_inventory_lists_only_regular_files(tmp_path: Path) -> None:
 
     assert result["source"] == {"name": "download", "type": "directory"}
     assert [entry["path"] for entry in result["files"]] == ["nested/metadata.txt"]
+
+
+def test_directory_inventory_rejects_a_file_replaced_by_a_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raced symlink cannot make inventory read a file outside its input tree."""
+    root = tmp_path / "download"
+    root.mkdir()
+    member = root / "metadata.txt"
+    member.write_text("config=phone\n", encoding="utf-8")
+    victim = tmp_path / "private.txt"
+    victim.write_text("do not inventory this\n", encoding="utf-8")
+    open_file = inventory_module._open_directory_file
+
+    def swap_then_open(
+        directory: Path,
+        relative_path: str,
+        path: Path,
+        expected_version: tuple[int, int, int, int, int],
+    ) -> BinaryIO:
+        path.unlink()
+        path.symlink_to(victim)
+        return open_file(directory, relative_path, path, expected_version)
+
+    monkeypatch.setattr(inventory_module, "_open_directory_file", swap_then_open)
+
+    with pytest.raises(InventoryError, match="changed before it could be opened"):
+        inventory(root)
+
+    assert victim.read_text(encoding="utf-8") == "do not inventory this\n"
+
+
+def test_directory_inventory_rejects_a_parent_directory_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raced parent symlink cannot redirect openat outside the input tree."""
+    root = tmp_path / "download"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    member = nested / "metadata.txt"
+    member.write_text("config=phone\n", encoding="utf-8")
+    private = tmp_path / "private"
+    private.mkdir()
+    victim = private / "metadata.txt"
+    victim.write_text("secret=data!\n", encoding="utf-8")
+    backup = root / "original"
+    open_file = inventory_module._open_directory_file
+
+    def swap_parent_then_open(
+        directory: Path,
+        relative_path: str,
+        path: Path,
+        expected_version: tuple[int, int, int, int, int],
+    ) -> BinaryIO:
+        nested.rename(backup)
+        nested.symlink_to(private, target_is_directory=True)
+        return open_file(directory, relative_path, path, expected_version)
+
+    monkeypatch.setattr(inventory_module, "_open_directory_file", swap_parent_then_open)
+
+    with pytest.raises(InventoryError, match="changed before it could be opened"):
+        inventory(root)
+
+    assert victim.read_text(encoding="utf-8") == "secret=data!\n"
+
+
+def test_directory_inventory_detects_same_size_writes_between_hash_and_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inventory hash and parsed details must describe one stable file."""
+    root = tmp_path / "download"
+    root.mkdir()
+    member = root / "metadata.txt"
+    original = b"config=phone\n"
+    replacement = b"config=other\n"
+    member.write_bytes(original)
+    initial_inode = member.stat().st_ino
+    classify = inventory_module._classify
+
+    def mutate_then_classify(
+        stream: BinaryIO,
+        size: int,
+        path: str,
+    ) -> inventory_module.Classification:
+        member.write_bytes(replacement)
+        return classify(stream, size, path)
+
+    monkeypatch.setattr(inventory_module, "_classify", mutate_then_classify)
+
+    with pytest.raises(InventoryError, match="changed during inventory"):
+        inventory(root)
+
+    assert member.stat().st_ino == initial_inode
+    assert member.read_bytes() == replacement
+
+
+def test_inventory_stops_when_a_stream_exceeds_its_declared_size() -> None:
+    """A dishonest stream cannot force inventory to consume unbounded output."""
+    entry = inventory_module.InputFile(
+        path="payload",
+        size=4,
+        open_stream=lambda: io.BytesIO(b"12345"),
+    )
+
+    with pytest.raises(InventoryError, match="expanded beyond its declared size limit"):
+        inventory_module._inventory_file(entry)
 
 
 def test_download_directory_inventories_its_archive_and_provenance(tmp_path: Path) -> None:
@@ -449,8 +793,14 @@ def test_inventory_rejects_archive_replaced_after_hashing(
     )
     original_hash = inventory_module._hash_stream
 
-    def hash_then_replace(stream: BinaryIO, size: int, path: str) -> str:
-        digest = original_hash(stream, size, path)
+    def hash_then_replace(
+        stream: BinaryIO,
+        size: int,
+        path: str,
+        *,
+        maximum_size: int | None = None,
+    ) -> str:
+        digest = original_hash(stream, size, path, maximum_size=maximum_size)
         archive.write_bytes(replacement_archive.read_bytes())
         return digest
 
@@ -658,11 +1008,12 @@ def test_inventory_cli_does_not_write_inside_input_directory(
     source.mkdir()
     original = source / "info.txt"
     original.write_text("config=phone\n", encoding="utf-8")
-    output = source / "inventory.json"
+    output = source / "new" / "nested" / "inventory.json"
 
     from apkrun_image.inventory import main
 
     assert main([str(source), "--out", str(output)]) == 1
     assert "outside the input directory" in capsys.readouterr().err
     assert not output.exists()
+    assert not output.parent.exists()
     assert original.read_text(encoding="utf-8") == "config=phone\n"

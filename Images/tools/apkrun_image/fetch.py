@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import fnmatch
 import hashlib
 import http.client
@@ -12,6 +13,7 @@ import re
 import stat
 import sys
 import tempfile
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,9 @@ from urllib.request import Request, urlopen
 API_BASE_URL = "https://androidbuild-pa.googleapis.com/v4"
 API_KEY_ENV = "APKRUN_ANDROID_BUILD_API_KEY"
 CHUNK_SIZE = 1024 * 1024
+MAX_API_RESPONSE_SIZE = 1024 * 1024
+MAX_API_PAGES = 100
+MAX_PAGE_TOKEN_SIZE = 4096
 USER_AGENT = "APKRun-Image-Tools/0.1.0"
 
 
@@ -75,12 +80,12 @@ def _artifact_name(value: object) -> str:
 
 def _positive_size(value: object, name: str) -> int:
     """Parse a positive byte count from the API response."""
-    if isinstance(value, bool):
-        raise FetchError(f"Android Build API returned an invalid size for {name}.")
-    try:
+    if isinstance(value, int) and not isinstance(value, bool):
+        size = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
         size = int(value)
-    except (OverflowError, TypeError, ValueError) as error:
-        raise FetchError(f"Android Build API returned an invalid size for {name}.") from error
+    else:
+        raise FetchError(f"Android Build API returned an invalid size for {name}.")
     if size < 0:
         raise FetchError(f"Android Build API returned an invalid size for {name}.")
     return size
@@ -108,7 +113,11 @@ def _request_json(
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            payload = response.read()
+            payload = response.read(MAX_API_RESPONSE_SIZE + 1)
+            if len(payload) > MAX_API_RESPONSE_SIZE:
+                raise FetchError(
+                    f"Android Build API response exceeds the {MAX_API_RESPONSE_SIZE}-byte limit."
+                )
     except HTTPError as error:
         raise FetchError(f"Android Build API request failed with HTTP {error.code}.") from None
     except (URLError, TimeoutError, OSError):
@@ -142,10 +151,16 @@ def _list_artifacts(
     page_token = ""
     seen_page_tokens: set[str] = set()
     matches: dict[str, Artifact] = {}
+    pages_read = 0
     while True:
+        if pages_read >= MAX_API_PAGES:
+            raise FetchError(
+                f"Android Build API returned more than {MAX_API_PAGES} artifact pages."
+            )
         if page_token in seen_page_tokens:
             raise FetchError("Android Build API returned a pagination cycle.")
         seen_page_tokens.add(page_token)
+        pages_read += 1
         parameters = {"pageToken": page_token} if page_token else {}
         response = _request_json(
             _api_url(base_url, path, api_key, parameters),
@@ -176,6 +191,11 @@ def _list_artifacts(
             break
         if not isinstance(next_page, str) or next_page == page_token:
             raise FetchError("Android Build API returned an invalid pagination token.")
+        if len(next_page) > MAX_PAGE_TOKEN_SIZE:
+            raise FetchError(
+                "Android Build API pagination token exceeds the "
+                f"{MAX_PAGE_TOKEN_SIZE}-character limit."
+            )
         page_token = next_page
     return [matches[name] for name in sorted(matches)]
 
@@ -242,14 +262,58 @@ def _file_version(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _unlink_if_identity_matches(path: Path, expected_identity: tuple[int, int]) -> None:
-    """Remove only the path entry created by this finalization attempt."""
+def _cleanup_owned_partial(
+    output_directory_descriptor: int,
+    partial_name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove only the verified partial inode, preserving a name-swap replacement."""
     try:
-        file_stat = path.lstat()
-        if _file_identity(file_stat) == expected_identity:
-            path.unlink()
+        current = os.stat(
+            partial_name,
+            dir_fd=output_directory_descriptor,
+            follow_symlinks=False,
+        )
     except OSError:
         return
+    if stat.S_ISLNK(current.st_mode) or _file_identity(current) != expected_identity:
+        return
+
+    quarantine_name = f".{partial_name}.cleanup-{uuid.uuid4().hex}"
+    try:
+        os.rename(
+            partial_name,
+            quarantine_name,
+            src_dir_fd=output_directory_descriptor,
+            dst_dir_fd=output_directory_descriptor,
+        )
+        quarantined = os.stat(
+            quarantine_name,
+            dir_fd=output_directory_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return
+
+    if stat.S_ISLNK(quarantined.st_mode) or _file_identity(quarantined) != expected_identity:
+        try:
+            os.link(
+                quarantine_name,
+                partial_name,
+                src_dir_fd=output_directory_descriptor,
+                dst_dir_fd=output_directory_descriptor,
+                follow_symlinks=False,
+            )
+            os.unlink(quarantine_name, dir_fd=output_directory_descriptor)
+        except OSError:
+            # Keep an unexpected replacement under its private quarantine name.
+            pass
+        return
+
+    try:
+        os.unlink(quarantine_name, dir_fd=output_directory_descriptor)
+    except OSError:
+        pass
 
 
 def _publish_partial(
@@ -258,7 +322,7 @@ def _publish_partial(
     expected_sha256: str | None,
     expected_identity: tuple[int, int],
 ) -> DownloadRecord:
-    """Copy, verify, then publish a partial without following a swapped path."""
+    """Verify into a private staging directory and atomically publish complete bytes."""
     try:
         descriptor = os.open(partial_path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
@@ -267,12 +331,18 @@ def _publish_partial(
         ) from None
 
     final_path = partial_path.with_suffix("")
-    staging_path: Path | None = None
+    output_directory_descriptor = -1
+    staging_directory: tempfile.TemporaryDirectory[str] | None = None
+    staging_directory_descriptor = -1
     staging_descriptor = -1
     staging_identity: tuple[int, int] | None = None
-    linked_identity: tuple[int, int] | None = None
     try:
         with os.fdopen(descriptor, "rb"):
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            output_directory_descriptor = os.open(
+                partial_path.parent,
+                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0),
+            )
             opened_stat = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(opened_stat.st_mode)
@@ -302,12 +372,25 @@ def _publish_partial(
                     f"The partial download for {artifact.name} changed during finalization."
                 )
 
-            staging_descriptor, staging_name = tempfile.mkstemp(
+            staging_directory = tempfile.TemporaryDirectory(
                 prefix=f".{artifact.name}.",
                 suffix=".finalizing",
                 dir=partial_path.parent,
             )
-            staging_path = Path(staging_name)
+            staging_directory_descriptor = os.open(
+                staging_directory.name,
+                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0),
+            )
+            if not stat.S_ISDIR(os.fstat(staging_directory_descriptor).st_mode):
+                raise FetchError(
+                    f"The staging directory for {artifact.name} changed during finalization."
+                )
+            staging_descriptor = os.open(
+                artifact.name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=staging_directory_descriptor,
+            )
             staging_initial_stat = os.fstat(staging_descriptor)
             staging_identity = _file_identity(staging_initial_stat)
             if (
@@ -349,9 +432,19 @@ def _publish_partial(
                 raise FetchError(
                     f"The staged artifact {artifact.name} changed during finalization."
                 )
+            os.fchmod(staging_descriptor, 0o400)
+            os.fchmod(staging_directory_descriptor, 0o500)
             try:
-                staging_path_stat = staging_path.lstat()
-                partial_path_stat = partial_path.lstat()
+                staging_path_stat = os.stat(
+                    artifact.name,
+                    dir_fd=staging_directory_descriptor,
+                    follow_symlinks=False,
+                )
+                partial_path_stat = os.stat(
+                    partial_path.name,
+                    dir_fd=output_directory_descriptor,
+                    follow_symlinks=False,
+                )
             except OSError:
                 raise FetchError(
                     f"The partial download for {artifact.name} changed during finalization."
@@ -367,7 +460,13 @@ def _publish_partial(
                 )
 
             try:
-                os.link(staging_path, final_path, follow_symlinks=False)
+                os.link(
+                    artifact.name,
+                    final_path.name,
+                    src_dir_fd=staging_directory_descriptor,
+                    dst_dir_fd=output_directory_descriptor,
+                    follow_symlinks=False,
+                )
             except FileExistsError:
                 raise FetchError(
                     f"The destination for {artifact.name} already exists; "
@@ -377,84 +476,59 @@ def _publish_partial(
                 raise FetchError(
                     f"Could not safely publish the downloaded artifact {artifact.name}."
                 ) from None
+
             try:
-                linked_stat = final_path.lstat()
-                linked_identity = _file_identity(linked_stat)
-                if (
-                    stat.S_ISLNK(linked_stat.st_mode)
-                    or not stat.S_ISREG(linked_stat.st_mode)
-                    or linked_identity != staging_identity
-                ):
-                    raise FetchError(
-                        f"The downloaded artifact {artifact.name} changed during finalization."
-                    )
-                published_descriptor = os.open(final_path, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(published_descriptor, "rb"):
-                    published_stat = os.fstat(published_descriptor)
-                    if (
-                        not stat.S_ISREG(published_stat.st_mode)
-                        or published_stat.st_nlink < 2
-                        or _file_identity(published_stat) != staging_identity
-                        or published_stat.st_size != artifact.size
-                    ):
-                        raise FetchError(
-                            f"The downloaded artifact {artifact.name} changed during finalization."
-                        )
-                    published_digest = _sha256_descriptor(published_descriptor)
-                    if published_digest != digest or (
-                        expected_sha256 is not None and published_digest != expected_sha256
-                    ):
-                        raise FetchError(
-                            f"{artifact.name} changed while it was being finalized; "
-                            "run fetch again."
-                        )
-                    hashed_stat = os.fstat(published_descriptor)
-                    if _file_version(hashed_stat) != _file_version(published_stat):
-                        raise FetchError(
-                            f"{artifact.name} changed while it was being finalized; "
-                            "run fetch again."
-                        )
-                    try:
-                        final_path_stat = final_path.lstat()
-                    except OSError:
-                        raise FetchError(
-                            f"The downloaded artifact {artifact.name} changed during finalization."
-                        ) from None
-                    if (
-                        stat.S_ISLNK(final_path_stat.st_mode)
-                        or not stat.S_ISREG(final_path_stat.st_mode)
-                        or _file_version(final_path_stat) != _file_version(hashed_stat)
-                    ):
-                        raise FetchError(
-                            f"The downloaded artifact {artifact.name} changed during finalization."
-                        )
-            except FetchError:
-                if linked_identity is not None:
-                    _unlink_if_identity_matches(final_path, linked_identity)
-                    if staging_path is not None:
-                        _unlink_if_identity_matches(staging_path, linked_identity)
-                raise
+                final_path_stat = os.stat(
+                    final_path.name,
+                    dir_fd=output_directory_descriptor,
+                    follow_symlinks=False,
+                )
+                staging_path_stat = os.stat(
+                    artifact.name,
+                    dir_fd=staging_directory_descriptor,
+                    follow_symlinks=False,
+                )
+                staged_stat = os.fstat(staging_descriptor)
             except OSError:
-                if linked_identity is not None:
-                    _unlink_if_identity_matches(final_path, linked_identity)
-                    if staging_path is not None:
-                        _unlink_if_identity_matches(staging_path, linked_identity)
                 raise FetchError(
                     f"The downloaded artifact {artifact.name} changed during finalization."
                 ) from None
+            if (
+                stat.S_ISLNK(final_path_stat.st_mode)
+                or not stat.S_ISREG(final_path_stat.st_mode)
+                or _file_identity(final_path_stat) != staging_identity
+                or final_path_stat.st_nlink != 2
+                or final_path_stat.st_size != artifact.size
+                or not stat.S_ISREG(staged_stat.st_mode)
+                or staged_stat.st_nlink != 2
+                or _file_identity(staging_path_stat) != staging_identity
+                or _file_identity(staged_stat) != staging_identity
+                or staged_stat.st_size != artifact.size
+            ):
+                # The final name is never removed here: after atomic linking it
+                # may already belong to another process.
+                raise FetchError(
+                    f"The downloaded artifact {artifact.name} changed during finalization."
+                )
 
-            try:
-                partial_path_stat = partial_path.lstat()
-                if _file_identity(partial_path_stat) == expected_identity:
-                    partial_path.unlink()
-            except OSError:
-                pass
-            digest = published_digest
+            _cleanup_owned_partial(
+                output_directory_descriptor,
+                partial_path.name,
+                expected_identity,
+            )
     finally:
         if staging_descriptor >= 0:
             os.close(staging_descriptor)
-        if staging_path is not None and staging_identity is not None:
-            _unlink_if_identity_matches(staging_path, staging_identity)
+        if staging_directory is not None:
+            try:
+                os.fchmod(staging_directory_descriptor, 0o700)
+            except OSError:
+                pass
+            if staging_directory_descriptor >= 0:
+                os.close(staging_directory_descriptor)
+            staging_directory.cleanup()
+        if output_directory_descriptor >= 0:
+            os.close(output_directory_descriptor)
 
     return DownloadRecord(name=artifact.name, size=artifact.size, sha256=digest)
 
@@ -659,6 +733,7 @@ def _download(
             flags |= os.O_APPEND if mode == "ab" else 0
             flags |= os.O_CREAT | os.O_EXCL if partial_stat is None else 0
             descriptor = os.open(partial_path, flags, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
             opened_stat = os.fstat(descriptor)
             if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_nlink != 1:
                 raise FetchError(
@@ -715,6 +790,49 @@ def _download(
 
 
 def fetch_artifacts(
+    *,
+    branch: str,
+    target: str,
+    build_id: str,
+    pattern: str,
+    output_directory: Path,
+    api_key: str | None,
+    api_base_url: str = API_BASE_URL,
+) -> list[DownloadRecord]:
+    """Serialize fetches in one parent directory so concurrent runs cannot race cleanup."""
+    if not branch or not target or not build_id or not pattern:
+        raise FetchError("Branch, target, build ID, and artifact pattern must be non-empty.")
+    output_directory.mkdir(parents=True, exist_ok=True)
+    parent_descriptor = -1
+    try:
+        parent_descriptor = os.open(
+            output_directory.parent,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0),
+        )
+        fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
+    except OSError as error:
+        if parent_descriptor >= 0:
+            os.close(parent_descriptor)
+        raise FetchError(f"Could not safely lock {output_directory}: {error}.") from None
+
+    try:
+        return _fetch_artifacts_locked(
+            branch=branch,
+            target=target,
+            build_id=build_id,
+            pattern=pattern,
+            output_directory=output_directory,
+            api_key=api_key,
+            api_base_url=api_base_url,
+        )
+    finally:
+        try:
+            fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(parent_descriptor)
+
+
+def _fetch_artifacts_locked(
     *,
     branch: str,
     target: str,

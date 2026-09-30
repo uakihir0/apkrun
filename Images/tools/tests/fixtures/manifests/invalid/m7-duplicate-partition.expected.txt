@@ -1,0 +1,1 @@
+partition "misc" appears in artifacts[4] and blankPartitions[0].

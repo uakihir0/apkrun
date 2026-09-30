@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "origin": "ci.android.com",
+    "branch": "aosp-android-latest-release",
+    "target": "aosp_cf_arm64_only_phone-userdebug",
+    "buildId": "16373615",
+    "archives": [
+      {
+        "name": "android-build",
+        "size": 1,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "android": {
+    "release": "17",
+    "sdk": 37,
+    "variant": "userdebug",
+    "securityPatch": "2026-06"
+  },
+  "architecture": "arm64",
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "artifacts": [
+    {
+      "id": "boot",
+      "file": "boot",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 1,
+      "kind": "bootImage",
+      "partition": "boot"
+    },
+    {
+      "id": "init_boot",
+      "file": "init_boot",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size": 1,
+      "kind": "bootImage",
+      "partition": "init_boot"
+    },
+    {
+      "id": "vendor_boot",
+      "file": "vendor_boot",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1,
+      "kind": "vendorBootImage",
+      "partition": "vendor_boot"
+    },
+    {
+      "id": "vbmeta",
+      "file": "vbmeta",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 1,
+      "kind": "vbmeta",
+      "partition": "vbmeta"
+    },
+    {
+      "id": "vbmeta_system",
+      "file": "vbmeta_system",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size": 1,
+      "kind": "vbmeta",
+      "partition": "vbmeta_system"
+    },
+    {
+      "id": "super",
+      "file": "super",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1,
+      "kind": "sparse",
+      "partition": "super"
+    },
+    {
+      "id": "userdata",
+      "file": "userdata",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1,
+      "kind": "sparse",
+      "partition": "userdata"
+    }
+  ],
+  "roles": {
+    "kernel": "boot",
+    "genericRamdisk": "init_boot",
+    "vendorBoot": "vendor_boot",
+    "vbmeta": ["vbmeta", "vbmeta_system"],
+    "super": "super",
+    "userdataTemplate": "userdata"
+  },
+  "logicalPartitions": [
+    {
+      "name": "system_a",
+      "size": 512,
+      "filesystem": "unknown"
+    }
+  ],
+  "blankPartitions": [
+    {
+      "partition": "misc",
+      "size": 4096
+    }
+  ],
+  "androidInfo": {}
+}

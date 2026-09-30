@@ -1,0 +1,1 @@
+artifacts[11] (vbmeta): id "vbmeta_system" is missing from roles.vbmeta. Add it to the chain order.

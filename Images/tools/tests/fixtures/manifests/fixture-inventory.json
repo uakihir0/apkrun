@@ -1,0 +1,245 @@
+{
+  "files": [
+    {
+      "details": {
+        "values": {
+          "config": "phone",
+          "gfxstream": "supported"
+        }
+      },
+      "kind": "text",
+      "path": "android-info.txt",
+      "probablePurpose": "device information key/value metadata",
+      "sha256": "89008d45db9e2bc305150a6341ec63a9b510b6bddb89e28ef3f6b8b7822f18a9",
+      "size": 33
+    },
+    {
+      "details": {
+        "bootKind": "boot",
+        "cmdline": "console=hvc0 panic=-1",
+        "headerVersion": 4,
+        "kernelSize": 4096,
+        "osVersion": {
+          "release": "17.0.0",
+          "securityPatch": "2026-09"
+        },
+        "ramdiskSize": 33
+      },
+      "kind": "bootImage",
+      "path": "boot.img",
+      "probablePurpose": "boot partition (kernel)",
+      "sha256": "bb1b4f7ddb8cf509ad7d5c0b93a8436bfe877d4a9d23d82e3dbf93232ec7cb54",
+      "size": 12288
+    },
+    {
+      "details": {
+        "size": 0,
+        "type": "erofs"
+      },
+      "kind": "filesystem",
+      "path": "erofs.img",
+      "probablePurpose": "EROFS filesystem image",
+      "sha256": "05638be33063a7553d08f40038b61649b6ecbb3524aa0da9befe36114213b080",
+      "size": 4096
+    },
+    {
+      "details": {
+        "size": 32768,
+        "type": "ext4"
+      },
+      "kind": "filesystem",
+      "path": "ext4.img",
+      "probablePurpose": "ext4 filesystem image",
+      "sha256": "89d523ff67617953eff56a45d8c5d6282ba5114bef180809af20e6ccc7d0945b",
+      "size": 32768
+    },
+    {
+      "details": {
+        "size": 4096,
+        "type": "f2fs"
+      },
+      "kind": "filesystem",
+      "path": "f2fs.img",
+      "probablePurpose": "F2FS filesystem image",
+      "sha256": "2f78afecceaf0ce8855e1be4898e4c0e231b2373e87aaab14fc4059ac2198540",
+      "size": 4096
+    },
+    {
+      "details": {
+        "lines": [
+          "flash boot boot.img",
+          "reboot"
+        ]
+      },
+      "kind": "text",
+      "path": "fastboot-info.txt",
+      "probablePurpose": "build metadata text",
+      "sha256": "17045d009ff9dbbd1d264a7e0c03636c68a926aa3ea08ea71e7745c16fe5f5f1",
+      "size": 27
+    },
+    {
+      "details": {
+        "bootKind": "init_boot",
+        "cmdline": "",
+        "headerVersion": 4,
+        "kernelSize": 0,
+        "osVersion": {
+          "release": "17.0.0",
+          "securityPatch": "2026-09"
+        },
+        "ramdiskSize": 33
+      },
+      "kind": "bootImage",
+      "path": "init_boot.img",
+      "probablePurpose": "generic ramdisk partition",
+      "sha256": "0baf14bd3a99cf258715c77e4644bcb332efa9f0025dfc63ee58d3ac97b7afe4",
+      "size": 8192
+    },
+    {
+      "details": {
+        "blockSize": 4096,
+        "chunkCount": 4,
+        "content": {
+          "details": {
+            "size": 32768,
+            "type": "ext4"
+          },
+          "kind": "filesystem"
+        },
+        "logicalSize": 32768,
+        "totalBlocks": 8
+      },
+      "kind": "sparse",
+      "path": "sparse-all-chunks.img",
+      "probablePurpose": "sparse image containing filesystem",
+      "sha256": "50e3566c108574553fcd536d243d886c0f26a8fbcb5c9bc28b5cf8c4178b3bfd",
+      "size": 4180
+    },
+    {
+      "details": {
+        "blockSize": 4096,
+        "chunkCount": 1,
+        "content": {
+          "details": {
+            "blockDeviceSize": 2097152,
+            "logicalPartitions": [
+              {
+                "group": "google_dynamic_partitions_a",
+                "name": "system_a",
+                "size": 1048576
+              },
+              {
+                "group": "google_dynamic_partitions_a",
+                "name": "vendor_a",
+                "size": 524288
+              }
+            ],
+            "metadataSlots": 2
+          },
+          "kind": "dynamicPartitions"
+        },
+        "logicalSize": 2097152,
+        "totalBlocks": 512
+      },
+      "kind": "sparse",
+      "path": "super.img",
+      "probablePurpose": "sparse image containing dynamicPartitions",
+      "sha256": "8e33292e65e6113793a39d4b87dccba3c380e16d8a7d37ea0b1b56d2056172ed",
+      "size": 2097192
+    },
+    {
+      "details": {
+        "magic": "0073796e74686574"
+      },
+      "kind": "unknown",
+      "path": "unknown.bin",
+      "probablePurpose": "unknown",
+      "sha256": "b53bd6007b5a05cb58f2e1ab0bc8ecc5bc712207b09a175e9b24e47dad821879",
+      "size": 25
+    },
+    {
+      "details": {
+        "blockSize": 4096,
+        "chunkCount": 1,
+        "content": {
+          "details": {
+            "size": 32768,
+            "type": "ext4"
+          },
+          "kind": "filesystem"
+        },
+        "logicalSize": 32768,
+        "totalBlocks": 8
+      },
+      "kind": "sparse",
+      "path": "userdata.img",
+      "probablePurpose": "sparse image containing filesystem",
+      "sha256": "5755f159ccdde216a3344fb9e092b9cea5a633995049fe326c39468bd0789985",
+      "size": 32808
+    },
+    {
+      "details": {
+        "algorithm": "NONE",
+        "descriptors": [
+          {
+            "partition": "system_a",
+            "type": "chainPartition"
+          },
+          {
+            "partition": "vendor_a",
+            "type": "chainPartition"
+          }
+        ],
+        "flags": 0,
+        "rollbackIndex": 7
+      },
+      "kind": "vbmeta",
+      "path": "vbmeta.img",
+      "probablePurpose": "Android Verified Boot metadata",
+      "sha256": "7058e6a6c1f0fa0579f7416f801873ba31a274494399d44e95eec3d5f1cb6e75",
+      "size": 1536
+    },
+    {
+      "details": {
+        "bootconfigSize": 30,
+        "cmdline": "console=hvc0 panic=-1",
+        "dtbSize": 0,
+        "headerVersion": 4,
+        "pageSize": 4096,
+        "ramdisks": [
+          {
+            "name": "platform",
+            "size": 18,
+            "type": "PLATFORM"
+          },
+          {
+            "name": "recovery",
+            "size": 18,
+            "type": "RECOVERY"
+          },
+          {
+            "name": "dlkm",
+            "size": 14,
+            "type": "DLKM"
+          }
+        ]
+      },
+      "kind": "vendorBootImage",
+      "path": "vendor_boot.img",
+      "probablePurpose": "vendor boot partition (vendor ramdisk, cmdline, and bootconfig)",
+      "sha256": "9ed9572fa6e7725e9af4a3a477bca083aa1956aeebaf286871a100fe8e162263",
+      "size": 16384
+    }
+  ],
+  "generator": "apkrun_image.inventory 0.1.0",
+  "schemaVersion": 2,
+  "source": {
+    "branch": "aosp-android-latest-release",
+    "buildId": "16373615",
+    "name": "aosp_cf_arm64_only_phone-img-fixture.zip",
+    "sha256": "2440caf4f526937bc570b9593e2a25d6d1c59e125c11d3c3b1a8a28506b3eba7",
+    "size": 2214949,
+    "target": "aosp_cf_arm64_only_phone-userdebug",
+    "type": "zip"
+  }
+}

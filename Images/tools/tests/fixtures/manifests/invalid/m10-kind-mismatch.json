@@ -1,0 +1,154 @@
+{
+  "android": {
+    "release": "17",
+    "sdk": 37,
+    "securityPatch": "2026-09",
+    "variant": "userdebug"
+  },
+  "androidInfo": {
+    "config": "phone",
+    "gfxstream": "supported"
+  },
+  "architecture": "arm64",
+  "artifacts": [
+    {
+      "file": "boot.img",
+      "id": "boot",
+      "kind": "bootImage",
+      "partition": "boot",
+      "sha256": "bb1b4f7ddb8cf509ad7d5c0b93a8436bfe877d4a9d23d82e3dbf93232ec7cb54",
+      "size": 12288
+    },
+    {
+      "file": "erofs.img",
+      "id": "erofs",
+      "kind": "filesystem",
+      "partition": "erofs",
+      "sha256": "05638be33063a7553d08f40038b61649b6ecbb3524aa0da9befe36114213b080",
+      "size": 4096
+    },
+    {
+      "file": "ext4.img",
+      "id": "ext4",
+      "kind": "filesystem",
+      "partition": "ext4",
+      "sha256": "89d523ff67617953eff56a45d8c5d6282ba5114bef180809af20e6ccc7d0945b",
+      "size": 32768
+    },
+    {
+      "file": "f2fs.img",
+      "id": "f2fs",
+      "kind": "filesystem",
+      "partition": "f2fs",
+      "sha256": "2f78afecceaf0ce8855e1be4898e4c0e231b2373e87aaab14fc4059ac2198540",
+      "size": 4096
+    },
+    {
+      "file": "init_boot.img",
+      "id": "init_boot",
+      "kind": "bootImage",
+      "partition": "init_boot",
+      "sha256": "0baf14bd3a99cf258715c77e4644bcb332efa9f0025dfc63ee58d3ac97b7afe4",
+      "size": 8192
+    },
+    {
+      "file": "sparse-all-chunks.img",
+      "id": "sparse_all_chunks",
+      "kind": "sparse",
+      "partition": "sparse_all_chunks",
+      "sha256": "50e3566c108574553fcd536d243d886c0f26a8fbcb5c9bc28b5cf8c4178b3bfd",
+      "size": 4180
+    },
+    {
+      "file": "super.img",
+      "id": "super",
+      "kind": "sparse",
+      "partition": "super",
+      "sha256": "8e33292e65e6113793a39d4b87dccba3c380e16d8a7d37ea0b1b56d2056172ed",
+      "size": 2097192
+    },
+    {
+      "file": "unknown.bin",
+      "id": "unknown",
+      "kind": "filesystem",
+      "partition": "unknown",
+      "sha256": "b53bd6007b5a05cb58f2e1ab0bc8ecc5bc712207b09a175e9b24e47dad821879",
+      "size": 25
+    },
+    {
+      "file": "userdata.img",
+      "id": "userdata",
+      "kind": "sparse",
+      "partition": "userdata",
+      "sha256": "5755f159ccdde216a3344fb9e092b9cea5a633995049fe326c39468bd0789985",
+      "size": 32808
+    },
+    {
+      "file": "vbmeta.img",
+      "id": "vbmeta",
+      "kind": "vbmeta",
+      "partition": "vbmeta",
+      "sha256": "7058e6a6c1f0fa0579f7416f801873ba31a274494399d44e95eec3d5f1cb6e75",
+      "size": 1536
+    },
+    {
+      "file": "vendor_boot.img",
+      "id": "vendor_boot",
+      "kind": "vendorBootImage",
+      "partition": "vendor_boot",
+      "sha256": "9ed9572fa6e7725e9af4a3a477bca083aa1956aeebaf286871a100fe8e162263",
+      "size": 16384
+    }
+  ],
+  "blankPartitions": [
+    {
+      "partition": "misc",
+      "size": 1048576
+    },
+    {
+      "partition": "metadata",
+      "size": 67108864
+    },
+    {
+      "partition": "frp",
+      "size": 1048576
+    }
+  ],
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "logicalPartitions": [
+    {
+      "filesystem": "unknown",
+      "name": "system_a",
+      "size": 1048576
+    },
+    {
+      "filesystem": "unknown",
+      "name": "vendor_a",
+      "size": 524288
+    }
+  ],
+  "roles": {
+    "genericRamdisk": "init_boot",
+    "kernel": "boot",
+    "super": "super",
+    "userdataTemplate": "userdata",
+    "vbmeta": [
+      "vbmeta"
+    ],
+    "vendorBoot": "vendor_boot"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "archives": [
+      {
+        "name": "aosp_cf_arm64_only_phone-img-fixture.zip",
+        "sha256": "2440caf4f526937bc570b9593e2a25d6d1c59e125c11d3c3b1a8a28506b3eba7",
+        "size": 2214949
+      }
+    ],
+    "branch": "aosp-android-latest-release",
+    "buildId": "16373615",
+    "origin": "ci.android.com",
+    "target": "aosp_cf_arm64_only_phone-userdebug"
+  }
+}

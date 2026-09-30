@@ -1,0 +1,1 @@
+roles.vbmeta[1] = "untrusted_chain": vbmeta.img has no chain descriptor for partition vbmeta_extra.

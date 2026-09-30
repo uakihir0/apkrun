@@ -11,6 +11,7 @@ COMMANDS = {
     "fetch": "Fetch and verify Android build artifacts.",
     "inventory": "Classify every file in an Android build by content.",
     "inspect": "Inspect an Android image file.",
+    "manifest": "Generate or validate an Android image manifest.",
 }
 
 

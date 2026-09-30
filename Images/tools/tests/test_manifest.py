@@ -1,0 +1,289 @@
+"""Schema, generation, and semantic validation tests for Android image manifests."""
+
+from __future__ import annotations
+
+import json
+import re
+import struct
+import tempfile
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from apkrun_image.__main__ import main as package_main
+from apkrun_image.inventory import inventory, serialize_inventory
+from apkrun_image.manifest import (
+    ManifestError,
+    generate_manifest,
+    serialize_manifest,
+    validate_manifest,
+)
+from apkrun_image.manifest import (
+    main as manifest_main,
+)
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures/manifests"
+FIXTURE_ARCHIVE = (
+    Path(__file__).resolve().parent / "fixtures/images/aosp_cf_arm64_only_phone-img-fixture.zip"
+)
+FIXTURE_INVENTORY = FIXTURE_ROOT / "fixture-inventory.json"
+FIXTURE_MANIFEST = FIXTURE_ROOT / "valid/fixture-build.json"
+PINNED_ARCHIVE = (
+    REPOSITORY_ROOT / "Images/work/16373615/download/aosp_cf_arm64_only_phone-img-16373615.zip"
+)
+PINNED_INVENTORY = REPOSITORY_ROOT / "Images/manifests/16373615/inventory.json"
+PINNED_MANIFEST = REPOSITORY_ROOT / "Images/manifests/16373615/android-image.json"
+
+
+def _load_json(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(value, dict)
+    return value
+
+
+def _python_only_fixtures() -> set[str]:
+    path = FIXTURE_ROOT / "invalid/python-only.txt"
+    return {
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    }
+
+
+def _fixture_source_for_m6(manifest: dict[str, object], directory: Path) -> tuple[Path, Path]:
+    """Change the synthetic vendor boot header to v3 while preserving the archive files."""
+    modified_archive = directory / FIXTURE_ARCHIVE.name
+    with zipfile.ZipFile(FIXTURE_ARCHIVE, "r") as original:
+        with zipfile.ZipFile(modified_archive, "w", compression=zipfile.ZIP_STORED) as output:
+            for item in original.infolist():
+                content = original.read(item)
+                if item.filename == "vendor_boot.img":
+                    mutable = bytearray(content)
+                    struct.pack_into("<I", mutable, 8, 3)
+                    content = bytes(mutable)
+                output.writestr(item, content)
+
+    modified_inventory = inventory(modified_archive)
+    manifest_source = manifest["source"]
+    assert isinstance(manifest_source, dict)
+    source_archive = manifest_source["archives"][0]
+    assert isinstance(source_archive, dict)
+    modified_source = modified_inventory["source"]
+    source_archive["size"] = modified_source["size"]
+    source_archive["sha256"] = modified_source["sha256"]
+
+    vendor_boot = next(
+        item for item in manifest["artifacts"] if item["id"] == manifest["roles"]["vendorBoot"]
+    )
+    inventory_vendor_boot = next(
+        item for item in modified_inventory["files"] if item["path"] == vendor_boot["file"]
+    )
+    vendor_boot["size"] = inventory_vendor_boot["size"]
+    vendor_boot["sha256"] = inventory_vendor_boot["sha256"]
+    inventory_path = directory / "inventory.json"
+    modified_source = modified_inventory["source"]
+    manifest_source = manifest["source"]
+    assert isinstance(modified_source, dict)
+    assert isinstance(manifest_source, dict)
+    for field in ("branch", "buildId", "target"):
+        modified_source[field] = manifest_source[field]
+    inventory_path.write_text(serialize_inventory(modified_inventory), encoding="utf-8")
+    return modified_archive, inventory_path
+
+
+def test_schema_matches_the_reference_copy_byte_for_byte() -> None:
+    """The checked-in schema stays identical to the normative reference block."""
+    reference = (REPOSITORY_ROOT / "docs/03-reference/android-image-manifest.md").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"## 7\. JSON Schema\n.*?```json\n(.*?)\n```", reference, re.S)
+
+    assert match is not None
+    checked_in = (
+        REPOSITORY_ROOT / "Images/tools/schemas/android-image-manifest.schema.json"
+    ).read_text(encoding="utf-8")
+    assert checked_in == match.group(1) + "\n"
+
+
+def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
+    """Every checked-in valid example satisfies the versioned schema and M1–M9."""
+    valid_directory = FIXTURE_ROOT / "valid"
+    paths = sorted(valid_directory.glob("*.json"))
+    paths.extend(sorted(REPOSITORY_ROOT.glob("Images/manifests/*/android-image.json")))
+
+    assert paths
+    for path in paths:
+        assert validate_manifest(_load_json(path)) == [], path
+
+
+def test_invalid_manifest_only_fixtures_match_their_expected_messages() -> None:
+    """Python and Swift share exact expected messages for M1–M3, M5, and M7–M9."""
+    python_only = _python_only_fixtures()
+    invalid_directory = FIXTURE_ROOT / "invalid"
+    for path in sorted(invalid_directory.glob("*.json")):
+        if path.name in python_only:
+            continue
+        expected_path = path.with_suffix(".expected.txt")
+        expected = expected_path.read_text(encoding="utf-8").splitlines()
+
+        assert validate_manifest(_load_json(path)) == expected, path.name
+
+
+def test_manifest_model_round_trips_with_deterministic_json() -> None:
+    """A parsed manifest can be serialized and loaded without changing its values."""
+    document = _load_json(FIXTURE_MANIFEST)
+
+    assert json.loads(serialize_manifest(document)) == document
+
+
+def test_generator_matches_the_shared_fixture_manifest() -> None:
+    """The draft generator uses inventory metadata and liblp partition contents."""
+    inventory_document = _load_json(FIXTURE_INVENTORY)
+    generated = generate_manifest(inventory_document, source=FIXTURE_ARCHIVE)
+
+    assert serialize_manifest(generated) == FIXTURE_MANIFEST.read_text(encoding="utf-8")
+    assert validate_manifest(generated) == []
+    assert {item["name"] for item in generated["logicalPartitions"]} == {"system_a", "vendor_a"}
+
+
+def test_generator_rejects_stale_inventory_entries() -> None:
+    """Draft generation refuses hashes that do not match the inspected source."""
+    inventory_document = _load_json(FIXTURE_INVENTORY)
+    stale_inventory = json.loads(json.dumps(inventory_document))
+    next(item for item in stale_inventory["files"] if item["path"] == "unknown.bin")["sha256"] = (
+        "0" * 64
+    )
+
+    with pytest.raises(ManifestError, match="file entries do not match the source image set"):
+        generate_manifest(stale_inventory, source=FIXTURE_ARCHIVE)
+
+
+def test_file_backed_fixture_manifest_passes_m4_and_m6_to_m13() -> None:
+    """The fixture archive, inventory, AVB chains, and logical partitions agree."""
+    failures = validate_manifest(
+        _load_json(FIXTURE_MANIFEST),
+        include_files=True,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=FIXTURE_INVENTORY,
+    )
+
+    assert failures == []
+
+
+def test_python_only_invalid_fixtures_match_file_check_messages() -> None:
+    """File-dependent checks compare the manifest against the inspected archive."""
+    invalid_directory = FIXTURE_ROOT / "invalid"
+    names = _python_only_fixtures()
+    assert names
+    for name in sorted(names):
+        manifest = _load_json(invalid_directory / name)
+        source = FIXTURE_ARCHIVE
+        inventory_path = FIXTURE_INVENTORY
+        if name == "m6-vendor-boot-v3.json":
+            temporary_directory = tempfile.TemporaryDirectory()
+            try:
+                source, inventory_path = _fixture_source_for_m6(
+                    manifest,
+                    Path(temporary_directory.name),
+                )
+                expected = (
+                    (invalid_directory / Path(name).with_suffix(".expected.txt"))
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                )
+                assert (
+                    validate_manifest(
+                        manifest,
+                        include_files=True,
+                        source=source,
+                        inventory_path=inventory_path,
+                    )
+                    == expected
+                ), name
+            finally:
+                temporary_directory.cleanup()
+            continue
+        expected = (
+            (invalid_directory / Path(name).with_suffix(".expected.txt"))
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+
+        assert (
+            validate_manifest(
+                manifest,
+                include_files=True,
+                source=source,
+                inventory_path=inventory_path,
+            )
+            == expected
+        ), name
+
+
+def test_pinned_manifest_generation_matches_the_committed_file() -> None:
+    """The pinned build draft is deterministic and includes every non-empty partition."""
+    if not PINNED_ARCHIVE.is_file():
+        pytest.skip("pinned Cuttlefish archive is not downloaded")
+    generated = generate_manifest(_load_json(PINNED_INVENTORY), source=PINNED_ARCHIVE)
+    committed = _load_json(PINNED_MANIFEST)
+
+    assert generated == committed
+    assert "system_b" in {item["name"] for item in generated["logicalPartitions"]}
+    assert len(generated["logicalPartitions"]) == 9
+
+
+def test_pinned_manifest_passes_file_checks_against_the_real_archive() -> None:
+    """T1 verifies the manifest, inventory, and actual build 16373615 archive."""
+    if not PINNED_ARCHIVE.is_file():
+        pytest.skip("pinned Cuttlefish archive is not downloaded")
+
+    assert (
+        validate_manifest(
+            _load_json(PINNED_MANIFEST),
+            include_files=True,
+            source=PINNED_ARCHIVE,
+            inventory_path=PINNED_INVENTORY,
+        )
+        == []
+    )
+
+
+def test_package_help_lists_manifest_command(capsys: pytest.CaptureFixture[str]) -> None:
+    """The top-level Python command exposes the manifest subcommand."""
+    assert package_main(["--help"]) == 0
+    assert "manifest" in capsys.readouterr().out
+
+
+def test_manifest_command_generates_and_checks_a_fixture(
+    tmp_path: Path,
+) -> None:
+    """The documented CLI writes a draft and checks the same source files."""
+    output_path = tmp_path / "android-image.json"
+    assert (
+        manifest_main(
+            [
+                "--inventory",
+                str(FIXTURE_INVENTORY),
+                "--source",
+                str(FIXTURE_ARCHIVE),
+                "--out",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    assert (
+        manifest_main(
+            [
+                "--check",
+                str(output_path),
+                "--inventory",
+                str(FIXTURE_INVENTORY),
+                "--source",
+                str(FIXTURE_ARCHIVE),
+            ]
+        )
+        == 0
+    )

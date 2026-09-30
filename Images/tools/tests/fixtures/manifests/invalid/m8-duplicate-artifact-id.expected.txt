@@ -1,0 +1,1 @@
+artifact id "vbmeta" appears in artifacts[3] and artifacts[7].

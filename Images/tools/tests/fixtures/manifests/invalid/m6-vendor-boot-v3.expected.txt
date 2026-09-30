@@ -1,0 +1,1 @@
+vendor_boot.img header v3 is not supported (needs v4 ramdisk table).

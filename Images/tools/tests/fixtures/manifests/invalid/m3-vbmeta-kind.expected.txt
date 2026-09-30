@@ -1,0 +1,1 @@
+artifacts[6] (role roles.vbmeta[0]): expected kind vbmeta on partition vbmeta, found sparse on partition super. Is the file swapped?

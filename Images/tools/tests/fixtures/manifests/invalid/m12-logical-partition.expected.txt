@@ -1,0 +1,1 @@
+logicalPartitions: system_a is in super.img but not in the manifest.

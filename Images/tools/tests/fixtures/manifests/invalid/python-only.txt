@@ -1,0 +1,9 @@
+# Invalid fixture JSON files that require source image bytes are checked by Python only.
+m4-hash-mismatch.json
+m6-vendor-boot-v3.json
+m10-kind-mismatch.json
+m11-chain-partition.json
+m12-logical-partition.json
+m13-release-mismatch.json
+m3-userdata-content.json
+m10-target-provenance.json

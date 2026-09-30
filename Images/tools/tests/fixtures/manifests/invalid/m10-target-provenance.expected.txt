@@ -1,0 +1,1 @@
+source.target "aosp_cf_arm64_only_tablet-userdebug" does not match inventory.json source.target "aosp_cf_arm64_only_phone-userdebug". Re-run manifest generation.

@@ -1,0 +1,1 @@
+roles.vendorBoot = "vendor_boot2": no artifact with that id. Known ids: boot, init_boot, vendor_boot, vbmeta, vbmeta_system, super, userdata.

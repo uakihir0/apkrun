@@ -1,0 +1,1 @@
+artifacts[7] (unknown.bin): kind filesystem does not match the inventory (unknown). Re-run the inventory.

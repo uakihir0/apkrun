@@ -1,0 +1,107 @@
+{
+  "android": {
+    "release": "17",
+    "sdk": 37,
+    "securityPatch": "2026-06",
+    "variant": "userdebug"
+  },
+  "androidInfo": {},
+  "architecture": "arm64",
+  "artifacts": [
+    {
+      "file": "boot",
+      "id": "boot",
+      "kind": "bootImage",
+      "partition": "boot",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 1
+    },
+    {
+      "file": "init_boot",
+      "id": "init_boot",
+      "kind": "bootImage",
+      "partition": "init_boot",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size": 1
+    },
+    {
+      "file": "vendor_boot",
+      "id": "vendor_boot",
+      "kind": "vendorBootImage",
+      "partition": "vendor_boot",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1
+    },
+    {
+      "file": "vbmeta",
+      "id": "vbmeta",
+      "kind": "vbmeta",
+      "partition": "vbmeta",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 1
+    },
+    {
+      "file": "vbmeta_system",
+      "id": "vbmeta_system",
+      "kind": "vbmeta",
+      "partition": "misc",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size": 1
+    },
+    {
+      "file": "super",
+      "id": "super",
+      "kind": "sparse",
+      "partition": "super",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1
+    },
+    {
+      "file": "userdata",
+      "id": "userdata",
+      "kind": "sparse",
+      "partition": "userdata",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1
+    }
+  ],
+  "blankPartitions": [
+    {
+      "partition": "misc",
+      "size": 4096
+    }
+  ],
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "logicalPartitions": [
+    {
+      "filesystem": "unknown",
+      "name": "system_a",
+      "size": 512
+    }
+  ],
+  "roles": {
+    "genericRamdisk": "init_boot",
+    "kernel": "boot",
+    "super": "super",
+    "userdataTemplate": "userdata",
+    "vbmeta": [
+      "vbmeta",
+      "vbmeta_system"
+    ],
+    "vendorBoot": "vendor_boot"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "archives": [
+      {
+        "name": "android-build",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 1
+      }
+    ],
+    "branch": "aosp-android-latest-release",
+    "buildId": "16373615",
+    "origin": "ci.android.com",
+    "target": "aosp_cf_arm64_only_phone-userdebug"
+  }
+}

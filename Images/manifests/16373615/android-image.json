@@ -1,0 +1,185 @@
+{
+  "android": {
+    "release": "17",
+    "sdk": 37,
+    "securityPatch": "2026-06",
+    "variant": "userdebug"
+  },
+  "androidInfo": {
+    "config": "phone",
+    "gfxstream": "supported",
+    "gfxstream_gl_program_binary_link_status": "supported"
+  },
+  "architecture": "arm64",
+  "artifacts": [
+    {
+      "file": "boot.img",
+      "id": "boot",
+      "kind": "bootImage",
+      "partition": "boot",
+      "sha256": "a8fb0875277c99d40154e03416010c496c22395bb4dd6b399ddeef69f5a833ac",
+      "size": 67108864
+    },
+    {
+      "file": "cuttlefish_example_custom.img",
+      "id": "custom",
+      "kind": "filesystem",
+      "partition": "custom",
+      "sha256": "3d17578db83de489aafbd421d98d2596cf4d486639c2802f4df7e9ac9e231847",
+      "size": 1048576
+    },
+    {
+      "file": "init_boot.img",
+      "id": "init_boot",
+      "kind": "bootImage",
+      "partition": "init_boot",
+      "sha256": "df1a2fc8aa21b5df13a2dcea50cdf90ac2ad222f19fb5a70877a16130e374e54",
+      "size": 8388608
+    },
+    {
+      "file": "super.img",
+      "id": "super",
+      "kind": "sparse",
+      "partition": "super",
+      "sha256": "54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05",
+      "size": 1746554644
+    },
+    {
+      "file": "userdata.img",
+      "id": "userdata",
+      "kind": "sparse",
+      "partition": "userdata",
+      "sha256": "f61bf108a6681bfd40f43e288a68bc623f1218d6d0d1840be87cb278b6093034",
+      "size": 2249012
+    },
+    {
+      "file": "vbmeta.img",
+      "id": "vbmeta",
+      "kind": "vbmeta",
+      "partition": "vbmeta",
+      "sha256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+      "size": 12288
+    },
+    {
+      "file": "vbmeta_system.img",
+      "id": "vbmeta_system",
+      "kind": "vbmeta",
+      "partition": "vbmeta_system",
+      "sha256": "8cd7110a0a15dbde66c91789e227bfe6a67b8381466815185a9bb5a0b161173d",
+      "size": 4096
+    },
+    {
+      "file": "vbmeta_system_dlkm.img",
+      "id": "vbmeta_system_dlkm",
+      "kind": "vbmeta",
+      "partition": "vbmeta_system_dlkm",
+      "sha256": "1c86b6c6b979860ee5e9f67387f0f152c4db39274520de812858ce3b6fec989a",
+      "size": 4096
+    },
+    {
+      "file": "vbmeta_vendor_dlkm.img",
+      "id": "vbmeta_vendor_dlkm",
+      "kind": "vbmeta",
+      "partition": "vbmeta_vendor_dlkm",
+      "sha256": "beeda4df61c649a7c74a5a296d910b310b9abb26bd2d81ff9b634008148dbc11",
+      "size": 4096
+    },
+    {
+      "file": "vendor_boot.img",
+      "id": "vendor_boot",
+      "kind": "vendorBootImage",
+      "partition": "vendor_boot",
+      "sha256": "02b2af631eb4868ea2163b9de0773ab3b17bf1f5ddca5ab4e2a0258777f46f3f",
+      "size": 67108864
+    }
+  ],
+  "blankPartitions": [
+    {
+      "partition": "misc",
+      "size": 1048576
+    },
+    {
+      "partition": "metadata",
+      "size": 67108864
+    },
+    {
+      "partition": "frp",
+      "size": 1048576
+    }
+  ],
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "logicalPartitions": [
+    {
+      "filesystem": "erofs",
+      "name": "odm_a",
+      "size": 520192
+    },
+    {
+      "filesystem": "erofs",
+      "name": "odm_dlkm_a",
+      "size": 348160
+    },
+    {
+      "filesystem": "erofs",
+      "name": "product_a",
+      "size": 232157184
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_a",
+      "size": 959066112
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_b",
+      "size": 4747264
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_dlkm_a",
+      "size": 8568832
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_ext_a",
+      "size": 258179072
+    },
+    {
+      "filesystem": "erofs",
+      "name": "vendor_a",
+      "size": 291229696
+    },
+    {
+      "filesystem": "erofs",
+      "name": "vendor_dlkm_a",
+      "size": 1695744
+    }
+  ],
+  "roles": {
+    "genericRamdisk": "init_boot",
+    "kernel": "boot",
+    "super": "super",
+    "userdataTemplate": "userdata",
+    "vbmeta": [
+      "vbmeta",
+      "vbmeta_system",
+      "vbmeta_system_dlkm",
+      "vbmeta_vendor_dlkm"
+    ],
+    "vendorBoot": "vendor_boot"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "archives": [
+      {
+        "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
+        "sha256": "051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18",
+        "size": 1101175103
+      }
+    ],
+    "branch": "aosp-android-latest-release",
+    "buildId": "16373615",
+    "origin": "ci.android.com",
+    "target": "aosp_cf_arm64_only_phone-userdebug"
+  }
+}

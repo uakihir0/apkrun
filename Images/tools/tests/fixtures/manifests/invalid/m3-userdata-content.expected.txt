@@ -1,0 +1,1 @@
+artifacts[10] (role userdataTemplate): expected sparse with filesystem content, found sparse with dynamicPartitions content. Is the template swapped?

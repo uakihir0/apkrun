@@ -1,0 +1,1 @@
+artifacts[1] (role kernel): expected kind bootImage on partition boot, found bootImage on partition init_boot. Is the file swapped?

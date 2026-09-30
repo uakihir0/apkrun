@@ -76,10 +76,18 @@ else
 fi
 
 if [[ -n "$(find Images/tools -type f -name '*.py' -print -quit 2>/dev/null || true)" ]]; then
+    ruff="$repo_root/Images/tools/.venv/bin/ruff"
+    if [[ ! -x "$ruff" ]]; then
+        ruff="$(command -v ruff || true)"
+    fi
+    if [[ -z "$ruff" ]]; then
+        printf 'check-format: Python sources exist but Ruff is missing; run scripts/bootstrap\n' >&2
+        exit 1
+    fi
     if [[ "$fix" == true ]]; then
-        ruff format Images/tools
+        "$ruff" format Images/tools
     else
-        ruff format --check Images/tools
+        "$ruff" format --check Images/tools
     fi
 else
     printf 'check-format: skip (Images/tools Python sources not present)\n'

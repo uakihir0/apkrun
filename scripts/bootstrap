@@ -56,6 +56,49 @@ check_xcodegen() {
     fi
 }
 
+setup_python_tools() {
+    local host_python="$repo_root/Images/tools/.venv/bin/python"
+    local environment="$repo_root/Images/tools/.venv"
+    local system_python
+    system_python="$(command -v python3.12 2>/dev/null || true)"
+
+    if [[ -z "$system_python" ]]; then
+        report FAIL "Python image tooling" "install python@3.12 from scripts/Brewfile"
+        failures=$((failures + 1))
+        return
+    fi
+
+    if [[ "$check_only" -eq 1 ]]; then
+        if [[ ! -x "$host_python" ]]; then
+            report FAIL "Python image tooling" "missing Images/tools/.venv; run scripts/bootstrap"
+            failures=$((failures + 1))
+            return
+        fi
+        if ! "$host_python" -c \
+            'import apkrun_image, cryptography, jsonschema, lz4, pytest, ruff'; then
+            report FAIL "Python image tooling" "the image tools environment is incomplete; run scripts/bootstrap"
+            failures=$((failures + 1))
+            return
+        fi
+        report ok "Python image tooling" "$("$host_python" --version 2>&1)"
+        return
+    fi
+
+    if [[ ! -x "$host_python" ]]; then
+        if ! "$system_python" -m venv "$environment"; then
+            report FAIL "Python image tooling" "could not create Images/tools/.venv"
+            failures=$((failures + 1))
+            return
+        fi
+    fi
+    if ! "$host_python" -m pip install -e "$repo_root/Images/tools[test]"; then
+        report FAIL "Python image tooling" "dependency installation failed"
+        failures=$((failures + 1))
+        return
+    fi
+    report ok "Python image tooling" "$("$host_python" --version 2>&1)"
+}
+
 install_xcodegen() {
     local tools_dir="$repo_root/build/tools/xcodegen-$XCODEGEN_VERSION"
     local executable="$tools_dir/bin/xcodegen"
@@ -171,7 +214,7 @@ fi
 
 report skip "Metal toolchain" "added by #020"
 report skip "Homebrew packages" "added by #020"
-report skip "Python image tooling" "added by #008"
+setup_python_tools
 report skip "JDK and Android SDK" "added by #015"
 report skip "Rust and cargo-ndk" "added by #034"
 report skip "protoc and buf" "added by #033"

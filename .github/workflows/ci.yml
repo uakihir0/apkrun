@@ -110,3 +110,24 @@ jobs:
             build/ci/*.xml
           if-no-files-found: warn
           retention-days: 14
+
+  test-images:
+    name: test-images
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install Python 3.12
+        run: brew install python@3.12
+      - name: Install image tooling
+        run: |
+          python3.12 -m venv Images/tools/.venv
+          Images/tools/.venv/bin/python -m pip install -e 'Images/tools[test]'
+      - name: Run image tooling tests
+        run: Images/tools/.venv/bin/python -m pytest Images/tools/tests
+      - name: Check image tooling style
+        run: |
+          Images/tools/.venv/bin/ruff check Images/tools
+          Images/tools/.venv/bin/ruff format --check Images/tools

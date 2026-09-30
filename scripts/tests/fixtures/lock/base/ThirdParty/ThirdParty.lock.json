@@ -13,6 +13,25 @@
       "buildFlags": [],
       "patches": [],
       "ships": "app"
+    },
+    {
+      "name": "fixture-vendored",
+      "group": "fixture-tools",
+      "kind": "vendored",
+      "repository": "https://example.com/fixture-vendored.git",
+      "commit": "1111111111111111111111111111111111111111",
+      "version": "1.0.0",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling",
+      "files": [
+        {
+          "path": "Images/tools/vendor/fixture-tool.py",
+          "sha256": "4a7b863a70bf3a61ce3c65e900f960f2a5ac7a2ec19daf79cb06d6985a546959"
+        }
+      ]
     }
   ]
 }

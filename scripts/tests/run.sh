@@ -85,6 +85,7 @@ mode = sys.argv[2]
 lock_path = root / "ThirdParty/ThirdParty.lock.json"
 lock = json.loads(lock_path.read_text())
 component = lock["components"][0]
+vendored_component = lock["components"][1]
 
 def use_project_package(repository, version):
     (root / "Package.swift").write_text(
@@ -268,6 +269,19 @@ elif mode == "hash-trailing-newline":
     component["sha256"] = "a" * 64 + "\n"
 elif mode == "malformed-resolved-json":
     (root / "Package.resolved").write_text("{\n")
+elif mode == "vendored-file-hash":
+    vendored_component["files"][0]["sha256"] = "0" * 64
+elif mode == "vendored-file-path":
+    vendored_component["files"][0]["path"] = "../Package.swift"
+elif mode == "vendored-file-symlink":
+    file_path = root / "Images/tools/vendor/escape.py"
+    file_path.symlink_to(root / "Package.swift")
+    vendored_component["files"] = [
+        {
+            "path": "Images/tools/vendor/escape.py",
+            "sha256": "0" * 64,
+        }
+    ]
 else:
     raise SystemExit(f"unknown mutation: {mode}")
 
@@ -394,6 +408,18 @@ malformed_resolved_root="$(new_fixture malformed-resolved-json)"
 mutate_lock "$malformed_resolved_root" malformed-resolved-json
 expect_fail "malformed resolved JSON diagnostic" "Package.resolved: invalid JSON" "$malformed_resolved_root"
 
+vendored_hash_root="$(new_fixture vendored-file-hash)"
+mutate_lock "$vendored_hash_root" vendored-file-hash
+expect_fail "vendored file hash mismatch" "vendored file SHA-256 mismatch" "$vendored_hash_root"
+
+vendored_path_root="$(new_fixture vendored-file-path)"
+mutate_lock "$vendored_path_root" vendored-file-path
+expect_fail "vendored unsafe file path" "has unsafe vendored file path" "$vendored_path_root"
+
+vendored_symlink_root="$(new_fixture vendored-file-symlink)"
+mutate_lock "$vendored_symlink_root" vendored-file-symlink
+expect_fail "vendored file symlink escape" "vendored path is not a regular file" "$vendored_symlink_root"
+
 module_fixture_root="$script_dir/fixtures/module-deps"
 new_module_fixture() {
     local name="$1"
@@ -505,12 +531,20 @@ def workflow_errors(workflow, trigger_key)
   unless test_commands.any? { |command| command.include?("--skip 'SystemTests' -j 2") }
     errors << "test-swift must run T0 only and cap build parallelism"
   end
+  image_commands = workflow.fetch("jobs").fetch("test-images").fetch("steps")
+    .map { |step| step["run"] }.compact
+  unless image_commands.any? { |command| command.include?("python3.12 -m venv Images/tools/.venv") } &&
+      image_commands.any? { |command| command.include?("pip install -e 'Images/tools[test]'") } &&
+      image_commands.any? { |command| command.include?("pytest Images/tools/tests") } &&
+      image_commands.any? { |command| command.include?("ruff check Images/tools") }
+    errors << "test-images must install Python tooling and run pytest and Ruff"
+  end
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen build test-swift]
+  expected_jobs = %w[lint codegen build test-swift test-images]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
-    errors << "only the four initial required CI jobs may be configured here"
+    errors << "CI jobs must match the M0 and M1 required job set"
   end
   unless test_commands.none? { |command| command.include?("check-compile-fail.sh") }
     errors << "T1 compiler-fail checks must not run in the hosted T0 job"
@@ -1153,6 +1187,8 @@ fixture_root = repository / "scripts/tests/fixtures/release"
 checker = repository / "scripts/release/check-release-build.sh"
 source = fixture_root / "release-check.c"
 public_key = (repository / "Tests/Fixtures/signing/test-release-check-ed25519.pub").read_text().strip()
+avb_public_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture.avbpubkey").read_bytes()
+avb_private_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem").read_bytes()
 key_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
 cases = (
     ("clean", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", None, True, None),
@@ -1161,6 +1197,8 @@ cases = (
     ("test-key-id", key_id, "release", None, False, "test signing material"),
     ("test-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".pub", False, "test signing material"),
     ("test-key-der-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".der", False, "test signing material"),
+    ("test-avb-public-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".avbpubkey", False, "test signing material"),
+    ("test-avb-private-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".rsa.pem", False, "test signing material"),
     ("development-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "dev", None, False, "APKRunBuildIdentity"),
     ("release-update-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "updatetest", None, False, "updatetest"),
 )
@@ -1195,11 +1233,12 @@ for name, marker, identity, resource_suffix, should_pass, expected in cases:
     if resource_suffix:
         resources = contents / "Resources"
         resources.mkdir()
-        resource_bytes = (
-            public_key.encode("ascii")
-            if resource_suffix == ".pub"
-            else bytes.fromhex(public_key)
-        )
+        resource_bytes = {
+            ".pub": public_key.encode("ascii"),
+            ".der": bytes.fromhex(public_key),
+            ".avbpubkey": avb_public_key,
+            ".rsa.pem": avb_private_key,
+        }[resource_suffix]
         (resources / f"test-key{resource_suffix}").write_bytes(resource_bytes)
     result = subprocess.run(
         [str(checker), str(app)],

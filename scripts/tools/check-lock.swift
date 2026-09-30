@@ -1,4 +1,5 @@
 import CoreFoundation
+import CryptoKit
 import Foundation
 
 struct CheckFailure: Error, CustomStringConvertible {
@@ -488,6 +489,73 @@ func check(root: URL) throws -> [String] {
             }
             if string(component["sha256"]) == nil {
                 failures.append("\(lockURL.path): \(label) is missing its sha256")
+            }
+        }
+        if kind == "vendored" {
+            guard let vendoredFiles = component["files"] as? [[String: Any]],
+                !vendoredFiles.isEmpty
+            else {
+                failures.append("\(lockURL.path): \(label) requires a non-empty 'files' array")
+                continue
+            }
+            var vendoredPaths: Set<String> = []
+            for file in vendoredFiles {
+                guard let relativePath = string(file["path"]),
+                    let expectedHash = string(file["sha256"])
+                else {
+                    failures.append("\(lockURL.path): \(label) has a malformed vendored file entry")
+                    continue
+                }
+                guard safeRelativePath(relativePath) else {
+                    failures.append(
+                        "\(lockURL.path): \(label) has unsafe vendored file path '\(relativePath)'"
+                    )
+                    continue
+                }
+                if !matches(hex64, expectedHash) {
+                    failures.append(
+                        "\(lockURL.path): \(label) has an invalid SHA-256 for '\(relativePath)'"
+                    )
+                    continue
+                }
+                if !vendoredPaths.insert(relativePath).inserted {
+                    failures.append(
+                        "\(lockURL.path): \(label) lists vendored file '\(relativePath)' more than once"
+                    )
+                    continue
+                }
+
+                let fileURL = root.appending(path: relativePath)
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    failures.append(
+                        "\(lockURL.path): \(label) vendored file is missing: \(relativePath)"
+                    )
+                    continue
+                }
+                guard !hasSymlinkComponent(fileURL, within: root),
+                    isDescendant(fileURL, of: root),
+                    let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                    attributes[.type] as? FileAttributeType == .typeRegular
+                else {
+                    failures.append(
+                        "\(lockURL.path): \(label) vendored path is not a regular file within the repository: \(relativePath)"
+                    )
+                    continue
+                }
+                guard let data = try? Data(contentsOf: fileURL) else {
+                    failures.append(
+                        "\(lockURL.path): \(label) vendored file cannot be read: \(relativePath)"
+                    )
+                    continue
+                }
+                let actualHash = SHA256.hash(data: data)
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                if actualHash != expectedHash.lowercased() {
+                    failures.append(
+                        "\(lockURL.path): \(label) vendored file SHA-256 mismatch: \(relativePath)"
+                    )
+                }
             }
         }
 

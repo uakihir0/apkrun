@@ -25,7 +25,20 @@ if [ "$(uname -m)" != aarch64 ] && [ "$(uname -m)" != arm64 ] && [ "$(uname -m)"
   exit 2
 fi
 
-for tool in adb launch_cvd stop_cvd timeout python3 gzip find ps grep awk; do
+if [ -z "${CVD_HOST_DIR:-}" ] || [ ! -d "$CVD_HOST_DIR" ]; then
+  printf 'set CVD_HOST_DIR to the extracted Cuttlefish host package directory.\n' >&2
+  exit 2
+fi
+if [ ! -x "$CVD_HOST_DIR/bin/launch_cvd" ] \
+  || [ ! -x "$CVD_HOST_DIR/bin/cvd" ] \
+  || [ ! -x "$CVD_HOST_DIR/bin/adb" ]; then
+  printf 'CVD_HOST_DIR must contain executable bin/launch_cvd, bin/cvd, and bin/adb.\n' >&2
+  exit 2
+fi
+PATH="$CVD_HOST_DIR/bin:$PATH"
+export PATH
+
+for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required host tool not found on PATH: %s\n' "$tool" >&2
     exit 2
@@ -58,7 +71,8 @@ fi
 adb_port=$((6520 + cvd_instance_num - 1))
 
 manifest_path="$repo_root/Images/manifests/16373615/android-image.json"
-if ! python3 - "$manifest_path" "$ANDROID_PRODUCT_OUT" <<'PY'
+verify_product_images() {
+python3 - "$manifest_path" "$1" <<'PY'
 import hashlib
 import json
 import sys
@@ -114,8 +128,17 @@ for artifact in artifacts:
         raise SystemExit(f"product output does not match pinned artifact {filename}: {error}")
 print("Verified all product image artifacts against build 16373615.")
 PY
-then
+}
+if ! verify_product_images "$ANDROID_PRODUCT_OUT"; then
   printf 'ANDROID_PRODUCT_OUT must contain the artifacts from the pinned build 16373615.\n' >&2
+  exit 2
+fi
+if ! source_symlink=$(find "$ANDROID_PRODUCT_OUT" -type l -print -quit); then
+  printf 'could not inspect ANDROID_PRODUCT_OUT for symbolic links.\n' >&2
+  exit 2
+fi
+if [ -n "$source_symlink" ]; then
+  printf 'ANDROID_PRODUCT_OUT contains symbolic links; re-extract the product files without links.\n' >&2
   exit 2
 fi
 
@@ -190,16 +213,29 @@ stage_normalized=0
 cvd_home=
 preserve_cvd_home=0
 started=0
+cvd_group_name=
 capture_failed=0
 capture_lock_owned=0
 lock_initializing=0
 pending_signal_status=
+adb_connect_attempted=0
+adb_disconnect_attempted=0
 capture_started_at=$(date +%s)
 capture_script_pid=$$
 exec 3>&2
 
-stop_cvd_bounded() {
-  HOME="$cvd_home" timeout --kill-after=10s "$stop_timeout_seconds" stop_cvd
+remove_cvd_group_bounded() {
+  HOME="$cvd_home" timeout --kill-after=10s "$stop_timeout_seconds" \
+    cvd --group_name="$cvd_group_name" remove
+}
+
+disconnect_adb_bounded() {
+  [ -n "$cvd_home" ] || return 0
+  [ "$adb_connect_attempted" -eq 1 ] || return 0
+  [ "$adb_disconnect_attempted" -eq 0 ] || return 0
+  adb_disconnect_attempted=1
+  HOME="$cvd_home" timeout --kill-after=2s 10 \
+    adb disconnect "127.0.0.1:$adb_port" >/dev/null 2>&1 || true
 }
 
 discard_staging_path() {
@@ -235,8 +271,9 @@ on_exit() {
   exec 2>&3
   exec 3>&-
   trap '' HUP INT TERM
+  disconnect_adb_bounded
   if [ "$started" -eq 1 ]; then
-    if stop_cvd_bounded >/dev/null 2>&1; then
+    if remove_cvd_group_bounded >/dev/null 2>&1; then
       started=0
       if rm -rf "$cvd_home"; then
         cvd_home=
@@ -360,9 +397,12 @@ if [ -n "$pending_signal_status" ]; then
 fi
 
 stage=$(mktemp -d "$reference_root/.${profile}.capture.XXXXXX")
-cvd_home=$(mktemp -d "$HOME/.apkrun-cvd-home.${profile}.XXXXXX")
-runtime_root="$cvd_home/cuttlefish_runtime"
-instance_runtime="$runtime_root/instances/cvd-$cvd_instance_num"
+cvd_home=$(mktemp -d "${TMPDIR:-/tmp}/apkrun-cvd-home.${profile}.XXXXXX")
+cvd_group_suffix=$(printf '%s' "${cvd_home##*.}" | tr '[:upper:]' '[:lower:]')
+cvd_group_name="apkrun_${profile}_${cvd_group_suffix}"
+runtime_root="$cvd_home"
+instance_runtime="$runtime_root/.missing-instance"
+mkdir -p "$runtime_root"
 capture_marker="$stage/capture-start-marker"
 : > "$capture_marker"
 missing_file="$stage/MISSING.txt"
@@ -373,6 +413,30 @@ record_missing() {
   capture_failed=1
 }
 
+private_product_out="$cvd_home/product"
+if ! mkdir -p "$private_product_out" \
+  || ! cp -a "$ANDROID_PRODUCT_OUT/." "$private_product_out/" \
+  || ! chmod -R u+rwX "$private_product_out"; then
+  record_missing "product-images" \
+    "could not create a writable private copy of ANDROID_PRODUCT_OUT"
+  exit 1
+fi
+if ! copied_symlink=$(find "$private_product_out" -type l -print -quit); then
+  record_missing "product-images" \
+    "could not verify the private product copy for symbolic links"
+  exit 1
+fi
+if [ -n "$copied_symlink" ]; then
+  record_missing "product-images" \
+    "private product copy contains a symbolic link; Cuttlefish was not started"
+  exit 1
+fi
+if ! verify_product_images "$private_product_out" >/dev/null; then
+  record_missing "product-images" \
+    "private product copy does not match pinned build 16373615; Cuttlefish was not started"
+  exit 1
+fi
+
 if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
   if cp "$virgl_properties_file" "$stage/graphics-props-from-source.txt"; then
     printf '%s\n' "$virgl_source_revision" > "$stage/graphics-props-source-revision.txt"
@@ -381,26 +445,33 @@ if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
   fi
 fi
 
+create_cvd_group_with_common_options() {
+  HOME="$cvd_home" cvd create \
+    --host_path="$CVD_HOST_DIR" \
+    --product_path="$private_product_out" \
+    --base_directory="$runtime_root" \
+    --group_name="$cvd_group_name" \
+    --base_instance_num="$cvd_instance_num" \
+    --num_instances=1 \
+    --nostart \
+    "$@" \
+    && HOME="$cvd_home" cvd --group_name="$cvd_group_name" start
+}
+
 launch_profile() {
   case "$profile" in
     default)
-      HOME="$cvd_home" launch_cvd \
-        --base_instance_num="$cvd_instance_num" --num_instances=1 \
-        --cpus 4 --memory_mb 4096
+      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096
       ;;
     target)
-      HOME="$cvd_home" launch_cvd \
-        --base_instance_num="$cvd_instance_num" \
-        --num_instances=1 \
+      create_cvd_group_with_common_options \
         --gpu_mode="$target_gpu_mode" \
         --secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure \
         --cpus 4 \
         --memory_mb 4096
       ;;
     swiftshader)
-      HOME="$cvd_home" launch_cvd \
-        --base_instance_num="$cvd_instance_num" \
-        --num_instances=1 \
+      create_cvd_group_with_common_options \
         --gpu_mode=guest_swiftshader \
         --secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure \
         --cpus 4 \
@@ -415,15 +486,25 @@ capture_adb() {
 
 preserve_cvd_home=1
 started=1
-if ! launch_profile > "$stage/launch-cvd-console.log" 2>&1; then
-  record_missing "guest" "launch_cvd failed; see launch-cvd-console.log"
+if ! launch_profile > "$stage/cvd-create-console.log" 2>&1; then
+  record_missing "guest" "Cuttlefish group create or start failed; see cvd-create-console.log"
 else
   preserve_cvd_home=0
+  discovered_instance_runtime=$(find "$runtime_root" -type d \
+    -path "*/instances/cvd-$cvd_instance_num" -print -quit 2>/dev/null || true)
+  if [ -n "$discovered_instance_runtime" ]; then
+    instance_runtime=$discovered_instance_runtime
+  else
+    record_missing "instance-runtime" \
+      "Cuttlefish did not create the selected instance directory under its private base directory"
+  fi
   boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
   booted=0
   device_invalid=0
   adb_serial=
   while [ "$(date +%s)" -lt "$boot_timeout_deadline" ]; do
+    adb_connect_attempted=1
+    capture_adb connect "127.0.0.1:$adb_port" >/dev/null 2>&1 || true
     adb_serial=$(capture_adb devices |
       awk -v port="$adb_port" \
         'NR > 1 && $2 == "device" && $1 ~ ("^(127[.]0[.]0[.]1|localhost):" port "$") { print $1 }')
@@ -684,15 +765,16 @@ Path(sys.argv[1]).write_text(
 )
 PY
 
+disconnect_adb_bounded
 if [ "$started" -eq 1 ]; then
-  if stop_cvd_bounded >/dev/null 2>&1; then
+  if remove_cvd_group_bounded >/dev/null 2>&1; then
     started=0
     preserve_cvd_home=0
   else
     started=0
     preserve_cvd_home=1
-    record_missing "guest" "stop_cvd reported a shutdown failure"
-    record_missing "cvd-runtime-home" "shutdown failed; retained HOME path is printed to stderr"
+    record_missing "guest" "scoped cvd remove reported a shutdown failure"
+    record_missing "cvd-runtime-home" "CVD group removal failed; retained HOME path is printed to stderr"
   fi
 fi
 rm -f "$capture_marker"

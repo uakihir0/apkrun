@@ -128,6 +128,367 @@ def test_compare_boot_can_be_invoked_directly_with_the_project_python() -> None:
 
 
 @pytest.mark.parametrize(
+    ("profile", "expected_gpu_mode", "expected_secure_hals"),
+    (
+        ("default", None, False),
+        ("target", "drm_virgl", True),
+        ("swiftshader", "guest_swiftshader", True),
+    ),
+)
+def test_capture_script_uses_each_profile_launch_configuration(
+    tmp_path: Path,
+    profile: str,
+    expected_gpu_mode: str | None,
+    expected_secure_hals: bool,
+) -> None:
+    repo = tmp_path / "repo"
+    reference_tools = repo / "Images/tools/reference"
+    reference_tools.mkdir(parents=True)
+    for name in ("capture.sh", "compare_boot.py", "normalize.yaml", "guest-capture.txt"):
+        shutil.copy2(TOOLS_ROOT / "reference" / name, reference_tools / name)
+    lock_root = tmp_path / "locks"
+    lock_root.mkdir()
+    capture_script = reference_tools / "capture.sh"
+    capture_text = capture_script.read_text(encoding="utf-8")
+    capture_text = capture_text.replace(
+        "capture_lock_root=/tmp",
+        f"capture_lock_root={shlex.quote(str(lock_root))}",
+    )
+    capture_script.write_text(capture_text, encoding="utf-8")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    (fake_bin / "uname").write_text(
+        "#!/bin/sh\n"
+        'case "${1:-}" in\n'
+        "  -s) echo Linux ;;\n"
+        "  -m) echo aarch64 ;;\n"
+        '  -srmo) echo "Linux synthetic 6.0 aarch64 GNU/Linux" ;;\n'
+        "  *) echo aarch64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "cvd").write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            if [ "${1:-}" = create ]; then
+              shift
+              base_directory="$HOME"
+              instance_num=1
+              for argument in "$@"; do
+                case "$argument" in
+                  --base_directory=*) base_directory=${argument#*=} ;;
+                  --base_instance_num=*) instance_num=${argument#*=} ;;
+                esac
+              done
+              instance="$base_directory/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
+              mkdir -p "$instance/internal"
+              printf '%s\\n' "$*" > "$APKRUN_PROFILE_LAUNCH_LOG"
+              printf '%s\\n' "$instance" > "$APKRUN_PROFILE_INSTANCE_FILE"
+              python3 - "$instance/internal/bootconfig" <<'PY'
+            import struct
+            import sys
+            from pathlib import Path
+            body = b"androidboot.synthetic=1\\n"
+            footer = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(body), len(body), 0)
+            Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
+            PY
+              printf '%s\\n' '{"disks":{"os_composite":{"partitions":["boot_a"]}}}' \\
+                > "$instance/cuttlefish_config.json"
+              printf 'synthetic kernel log\\n' > "$instance/kernel.log"
+              printf 'synthetic launcher log\\n' > "$instance/launcher.log"
+              exit 0
+            fi
+            for argument in "$@"; do
+              if [ "$argument" = start ]; then
+                printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
+                exit 0
+              fi
+            done
+            exit 0
+            """
+        ),
+        encoding="utf-8",
+    )
+    (fake_bin / "adb").write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            case "${1:-}" in
+              connect|disconnect) exit 0 ;;
+              devices)
+                printf 'List of devices attached\\n'
+                if [ "$HOME" != "$APKRUN_PROFILE_INITIAL_HOME" ]; then
+                  printf '127.0.0.1:6520 device\\n'
+                fi
+                exit 0
+                ;;
+              -s) shift 2 ;;
+            esac
+            case "${1:-}" in
+              shell)
+                if [ "${2:-}" = getprop ]; then
+                  echo 1
+                fi
+                exit 0
+                ;;
+              wait-for-device) exit 0 ;;
+              exec-out) printf 'synthetic guest output\\n'; exit 0 ;;
+              *) exit 1 ;;
+            esac
+            """
+        ),
+        encoding="utf-8",
+    )
+    (fake_bin / "ps").write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            [ -f "$APKRUN_PROFILE_INSTANCE_FILE" ] || exit 0
+            instance=$(cat "$APKRUN_PROFILE_INSTANCE_FILE")
+            printf 'PID COMMAND\\n100 crosvm run --socket=%s/vsock.sock\\n' "$instance"
+            """
+        ),
+        encoding="utf-8",
+    )
+    (fake_bin / "timeout").write_text(
+        '#!/bin/sh\nshift 2\nexec "$@"\n',
+        encoding="utf-8",
+    )
+    (fake_bin / "mv").write_text(
+        '#!/bin/sh\n[ "$1" = -T ] && shift\n[ ! -e "$2" ] || exit 1\nexec /bin/mv "$1" "$2"\n',
+        encoding="utf-8",
+    )
+    for executable in fake_bin.iterdir():
+        executable.chmod(0o755)
+
+    product_out = tmp_path / "product-out"
+    product_out.mkdir()
+    boot_image = b"synthetic boot image\n"
+    (product_out / "boot.img").write_bytes(boot_image)
+    manifest_dir = repo / "Images/manifests/16373615"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "android-image.json").write_text(
+        json.dumps(
+            {
+                "architecture": "arm64",
+                "artifacts": [
+                    {
+                        "file": "boot.img",
+                        "sha256": hashlib.sha256(boot_image).hexdigest(),
+                        "size": len(boot_image),
+                    }
+                ],
+                "source": {
+                    "buildId": "16373615",
+                    "target": "aosp_cf_arm64_only_phone-userdebug",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cvd_host = tmp_path / "cvd-host"
+    host_bin = cvd_host / "bin"
+    host_bin.mkdir(parents=True)
+    (host_bin / "cvd").symlink_to(fake_bin / "cvd")
+    (host_bin / "launch_cvd").symlink_to(fake_bin / "cvd")
+    (host_bin / "adb").symlink_to(fake_bin / "adb")
+    launch_log = tmp_path / "launch-args.txt"
+    start_log = tmp_path / "start-args.txt"
+    instance_file = tmp_path / "instance-path.txt"
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
+            "APKRUN_PROFILE_INSTANCE_FILE": str(instance_file),
+            "APKRUN_PROFILE_INITIAL_HOME": str(home),
+            "APKRUN_PROFILE_LAUNCH_LOG": str(launch_log),
+            "APKRUN_PROFILE_START_LOG": str(start_log),
+            "CVD_HOST_DIR": str(cvd_host),
+            "ANDROID_PRODUCT_OUT": str(product_out),
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}",
+            "TMPDIR": str(tmp_path),
+        }
+    )
+
+    result = subprocess.run(
+        ["sh", str(capture_script), profile],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    launch_arguments = launch_log.read_text(encoding="utf-8").split()
+    group_argument = next(
+        argument for argument in launch_arguments if argument.startswith("--group_name=")
+    )
+    assert start_log.read_text(encoding="utf-8").split() == [group_argument, "start"]
+    assert f"--base_directory={tmp_path}/apkrun-cvd-home.{profile}." in " ".join(launch_arguments)
+    if expected_gpu_mode is None:
+        assert not any(argument.startswith("--gpu_mode=") for argument in launch_arguments)
+    else:
+        assert f"--gpu_mode={expected_gpu_mode}" in launch_arguments
+    secure_hals = "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure"
+    assert (secure_hals in launch_arguments) is expected_secure_hals
+
+    capture = repo / f"Images/reference/16373615/{profile}"
+    metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
+    assert metadata["profile"] == profile
+    assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
+    assert "androidboot.synthetic=1\n" == (capture / "internal-bootconfig.txt").read_text(
+        encoding="utf-8"
+    )
+    assert not Path(instance_file.read_text(encoding="utf-8").strip()).exists()
+
+
+@pytest.mark.parametrize(
+    ("product_symlink", "mutate_private_copy", "expected_status", "expected_error"),
+    (
+        (True, False, 2, "ANDROID_PRODUCT_OUT contains symbolic links"),
+        (False, True, 1, "product output does not match pinned artifact boot.img"),
+    ),
+)
+def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
+    tmp_path: Path,
+    product_symlink: bool,
+    mutate_private_copy: bool,
+    expected_status: int,
+    expected_error: str,
+) -> None:
+    repo = tmp_path / "repo"
+    reference_tools = repo / "Images/tools/reference"
+    reference_tools.mkdir(parents=True)
+    for name in ("capture.sh", "compare_boot.py", "normalize.yaml", "guest-capture.txt"):
+        shutil.copy2(TOOLS_ROOT / "reference" / name, reference_tools / name)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    (fake_bin / "uname").write_text(
+        "#!/bin/sh\n"
+        'case "${1:-}" in\n'
+        "  -s) echo Linux ;;\n"
+        "  -m) echo aarch64 ;;\n"
+        '  -srmo) echo "Linux synthetic 6.0 aarch64 GNU/Linux" ;;\n'
+        "  *) echo aarch64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "uname").chmod(0o755)
+    cvd_invocation_log = tmp_path / "cvd-invocations.txt"
+    fake_cvd = fake_bin / "cvd"
+    fake_cvd.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CVD_INVOCATION_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_cvd.chmod(0o755)
+    fake_timeout = fake_bin / "timeout"
+    fake_timeout.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_timeout.chmod(0o755)
+    fake_cp = fake_bin / "cp"
+    fake_cp.write_text(
+        "#!/bin/sh\n"
+        '/bin/cp "$@" || exit\n'
+        'if [ "${FAKE_MUTATE_PRIVATE_COPY:-0}" = 1 ] && [ "${1:-}" = -a ]; then\n'
+        '  printf "modified after copy\\n" >> "$3/boot.img"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_cp.chmod(0o755)
+    fake_mv = fake_bin / "mv"
+    fake_mv.write_text(
+        '#!/bin/sh\n[ "$1" = -T ] && shift\n[ ! -e "$2" ] || exit 1\nexec /bin/mv "$1" "$2"\n',
+        encoding="utf-8",
+    )
+    fake_mv.chmod(0o755)
+
+    product_out = tmp_path / "product-out"
+    product_out.mkdir()
+    image_contents = b"verified image target\n"
+    target_image = product_out / "boot-image-source.img"
+    target_image.write_bytes(image_contents)
+    if product_symlink:
+        (product_out / "boot.img").symlink_to(target_image)
+    else:
+        (product_out / "boot.img").write_bytes(image_contents)
+
+    manifest_dir = repo / "Images/manifests/16373615"
+    manifest_dir.mkdir(parents=True)
+    manifest = {
+        "architecture": "arm64",
+        "artifacts": [
+            {
+                "file": "boot.img",
+                "sha256": hashlib.sha256(image_contents).hexdigest(),
+                "size": len(image_contents),
+            }
+        ],
+        "source": {
+            "buildId": "16373615",
+            "target": "aosp_cf_arm64_only_phone-userdebug",
+        },
+    }
+    (manifest_dir / "android-image.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    cvd_host = tmp_path / "cvd-host"
+    host_bin = cvd_host / "bin"
+    host_bin.mkdir(parents=True)
+    for executable in ("cvd", "launch_cvd", "adb"):
+        (host_bin / executable).symlink_to(fake_cvd)
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
+            "CVD_HOST_DIR": str(cvd_host),
+            "CVD_INVOCATION_LOG": str(cvd_invocation_log),
+            "ANDROID_PRODUCT_OUT": str(product_out),
+            "FAKE_MUTATE_PRIVATE_COPY": "1" if mutate_private_copy else "0",
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}",
+            "TMPDIR": str(tmp_path),
+        }
+    )
+
+    result = subprocess.run(
+        ["sh", str(reference_tools / "capture.sh"), "default"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_status
+    assert expected_error in result.stderr
+    cvd_calls = (
+        cvd_invocation_log.read_text(encoding="utf-8").splitlines()
+        if cvd_invocation_log.exists()
+        else []
+    )
+    assert all(not {"create", "start"}.intersection(call.split()) for call in cvd_calls)
+    assert target_image.read_bytes() == image_contents
+    if not product_symlink:
+        assert (product_out / "boot.img").read_bytes() == image_contents
+    capture_root = repo / "Images/reference/16373615"
+    assert not (capture_root / "default").exists()
+    if mutate_private_copy:
+        partials = list((capture_root / "incomplete").glob("default-*"))
+        assert len(partials) == 1
+        missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+        assert "private product copy does not match pinned build 16373615" in missing
+    else:
+        assert not capture_root.exists()
+
+
+@pytest.mark.parametrize(
     (
         "gpu_mode",
         "build_id",
@@ -343,23 +704,40 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         ),
         encoding="utf-8",
     )
-    (fake_bin / "launch_cvd").write_text(
+    (fake_bin / "cvd").write_text(
         textwrap.dedent(
             """\
             #!/bin/sh
-            runtime="$HOME/cuttlefish_runtime"
+            runtime="$HOME"
+            base_directory="$runtime"
+            if [ "${1:-}" != create ]; then
+              case "${1:-}" in
+                --base_directory=*)
+                  base_directory=${1#*=}
+                  shift
+                  ;;
+              esac
+            fi
+            if [ "${1:-}" = create ]; then
+              shift
             printf '%s\\n' "$HOME" > "$CVD_HOME_LOG"
-            printf '%s\\n' "$*" > "$LAUNCH_LOG"
+            printf '%s\\n' "--base_directory=$base_directory $*" > "$LAUNCH_LOG"
+            product_directory=
             instance_num=1
             for argument in "$@"; do
               case "$argument" in
                 --base_instance_num=*) instance_num=${argument#*=} ;;
+                --base_directory=*) base_directory=${argument#*=} ;;
+                --product_path=*) product_directory=${argument#*=} ;;
               esac
             done
-            instance="$runtime/instances/cvd-$instance_num"
+            printf 'modified by synthetic Cuttlefish\\n' >> "$product_directory/boot.img"
+            runtime="$base_directory"
+            instance="$runtime/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
             mkdir -p "$instance/internal"
             printf '%s\\n' "$*" > "$runtime/launch-args.txt"
             printf '%s\\n' "$instance_num" > "$runtime/instance-num.txt"
+            printf '%s\\n' "$instance" > "$runtime/instance-runtime.txt"
             python3 - "$instance/internal/bootconfig" <<'PY'
             import struct
             import sys
@@ -376,6 +754,21 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             if [ "${FAKE_LAUNCH_FAIL:-0}" = 1 ]; then
               exit 1
             fi
+              exit 0
+            fi
+            for argument in "$@"; do
+              if [ "$argument" = start ]; then
+                exit 0
+              fi
+            done
+            printf '%s\\n' "$*" >> "$CVD_REMOVE_LOG"
+            printf 'cvd %s\\n' "$*" >> "$CAPTURE_EVENT_LOG"
+            printf '%s\\n' "$HOME" > "$CVD_REMOVE_HOME_LOG"
+            if [ "${FAKE_STOP_HANG:-0}" = 1 ]; then
+              trap '' TERM
+              while :; do sleep 1; done
+            fi
+            exit 0
             """
         ),
         encoding="utf-8",
@@ -385,9 +778,15 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             """\
             #!/bin/sh
             printf '%s\\t%s\\n' "$HOME" "$*" >> "$ADB_COMMAND_LOG"
+            if [ "$1" = disconnect ]; then
+              printf 'adb disconnect %s\\n' "$2" >> "$CAPTURE_EVENT_LOG"
+            fi
+            if [ "$1" = connect ] || [ "$1" = disconnect ]; then
+              exit 0
+            fi
             if [ "$1" = devices ]; then
               echo "List of devices attached"
-              instance_file="$HOME/cuttlefish_runtime/instance-num.txt"
+              instance_file="$HOME/instance-num.txt"
               if [ -f "$instance_file" ]; then
                 instance_num=$(cat "$instance_file")
                 adb_port=$((6520 + instance_num - 1))
@@ -421,21 +820,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         ),
         encoding="utf-8",
     )
-    (fake_bin / "stop_cvd").write_text(
-        textwrap.dedent(
-            """\
-            #!/bin/sh
-            printf '%s\\n' "$*" >> "$STOP_LOG"
-            printf '%s\\n' "$HOME" > "$STOP_HOME_LOG"
-            if [ "${FAKE_STOP_HANG:-0}" = 1 ]; then
-              trap '' TERM
-              while :; do sleep 1; done
-            fi
-            exit 0
-            """
-        ),
-        encoding="utf-8",
-    )
+    (fake_bin / "launch_cvd").symlink_to(fake_bin / "cvd")
     (fake_bin / "timeout").write_text(
         textwrap.dedent(
             """\
@@ -444,10 +829,15 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             if [ "${FAKE_USE_REAL_TIMEOUT:-0}" = 1 ]; then
               exec /usr/bin/timeout "$@"
             fi
-            if [ "$1" = --kill-after=10s ]; then
-              shift
-            fi
+            case "$1" in
+              --kill-after=*) shift ;;
+            esac
             shift
+            if [ "${1:-}" = adb ] && [ "${2:-}" = disconnect ] \
+              && [ "${FAKE_ADB_DISCONNECT_TIMEOUT:-0}" = 1 ]; then
+              "$@"
+              exit 124
+            fi
             if [ "${FAKE_STOP_TIMEOUT:-0}" = 1 ]; then
               exit 124
             fi
@@ -517,18 +907,17 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     (fake_bin / "ps").write_text(
         "#!/bin/sh\n"
         'cvd_home=$(cat "$CVD_HOME_LOG" 2>/dev/null || true)\n'
-        'if [ -n "$cvd_home" ] && [ -f "$cvd_home/cuttlefish_runtime/launch-args.txt" ]; then\n'
-        '  instance_num=$(cat "$cvd_home/cuttlefish_runtime/instance-num.txt")\n'
+        'if [ -n "$cvd_home" ] && [ -f "$cvd_home/launch-args.txt" ]; then\n'
+        '  instance_num=$(cat "$cvd_home/instance-num.txt")\n'
+        '  instance_runtime=$(cat "$cvd_home/instance-runtime.txt")\n'
         "  other_instance=$((instance_num + 4))\n"
         "  printf 'PID COMMAND\\n'\n"
         '  printf "100 crosvm run --instance_num=%s --serial=OTHER\\n" "$other_instance"\n'
-        '  printf "101 crosvm run --socket=%s/cuttlefish_runtime/instances/cvd-%s0/vsock.sock\\n" '
-        '"$cvd_home" "$instance_num"\n'
+        '  printf "101 crosvm run --socket=%s0/vsock.sock\\n" "$instance_runtime"\n'
         '  printf "123 crosvm run --instance_num=%s --serial=EXTERNAL-SAME-NUMBER\\n" '
         '"$instance_num"\n'
-        '  printf "124 crosvm run --instance_num=%s --socket=%s/cuttlefish_runtime/'
-        'instances/cvd-%s/vsock.sock\\n" '
-        '"$instance_num" "$cvd_home" "$instance_num"\n'
+        '  printf "124 crosvm run --instance_num=%s --socket=%s/vsock.sock\\n" '
+        '"$instance_num" "$instance_runtime"\n'
         "fi\n",
         encoding="utf-8",
     )
@@ -548,6 +937,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
 
     product_out = tmp_path / "product-out"
     product_out.mkdir()
+    cvd_host_dir = tmp_path / "cvd-host"
+    cvd_host_dir.mkdir()
+    host_bin = cvd_host_dir / "bin"
+    host_bin.mkdir()
+    for executable in ("launch_cvd", "cvd", "adb"):
+        (host_bin / executable).symlink_to(fake_bin / executable)
     boot_image = b"pinned synthetic boot image\n"
     (product_out / "boot.img").write_bytes(boot_image)
     manifest_dir = repo / "Images/manifests/16373615"
@@ -570,17 +965,19 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     home = tmp_path / "home"
     home.mkdir()
     adb_log = tmp_path / "adb-commands.txt"
-    stop_log = tmp_path / "stop-command.txt"
+    cvd_remove_log = tmp_path / "cvd-remove-command.txt"
     timeout_log = tmp_path / "timeout-command.txt"
+    capture_event_log = tmp_path / "capture-events.txt"
     cvd_home_log = tmp_path / "cvd-home.txt"
     launch_log = tmp_path / "launch-command.txt"
-    stop_home_log = tmp_path / "stop-home.txt"
+    cvd_remove_home_log = tmp_path / "cvd-remove-home.txt"
     expected_instance = requested_instance or 1
     props_file = tmp_path / "drm-virgl-props.txt"
     props_file.write_text("androidboot.hardware.gralloc=gbm\n", encoding="utf-8")
     environment = os.environ.copy()
     environment.update(
         {
+            "CVD_HOST_DIR": str(cvd_host_dir),
             "ANDROID_PRODUCT_OUT": str(product_out),
             "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
             "APKRUN_TARGET_GPU_MODE": gpu_mode,
@@ -593,17 +990,19 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_STOP_TIMEOUT": "1" if stop_timeout is True else "0",
             "FAKE_STOP_HANG": "1" if stop_timeout == "real" else "0",
             "FAKE_USE_REAL_TIMEOUT": "1" if stop_timeout == "real" else "0",
+            "FAKE_ADB_DISCONNECT_TIMEOUT": "1" if abort_command else "0",
             "FAKE_SIGNAL_DURING_LOCK": "1" if lock_signal_during_acquire else "0",
             "FAKE_CAPTURE_LOCK_PATH": str(host_lock_root / "apkrun-cvd-capture.lock"),
             "ADB_COMMAND_LOG": str(adb_log),
-            "STOP_LOG": str(stop_log),
+            "CVD_REMOVE_LOG": str(cvd_remove_log),
+            "CAPTURE_EVENT_LOG": str(capture_event_log),
             "TIMEOUT_LOG": str(timeout_log),
-            "STOP_HOME_LOG": str(stop_home_log),
+            "CVD_REMOVE_HOME_LOG": str(cvd_remove_home_log),
             "CVD_HOME_LOG": str(cvd_home_log),
             "LAUNCH_LOG": str(launch_log),
             "HOME": str(home),
             "PATH": (f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}"),
-            "TMPDIR": "/tmp",
+            "TMPDIR": str(tmp_path),
         }
     )
     if stop_timeout == "real":
@@ -625,6 +1024,27 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         text=True,
         check=False,
     )
+
+    def assert_scoped_group_removal() -> None:
+        launch_arguments = launch_log.read_text(encoding="utf-8").split()
+        group_argument = next(
+            argument for argument in launch_arguments if argument.startswith("--group_name=")
+        )
+        assert cvd_remove_log.read_text(encoding="utf-8").strip() == (f"{group_argument} remove")
+        assert cvd_remove_home_log.read_text(encoding="utf-8").strip() == (
+            cvd_home_log.read_text(encoding="utf-8").strip()
+        )
+
+    def assert_adb_disconnect_precedes_group_removal() -> None:
+        events = capture_event_log.read_text(encoding="utf-8").splitlines()
+        adb_serial = f"127.0.0.1:{6520 + expected_instance - 1}"
+        disconnect_index = events.index(f"adb disconnect {adb_serial}")
+        remove_index = next(
+            index
+            for index, event in enumerate(events)
+            if event.startswith("cvd --group_name=") and event.endswith(" remove")
+        )
+        assert disconnect_index < remove_index
 
     if not should_capture:
         expected_status = (
@@ -668,16 +1088,26 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
             assert len(partials) == 1
             missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
-            assert "stop_cvd reported a shutdown failure" in missing
+            assert "scoped cvd remove reported a shutdown failure" in missing
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
             assert cvd_home.is_dir()
-            assert stop_log.exists() is (stop_timeout == "real")
+            assert cvd_remove_log.exists() is (stop_timeout == "real")
             if stop_timeout == "real":
-                assert stop_home_log.read_text(encoding="utf-8").strip() == str(cvd_home)
-                expected_stop_timeout = "--kill-after=10s 1 stop_cvd"
+                assert cvd_remove_home_log.read_text(encoding="utf-8").strip() == str(cvd_home)
+                launch_arguments = launch_log.read_text(encoding="utf-8").split()
+                group_argument = next(
+                    argument
+                    for argument in launch_arguments
+                    if argument.startswith("--group_name=")
+                )
+                expected_remove_timeout = f"--kill-after=10s 1 cvd {group_argument} remove"
             else:
-                expected_stop_timeout = "--kill-after=10s 120 stop_cvd"
-            assert timeout_log.read_text(encoding="utf-8").strip().endswith(expected_stop_timeout)
+                expected_remove_timeout = "--kill-after=10s 120 cvd --group_name=apkrun_target_"
+            timeout_command = timeout_log.read_text(encoding="utf-8").strip()
+            if stop_timeout == "real":
+                assert timeout_command.endswith(expected_remove_timeout)
+            else:
+                assert expected_remove_timeout in timeout_command
         elif copy_fails:
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -685,10 +1115,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
             assert "cuttlefish_config.json\tcould not copy" in missing
             assert cvd_home_log.read_text(encoding="utf-8").strip() not in missing
-            assert stop_log.read_text(encoding="utf-8").strip() == ""
-            assert stop_home_log.read_text(encoding="utf-8").strip() == (
-                cvd_home_log.read_text(encoding="utf-8").strip()
-            )
+            assert_scoped_group_removal()
         elif abort_command:
             assert "normalized incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -704,18 +1131,32 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             else:
                 assert not (partials[0] / "logcat.txt.gz").exists()
                 assert not list(partials[0].rglob(".logcat.raw"))
-            assert stop_log.read_text(encoding="utf-8").strip() == ""
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
             assert not cvd_home.exists()
+            adb_serial = f"127.0.0.1:{6520 + expected_instance - 1}"
+            adb_calls = [
+                arguments
+                for _, arguments in (
+                    line.split("\t", maxsplit=1)
+                    for line in adb_log.read_text(encoding="utf-8").splitlines()
+                )
+            ]
+            assert f"disconnect {adb_serial}" in adb_calls
+            timeout_calls = timeout_log.read_text(encoding="utf-8").splitlines()
+            assert any(
+                line.endswith(f"\t--kill-after=2s 10 adb disconnect {adb_serial}")
+                for line in timeout_calls
+            )
+            assert_adb_disconnect_precedes_group_removal()
+            assert_scoped_group_removal()
         else:
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
             assert len(partials) == 1
-            assert "launch_cvd failed" in (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
-            assert stop_log.read_text(encoding="utf-8").strip() == ""
-            assert stop_home_log.read_text(encoding="utf-8").strip() == (
-                cvd_home_log.read_text(encoding="utf-8").strip()
+            assert "Cuttlefish group create or start failed" in (
+                (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
             )
+            assert_scoped_group_removal()
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
             assert not cvd_home.exists()
             missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
@@ -741,13 +1182,22 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert f"--instance_num={expected_instance + 4}" not in crosvm_command
     assert "EXTERNAL-SAME-NUMBER" not in crosvm_command
     assert f"/instances/cvd-{expected_instance}0/" not in crosvm_command
-    launch_arguments = launch_log.read_text(encoding="utf-8")
+    launch_arguments = launch_log.read_text(encoding="utf-8").split()
     assert f"--gpu_mode={gpu_mode}" in launch_arguments
     assert "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure" in launch_arguments
     assert f"--base_instance_num={expected_instance}" in launch_arguments
     assert "--num_instances=1" in launch_arguments
-    assert stop_log.read_text(encoding="utf-8").strip() == ""
-    assert stop_home_log.read_text(encoding="utf-8").strip() == str(cvd_home)
+    assert f"--host_path={cvd_host_dir}" in launch_arguments
+    assert f"--product_path={cvd_home}/product" in launch_arguments
+    assert f"--base_directory={cvd_home}" in launch_arguments
+    assert (product_out / "boot.img").read_bytes() == boot_image
+    assert any(argument.startswith("--group_name=apkrun_target_") for argument in launch_arguments)
+    group_argument = next(
+        argument for argument in launch_arguments if argument.startswith("--group_name=")
+    )
+    assert group_argument == group_argument.lower()
+    assert "-" not in group_argument.split("=", maxsplit=1)[1]
+    assert_scoped_group_removal()
     assert not cvd_home.exists()
     assert not (host_lock_root / "apkrun-cvd-capture.lock").exists()
     adb_calls = [
@@ -756,8 +1206,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     ]
     adb_serial = f"127.0.0.1:{6520 + expected_instance - 1}"
     assert any(arguments.startswith(f"-s {adb_serial} exec-out") for _, arguments in adb_calls)
+    assert any(arguments == f"connect {adb_serial}" for _, arguments in adb_calls)
+    assert any(arguments == f"disconnect {adb_serial}" for _, arguments in adb_calls)
     assert all(
-        arguments.startswith("devices") or arguments.startswith(f"-s {adb_serial}")
+        arguments.startswith("devices")
+        or arguments.startswith(f"connect {adb_serial}")
+        or arguments.startswith(f"disconnect {adb_serial}")
+        or arguments.startswith(f"-s {adb_serial}")
         for _, arguments in adb_calls
     )
     assert all(
@@ -765,6 +1220,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         for home_path, arguments in adb_calls
         if arguments.startswith(f"-s {adb_serial}")
     )
+    assert_adb_disconnect_precedes_group_removal()
     if gpu_mode == "guest_swiftshader":
         assert (capture / "graphics-props-from-source.txt").read_text(
             encoding="utf-8"

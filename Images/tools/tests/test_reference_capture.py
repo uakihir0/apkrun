@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -502,9 +503,24 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
         "stop_timeout",
         "capture_lock_held",
         "lock_signal_during_acquire",
+        "boot_timeout_case",
     ),
     (
-        ("drm_virgl", "16373615", True, True, True, False, 3, None, False, False, False, False),
+        (
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ),
         (
             "guest_swiftshader",
             "16373615",
@@ -514,6 +530,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             3,
             None,
+            False,
             False,
             False,
             False,
@@ -532,6 +549,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
         (
             "drm_virgl",
@@ -546,6 +564,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
         (
             "drm_virgl",
@@ -560,6 +579,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
         (
             "drm_virgl",
@@ -574,6 +594,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
         (
             "drm_virgl",
@@ -584,6 +605,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             None,
             None,
+            False,
             False,
             False,
             False,
@@ -602,6 +624,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
         (
             "drm_virgl",
@@ -616,8 +639,23 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
-        ("drm_virgl", "16373615", True, True, False, False, 3, None, True, False, False, False),
+        (
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            True,
+            False,
+            False,
+            False,
+            False,
+        ),
         (
             "drm_virgl",
             "16373615",
@@ -631,10 +669,53 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            False,
         ),
-        ("drm_virgl", "16373615", True, True, False, False, 3, None, False, True, False, False),
-        ("drm_virgl", "16373615", True, True, False, False, 3, None, False, False, True, False),
-        ("drm_virgl", "16373615", True, True, False, False, 3, None, False, False, False, True),
+        (
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            True,
+            False,
+            False,
+            False,
+        ),
+        (
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            True,
+            False,
+            False,
+        ),
+        (
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            True,
+            False,
+        ),
         pytest.param(
             "drm_virgl",
             "16373615",
@@ -648,11 +729,148 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "real",
             False,
             False,
+            False,
             marks=pytest.mark.skipif(
                 sys.platform != "linux" or not Path("/usr/bin/timeout").is_file(),
                 reason="requires GNU timeout on Linux",
             ),
             id="real-timeout-kills-stuck-stop",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "cvd-start",
+            id="cvd-start-times-out",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "adb-getprop",
+            id="adb-getprop-times-out",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "adb-preflight",
+            id="adb-preflight-times-out",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "adb-wait-for-device",
+            id="adb-wait-for-device-failure-skips-guest-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "adb-no-device",
+            id="adb-poll-sleep-stays-within-deadline",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "shared-deadline",
+            id="default-600-second-deadline-is-shared",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "real-cvd-start",
+            marks=pytest.mark.skipif(
+                sys.platform != "linux" or not Path("/usr/bin/timeout").is_file(),
+                reason="requires GNU timeout on Linux",
+            ),
+            id="real-timeout-kills-stuck-start",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "real-adb-getprop",
+            marks=pytest.mark.skipif(
+                sys.platform != "linux" or not Path("/usr/bin/timeout").is_file(),
+                reason="requires GNU timeout on Linux",
+            ),
+            id="real-timeout-kills-stuck-adb-getprop",
         ),
     ),
 )
@@ -670,6 +888,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     stop_timeout: bool | str,
     capture_lock_held: bool,
     lock_signal_during_acquire: bool,
+    boot_timeout_case: bool | str,
 ) -> None:
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
@@ -720,25 +939,28 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
             if [ "${1:-}" = create ]; then
               shift
-            printf '%s\\n' "$HOME" > "$CVD_HOME_LOG"
-            printf '%s\\n' "--base_directory=$base_directory $*" > "$LAUNCH_LOG"
-            product_directory=
-            instance_num=1
-            for argument in "$@"; do
-              case "$argument" in
-                --base_instance_num=*) instance_num=${argument#*=} ;;
-                --base_directory=*) base_directory=${argument#*=} ;;
-                --product_path=*) product_directory=${argument#*=} ;;
-              esac
-            done
-            printf 'modified by synthetic Cuttlefish\\n' >> "$product_directory/boot.img"
-            runtime="$base_directory"
-            instance="$runtime/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
-            mkdir -p "$instance/internal"
-            printf '%s\\n' "$*" > "$runtime/launch-args.txt"
-            printf '%s\\n' "$instance_num" > "$runtime/instance-num.txt"
-            printf '%s\\n' "$instance" > "$runtime/instance-runtime.txt"
-            python3 - "$instance/internal/bootconfig" <<'PY'
+              if [ "${FAKE_CVD_CREATE_DELAY_SECONDS:-0}" -gt 0 ]; then
+                sleep "$FAKE_CVD_CREATE_DELAY_SECONDS"
+              fi
+              printf '%s\\n' "$HOME" > "$CVD_HOME_LOG"
+              printf '%s\\n' "--base_directory=$base_directory $*" > "$LAUNCH_LOG"
+              product_directory=
+              instance_num=1
+              for argument in "$@"; do
+                case "$argument" in
+                  --base_instance_num=*) instance_num=${argument#*=} ;;
+                  --base_directory=*) base_directory=${argument#*=} ;;
+                  --product_path=*) product_directory=${argument#*=} ;;
+                esac
+              done
+              printf 'modified by synthetic Cuttlefish\\n' >> "$product_directory/boot.img"
+              runtime="$base_directory"
+              instance="$runtime/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
+              mkdir -p "$instance/internal"
+              printf '%s\\n' "$*" > "$runtime/launch-args.txt"
+              printf '%s\\n' "$instance_num" > "$runtime/instance-num.txt"
+              printf '%s\\n' "$instance" > "$runtime/instance-runtime.txt"
+              python3 - "$instance/internal/bootconfig" <<'PY'
             import struct
             import sys
             from pathlib import Path
@@ -746,18 +968,22 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             footer = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(body), len(body), 0)
             Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
             PY
-            cat > "$instance/cuttlefish_config.json" <<'JSON'
+              cat > "$instance/cuttlefish_config.json" <<'JSON'
             {"disks":{"os_composite":{"partitions":["boot_a","system_a"]}}}
             JSON
-            printf 'VIRTUAL_DEVICE_BOOT_COMPLETED\\n' > "$instance/kernel.log"
-            printf 'launcher synthetic log\\n' > "$instance/launcher.log"
-            if [ "${FAKE_LAUNCH_FAIL:-0}" = 1 ]; then
-              exit 1
-            fi
+              printf 'VIRTUAL_DEVICE_BOOT_COMPLETED\\n' > "$instance/kernel.log"
+              printf 'launcher synthetic log\\n' > "$instance/launcher.log"
+              if [ "${FAKE_LAUNCH_FAIL:-0}" = 1 ]; then
+                exit 1
+              fi
               exit 0
             fi
             for argument in "$@"; do
               if [ "$argument" = start ]; then
+                if [ "${FAKE_CVD_START_HANG:-0}" = 1 ]; then
+                  trap '' TERM
+                  while :; do sleep 1; done
+                fi
                 exit 0
               fi
             done
@@ -785,13 +1011,19 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               exit 0
             fi
             if [ "$1" = devices ]; then
+              if [ "${FAKE_ADB_PREFLIGHT_TIMEOUT:-0}" = 1 ] \
+                && [ ! -f "$HOME/instance-num.txt" ]; then
+                exit 124
+              fi
               echo "List of devices attached"
               instance_file="$HOME/instance-num.txt"
               if [ -f "$instance_file" ]; then
-                instance_num=$(cat "$instance_file")
-                adb_port=$((6520 + instance_num - 1))
-                echo "127.0.0.1:$adb_port device"
-                echo "10.0.0.5:$adb_port device"
+                if [ "${FAKE_ADB_NO_DEVICE:-0}" != 1 ]; then
+                  instance_num=$(cat "$instance_file")
+                  adb_port=$((6520 + instance_num - 1))
+                  echo "127.0.0.1:$adb_port device"
+                  echo "10.0.0.5:$adb_port device"
+                fi
               fi
               exit 0
             fi
@@ -799,10 +1031,17 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               shift 2
             fi
             if [ "$1" = shell ] && [ "$2" = getprop ]; then
+              if [ "${FAKE_ADB_BOOT_HANG:-0}" = 1 ]; then
+                trap '' TERM
+                while :; do sleep 1; done
+              fi
               echo 1
               exit 0
             fi
             if [ "$1" = wait-for-device ]; then
+              if [ "${FAKE_ADB_WAIT_TIMEOUT:-0}" = 1 ]; then
+                exit 124
+              fi
               exit 0
             fi
             if [ "$1" = exec-out ]; then
@@ -832,13 +1071,30 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             case "$1" in
               --kill-after=*) shift ;;
             esac
+            timeout_seconds=$1
             shift
+            if [ "${FAKE_ADB_PREFLIGHT_TIMEOUT:-0}" = 1 ] \
+              && [ "${1:-}" = adb ] && [ "${2:-}" = devices ] \
+              && [ ! -f "$HOME/instance-num.txt" ]; then
+              exit 124
+            fi
             if [ "${1:-}" = adb ] && [ "${2:-}" = disconnect ] \
               && [ "${FAKE_ADB_DISCONNECT_TIMEOUT:-0}" = 1 ]; then
               "$@"
               exit 124
             fi
-            if [ "${FAKE_STOP_TIMEOUT:-0}" = 1 ]; then
+            if [ "${FAKE_CVD_START_TIMEOUT:-0}" = 1 ] \
+              && [ "${1:-}" = cvd ] && [ "${3:-}" = start ]; then
+              sleep "$timeout_seconds"
+              exit 124
+            fi
+            if [ "${FAKE_ADB_BOOT_TIMEOUT:-0}" = 1 ] \
+              && [ "${1:-}" = adb ] && [ "${5:-}" = getprop ]; then
+              sleep "$timeout_seconds"
+              exit 124
+            fi
+            if [ "${FAKE_STOP_TIMEOUT:-0}" = 1 ] \
+              && [ "${1:-}" = cvd ] && [ "${3:-}" = remove ]; then
               exit 124
             fi
             exec "$@"
@@ -982,6 +1238,25 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
             "APKRUN_TARGET_GPU_MODE": gpu_mode,
             "FAKE_LAUNCH_FAIL": "0" if launch_succeeds else "1",
+            "FAKE_CVD_START_TIMEOUT": "1" if boot_timeout_case == "cvd-start" else "0",
+            "FAKE_CVD_START_HANG": ("1" if boot_timeout_case == "real-cvd-start" else "0"),
+            "FAKE_ADB_BOOT_TIMEOUT": ("1" if boot_timeout_case == "adb-getprop" else "0"),
+            "FAKE_ADB_BOOT_HANG": ("1" if boot_timeout_case == "real-adb-getprop" else "0"),
+            "FAKE_ADB_PREFLIGHT_TIMEOUT": ("1" if boot_timeout_case == "adb-preflight" else "0"),
+            "FAKE_ADB_WAIT_TIMEOUT": ("1" if boot_timeout_case == "adb-wait-for-device" else "0"),
+            "FAKE_ADB_NO_DEVICE": "1" if boot_timeout_case == "adb-no-device" else "0",
+            "FAKE_CVD_CREATE_DELAY_SECONDS": (
+                "2"
+                if boot_timeout_case
+                in {"cvd-start", "adb-getprop", "shared-deadline", "adb-no-device"}
+                else "0"
+            ),
+            "FAKE_USE_REAL_TIMEOUT": (
+                "1"
+                if stop_timeout == "real"
+                or boot_timeout_case in {"real-cvd-start", "real-adb-getprop"}
+                else "0"
+            ),
             "FAKE_CP_FAIL_NAME": "cuttlefish_config.json" if copy_fails else "",
             "FAKE_ABORT_CAPTURE": "1" if abort_command else "0",
             "FAKE_ABORT_CAPTURE_COMMAND": abort_command or "",
@@ -989,7 +1264,6 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_RM_FAIL_STAGE": "1" if raw_cleanup_fails == "stage-fails" else "0",
             "FAKE_STOP_TIMEOUT": "1" if stop_timeout is True else "0",
             "FAKE_STOP_HANG": "1" if stop_timeout == "real" else "0",
-            "FAKE_USE_REAL_TIMEOUT": "1" if stop_timeout == "real" else "0",
             "FAKE_ADB_DISCONNECT_TIMEOUT": "1" if abort_command else "0",
             "FAKE_SIGNAL_DURING_LOCK": "1" if lock_signal_during_acquire else "0",
             "FAKE_CAPTURE_LOCK_PATH": str(host_lock_root / "apkrun-cvd-capture.lock"),
@@ -1007,6 +1281,16 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     )
     if stop_timeout == "real":
         environment["APKRUN_CVD_STOP_TIMEOUT_SECONDS"] = "1"
+    if boot_timeout_case in {"real-cvd-start", "real-adb-getprop"}:
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
+    elif boot_timeout_case == "cvd-start":
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "3"
+    elif boot_timeout_case == "adb-getprop":
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "6"
+    elif boot_timeout_case == "adb-no-device":
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "5"
+    elif boot_timeout_case != "shared-deadline":
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "600"
     environment.pop("APKRUN_CVD_INSTANCE_NUM", None)
     if requested_instance is not None:
         environment["APKRUN_CVD_INSTANCE_NUM"] = str(requested_instance)
@@ -1016,6 +1300,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         environment["APKRUN_DRM_VIRGL_PROPS_FILE"] = str(props_file)
         environment["APKRUN_DRM_VIRGL_SOURCE_REVISION"] = "a" * 40
 
+    capture_started_at = time.monotonic()
     result = subprocess.run(
         ["sh", str(reference_tools / "capture.sh"), "target"],
         cwd=tmp_path,
@@ -1023,7 +1308,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         capture_output=True,
         text=True,
         check=False,
+        timeout=25 if boot_timeout_case in {"real-cvd-start", "real-adb-getprop"} else None,
     )
+    capture_elapsed_seconds = time.monotonic() - capture_started_at
 
     def assert_scoped_group_removal() -> None:
         launch_arguments = launch_log.read_text(encoding="utf-8").split()
@@ -1056,7 +1343,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         )
         assert result.returncode == expected_status
         assert not (repo / "Images/reference/16373615/target").exists()
-        if build_id != "16373615":
+        if boot_timeout_case == "adb-preflight":
+            assert "ADB did not respond during the 10-second preflight" in result.stderr
+            assert not launch_log.exists()
+            assert not (repo / "Images/reference/16373615/incomplete").exists()
+            timeout_calls = timeout_log.read_text(encoding="utf-8").splitlines()
+            assert any(line.endswith("\t--kill-after=2s 10 adb devices") for line in timeout_calls)
+        elif build_id != "16373615":
             assert "pinned build 16373615" in result.stderr
             assert not launch_log.exists()
         elif lock_signal_during_acquire:
@@ -1149,6 +1442,135 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             )
             assert_adb_disconnect_precedes_group_removal()
             assert_scoped_group_removal()
+        elif boot_timeout_case == "adb-wait-for-device":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            assert "guest\tadb wait-for-device failed" in missing
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(call.endswith(" wait-for-device") for call in adb_calls)
+            assert not any(" exec-out " in f" {call} " for call in adb_calls)
+            assert_adb_disconnect_precedes_group_removal()
+            assert_scoped_group_removal()
+        elif boot_timeout_case == "adb-no-device":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            assert any(
+                diagnostic in missing
+                for diagnostic in (
+                    "sys.boot_completed did not become 1 within 5s",
+                    "ADB did not report sys.boot_completed before "
+                    "APKRUN_BOOT_TIMEOUT_SECONDS expired",
+                )
+            )
+            timeout_calls = [
+                shlex.split(line.split("\t", maxsplit=1)[1])
+                for line in timeout_log.read_text(encoding="utf-8").splitlines()
+            ]
+            sleep_calls = [call for call in timeout_calls if len(call) >= 4 and call[2] == "sleep"]
+            assert sleep_calls
+            assert all(
+                call[0] == "--kill-after=2s"
+                and call[1].isdigit()
+                and 0 < int(call[3]) <= min(2, int(call[1]))
+                for call in sleep_calls
+            )
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert not any("getprop" in call or "exec-out" in call for call in adb_calls)
+            assert_adb_disconnect_precedes_group_removal()
+            assert_scoped_group_removal()
+        elif boot_timeout_case in {"cvd-start", "real-cvd-start"}:
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            expected_timeout_seconds = "10" if boot_timeout_case == "real-cvd-start" else "3"
+            assert (
+                "Cuttlefish create or start exceeded the "
+                f"{expected_timeout_seconds}-second boot deadline"
+            ) in missing
+            timeout_calls = [
+                shlex.split(line.split("\t", maxsplit=1)[1])
+                for line in timeout_log.read_text(encoding="utf-8").splitlines()
+            ]
+            create_calls = [
+                call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
+            ]
+            start_calls = [
+                call
+                for call in timeout_calls
+                if len(call) >= 5
+                and call[2] == "cvd"
+                and call[3].startswith("--group_name=")
+                and call[4:] == ["start"]
+            ]
+            assert len(create_calls) == 1
+            assert len(start_calls) == 1
+            assert create_calls[0][0] == "--kill-after=2s"
+            assert create_calls[0][1].isdigit() and int(create_calls[0][1]) > 0
+            assert start_calls[0][0] == "--kill-after=2s"
+            assert start_calls[0][1].isdigit() and int(start_calls[0][1]) > 0
+            if boot_timeout_case == "cvd-start":
+                assert int(start_calls[0][1]) < int(create_calls[0][1])
+            else:
+                assert capture_elapsed_seconds >= 10
+                assert capture_elapsed_seconds < 25
+            assert start_calls[0][2] == "cvd"
+            assert start_calls[0][3].startswith("--group_name=apkrun_target_")
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
+        elif boot_timeout_case in {"adb-getprop", "real-adb-getprop"}:
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            assert (
+                "ADB did not report sys.boot_completed before APKRUN_BOOT_TIMEOUT_SECONDS expired"
+            ) in missing
+            timeout_calls = [
+                shlex.split(line.split("\t", maxsplit=1)[1])
+                for line in timeout_log.read_text(encoding="utf-8").splitlines()
+            ]
+            getprop_calls = [
+                call
+                for call in timeout_calls
+                if len(call) >= 8
+                and call[2:]
+                == [
+                    "adb",
+                    "-s",
+                    "127.0.0.1:6522",
+                    "shell",
+                    "getprop",
+                    "sys.boot_completed",
+                ]
+            ]
+            assert len(getprop_calls) == 1
+            assert getprop_calls[0][0] == "--kill-after=2s"
+            assert getprop_calls[0][1].isdigit() and int(getprop_calls[0][1]) > 0
+            create_calls = [
+                call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
+            ]
+            assert len(create_calls) == 1
+            if boot_timeout_case == "adb-getprop":
+                assert int(getprop_calls[0][1]) < int(create_calls[0][1])
+            else:
+                assert capture_elapsed_seconds >= 10
+                assert capture_elapsed_seconds < 25
+            assert_adb_disconnect_precedes_group_removal()
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
         else:
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -1221,6 +1643,43 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         if arguments.startswith(f"-s {adb_serial}")
     )
     assert_adb_disconnect_precedes_group_removal()
+    if boot_timeout_case == "shared-deadline":
+        timeout_calls = [
+            shlex.split(line.split("\t", maxsplit=1)[1])
+            for line in timeout_log.read_text(encoding="utf-8").splitlines()
+        ]
+        create_calls = [
+            call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
+        ]
+        start_calls = [
+            call
+            for call in timeout_calls
+            if len(call) >= 5
+            and call[2] == "cvd"
+            and call[3].startswith("--group_name=")
+            and call[4:] == ["start"]
+        ]
+        getprop_calls = [
+            call
+            for call in timeout_calls
+            if len(call) >= 8
+            and call[2:]
+            == [
+                "adb",
+                "-s",
+                f"127.0.0.1:{6520 + expected_instance - 1}",
+                "shell",
+                "getprop",
+                "sys.boot_completed",
+            ]
+        ]
+        assert len(create_calls) == len(start_calls) == len(getprop_calls) == 1
+        assert create_calls[0][0] == "--kill-after=2s"
+        assert create_calls[0][1] == "600"
+        assert start_calls[0][0] == "--kill-after=2s"
+        assert 0 < int(start_calls[0][1]) < 600
+        assert getprop_calls[0][0] == "--kill-after=2s"
+        assert 0 < int(getprop_calls[0][1]) <= int(start_calls[0][1])
     if gpu_mode == "guest_swiftshader":
         assert (capture / "graphics-props-from-source.txt").read_text(
             encoding="utf-8"

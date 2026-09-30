@@ -26,6 +26,15 @@ final class LinuxGuestBootTests: XCTestCase {
 
         XCTAssertEqual(result.records.first, .bootOK)
         XCTAssertEqual(result.records.last, .done)
+        XCTAssertTrue(
+            result.records.contains(
+                .check(
+                    name: "powerinput",
+                    result: .ok,
+                    detail: "PL061 offset 6 line request confirmed"
+                )
+            )
+        )
         XCTAssertEqual(
             result.states,
             [.stopped, .starting, .running, .stopping, .stopped]

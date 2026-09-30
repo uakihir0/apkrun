@@ -271,7 +271,7 @@ the release barrier before making a new driver.
 - RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
 - If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
 - A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
-- `requestGuestStop()` is required for the test Linux guest. The pinned Alpine kernel lacks `CONFIG_KEYBOARD_GPIO`, so the current initramfs `button`/`acpid` setup does not handle the VZ PL061 power input; its T2 check remains blocked.
+- `requestGuestStop()` is required for the test Linux guest. Its initramfs discovers the PL061 GPIO chip with `gpiodetect`, confirms the active line request with `gpioinfo`, and maps a rising edge on offset 6 to `poweroff -f` (§12). The T2 log verified that event on `gpiochip0` offset 6 on macOS 27.0 (26A428).
 
 ### 9.4 Pause and resume
 
@@ -309,14 +309,15 @@ Changing either takes effect on the next VM start. The UI states that. Measureme
 M0 needs a small Linux guest that exercises every device before Android is involved.
 
 - **Kernel:** a pinned, prebuilt arm64 kernel with virtio PCI, blk, net, console, vsock (`vmw_vsock_virtio_transport`), rng, and DRM virtio-gpu available as built-ins or modules. Candidate: Alpine `linux-virt` (pinned version and SHA-256 in `ThirdParty/ThirdParty.lock.json`). `scripts/fetch-test-linux.sh` downloads it, verifies the hash, and decompresses it if the kernel file is gzip-compressed (the validator rejects compressed kernels, §3).
-- **initramfs:** built by `scripts/build-test-initramfs.sh` from a pinned Alpine minirootfs plus the needed kernel modules, `socat`, and our `/init` script (`Tests/Fixtures/linux/init`). `/init`:
+- **initramfs:** built by `scripts/build-test-initramfs.sh` from a pinned Alpine minirootfs plus the needed kernel modules, `socat`, `libgpiod`, and our `/init` script (`Tests/Fixtures/linux/init`). `/init`:
   1. mounts proc/sys/dev, loads modules;
-  2. prints `APKRUN-TEST: boot ok` to `hvc0`;
-  3. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check;
-  4. prints `APKRUN-TEST: done` and either powers off (`apkrun.test.poweroff=1`) or starts a shell on hvc0.
+  2. unless it will power off after the tests, finds the GPIO chip labeled PL061 and starts `gpiomon` for rising edges on offset 6. It uses `gpioinfo` to verify that the line is held by the monitor before reporting readiness. If the chip or line request is unavailable, it reports an init failure and attempts to power off rather than booting without a stop path;
+  3. prints `APKRUN-TEST: boot ok` to `hvc0`, then reports `powerinput ok` after the GPIO line request is confirmed;
+  4. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check;
+  5. prints `APKRUN-TEST: done`, powers off when `apkrun.test.poweroff=1`, or keeps the serial shell available while waiting for the VZ power input. On the rising GPIO edge, it powers off.
 - **Disks:** `Tests/Fixtures/linux/` scripts create a small raw test disk at test time (read-only and read-write variants with known content).
 - The T2 test harness (`Tests/IntegrationTests/LinuxGuestTests`) boots this guest with `EmbeddedRuntimeService`-free plumbing (just VirtualMachineCore) and asserts on the `APKRUN-TEST:` lines. Timeout 60 s.
-- The pinned Alpine 6.18.54 kernel has `CONFIG_ACPI_BUTTON=m`, `CONFIG_INPUT_EVDEV=m`, and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The `ACPI_BUTTON` module is named `button` in `modules.list`; the initramfs loads it and runs `acpid`. On 2026-09-30, T2 `requestGuestStop()` timed out after 10 s on macOS 27.0 (26A428), then the forced stop succeeded. The VZ button event is not handled by this guest configuration, so G1 remains blocked until the guest has a working input path.
+- The pinned Alpine 6.18.54 kernel has `CONFIG_GPIO_CDEV=y` and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The initramfs uses the GPIO character-device API through `libgpiod`; it does not depend on the keyboard input driver. A captured T2 console identified `gpiochip0 [20060000.pl061]` and showed a rising event on offset 6 after `requestGuestStop()`. `gpiochip` is resolved by its PL061 label; only the verified offset is monitored.
 - The test harness caps parsed-record buffering at 256 records. If a guest emits faster than the consumer can read, missing boot/check/done records fail the test instead of growing host memory without limit.
 
 `TestGuestLineParser` joins serial bytes across read boundaries, ignores
@@ -401,6 +402,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 |---|---|---|
 | Alpine ARM64 Linux boot marker and guest power-off | #003 | 2026-09-29, MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBootTests.testBootMarkerAndGuestPowerOff` passed on the pinned guest with an Apple Development-signed test host |
 | LinuxGuest T2 suite using artifacts outside the checkout | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): the signed test host read `/tmp/apkrun-test-linux-explicit-20260930` from its Info.plist without a file-access prompt; boot marker, failed-start/reset, forced-stop, and bounded-capture tests passed; `requestGuestStop()` timed out after 10 s, then forced stop succeeded |
+| PL061 power input and G1 ten-boot behavior | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): hvc0 showed a rising event on `gpiochip0` offset 6; after adding a line-owner readiness check, all LinuxGuest T2 tests and direct G1 acceptance on branch `codex` passed, including ten request-stop boots. The signed CLI smoke from `/tmp` printed boot/powerinput/done and exited 0 without a file-access prompt. The clean-`main` `scripts/run-gate.sh G1` run remains pending |
 | Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
 | `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |

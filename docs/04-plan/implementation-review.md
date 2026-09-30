@@ -1043,7 +1043,7 @@ strictness explicit. A signed T2 boot passed after both checkout and default
 temporary artifact paths were moved aside, confirming that the host used the
 selected temporary directory.
 
-## IR-047: Keep G1 blocked when the pinned kernel cannot handle VZ power input
+## IR-047: Handle VZ power input through the PL061 GPIO character device
 
 | Field | Value |
 |---|---|
@@ -1052,13 +1052,22 @@ selected temporary directory.
 | Affected documents | [vm.md](../02-design/vm.md) §§4, 12, 17; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
 
 **Choice.** Keep the `requestGuestStop()` T2 check and G1 acceptance criteria
-unchanged, and leave #003 open. The pinned Alpine 6.18.54 kernel has no
-`CONFIG_KEYBOARD_GPIO`; the test's `button`/`acpid` setup did not stop the
-guest after a VZ power-button request. Forced stop did stop it.
+unchanged. The test initramfs discovers the GPIO chip labeled PL061 and uses
+the pinned `libgpiod` `gpiomon` tool to monitor only the rising edge on offset
+6. It confirms the line request by reading the consumer through `gpioinfo`;
+that readiness signal precedes the test marker. If the chip or line request
+cannot be opened, init reports failure and attempts to power off instead of
+continuing without a stop path.
 
-**Reason.** Removing the graceful-stop assertion would hide a failure in the
-planned input path and produce false G1 evidence. The kernel/input path must be
-corrected and re-tested before the gate can close.
+**Reason.** The pinned Alpine 6.18.54 kernel has no `CONFIG_KEYBOARD_GPIO`, and
+the prior `button`/`acpid` setup did not handle the VZ event. A captured T2
+console showed `gpiochip0 [20060000.pl061]` and a rising event on offset 6
+after `requestGuestStop()`. A separate line-6-only T2 run passed. Monitoring
+all eight lines could power off for an unrelated input, and accepting both
+edges could treat a release transition as a power request, so the implementation
+uses only the observed rising edge. The complete T2 suite and ten-boot G1
+acceptance test passed in direct `xcodebuild` runs on branch `codex`; the
+clean-`main` `scripts/run-gate.sh G1` run remains pending before #003 can close.
 
 ## IR-048: Parse the first test marker after an unterminated kernel line
 
@@ -1166,13 +1175,17 @@ and re-open the investigation if it recurs.
 
 **Choice.** Lock Alpine's `libgpiod` package as
 `GPL-2.0-or-later AND LGPL-2.1-or-later`, and include its upstream `COPYING`,
-GPL, LGPL, and Linux syscall-note license texts. Keep it as downloaded
-`tooling`; do not expand the tooling allowlist.
+GPL-2.0-or-later, GPL-2.0-only, LGPL, Linux syscall-note, and CC-BY-SA
+license texts. Keep it as downloaded `tooling`; do not expand the tooling
+allowlist.
 
 **Reason.** Alpine's package metadata names the library license, while upstream
 `COPYING` distinguishes the LGPL library from the GPL GPIO tools, including
 `gpiomon`. The upstream notice also identifies Linux UAPI headers under the
 syscall-note exception. The lock records the library and tool licenses and
-retains that exception's text for review; maintainers should confirm whether
-the exception applies to the packaged binaries before #003 closes. The package
-is confined to the test guest and never enters APKRun.app.
+retains that exception's text for review; its `GPL-2.0-or-later.txt` source
+path is recorded with a dereferenced copy of the shared GPL text. Maintainers
+should confirm whether the syscall exception applies to the packaged binaries
+before #003 closes. Upstream also licenses its copied text files under
+CC-BY-SA-4.0; that text is included for the committed notices. The package is
+confined to the test guest and never enters APKRun.app.

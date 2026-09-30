@@ -880,7 +880,8 @@ Out of scope:
 - Lock entries (`kind: prebuilt`, `ships: tooling`, full `sha256`) for:
   - the Alpine `linux-virt` package;
   - the Alpine minirootfs;
-  - `socat` and its runtime dependencies (used by #007, pinned now so the initramfs layout is final).
+  - `socat` and its runtime dependencies (used by #007, pinned now so the initramfs layout is final);
+  - `libgpiod` and its license files for the Linux guest power-input monitor.
 - `project.yml` additions:
   - the `APKRunTestHost` target (`Tests/IntegrationTests/Host/`, with `APKRunTestHost.entitlements` holding `com.apple.security.virtualization`, [../../05-development/build-system.md](../../05-development/build-system.md) §12.2);
   - the `IntegrationTests` and `AcceptanceTests` unit-test bundles, both hosted by `APKRunTestHost`;
@@ -938,7 +939,7 @@ Out of scope:
    - `scripts/build-test-initramfs.sh` builds `initramfs.cpio.gz` (cpio `newc`, gzip) from:
      - the minirootfs;
      - the modules named in `Tests/Fixtures/linux/modules.list`, with their `modules.dep` entries;
-     - the pinned `socat` packages;
+     - the pinned `socat` and `libgpiod` packages;
      - `Tests/Fixtures/linux/init`.
 
      It uses only `cpio` and `gzip` from macOS.
@@ -946,11 +947,11 @@ Out of scope:
      1. Mounts `proc`, `sys`, and `devtmpfs`.
      2. Redirects its own stdio to `/dev/hvc0`.
      3. Loads the modules.
-     4. Handles the VZ power input and maps it to `poweroff -f` so that `requestGuestStop()` works (§9.3). The current pinned Alpine kernel has no `CONFIG_KEYBOARD_GPIO`; the `button`/`acpid` setup did not handle the VZ PL061 input in T2, so this step and G1 remain open until a working input path is available.
-     5. Prints `APKRUN-TEST: boot ok`.
+     4. Unless `apkrun.test.poweroff=1`, resolves the PL061 chip by label and starts pinned `gpiomon` on the verified offset 6. It uses `gpioinfo` to confirm the line is held by the monitor. If the chip or line request cannot be opened, it reports an init failure and attempts to power off.
+     5. Prints `APKRUN-TEST: boot ok`, then `APKRUN-TEST: powerinput ok PL061 offset 6 line request confirmed`.
      6. Runs the checks named in `apkrun.test=`. There are none in this task; later tasks add blocks.
      7. Prints `APKRUN-TEST: done`.
-     8. Powers off when `apkrun.test.poweroff=1`, or otherwise starts a shell on `hvc0`.
+     8. Powers off when `apkrun.test.poweroff=1`; otherwise keeps a shell available on `hvc0` and waits for the monitor. The rising GPIO edge maps to `poweroff -f`.
    - Add the lock entries with a `url` member for each download (see Notes).
 
    Check: both scripts run on a clean clone, twice in a row with the same output hashes.
@@ -1041,14 +1042,14 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - Whether VZ reports a failed start through the `start` completion or through `validate()` goes into [../../02-design/vm.md](../../02-design/vm.md) §9.1.
   - The measured boot time of the test guest goes into the pull request, for later comparison.
 - **Pitfall:** the initramfs holds no `/dev/console` node, because macOS cannot create device nodes without root. `/init` must mount `devtmpfs` and redirect its stdio before it prints anything.
-- **Pitfall:** check whether `virtio_console`, `virtio_pci`, and `gpio_keys` are built into `linux-virt` or are modules, using the package's kernel config. List only the real modules in `modules.list`. The power key needs `gpio_keys` and `evdev`.
+- **Pitfall:** check whether `virtio_console`, `virtio_pci`, and `gpio_pl061` are built into `linux-virt` or are modules, using the package's kernel config. List only the real modules in `modules.list`. The test guest reads the VZ power input through the GPIO character-device API, so it does not need `gpio_keys`.
 - **Pitfall:** Alpine `.apk` files are several concatenated gzip streams. Check that macOS `tar` extracts all of the data. If it does not, split the streams in the fetch script.
 - **Pitfall:** the failed-start assertion needs a start that VZ rejects after validation. Validate a copy of the kernel, delete the copy, and then call `start()`. If VZ rejects the missing file only when `start()` builds the configuration, the result is still `failed(.startFailed)`, as [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 requires.
 - The 10 s limit for a forced stop (`.stopTimedOut`) is a choice of this plan. It is recorded in [vm.md](../../02-design/vm.md) §9.3 and [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 (`stopping → failed`).
 - Using a `url` member in prebuilt lock entries is also a choice of this plan. [../../05-development/build-system.md](../../05-development/build-system.md) §6.1 has no field for the download location, so add it there.
 - The CLI command is checked manually in M0. [../../02-design/cli.md](../../02-design/cli.md) §6.2 says each task's T2 test runs through the command, but [../../02-design/vm.md](../../02-design/vm.md) §12 requires the harness to use VirtualMachineCore only. Here the harness follows vm.md.
 - **Local verification:** hosted VZ tests require `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; neither is committed. See [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §2.8.
-- **Open G1 blocker:** the 2026-09-30 T2 run did not stop the guest after `requestGuestStop()`; it timed out at 10 s and passed only after the forced stop. The pinned kernel has no `CONFIG_KEYBOARD_GPIO`, so the planned PL061-to-`gpio-keys` path is unavailable. Keep #003 and G1 open until the pinned guest handles the VZ power-button event and the T2/G1 checks pass.
+- **G1 progress:** the initial 2026-09-30 T2 run timed out after `requestGuestStop()`. A later hvc0 capture identified `gpiochip0 [20060000.pl061]` and a rising event on offset 6. With a line-owner readiness check, the complete T2 suite and direct ten-boot G1 acceptance test passed on branch `codex`; a signed `apkrun-dev dev linux` smoke from `/tmp` printed boot, powerinput, and done, then exited 0. The clean-`main` `scripts/run-gate.sh G1` run remains pending, so #003 stays open.
 - **TCC-safe test artifacts:** the local default is `/tmp/apkrun-test-linux`. Pass `APKRUN_TEST_LINUX_DIR` and `APKRUN_CI` as `xcodebuild` build settings; the hosted tests read them from `APKRunTestHost.app/Contents/Info.plist`.
 - **Review before merge:** the pinned `socat` and ncurses tooling license expressions are outside the current §4.4 allowlist. The allowlist was not expanded; maintainers must resolve the dependency or accept a policy change before #003 can close.
 - **Review before merge:** `linux-guest` currently runs only on trusted `main` pushes or manual dispatch. PR execution stays disabled until disposable lab runner capacity is available; meanwhile the task-closing PR must link a maintainer-run result for its reviewed commit, per [../../05-development/build-system.md](../../05-development/build-system.md) §15.1.

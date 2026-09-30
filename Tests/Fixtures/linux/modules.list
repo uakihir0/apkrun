@@ -1,6 +1,5 @@
 # Actual modules in the pinned Alpine linux-virt package.
 # virtio_console and virtio_pci are built into this kernel.
-button
 gpio_pl061
 evdev
 virtio_blk

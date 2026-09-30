@@ -113,6 +113,8 @@
       "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
       "licenseFiles": [
         "COPYING",
+        "LICENSES/CC-BY-SA-4.0.txt",
+        "LICENSES/GPL-2.0-or-later.txt",
         "LICENSES/GPL-2.0-only.txt",
         "LICENSES/LGPL-2.1-or-later.txt",
         "LICENSES/Linux-syscall-note.txt"

@@ -11,6 +11,16 @@ final class G1LinuxBootTests: XCTestCase {
             )
             XCTAssertEqual(result.records.first, .bootOK, "boot \(bootNumber)")
             XCTAssertEqual(result.records.last, .done, "boot \(bootNumber)")
+            XCTAssertTrue(
+                result.records.contains(
+                    .check(
+                        name: "powerinput",
+                        result: .ok,
+                        detail: "PL061 offset 6 line request confirmed"
+                    )
+                ),
+                "power-button monitor armed on boot \(bootNumber)"
+            )
             XCTAssertEqual(
                 result.states,
                 [.stopped, .starting, .running, .stopping, .stopped],

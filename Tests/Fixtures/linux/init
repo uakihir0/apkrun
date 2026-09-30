@@ -30,20 +30,6 @@ while IFS= read -r module || [ -n "$module" ]; do
     fi
 done < /etc/apkrun/modules.list
 
-mkdir -p /etc/acpi/events
-cat > /etc/acpi/events/power <<'EOF'
-event=button/power.*
-action=/etc/acpi/power-button.sh
-EOF
-cat > /etc/acpi/power-button.sh <<'EOF'
-#!/bin/sh
-case "${1:-}" in
-    *button/power*) /sbin/poweroff -f ;;
-esac
-EOF
-chmod 755 /etc/acpi/power-button.sh
-/sbin/acpid -f &
-
 requested_tests=
 poweroff_after_tests=0
 for argument in $(cat /proc/cmdline); do
@@ -53,7 +39,53 @@ for argument in $(cat /proc/cmdline); do
     esac
 done
 
+power_monitor_pid=
+if [ "$poweroff_after_tests" != 1 ]; then
+    if ! gpio_chips=$(/usr/bin/gpiodetect); then
+        fail gpio-detect
+    fi
+    printf '%s\n' "$gpio_chips"
+    power_gpiochip=$(printf '%s\n' "$gpio_chips" | awk 'tolower($0) ~ /pl061/ { print $1; exit }')
+    if [ -z "$power_gpiochip" ]; then
+        fail missing-pl061-gpiochip
+    fi
+    power_gpio_device="/dev/$power_gpiochip"
+    if [ ! -c "$power_gpio_device" ]; then
+        fail "missing-$power_gpiochip-device"
+    fi
+
+    /usr/bin/gpiomon \
+        --consumer=apkrun-test-power-button \
+        --edges=rising \
+        --num-events=1 \
+        --chip="$power_gpio_device" \
+        6 &
+    power_monitor_pid=$!
+    power_monitor_ready=0
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if ! kill -0 "$power_monitor_pid" 2>/dev/null; then
+            wait "$power_monitor_pid"
+            monitor_status=$?
+            fail "power-monitor-start-$monitor_status"
+        fi
+        power_line_info=$(/usr/bin/gpioinfo --chip="$power_gpiochip" 6 2>/dev/null)
+        case "$power_line_info" in
+            *'consumer="apkrun-test-power-button"'*)
+                power_monitor_ready=1
+                break
+                ;;
+        esac
+        sleep 0.05
+    done
+    if [ "$power_monitor_ready" -ne 1 ]; then
+        fail power-monitor-not-ready
+    fi
+fi
+
 printf 'APKRUN-TEST: boot ok\n'
+if [ -n "$power_monitor_pid" ]; then
+    printf 'APKRUN-TEST: powerinput ok PL061 offset 6 line request confirmed\n'
+fi
 if [ -n "$requested_tests" ]; then
     previous_ifs=$IFS
     IFS=,
@@ -66,6 +98,19 @@ printf 'APKRUN-TEST: done\n'
 
 if [ "$poweroff_after_tests" = 1 ]; then
     /sbin/poweroff -f
+fi
+
+if [ -n "$power_monitor_pid" ]; then
+    /bin/sh </dev/hvc0 >/dev/hvc0 2>&1 &
+    guest_shell_pid=$!
+    wait "$power_monitor_pid"
+    monitor_status=$?
+    kill "$guest_shell_pid" 2>/dev/null || :
+    if [ "$monitor_status" -eq 0 ]; then
+        printf 'APKRUN-POWER: VZ rising edge received on PL061 offset 6\n'
+        /sbin/poweroff -f
+    fi
+    fail "power-monitor-exit-$monitor_status"
 fi
 
 exec /bin/sh

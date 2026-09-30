@@ -261,7 +261,15 @@ scripts/build-third-party.sh virgl-runtime
 
 ### 6.4 Image tooling inputs: mkbootimg and avbtool
 
-`Images/tools/vendor/` holds pinned copies of `mkbootimg.py` and `unpack_bootimg.py` from `platform/system/tools/mkbootimg` and `avbtool.py` from `platform/external/avb`. `mkbootimg.py` builds the synthetic test boot images (#008) ([../02-design/android-image.md](../02-design/android-image.md) §1.2). They are `kind: vendored` entries with the AOSP commit and the SHA-256 of each copied file. `scripts/check-lock.sh` fails if a vendored file changes without a lock update. Local changes to them are not allowed; wrap them in `apkrun_image` instead.
+`Images/tools/vendor/` holds pinned copies of `mkbootimg.py` and
+`unpack_bootimg.py` from `platform/system/tools/mkbootimg`, its imported
+`gki/generate_gki_certificate.py` helper, and `avbtool.py` from
+`platform/external/avb`. `mkbootimg.py` builds the synthetic test boot images
+(#008) ([../02-design/android-image.md](../02-design/android-image.md) §1.2).
+They are `kind: vendored` entries with the AOSP commit and a `files` array of
+repository-relative paths and SHA-256 hashes. `scripts/check-lock.sh` verifies
+each listed file and fails if it changes without a lock update. Local changes
+to them are not allowed; wrap them in `apkrun_image` instead.
 
 ### 6.5 Other pinned inputs
 

@@ -106,7 +106,7 @@ A developer fetches the pinned build 16373615. They get a committed, reproducibl
 - `Images/tools/pyproject.toml`: Python 3.12, with pinned `lz4`, `cryptography`, `jsonschema`, and `pytest`.
 - `Images/tools/apkrun_image/__main__.py` with the subcommands `fetch`, `inventory`, and `inspect`. Later tasks add their own subcommands.
 - `fetch.py`, `inventory.py`, `sparse.py` (the streaming reader), and `lp.py` (the super metadata reader).
-- `Images/tools/vendor/`: `mkbootimg.py`, `unpack_bootimg.py`, and `avbtool.py` at pinned AOSP commits, each listed in `ThirdParty/ThirdParty.lock.json` (NFR-DEV-01).
+- `Images/tools/vendor/`: `mkbootimg.py`, `unpack_bootimg.py`, the imported GKI certificate helper, and `avbtool.py` at pinned AOSP commits, each listed with its file hash in `ThirdParty/ThirdParty.lock.json` (NFR-DEV-01).
 - `Images/tools/tests/fixtures/build_fixtures.py` and the small synthetic images in `Images/tools/tests/fixtures/images/`.
 - `scripts/inventory-cuttlefish.py`.
 - `Images/manifests/16373615/inventory.json`.
@@ -119,9 +119,9 @@ A developer fetches the pinned build 16373615. They get a committed, reproducibl
    - Add `__main__.py`, which dispatches subcommands.
    - Add `Images/work/` to `.gitignore`.
    - Set up with `python3 -m venv Images/tools/.venv && Images/tools/.venv/bin/pip install -e 'Images/tools[test]'`.
-   - Check: `python3 -m apkrun_image --help` lists `fetch`, `inventory`, and `inspect`. The CI job `test-images` runs `pytest Images/tools/tests` and it passes ([../../05-development/build-system.md](../../05-development/build-system.md) §15).
+   - Check: `python3 -m apkrun_image --help` lists `fetch`, `inventory`, and `inspect`. `inspect` prints a content-based image summary and does not modify the input. The CI job `test-images` runs `pytest Images/tools/tests` and it passes ([../../05-development/build-system.md](../../05-development/build-system.md) §15).
 2. **Vendored tools and synthetic fixtures.**
-   - Copy `mkbootimg.py`, `unpack_bootimg.py`, and `avbtool.py` into `Images/tools/vendor/`, and pin them in the lock file as `kind: vendored` entries with the AOSP commit and the SHA-256 of each file. Add the vendored-file check to `scripts/tools/check-lock.swift`: a copied file whose hash differs from its entry fails ([../../05-development/build-system.md](../../05-development/build-system.md) §6.4).
+   - Copy `mkbootimg.py`, `unpack_bootimg.py`, the imported `gki/generate_gki_certificate.py` helper, and `avbtool.py` into `Images/tools/vendor/`, and pin them in the lock file as `kind: vendored` entries with the AOSP commit and the SHA-256 of each file. Add the vendored-file check to `scripts/tools/check-lock.swift`: a copied file whose hash differs from its entry fails ([../../05-development/build-system.md](../../05-development/build-system.md) §6.4).
    - `build_fixtures.py` uses them to write small synthetic images:
      - a boot image v4 and an init_boot image;
      - a vendor_boot v4 image with three ramdisk fragments (PLATFORM, RECOVERY, DLKM) and a bootconfig section;
@@ -176,13 +176,23 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] How to obtain the artifact is documented: the API key, the fetch command, and the manual fallback, in [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §3.1–§3.2 and [../../02-design/android-image.md](../../02-design/android-image.md) §2.
-- [ ] `scripts/inventory-cuttlefish.py` outputs, for every file, its filename, size, SHA-256, and probable purpose. It also outputs `kind`, `details`, and `nameMismatch`.
-- [ ] The tools assume no fixed archive contents: files are classified by content, unknown files are listed, and a renamed file is detected.
-- [ ] Running the script on the selected build produces `Images/manifests/16373615/inventory.json`, which is committed. A second run is byte-identical.
-- [ ] `fetch` resumes, writes `fetch.json`, and downloads nothing on a second run.
-- [ ] The downloaded originals are never modified: they are opened read-only, and `fetch.json` hashes still match after the inventory.
-- [ ] The vendored tools are pinned in `ThirdParty/ThirdParty.lock.json`.
+- [x] How to obtain the artifact is documented: the API key, the fetch command, and the manual fallback, in [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §3.1–§3.2 and [../../02-design/android-image.md](../../02-design/android-image.md) §2.
+- [x] `scripts/inventory-cuttlefish.py` outputs, for every file, its filename, size, SHA-256, and probable purpose. It also outputs `kind`, `details`, and `nameMismatch`.
+- [x] The tools assume no fixed archive contents: files are classified by content, unknown files are listed, and a renamed file is detected.
+- [x] Running the script on the selected build produces `Images/manifests/16373615/inventory.json`, which is committed. A second run is byte-identical.
+- [x] `fetch` resumes, writes `fetch.json`, and downloads nothing on a second run.
+- [x] The downloaded originals are never modified: they are opened read-only, and `fetch.json` hashes still match after the inventory.
+- [x] The vendored tools are pinned in `ThirdParty/ThirdParty.lock.json`.
+
+**Verification record (2026-09-30).** The Build API artifact is 1,101,175,103
+bytes with SHA-256
+`051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The
+inventory contains 12 files totaling 1,892,483,479 bytes; it has no unknown
+files or name mismatches. A second inventory run is byte-identical.
+The inventory validates vendor_boot v3 payload bounds for archive
+classification; manifest and runtime support remain limited to v4 by gate M6.
+Inventory schema v2 records the validated AVB footer size and version, plus
+fetch provenance from the downloaded archive's adjacent `fetch.json`.
 
 ### Notes
 

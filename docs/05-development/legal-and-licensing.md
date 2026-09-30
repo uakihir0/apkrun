@@ -73,7 +73,12 @@ RiftVM is MIT-licensed. It is read and partly reused for the graphics path ([../
 
 ### 3.3 Vendored files
 
-- `Images/tools/vendor/` holds `avbtool.py` (from `platform/external/avb`) and `mkbootimg.py` and `unpack_bootimg.py` (from `platform/system/tools/mkbootimg`) unchanged ([build-system.md](build-system.md) §6.4). Each keeps its upstream license header, and the upstream license file sits next to it as `LICENSE.<name>`.
+- `Images/tools/vendor/` holds `avbtool.py` (from `platform/external/avb`)
+  and `mkbootimg.py`, `unpack_bootimg.py`, and the imported GKI certificate
+  helper (from `platform/system/tools/mkbootimg`) unchanged
+  ([build-system.md](build-system.md) §6.4). Each keeps its upstream license
+  header, and the upstream license file is recorded in
+  `ThirdParty/ThirdParty.lock.json`.
 - The apksig test vectors keep the upstream `NOTICE` and license file in their resource directory.
 - A vendored file is never edited ([build-system.md](build-system.md) §6.4), so its license never changes.
 

@@ -202,7 +202,7 @@ python3 -m apkrun_image fetch \
 python3 scripts/inventory-cuttlefish.py Images/work/16373615/download/
 ```
 
-- Downloads resume. `fetch.json` records name, size, and SHA-256. A second run downloads nothing and re-verifies.
+- Downloads resume. `fetch.json` records the build ID, target, caller-asserted branch, and each artifact's name, size, and SHA-256. Inventorying the download directory verifies and scans the archive listed there, then carries that provenance into `inventory.json`. Existing unverified files are preserved; move one aside or run `fetch` without an API key to record it as a manual download.
 - Fallback without a key: download `aosp_cf_arm64_only_phone-img-16373615.zip` from the ci.android.com web UI into the same directory, then run the same command. `fetch` then only verifies ([../02-design/android-image.md](../02-design/android-image.md) §2.2).
 - The prebuilt image is for development only (M1–M4). Do not publish it or bundles made from it ([legal-and-licensing.md](legal-and-licensing.md) §2).
 - Build a development bundle and install it with the commands in [build-system.md](build-system.md) §10.

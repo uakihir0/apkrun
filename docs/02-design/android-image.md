@@ -125,7 +125,7 @@ python3 -m apkrun_image fetch \
 
 - Uses the Android Build API v4: `https://androidbuild-pa.googleapis.com/v4/builds/{buildId}/{target}/attempts/latest/artifacts` to list, and `…/artifacts/{name}/url` to get a signed download URL.
 - The API key is the public key embedded in the open-source `cvd` tool (`android_build_api_key.cc`). The tool reads it from `APKRUN_ANDROID_BUILD_API_KEY`. The key is not committed. `docs/05-development/environment-setup.md` explains where to copy it from. Manual download from the ci.android.com web UI is the documented fallback; `fetch` then only verifies.
-- Downloads resume with HTTP `Range`. After each download the tool records name, size, and SHA-256 in `Images/work/<buildId>/download/fetch.json`.
+- Downloads resume with HTTP `Range`. After each download the tool records name, size, and SHA-256 in `Images/work/<buildId>/download/fetch.json`. The requested branch is recorded with `branchProvenance: "caller-asserted"` because the artifact-list request is scoped by build ID and target. It never overwrites an existing artifact unless an API or prior manifest hash verifies it.
 - A second run with the same arguments downloads nothing and re-verifies hashes.
 
 ### 2.3 Licensing note
@@ -138,14 +138,14 @@ The prebuilt image is used for development only (M1–M4). Release images are bu
 
 ### 3.1 Inventory (#008)
 
-`scripts/inventory-cuttlefish.py <zip or directory> [--out inventory.json]` lists every file and classifies it **by content**. File names are recorded only as hints. #008 requires filename, size, hash, and probable purpose. The tool records more.
+`scripts/inventory-cuttlefish.py <zip or directory> [--out inventory.json]` lists every archive entry and classifies it **by content**. When given a download directory with one archive and `fetch.json`, it inventories that archive and carries the checked build provenance into the inventory. An unpacked directory without fetch metadata is inventoried as a directory. File names are recorded only as hints. #008 requires filename, size, hash, and probable purpose. The tool records more.
 
 | Detection | Test | Extra details recorded |
 |---|---|---|
-| Boot image | `ANDROID!` at offset 0 | header version (offset 40), kernel size, ramdisk size, `os_version` (Android release and security patch level), cmdline. Kernel size > 0 ⇒ `boot`; kernel size 0 and ramdisk > 0 ⇒ `init_boot`. |
-| Vendor boot image | `VNDRBOOT` at offset 0 | header version (v4 required), page size, vendor cmdline, DTB size, vendor ramdisk table (name, type NONE/PLATFORM/RECOVERY/DLKM, size), bootconfig section size |
+| Boot image | `ANDROID!` at offset 0 | header version (offset 40), kernel size, ramdisk size, `os_version` (Android release and security patch level), cmdline, and the bounded v4 boot signature size when present. Kernel size > 0 ⇒ `boot`; kernel size 0 and ramdisk > 0 ⇒ `init_boot`. |
+| Vendor boot image | `VNDRBOOT` at offset 0 | header version 3 or 4; validate ramdisk and DTB bounds for both; for v4, page size, vendor cmdline, vendor ramdisk table (name, type NONE/PLATFORM/RECOVERY/DLKM, size), and bootconfig section size |
 | vbmeta image | `AVB0` at offset 0 | algorithm, rollback index, flags, descriptors (hash, hashtree, chain partition names) |
-| AVB footer | `AVBf` in the last 64 bytes | original image size, vbmeta offset |
+| AVB footer | `AVBf` in the last 64 bytes | footer version, original image size, vbmeta offset and size |
 | Android sparse image | little-endian magic `0xED26FF3A` at offset 0 | block size, total blocks (logical size), chunk count |
 | Dynamic partition metadata | after unsparsing (streamed): liblp geometry magic at offset 4096 | logical partitions (name, size, group), block device size, metadata slots |
 | Filesystems | ext4 `0xEF53` at 1024+56; erofs `0xE0F5E1E2` at 1024; f2fs `0xF2F52010` at 1024 | filesystem type, size |

@@ -470,24 +470,26 @@ approximate source text.
 | Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [build-system.md](../05-development/build-system.md) §3.1; [test-strategy.md](test-strategy.md) §3.3 |
 
 **Choice.** The Release checker derives searchable key encodings, SHA-256
-fingerprints, and the image key ID from supported Ed25519 fixtures under
-`Tests/Fixtures/signing/`, then scans every file in the app bundle for those
-tokens. Unsupported certificate and keystore formats fail the check closed
-until their public material can be extracted. The fixture uses the public RFC
-8032 Ed25519 test vector; no private key is stored. The `apkrun` and `apkrund`
-Mach-O files must contain a parseable embedded Info.plist whose
-`APKRunBuildIdentity` is exactly `release`; a missing key fails.
+fingerprints, and the image key ID from supported Ed25519 fixtures and the
+synthetic AVB RSA fixture under `Tests/Fixtures/signing/`, then scans every
+file in the app bundle for those tokens. Unsupported certificate and
+keystore formats fail the check closed until their public material can be
+extracted. The Ed25519 fixture uses the public RFC 8032 test vector. The
+`apkrun` and `apkrund` Mach-O files must contain a parseable embedded
+Info.plist whose `APKRunBuildIdentity` is exactly `release`; a missing key
+fails.
 
 **Reason.** Deriving tokens from the fixture directory means adding a test
 key does not require a parallel hard-coded list in the checker. The first
 eight SHA-256 bytes, rendered as 16 hexadecimal characters, follow the image
 manifest key-ID format in [android-image.md](../02-design/android-image.md)
 §10.1. Scanning all bundle files catches raw binary keys and resources with
-extensions other than the usual text formats. Rejecting an unsupported
-keystore keeps a future JKS fixture from silently weakening the check. A
-release artifact without the embedded identity is ambiguous, so the checker
-fails closed; linked Mach-O fixtures cover both a present release identity
-and the missing-key case.
+extensions other than the usual text formats. The AVB fixture's generated
+PKCS#8 private key and matching AVB public-key blob are also scanned.
+Rejecting an unsupported keystore keeps a future JKS fixture from silently
+weakening the check. A release artifact without the embedded identity is
+ambiguous, so the checker fails closed; linked Mach-O fixtures cover both a
+present release identity and the missing-key case.
 
 ## IR-020: Validate generators available in the checkout
 
@@ -1189,3 +1191,128 @@ should confirm whether the syscall exception applies to the packaged binaries
 before #003 closes. Upstream also licenses its copied text files under
 CC-BY-SA-4.0; that text is included for the committed notices. The package is
 confined to the test guest and never enters APKRun.app.
+
+## IR-054: Pin the complete mkbootimg import set
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #008; [build-system.md](../05-development/build-system.md) §6.4; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.3; `ThirdParty/ThirdParty.lock.json` |
+
+**Choice.** Vendor and hash
+`gki/generate_gki_certificate.py` with `mkbootimg.py` and
+`unpack_bootimg.py`, all from the same pinned AOSP commit.
+
+**Reason.** The pinned `mkbootimg.py` imports the GKI helper at module load,
+even when the fixture generator does not request a GKI signature. Omitting it
+would make the official tool fail to start in a clean checkout. Keeping the
+helper at its upstream path and locking its hash preserves the exact upstream
+import closure without patching vendored code.
+
+## IR-055: Bound image metadata reads and label branch provenance
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §2.2–§3.1; [M01](issues/M01-android-bring-up.md) #008; `Images/tools/apkrun_image/{fetch,inventory,lp,sparse}.py` |
+
+**Choice.** Limit parsed liblp metadata and vbmeta descriptor tables to
+16 MiB, sparse logical images to 64 GiB, and vendor ramdisk tables to 16 MiB
+and 4096 entries. Reject sparse chunks that exceed the declared expanded
+block count before calculating their CRC, and combine repeated-pattern CRCs
+in logarithmic time. Reject liblp extents, device sizes, and filesystem sizes
+that exceed their containing image. Record `fetch.json.branchProvenance` as
+`caller-asserted`. Publish downloaded artifacts through a verified staging
+file and an exclusive hard link; never replace an existing destination. When
+an existing file has no verifiable API or prior-manifest digest, preserve it
+and ask the user to move it aside or use the documented manual verification
+path.
+
+**Reason.** The inventory handles untrusted image bytes and should reject
+malformed dimensions before allocating or doing input-sized work. The design
+does not specify parser resource ceilings, so these limits are conservative
+implementation bounds above the selected image's expected sizes. The Build
+API lookup used here is keyed by build ID and target; the tool does not
+independently prove that the supplied branch names that build. The provenance
+field prevents the local manifest from overstating what was verified.
+Staging isolates the verified bytes from a path swap, the second hash detects
+changes during finalization, and exclusive hard-link publication cannot
+clobber a pre-existing artifact. Rejecting an unverifiable pre-existing file
+avoids silently replacing user data when the API provides no digest.
+
+## IR-056: Keep the synthetic AVB signing key with other test keys
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #008; [build-system.md](../05-development/build-system.md) §3.1; [security-model.md](../01-architecture/security-model.md) §7 |
+
+**Choice.** Store the synthetic RSA private key and its derived AVB public
+key in `Tests/Fixtures/signing/`. Extend the release checker to recognize and
+scan PKCS#8 RSA fixture material and Android AVB public-key blobs.
+
+**Reason.** The vendored AOSP `avbtool.py` needs an RSA key to build the
+required chain-partition descriptors. The repository rule keeps test signing
+material in one reviewed fixture directory. The existing release checker
+recognized only Ed25519 public keys, so it now scans the new formats instead
+of rejecting the fixture or leaving its public material unchecked. The key
+is generated only for tests and has no production use.
+
+## IR-057: Classify bounded vendor boot v3 images
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1; [android-image-manifest.md](../03-reference/android-image-manifest.md) §4.4; [M01](issues/M01-android-bring-up.md) #008 |
+
+**Choice.** Inventory v3 and v4 vendor boot images when the header, ramdisk,
+and DTB ranges fit the file. Parse the ramdisk table and bootconfig fields
+only for v4. Keep the Android image manifest and runtime support gate at v4.
+
+**Reason.** Inventory describes what an archive contains, including older
+standard image headers; safely classifying v3 is more useful than treating it
+as unknown. Runtime bring-up still requires v4 as specified by gate M6, so
+this parser behavior does not broaden the supported guest image format.
+
+## IR-058: Version inventory details for validated AVB footer fields
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §§4, 10; [android-image.md](../02-design/android-image.md) §3.1; `Images/tools/apkrun_image/inventory.py` |
+
+**Choice.** Emit the AVB footer's `vbmetaSize` and `version` alongside
+`originalSize` and `vbmetaOffset`, and raise the inventory schema version from
+1 to 2. Require supported footer version 1.0 and validate its image bounds
+before adding it to the inventory.
+
+**Reason.** The extra fields make inventory evidence more useful and can be
+validated against the pinned AOSP footer layout. Inventory consumers reject
+unknown fields and rely on the version to understand the exact shape, so
+silently extending version 1 would violate the documented contract. The
+committed inventory is regenerated in the same change.
+
+## IR-059: Carry checked fetch provenance through the inventory
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §2.2–§3.1; [android-image-manifest.md](../03-reference/android-image-manifest.md) §4; [environment-setup.md](../05-development/environment-setup.md) §3.2 |
+
+**Choice.** When the inventory command receives a download directory with one
+archive and `fetch.json`, inventory that archive, verify its recorded size
+and SHA-256, and copy build ID, target, and caller-asserted branch provenance
+into the inventory source. Keep ordinary unpacked directories as directory
+inventories.
+
+**Reason.** The documented #008 command passes the download directory.
+Treating it as a generic directory would inventory the ZIP file and
+`fetch.json` instead of the files inside the archive. Carrying the checked
+fetch fields also gives the #009 manifest generator the branch, target, and
+build ID required by the documented `--inventory`-only command.

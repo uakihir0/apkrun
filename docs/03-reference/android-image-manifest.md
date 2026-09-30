@@ -28,7 +28,7 @@ Both files live in the source tree. Neither is shipped to users. The runtime ima
 |---|---|---|
 | `Images/manifests/<buildId>/inventory.json` | yes | the inventory (§4) |
 | `Images/manifests/<buildId>/android-image.json` | yes | the manifest (§5–§6) |
-| `Images/work/<buildId>/download/` | no (git-ignored) | the downloaded archives and `fetch.json` (name, size, SHA-256 per download) |
+| `Images/work/<buildId>/download/` | no (git-ignored) | the downloaded archives and `fetch.json` (name, size, SHA-256 per download; branch marked caller-asserted) |
 | `Images/work/<buildId>/boot/`, `disks/`, `bundle/` | no | outputs of `extract`, `disks`, and `bundle` (§9) |
 | `Images/tools/schemas/android-image-manifest.schema.json` | yes | the JSON Schema of §7, byte for byte |
 | `Images/tools/layouts/<deviceFamily>.json` | yes | the disk plan, console port plan, and bootconfig baseline. It refers to partitions, never to files (§9) |
@@ -82,7 +82,9 @@ Shortened to four files. The real file lists every file in the archive.
       "details": {
         "avbFooter": {
           "originalSize": 44040192,
-          "vbmetaOffset": 44040192
+          "vbmetaOffset": 44040192,
+          "vbmetaSize": 2432,
+          "version": "1.0"
         },
         "bootKind": "boot",
         "cmdline": "",
@@ -135,12 +137,16 @@ Shortened to four files. The real file lists every file in the archive.
       "size": 1879048192
     }
   ],
-  "generator": "apkrun_image.inventory 1.0.0",
-  "schemaVersion": 1,
+  "generator": "apkrun_image.inventory 0.1.0",
+  "schemaVersion": 2,
   "source": {
+    "branch": "aosp-android-latest-release",
+    "branchProvenance": "caller-asserted",
+    "buildId": "16373615",
     "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
     "sha256": "4a70fe9aa6436e02c2dea340fbd1e352e4ef2d8ce6ca52ad25d4b95471fc8bf2",
     "size": 1476395008,
+    "target": "aosp_cf_arm64_only_phone-userdebug",
     "type": "zip"
   }
 }
@@ -150,13 +156,17 @@ Shortened to four files. The real file lists every file in the archive.
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `schemaVersion` | integer | yes | `1` | format version of the inventory |
+| `schemaVersion` | integer | yes | `2` | format version of the inventory |
 | `generator` | string | yes | `apkrun_image.inventory <version>` | the tool and its version. No time stamp |
 | `source` | object | yes | see below | the input that was scanned |
-| `source.type` | string | yes | `zip` or `directory` | the input kind |
+| `source.type` | string | yes | `zip` or `directory` | the input kind; a download directory with `fetch.json` is represented as its archive |
 | `source.name` | string | yes | a base name, never an absolute path | the archive file name, or the directory name |
 | `source.size` | integer | for `zip` | bytes | archive size |
 | `source.sha256` | string | for `zip` | 64 lowercase hex | archive hash |
+| `source.branch` | string | when `fetch.json` is present | non-empty | the branch supplied to `fetch` |
+| `source.branchProvenance` | string | with `source.branch` | `caller-asserted` | the Build API request is keyed by build ID and target; the branch is not independently confirmed |
+| `source.target` | string | when `fetch.json` is present | non-empty | the target supplied to `fetch` |
+| `source.buildId` | string | when `fetch.json` is present | non-empty | the build ID supplied to `fetch` |
 | `files` | array of entry (§4.3) | yes | sorted by `path`, byte order of UTF-8 | one entry per regular file. Directories are not listed |
 
 ### 4.3 File entry
@@ -177,8 +187,8 @@ Detection follows [../02-design/android-image.md](../02-design/android-image.md)
 
 | `kind` | Test | `details` fields |
 |---|---|---|
-| `bootImage` | `ANDROID!` at offset 0 | `headerVersion` (offset 40), `kernelSize`, `ramdiskSize`, `osVersion` {`release`, `securityPatch` `YYYY-MM`}, `cmdline`, `bootKind`: `boot` (kernel size > 0) or `init_boot` (kernel size 0, ramdisk > 0) |
-| `vendorBootImage` | `VNDRBOOT` at offset 0 | `headerVersion`, `pageSize`, `cmdline`, `dtbSize`, `ramdisks` [{`name`, `type` `NONE`\|`PLATFORM`\|`RECOVERY`\|`DLKM`, `size`}], `bootconfigSize` |
+| `bootImage` | `ANDROID!` at offset 0 | `headerVersion` (offset 40), `kernelSize`, `ramdiskSize`, `osVersion` {`release`, `securityPatch` `YYYY-MM`}, `cmdline`, `bootKind`: `boot` (kernel size > 0) or `init_boot` (kernel size 0, ramdisk > 0), optional `bootSignatureSize` for a bounded v4 signature |
+| `vendorBootImage` | `VNDRBOOT` at offset 0 | header version 3 or 4; ramdisk and DTB bounds are checked for both. V4 also records `pageSize`, `cmdline`, `dtbSize`, `ramdisks` [{`name`, `type` `NONE`\|`PLATFORM`\|`RECOVERY`\|`DLKM`, `size`}], and `bootconfigSize` |
 | `vbmeta` | `AVB0` at offset 0 | `algorithm`, `rollbackIndex`, `flags`, `descriptors` [{`type` `hash`\|`hashtree`\|`chainPartition`\|`property`\|`kernelCmdline`, `partition` (for hash, hashtree, chain)}] |
 | `sparse` | little-endian `0xED26FF3A` at offset 0 | `blockSize`, `totalBlocks`, `logicalSize` (= `blockSize` × `totalBlocks`), `chunkCount`, `content` {`kind`, `details`}: the detection result of the unsparsed stream (`dynamicPartitions`, `filesystem`, or `unknown`) |
 | `dynamicPartitions` | liblp geometry magic at offset 4096 | `logicalPartitions` [{`name`, `size`, `group`}], `blockDeviceSize`, `metadataSlots` |
@@ -186,7 +196,7 @@ Detection follows [../02-design/android-image.md](../02-design/android-image.md)
 | `text` | valid UTF-8, no NUL byte, at most 1 MiB | `values` {key: value} when every non-empty, non-`#` line is `key=value` (android-info.txt). Otherwise `lines` [string] (fastboot-info.txt) |
 | `unknown` | anything else | `magic`: the first 8 bytes as lowercase hex (fewer for shorter files) |
 
-- Any image kind may also carry `avbFooter` {`originalSize`, `vbmetaOffset`}, when `AVBf` is in the last 64 bytes.
+- Any image kind may also carry `avbFooter` {`originalSize`, `vbmetaOffset`, `vbmetaSize`, `version`}, when a valid, bounded `AVBf` footer is in the last 64 bytes. Footer integers use big-endian byte order.
 - Unknown files are listed. They are never dropped.
 - Sparse images are unsparsed as a stream for detection. Nothing is written to disk.
 
@@ -205,7 +215,7 @@ Detection follows [../02-design/android-image.md](../02-design/android-image.md)
 
 ### 4.6 Determinism
 
-The acceptance of #008 is that a second run gives byte-identical output. So the writer uses UTF-8, sorted keys, 2-space indentation, and a trailing newline. It writes no time stamps and no absolute paths. `files` is sorted by `path`.
+The acceptance of #008 is that a second run gives byte-identical output. So the writer uses UTF-8, sorted keys, 2-space indentation, and a trailing newline. It writes no time stamps and no absolute paths. `files` is sorted by `path`. When an input directory contains one archive and its `fetch.json`, the inventory verifies the archive against that record and carries the branch, target, and build ID into `source`; the sidecar itself is not an archive entry.
 
 ## 5. `android-image.json`: complete example
 
@@ -530,11 +540,11 @@ The layout file never names a file. It names partitions, and this manifest maps 
 
 ## 10. Versioning rules
 
-- `schemaVersion` is an integer. Only `1` is defined.
+- `AndroidImageManifest.schemaVersion` is an integer. Only `1` is defined.
 - A reader refuses a newer version with M1. `Images/tools` reads only the current version. A change that raises the version also rewrites every committed manifest, in the same change.
 - Unknown fields are rejected. This file is ours and reviewed by a human, so a typo must fail. (The Direct provider manifest does the opposite, because third parties write it: [direct-provider-manifest.md](direct-provider-manifest.md) §9.)
 - Any change to the schema, even an optional field, raises `schemaVersion`. The schema `$id` carries the version.
-- `inventory.json` has its own `schemaVersion` with the same rules. It is regenerated, never migrated.
+- `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current; it adds the bounded AVB footer `vbmetaSize` and `version` fields, plus checked `fetch.json` build provenance in `source`. Inventory files are regenerated, never migrated.
 
 ## 11. Writers and readers
 

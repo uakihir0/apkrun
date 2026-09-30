@@ -125,7 +125,8 @@ python3 -m apkrun_image fetch \
 
 - Uses the Android Build API v4: `https://androidbuild-pa.googleapis.com/v4/builds/{buildId}/{target}/attempts/latest/artifacts` to list, and `…/artifacts/{name}/url` to get a signed download URL.
 - The API key is the public key embedded in the open-source `cvd` tool (`android_build_api_key.cc`). The tool reads it from `APKRUN_ANDROID_BUILD_API_KEY`. The key is not committed. `docs/05-development/environment-setup.md` explains where to copy it from. Manual download from the ci.android.com web UI is the documented fallback; `fetch` then only verifies.
-- Downloads resume with HTTP `Range`. After each download the tool records name, size, and SHA-256 in `Images/work/<buildId>/download/fetch.json`. The requested branch is recorded with `branchProvenance: "caller-asserted"` because the artifact-list request is scoped by build ID and target. It never overwrites an existing artifact unless an API or prior manifest hash verifies it.
+- Downloads resume with HTTP `Range`. Finalization copies the completed partial into a private staging directory, reads no more than the declared size plus one byte, checks its size and SHA-256, makes the staged file read-only, then atomically hard-links it to the final name. An interruption can leave the resumable `.partial` or a complete final artifact, never a truncated file at the final name. It never overwrites an existing artifact. After each download the tool records name, size, and SHA-256 in `Images/work/<buildId>/download/fetch.json`. The requested branch is recorded with `branchProvenance: "caller-asserted"` because the artifact-list request is scoped by build ID and target.
+- Artifact sizes are capped at 16 GiB before download, verification, and publication. The CLI requires HTTPS for API and artifact URLs. The Python test API can explicitly opt into loopback HTTP; redirects are still checked, remain on the same loopback origin, and HTTPS cannot redirect to HTTP.
 - A second run with the same arguments downloads nothing and re-verifies hashes.
 
 ### 2.3 Licensing note
@@ -152,6 +153,11 @@ The prebuilt image is used for development only (M1–M4). Release images are bu
 | Text metadata | `android-info.txt`, `fastboot-info.txt` (UTF-8 text) | parsed key/values (`config=phone`, `gfxstream=supported`, …) |
 | Anything else | — | `kind: unknown`. Unknown files are listed, never dropped. |
 
+EROFS size is read from the superblock `blocks` field at byte offset 36 and
+scaled by the block-size bits at offset 12. ZIP and directory input bounds,
+stable-file checks, and the output-path rule are specified in
+[android-image-manifest.md](../03-reference/android-image-manifest.md) §4.5.
+
 Output (`inventory.json`, one entry per file):
 
 ```json
@@ -171,7 +177,7 @@ Acceptance (#008): running the script on the pinned zip produces `Images/manifes
 
 ### 3.2 AndroidImageManifest (#009)
 
-The inventory says *what is there*. The `AndroidImageManifest` says *what each thing is for*. It is written once per build (generated from the inventory by `python3 -m apkrun_image manifest`, then reviewed by a human and committed). Full schema and field rules: [../03-reference/android-image-manifest.md](../03-reference/android-image-manifest.md). The sketch below is abbreviated: hashes are elided, and it leaves out the artifacts `vbmeta_system`, `vbmeta_system_dlkm`, `vbmeta_vendor_dlkm`, and `custom` and five of the eight logical partitions. The complete example is in the reference, §5.
+The inventory says *what is there*. The `AndroidImageManifest` says *what each thing is for*. It is written once per build (generated from the inventory by `python3 -m apkrun_image manifest`, then reviewed by a human and committed). Full schema and field rules: [../03-reference/android-image-manifest.md](../03-reference/android-image-manifest.md). The sketch below is abbreviated: hashes are elided, and it leaves out the artifacts `vbmeta_system`, `vbmeta_system_dlkm`, `vbmeta_vendor_dlkm`, and `custom` and six of the nine non-empty logical partitions. The complete example is in the reference, §5.
 
 ```json
 {
@@ -183,7 +189,7 @@ The inventory says *what is there*. The `AndroidImageManifest` says *what each t
     "buildId": "16373615",
     "archives": [{ "name": "aosp_cf_arm64_only_phone-img-16373615.zip", "size": 1476395008, "sha256": "…" }]
   },
-  "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-09" },
+  "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-06" },
   "architecture": "arm64",
   "deviceFamily": "cuttlefish-phone-arm64",
   "artifacts": [

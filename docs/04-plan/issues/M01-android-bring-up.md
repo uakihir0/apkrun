@@ -136,7 +136,7 @@ A developer fetches the pinned build 16373615. They get a committed, reproducibl
 3. **`fetch.py`.**
    - Read the key from `APKRUN_ANDROID_BUILD_API_KEY`.
    - Resolve the `--artifact` glob with the v4 list endpoint, then fetch the signed URL from `…/artifacts/{name}/url` ([../../02-design/android-image.md](../../02-design/android-image.md) §2.2).
-   - Download to `<name>.partial` with HTTP Range resume, then rename.
+   - Download to `<name>.partial` with HTTP Range resume. Verify into a private, read-only staging file and atomically hard-link it to the final name; never expose partial bytes at the final path or overwrite an existing file.
    - Write `fetch.json` with name, size, and SHA-256.
    - A second run downloads nothing and re-verifies.
    - A file that was downloaded by hand, with no key set, is only verified.
@@ -147,7 +147,7 @@ A developer fetches the pinned build 16373615. They get a committed, reproducibl
    - Classify each file by the magic numbers and offsets in the table of [../../02-design/android-image.md](../../02-design/android-image.md) §3.1. The liblp header is read at offset 4096 after a streamed unsparse. Nothing is written to disk.
    - Emit, per file: `path`, `size`, `sha256`, `kind`, `probablePurpose`, `details`, and `nameMismatch`. The format is [../../03-reference/android-image-manifest.md](../../03-reference/android-image-manifest.md) §4.
    - Unknown files are listed with kind `unknown` and are never dropped.
-   - Output order is deterministic: sorted paths and sorted keys, and no timestamps ([../../03-reference/android-image-manifest.md](../../03-reference/android-image-manifest.md) §4.6).
+   - Output order is deterministic: sorted paths and sorted keys, and no timestamps ([../../03-reference/android-image-manifest.md](../../03-reference/android-image-manifest.md) §4.7).
    - Check: T0 classification tests pass for every kind.
 5. **`scripts/inventory-cuttlefish.py`.**
    - A thin entry point that calls `apkrun_image.inventory.main`. It takes a zip or a directory, writes to `--out` or else to stdout, and has no logic of its own.
@@ -171,6 +171,7 @@ See [../test-strategy.md](../test-strategy.md).
   - Two inventory runs over the fixture zip are byte-identical.
 - **T1** (`Images/tools/tests/test_fetch.py`, `test_inventory_real.py`):
   - A fake Build API on loopback: an interrupted download resumes, a second run downloads nothing, a hash mismatch is reported, and the manual-download path only verifies.
+  - Artifact sizes above 16 GiB are rejected before transfer. Unsafe redirects, including HTTPS-to-HTTP downgrades, are rejected.
   - The inventory of the real archive equals the committed file. This test is skipped with a message when `Images/work/16373615/download/` is absent.
 - **T3** (manual or nightly, needs the network and the key): `fetch` against the real Build API for build 16373615. It must match `fetch.json`.
 
@@ -193,6 +194,19 @@ The inventory validates vendor_boot v3 payload bounds for archive
 classification; manifest and runtime support remain limited to v4 by gate M6.
 Inventory schema v2 records the validated AVB footer size and version, plus
 fetch provenance from the downloaded archive's adjacent `fetch.json`.
+The EROFS block count is read from the documented superblock offset. ZIP64
+record bounds, archive and directory size limits, the 64 MiB central-directory
+and 1 MiB ZIP64-record caps, ZIP64 self-extracting prefix handling,
+unsupported ZIP64 extensible-data rejection, bounded Build API metadata,
+symlink-resistant directory reads, parent-directory fetch locking, and
+replacement-safe partial cleanup are covered by regression tests.
+
+**Final verification (2026-09-30).** `pytest Images/tools/tests -q` passed all
+121 tests, including fake-API T1, bounded-size and redirect cases, and the real
+archive inventory check. The rerun of `scripts/ci/run-checks.sh`, Ruff lint and
+format checks, and `git diff --check` passed. Regenerating the inventory from
+`Images/work/16373615/download/` produced bytes identical to the committed
+`inventory.json`.
 
 ### Notes
 
@@ -376,24 +390,26 @@ One reviewed, schema-validated `android-image.json` describes build 16373615. Ev
 
 See [../test-strategy.md](../test-strategy.md).
 
-- **T0 Python:** every valid fixture passes. Every invalid fixture fails with exactly its expected message. The model round-trips: load, dump with sorted keys, load again, and the result is equal. The no-file-names test.
+- **T0 Python:** every valid fixture passes. Every invalid fixture fails with exactly its expected message. A source vbmeta omitted from both `artifacts` and `roles.vbmeta` is rejected; generation follows the top-level descriptor order. The model round-trips: load, dump with sorted keys, load again, and the result is equal. The no-file-names test.
 - **T0 Swift** (`Packages/ImageCore/Tests/ImageCoreTests/AndroidImageManifestTests.swift`): decoding and encoding round trip. Every valid fixture and every committed manifest is accepted. The manifest-only invalid fixtures fail with the same message as in Python.
 - **T1:** `manifest --check Images/manifests/16373615/android-image.json` passes with the real archive. It is skipped when the archive is absent.
 
 ### Acceptance criteria
 
-- [ ] The schema describes the build ID, Android version, architecture, boot image, vendor boot, super/system, vendor, product, userdata, vbmeta, and metadata:
+- [x] The schema describes the build ID, Android version, architecture, boot image, vendor boot, super/system, vendor, product, userdata, vbmeta, and metadata:
   - system, vendor, and product are `logicalPartitions` of `super`;
   - metadata is a `blankPartitions` entry.
-- [ ] JSON encode and decode work in Python and in Swift.
-- [ ] The committed manifest describes the #008 set. Every artifact matches its inventory entry in size, hash, and kind (M10).
-- [ ] Invalid manifests fail with actionable errors. Each message names the file or field, what was expected, what was found, and the fix. Each invalid fixture has its expected message.
-- [ ] No Python or Swift code opens an image file by a literal name.
+- [x] JSON encode and decode work in Python and in Swift.
+- [x] The committed manifest describes the #008 set. Every artifact matches its inventory entry in size, hash, and kind (M10).
+- [x] Invalid manifests fail with actionable errors. Each message names the file or field, what was expected, what was found, and the fix. Each invalid fixture has its expected message.
+- [x] No Python or Swift code opens an image file by a literal name.
 
 ### Notes
 
 - The `blankPartitions` sizes are placeholders until #011 replaces them with the sizes from the #064 `target` capture.
 - The design sketch in [android-image.md](../../02-design/android-image.md) §3.2 is abbreviated. Reference §5 is the complete example.
+- **Verification (2026-09-30):** Python tests cover all M1–M13 fixture pairs, including source vbmeta completeness, descriptor-order generation and validation, deterministic generation, the committed build manifest, stale-inventory rejection, and file checks against the pinned archive. The full image test suite passed 121 tests; Swift ImageCore manifest tests passed 14 tests; the T1 real archive check passed. The manifest has 10 artifacts and all 9 non-empty liblp partitions.
+- **Maintainer review pending:** the manifest is generated from the pinned inventory and its file checks pass, but a human maintainer still needs to review its source-derived values before treating the draft as approved; see IR-062.
 
 ---
 

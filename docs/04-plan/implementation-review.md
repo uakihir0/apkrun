@@ -1028,10 +1028,12 @@ operation. A bounded retry preserves queue and object lifetime safety.
 
 **Choice.** The artifact scripts and local CLI default to
 `/tmp/apkrun-test-linux`; local G1 selects `${TMPDIR}/apkrun-test-linux`, and
-the T2 workflow selects `$RUNNER_TEMP/apkrun-test-linux`. `APKRUN_TEST_LINUX_DIR`
-can select another location. The G1/T2 `xcodebuild` invocations pass the
-selected path and `APKRUN_CI` as build settings; the hosted test process reads
-them from `APKRunTestHost.app/Contents/Info.plist`.
+the T2 workflow selects `$RUNNER_TEMP/apkrun-test-linux`. An
+`APKRUN_TEST_LINUX_DIR` override must be absolute and outside `~/Documents`.
+The fetch/build scripts and hosted test reject a Documents path, including
+symlink aliases, before accessing guest artifacts. The G1/T2 `xcodebuild`
+invocations pass the selected path and `APKRUN_CI` as build settings; the
+hosted test process reads them from `APKRunTestHost.app/Contents/Info.plist`.
 
 **Reason.** The signed test host triggered macOS file-access approval while
 opening the pinned kernel under a checkout in `~/Documents`. Putting only the
@@ -1044,6 +1046,36 @@ the test host's Info.plist makes the selected artifact directory and CI
 strictness explicit. A signed T2 boot passed after both checkout and default
 temporary artifact paths were moved aside, confirming that the host used the
 selected temporary directory.
+
+## IR-061: Reject T2 artifacts inside protected Documents
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003; [environment-setup.md](../05-development/environment-setup.md) §4; [build-system.md](../05-development/build-system.md) §12.4; `scripts/{fetch-test-linux,build-test-initramfs,run-gate}.sh`; `LinuxGuestHarness.swift` |
+
+**Choice.** Keep the `/tmp` and CI temporary-directory defaults. Reject an
+absolute artifact-directory override inside the current account's
+`~/Documents`, regardless of an overridden `HOME`, in both artifact
+preparation scripts and the signed test host. Check the lexical path first,
+then resolve symlink components while stopping before any filesystem lookup
+inside protected Documents. Resolve the Swift default path through the same
+check, so a `/tmp` symlink cannot bypass it. Fail before creating or opening
+guest artifacts.
+
+**Reason.** A stale or explicit override into Documents is a reproducible
+source of macOS file-access prompts. The exact path behind the reported
+interruption was not established, so this guard covers both direct paths and
+symlink aliases without claiming that they caused that particular prompt.
+Using the account database home prevents a caller-controlled `HOME` from
+disabling the check. The `/tmp` defaults keep normal local and CI runs
+unprompted and preserve custom artifact paths elsewhere.
+
+**Residual risk.** A same-user process could rename or replace an ancestor
+after validation and before a later shell or Virtualization.framework open.
+The guard is intended to prevent accidental TCC prompts from configured paths;
+it does not claim to protect against a concurrent same-user path swap.
 
 ## IR-047: Handle VZ power input through the PL061 GPIO character device
 
@@ -1224,11 +1256,11 @@ and 4096 entries. Reject sparse chunks that exceed the declared expanded
 block count before calculating their CRC, and combine repeated-pattern CRCs
 in logarithmic time. Reject liblp extents, device sizes, and filesystem sizes
 that exceed their containing image. Record `fetch.json.branchProvenance` as
-`caller-asserted`. Publish downloaded artifacts through a verified staging
-file and an exclusive hard link; never replace an existing destination. When
-an existing file has no verifiable API or prior-manifest digest, preserve it
-and ask the user to move it aside or use the documented manual verification
-path.
+`caller-asserted`. Copy and verify bytes in a private staging directory, make
+the file read-only, and atomically hard-link it to the final name; never
+replace an existing path or expose partial bytes at that name. When an
+existing file has no verifiable API or prior-manifest digest, preserve it and
+ask the user to move it aside or use the documented manual verification path.
 
 **Reason.** The inventory handles untrusted image bytes and should reject
 malformed dimensions before allocating or doing input-sized work. The design
@@ -1237,10 +1269,11 @@ implementation bounds above the selected image's expected sizes. The Build
 API lookup used here is keyed by build ID and target; the tool does not
 independently prove that the supplied branch names that build. The provenance
 field prevents the local manifest from overstating what was verified.
-Staging isolates the verified bytes from a path swap, the second hash detects
-changes during finalization, and exclusive hard-link publication cannot
-clobber a pre-existing artifact. Rejecting an unverifiable pre-existing file
-avoids silently replacing user data when the API provides no digest.
+Private staging keeps incomplete bytes away from the final name, and atomic
+hard-link publication cannot clobber a pre-existing artifact. If a final path
+changes after publication, error handling leaves the replacement untouched.
+Rejecting an unverifiable pre-existing file avoids silently replacing user
+data when the API provides no digest.
 
 ## IR-056: Keep the synthetic AVB signing key with other test keys
 
@@ -1316,3 +1349,131 @@ Treating it as a generic directory would inventory the ZIP file and
 `fetch.json` instead of the files inside the archive. Carrying the checked
 fetch fields also gives the #009 manifest generator the branch, target, and
 build ID required by the documented `--inventory`-only command.
+
+## IR-060: Bound and stabilize inventory input handling
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1; [android-image-manifest.md](../03-reference/android-image-manifest.md) §4.5–§4.7; [M01](issues/M01-android-bring-up.md) #008 |
+
+**Choice.** Read the EROFS block count at byte offset 36. Limit archives to
+16 GiB and 4096 entries, the central directory to 64 MiB, a ZIP64 end record
+to 1 MiB, individual files to 16 GiB, and total expanded input to 64 GiB.
+Read standard ZIP/ZIP64 directory bounds, scan and count actual central-
+directory records before loading them into `zipfile`, then verify the actual
+count against the end record. Reject ZIP64 extensible data sectors, which the
+pinned Python reader does not safely support. Resolve ZIP64 self-extracting
+prefixes from the record located immediately before the locator. Bound Build
+API JSON responses to 1 MiB, listings to 100 pages, and page tokens to 4096
+characters; accept only integral artifact sizes. Open directory members
+relative to directory descriptors without following symlinks, and verify the
+same file version is hashed and classified. Reject inventory output inside
+the input tree before creating output directories. Serialize fetches by
+flocking the output parent directory descriptor, with no sidecar lock path.
+This keeps the lock stable if an output directory is replaced and serializes
+sibling output directories. Remove only the verified partial inode by
+atomically moving it to a private quarantine name before unlinking.
+
+**Reason.** Image archives and unpacked trees are untrusted input. These
+ceilings bound metadata allocation, decompression, and total work while
+remaining above the selected build's size. Stable descriptor-relative reads
+prevent path swaps from redirecting inventory outside the input tree. Reading
+and parsing one unchanged file keeps the recorded hash and details consistent.
+Bounding API metadata prevents an oversized response or unending pagination
+from consuming unbounded memory or time. Locking the parent inode avoids a
+replaceable sidecar lock and the macOS `O_CREAT|O_NOFOLLOW` race reproduced
+with concurrent lock-file creation. It does serialize different outputs under
+the same parent. Quarantine cleanup avoids deleting a replacement that
+appears between an inode check and unlink.
+
+## IR-062: Derive the pinned manifest from inspected build metadata
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.2; [android-image-manifest.md](../03-reference/android-image-manifest.md) §§5, 8; [M01](issues/M01-android-bring-up.md) #009; `Images/manifests/16373615/android-image.json` |
+
+**Choice.** Generate the pinned manifest from the committed inventory and
+inspect the source archive. Include all nine non-empty liblp partitions,
+including `system_b`, even though the prior abbreviated example listed only
+slot-A partitions. Derive artifact identifiers from discovered paths and
+strip the conventional `cuttlefish_example_` prefix so the custom partition
+uses the stable ID `custom`. Record the boot header's security patch month,
+`2026-06`, in place of the example's illustrative `2026-09`.
+
+**Reason.** The manifest must describe every non-empty logical partition and
+the source build's actual metadata. `system_b` has a non-zero 4,747,264-byte
+filesystem, and the inventory reports `2026-06` in both boot headers. The
+prefix mapping keeps the source archive's custom image usable under the
+manifest's concise artifact ID convention. The generated manifest matches
+the archive and inventory byte for byte; the maintainer review step remains
+pending.
+
+## IR-063: Require complete vbmeta artifact role coverage
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §§7–8; [M01](issues/M01-android-bring-up.md) #009; Python and Swift manifest validators |
+
+**Choice.** Require every source-inventory file classified as `vbmeta` to
+appear as a `kind: vbmeta` artifact and in `roles.vbmeta`. Order available
+child artifacts by the chain descriptors in the top-level image, and validate
+that the role array preserves that exact descriptor order. Do not
+require every chain descriptor to have a corresponding artifact in the
+downloaded set. Run role completeness only after the first role entry has
+been validated as the top-level `vbmeta` partition.
+
+**Reason.** An omitted child artifact otherwise disappears from the ordered
+chain used by extraction and AVB checks. The pinned build's top-level image
+also has descriptors for boot and init_boot that are not separate vbmeta
+artifacts, so requiring every descriptor to have an artifact would reject
+valid input. The source-inventory check also catches a child omitted from
+both the artifact list and role chain. The top-level descriptor order is
+preserved because downstream AVB digest calculation consumes the chain in
+that order. Deferring role completeness when the top-level entry is malformed
+avoids a redundant M11 diagnostic after the more specific M3 role-kind
+failure. A hostile review found that the file-backed validator previously
+accepted a manifest with two child roles swapped; a regression check now
+reverses the pinned build's children and requires validation to fail. A child
+with no matching chain descriptor retains its specific diagnostic without an
+extra order error. The source-omission case is Python-only because Swift
+validates a manifest without opening source archives.
+
+## IR-064: Bound artifact transfers and validate redirects
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §2.2; [android-image-manifest.md](../03-reference/android-image-manifest.md) §4.5; [M01](issues/M01-android-bring-up.md) #008 |
+
+**Choice.** Enforce the inventory's 16 GiB per-file ceiling when parsing API
+metadata, loading prior `fetch.json` records, verifying existing files,
+starting a download, and publishing the partial. Open existing files without
+following a final symlink, hash through the opened descriptor with the
+declared size as a hard bound, and compare descriptor and path identity before
+accepting the result. Finalization reads no more than the declared size plus
+one byte before rejecting concurrent growth. Apply redirect validation to
+Build API JSON and artifact requests. The CLI permits HTTPS only. The Python
+test API must explicitly opt into loopback HTTP, with redirects constrained
+to the same loopback origin; HTTPS-to-HTTP redirects remain rejected. A
+regression test covers the opt-in boundary, an allowed same-origin loopback
+redirect, and rejected external, cross-port, and downgrade redirects. Reject
+overlong decimal sizes before integer conversion and convert JSON integer
+parser failures into actionable `FetchError` diagnostics.
+
+**Reason.** Inventory rejects a file larger than 16 GiB, so the fetcher must
+not download or trust a declaration that inventory will later reject.
+Redirecting an API or signed artifact URL to an unsafe origin can expose
+metadata or bypass the initial URL checks. Checking each redirect before
+opening the next hop keeps remote requests encrypted and retains only an
+explicit, same-origin loopback HTTP test path. Descriptor-based hashing and
+bounded finalization constrain concurrent file growth and avoid hashing a
+replacement opened through the same path. Bounding decimal strings before
+conversion prevents malformed metadata from escaping the typed CLI error
+path.

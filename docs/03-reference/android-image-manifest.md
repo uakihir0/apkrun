@@ -178,7 +178,7 @@ Shortened to four files. The real file lists every file in the archive.
 | `sha256` | string | yes | 64 lowercase hex | file hash |
 | `kind` | string | yes | one of §4.4 | what the content is |
 | `probablePurpose` | string | yes | free text for humans | derived from `kind` plus `details`, never from the name alone. Tools never parse it |
-| `nameMismatch` | boolean | no | present only when `true` | the name suggests another kind (§4.5) |
+| `nameMismatch` | boolean | no | present only when `true` | the name suggests another kind (§4.6) |
 | `details` | object | yes | per kind (§4.4). `{}` when there is nothing to record | the parsed header fields |
 
 ### 4.4 Kinds and details
@@ -200,7 +200,53 @@ Detection follows [../02-design/android-image.md](../02-design/android-image.md)
 - Unknown files are listed. They are never dropped.
 - Sparse images are unsparsed as a stream for detection. Nothing is written to disk.
 
-### 4.5 Name hints
+### 4.5 Input bounds and stability
+
+Inventory inputs are untrusted. ZIP processing applies these fixed limits before
+allocating the central-directory entry list or decompressing members:
+
+| Limit | Maximum |
+|---|---:|
+| ZIP archive size | 16 GiB |
+| ZIP entries | 4096 |
+| ZIP central directory | 64 MiB |
+| ZIP64 end record | 1 MiB |
+| One file, in an archive or directory | 16 GiB |
+| Total uncompressed ZIP data or directory file data | 64 GiB |
+
+Build API metadata is also bounded: one JSON response may be at most 1 MiB,
+one listing may contain at most 100 pages, and each page token may be at most
+4096 characters. Artifact sizes must be non-negative integral byte counts no
+larger than 16 GiB; fractional JSON numbers are rejected. The fetch CLI
+requires HTTPS for API and artifact URLs. Local test APIs may explicitly opt
+into loopback HTTP; each redirect is checked, loopback redirects remain on
+the same origin, and HTTPS cannot redirect to HTTP.
+
+The ZIP end records provide the central-directory bounds and declared count.
+Before `zipfile` materializes any entries, the tool caps the central-directory
+and ZIP64 end-record scan sizes, rejects ZIP64 extensible data sectors (which
+the pinned Python reader does not safely support), then scans the central
+directory one fixed-size record at a time, counts actual entries, rejects the
+4097th, and checks the actual count against the end record. This also rejects
+archives that underreport their entry count. ZIP64 self-extracting prefixes are
+handled by locating the bounded end record relative to its locator. ZIP member
+sizes are checked before opening them, and decompression stops if a member
+exceeds its declared or allowed size.
+Directory inputs reject symbolic links, open each member relative to a
+directory descriptor without following symlink components, and verify file
+identity and timestamps before and after hashing and classification. Hashes
+and parsed details therefore describe the same stable file.
+
+An inventory output path must resolve outside its input directory. This check
+happens before creating the output parent, so a rejected output path leaves no
+directories behind.
+
+Concurrent fetches that share a parent directory are serialized by locking
+that directory's descriptor. This avoids a replaceable sidecar lock path; the
+trade-off is that separate output directories with the same parent wait for
+one another.
+
+### 4.6 Name hints
 
 `nameMismatch` is the only place where a name is used. The base name without `.img` is looked up here. A name that is not in the table never mismatches.
 
@@ -213,73 +259,211 @@ Detection follows [../02-design/android-image.md](../02-design/android-image.md)
 | `super` | `dynamicPartitions`, or `sparse` with that content |
 | `userdata` | `filesystem`, or `sparse` with that content |
 
-### 4.6 Determinism
+### 4.7 Determinism
 
 The acceptance of #008 is that a second run gives byte-identical output. So the writer uses UTF-8, sorted keys, 2-space indentation, and a trailing newline. It writes no time stamps and no absolute paths. `files` is sorted by `path`. When an input directory contains one archive and its `fetch.json`, the inventory verifies the archive against that record and carries the branch, target, and build ID into `source`; the sidecar itself is not an archive entry.
 
 ## 5. `android-image.json`: complete example
 
-This is the manifest for build `16373615`. Hashes and the sizes of `super`, `userdata`, and the logical partitions are illustrative. The committed file is authoritative. The blank partition sizes are placeholders until #011 reads the real ones from the reference capture.
+This is the generated manifest for the pinned build `16373615`. It matches
+[`Images/manifests/16373615/android-image.json`](../../Images/manifests/16373615/android-image.json)
+and the committed inventory. The blank partition sizes remain placeholders
+until #011 reads their actual values from the #064 reference capture.
 
 ```json
 {
+  "android": {
+    "release": "17",
+    "sdk": 37,
+    "securityPatch": "2026-06",
+    "variant": "userdebug"
+  },
+  "androidInfo": {
+    "config": "phone",
+    "gfxstream": "supported",
+    "gfxstream_gl_program_binary_link_status": "supported"
+  },
+  "architecture": "arm64",
+  "artifacts": [
+    {
+      "file": "boot.img",
+      "id": "boot",
+      "kind": "bootImage",
+      "partition": "boot",
+      "sha256": "a8fb0875277c99d40154e03416010c496c22395bb4dd6b399ddeef69f5a833ac",
+      "size": 67108864
+    },
+    {
+      "file": "cuttlefish_example_custom.img",
+      "id": "custom",
+      "kind": "filesystem",
+      "partition": "custom",
+      "sha256": "3d17578db83de489aafbd421d98d2596cf4d486639c2802f4df7e9ac9e231847",
+      "size": 1048576
+    },
+    {
+      "file": "init_boot.img",
+      "id": "init_boot",
+      "kind": "bootImage",
+      "partition": "init_boot",
+      "sha256": "df1a2fc8aa21b5df13a2dcea50cdf90ac2ad222f19fb5a70877a16130e374e54",
+      "size": 8388608
+    },
+    {
+      "file": "super.img",
+      "id": "super",
+      "kind": "sparse",
+      "partition": "super",
+      "sha256": "54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05",
+      "size": 1746554644
+    },
+    {
+      "file": "userdata.img",
+      "id": "userdata",
+      "kind": "sparse",
+      "partition": "userdata",
+      "sha256": "f61bf108a6681bfd40f43e288a68bc623f1218d6d0d1840be87cb278b6093034",
+      "size": 2249012
+    },
+    {
+      "file": "vbmeta.img",
+      "id": "vbmeta",
+      "kind": "vbmeta",
+      "partition": "vbmeta",
+      "sha256": "f2b8f369dd85659180b6bb10abf23845ac0d61de0cd6c17d883fc342e23867d8",
+      "size": 12288
+    },
+    {
+      "file": "vbmeta_system.img",
+      "id": "vbmeta_system",
+      "kind": "vbmeta",
+      "partition": "vbmeta_system",
+      "sha256": "8cd7110a0a15dbde66c91789e227bfe6a67b8381466815185a9bb5a0b161173d",
+      "size": 4096
+    },
+    {
+      "file": "vbmeta_system_dlkm.img",
+      "id": "vbmeta_system_dlkm",
+      "kind": "vbmeta",
+      "partition": "vbmeta_system_dlkm",
+      "sha256": "1c86b6c6b979860ee5e9f67387f0f152c4db39274520de812858ce3b6fec989a",
+      "size": 4096
+    },
+    {
+      "file": "vbmeta_vendor_dlkm.img",
+      "id": "vbmeta_vendor_dlkm",
+      "kind": "vbmeta",
+      "partition": "vbmeta_vendor_dlkm",
+      "sha256": "beeda4df61c649a7c74a5a296d910b310b9abb26bd2d81ff9b634008148dbc11",
+      "size": 4096
+    },
+    {
+      "file": "vendor_boot.img",
+      "id": "vendor_boot",
+      "kind": "vendorBootImage",
+      "partition": "vendor_boot",
+      "sha256": "02b2af631eb4868ea2163b9de0773ab3b17bf1f5ddca5ab4e2a0258777f46f3f",
+      "size": 67108864
+    }
+  ],
+  "blankPartitions": [
+    {
+      "partition": "misc",
+      "size": 1048576
+    },
+    {
+      "partition": "metadata",
+      "size": 67108864
+    },
+    {
+      "partition": "frp",
+      "size": 1048576
+    }
+  ],
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "logicalPartitions": [
+    {
+      "filesystem": "erofs",
+      "name": "odm_a",
+      "size": 520192
+    },
+    {
+      "filesystem": "erofs",
+      "name": "odm_dlkm_a",
+      "size": 348160
+    },
+    {
+      "filesystem": "erofs",
+      "name": "product_a",
+      "size": 232157184
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_a",
+      "size": 959066112
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_b",
+      "size": 4747264
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_dlkm_a",
+      "size": 8568832
+    },
+    {
+      "filesystem": "erofs",
+      "name": "system_ext_a",
+      "size": 258179072
+    },
+    {
+      "filesystem": "erofs",
+      "name": "vendor_a",
+      "size": 291229696
+    },
+    {
+      "filesystem": "erofs",
+      "name": "vendor_dlkm_a",
+      "size": 1695744
+    }
+  ],
+  "roles": {
+    "genericRamdisk": "init_boot",
+    "kernel": "boot",
+    "super": "super",
+    "userdataTemplate": "userdata",
+    "vbmeta": [
+      "vbmeta",
+      "vbmeta_system",
+      "vbmeta_system_dlkm",
+      "vbmeta_vendor_dlkm"
+    ],
+    "vendorBoot": "vendor_boot"
+  },
   "schemaVersion": 1,
   "source": {
-    "origin": "ci.android.com",
-    "branch": "aosp-android-latest-release",
-    "target": "aosp_cf_arm64_only_phone-userdebug",
-    "buildId": "16373615",
     "archives": [
       {
         "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
-        "size": 1476395008,
-        "sha256": "4a70fe9aa6436e02c2dea340fbd1e352e4ef2d8ce6ca52ad25d4b95471fc8bf2"
+        "sha256": "051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18",
+        "size": 1101175103
       }
-    ]
-  },
-  "android": { "release": "17", "sdk": 37, "variant": "userdebug", "securityPatch": "2026-09" },
-  "architecture": "arm64",
-  "deviceFamily": "cuttlefish-phone-arm64",
-  "artifacts": [
-    { "id": "boot", "file": "boot.img", "sha256": "4509beb0ab401d71fa4a5cd94a55c9a74f13332776ae4019c5bfc4c2005157ff", "size": 67108864, "kind": "bootImage", "partition": "boot" },
-    { "id": "init_boot", "file": "init_boot.img", "sha256": "cd19026f4b3933f79100922d0383d948b53744aca39b50b44b7e81c021cde3d7", "size": 8388608, "kind": "bootImage", "partition": "init_boot" },
-    { "id": "vendor_boot", "file": "vendor_boot.img", "sha256": "fce16cbfd9d47eeeb76c893c5bf880dd01cae03cba8e9af0845e4646592aa9f4", "size": 67108864, "kind": "vendorBootImage", "partition": "vendor_boot" },
-    { "id": "vbmeta", "file": "vbmeta.img", "sha256": "a0c6f07a4b3a17fb9348db981de3c5602e2685d626599be1bd909195c694a57b", "size": 65536, "kind": "vbmeta", "partition": "vbmeta" },
-    { "id": "vbmeta_system", "file": "vbmeta_system.img", "sha256": "0ed258163a6ded2b600f003e91e541e90380e52eb1cdac2444d9df1b1daf9996", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_system" },
-    { "id": "vbmeta_system_dlkm", "file": "vbmeta_system_dlkm.img", "sha256": "9754204bb12c6d45da311778c739179c0154ec3fa8f4155d4a51223064e405df", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_system_dlkm" },
-    { "id": "vbmeta_vendor_dlkm", "file": "vbmeta_vendor_dlkm.img", "sha256": "560fcdda0d381e5db9c99bb5d872972e4fd70c0e8f4ae7226975823373c74604", "size": 65536, "kind": "vbmeta", "partition": "vbmeta_vendor_dlkm" },
-    { "id": "super", "file": "super.img", "sha256": "73d1b1b1bc1dabfb97f216d897b7968e44b06457920f00f2dc6c1ed3be25ad4c", "size": 1879048192, "kind": "sparse", "partition": "super" },
-    { "id": "custom", "file": "cuttlefish_example_custom.img", "sha256": "6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33", "size": 4194304, "kind": "filesystem", "partition": "custom" },
-    { "id": "userdata", "file": "userdata.img", "sha256": "834f09a48336314550d7d8f159c23f87fb9d9ed687df30d5189c8d4992ef3ea6", "size": 2166784, "kind": "sparse", "partition": "userdata" }
-  ],
-  "roles": {
-    "kernel": "boot",
-    "genericRamdisk": "init_boot",
-    "vendorBoot": "vendor_boot",
-    "vbmeta": ["vbmeta", "vbmeta_system", "vbmeta_system_dlkm", "vbmeta_vendor_dlkm"],
-    "super": "super",
-    "userdataTemplate": "userdata"
-  },
-  "logicalPartitions": [
-    { "name": "system_a", "size": 897581056, "filesystem": "erofs" },
-    { "name": "system_ext_a", "size": 214532096, "filesystem": "erofs" },
-    { "name": "product_a", "size": 402653184, "filesystem": "erofs" },
-    { "name": "vendor_a", "size": 150994944, "filesystem": "erofs" },
-    { "name": "vendor_dlkm_a", "size": 20971520, "filesystem": "erofs" },
-    { "name": "odm_a", "size": 1048576, "filesystem": "erofs" },
-    { "name": "odm_dlkm_a", "size": 1048576, "filesystem": "erofs" },
-    { "name": "system_dlkm_a", "size": 8388608, "filesystem": "erofs" }
-  ],
-  "blankPartitions": [
-    { "partition": "misc", "size": 1048576 },
-    { "partition": "metadata", "size": 67108864 },
-    { "partition": "frp", "size": 1048576 }
-  ],
-  "androidInfo": { "config": "phone", "gfxstream": "supported" }
+    ],
+    "branch": "aosp-android-latest-release",
+    "buildId": "16373615",
+    "origin": "ci.android.com",
+    "target": "aosp_cf_arm64_only_phone-userdebug"
+  }
 }
 ```
 
-Compared with the sketch in [../02-design/android-image.md](../02-design/android-image.md) §3.2, this example adds the artifacts that the sketch's `roles.vbmeta` and the disk plan (§4.2 there) need: `vbmeta_system`, `vbmeta_system_dlkm`, `vbmeta_vendor_dlkm`, and `custom`. It also lists all eight logical partitions of the #009 mapping.
+Compared with the abbreviated sketch in
+[../02-design/android-image.md](../02-design/android-image.md) §3.2, this
+example adds the `vbmeta_system`, `vbmeta_system_dlkm`,
+`vbmeta_vendor_dlkm`, and `custom` artifacts. It lists all nine non-empty
+logical partitions discovered in `super`, including the non-empty `system_b`
+slot.
 
 ## 6. Fields
 
@@ -347,9 +531,9 @@ The boot header stores only a year and a month. The day-precise level (`2026-09-
 | `kernel` | artifact id | yes | kind `bootImage`, `bootKind` `boot`, header v4 | the kernel source (#010) |
 | `genericRamdisk` | artifact id | yes | kind `bootImage`, `bootKind` `init_boot`, header v4 | the generic ramdisk (Android 13+ keeps it in `init_boot`) |
 | `vendorBoot` | artifact id | yes | kind `vendorBootImage`, header v4 | vendor ramdisks, vendor cmdline, vendor bootconfig |
-| `vbmeta` | array of artifact id | yes | 1 to 16 unique ids, each kind `vbmeta`. Item 0 is the top-level vbmeta. Every other item's partition is a chain partition of item 0 | input of `androidboot.vbmeta.*` ([../02-design/android-image.md](../02-design/android-image.md) §6.2) |
+| `vbmeta` | array of artifact id | yes | 1 to 16 unique ids, each kind `vbmeta`. Item 0 must have partition `vbmeta` and is the top-level image. Every other `kind: vbmeta` artifact must appear in the array, and its partition must be a chain partition of item 0 | input of `androidboot.vbmeta.*` ([../02-design/android-image.md](../02-design/android-image.md) §6.2) |
 | `super` | artifact id | yes | kind `dynamicPartitions`, or `sparse` with that content | the super partition |
-| `userdataTemplate` | artifact id | no | kind `filesystem`, or `sparse` with that content | used only by userdata fallback A ([../02-design/android-image.md](../02-design/android-image.md) §5.2) |
+| `userdataTemplate` | artifact id | no | kind `filesystem`, or `sparse` whose detected content is `filesystem` | used only by userdata fallback A ([../02-design/android-image.md](../02-design/android-image.md) §5.2) |
 
 ### 6.6 `logicalPartitions[]`
 
@@ -519,7 +703,7 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 | M8 | artifact ids are unique | `artifact id "vbmeta" appears in artifacts[3] and artifacts[4].` |
 | M9 | `android.variant` equals the suffix of `source.target` | `android.variant "user" does not match target aosp_cf_arm64_only_phone-userdebug.` |
 | M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind | `artifacts[8] (cuttlefish_example_custom.img): kind filesystem does not match the inventory (unknown). Re-run the inventory.` |
-| M11 | `roles.vbmeta` items 1… are chain partitions of item 0 | `roles.vbmeta[2] = "vbmeta_system_dlkm": vbmeta.img has no chain descriptor for partition vbmeta_system_dlkm.` |
+| M11 | every source inventory vbmeta file is a `kind: vbmeta` artifact listed in `roles.vbmeta`; chain items follow item 0's descriptor order | `roles.vbmeta[2] = "vbmeta_system_dlkm": vbmeta.img has no chain descriptor for partition vbmeta_system_dlkm.` |
 | M12 | `logicalPartitions` equals the non-empty partitions in the super metadata (name, size, filesystem) | `logicalPartitions: system_dlkm_a is in super.img but not in the manifest.` |
 | M13 | `android.release` and `securityPatch` equal the `roles.kernel` boot header `os_version`, and `sdk` equals the table entry for `release` | `android.release "16" does not match boot.img os_version 17.0.0.` |
 

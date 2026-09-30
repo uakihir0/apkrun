@@ -34,3 +34,27 @@ import Testing
     #expect(probe.resolvedFileURL == url.standardizedFileURL)
     #expect(try Data(contentsOf: url) == contents)
 }
+
+@Test func liveFileProbeResolvesSymlinksAndReadsLargeFiles() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "apkrun-vm-file-probe-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let target = directory.appending(path: "kernel-image")
+    let link = directory.appending(path: "kernel-link")
+    try Data(repeating: 0, count: 1_048_576).write(to: target)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+    let probe = LiveVMHostEnvironment().probeFile(at: link)
+
+    #expect(probe.exists)
+    #expect(probe.isRegularFile)
+    #expect(probe.sizeBytes == 1_048_576)
+    #expect(probe.resolvedFileURL == target.standardizedFileURL)
+    #expect(probe.isReadable)
+    #expect(probe.isWritable)
+}

@@ -184,6 +184,20 @@ Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
 - **Guest → host:** the guest writes into the pipe's write end. `ConsoleChannel` reads the read end with `DispatchIO` and publishes an `AsyncStream<Data>`.
 - **Host → guest:** a second pipe. For `.systemConsole` and `.service` ports the host may write. For `.log` and `.silent` ports the host never writes and keeps the write end open, so guest reads block instead of seeing EOF.
 
+`ConsoleChannel` publishes chunks of at most 64 KiB through a bounded buffer of
+64 chunks per subscriber. The default policy preserves the oldest queued chunks;
+a consumer that needs a diagnostic tail can select the newest chunks instead.
+Each `ConsoleByteStream` reports its own `droppedByteCount`, and the channel
+also exposes the total across subscribers. Consumers must treat a nonzero count
+as incomplete output. The Linux test harness uses the oldest policy for parsing
+test records and the newest policy for its bounded 4 MiB failure attachment,
+which also includes both stream loss counts. Consumers that need the same
+output subscribe before the guest starts; a stream created before the first
+subscriber receives the buffered prefix. After the VZ driver releases the VM
+on its queue, the channel closes the guest-output writer and lets `DispatchIO`
+drain the pipe to EOF before ending the stream. Each channel is bound to its
+VM's serial queue and cannot be attached again after detachment.
+
 | Role | Guest → host data goes to | Host writes |
 |---|---|---|
 | `.systemConsole` (hvc0) | `ConsoleLogWriter` → `~/Library/Logs/APKRun/vm/console.log` and `BootPhaseDetector` | Only in `apkrun dev console` (interactive debugging) |
@@ -242,6 +256,14 @@ start()
 | `virtualMachine(_:didStopWithError:)` | `→ failed(.stoppedWithError(underlying))` |
 | `virtualMachine(_:networkDevice:attachmentWasDisconnectedWithError:)` | stays `running`; logged; health `vm.network = degraded` |
 
+For a spontaneous `guestDidStop`, `VMController` records `.stopped` before it
+awaits VZ resource release. During an explicit forced stop, the event completes
+the stop request but the controller remains `.stopping` until the VZ stop
+completion callback arrives; only then are the driver and console attachments
+released and the state changed to `.stopped`. Public lifecycle calls therefore
+cannot reach a machine that is being detached, and a later `start()` waits for
+the release barrier before making a new driver.
+
 ### 9.3 Stopping Android correctly
 
 `requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:
@@ -249,7 +271,7 @@ start()
 - RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
 - If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
 - A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
-- `requestGuestStop()` exists for the test Linux guest, whose init powers off on the power key.
+- `requestGuestStop()` is required for the test Linux guest. The pinned Alpine kernel lacks `CONFIG_KEYBOARD_GPIO`, so the current initramfs `button`/`acpid` setup does not handle the VZ PL061 power input; its T2 check remains blocked.
 
 ### 9.4 Pause and resume
 
@@ -263,7 +285,7 @@ Not used. The VirGL renderer state lives in host GL contexts and cannot be seria
 
 ### 9.6 Reset
 
-`failed → stopped` happens only through `reset()`, after the diagnostics capture ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1). `reset()` releases the `VZVirtualMachine`, closes pipes, and flushes console logs.
+`failed → stopped` happens only through `reset()`, after the diagnostics capture ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1). `reset()` releases the `VZVirtualMachine`, closes pipes, and flushes console logs. If a forced-stop framework callback is still pending, reset waits up to the forced-stop timeout. If it remains pending, reset returns `VMFailure.stopTimedOut` and retains the failed VM and its resources; callers may retry after the callback completes. Releasing the VM while Virtualization.framework still owns an in-flight lifecycle call is unsafe.
 
 ## 10. Memory and CPU defaults
 
@@ -294,6 +316,16 @@ M0 needs a small Linux guest that exercises every device before Android is invol
   4. prints `APKRUN-TEST: done` and either powers off (`apkrun.test.poweroff=1`) or starts a shell on hvc0.
 - **Disks:** `Tests/Fixtures/linux/` scripts create a small raw test disk at test time (read-only and read-write variants with known content).
 - The T2 test harness (`Tests/IntegrationTests/LinuxGuestTests`) boots this guest with `EmbeddedRuntimeService`-free plumbing (just VirtualMachineCore) and asserts on the `APKRUN-TEST:` lines. Timeout 60 s.
+- The pinned Alpine 6.18.54 kernel has `CONFIG_ACPI_BUTTON=m`, `CONFIG_INPUT_EVDEV=m`, and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The `ACPI_BUTTON` module is named `button` in `modules.list`; the initramfs loads it and runs `acpid`. On 2026-09-30, T2 `requestGuestStop()` timed out after 10 s on macOS 27.0 (26A428), then the forced stop succeeded. The VZ button event is not handled by this guest configuration, so G1 remains blocked until the guest has a working input path.
+- The test harness caps parsed-record buffering at 256 records. If a guest emits faster than the consumer can read, missing boot/check/done records fail the test instead of growing host memory without limit.
+
+`TestGuestLineParser` joins serial bytes across read boundaries, ignores
+non-marker kernel output, and recognizes `APKRUN-TEST: boot ok`,
+`APKRUN-TEST: <name> ok|fail <detail>`, and `APKRUN-TEST: done`. It accepts
+LF and CRLF lines, recognizes a marker appended to the final unterminated
+kernel message, and parses a final record at EOF. To bound memory when a guest
+never terminates a line, records longer than 64 KiB are discarded through the
+next newline and counted.
 
 The same guest is reused by #063 (test virtio device) and #019 (virtio-gpu probing with the Linux DRM driver) before Android.
 
@@ -367,6 +399,9 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 
 | Question | Task | Result |
 |---|---|---|
+| Alpine ARM64 Linux boot marker and guest power-off | #003 | 2026-09-29, MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBootTests.testBootMarkerAndGuestPowerOff` passed on the pinned guest with an Apple Development-signed test host |
+| LinuxGuest T2 suite using artifacts outside the checkout | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): the signed test host read `/tmp/apkrun-test-linux-explicit-20260930` from its Info.plist without a file-access prompt; boot marker, failed-start/reset, forced-stop, and bounded-capture tests passed; `requestGuestStop()` timed out after 10 s, then forced stop succeeded |
+| Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
 | `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
 | Serial port numbering with three ports | #004 | pending |

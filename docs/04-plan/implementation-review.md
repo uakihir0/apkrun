@@ -868,6 +868,29 @@ remain in #063 with the adapter.
 that the builder does not attach, so describing those checks as part of #002
 would claim coverage the implementation cannot provide.
 
+## IR-039: Bound console buffering and drain after VZ release
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §6.3; [M00](issues/M00-repository-and-vm-foundation.md) #003–#004 |
+
+**Choice.** `ConsoleChannel` retains at most 64 chunks of 64 KiB. It preserves
+the oldest bytes, counts omitted newer bytes in `droppedByteCount`, and does
+not finish reading until the VZ driver releases its attachment and the pipe
+reaches EOF.
+
+**Reason.** A console stream can outlive or overwhelm its consumer, so an
+unbounded in-memory buffer could grow without limit. Preserving the earliest
+bytes retains boot diagnostics, while the explicit dropped-byte count lets
+later consumers report incomplete logs. Each channel retains the exact VM
+queue passed at creation, and detachment is terminal; this prevents callers
+from using a different queue or reusing closed handles. Releasing the VZ
+objects before closing pipe endpoints avoids racing file handles that the VM
+still uses, and EOF draining preserves the last bytes emitted before guest
+shutdown.
+
 ## IR-038: Keep VZ descriptions in the private diagnostic path
 
 | Field | Value |
@@ -884,3 +907,251 @@ for private diagnostic logs.
 **Reason.** Keeping the description supports useful framework diagnostics
 without adding potentially path-bearing text to user-visible error parameters
 or copied catalog details.
+
+## IR-040: Bound incomplete test-guest console records
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §12; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** `TestGuestLineParser` buffers at most 64 KiB for one unterminated
+serial line. It discards the overlong line through the next newline, increments
+a diagnostic counter, and resumes parsing later records.
+
+**Reason.** Serial input can be arbitrary and may never contain a newline.
+Bounding the partial-line buffer prevents a malformed guest from causing
+unlimited host memory growth, while discarding only that line lets the harness
+continue to observe later checks and completion.
+
+## IR-041: Select the lab signing identity by certificate fingerprint
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.8, [build-system.md](../05-development/build-system.md) §12.4; `scripts/run-gate.sh`; `.github/workflows/integration.yml`, `.github/workflows/nightly.yml` |
+
+**Choice.** T2 and G1 test hosts use the lab's Apple Development team ID and
+certificate SHA-1 fingerprint from `APKRUN_TEST_DEVELOPMENT_TEAM` and
+`APKRUN_TEST_CODE_SIGN_IDENTITY`. CI reads both values from repository
+variables; neither value is committed.
+
+**Reason.** Xcode did not reliably resolve the generic `Apple Development`
+identity for a manually signed hosted test bundle. Selecting the certificate
+by fingerprint reproduced the successful local T2 signing setup while keeping
+personal signing details out of source control.
+
+## IR-042: Disable hardened runtime for the VM test host and bundles
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §§2.5, 12.4; `project.yml` |
+
+**Choice.** `APKRunTestHost`, `IntegrationTests`, and `AcceptanceTests` set
+`ENABLE_HARDENED_RUNTIME=NO`. Product targets keep hardened runtime enabled.
+
+**Reason.** XCTest loads the test bundles into the entitled host process.
+Disabling the runtime on these test-only targets resolved the host/bundle
+signing incompatibility found while bringing up T2, without changing product
+target settings.
+
+## IR-043: Keep lab VM tests off pull-request workflows until runner isolation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §15.1, [workflow.md](workflow.md) §§5.1, 7; [test-strategy.md](test-strategy.md) §2.4; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** `linux-guest` runs on pushes to `main` and manual dispatch. It does
+not run pull-request source on the persistent `apkrun-lab` runner.
+
+**Reason.** The documented workflow policy requires disposable lab capacity
+for pull-request code. No such runner is configured in this environment, so
+running fork or unreviewed source on the persistent lab Mac would violate the
+runner-isolation rule.
+
+## IR-044: Keep Alpine tooling pins pending license-policy review
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §§4.4–4.6; [build-system.md](../05-development/build-system.md) §6.5; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** Keep the pinned Alpine test tooling (`socat`, `libcrypto3`,
+`libssl3`, `readline`, and the two ncurses packages) so later M0 tests can use
+the planned guest utilities, but do not expand the tooling license allowlist or
+claim that the current license check passes. The license inventory now records
+the lock's full expressions, including `GPL-2.0-only WITH OpenSSL-Exception`
+for `socat`.
+
+**Reason.** Removing or replacing a task-mandated third-party input, or changing
+the license policy, needs maintainer review. Matching the inventory to the
+locked Alpine metadata makes the unresolved policy question visible without
+misstating a package's license. #003 remains open until the license expressions
+are accepted or a compliant dependency set is selected.
+
+## IR-045: Bound reset while a stop callback remains pending
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §9.6; `VMController.swift`; `VMControllerTests.swift` |
+
+**Choice.** A forced stop waits at most the forced-stop timeout for its VZ
+completion callback before releasing resources, even if `guestDidStop` arrived
+first. `reset()` also waits at most that timeout for an outstanding stop
+operation. If a callback is still pending, it keeps the VM in `failed`, retains
+the VZ resources, and returns `VMFailure.stopTimedOut`; a later reset can
+release the resources after the callback completes.
+
+**Reason.** The VZ completion bridge must not abandon an operation that has
+already started. Waiting without a bound would make reset hang indefinitely,
+while releasing the VM before its callback could race an active framework
+operation. A bounded retry preserves queue and object lifetime safety.
+
+## IR-046: Keep hosted Linux artifacts outside protected Documents
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4, [build-system.md](../05-development/build-system.md) §12.4; `scripts/run-gate.sh`; `.github/workflows/integration.yml` |
+
+**Choice.** The artifact scripts and local CLI default to
+`/tmp/apkrun-test-linux`; local G1 selects `${TMPDIR}/apkrun-test-linux`, and
+the T2 workflow selects `$RUNNER_TEMP/apkrun-test-linux`. `APKRUN_TEST_LINUX_DIR`
+can select another location. The G1/T2 `xcodebuild` invocations pass the
+selected path and `APKRUN_CI` as build settings; the hosted test process reads
+them from `APKRunTestHost.app/Contents/Info.plist`.
+
+**Reason.** The signed test host triggered macOS file-access approval while
+opening the pinned kernel under a checkout in `~/Documents`. Putting only the
+generated guest artifacts in a private temporary directory avoids blocking
+the test on that prompt while leaving source and build outputs in the checkout.
+An experiment also showed that a shell export alone does not reach the hosted
+test process: with the old checkout artifact directory moved away, the test
+skipped instead of using the temporary path. Baking the build settings into
+the test host's Info.plist makes the selected artifact directory and CI
+strictness explicit. A signed T2 boot passed after both checkout and default
+temporary artifact paths were moved aside, confirming that the host used the
+selected temporary directory.
+
+## IR-047: Keep G1 blocked when the pinned kernel cannot handle VZ power input
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §§4, 12, 17; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** Keep the `requestGuestStop()` T2 check and G1 acceptance criteria
+unchanged, and leave #003 open. The pinned Alpine 6.18.54 kernel has no
+`CONFIG_KEYBOARD_GPIO`; the test's `button`/`acpid` setup did not stop the
+guest after a VZ power-button request. Forced stop did stop it.
+
+**Reason.** Removing the graceful-stop assertion would hide a failure in the
+planned input path and produce false G1 evidence. The kernel/input path must be
+corrected and re-tested before the gate can close.
+
+## IR-048: Parse the first test marker after an unterminated kernel line
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §12; `TestGuestLineParser.swift`; `TestGuestLineParserTests.swift` |
+
+**Choice.** Search each bounded console line for the unique `APKRUN-TEST:`
+marker instead of requiring it to begin at byte zero.
+
+**Reason.** The T2 attachment showed the final kernel message and the first
+`/init` marker concatenated without a newline. Requiring a line prefix dropped
+`boot ok` even though the guest printed it, causing the boot test to fail.
+
+## IR-049: Bound console shutdown and T2 diagnostic capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §§9, 12; `LinuxTestGuestRunner.swift`; `DevLinux.swift`; `LinuxGuestHarness.swift` |
+
+**Choice.** Register the record parser's oldest-preserving console stream before
+starting the guest. T2 also registers a newest-preserving stream for its raw
+console attachment, retains the newest 4 MiB, and records each stream's dropped
+byte count. Wait at most two seconds for console EOF after shutdown, then cancel
+both consumers.
+
+**Reason.** If a VZ stop callback remains pending, VMController safely retains
+the VM and pipe, so the console may never reach EOF. A bounded drain lets CLI
+and T2 error paths return, while an early parser subscription prevents fast
+guest output from being missed. Keeping a separate newest-preserving stream
+lets the parser retain ordered startup records while the attachment retains
+recent failure details. Per-stream loss counts show when either bounded buffer
+discarded output, and the bounded attachment prevents a noisy guest from
+growing test-host memory without limit.
+
+## IR-050: Retain failed Linux guest controllers until reset succeeds
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §§9, 12; `LinuxGuestHarness.swift` |
+
+**Choice.** T2 cleanup re-reads the controller state after attempting a stop,
+then attempts `reset()` if the stop moved it to `.failed`. If the controller is
+still not `.stopped`, the harness retains it and retries stop/reset in the
+background until the VM resources are released.
+
+**Reason.** A bounded VZ completion wait can expire before the framework
+callback arrives. Returning from the test while dropping the controller would
+release the lifecycle owner too early and could leave framework resources
+active during later tests. Retaining the owner allows a later retry to complete
+resource release without making the failing test wait indefinitely.
+
+## IR-051: Resolve relative Linux artifact paths from the working directory
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §12; [environment-setup.md](../05-development/environment-setup.md) §4; `fetch-test-linux.sh`; `build-test-initramfs.sh`; `DevLinux.swift`; `LinuxGuestHarness.swift` |
+
+**Choice.** Require `APKRUN_TEST_LINUX_DIR` overrides to be absolute paths in
+the artifact scripts, development CLI, and hosted T2 tests. The scripts reject
+relative values, the CLI returns `runtime.devLinuxArtifactDirectoryMustBeAbsolute`,
+and the hosted test reports the same requirement.
+
+**Reason.** The scripts, CLI, and hosted test can run from different working
+directories. A relative value could therefore point to different locations and
+make a successful artifact build invisible to the VM runner. Requiring an
+absolute path gives all entry points the same location independently of their
+working directories. Defaults and CI already use absolute paths.
+
+## IR-052: Track one unrepeatable missing boot marker
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §§12, 17; `LinuxGuestHarness.swift`; `ConsoleChannel.swift` |
+
+**Choice.** Make no timing or buffering change after one full T2 run whose
+raw `hvc0` attachment contained `APKRUN-TEST: done` but not `boot ok`. Keep
+the evidence in the verification log and keep the test assertion strict.
+
+**Reason.** The guest init script writes both records in order, neither
+console stream reported dropped bytes, and the same signed T2 test passed
+once in isolation, ten consecutive repetitions, and the next full T2 run.
+There is not enough evidence to attribute the missing bytes to guest shutdown,
+the parser, or console buffering. Adding a delay or retry to make the test
+green could hide lost serial output; maintainers should review the evidence
+and re-open the investigation if it recurs.

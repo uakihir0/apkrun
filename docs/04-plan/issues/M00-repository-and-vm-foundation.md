@@ -624,7 +624,7 @@ change the `cargo fmt --check` run when Rust sources are present.
 - **Record:** the required checks and the branch rules go into [../../05-development/workflow.md](../../05-development/workflow.md).
 - **Local verification:** `scripts/ci/run-checks.sh`, `swift test --skip 'SystemTests' -j 2`, full `swift test`, `scripts/smoke-products.sh` on Debug products, and `scripts/release/check-release-build.sh` on the Release app all passed on the Apple Silicon host. Debug and Release `xcodebuild` jobs also passed. The live GitHub Actions run, branch protection, and negative-test pull request remain unverified because this checkout has no Git remote.
 - **Pitfall:** `swift package dump-package` does not show source imports. Without the import scan, the CLI could import RuntimeCore through RuntimeHost unnoticed.
-- **Pitfall:** GitHub keeps a required check "pending" forever when a workflow is skipped by a `paths:` filter. When #003 adds `linux-guest`, it must use a job that always runs and decides from the changed files.
+- **Pitfall:** GitHub keeps a required check "pending" forever when a workflow is skipped by a `paths:` filter. The current #003 `linux-guest` workflow is a trusted-main regression check, not a required PR check. If a future change enables PR runs, use a job that always reports a result and decides from the changed files.
 - **Pitfall:** hosted macOS runners are VMs. Use them for static checks, builds, and T0 tests only. Run host-dependent T1 checks on a real Apple Silicon Mac ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6).
 - **Pitfall:** `ci-policy-approved` is a narrow CI-control approval, not a substitute for the pull request's required review. The non-author reviewer who approved the exact current head applies it; removing it revokes the policy check. Any new commit, reopen, PR edit, or label event requires a fresh policy-label event.
 - `check-lock.sh` runs in two jobs ([../../05-development/build-system.md](../../05-development/build-system.md) §3, §15.1). The `lint` job runs the file checks. The `third-party` job, from #020 on, runs `check-lock.sh --apply` after it checks out the sources.
@@ -930,7 +930,7 @@ Out of scope:
    Check: T0 parser tests pass, including lines split across reads and an interleaved kernel log.
 5. **Test guest artifacts** ([../../02-design/vm.md](../../02-design/vm.md) §12, [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §4).
    - `scripts/fetch-test-linux.sh`:
-     1. Downloads the pinned `linux-virt` package and minirootfs into `${APKRUN_TEST_LINUX_DIR:-build/test-linux}/`.
+     1. Downloads the pinned `linux-virt` package and minirootfs into `${APKRUN_TEST_LINUX_DIR:-/tmp/apkrun-test-linux}/`.
      2. Verifies their SHA-256 against the lock file.
      3. Extracts the kernel and modules.
      4. Makes the kernel an uncompressed `Image`: it gunzips a gzip kernel, and for a zboot kernel it extracts the payload from the offset and size in its header, then decompresses it.
@@ -946,7 +946,7 @@ Out of scope:
      1. Mounts `proc`, `sys`, and `devtmpfs`.
      2. Redirects its own stdio to `/dev/hvc0`.
      3. Loads the modules.
-     4. Starts busybox `acpid`, with the power key mapped to `poweroff -f`, so that `requestGuestStop()` works (§9.3).
+     4. Handles the VZ power input and maps it to `poweroff -f` so that `requestGuestStop()` works (§9.3). The current pinned Alpine kernel has no `CONFIG_KEYBOARD_GPIO`; the `button`/`acpid` setup did not handle the VZ PL061 input in T2, so this step and G1 remain open until a working input path is available.
      5. Prints `APKRUN-TEST: boot ok`.
      6. Runs the checks named in `apkrun.test=`. There are none in this task; later tasks add blocks.
      7. Prints `APKRUN-TEST: done`.
@@ -959,14 +959,14 @@ Out of scope:
    - no disks, network, or vsock unless a later task's check asks for them;
    - command line `console=hvc0 apkrun.test=<list> apkrun.test.poweroff=<0|1>`.
 
-   The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `build/test-linux/`.
+   The default artifact directory is `APKRUN_TEST_LINUX_DIR`, or `/tmp/apkrun-test-linux/`; an override must be an absolute path.
 
    Check: the definition passes `VMDefinitionValidator` with the fetched artifacts.
 7. **T2 harness.**
    - `APKRunTestHost` is an app with no UI of its own, signed with the virtualization entitlement.
    - `LinuxGuestHarness` does the following:
      1. Boots a `LinuxTestGuest` through `VMController` (VirtualMachineCore only, §12).
-     2. Collects `hvc0` into memory and into an `XCTAttachment`.
+     2. Parses `hvc0` from an oldest-preserving bounded stream and captures the newest 4 MiB from a second bounded stream for `XCTAttachment`; each stream's dropped-byte count is included in the attachment.
      3. Fails when a check prints `fail`, when a requested check prints nothing, or when `done` does not appear within 60 s ([../test-strategy.md](../test-strategy.md) §3.4).
    - Missing artifacts skip the test with a message that names both scripts. With `APKRUN_CI=1`, missing artifacts fail it.
    - `BootTests` covers:
@@ -974,7 +974,7 @@ Out of scope:
      - boot with `apkrun.test.poweroff=0`, then `requestGuestStop()`;
      - boot, then `stop()`;
      - a failed start, then `reset()`.
-   - `integration.yml` has the job `linux-guest` on `apkrun-lab`, with the path filter of [../../05-development/build-system.md](../../05-development/build-system.md) §15.1, on pushes to `main` and on the `run-t2` label. The job always runs and decides from the changed files, so that the check can be required. It runs `xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests -configuration Debug -only-test-configuration LinuxGuest` ([../../05-development/build-system.md](../../05-development/build-system.md) §12.4).
+   - `integration.yml` has the `linux-guest` job on `apkrun-lab`, triggered by matching pushes to `main` and manual dispatch from `main`. Its path filter is in [../../05-development/build-system.md](../../05-development/build-system.md) §15.1. It does not run pull-request source on the persistent lab Mac; until disposable lab capacity exists, a maintainer runs the reviewed commit and links the result before the task-closing PR merges. It runs `xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests -configuration Debug -only-test-configuration LinuxGuest` ([../../05-development/build-system.md](../../05-development/build-system.md) §12.4).
 
    Check: the `LinuxGuest` suite passes on a lab Mac.
 8. **`apkrun dev linux`.** The path is CLI `Dev/DevLinux.swift` → RuntimeHost `DevLinux` → RuntimeCore `LinuxTestGuestRunner` → VirtualMachineCore, which keeps the edges of [modules.md](../../01-architecture/modules.md) §3.
@@ -1032,7 +1032,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - [ ] `apkrun-dev dev linux` prints the boot output live and exits 0 only when every requested check printed `ok`. It refuses to run while another owner holds the instance lock (exit 75).
 - [ ] The test kernel, minirootfs, and packages are pinned by SHA-256 in `ThirdParty/ThirdParty.lock.json` (NFR-DEV-01). The fetch and build scripts produce the same artifacts on a clean clone.
 - [ ] Without the artifacts, the T2 tests skip with a message that names both scripts. With `APKRUN_CI=1`, they fail.
-- [ ] `linux-guest` runs on pushes to `main` and on labelled or matching pull requests. `gates` runs G1 nightly.
+- [ ] `linux-guest` runs on matching pushes to `main` and by manual dispatch from `main`; a maintainer-run T2 result for the reviewed commit is linked before the task-closing PR merges until disposable lab capacity enables PR runs. `gates` runs G1 nightly.
 
 ### Notes
 
@@ -1047,6 +1047,12 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - The 10 s limit for a forced stop (`.stopTimedOut`) is a choice of this plan. It is recorded in [vm.md](../../02-design/vm.md) §9.3 and [../../01-architecture/state-machines.md](../../01-architecture/state-machines.md) §1 (`stopping → failed`).
 - Using a `url` member in prebuilt lock entries is also a choice of this plan. [../../05-development/build-system.md](../../05-development/build-system.md) §6.1 has no field for the download location, so add it there.
 - The CLI command is checked manually in M0. [../../02-design/cli.md](../../02-design/cli.md) §6.2 says each task's T2 test runs through the command, but [../../02-design/vm.md](../../02-design/vm.md) §12 requires the harness to use VirtualMachineCore only. Here the harness follows vm.md.
+- **Local verification:** hosted VZ tests require `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; neither is committed. See [../../05-development/environment-setup.md](../../05-development/environment-setup.md) §2.8.
+- **Open G1 blocker:** the 2026-09-30 T2 run did not stop the guest after `requestGuestStop()`; it timed out at 10 s and passed only after the forced stop. The pinned kernel has no `CONFIG_KEYBOARD_GPIO`, so the planned PL061-to-`gpio-keys` path is unavailable. Keep #003 and G1 open until the pinned guest handles the VZ power-button event and the T2/G1 checks pass.
+- **TCC-safe test artifacts:** the local default is `/tmp/apkrun-test-linux`. Pass `APKRUN_TEST_LINUX_DIR` and `APKRUN_CI` as `xcodebuild` build settings; the hosted tests read them from `APKRunTestHost.app/Contents/Info.plist`.
+- **Review before merge:** the pinned `socat` and ncurses tooling license expressions are outside the current §4.4 allowlist. The allowlist was not expanded; maintainers must resolve the dependency or accept a policy change before #003 can close.
+- **Review before merge:** `linux-guest` currently runs only on trusted `main` pushes or manual dispatch. PR execution stays disabled until disposable lab runner capacity is available; meanwhile the task-closing PR must link a maintainer-run result for its reviewed commit, per [../../05-development/build-system.md](../../05-development/build-system.md) §15.1.
+- **Local T2 setup:** place guest artifacts under `${TMPDIR}/apkrun-test-linux` when running the signed test host from a checkout under `~/Documents`; reading the kernel from the checkout can trigger macOS file-access approval. `scripts/run-gate.sh` and `integration.yml` select a temporary artifact directory automatically.
 
 ---
 

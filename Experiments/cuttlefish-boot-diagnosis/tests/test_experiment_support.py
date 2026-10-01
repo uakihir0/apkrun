@@ -1528,8 +1528,8 @@ def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
     assert 'PATH="$APKRUN_DIAGNOSTIC_ADB_SHIM_DIR:$CVD_HOST_DIR/bin:$PATH"' in patched
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (
-        "create_cvd_group_with_common_options --gpu_mode=none --cpus 4 --memory_mb 4096"
-        in patched
+        "create_cvd_group_with_common_options --gpu_mode=none "
+        "--gpu_vhost_user_mode=off --cpus 4 --memory_mb 4096" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
     assert '--output "$raw_log"' in patched
@@ -1547,7 +1547,7 @@ def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
     assert "run_with_boot_deadline adb" not in patched
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
-    assert "start --gpu_mode=none 2>&1" in patched
+    assert "start --gpu_mode=none --gpu_vhost_user_mode=off 2>&1" in patched
     assert patched.count("--gpu_mode=none") == 2
     assert (
         "default)\n      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096"
@@ -1978,7 +1978,16 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     )
     (capture_record / "cuttlefish_config.json").write_text(
         json.dumps(
-            {"instances": {"1": {"gpu_mode": "none", "cpus": 4, "memory_mb": 4096}}}
+            {
+                "instances": {
+                    "1": {
+                        "gpu_mode": "none",
+                        "enable_gpu_vhost_user": False,
+                        "cpus": 4,
+                        "memory_mb": 4096,
+                    }
+                }
+            }
         ),
         encoding="utf-8",
     )
@@ -2265,6 +2274,61 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
         )
     captured_config["instances"]["1"]["gpu_mode"] = "none"
+    captured_config["instances"]["1"]["enable_gpu_vhost_user"] = True
+    config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match="captured Cuttlefish configuration has unexpected "
+        "enable_gpu_vhost_user: True",
+    ):
+        experiment_support.build_experiment_record(
+            capture_record,
+            repo_root,
+            baseline_record,
+            tool_copy_root,
+            canonical_capture_copy,
+            manifest_copy_root,
+            experiment_root,
+            patched_capture,
+            host_identity,
+            summary,
+            adb_state,
+            1,
+            "127.0.0.1:6520",
+            capture_status_root,
+            capture_run_status,
+            socket_metrics,
+            fleet_socket_metrics,
+        )
+    captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
+    config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+    captured_config["instances"]["1"]["enable_gpu_vhost_user"] = 0
+    config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match="captured Cuttlefish configuration has unexpected "
+        "enable_gpu_vhost_user: 0",
+    ):
+        experiment_support.build_experiment_record(
+            capture_record,
+            repo_root,
+            baseline_record,
+            tool_copy_root,
+            canonical_capture_copy,
+            manifest_copy_root,
+            experiment_root,
+            patched_capture,
+            host_identity,
+            summary,
+            adb_state,
+            1,
+            "127.0.0.1:6520",
+            capture_status_root,
+            capture_run_status,
+            socket_metrics,
+            fleet_socket_metrics,
+        )
+    captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
 
     incomplete_cleanup = capture_status_root / "adb-helper-cleanup-incomplete.json"

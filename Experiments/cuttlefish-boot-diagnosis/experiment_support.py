@@ -2887,7 +2887,7 @@ def patch_capture_script(path: Path) -> None:
             ),
             (
                 "default)\n"
-                "      create_cvd_group_with_common_options --gpu_mode=none --cpus 4 --memory_mb 4096\n"
+                "      create_cvd_group_with_common_options --gpu_mode=none --gpu_vhost_user_mode=off --cpus 4 --memory_mb 4096\n"
                 "      ;;"
             ),
         ),
@@ -2935,7 +2935,7 @@ def patch_capture_script(path: Path) -> None:
                 "fi\n"
                 'if [ "$cvd_command_failed" -eq 0 ] \\\n'
                 '  && ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\\n'
-                "    start --gpu_mode=none 2>&1 \\\n"
+                "    start --gpu_mode=none --gpu_vhost_user_mode=off 2>&1 \\\n"
                 '    | python3 "$script_dir/capture_bounded.py" \\\n'
                 '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
@@ -3167,10 +3167,15 @@ def build_experiment_record(
         raise ValueError("diagnostic capture did not use the default capture profile")
     if host.get("cvdPackageVersion") != baseline_cvd.get("packageVersion"):
         raise ValueError("capture metadata records an unexpected Cuttlefish version")
-    expected = {"gpu_mode": "none", "cpus": 4, "memory_mb": 4096}
+    expected = {
+        "gpu_mode": "none",
+        "enable_gpu_vhost_user": False,
+        "cpus": 4,
+        "memory_mb": 4096,
+    }
     for key, value in expected.items():
         observed_value = instance.get(key)
-        if observed_value != value:
+        if type(observed_value) is not type(value) or observed_value != value:
             if (
                 type(observed_value) in (str, int, float, bool)
                 or observed_value is None

@@ -285,6 +285,10 @@ def _layout_additions(
             raise ExtractError(
                 f"layout cmdline.additions[{index}].value must be one non-empty argument."
             )
+        if not value.isascii():
+            raise ExtractError(
+                f"layout cmdline.additions[{index}].value must be a printable ASCII argument."
+            )
         if not isinstance(comment, str) or not comment.strip():
             raise ExtractError(f"layout cmdline.additions[{index}] needs a non-empty comment.")
         result.append(value)
@@ -566,9 +570,9 @@ def extract_images(
                 part for part in (vendor_boot.cmdline, boot.cmdline, *additions) if part
             )
             command_line_bytes = command_line.encode("utf-8")
-            if command_line and not command_line.isprintable():
+            if command_line and (not command_line.isascii() or not command_line.isprintable()):
                 raise ExtractError(
-                    "combined kernel command line contains non-printable characters."
+                    "combined kernel command line contains non-ASCII or non-printable characters."
                 )
             if len(command_line_bytes) > MAX_CMDLINE_SIZE:
                 raise ExtractError(

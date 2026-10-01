@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
+from typing import BinaryIO
 from zipfile import ZipFile
 
 import pytest
 
 import apkrun_image.extract as extract_module
+from apkrun_image.bootimg import VendorBootImage
 from apkrun_image.extract import ExtractError, extract_images, main
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -152,15 +155,64 @@ def test_extract_rejects_androidboot_command_line_additions(tmp_path: Path) -> N
     assert not (tmp_path / "output").exists()
 
 
-def test_extract_rejects_command_line_over_2048_utf8_bytes(tmp_path: Path) -> None:
-    """The kernel command line limit counts encoded bytes, not Unicode characters."""
+def test_extract_rejects_command_line_over_2048_bytes(tmp_path: Path) -> None:
+    """The kernel command line limit counts encoded ASCII bytes."""
     layout = _layout(
         tmp_path / "layout.json",
-        [{"comment": "UTF-8 byte boundary test.", "value": "é" * 1003}],
+        [{"comment": "ASCII byte boundary test.", "value": "x" * 2000}],
     )
 
     with pytest.raises(ExtractError, match="over the 2048-byte limit"):
         _run_extract(tmp_path / "output", layout)
+
+
+def test_extract_accepts_command_line_at_2048_byte_limit(tmp_path: Path) -> None:
+    """An ASCII command line at the documented byte limit is accepted."""
+    prefix_layout = _layout(
+        tmp_path / "prefix-layout.json",
+        [{"comment": "Prefix marker.", "value": "x"}],
+    )
+    prefix_output = tmp_path / "prefix"
+    _run_extract(prefix_output, prefix_layout)
+    prefix = (prefix_output / "cmdline.txt").read_bytes()[:-1]
+    boundary_value = "x" * (2048 - len(prefix))
+
+    layout = _layout(
+        tmp_path / "boundary-layout.json",
+        [{"comment": "Exact command-line limit.", "value": boundary_value}],
+    )
+    output = tmp_path / "boundary"
+    metadata = _run_extract(output, layout)
+
+    assert metadata["cmdlineLength"] == 2048
+    assert len((output / "cmdline.txt").read_bytes()) == 2048
+
+
+def test_extract_rejects_non_ascii_source_command_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UTF-8 source headers cannot produce a VM-invalid command line."""
+    layout = _layout(tmp_path / "layout.json")
+    parse_vendor_boot_image = extract_module.parse_vendor_boot_image
+
+    def parse_with_non_ascii_command_line(
+        stream: BinaryIO,
+        image_size: int,
+    ) -> VendorBootImage:
+        image = parse_vendor_boot_image(stream, image_size)
+        return replace(image, cmdline="console=hvc0 café")
+
+    monkeypatch.setattr(
+        extract_module,
+        "parse_vendor_boot_image",
+        parse_with_non_ascii_command_line,
+    )
+
+    with pytest.raises(ExtractError, match="non-ASCII or non-printable"):
+        _run_extract(tmp_path / "output", layout)
+
+    assert not (tmp_path / "output").exists()
 
 
 @pytest.mark.parametrize(
@@ -171,6 +223,10 @@ def test_extract_rejects_command_line_over_2048_utf8_bytes(tmp_path: Path) -> No
         (
             {"comment": "NUL prefix.", "value": "\x00androidboot.hardware=test"},
             "one non-empty argument",
+        ),
+        (
+            {"comment": "Non-ASCII.", "value": "café"},
+            "printable ASCII argument",
         ),
         ({"value": "apkrun.test=value"}, "needs a non-empty comment"),
     ),

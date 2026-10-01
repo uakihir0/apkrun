@@ -1,0 +1,158 @@
+
+
+U-Boot 2024.04-g3fe964757589-ab15108624 (Mar 27 2026 - 21:26:21 +0000)
+
+DRAM:  4 GiB
+Core:  8 devices, 5 uclasses, devicetree: board
+Net:   eth0: virtio-net#1, eth1: virtio-net#2
+No QEMU firmware device
+Falling back to U-Boot generated SMBIOS tables
+Driver                    uid uclass               Devices
+----------------------------------------------------------
+blk_partition             083 partition            virtio-blk#24:1          
+                                                   virtio-blk#24:2          
+                                                   virtio-blk#24:3          
+                                                   virtio-blk#24:4          
+                                                   virtio-blk#24:5          
+                                                   virtio-blk#24:6          
+                                                   virtio-blk#24:7          
+                                                   virtio-blk#24:8          
+                                                   virtio-blk#24:9          
+                                                   virtio-blk#24:10         
+                                                   virtio-blk#24:11         
+                                                   virtio-blk#24:12         
+                                                   virtio-blk#24:13         
+                                                   virtio-blk#24:14         
+                                                   virtio-blk#24:15         
+                                                   virtio-blk#24:16         
+                                                   virtio-blk#24:17         
+                                                   virtio-blk#24:18         
+                                                   virtio-blk#24:19         
+                                                   virtio-blk#25:1          
+                                                   virtio-blk#25:2          
+                                                   virtio-blk#25:3          
+                                                   virtio-blk#25:4          
+                                                   virtio-blk#26:1          
+bochs_video               129 video                <none>
+bootmeth_qfw              026 <no uclass>          
+efi_blk                   022 blk                  <none>
+EFI block driver          038 efi                  <none>
+ns16550_serial            108 serial               U6_16550A@3f8            
+                                                   U6_16550A@2f8            
+                                                   U6_16550A@3e8            
+                                                   U6_16550A@2e8            
+pci_bridge_drv            085 pci                  <none>
+pci_generic_drv           087 pci_generic          pci_0:0.0                
+                                                   pci_0:1.7                
+pci_generic_ecam          085 pci                  pci                      
+psci                      045 firmware             psci                     
+psci-sysreset             119 sysreset             psci-sysreset            
+qfw_bootdev               025 <no uclass>          
+qfw_mmio                  096 qfw                  <none>
+root_driver               000 root                 root_driver              
+rtc-pl031                 104 rtc                  <none>
+serial_pl01x              108 serial               <none>
+smccc-trng                103 rng                  <none>
+vidconsole0               131 vidconsole0          <none>
+virtio-blk                022 blk                  virtio-blk#24            
+                                                   virtio-blk#25            
+                                                   virtio-blk#26            
+virtio_bootdev            025 <no uclass>          
+virtio-console            108 serial               virtio-console#0         
+                                                   virtio-console#8         
+                                                   virtio-console#9         
+                                                   virtio-console#10        
+                                                   virtio-console#11        
+                                                   virtio-console#12        
+                                                   virtio-console#13        
+                                                   virtio-console#14        
+                                                   virtio-console#15        
+                                                   virtio-console#16        
+                                                   virtio-console#17        
+                                                   virtio-console#18        
+                                                   virtio-console#19        
+                                                   virtio-console#20        
+                                                   virtio-console#21        
+                                                   virtio-console#22        
+                                                   virtio-console#23        
+                                                   virtio-console#27        
+                                                   virtio-console#28        
+                                                   virtio-console#29        
+virtio-console-port       108 serial               <none>
+virtio-mmio               133 virtio               <none>
+virtio-net                040 ethernet             virtio-net#1             
+                                                   virtio-net#2             
+virtio-pci.m              133 virtio               virtio-pci.m#0           
+                                                   virtio-pci.m#1           
+                                                   virtio-pci.m#2           
+                                                   virtio-pci.m#3           
+                                                   virtio-pci.m#4           
+                                                   virtio-pci.m#5           
+                                                   virtio-pci.m#6           
+                                                   virtio-pci.m#7           
+                                                   virtio-pci.m#8           
+                                                   virtio-pci.m#9           
+                                                   virtio-pci.m#10          
+                                                   virtio-pci.m#11          
+                                                   virtio-pci.m#12          
+                                                   virtio-pci.m#13          
+                                                   virtio-pci.m#14          
+                                                   virtio-pci.m#15          
+                                                   virtio-pci.m#16          
+                                                   virtio-pci.m#17          
+                                                   virtio-pci.m#18          
+                                                   virtio-pci.m#19          
+                                                   virtio-pci.m#20          
+                                                   virtio-pci.m#21          
+                                                   virtio-pci.m#22          
+                                                   virtio-pci.m#23          
+                                                   virtio-pci.m#24          
+                                                   virtio-pci.m#25          
+                                                   virtio-pci.m#26          
+                                                   virtio-pci.m#27          
+                                                   virtio-pci.m#28          
+                                                   virtio-pci.m#29          
+                                                   virtio-pci.m#30          
+                                                   virtio-pci.m#31          
+                                                   virtio-pci.m#32          
+                                                   virtio-pci.m#33          
+                                                   virtio-pci.m#34          
+                                                   virtio-pci.m#35          
+                                                   virtio-pci.m#36          
+virtio-rng                103 rng                  virtio-rng#32            
+## Android Verified Boot 2.0 version 1.2.0
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Verification passed successfully
+Imported supplementary environment
+Unknown command 'mtrr' - try 'help'
+ANDROID: reboot reason: "(none)"
+ANDROID: Invalid CRC-32 (expected 807077e9, found 00000000),re-initializing A/B metadata.
+ANDROID: Attempting slot a, tries remaining 3
+## Android Verified Boot 2.0 version 1.2.0
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Verification passed successfully
+## Android Verified Boot 2.0 version 1.2.0
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Writing 8 bytes to virtio-console#17 console
+Reading 8 bytes from virtio-console#17 console
+Verification passed successfully
+ANDROID: Loading ramdisk from "init_boot_a", partition 4.
+ANDROID: Loading kernel from "boot_a", partition 1.
+ANDROID: Loading vendor ramdisk from "vendor_boot_a", partition 18.
+Booting kernel at 0x80200000 with fdt at 80000000 ramdisk 0x84200000:0x014ccf2b...
+
+
+## Flattened Device Tree blob at 80000000
+   Booting using the fdt blob at 0x80000000
+   Loading Ramdisk to 17c132000, end 17d5fef2b ... OK
+   Loading Device Tree to 000000017c12d000, end 000000017c13125e ... OK
+
+Starting kernel ...
+

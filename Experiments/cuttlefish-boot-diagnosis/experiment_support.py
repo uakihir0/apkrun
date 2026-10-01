@@ -81,72 +81,495 @@ def audit_unix_socket_paths(roots: list[Path]) -> dict[str, int | bool]:
     socket_count = 0
     maximum_path_bytes = 0
     maximum_sun_path_bytes = 0
+    canonical_roots: list[Path] = []
+    canonical_root_stats: dict[Path, os.stat_result] = {}
     for requested_root in roots:
         if not requested_root.is_absolute() or requested_root.is_symlink():
             raise ValueError("Cuttlefish socket audit root is unsafe")
         try:
             root = requested_root.resolve(strict=True)
+            root_stat = os.stat(root, follow_symlinks=False)
         except OSError as error:
             raise ValueError("Cuttlefish socket audit root is unavailable") from error
-        if not root.is_dir() or root != requested_root:
+        if (
+            not stat.S_ISDIR(root_stat.st_mode)
+            or not root.is_dir()
+            or root != requested_root
+        ):
             raise ValueError("Cuttlefish socket audit root is not physically canonical")
-        pending = [root]
-        while pending:
-            directory = pending.pop()
+        if root not in canonical_root_stats:
+            canonical_roots.append(root)
+            canonical_root_stats[root] = root_stat
+
+    seen_socket_paths: set[bytes] = set()
+
+    def record_socket_path(path: str | os.PathLike[str]) -> None:
+        nonlocal socket_count, maximum_path_bytes, maximum_sun_path_bytes
+        encoded_path = os.fsencode(path)
+        if encoded_path in seen_socket_paths:
+            return
+        sun_path_bytes = _encoded_unix_socket_path_bytes(path)
+        if sun_path_bytes > LINUX_SUN_PATH_CAPACITY:
+            raise ValueError(
+                "a Cuttlefish Unix socket path exceeds Linux sun_path "
+                f"capacity ({sun_path_bytes} bytes including the "
+                f"terminating NUL; limit {LINUX_SUN_PATH_CAPACITY})"
+            )
+        seen_socket_paths.add(encoded_path)
+        socket_count += 1
+        maximum_path_bytes = max(maximum_path_bytes, sun_path_bytes - 1)
+        maximum_sun_path_bytes = max(maximum_sun_path_bytes, sun_path_bytes)
+
+    def verify_skipped_symlink(
+        entry_name: str,
+        directory_descriptor: int,
+        entry_stat: os.stat_result,
+        initial_target_text: str,
+        initial_target_stat: os.stat_result | None,
+    ) -> None:
+        def stat_symlink_target() -> os.stat_result | None:
             try:
-                entries = list(os.scandir(directory))
+                return os.stat(
+                    entry_name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=True,
+                )
+            except FileNotFoundError:
+                return None
             except OSError as error:
                 raise ValueError(
-                    "could not inspect Cuttlefish runtime sockets"
+                    "could not recheck a Cuttlefish symlink target"
                 ) from error
-            for entry in entries:
+
+        def target_matches(
+            expected_stat: os.stat_result | None,
+            observed_stat: os.stat_result | None,
+        ) -> bool:
+            if expected_stat is None:
+                return observed_stat is None
+            return (
+                observed_stat is not None
+                and _same_inode(expected_stat, observed_stat)
+                and stat.S_IFMT(expected_stat.st_mode)
+                == stat.S_IFMT(observed_stat.st_mode)
+            )
+
+        def verify_link_identity() -> None:
+            try:
+                link_stat = os.stat(
+                    entry_name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                link_text = os.readlink(
+                    entry_name,
+                    dir_fd=directory_descriptor,
+                )
+            except OSError as error:
+                raise ValueError("could not recheck a Cuttlefish symlink") from error
+            if (
+                not stat.S_ISLNK(link_stat.st_mode)
+                or not _same_inode(entry_stat, link_stat)
+                or link_text != initial_target_text
+            ):
+                raise ValueError("a Cuttlefish symlink changed during audit")
+
+        verify_link_identity()
+        current_target_stat = stat_symlink_target()
+        if not target_matches(initial_target_stat, current_target_stat):
+            raise ValueError("a Cuttlefish symlink target changed during audit")
+        verify_link_identity()
+        final_target_stat = stat_symlink_target()
+        if not target_matches(current_target_stat, final_target_stat):
+            raise ValueError("a Cuttlefish symlink target changed during final audit")
+
+    def resolve_socket_target(
+        entry_name: str,
+        entry_path: Path,
+        directory_descriptor: int,
+        target_stat: os.stat_result,
+        current_root: Path,
+        current_root_descriptor: int,
+    ) -> Path:
+        try:
+            target_text = os.readlink(
+                entry_name,
+                dir_fd=directory_descriptor,
+            )
+        except OSError as error:
+            raise ValueError(
+                "could not read a Cuttlefish socket symlink target"
+            ) from error
+        if os.path.isabs(target_text):
+            target_path = Path(os.path.normpath(target_text))
+        else:
+            target_path = Path(
+                os.path.normpath(os.path.join(entry_path.parent, target_text))
+            )
+
+        candidates: list[tuple[Path, Path]] = []
+        for audit_root in canonical_roots:
+            try:
+                relative_target = target_path.relative_to(audit_root)
+            except ValueError:
+                continue
+            if relative_target.parts:
+                candidates.append((audit_root, relative_target))
+        if not candidates:
+            raise ValueError("a Cuttlefish socket symlink escapes its audit roots")
+        target_root, relative_target = max(
+            candidates,
+            key=lambda candidate: len(candidate[0].parts),
+        )
+        if target_root == current_root:
+            target_root_descriptor = os.dup(current_root_descriptor)
+        else:
+            try:
+                target_root_descriptor = _open_directory_chain(target_root)
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    "a Cuttlefish socket symlink target root changed during audit"
+                ) from error
+        try:
+            target_root_stat = os.fstat(target_root_descriptor)
+            if not _same_inode(
+                canonical_root_stats[target_root],
+                target_root_stat,
+            ):
+                raise ValueError(
+                    "a Cuttlefish socket symlink target root changed during audit"
+                )
+
+            relative_parent = Path(*relative_target.parts[:-1])
+            try:
+                if relative_parent.parts:
+                    target_parent_descriptor = _open_relative_directory(
+                        target_root_descriptor,
+                        relative_parent,
+                    )
+                else:
+                    target_parent_descriptor = os.dup(target_root_descriptor)
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    "a Cuttlefish socket symlink has unsafe target components"
+                ) from error
+            try:
+                target_parent_stat = os.fstat(target_parent_descriptor)
+                target_name = relative_target.parts[-1]
                 try:
-                    entry_stat = entry.stat(follow_symlinks=False)
+                    target_entry_stat = os.stat(
+                        target_name,
+                        dir_fd=target_parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                    current_link_stat = os.stat(
+                        entry_name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
                 except OSError as error:
                     raise ValueError(
-                        "could not inspect Cuttlefish runtime sockets"
+                        "could not verify a Cuttlefish socket symlink"
                     ) from error
-                if stat.S_ISLNK(entry_stat.st_mode):
+                if (
+                    not stat.S_ISSOCK(target_entry_stat.st_mode)
+                    or not _same_inode(target_stat, target_entry_stat)
+                    or not stat.S_ISLNK(current_link_stat.st_mode)
+                ):
+                    raise ValueError("a Cuttlefish socket symlink changed during audit")
+
+            finally:
+                os.close(target_parent_descriptor)
+
+            try:
+                verified_root_descriptor = _open_directory_chain(target_root)
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    "a Cuttlefish socket symlink target root changed during audit"
+                ) from error
+            try:
+                if not _same_inode(
+                    target_root_stat,
+                    os.fstat(verified_root_descriptor),
+                ):
+                    raise ValueError(
+                        "a Cuttlefish socket symlink target root changed during audit"
+                    )
+                try:
+                    if relative_parent.parts:
+                        verified_parent_descriptor = _open_relative_directory(
+                            verified_root_descriptor,
+                            relative_parent,
+                        )
+                    else:
+                        verified_parent_descriptor = os.dup(verified_root_descriptor)
+                except (OSError, ValueError) as error:
+                    raise ValueError(
+                        "a Cuttlefish socket symlink target directory changed "
+                        "during audit"
+                    ) from error
+                try:
+                    verified_parent_stat = os.fstat(verified_parent_descriptor)
+                    verified_target_stat = os.stat(
+                        target_name,
+                        dir_fd=verified_parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                    verified_link_stat = os.stat(
+                        entry_name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                    verified_link_text = os.readlink(
+                        entry_name,
+                        dir_fd=directory_descriptor,
+                    )
+                    if (
+                        not _same_inode(target_parent_stat, verified_parent_stat)
+                        or not stat.S_ISSOCK(verified_target_stat.st_mode)
+                        or not _same_inode(target_entry_stat, verified_target_stat)
+                        or not _same_inode(current_link_stat, verified_link_stat)
+                        or verified_link_text != target_text
+                    ):
+                        raise ValueError(
+                            "a Cuttlefish socket symlink changed during audit"
+                        )
+                except OSError as error:
+                    raise ValueError(
+                        "could not recheck a Cuttlefish socket symlink"
+                    ) from error
+                finally:
+                    os.close(verified_parent_descriptor)
+            finally:
+                os.close(verified_root_descriptor)
+        finally:
+            os.close(target_root_descriptor)
+        return target_path
+
+    for root in canonical_roots:
+        try:
+            root_descriptor = _open_directory_chain(root)
+        except (OSError, ValueError) as error:
+            raise ValueError(
+                "could not open a Cuttlefish socket audit root safely"
+            ) from error
+        try:
+            root_stat = os.fstat(root_descriptor)
+            if not _same_inode(canonical_root_stats[root], root_stat):
+                raise ValueError("a Cuttlefish socket audit root changed during audit")
+            pending: list[tuple[Path, os.stat_result]] = [
+                (Path(), root_stat),
+            ]
+            while pending:
+                relative_directory, expected_directory_stat = pending.pop()
+                try:
+                    if relative_directory.parts:
+                        directory_descriptor = _open_relative_directory(
+                            root_descriptor,
+                            relative_directory,
+                        )
+                    else:
+                        directory_descriptor = os.dup(root_descriptor)
+                except (OSError, ValueError) as error:
+                    raise ValueError(
+                        "a Cuttlefish runtime directory changed during audit"
+                    ) from error
+                try:
+                    directory_stat = os.fstat(directory_descriptor)
+                    if not stat.S_ISDIR(directory_stat.st_mode) or not _same_inode(
+                        expected_directory_stat,
+                        directory_stat,
+                    ):
+                        raise ValueError(
+                            "a Cuttlefish runtime directory changed during audit"
+                        )
+                    directory_path = root / relative_directory
                     try:
-                        target_stat = entry.stat(follow_symlinks=True)
-                    except FileNotFoundError:
-                        continue
+                        with os.scandir(directory_descriptor) as entries:
+                            entry_names = [entry.name for entry in entries]
                     except OSError as error:
                         raise ValueError(
-                            "could not inspect Cuttlefish socket symlink targets"
+                            "could not inspect Cuttlefish runtime sockets"
                         ) from error
-                    if stat.S_ISDIR(target_stat.st_mode):
+                    for entry_name in entry_names:
+                        entry_path = directory_path / entry_name
+                        try:
+                            entry_stat = os.stat(
+                                entry_name,
+                                dir_fd=directory_descriptor,
+                                follow_symlinks=False,
+                            )
+                        except OSError as error:
+                            raise ValueError(
+                                "could not inspect Cuttlefish runtime sockets"
+                            ) from error
+                        if stat.S_ISLNK(entry_stat.st_mode):
+                            try:
+                                initial_target_text = os.readlink(
+                                    entry_name,
+                                    dir_fd=directory_descriptor,
+                                )
+                            except OSError as error:
+                                raise ValueError(
+                                    "could not read a Cuttlefish symlink target"
+                                ) from error
+                            try:
+                                target_stat = os.stat(
+                                    entry_name,
+                                    dir_fd=directory_descriptor,
+                                    follow_symlinks=True,
+                                )
+                            except FileNotFoundError:
+                                verify_skipped_symlink(
+                                    entry_name,
+                                    directory_descriptor,
+                                    entry_stat,
+                                    initial_target_text,
+                                    None,
+                                )
+                                continue
+                            except OSError as error:
+                                raise ValueError(
+                                    "could not inspect Cuttlefish socket symlink "
+                                    "targets"
+                                ) from error
+                            if stat.S_ISDIR(target_stat.st_mode):
+                                raise ValueError(
+                                    "a directory symlink was found beneath a "
+                                    "Cuttlefish socket audit root"
+                                )
+                            if stat.S_ISSOCK(target_stat.st_mode):
+                                target_path = resolve_socket_target(
+                                    entry_name,
+                                    entry_path,
+                                    directory_descriptor,
+                                    target_stat,
+                                    root,
+                                    root_descriptor,
+                                )
+                                current_link_stat = os.stat(
+                                    entry_name,
+                                    dir_fd=directory_descriptor,
+                                    follow_symlinks=False,
+                                )
+                                if not stat.S_ISLNK(
+                                    current_link_stat.st_mode
+                                ) or not _same_inode(
+                                    entry_stat,
+                                    current_link_stat,
+                                ):
+                                    raise ValueError(
+                                        "a Cuttlefish socket symlink changed "
+                                        "during audit"
+                                    )
+                                record_socket_path(entry_path)
+                                record_socket_path(target_path)
+                            else:
+                                verify_skipped_symlink(
+                                    entry_name,
+                                    directory_descriptor,
+                                    entry_stat,
+                                    initial_target_text,
+                                    target_stat,
+                                )
+                            continue
+                        if stat.S_ISDIR(entry_stat.st_mode):
+                            try:
+                                child_descriptor = _open_child_directory(
+                                    directory_descriptor,
+                                    entry_name,
+                                )
+                            except (OSError, ValueError) as error:
+                                raise ValueError(
+                                    "a Cuttlefish runtime directory changed "
+                                    "during audit"
+                                ) from error
+                            try:
+                                child_stat = os.fstat(child_descriptor)
+                                current_child_stat = os.stat(
+                                    entry_name,
+                                    dir_fd=directory_descriptor,
+                                    follow_symlinks=False,
+                                )
+                                if (
+                                    not stat.S_ISDIR(child_stat.st_mode)
+                                    or not _same_inode(entry_stat, child_stat)
+                                    or not _same_inode(child_stat, current_child_stat)
+                                ):
+                                    raise ValueError(
+                                        "a Cuttlefish runtime directory changed "
+                                        "during audit"
+                                    )
+                                pending.append(
+                                    (
+                                        relative_directory / entry_name,
+                                        child_stat,
+                                    )
+                                )
+                            except OSError as error:
+                                raise ValueError(
+                                    "could not inspect Cuttlefish runtime sockets"
+                                ) from error
+                            finally:
+                                os.close(child_descriptor)
+                            continue
+                        if stat.S_ISSOCK(entry_stat.st_mode):
+                            try:
+                                current_socket_stat = os.stat(
+                                    entry_name,
+                                    dir_fd=directory_descriptor,
+                                    follow_symlinks=False,
+                                )
+                            except OSError as error:
+                                raise ValueError(
+                                    "could not recheck a Cuttlefish socket entry"
+                                ) from error
+                            if not stat.S_ISSOCK(
+                                current_socket_stat.st_mode
+                            ) or not _same_inode(entry_stat, current_socket_stat):
+                                raise ValueError(
+                                    "a Cuttlefish socket entry changed during audit"
+                                )
+                            record_socket_path(entry_path)
+
+                    try:
+                        if relative_directory.parts:
+                            verified_directory = _open_relative_directory(
+                                root_descriptor,
+                                relative_directory,
+                            )
+                        else:
+                            verified_directory = os.dup(root_descriptor)
+                    except (OSError, ValueError) as error:
                         raise ValueError(
-                            "a directory symlink was found beneath a Cuttlefish "
-                            "socket audit root"
-                        )
-                    if stat.S_ISSOCK(target_stat.st_mode):
-                        raise ValueError(
-                            "a socket symlink was found beneath a Cuttlefish "
-                            "socket audit root"
-                        )
-                    continue
-                if stat.S_ISDIR(entry_stat.st_mode):
-                    pending.append(Path(entry.path))
-                    continue
-                if not stat.S_ISSOCK(entry_stat.st_mode):
-                    continue
-                sun_path_bytes = _encoded_unix_socket_path_bytes(entry.path)
-                if sun_path_bytes > LINUX_SUN_PATH_CAPACITY:
+                            "a Cuttlefish runtime directory changed during audit"
+                        ) from error
+                    try:
+                        verified_directory_stat = os.fstat(verified_directory)
+                        if not _same_inode(directory_stat, verified_directory_stat):
+                            raise ValueError(
+                                "a Cuttlefish runtime directory changed during audit"
+                            )
+                    finally:
+                        os.close(verified_directory)
+                finally:
+                    os.close(directory_descriptor)
+
+            try:
+                verified_root = _open_directory_chain(root)
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    "a Cuttlefish socket audit root changed during audit"
+                ) from error
+            try:
+                if not _same_inode(root_stat, os.fstat(verified_root)):
                     raise ValueError(
-                        "a Cuttlefish Unix socket path exceeds Linux sun_path "
-                        f"capacity ({sun_path_bytes} bytes including the "
-                        f"terminating NUL; limit {LINUX_SUN_PATH_CAPACITY})"
+                        "a Cuttlefish socket audit root changed during audit"
                     )
-                socket_count += 1
-                maximum_sun_path_bytes = max(
-                    maximum_sun_path_bytes,
-                    sun_path_bytes,
-                )
-                maximum_path_bytes = max(
-                    maximum_path_bytes,
-                    sun_path_bytes - 1,
-                )
+            finally:
+                os.close(verified_root)
+        finally:
+            os.close(root_descriptor)
     return {
         "capacityBytes": LINUX_SUN_PATH_CAPACITY,
         "terminatingNulBytes": 1,

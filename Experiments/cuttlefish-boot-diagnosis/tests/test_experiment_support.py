@@ -446,7 +446,217 @@ def test_unix_socket_audit_measures_complete_physical_paths() -> None:
     }
 
 
-def test_unix_socket_audit_rejects_symlinks() -> None:
+def test_unix_socket_audit_rejects_socket_replaced_by_external_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    socket_path = root / "cvd.sock"
+    external_socket_path = external_root / "cvd.sock"
+    root_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    external_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    root_listener.bind(str(socket_path))
+    external_listener.bind(str(external_socket_path))
+    root_stat = os.stat(root, follow_symlinks=False)
+    original_stat = os.stat
+    entry_stat_count = 0
+
+    def replace_on_socket_recheck(path, *args, **kwargs):
+        nonlocal entry_stat_count
+        directory_descriptor = kwargs.get("dir_fd")
+        is_audit_root = isinstance(
+            directory_descriptor, int
+        ) and experiment_support._same_inode(
+            root_stat,
+            os.fstat(directory_descriptor),
+        )
+        if (
+            path == "cvd.sock"
+            and is_audit_root
+            and kwargs.get("follow_symlinks") is False
+        ):
+            entry_stat_count += 1
+            if entry_stat_count == 2:
+                socket_path.unlink()
+                socket_path.symlink_to(external_socket_path)
+        return original_stat(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(experiment_support.os, "stat", replace_on_socket_recheck)
+            with pytest.raises(ValueError, match="socket entry changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert entry_stat_count == 2
+            assert socket_path.is_symlink()
+            assert external_socket_path.exists()
+    finally:
+        root_listener.close()
+        external_listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_rechecks_dangling_symlink_before_skipping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    socket_alias = root / "socket-alias"
+    missing_target = external_root / "missing.sock"
+    external_socket_path = external_root / "live.sock"
+    socket_alias.symlink_to(missing_target)
+    external_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    external_listener.bind(str(external_socket_path))
+    root_stat = os.stat(root, follow_symlinks=False)
+    original_stat = os.stat
+    link_replaced = False
+
+    def replace_after_missing_stat(path, *args, **kwargs):
+        nonlocal link_replaced
+        directory_descriptor = kwargs.get("dir_fd")
+        is_audit_root = isinstance(
+            directory_descriptor, int
+        ) and experiment_support._same_inode(
+            root_stat,
+            os.fstat(directory_descriptor),
+        )
+        if (
+            path == "socket-alias"
+            and is_audit_root
+            and kwargs.get("follow_symlinks") is True
+            and not link_replaced
+        ):
+            try:
+                return original_stat(path, *args, **kwargs)
+            except FileNotFoundError:
+                socket_alias.unlink()
+                socket_alias.symlink_to(external_socket_path)
+                link_replaced = True
+                raise
+        return original_stat(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(experiment_support.os, "stat", replace_after_missing_stat)
+            with pytest.raises(ValueError, match="symlink changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert link_replaced
+            assert external_socket_path.exists()
+    finally:
+        external_listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_rechecks_non_socket_symlink_target_before_skipping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    socket_alias = root / "socket-alias"
+    external_target = external_root / "target"
+    external_target.write_text("initial regular file", encoding="utf-8")
+    socket_alias.symlink_to(external_target)
+    external_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    root_stat = os.stat(root, follow_symlinks=False)
+    original_stat = os.stat
+    target_replaced = False
+
+    def replace_after_regular_stat(path, *args, **kwargs):
+        nonlocal target_replaced
+        directory_descriptor = kwargs.get("dir_fd")
+        is_audit_root = isinstance(
+            directory_descriptor, int
+        ) and experiment_support._same_inode(
+            root_stat,
+            os.fstat(directory_descriptor),
+        )
+        if (
+            path == "socket-alias"
+            and is_audit_root
+            and kwargs.get("follow_symlinks") is True
+            and not target_replaced
+        ):
+            initial_stat = original_stat(path, *args, **kwargs)
+            external_target.unlink()
+            external_listener.bind(str(external_target))
+            target_replaced = True
+            return initial_stat
+        return original_stat(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(experiment_support.os, "stat", replace_after_regular_stat)
+            with pytest.raises(ValueError, match="symlink target changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert target_replaced
+            assert external_target.exists()
+    finally:
+        external_listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+@pytest.mark.parametrize("initial_target", ["dangling", "regular"])
+def test_unix_socket_audit_rechecks_skipped_target_after_final_link_check(
+    initial_target: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    socket_alias = root / "socket-alias"
+    external_target = external_root / "target"
+    if initial_target == "regular":
+        external_target.write_text("initial regular file", encoding="utf-8")
+    socket_alias.symlink_to(external_target)
+    external_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    root_stat = os.stat(root, follow_symlinks=False)
+    original_readlink = os.readlink
+    readlink_count = 0
+    target_created = False
+
+    def create_target_during_final_link_check(path, *args, **kwargs):
+        nonlocal readlink_count, target_created
+        link_text = original_readlink(path, *args, **kwargs)
+        directory_descriptor = kwargs.get("dir_fd")
+        is_audit_root = isinstance(
+            directory_descriptor, int
+        ) and experiment_support._same_inode(
+            root_stat,
+            os.fstat(directory_descriptor),
+        )
+        if path == "socket-alias" and is_audit_root:
+            readlink_count += 1
+            if readlink_count == 3:
+                if initial_target == "regular":
+                    external_target.unlink()
+                external_listener.bind(str(external_target))
+                target_created = True
+        return link_text
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                experiment_support.os,
+                "readlink",
+                create_target_during_final_link_check,
+            )
+            with pytest.raises(ValueError, match="symlink target changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert target_created
+            assert readlink_count == 3
+            assert external_target.exists()
+    finally:
+        external_listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_rejects_directory_and_external_socket_symlinks() -> None:
     root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
     external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
     socket_path = external_root / "cvd.sock"
@@ -460,10 +670,269 @@ def test_unix_socket_audit_rejects_symlinks() -> None:
 
         (root / "linked-runtime").unlink()
         (root / "linked-socket").symlink_to(socket_path)
-        with pytest.raises(ValueError, match="symlink"):
+        with pytest.raises(ValueError, match="escapes its audit roots"):
             experiment_support.audit_unix_socket_paths([root])
 
         assert socket_path.exists()
+    finally:
+        listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_measures_contained_socket_symlink_paths() -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    socket_directory = root / "runtime"
+    socket_directory.mkdir()
+    socket_path = socket_directory / "cvd.sock"
+    socket_alias = root / "linked-socket"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(socket_path))
+        socket_alias.symlink_to(socket_path)
+
+        metrics = experiment_support.audit_unix_socket_paths([root])
+        encoded_socket_path_bytes = len(os.fsencode(socket_path)) + 1
+        encoded_alias_path_bytes = len(os.fsencode(socket_alias)) + 1
+        maximum_path_bytes = max(
+            encoded_socket_path_bytes,
+            encoded_alias_path_bytes,
+        )
+        assert metrics == {
+            "capacityBytes": 108,
+            "terminatingNulBytes": 1,
+            "socketCount": 2,
+            "maxEncodedPathBytes": maximum_path_bytes - 1,
+            "maxSunPathBytesIncludingNul": maximum_path_bytes,
+        }
+
+        long_socket_alias = root / ("a" * 100)
+        long_socket_alias.symlink_to(socket_path)
+        with pytest.raises(ValueError, match="exceeds Linux sun_path capacity"):
+            experiment_support.audit_unix_socket_paths([root])
+    finally:
+        listener.close()
+        shutil.rmtree(root)
+
+
+def test_unix_socket_audit_rejects_a_directory_replaced_by_external_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    nested_directory = root / "runtime"
+    moved_directory = root / "runtime-moved"
+    nested_directory.mkdir()
+    socket_path = external_root / "cvd.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    nested_stat = os.stat(nested_directory, follow_symlinks=False)
+    original_scandir = os.scandir
+    directory_replaced = False
+
+    def replace_directory_before_scan(path: int | str | os.PathLike[str]):
+        nonlocal directory_replaced
+        if isinstance(path, int):
+            path_stat = os.fstat(path)
+            is_nested_directory = experiment_support._same_inode(
+                nested_stat,
+                path_stat,
+            )
+        else:
+            is_nested_directory = Path(path) == nested_directory
+        if is_nested_directory and not directory_replaced:
+            os.rename(nested_directory, moved_directory)
+            nested_directory.symlink_to(external_root, target_is_directory=True)
+            directory_replaced = True
+        return original_scandir(path)
+
+    monkeypatch.setattr(experiment_support.os, "scandir", replace_directory_before_scan)
+    try:
+        with pytest.raises(ValueError, match="directory changed"):
+            experiment_support.audit_unix_socket_paths([root])
+
+        assert directory_replaced
+        assert socket_path.exists()
+    finally:
+        listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_rejects_socket_target_parent_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    target_directory = root / "runtime-target"
+    moved_directory = external_root / "runtime-target"
+    socket_path = target_directory / "cvd.sock"
+    (root / "socket-alias").symlink_to(socket_path)
+    root_stat = os.stat(root, follow_symlinks=False)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    original_scandir = os.scandir
+    original_stat = os.stat
+    original_open_relative = experiment_support._open_relative_directory
+    target_created = False
+    target_replaced = False
+
+    def replace_target_directory() -> None:
+        nonlocal target_replaced
+        os.rename(target_directory, moved_directory)
+        target_directory.symlink_to(moved_directory, target_is_directory=True)
+        target_replaced = True
+
+    def snapshot_then_create_target(path: int | str | os.PathLike[str]):
+        nonlocal target_created
+        entries = list(original_scandir(path))
+        if isinstance(path, int):
+            is_audit_root = experiment_support._same_inode(
+                root_stat,
+                os.fstat(path),
+            )
+        else:
+            is_audit_root = Path(path) == root
+        if is_audit_root and not target_created:
+            target_directory.mkdir()
+            listener.bind(str(socket_path))
+            target_created = True
+
+        class EntrySnapshot:
+            def __enter__(self):
+                return iter(entries)
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+            def __iter__(self):
+                return iter(entries)
+
+        return EntrySnapshot()
+
+    def racing_stat(path, *args, **kwargs):
+        if (
+            target_created
+            and not target_replaced
+            and kwargs.get("dir_fd") is None
+            and kwargs.get("follow_symlinks") is False
+            and Path(path) == socket_path
+        ):
+            replace_target_directory()
+        return original_stat(path, *args, **kwargs)
+
+    def racing_open_relative(parent_descriptor: int, relative_path: Path) -> int:
+        descriptor = original_open_relative(parent_descriptor, relative_path)
+        if (
+            target_created
+            and not target_replaced
+            and relative_path == Path("runtime-target")
+        ):
+            replace_target_directory()
+        return descriptor
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                experiment_support.os,
+                "scandir",
+                snapshot_then_create_target,
+            )
+            patch.setattr(experiment_support.os, "stat", racing_stat)
+            patch.setattr(
+                experiment_support,
+                "_open_relative_directory",
+                racing_open_relative,
+            )
+            with pytest.raises(ValueError, match="target directory changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert target_created
+            assert target_replaced
+            assert socket_path.exists()
+    finally:
+        listener.close()
+        shutil.rmtree(root)
+        shutil.rmtree(external_root)
+
+
+def test_unix_socket_audit_rechecks_target_parent_after_root_reopen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="a.", dir="/tmp")).resolve()
+    external_root = Path(tempfile.mkdtemp(prefix="b.", dir="/tmp")).resolve()
+    target_directory = root / "runtime-target"
+    moved_directory = external_root / "runtime-target"
+    socket_path = target_directory / "cvd.sock"
+    (root / "socket-alias").symlink_to(socket_path)
+    root_stat = os.stat(root, follow_symlinks=False)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    original_scandir = os.scandir
+    original_open_directory_chain = experiment_support._open_directory_chain
+    root_open_count = 0
+    target_created = False
+    target_replaced = False
+
+    def replace_target_directory() -> None:
+        nonlocal target_replaced
+        os.rename(target_directory, moved_directory)
+        target_directory.symlink_to(moved_directory, target_is_directory=True)
+        target_replaced = True
+
+    def snapshot_then_create_target(path: int | str | os.PathLike[str]):
+        nonlocal target_created
+        entries = list(original_scandir(path))
+        if isinstance(path, int):
+            is_audit_root = experiment_support._same_inode(
+                root_stat,
+                os.fstat(path),
+            )
+        else:
+            is_audit_root = Path(path) == root
+        if is_audit_root and not target_created:
+            target_directory.mkdir()
+            listener.bind(str(socket_path))
+            target_created = True
+
+        class EntrySnapshot:
+            def __enter__(self):
+                return iter(entries)
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+            def __iter__(self):
+                return iter(entries)
+
+        return EntrySnapshot()
+
+    def replace_after_root_reopen(path: Path) -> int:
+        nonlocal root_open_count
+        descriptor = original_open_directory_chain(path)
+        if path == root:
+            root_open_count += 1
+            if root_open_count == 2 and target_created:
+                replace_target_directory()
+        return descriptor
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                experiment_support.os,
+                "scandir",
+                snapshot_then_create_target,
+            )
+            patch.setattr(
+                experiment_support,
+                "_open_directory_chain",
+                replace_after_root_reopen,
+            )
+            with pytest.raises(ValueError, match="target directory changed"):
+                experiment_support.audit_unix_socket_paths([root])
+
+            assert target_created
+            assert target_replaced
+            assert root_open_count == 2
+            assert socket_path.exists()
     finally:
         listener.close()
         shutil.rmtree(root)

@@ -14,6 +14,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import capture_processes
+
 READ_CHUNK_BYTES = 64 * 1024
 STOP_GRACE_SECONDS = 1.0
 POST_KILL_GRACE_SECONDS = 1.0
@@ -24,47 +26,160 @@ requested_signal: int | None = None
 def _handle_signal(signum: int, _frame: object) -> None:
     global requested_signal
     requested_signal = signum
-    if child is not None:
-        try:
-            os.killpg(child.pid, signum)
-        except ProcessLookupError:
-            pass
 
 
 def _group_exists(group_id: int) -> bool:
-    try:
-        os.killpg(group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return capture_processes.process_group_has_live_members(group_id)
 
 
 def _stop_child(process: subprocess.Popen[bytes]) -> bool:
+    if process.returncode is not None:
+        return False
+    signal_failed = False
     try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except PermissionError:
-        pass
-    try:
-        process.wait(timeout=STOP_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
-    if _group_exists(process.pid):
+        capture_processes.signal_process_group_while_child_is_pinned(
+            process,
+            signal.SIGTERM,
+        )
+    except OSError:
+        signal_failed = True
+    terminate_deadline = time.monotonic() + STOP_GRACE_SECONDS
+    while time.monotonic() < terminate_deadline:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
+            capture_processes.signal_adopted_descendants(
+                process.pid,
+                signal.SIGTERM,
+            )
+        except OSError:
+            signal_failed = True
+        root_exited = capture_processes.child_exit_observed_without_reaping(process)
+        group_remains = _group_exists(process.pid)
+        try:
+            descendants_remain = capture_processes.reap_adopted_descendants(process.pid)
+        except OSError:
+            signal_failed = True
+            descendants_remain = True
+        if root_exited and not group_remains and not descendants_remain:
+            try:
+                process.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                return False
+            return not signal_failed
+        time.sleep(min(0.05, max(0, terminate_deadline - time.monotonic())))
+    try:
+        capture_processes.signal_process_group_while_child_is_pinned(
+            process,
+            signal.SIGKILL,
+        )
+    except OSError:
+        signal_failed = True
+    try:
+        capture_processes.signal_adopted_descendants(
+            process.pid,
+            signal.SIGKILL,
+        )
+    except OSError:
+        signal_failed = True
     deadline = time.monotonic() + POST_KILL_GRACE_SECONDS
     while time.monotonic() < deadline:
-        if process.poll() is not None and not _group_exists(process.pid):
-            return True
+        try:
+            capture_processes.signal_adopted_descendants(
+                process.pid,
+                signal.SIGKILL,
+            )
+        except OSError:
+            signal_failed = True
+        root_exited = capture_processes.child_exit_observed_without_reaping(process)
+        group_remains = _group_exists(process.pid)
+        try:
+            descendants_remain = capture_processes.reap_adopted_descendants(process.pid)
+        except OSError:
+            signal_failed = True
+            descendants_remain = True
+        if root_exited and not group_remains and not descendants_remain:
+            try:
+                process.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                return False
+            return not signal_failed
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
-    return process.poll() is not None and not _group_exists(process.pid)
+    root_exited = capture_processes.child_exit_observed_without_reaping(process)
+    group_remains = _group_exists(process.pid)
+    try:
+        descendants_remain = capture_processes.reap_adopted_descendants(process.pid)
+    except OSError:
+        signal_failed = True
+        descendants_remain = True
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        return False
+    return (
+        root_exited
+        and not group_remains
+        and not descendants_remain
+        and not signal_failed
+    )
+
+
+def _finish_exited_child_group(process: subprocess.Popen[bytes]) -> bool:
+    if process.returncode is not None:
+        return False
+    signal_failed = False
+    try:
+        capture_processes.signal_process_group_while_child_is_pinned(
+            process,
+            signal.SIGKILL,
+        )
+    except OSError:
+        signal_failed = True
+    try:
+        capture_processes.signal_adopted_descendants(
+            process.pid,
+            signal.SIGKILL,
+        )
+    except OSError:
+        signal_failed = True
+    deadline = time.monotonic() + POST_KILL_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            capture_processes.signal_adopted_descendants(
+                process.pid,
+                signal.SIGKILL,
+            )
+        except OSError:
+            signal_failed = True
+        root_exited = capture_processes.child_exit_observed_without_reaping(process)
+        group_remains = _group_exists(process.pid)
+        try:
+            descendants_remain = capture_processes.reap_adopted_descendants(process.pid)
+        except OSError:
+            signal_failed = True
+            descendants_remain = True
+        if root_exited and not group_remains and not descendants_remain:
+            try:
+                process.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                return False
+            return not signal_failed
+        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+    root_exited = capture_processes.child_exit_observed_without_reaping(process)
+    group_remains = _group_exists(process.pid)
+    try:
+        descendants_remain = capture_processes.reap_adopted_descendants(process.pid)
+    except OSError:
+        signal_failed = True
+        descendants_remain = True
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        return False
+    return (
+        root_exited
+        and not group_remains
+        and not descendants_remain
+        and not signal_failed
+    )
 
 
 def _write_status(path: Path, status: dict[str, int | bool | None]) -> None:
@@ -109,12 +224,14 @@ def _capture_stdin(
     maximum_bytes: int,
     *,
     append: bool,
+    drain_after_limit: bool = False,
 ) -> tuple[int, dict[str, int | bool | None]]:
     if maximum_bytes < 1:
         raise ValueError("maximum byte count must be positive")
     descriptor = _open_output(output, append=append)
     written = 0
     truncated = False
+    input_eof = False
     selector: selectors.BaseSelector | None = None
     try:
         with os.fdopen(descriptor, "ab" if append else "wb") as destination:
@@ -128,11 +245,17 @@ def _capture_stdin(
                 events = selector.select(0.2)
                 if not events:
                     continue
+                read_limit = (
+                    READ_CHUNK_BYTES
+                    if drain_after_limit and truncated
+                    else min(READ_CHUNK_BYTES, maximum_bytes - written + 1)
+                )
                 chunk = os.read(
                     input_descriptor,
-                    min(READ_CHUNK_BYTES, maximum_bytes - written + 1),
+                    read_limit,
                 )
                 if not chunk:
+                    input_eof = True
                     break
                 allowed = max(0, maximum_bytes - written)
                 if allowed:
@@ -140,7 +263,8 @@ def _capture_stdin(
                     written += min(len(chunk), allowed)
                 if len(chunk) > allowed:
                     truncated = True
-                    break
+                    if not drain_after_limit:
+                        break
     except BaseException:
         output.unlink(missing_ok=True)
         raise
@@ -154,7 +278,7 @@ def _capture_stdin(
         "childExitCode": None,
         "timedOut": False,
         "signal": requested_signal,
-        "cleanupComplete": True,
+        "cleanupComplete": input_eof,
     }
     _write_status(status_path, status)
     if requested_signal is not None:
@@ -182,6 +306,7 @@ def capture(
     if timeout_seconds <= 0:
         raise ValueError("timeout must be positive")
 
+    capture_processes.enable_child_subreaper()
     descriptor = _open_output(output, append=append)
     written = 0
     truncated = False
@@ -205,16 +330,20 @@ def capture(
             while True:
                 if requested_signal is not None:
                     cleanup_complete = _stop_child(child)
+                    child_exit = child.returncode
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     timed_out = True
                     cleanup_complete = _stop_child(child)
+                    child_exit = child.returncode
                     break
                 events = selector.select(min(remaining, 0.2))
                 if not events:
-                    if child.poll() is not None:
-                        continue
+                    if capture_processes.child_exit_observed_without_reaping(child):
+                        cleanup_complete = _finish_exited_child_group(child)
+                        child_exit = child.returncode
+                        break
                     continue
                 chunk = os.read(
                     child.stdout.fileno(),
@@ -229,19 +358,24 @@ def capture(
                 if len(chunk) > allowed:
                     truncated = True
                     cleanup_complete = _stop_child(child)
-                    break
-            if child.poll() is None and cleanup_complete:
-                try:
-                    child_exit = child.wait(timeout=max(0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    cleanup_complete = _stop_child(child)
                     child_exit = child.returncode
-            else:
-                child_exit = child.returncode
-            if child.poll() is not None and _group_exists(child.pid):
-                cleanup_complete = _stop_child(child) and cleanup_complete
-                child_exit = child.returncode
+                    break
+            if child_exit is None and child.returncode is None:
+                while time.monotonic() < deadline:
+                    if capture_processes.child_exit_observed_without_reaping(child):
+                        break
+                    if requested_signal is not None:
+                        cleanup_complete = _stop_child(child)
+                        child_exit = child.returncode
+                        break
+                    time.sleep(0.02)
+                if child_exit is None and child.returncode is None:
+                    if not capture_processes.child_exit_observed_without_reaping(child):
+                        timed_out = True
+                        cleanup_complete = _stop_child(child)
+                    else:
+                        cleanup_complete = _finish_exited_child_group(child)
+                    child_exit = child.returncode
     except BaseException:
         if child is not None:
             _stop_child(child)
@@ -285,6 +419,7 @@ def main() -> int:
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--stdin", action="store_true")
+    parser.add_argument("--drain-after-limit", action="store_true")
     parser.add_argument("--fail-on-truncate", action="store_true")
     parser.add_argument("--merge-stderr", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -311,10 +446,13 @@ def main() -> int:
                 arguments.status,
                 arguments.max_bytes,
                 append=arguments.append,
+                drain_after_limit=arguments.drain_after_limit,
             )
         else:
-            if arguments.append:
-                parser.error("--append is only valid with --stdin")
+            if arguments.append or arguments.drain_after_limit:
+                parser.error(
+                    "--append and --drain-after-limit are only valid with --stdin"
+                )
             exit_code, _ = capture(
                 command,
                 arguments.output,

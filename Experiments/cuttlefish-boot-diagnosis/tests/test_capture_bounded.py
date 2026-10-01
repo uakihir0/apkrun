@@ -36,6 +36,59 @@ def test_capture_stops_after_writing_the_byte_limit(tmp_path: Path) -> None:
     assert json.loads(status_path.read_text(encoding="utf-8"))["truncated"] is True
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="detached descendant cleanup uses Linux child subreaper support",
+)
+def test_capture_stops_detached_writer_after_command_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "detached.raw"
+    status_path = tmp_path / "detached.json"
+    child_pid_path = tmp_path / "detached.pid"
+    root_pinned_during_reaping: list[bool] = []
+    original_reap = capture_bounded.capture_processes.reap_adopted_descendants
+
+    def record_reap(supervised_pid: int) -> bool:
+        process = capture_bounded.child
+        if process is not None and process.pid == supervised_pid:
+            root_pinned_during_reaping.append(process.returncode is None)
+        return original_reap(supervised_pid)
+
+    monkeypatch.setattr(
+        capture_bounded.capture_processes,
+        "reap_adopted_descendants",
+        record_reap,
+    )
+    exit_code, status = capture_bounded.capture(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import pathlib, subprocess, sys; "
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)'], start_new_session=True); "
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid))"
+            ),
+            str(child_pid_path),
+        ],
+        output,
+        status_path,
+        4096,
+        timeout_seconds=5,
+    )
+
+    child_pid = int(child_pid_path.read_text(encoding="ascii"))
+    assert exit_code == 0
+    assert status["childExitCode"] == 0
+    assert status["cleanupComplete"] is True
+    assert status["timedOut"] is False
+    assert root_pinned_during_reaping
+    assert all(root_pinned_during_reaping)
+    assert not Path("/proc", str(child_pid)).exists()
+
+
 def test_capture_can_fail_closed_when_control_output_is_truncated(
     tmp_path: Path,
 ) -> None:
@@ -94,6 +147,40 @@ def test_capture_preserves_a_small_successful_stream(tmp_path: Path) -> None:
     assert exit_code == 0
     assert output.read_text(encoding="utf-8") == "safe output\n"
     assert status["truncated"] is False
+
+
+def test_capture_passes_private_home_and_tmpdir_to_the_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "p.abcdef"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TMPDIR", str(home))
+    output = tmp_path / "environment.json"
+    status_path = tmp_path / "environment-status.json"
+
+    exit_code, status = capture_bounded.capture(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, os; "
+                "print(json.dumps({'home': os.environ['HOME'], "
+                "'tmpdir': os.environ['TMPDIR']}))"
+            ),
+        ],
+        output,
+        status_path,
+        4096,
+    )
+
+    assert exit_code == 0
+    assert status["cleanupComplete"] is True
+    assert json.loads(output.read_text(encoding="utf-8")) == {
+        "home": str(home),
+        "tmpdir": str(home),
+    }
 
 
 def test_capture_returns_child_failure(tmp_path: Path) -> None:
@@ -182,7 +269,58 @@ def test_stdin_mode_caps_and_reports_console_output(tmp_path: Path) -> None:
 
     assert result.returncode == 75
     assert output.stat().st_size == 128
-    assert json.loads(status_path.read_text(encoding="utf-8"))["truncated"] is True
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["truncated"] is True
+    assert status["cleanupComplete"] is False
+
+
+def test_stdin_mode_can_drain_after_reaching_the_log_limit(tmp_path: Path) -> None:
+    output = tmp_path / "drained-console.log"
+    status_path = tmp_path / "drained-console.json"
+    producer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 1048576)",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert producer.stdout is not None
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(capture_bounded.__file__)),
+            "--stdin",
+            "--drain-after-limit",
+            "--max-bytes",
+            "128",
+            "--output",
+            str(output),
+            "--status",
+            str(status_path),
+        ],
+        stdin=producer.stdout,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    producer.stdout.close()
+    try:
+        helper_stderr = helper.communicate(timeout=5)[1]
+        assert producer.wait(timeout=5) == 0
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait()
+        if producer.poll() is None:
+            producer.kill()
+            producer.wait()
+
+    assert helper.returncode == 75, helper_stderr.decode(errors="replace")
+    assert output.stat().st_size == 128
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["truncated"] is True
+    assert status["cleanupComplete"] is True
 
 
 def test_stdin_mode_exits_on_signal_and_closes_the_producer_pipe(
@@ -197,10 +335,16 @@ def test_stdin_mode_exits_on_signal_and_closes_the_producer_pipe(
             (
                 "import sys\n"
                 "import time\n"
+                "import signal\n"
+                "signal.signal(signal.SIGPIPE, signal.SIG_IGN)\n"
                 "chunk = b'x' * 1024\n"
                 "while True:\n"
-                "    sys.stdout.buffer.write(chunk)\n"
-                "    sys.stdout.flush()\n"
+                "    try:\n"
+                "        sys.stdout.buffer.write(chunk)\n"
+                "        sys.stdout.flush()\n"
+                "    except BrokenPipeError:\n"
+                "        while True:\n"
+                "            time.sleep(1)\n"
                 "    time.sleep(0.02)\n"
             ),
         ],
@@ -229,6 +373,7 @@ def test_stdin_mode_exits_on_signal_and_closes_the_producer_pipe(
         time.sleep(0.1)
         os.kill(helper.pid, signal.SIGTERM)
         assert helper.wait(timeout=3) == 128 + signal.SIGTERM
+        assert producer.poll() is None
     finally:
         if helper.poll() is None:
             helper.kill()
@@ -239,6 +384,7 @@ def test_stdin_mode_exits_on_signal_and_closes_the_producer_pipe(
 
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["signal"] == signal.SIGTERM
+    assert status["cleanupComplete"] is False
 
 
 def test_capture_refuses_existing_or_symlink_output(tmp_path: Path) -> None:

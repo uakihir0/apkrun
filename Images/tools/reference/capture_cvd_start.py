@@ -34,11 +34,16 @@ def parse_log_listing(listing: str) -> dict[str, Path]:
         label, separator, filename = line.partition(" ")
         if not separator:
             continue
-        name = Path(label).name
+        name = _log_name_from_label(label)
         path = Path(filename)
         if name in LOG_NAMES and path.is_absolute():
             paths[name] = path
     return paths
+
+
+def _log_name_from_label(label: str) -> str:
+    """Accept both bare log names and Cuttlefish's group/instance prefixes."""
+    return Path(label.rsplit(":", maxsplit=1)[-1]).name
 
 
 def snapshot_log(source: Path, destination: Path, home: Path) -> tuple[int, int] | None:
@@ -109,7 +114,7 @@ def _snapshot_listed_log(
     label, separator, filename = line.partition(" ")
     if not separator or "\x00" in filename:
         return
-    name = Path(label).name
+    name = _log_name_from_label(label)
     source = Path(filename)
     if name not in LOG_NAMES or not source.is_absolute() or name in pending_attempted:
         return

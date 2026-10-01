@@ -2065,3 +2065,24 @@ and no top-level `disks` object, while the existing synthetic fixture used an
 older shape. Individual image paths do not establish the exact
 `os_composite` and persistent-composite topology. Keep the missing-data reason
 visible until an authoritative source for that topology is verified.
+
+## IR-085: Accept group and instance prefixes in Cuttlefish log labels
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture_cvd_start.py`; `Images/tools/tests/test_capture_cvd_start.py` |
+
+**Choice.** Accept both bare log labels and labels prefixed with a Cuttlefish
+group and instance, such as `apkrun_default:1:kernel.log`. Match only the
+final component against the fixed set of selected log names. Continue to
+require an absolute regular file whose resolved path is beneath the private
+Cuttlefish `HOME` before snapshotting it.
+
+**Reason.** The pinned Cuttlefish 1.57.0 `cvd logs --nopretty` command emits
+group and instance prefixes. Treating the entire label as a filename silently
+ignored its live logs, which could leave no diagnostic record when cleanup
+removed the runtime files. The regression test uses the observed prefixed
+format in both listing parsing and live snapshot collection, including an
+outside path before the valid in-home path.

@@ -24,7 +24,7 @@ assert isinstance(capture_cvd_start, ModuleType)
 def test_parse_log_listing_keeps_only_selected_absolute_paths() -> None:
     listing = "\n".join(
         (
-            "kernel.log /private/cvd/instances/cvd-1/kernel.log",
+            "apkrun_default_test:1:kernel.log /private/cvd/instances/cvd-1/kernel.log",
             "launcher.log /private/cvd/instances/cvd-1/launcher.log",
             "assemble_cvd.log /private/cvd/instances/cvd-1/assemble_cvd.log",
             "unknown.log /private/cvd/instances/cvd-1/unknown.log",
@@ -186,9 +186,9 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
     fake_cvd = tmp_path / "cvd"
     fake_cvd.write_text(
         "#!/bin/sh\n"
-        "printf 'kernel.log %s\\n' \"$APKRUN_TEST_OUTSIDE_LOG_SOURCE\"\n"
-        "printf 'kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
-        "printf 'kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
+        "printf 'apkrun_default_test:1:kernel.log %s\\n' \"$APKRUN_TEST_OUTSIDE_LOG_SOURCE\"\n"
+        "printf 'apkrun_default_test:1:kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
+        "printf 'apkrun_default_test:1:kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
         "sleep 0.2\n"
         'rm -f "$APKRUN_TEST_LOG_SOURCE"\n',
         encoding="utf-8",
@@ -240,7 +240,7 @@ def test_collect_logs_keeps_snapshot_when_listing_times_out_after_source_deletio
     fake_cvd = tmp_path / "cvd"
     fake_cvd.write_text(
         "#!/bin/sh\n"
-        "printf 'kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
+        "printf 'apkrun_default_test:1:kernel.log %s\\n' \"$APKRUN_TEST_LOG_SOURCE\"\n"
         "sleep 0.1\n"
         'rm -f "$APKRUN_TEST_LOG_SOURCE"\n'
         "trap '' TERM\n"

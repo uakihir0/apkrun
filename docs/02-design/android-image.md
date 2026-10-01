@@ -672,10 +672,13 @@ atomic path; if that copy fails, the earlier snapshot stays intact. Each log
 name is attempted at most once per listing poll after its path is validated as
 a regular file beneath the private HOME. Invalid duplicate rows cannot suppress
 a later valid path or trigger repeated full-file copies.
-The listing parser preserves spaces in paths. If listing takes longer than
-0.5 seconds, the helper starts the next poll as soon as listing returns, and a
-malformed log listing does not prevent it from terminating the CVD process
-group.
+The listing parser preserves spaces in paths and accepts either a bare log
+name or a group and instance prefix such as
+`<group>:<instance>:kernel.log`. It matches only a known final log name and
+still requires an absolute regular file whose resolved path is beneath the
+private HOME. If listing takes longer than 0.5 seconds, the helper starts the
+next poll as soon as listing returns, and a malformed log listing does not
+prevent it from terminating the CVD process group.
 `compare_boot.py` limits plain and compressed inputs, decompressed gzip
 content, normalized output, and compressed gzip output to 64 MiB. It preflights
 each substitution before allocating an expanded result. Comparison streams

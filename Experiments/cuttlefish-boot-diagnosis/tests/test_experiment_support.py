@@ -1982,7 +1982,7 @@ def test_parse_fleet_report_rejects_unexpected_trailing_content() -> None:
         experiment_support.parse_fleet_report(report)
 
 
-def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
+def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).parents[3]
@@ -1999,7 +1999,7 @@ def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (
         "create_cvd_group_with_common_options --gpu_mode=none "
-        "--gpu_vhost_user_mode=off --cpus 4 --memory_mb 4096" in patched
+        "--gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
     assert '--output "$raw_log"' in patched
@@ -2018,8 +2018,11 @@ def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
     assert "run_with_boot_deadline adb" not in patched
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
-    assert "start --gpu_mode=none --gpu_vhost_user_mode=off\n}" in patched
+    assert (
+        "start --gpu_mode=none --gpu_vhost_user_mode=off --console=true\n}" in patched
+    )
     assert patched.count("--gpu_mode=none") == 2
+    assert patched.count("--console=true") == 2
     assert patched.index("start_cvd_group_with_gpu_none() {") < patched.index(
         "&& ! start_cvd_group_with_gpu_none 2>&1"
     )
@@ -2088,6 +2091,9 @@ elif "start" in arguments:
         "--gpu_vhost_user_mode=off" in create_arguments
         and "--gpu_vhost_user_mode=off" in arguments
     )
+    console_enabled = (
+        "--console=true" in create_arguments and "--console=true" in arguments
+    )
     config.parent.mkdir(parents=True)
     config.write_text(
         json.dumps(
@@ -2099,6 +2105,7 @@ elif "start" in arguments:
                             os.environ["APKRUN_TEST_VHOST_USER"] == "true"
                             or not vhost_user_disabled
                         ),
+                        "console": console_enabled,
                     }
                 }
             }
@@ -2209,6 +2216,7 @@ else:
             "--nostart",
             "--gpu_mode=none",
             "--gpu_vhost_user_mode=off",
+            "--console=true",
             "--cpus",
             "4",
             "--memory_mb",
@@ -2219,12 +2227,14 @@ else:
             "start",
             "--gpu_mode=none",
             "--gpu_vhost_user_mode=off",
+            "--console=true",
         ],
     ]
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     saved_instance = saved_config["instances"]["1"]
     assert saved_instance["gpu_mode"] == "none"
     assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
+    assert saved_instance["console"] is True
 
     if persisted_vhost_user:
         capture_record = tmp_path / "capture-record"
@@ -2690,6 +2700,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                         "enable_gpu_vhost_user": False,
                         "cpus": 4,
                         "memory_mb": 4096,
+                        "console": True,
                     }
                 }
             }
@@ -3034,6 +3045,40 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
+    config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+
+    record_arguments = (
+        capture_record,
+        repo_root,
+        baseline_record,
+        tool_copy_root,
+        canonical_capture_copy,
+        manifest_copy_root,
+        experiment_root,
+        patched_capture,
+        host_identity,
+        summary,
+        adb_state,
+        1,
+        "127.0.0.1:6520",
+        capture_status_root,
+        capture_run_status,
+        socket_metrics,
+        fleet_socket_metrics,
+    )
+    instance_config = captured_config["instances"]["1"]
+    for console_value in (False, None, 1):
+        if console_value is None:
+            instance_config.pop("console")
+        else:
+            instance_config["console"] = console_value
+        config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+        with pytest.raises(
+            ValueError,
+            match="captured Cuttlefish configuration has unexpected console:",
+        ):
+            experiment_support.build_experiment_record(*record_arguments)
+    instance_config["console"] = True
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
 
     incomplete_cleanup = capture_status_root / "adb-helper-cleanup-incomplete.json"

@@ -3022,6 +3022,7 @@ def _verify_gpu_none_configuration(instance: dict[str, Any]) -> None:
         "enable_gpu_vhost_user": False,
         "cpus": 4,
         "memory_mb": 4096,
+        "console": True,
     }
     for key, value in expected.items():
         observed_value = instance.get(key)
@@ -3226,7 +3227,7 @@ def patch_capture_script(path: Path) -> None:
             "launch_profile() {",
             """start_cvd_group_with_gpu_none() {
   run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
-    start --gpu_mode=none --gpu_vhost_user_mode=off
+    start --gpu_mode=none --gpu_vhost_user_mode=off --console=true
 }
 
 launch_profile() {""",
@@ -3339,7 +3340,7 @@ launch_profile() {""",
             ),
             (
                 "default)\n"
-                "      create_cvd_group_with_common_options --gpu_mode=none --gpu_vhost_user_mode=off --cpus 4 --memory_mb 4096\n"
+                "      create_cvd_group_with_common_options --gpu_mode=none --gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096\n"
                 "      ;;"
             ),
         ),

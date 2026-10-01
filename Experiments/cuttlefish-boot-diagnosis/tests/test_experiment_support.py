@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -2013,15 +2014,250 @@ def test_private_capture_patch_changes_only_gpu_adb_and_logcat_capture(
     assert "Cuttlefish HOME retained" in patched
     assert 'capture_adb_value 4096 10 adb connect "127.0.0.1:$adb_port"' in patched
     assert 'capture_adb_value 4096 10 adb -s "$adb_serial" wait-for-device' in patched
+    assert "start_cvd_group_with_gpu_none() {" in patched
     assert "run_with_boot_deadline adb" not in patched
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
-    assert "start --gpu_mode=none --gpu_vhost_user_mode=off 2>&1" in patched
+    assert "start --gpu_mode=none --gpu_vhost_user_mode=off\n}" in patched
     assert patched.count("--gpu_mode=none") == 2
+    assert patched.index("start_cvd_group_with_gpu_none() {") < patched.index(
+        "&& ! start_cvd_group_with_gpu_none 2>&1"
+    )
     assert (
         "default)\n      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096"
         not in patched
     )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="GPU-none capture runs on Linux")
+@pytest.mark.parametrize(
+    ("persisted_vhost_user", "start_exit_code", "expected_capture_failure"),
+    ((False, 0, 0), (True, 0, 0), (False, 17, 1)),
+)
+def test_gpu_none_launch_pipeline_passes_flags_and_checks_the_saved_config(
+    tmp_path: Path,
+    persisted_vhost_user: bool,
+    start_exit_code: int,
+    expected_capture_failure: int,
+) -> None:
+    repo_root = Path(__file__).parents[3]
+    source = repo_root / "Images/tools/reference/capture.sh"
+    private_copy = tmp_path / "capture.sh"
+    private_copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    experiment_support.patch_capture_script(private_copy)
+    patched = private_copy.read_text(encoding="utf-8")
+
+    def extract_shell_function(function_name: str) -> str:
+        function_start = patched.index(f"{function_name}() {{")
+        function_end = patched.index("\n}", function_start) + 2
+        return patched[function_start:function_end]
+
+    fake_bin = tmp_path / "bin's directory"
+    fake_bin.mkdir()
+    fake_cvd = fake_bin / "cvd"
+    fake_cvd.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+if arguments[0] == "logs":
+    raise SystemExit(0)
+with Path(os.environ["APKRUN_TEST_CVD_CALLS"]).open(
+    "a", encoding="utf-8"
+) as stream:
+    stream.write(json.dumps(arguments) + "\\n")
+config = Path(os.environ["APKRUN_TEST_CONFIG_PATH"])
+if arguments[0] == "create":
+    if config.exists():
+        raise SystemExit("cvd create --nostart unexpectedly produced a config")
+elif "start" in arguments:
+    calls = [
+        json.loads(line)
+        for line in Path(os.environ["APKRUN_TEST_CVD_CALLS"])
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    create_arguments = calls[0]
+    gpu_none_selected = (
+        "--gpu_mode=none" in create_arguments and "--gpu_mode=none" in arguments
+    )
+    vhost_user_disabled = (
+        "--gpu_vhost_user_mode=off" in create_arguments
+        and "--gpu_vhost_user_mode=off" in arguments
+    )
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "1": {
+                        "gpu_mode": "none" if gpu_none_selected else "guest_swiftshader",
+                        "enable_gpu_vhost_user": (
+                            os.environ["APKRUN_TEST_VHOST_USER"] == "true"
+                            or not vhost_user_disabled
+                        ),
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    raise SystemExit(int(os.environ["APKRUN_TEST_START_EXIT_CODE"]))
+else:
+    raise SystemExit("unexpected fake Cuttlefish command")
+""",
+        encoding="utf-8",
+    )
+    fake_cvd.chmod(0o755)
+
+    runtime_root = tmp_path / "runtime"
+    config_path = runtime_root / "instances/cvd-1/cuttlefish_config.json"
+    calls_path = tmp_path / "cvd-calls.jsonl"
+    tool_directory = tmp_path / "tool's directory"
+    tool_directory.mkdir()
+    shutil.copyfile(
+        repo_root / "Images/tools/reference/capture_cvd_start.py",
+        tool_directory / "capture_cvd_start.py",
+    )
+    shutil.copyfile(
+        repo_root / "Experiments/cuttlefish-boot-diagnosis/capture_bounded.py",
+        tool_directory / "capture_bounded.py",
+    )
+    shutil.copyfile(
+        repo_root / "Experiments/cuttlefish-boot-diagnosis/capture_processes.py",
+        tool_directory / "capture_processes.py",
+    )
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    cvd_home = tmp_path / "cvd-home"
+    cvd_home.mkdir()
+    status_root = tmp_path / "status"
+    status_root.mkdir()
+    capture_status_path = tmp_path / "capture-failure-status"
+    harness = tmp_path / "run-patched-launch-block.sh"
+    launch_block_start = patched.index(': > "$stage/cvd-create-console.log"\n')
+    launch_block_end = patched.index(
+        'if [ "$cvd_command_failed" -ne 0 ]; then\n',
+        launch_block_start,
+    )
+    launch_block = patched[launch_block_start:launch_block_end]
+    harness.write_text(
+        "\n".join(
+            (
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"PATH={shlex.quote(str(fake_bin))}:$PATH",
+                f"script_dir={shlex.quote(str(tool_directory))}",
+                f"runtime_root={shlex.quote(str(runtime_root))}",
+                f"private_product_out={shlex.quote(str(tmp_path / 'product'))}",
+                f"CVD_HOST_DIR={shlex.quote(str(tmp_path / 'host'))}",
+                "cvd_group_name=apkrun-test",
+                "cvd_instance_num=1",
+                f"stage={shlex.quote(str(stage))}",
+                f"cvd_home={shlex.quote(str(cvd_home))}",
+                "boot_timeout_deadline=$(($(date +%s) + 30))",
+                "boot_deadline_expired=0",
+                f"APKRUN_EXPERIMENT_STATUS_ROOT={shlex.quote(str(status_root))}",
+                extract_shell_function("create_cvd_group_with_common_options"),
+                extract_shell_function("launch_profile"),
+                extract_shell_function("start_cvd_group_with_gpu_none"),
+                extract_shell_function("run_cvd_command_with_live_logs"),
+                "profile=default",
+                launch_block,
+                f"printf '%s\\n' \"$cvd_command_failed\" > {shlex.quote(str(capture_status_path))}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+
+    environment = {
+        **os.environ,
+        "APKRUN_TEST_CVD_CALLS": str(calls_path),
+        "APKRUN_TEST_CONFIG_PATH": str(config_path),
+        "APKRUN_TEST_VHOST_USER": "true" if persisted_vhost_user else "false",
+        "APKRUN_TEST_START_EXIT_CODE": str(start_exit_code),
+    }
+    result = subprocess.run(
+        ["bash", str(harness)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert int(capture_status_path.read_text(encoding="ascii").strip()) == (
+        expected_capture_failure
+    )
+
+    calls = [
+        json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert calls == [
+        [
+            "create",
+            f"--host_path={tmp_path / 'host'}",
+            f"--product_path={tmp_path / 'product'}",
+            f"--base_directory={runtime_root}",
+            "--group_name=apkrun-test",
+            "--base_instance_num=1",
+            "--num_instances=1",
+            "--nostart",
+            "--gpu_mode=none",
+            "--gpu_vhost_user_mode=off",
+            "--cpus",
+            "4",
+            "--memory_mb",
+            "4096",
+        ],
+        [
+            "--group_name=apkrun-test",
+            "start",
+            "--gpu_mode=none",
+            "--gpu_vhost_user_mode=off",
+        ],
+    ]
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    saved_instance = saved_config["instances"]["1"]
+    assert saved_instance["gpu_mode"] == "none"
+    assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
+
+    if persisted_vhost_user:
+        capture_record = tmp_path / "capture-record"
+        capture_record.mkdir()
+        (capture_record / "host.json").write_text("{}", encoding="utf-8")
+        shutil.copyfile(config_path, capture_record / "cuttlefish_config.json")
+        unused = tmp_path / "unused"
+        with pytest.raises(
+            ValueError,
+            match=(
+                "captured Cuttlefish configuration has unexpected "
+                "enable_gpu_vhost_user: True"
+            ),
+        ):
+            experiment_support.build_experiment_record(
+                capture_record=capture_record,
+                repo_root=unused,
+                baseline_record=unused,
+                tool_copy_root=unused,
+                canonical_capture_copy=unused,
+                manifest_copy_root=unused,
+                experiment_root=unused,
+                patched_capture=unused,
+                host_identity_path=unused,
+                logcat_summary_path=unused,
+                adb_state_path=unused,
+                capture_exit_code=1,
+                adb_endpoint="127.0.0.1:6520",
+                capture_status_root=unused,
+                capture_run_status_path=unused,
+                socket_metrics_path=unused,
+                fleet_socket_metrics_path=unused,
+            )
 
 
 def test_baseline_must_use_the_expected_gpu_and_vm_shape(tmp_path: Path) -> None:

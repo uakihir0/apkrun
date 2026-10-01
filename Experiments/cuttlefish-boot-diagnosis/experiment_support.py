@@ -3016,6 +3016,26 @@ def _single_instance(config: dict[str, Any]) -> dict[str, Any]:
     return instance
 
 
+def _verify_gpu_none_configuration(instance: dict[str, Any]) -> None:
+    expected = {
+        "gpu_mode": "none",
+        "enable_gpu_vhost_user": False,
+        "cpus": 4,
+        "memory_mb": 4096,
+    }
+    for key, value in expected.items():
+        observed_value = instance.get(key)
+        if type(observed_value) is type(value) and observed_value == value:
+            continue
+        if type(observed_value) in (str, int, float, bool) or observed_value is None:
+            value_summary = repr(observed_value)
+        else:
+            value_summary = f"<{type(observed_value).__name__}>"
+        raise ValueError(
+            f"captured Cuttlefish configuration has unexpected {key}: {value_summary}"
+        )
+
+
 def validate_baseline_configuration(baseline_record: Path) -> dict[str, Any]:
     host, instance = _gpu_configuration(baseline_record)
     if host.get("buildId") != "16373615" or host.get("profile") != "default":
@@ -3203,6 +3223,15 @@ def patch_capture_script(path: Path) -> None:
             'cvd_home=$(mktemp -d "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX")',
         ),
         (
+            "launch_profile() {",
+            """start_cvd_group_with_gpu_none() {
+  run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
+    start --gpu_mode=none --gpu_vhost_user_mode=off
+}
+
+launch_profile() {""",
+        ),
+        (
             ('capture_adb() {\n  HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"\n}\n'),
             (
                 "capture_adb() {\n"
@@ -3357,8 +3386,7 @@ def patch_capture_script(path: Path) -> None:
                 "  cvd_command_failed=1\n"
                 "fi\n"
                 'if [ "$cvd_command_failed" -eq 0 ] \\\n'
-                '  && ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\\n'
-                "    start --gpu_mode=none --gpu_vhost_user_mode=off 2>&1 \\\n"
+                "  && ! start_cvd_group_with_gpu_none 2>&1 \\\n"
                 '    | python3 "$script_dir/capture_bounded.py" \\\n'
                 '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
@@ -3528,6 +3556,7 @@ def build_experiment_record(
     fleet_socket_metrics_path: Path,
 ) -> dict[str, Any]:
     host, instance = _gpu_configuration(capture_record)
+    _verify_gpu_none_configuration(instance)
     host_identity = _read_json(host_identity_path)
     verify_tool_copy(
         repo_root,
@@ -3590,26 +3619,6 @@ def build_experiment_record(
         raise ValueError("diagnostic capture did not use the default capture profile")
     if host.get("cvdPackageVersion") != baseline_cvd.get("packageVersion"):
         raise ValueError("capture metadata records an unexpected Cuttlefish version")
-    expected = {
-        "gpu_mode": "none",
-        "enable_gpu_vhost_user": False,
-        "cpus": 4,
-        "memory_mb": 4096,
-    }
-    for key, value in expected.items():
-        observed_value = instance.get(key)
-        if type(observed_value) is not type(value) or observed_value != value:
-            if (
-                type(observed_value) in (str, int, float, bool)
-                or observed_value is None
-            ):
-                value_summary = repr(observed_value)
-            else:
-                value_summary = f"<{type(observed_value).__name__}>"
-            raise ValueError(
-                "captured Cuttlefish configuration has unexpected "
-                f"{key}: {value_summary}"
-            )
     if not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", adb_endpoint):
         raise ValueError("ADB endpoint must be a loopback address and TCP port")
     if adb_state_path.is_symlink() or not adb_state_path.is_file():

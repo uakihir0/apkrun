@@ -49,7 +49,7 @@ def test_pidfd_broker_pins_only_the_verified_process(
     sent_signals: list[tuple[int, int]] = []
     pidfd, pidfd_keepalive = os.pipe()
     control_read, control_write = os.pipe()
-    os.write(control_write, b"TERM\nKILL\nQUIT\n")
+    os.write(control_write, b"TERM\nCONT\nKILL\nQUIT\n")
     os.close(control_write)
     control_input = os.fdopen(control_read, "rb", buffering=0)
     monkeypatch.setattr(experiment_support.sys, "platform", "linux")
@@ -88,6 +88,7 @@ def test_pidfd_broker_pins_only_the_verified_process(
             )
             assert sent_signals == [
                 (pidfd, signal.SIGTERM),
+                (pidfd, signal.SIGCONT),
                 (pidfd, signal.SIGKILL),
             ]
             assert ready_path.read_text(encoding="ascii") == "321 12345\n"
@@ -622,6 +623,67 @@ def _write_fake_systemd_user_manager(
     return process
 
 
+def _write_fake_process_stat(
+    proc_root: Path,
+    process_id: int,
+    parent_id: int,
+    start_time: int,
+) -> None:
+    process_directory = proc_root / str(process_id)
+    process_directory.mkdir(parents=True, exist_ok=True)
+    stat_fields = ["S", str(parent_id), *("0" for _ in range(17)), str(start_time)]
+    (process_directory / "stat").write_text(
+        f"{process_id} (ancestor) {' '.join(stat_fields)}\n",
+        encoding="ascii",
+    )
+
+
+def test_process_ancestor_walk_records_a_consistent_parent_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_fake_process_stat(tmp_path, 100, 200, 1000)
+    _write_fake_process_stat(tmp_path, 200, 1, 2000)
+    _write_fake_process_stat(tmp_path, 1, 0, 3000)
+    monkeypatch.setattr(experiment_support.os, "getpid", lambda: 100)
+
+    assert experiment_support._process_ancestor_start_times(tmp_path) == {
+        100: "1000",
+        200: "2000",
+        1: "3000",
+    }
+
+
+def test_process_ancestor_walk_rejects_a_parent_link_change_during_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_fake_process_stat(tmp_path, 100, 200, 1000)
+    _write_fake_process_stat(tmp_path, 200, 1, 2000)
+    _write_fake_process_stat(tmp_path, 1, 0, 3000)
+    read_process_state = experiment_support._process_state_and_start_time
+    current_process_reads = 0
+
+    def change_parent_link(process_directory: Path) -> tuple[str, str, int] | None:
+        nonlocal current_process_reads
+        state = read_process_state(process_directory)
+        if process_directory.name == "100":
+            current_process_reads += 1
+            if current_process_reads == 2:
+                _write_fake_process_stat(tmp_path, 200, 300, 2000)
+        return state
+
+    monkeypatch.setattr(experiment_support.os, "getpid", lambda: 100)
+    monkeypatch.setattr(
+        experiment_support,
+        "_process_state_and_start_time",
+        change_parent_link,
+    )
+
+    with pytest.raises(ValueError, match="ancestry links changed during audit"):
+        experiment_support._process_ancestor_start_times(tmp_path)
+
+
 def _trust_fake_systemd_fixture(
     monkeypatch: pytest.MonkeyPatch,
     executable_path: Path,
@@ -724,6 +786,333 @@ def test_private_cvd_process_check_detects_open_home_reference(
             tmpdir_root,
             proc_root,
         )
+
+
+def test_private_cvd_process_scan_ignores_process_exiting_before_environment_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    home_root = tmp_path / "h.abcdef"
+    home_root.mkdir()
+    tmpdir_root = tmp_path / "t"
+    tmpdir_root.mkdir()
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    process = _write_fake_cvd_process(
+        proc_root,
+        host_dir,
+        home_root,
+        tmpdir_root,
+        pid=324,
+        comm="sleep",
+    )
+    read_process_environment = experiment_support._process_environment
+
+    def process_exited(process_directory: Path) -> dict[bytes, bytes]:
+        if process_directory == process:
+            process.rename(proc_root / "exited-sleep")
+        return read_process_environment(process_directory)
+
+    monkeypatch.setattr(
+        experiment_support,
+        "_process_environment",
+        process_exited,
+    )
+
+    assert (
+        experiment_support.require_no_private_cvd_processes(
+            host_dir,
+            home_root,
+            tmpdir_root,
+            proc_root,
+        )
+        == 0
+    )
+
+
+def test_private_cvd_process_scan_fails_closed_for_live_process_missing_environment(
+    tmp_path: Path,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    home_root = tmp_path / "h.abcdef"
+    home_root.mkdir()
+    tmpdir_root = tmp_path / "t"
+    tmpdir_root.mkdir()
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    process = _write_fake_cvd_process(
+        proc_root,
+        host_dir,
+        home_root,
+        tmpdir_root,
+        pid=325,
+        comm="sleep",
+    )
+    (process / "environ").unlink()
+
+    with pytest.raises(
+        ValueError,
+        match="live Cuttlefish process has an unreadable entry",
+    ):
+        experiment_support.require_no_private_cvd_processes(
+            host_dir,
+            home_root,
+            tmpdir_root,
+            proc_root,
+        )
+
+
+def test_private_cvd_process_scan_rejects_pid_reuse_during_environment_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    home_root = tmp_path / "h.abcdef"
+    home_root.mkdir()
+    tmpdir_root = tmp_path / "t"
+    tmpdir_root.mkdir()
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    process = _write_fake_cvd_process(
+        proc_root,
+        host_dir,
+        tmp_path / "other-home",
+        tmp_path / "other-tmp",
+        pid=326,
+        comm="sleep",
+    )
+    read_process_environment = experiment_support._process_environment
+
+    def reuse_process_id(process_directory: Path) -> dict[bytes, bytes]:
+        if process_directory == process:
+            process.rename(proc_root / "exited-sleep")
+            replacement = _write_fake_cvd_process(
+                proc_root,
+                host_dir,
+                tmp_path / "replacement-home",
+                tmp_path / "replacement-tmp",
+                pid=326,
+                comm="sleep",
+            )
+            stat_fields = ["S", *("0" for _ in range(18)), "98766"]
+            (replacement / "stat").write_text(
+                f"326 (sleep) {' '.join(stat_fields)}\n",
+                encoding="ascii",
+            )
+            raise FileNotFoundError("simulated PID reuse during proc scan")
+        return read_process_environment(process_directory)
+
+    monkeypatch.setattr(
+        experiment_support,
+        "_process_environment",
+        reuse_process_id,
+    )
+
+    with pytest.raises(ValueError, match="identity changed during audit"):
+        experiment_support.require_no_private_cvd_processes(
+            host_dir,
+            home_root,
+            tmpdir_root,
+            proc_root,
+        )
+
+
+def test_private_cvd_process_scan_uses_pidfd_when_start_time_is_reused(
+    tmp_path: Path,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    process = _write_fake_cvd_process(
+        tmp_path / "proc",
+        host_dir,
+        tmp_path / "other-home",
+        tmp_path / "other-tmp",
+        pid=328,
+        comm="sleep",
+    )
+    process_pidfd, pidfd_writer = os.pipe()
+    try:
+        os.write(pidfd_writer, b"exited")
+
+        with pytest.raises(ValueError, match="PID was reused during audit"):
+            experiment_support._process_is_gone_or_changed(
+                process,
+                "98765",
+                process_pidfd,
+            )
+    finally:
+        os.close(process_pidfd)
+        os.close(pidfd_writer)
+
+
+def test_private_cvd_process_scan_fails_closed_when_live_pidfd_loses_proc_entry(
+    tmp_path: Path,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    process = _write_fake_cvd_process(
+        tmp_path / "proc",
+        host_dir,
+        tmp_path / "other-home",
+        tmp_path / "other-tmp",
+        pid=329,
+        comm="sleep",
+    )
+    process_pidfd, pidfd_writer = os.pipe()
+    process.rename(process.parent / "exited-sleep")
+    try:
+        with pytest.raises(
+            ValueError,
+            match="live Cuttlefish process through /proc",
+        ):
+            experiment_support._process_is_gone_or_changed(
+                process,
+                "98765",
+                process_pidfd,
+            )
+        os.write(pidfd_writer, b"exited")
+        assert experiment_support._process_is_gone_or_changed(
+            process,
+            "98765",
+            process_pidfd,
+        )
+    finally:
+        os.close(process_pidfd)
+        os.close(pidfd_writer)
+
+
+@pytest.mark.parametrize("pre_pin_state", ("zombie", "foreign-owner"))
+def test_private_cvd_process_scan_pins_before_excluding_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pre_pin_state: str,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    home_root = tmp_path / "h.abcdef"
+    home_root.mkdir()
+    tmpdir_root = tmp_path / "t"
+    tmpdir_root.mkdir()
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    process_id = 982_341
+    process = _write_fake_cvd_process(
+        proc_root,
+        host_dir,
+        home_root,
+        tmpdir_root,
+        pid=process_id,
+        comm="sleep",
+    )
+    if pre_pin_state == "zombie":
+        stat_fields = ["Z", *("0" for _ in range(18)), "98765"]
+        (process / "stat").write_text(
+            f"{process_id} (sleep) {' '.join(stat_fields)}\n",
+            encoding="ascii",
+        )
+    else:
+        (process / "status").write_text(
+            f"Name:\tsleep\nUid:\t{os.getuid() + 1}\t"
+            f"{os.getuid() + 1}\t{os.getuid() + 1}\t{os.getuid() + 1}\n",
+            encoding="ascii",
+        )
+    process_pidfd, pidfd_writer = os.pipe()
+    ancestry_scan_pidfd_modes: list[bool] = []
+
+    def pin_replacement_process(pid: int, flags: int) -> int:
+        assert pid == process_id
+        assert flags == 0
+        stat_fields = ["S", *("0" for _ in range(18)), "98765"]
+        (process / "stat").write_text(
+            f"{process_id} (sleep) {' '.join(stat_fields)}\n",
+            encoding="ascii",
+        )
+        (process / "status").write_text(
+            f"Name:\tsleep\nUid:\t{os.getuid()}\t{os.getuid()}\t"
+            f"{os.getuid()}\t{os.getuid()}\n",
+            encoding="ascii",
+        )
+        return os.dup(process_pidfd)
+
+    def scan_ancestors(
+        _process_root: Path,
+        *,
+        use_pidfds: bool = False,
+    ) -> dict[int, str | None]:
+        ancestry_scan_pidfd_modes.append(use_pidfds)
+        return {os.getpid(): None}
+
+    monkeypatch.setattr(
+        experiment_support,
+        "_process_root_uses_pidfds",
+        lambda _process_root: True,
+    )
+    monkeypatch.setattr(
+        experiment_support,
+        "_process_ancestor_start_times",
+        scan_ancestors,
+    )
+    monkeypatch.setattr(
+        experiment_support.os,
+        "pidfd_open",
+        pin_replacement_process,
+        raising=False,
+    )
+
+    try:
+        with pytest.raises(ValueError, match="still references the private HOME"):
+            experiment_support.require_no_private_cvd_processes(
+                host_dir,
+                home_root,
+                tmpdir_root,
+                proc_root,
+            )
+    finally:
+        os.close(process_pidfd)
+        os.close(pidfd_writer)
+    assert ancestry_scan_pidfd_modes == [True, True]
+
+
+@pytest.mark.parametrize("process_state", ("Z", "X"))
+def test_private_cvd_process_scan_ignores_verified_exited_process_states(
+    tmp_path: Path,
+    process_state: str,
+) -> None:
+    host_dir = tmp_path / "cuttlefish"
+    host_dir.mkdir()
+    home_root = tmp_path / "h.abcdef"
+    home_root.mkdir()
+    tmpdir_root = tmp_path / "t"
+    tmpdir_root.mkdir()
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    process = _write_fake_cvd_process(
+        proc_root,
+        host_dir,
+        home_root,
+        tmpdir_root,
+        pid=327,
+        comm="sleep",
+    )
+    stat_fields = [process_state, *("0" for _ in range(18)), "98765"]
+    (process / "stat").write_text(
+        f"327 (sleep) {' '.join(stat_fields)}\n",
+        encoding="ascii",
+    )
+
+    assert (
+        experiment_support.require_no_private_cvd_processes(
+            host_dir,
+            home_root,
+            tmpdir_root,
+            proc_root,
+        )
+        == 0
+    )
 
 
 def test_private_cvd_process_check_includes_external_cvd_helpers(

@@ -156,18 +156,79 @@ def audit_unix_socket_paths(roots: list[Path]) -> dict[str, int | bool]:
     }
 
 
-def _process_start_time(process_directory: Path) -> str:
+def _process_state_and_start_time(
+    process_directory: Path,
+) -> tuple[str, str, int] | None:
     try:
         contents = (process_directory / "stat").read_text(encoding="ascii")
+    except FileNotFoundError as error:
+        try:
+            process_directory.stat()
+        except FileNotFoundError:
+            return None
+        except OSError as verification_error:
+            raise ValueError("could not verify a Cuttlefish process identity") from (
+                verification_error
+            )
+        raise ValueError("could not verify a Cuttlefish process identity") from error
     except (OSError, UnicodeDecodeError) as error:
         raise ValueError("could not verify a Cuttlefish process identity") from error
     closing_parenthesis = contents.rfind(")")
     if closing_parenthesis < 0:
         raise ValueError("could not verify a Cuttlefish process identity")
+    process_id = contents[:closing_parenthesis].split(maxsplit=1)[0]
     fields = contents[closing_parenthesis + 1 :].split()
-    if len(fields) <= 19 or not fields[19].isdigit():
+    if (
+        process_id != process_directory.name
+        or len(fields) <= 19
+        or not fields[1].isdigit()
+        or not fields[19].isdigit()
+    ):
         raise ValueError("could not verify a Cuttlefish process identity")
-    return fields[19]
+    return fields[0], fields[19], int(fields[1])
+
+
+def _process_start_time(process_directory: Path) -> str:
+    process_state = _process_state_and_start_time(process_directory)
+    if process_state is None:
+        raise ValueError("could not verify a Cuttlefish process identity")
+    return process_state[1]
+
+
+def _process_pidfd_has_exited(process_pidfd: int) -> bool:
+    poller = select.poll()
+    poller.register(
+        process_pidfd,
+        select.POLLIN | select.POLLHUP | select.POLLERR,
+    )
+    return bool(poller.poll(0))
+
+
+def _process_root_uses_pidfds(process_root: Path) -> bool:
+    return sys.platform == "linux" and process_root.resolve(strict=True) == Path(
+        "/proc"
+    ).resolve(strict=True)
+
+
+def _process_is_gone_or_changed(
+    process_directory: Path,
+    expected_start_time: str | None,
+    process_pidfd: int | None = None,
+) -> bool:
+    process_state = _process_state_and_start_time(process_directory)
+    if process_state is None:
+        if process_pidfd is None or _process_pidfd_has_exited(process_pidfd):
+            return True
+        raise ValueError("could not inspect a live Cuttlefish process through /proc")
+    if process_pidfd is not None and _process_pidfd_has_exited(process_pidfd):
+        if process_state[0] in {"Z", "X"}:
+            return True
+        raise ValueError("Cuttlefish PID was reused during audit")
+    if process_state[0] in {"Z", "X"}:
+        return True
+    if expected_start_time is not None and process_state[1] != expected_start_time:
+        raise ValueError("Cuttlefish process identity changed during audit")
+    return False
 
 
 def _open_process_pidfd_by_identity(
@@ -315,6 +376,7 @@ def run_process_signal_broker(
                         "TERM": signal.SIGTERM,
                         "INT": signal.SIGINT,
                         "HUP": signal.SIGHUP,
+                        "CONT": signal.SIGCONT,
                         "KILL": signal.SIGKILL,
                     }.get(request)
                     if signal_number is None:
@@ -338,35 +400,94 @@ def run_process_signal_broker(
         os.close(process_descriptor)
 
 
-def _process_ancestor_start_times(process_root: Path) -> dict[int, str | None]:
+def _process_ancestor_start_times(
+    process_root: Path,
+    *,
+    use_pidfds: bool = False,
+) -> dict[int, str | None]:
     current_pid = os.getpid()
     ancestors: dict[int, str | None] = {current_pid: None}
+    process_pidfds: dict[int, int] = {}
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if use_pidfds and pidfd_open is None:
+        raise ValueError("Linux pidfds are required to verify process ancestry")
     process_id = current_pid
-    for _ in range(1024):
-        process_directory = process_root / str(process_id)
-        try:
-            contents = (process_directory / "stat").read_text(encoding="ascii")
-        except FileNotFoundError:
-            if process_id == current_pid:
-                return ancestors
-            break
-        except (OSError, UnicodeDecodeError) as error:
-            raise ValueError("could not verify Linux process ancestry") from error
-        closing_parenthesis = contents.rfind(")")
-        if closing_parenthesis < 0:
-            raise ValueError("could not verify Linux process ancestry")
-        fields = contents[closing_parenthesis + 1 :].split()
-        if len(fields) <= 19 or not fields[1].isdigit() or not fields[19].isdigit():
-            raise ValueError("could not verify Linux process ancestry")
-        start_time = fields[19]
-        parent_pid = int(fields[1])
-        ancestors[process_id] = start_time
-        if parent_pid <= 0 or parent_pid == process_id or parent_pid in ancestors:
-            break
-        process_id = parent_pid
-    else:
-        raise ValueError("Linux process ancestry exceeds the safety limit")
-    return ancestors
+    child_process_id: int | None = None
+    child_start_time: str | None = None
+    parent_ids: dict[int, int] = {}
+    try:
+        for _ in range(1024):
+            process_directory = process_root / str(process_id)
+            process_pidfd: int | None = None
+            if use_pidfds:
+                try:
+                    process_pidfd = pidfd_open(process_id, 0)
+                except ProcessLookupError as error:
+                    raise ValueError(
+                        "Linux process ancestry changed while being pinned"
+                    ) from error
+                except OSError as error:
+                    raise ValueError("could not pin Linux process ancestry") from error
+                process_pidfds[process_id] = process_pidfd
+            process_state = _process_state_and_start_time(process_directory)
+            if process_state is None:
+                if process_id == current_pid and not use_pidfds:
+                    return ancestors
+                raise ValueError("could not verify Linux process ancestry")
+            if process_state[0] in {"Z", "X"} or (
+                process_pidfd is not None and _process_pidfd_has_exited(process_pidfd)
+            ):
+                raise ValueError("Linux process ancestry changed while being pinned")
+            if child_process_id is not None:
+                child_directory = process_root / str(child_process_id)
+                child_state = _process_state_and_start_time(child_directory)
+                child_pidfd = process_pidfds.get(child_process_id)
+                if (
+                    child_state is None
+                    or child_state[0] in {"Z", "X"}
+                    or child_state[1] != child_start_time
+                    or child_state[2] != process_id
+                    or (
+                        child_pidfd is not None
+                        and _process_pidfd_has_exited(child_pidfd)
+                    )
+                ):
+                    raise ValueError(
+                        "Linux process ancestry links changed during audit"
+                    )
+            ancestors[process_id] = process_state[1]
+            parent_pid = process_state[2]
+            if parent_pid <= 0 or parent_pid == process_id or parent_pid in ancestors:
+                break
+            parent_ids[process_id] = parent_pid
+            child_process_id = process_id
+            child_start_time = process_state[1]
+            process_id = parent_pid
+        else:
+            raise ValueError("Linux process ancestry exceeds the safety limit")
+        for ancestor_id, expected_start_time in ancestors.items():
+            if expected_start_time is None:
+                continue
+            ancestor_state = _process_state_and_start_time(
+                process_root / str(ancestor_id)
+            )
+            if (
+                ancestor_state is None
+                or ancestor_state[0] in {"Z", "X"}
+                or ancestor_state[1] != expected_start_time
+                or (
+                    ancestor_id in parent_ids
+                    and ancestor_state[2] != parent_ids[ancestor_id]
+                )
+            ):
+                raise ValueError("Linux process ancestry changed during audit")
+            ancestor_pidfd = process_pidfds.get(ancestor_id)
+            if ancestor_pidfd is not None and _process_pidfd_has_exited(ancestor_pidfd):
+                raise ValueError("Linux process ancestry changed during audit")
+        return ancestors
+    finally:
+        for process_pidfd in process_pidfds.values():
+            os.close(process_pidfd)
 
 
 def _process_uid(process_directory: Path) -> int:
@@ -407,6 +528,8 @@ def _process_environment(
 ) -> dict[bytes, bytes]:
     try:
         raw_environment = (process_directory / "environ").read_bytes()
+    except FileNotFoundError:
+        raise
     except PermissionError:
         raise
     except OSError as error:
@@ -544,6 +667,8 @@ def _path_is_within_environment_root(value: bytes | None, root: Path) -> bool:
 def _process_references_path(
     process_directory: Path,
     root: Path,
+    start_time: str,
+    process_pidfd: int | None = None,
     *,
     allow_unreadable_cwd_or_descriptors: bool = False,
 ) -> bool:
@@ -570,8 +695,16 @@ def _process_references_path(
             ) from error
     try:
         descriptors = list((process_directory / "fd").iterdir())
-    except FileNotFoundError:
-        return references_path
+    except FileNotFoundError as error:
+        if _process_is_gone_or_changed(
+            process_directory,
+            start_time,
+            process_pidfd,
+        ):
+            return references_path
+        raise ValueError(
+            "could not inspect descriptors of a live Cuttlefish process"
+        ) from error
     except PermissionError as error:
         if not allow_unreadable_cwd_or_descriptors:
             raise ValueError(
@@ -586,6 +719,14 @@ def _process_references_path(
         try:
             target = os.readlink(descriptor).removesuffix(" (deleted)")
         except FileNotFoundError:
+            if _process_is_gone_or_changed(
+                process_directory,
+                start_time,
+                process_pidfd,
+            ):
+                continue
+            # A live process can close an individual descriptor while /proc is
+            # being scanned. Rechecking its identity makes that race safe.
             continue
         except PermissionError as error:
             if allow_unreadable_cwd_or_descriptors:
@@ -631,9 +772,19 @@ def _private_cvd_processes(
 
     processes: list[dict[str, Any]] = []
     current_pid = os.getpid()
-    ancestor_start_times = _process_ancestor_start_times(process_root)
-    host_process_names = _host_package_process_names(resolved_host_dir)
     try:
+        use_pidfds = _process_root_uses_pidfds(process_root)
+    except OSError as error:
+        raise ValueError("could not resolve Linux process information") from error
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if use_pidfds and pidfd_open is None:
+        raise ValueError("Linux pidfds are required for Cuttlefish process cleanup")
+    try:
+        ancestor_start_times = _process_ancestor_start_times(
+            process_root,
+            use_pidfds=use_pidfds,
+        )
+        host_process_names = _host_package_process_names(resolved_host_dir)
         process_entries = list(process_root.iterdir())
     except OSError as error:
         raise ValueError("could not inspect Linux Cuttlefish processes") from error
@@ -641,21 +792,67 @@ def _private_cvd_processes(
         if not process_directory.name.isdigit():
             continue
         process_id = int(process_directory.name)
+        process_pidfd: int | None = None
+        start_time: str | None = None
         try:
             if process_id == current_pid:
                 continue
-            if process_id in ancestor_start_times:
-                expected_start_time = ancestor_start_times[process_id]
-                if expected_start_time is not None and (
-                    _process_start_time(process_directory) == expected_start_time
+            if use_pidfds:
+                try:
+                    process_pidfd = pidfd_open(process_id, 0)
+                except ProcessLookupError:
+                    if _process_is_gone_or_changed(
+                        process_directory,
+                        None,
+                    ):
+                        continue
+                    raise ValueError("could not pin a Cuttlefish process identity")
+            initial_process_state = _process_state_and_start_time(process_directory)
+            if initial_process_state is None or initial_process_state[0] in {"Z", "X"}:
+                if _process_is_gone_or_changed(
+                    process_directory,
+                    None,
+                    process_pidfd,
                 ):
                     continue
+                raise ValueError("could not classify a pinned Cuttlefish process")
+            start_time = initial_process_state[1]
+            if _process_is_gone_or_changed(
+                process_directory,
+                start_time,
+                process_pidfd,
+            ):
+                continue
             owner = _process_uid(process_directory)
             if owner != os.getuid():
+                if _process_is_gone_or_changed(
+                    process_directory,
+                    start_time,
+                    process_pidfd,
+                ):
+                    continue
                 continue
+            if ancestor_start_times.get(process_id) == start_time:
+                current_ancestor_start_times = _process_ancestor_start_times(
+                    process_root,
+                    use_pidfds=use_pidfds,
+                )
+                if current_ancestor_start_times.get(process_id) == start_time:
+                    if _process_is_gone_or_changed(
+                        process_directory,
+                        start_time,
+                        process_pidfd,
+                    ):
+                        continue
+                    continue
             comm = (process_directory / "comm").read_text(encoding="utf-8").strip()
             is_host_process = comm in host_process_names
-            start_time = _process_start_time(process_directory)
+            if _process_is_gone_or_changed(
+                process_directory,
+                start_time,
+                process_pidfd,
+            ):
+                continue
             try:
                 environment = _process_environment(process_directory)
             except PermissionError as error:
@@ -670,14 +867,22 @@ def _private_cvd_processes(
                 references_private_paths = _process_references_path(
                     process_directory,
                     resolved_home_root,
+                    start_time,
+                    process_pidfd,
                     allow_unreadable_cwd_or_descriptors=True,
                 ) or _process_references_path(
                     process_directory,
                     resolved_tmpdir_root,
+                    start_time,
+                    process_pidfd,
                     allow_unreadable_cwd_or_descriptors=True,
                 )
-                if _process_start_time(process_directory) != start_time:
-                    raise ValueError("Cuttlefish process identity changed during audit")
+                if _process_is_gone_or_changed(
+                    process_directory,
+                    start_time,
+                    process_pidfd,
+                ):
+                    continue
                 if references_private_paths:
                     processes.append(
                         {
@@ -699,16 +904,22 @@ def _private_cvd_processes(
             references_private_paths = _process_references_path(
                 process_directory,
                 resolved_home_root,
+                start_time,
+                process_pidfd,
             ) or _process_references_path(
                 process_directory,
                 resolved_tmpdir_root,
+                start_time,
+                process_pidfd,
             )
-            if not (matches_home or matches_tmpdir or references_private_paths):
-                if _process_start_time(process_directory) != start_time:
-                    raise ValueError("Cuttlefish process identity changed during audit")
+            if _process_is_gone_or_changed(
+                process_directory,
+                start_time,
+                process_pidfd,
+            ):
                 continue
-            if _process_start_time(process_directory) != start_time:
-                raise ValueError("Cuttlefish process identity changed during audit")
+            if not (matches_home or matches_tmpdir or references_private_paths):
+                continue
             processes.append(
                 {
                     "pid": process_id,
@@ -717,14 +928,37 @@ def _private_cvd_processes(
                     "isCuttlefishHostBinary": is_host_process,
                 }
             )
-        except FileNotFoundError:
-            continue
+        except FileNotFoundError as error:
+            if _process_is_gone_or_changed(
+                process_directory,
+                start_time,
+                process_pidfd,
+            ):
+                continue
+            raise ValueError(
+                "a live Cuttlefish process has an unreadable entry during "
+                "HOME verification"
+            ) from error
         except PermissionError as error:
             raise ValueError(
                 "could not verify a Cuttlefish process before HOME cleanup"
             ) from error
         except (OSError, UnicodeDecodeError) as error:
             raise ValueError("could not inspect Linux Cuttlefish processes") from error
+        finally:
+            if process_pidfd is not None:
+                os.close(process_pidfd)
+    try:
+        final_ancestor_start_times = _process_ancestor_start_times(
+            process_root,
+            use_pidfds=use_pidfds,
+        )
+    except OSError as error:
+        raise ValueError(
+            "could not recheck Linux Cuttlefish process ancestry"
+        ) from error
+    if final_ancestor_start_times != ancestor_start_times:
+        raise ValueError("Linux process ancestry changed during Cuttlefish audit")
     return processes
 
 

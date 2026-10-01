@@ -2166,3 +2166,35 @@ PID 50271. This process evidence makes the earlier M01 wording misleading;
 correcting it avoids treating an auxiliary VM event as evidence of an Android
 reboot. The logs still do not identify why Android never registered the
 `activity` service.
+
+## IR-090: Isolate the `gpu_mode=none` boot diagnosis
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/` |
+
+**Choice.** Compare the pinned default `guest_swiftshader` capture with a
+separate `gpu_mode=none` run using the same Android build, Cuttlefish VCS
+revision, capture-tool blobs, Linux distribution and kernel, architecture,
+host CPU count, nested-virtualization state, Cuttlefish instance number, four
+guest CPUs, 4096 MiB, and 600-second boot deadline. Write results outside the
+repository by default. Use a dedicated ADB server on a unique private
+`localfilesystem` socket, cap guest outputs and live logcat while streaming,
+bound control output before parsing, and enforce a 900-second overall runner
+deadline with process-group cleanup. Publish only counts and boot-state
+samples, and require confirmed capture-process, Cuttlefish, ADB server, ADB
+helper process, and live-logcat cleanup before moving the normalized record
+into the experiment results directory. Scrub regular and in-progress raw
+logcat files before retaining a private failure workspace.
+
+**Reason.** The default capture reached zygote and SurfaceFlinger but did not
+confirm `system_server` or `sys.boot_completed=1`; Cuttlefish also reported
+graphics capability failures before selecting `guest_swiftshader`. A single
+GPU-mode change tests whether that difference correlates with the stall
+without promoting a diagnostic run to a canonical reference profile. The
+baseline is incomplete and may contain private guest logs, so input identity,
+temporary storage, per-command and aggregate byte limits, content-free
+summaries, experiment-code hashes, and cleanup are checked before publishing
+any result.

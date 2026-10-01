@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import gzip
 import io
+import ipaddress
 import json
 import os
 import re
@@ -125,6 +126,12 @@ SHORT_OPTION_BUNDLE = re.compile(r"-[A-Za-z]{1,3}(?:=[^\s]*)?\Z")
 REPLACEMENT_GROUP_REFERENCE = re.compile(r"\\g<([^>]+)>|\\([1-9][0-9]*)")
 TEXT_LINE_BREAK = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 JSON_STRING_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"')
+IPV6_ADDRESS_CANDIDATE = re.compile(
+    r"(?<![0-9A-Fa-f:.])"
+    r"(?:[0-9A-Fa-f]{0,4}:){2,7}"
+    r"(?:[0-9A-Fa-f]{0,4}|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
+    r"(?![0-9A-Fa-f:.])"
+)
 COMMAND_LINE_TOKEN = re.compile(r"\S+")
 PRIVATE_KEY_BOUNDARY = re.compile(
     r"-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----|-----END [A-Z0-9 ]{0,64}PRIVATE KEY-----"
@@ -296,6 +303,7 @@ def _transform_text(
         text = plain.decode("utf-8")
     except UnicodeDecodeError as error:
         raise CaptureToolError(f"cannot normalize {path}: {error}") from None
+    text = _redact_eui64_style_ipv6(text, path, operation="normalize")
     text = _redact_json_host_paths(text, path.name, path, operation="normalize")
     text = _redact_ambiguous_started_host_paths(text, path.name, path, operation="normalize")
     text = _redact_private_key_blocks(text, path, operation="normalize")
@@ -333,6 +341,27 @@ def _apply_substitutions(
         _ensure_substitution_fits(pattern, replacement, text, path, operation=operation)
         text = pattern.sub(replacement, text)
     return text
+
+
+def _redact_eui64_style_ipv6(text: str, path: Path, *, operation: str) -> str:
+    output = _BoundedTextBuffer(path, operation)
+    cursor = 0
+    changed = False
+    for candidate in IPV6_ADDRESS_CANDIDATE.finditer(text):
+        try:
+            address = ipaddress.IPv6Address(candidate.group())
+        except ipaddress.AddressValueError:
+            continue
+        if address.packed[11:13] != b"\xff\xfe":
+            continue
+        output.append(text[cursor : candidate.start()])
+        output.append("<EUI64_STYLE_IPV6>")
+        cursor = candidate.end()
+        changed = True
+    if not changed:
+        return text
+    output.append(text[cursor:])
+    return output.getvalue()
 
 
 def _ensure_substitution_fits(
@@ -651,6 +680,7 @@ def _read_capture_text(
         text = plain.decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise CaptureToolError(f"cannot read capture artifact {path}: {error}") from None
+    text = _redact_eui64_style_ipv6(text, path, operation="compare")
     text = _redact_json_host_paths(text, path.name, path, operation="compare")
     text = _redact_ambiguous_started_host_paths(text, path.name, path, operation="compare")
     text = _redact_private_key_blocks(text, path, operation="compare")

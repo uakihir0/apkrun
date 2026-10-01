@@ -286,8 +286,12 @@ def test_comparison_normalizes_both_captures_without_modifying_them(tmp_path: Pa
     reference = tmp_path / "reference"
     candidate = tmp_path / "candidate"
     _seed_category_files(reference, candidate)
-    reference_value = "[ro.serialno]: [SERIAL-REFERENCE]\neth0 aa:bb:cc:dd:ee:ff\n"
-    candidate_value = "[ro.serialno]: [SERIAL-CANDIDATE]\neth0 11:22:33:44:55:66\n"
+    reference_value = (
+        "[ro.serialno]: [SERIAL-REFERENCE]\neth0 aa:bb:cc:dd:ee:ff fe80::21a:11ff:fee1:cf00\n"
+    )
+    candidate_value = (
+        "[ro.serialno]: [SERIAL-CANDIDATE]\neth0 11:22:33:44:55:66 fe80::21a:11ff:254.225.207.0\n"
+    )
     (reference / "properties.txt").write_text(reference_value, encoding="utf-8")
     (candidate / "properties.txt").write_text(candidate_value, encoding="utf-8")
 
@@ -307,7 +311,13 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
         '{"serial_number": "SERIAL-JSON", "api_key": "json-secret", '
         '"access_token": "compound-secret", '
         '"client_secret": "client key with spaces", '
-        '"password": "correct horse battery staple"}\n'
+        '"password": "correct horse battery staple", '
+        '"ethernet_ipv6": "fe80::21a:11ff:fee1:cf00", '
+        '"expanded_eui64": "2001:0db8:0000:0000:021a:11ff:fee1:cf00", '
+        '"dotted_eui64": "fe80::21a:11ff:254.225.207.0", '
+        '"manual_eui64_style": "fd00::1234:56ff:fe78:9abc", '
+        '"ordinary_ipv6": "fe80::1234", '
+        '"non_iid_fffe": "2001:db8:11ff:fe00::1234"}\n'
         "eth0 aa:bb:cc:dd:ee:ff\n"
         "cmd=/home/alice/cuttlefish/bin/launch_cvd\n"
         "guest_path=/mnt/android-data\n"
@@ -411,6 +421,12 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
     assert normalized_json["access_token"] == "<REDACTED>"
     assert normalized_json["client_secret"] == "<REDACTED>"
     assert normalized_json["password"] == "<REDACTED>"
+    assert normalized_json["ethernet_ipv6"] == "<EUI64_STYLE_IPV6>"
+    assert normalized_json["expanded_eui64"] == "<EUI64_STYLE_IPV6>"
+    assert normalized_json["dotted_eui64"] == "<EUI64_STYLE_IPV6>"
+    assert normalized_json["manual_eui64_style"] == "<EUI64_STYLE_IPV6>"
+    assert normalized_json["ordinary_ipv6"] == "fe80::1234"
+    assert normalized_json["non_iid_fffe"] == "2001:db8:11ff:fe00::1234"
     assert "aa:bb:cc:dd:ee:ff" not in normalized
     assert "/home/alice" not in normalized
     assert "/root/guest-state" not in normalized

@@ -10,20 +10,32 @@
       "replacement": "<MAC>"
     },
     {
-      "pattern": "(?<![A-Za-z0-9_])(?:/home|/Users)/[^\\s,;\\\"'<>\\]\\)]+",
-      "replacement": "<HOST_HOME_PATH>"
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?([\\\"'])/(?:home|Users|root|tmp|var/tmp|mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/(?:(?:\\\\[^\\r\\n])|(?!\\2)[^\\\\\\r\\n])*\\2",
+      "replacement": "\\1<HOST_PATH>",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "kernel.log",
+        "launcher.log",
+        "launch-cvd-console.log"
+      ]
     },
     {
-      "pattern": "(?<![A-Za-z0-9_])/(?:root|tmp|var/tmp)/[^\\s,;\\\"'<>\\]\\)]+",
-      "replacement": "<HOST_TEMP_PATH>"
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?(?:/home|/Users)/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "\\1<HOST_HOME_PATH>"
     },
     {
-      "pattern": "(?<![A-Za-z0-9_])/(?:mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/[^\\s,;\\\"'<>\\]\\)]+",
-      "replacement": "<HOST_PATH>",
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?/(?:root|tmp|var/tmp)/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "\\1<HOST_TEMP_PATH>"
+    },
+    {
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?/(?:mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/[^\\s,;\\\"'<>\\]\\)]+",
+      "replacement": "\\1<HOST_PATH>",
       "files": [
         "crosvm-command-line.txt",
         "cuttlefish_config.json",
         "composite-disk-specs.json",
+        "assemble_cvd.log",
         "kernel.log",
         "launcher.log",
         "launch-cvd-console.log",
@@ -41,10 +53,6 @@
     {
       "pattern": "(?i)([\\\"']?\\[?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*\\]?[\\\"']?\\s*[=:]\\s*\\[?)([^\\]\\s,;\\\"']+)",
       "replacement": "\\1<REDACTED>"
-    },
-    {
-      "pattern": "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
-      "replacement": "<REDACTED_PRIVATE_KEY>"
     }
   ]
 }

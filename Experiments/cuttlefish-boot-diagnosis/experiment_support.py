@@ -13,10 +13,13 @@ import os
 import platform
 import re
 import secrets
+import select
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -25,21 +28,29 @@ from typing import Any
 BASELINE_RELATIVE = Path(
     "Images/reference/16373615/incomplete/default-20261001T120904-49816"
 )
+BASELINE_COMMIT = "64da28a551b0b33e258c8f37057b9a8a6d90846d"
+MANIFEST_RELATIVE = Path("Images/manifests/16373615/android-image.json")
+EXPERIMENT_RELATIVE = Path("Experiments/cuttlefish-boot-diagnosis")
 TOOL_PATHS = (
     Path("Images/tools/reference/capture.sh"),
     Path("Images/tools/reference/capture_cvd_start.py"),
     Path("Images/tools/reference/compare_boot.py"),
     Path("Images/tools/reference/normalize.yaml"),
     Path("Images/tools/reference/guest-capture.txt"),
-    Path("Images/manifests/16373615/android-image.json"),
+    MANIFEST_RELATIVE,
 )
 EXPERIMENT_TOOL_NAMES = (
     "capture-gpu-none.sh",
     "capture-lifecycle.sh",
     "capture_bounded.py",
+    "capture_processes.py",
     "experiment_support.py",
     "run_capture.py",
     "summarize_logcat.py",
+)
+SYSTEMD_EXECUTABLE_PATHS = (
+    Path("/usr/lib/systemd/systemd"),
+    Path("/lib/systemd/systemd"),
 )
 HOST_FACT_FIELDS = (
     "hostKind",
@@ -54,6 +65,722 @@ VERSION_PATTERN = re.compile(
     r"\bversion:\s*([0-9][0-9A-Za-z._-]*)\s*\|\s*VCS:\s*([0-9a-f]{40})\b",
     re.IGNORECASE,
 )
+LINUX_SUN_PATH_CAPACITY = 108
+
+
+def _encoded_unix_socket_path_bytes(path: str | os.PathLike[str]) -> int:
+    encoded_path = os.fsencode(path)
+    if b"\0" in encoded_path:
+        raise ValueError("Unix socket path contains a NUL byte")
+    return len(encoded_path) + 1
+
+
+def audit_unix_socket_paths(roots: list[Path]) -> dict[str, int | bool]:
+    if not roots:
+        raise ValueError("at least one Cuttlefish runtime path is required")
+    socket_count = 0
+    maximum_path_bytes = 0
+    maximum_sun_path_bytes = 0
+    for requested_root in roots:
+        if not requested_root.is_absolute() or requested_root.is_symlink():
+            raise ValueError("Cuttlefish socket audit root is unsafe")
+        try:
+            root = requested_root.resolve(strict=True)
+        except OSError as error:
+            raise ValueError("Cuttlefish socket audit root is unavailable") from error
+        if not root.is_dir() or root != requested_root:
+            raise ValueError("Cuttlefish socket audit root is not physically canonical")
+        pending = [root]
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = list(os.scandir(directory))
+            except OSError as error:
+                raise ValueError(
+                    "could not inspect Cuttlefish runtime sockets"
+                ) from error
+            for entry in entries:
+                try:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    raise ValueError(
+                        "could not inspect Cuttlefish runtime sockets"
+                    ) from error
+                if stat.S_ISLNK(entry_stat.st_mode):
+                    try:
+                        target_stat = entry.stat(follow_symlinks=True)
+                    except FileNotFoundError:
+                        continue
+                    except OSError as error:
+                        raise ValueError(
+                            "could not inspect Cuttlefish socket symlink targets"
+                        ) from error
+                    if stat.S_ISDIR(target_stat.st_mode):
+                        raise ValueError(
+                            "a directory symlink was found beneath a Cuttlefish "
+                            "socket audit root"
+                        )
+                    if stat.S_ISSOCK(target_stat.st_mode):
+                        raise ValueError(
+                            "a socket symlink was found beneath a Cuttlefish "
+                            "socket audit root"
+                        )
+                    continue
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    pending.append(Path(entry.path))
+                    continue
+                if not stat.S_ISSOCK(entry_stat.st_mode):
+                    continue
+                sun_path_bytes = _encoded_unix_socket_path_bytes(entry.path)
+                if sun_path_bytes > LINUX_SUN_PATH_CAPACITY:
+                    raise ValueError(
+                        "a Cuttlefish Unix socket path exceeds Linux sun_path "
+                        f"capacity ({sun_path_bytes} bytes including the "
+                        f"terminating NUL; limit {LINUX_SUN_PATH_CAPACITY})"
+                    )
+                socket_count += 1
+                maximum_sun_path_bytes = max(
+                    maximum_sun_path_bytes,
+                    sun_path_bytes,
+                )
+                maximum_path_bytes = max(
+                    maximum_path_bytes,
+                    sun_path_bytes - 1,
+                )
+    return {
+        "capacityBytes": LINUX_SUN_PATH_CAPACITY,
+        "terminatingNulBytes": 1,
+        "socketCount": socket_count,
+        "maxEncodedPathBytes": maximum_path_bytes,
+        "maxSunPathBytesIncludingNul": maximum_sun_path_bytes,
+    }
+
+
+def _process_start_time(process_directory: Path) -> str:
+    try:
+        contents = (process_directory / "stat").read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ValueError("could not verify a Cuttlefish process identity") from error
+    closing_parenthesis = contents.rfind(")")
+    if closing_parenthesis < 0:
+        raise ValueError("could not verify a Cuttlefish process identity")
+    fields = contents[closing_parenthesis + 1 :].split()
+    if len(fields) <= 19 or not fields[19].isdigit():
+        raise ValueError("could not verify a Cuttlefish process identity")
+    return fields[19]
+
+
+def _open_process_pidfd_by_identity(
+    process_id: int,
+    expected_start_time: str,
+) -> tuple[int, Callable[[int, int], None]]:
+    if sys.platform != "linux":
+        raise OSError(errno.ENOTSUP, "process identity signals require Linux pidfds")
+    if process_id <= 0 or re.fullmatch(r"[0-9]+", expected_start_time) is None:
+        raise ValueError("process identity is invalid")
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is None or pidfd_send_signal is None:
+        raise OSError(errno.ENOTSUP, "Linux pidfd signaling is unavailable")
+
+    process_descriptor = pidfd_open(process_id, 0)
+    try:
+        observed_start_time = _process_start_time(Path("/proc") / str(process_id))
+        if observed_start_time != expected_start_time:
+            raise ValueError(
+                "process identity changed; refusing to signal the reused PID"
+            )
+    except BaseException:
+        os.close(process_descriptor)
+        raise
+    return process_descriptor, pidfd_send_signal
+
+
+def _write_pidfd_broker_record(
+    path: Path,
+    process_id: int,
+    expected_start_time: str,
+) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".pidfd-broker-",
+        dir=path.parent,
+    )
+    try:
+        try:
+            os.fchmod(descriptor, 0o600)
+            content = f"{process_id} {expected_start_time}\n".encode("ascii")
+            offset = 0
+            while offset < len(content):
+                written = os.write(descriptor, content[offset:])
+                if written <= 0:
+                    raise OSError(errno.EIO, "could not write pidfd broker record")
+                offset += written
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(temporary_name, path, follow_symlinks=False)
+    finally:
+        os.unlink(temporary_name)
+
+
+def run_process_signal_broker(
+    process_id: int,
+    expected_start_time: str,
+    ready_path: Path,
+    exited_path: Path,
+    stopped_path: Path,
+) -> None:
+    process_descriptor, pidfd_send_signal = _open_process_pidfd_by_identity(
+        process_id,
+        expected_start_time,
+    )
+    try:
+        _write_pidfd_broker_record(ready_path, process_id, expected_start_time)
+        control_descriptor = sys.stdin.fileno()
+        poller = select.poll()
+        poller.register(
+            process_descriptor, select.POLLIN | select.POLLHUP | select.POLLERR
+        )
+        poller.register(
+            control_descriptor,
+            select.POLLIN | select.POLLHUP | select.POLLERR,
+        )
+        pending = bytearray()
+        process_events = select.POLLIN | select.POLLHUP | select.POLLERR
+        while True:
+            events = poller.poll()
+            if any(
+                descriptor == process_descriptor and event & process_events
+                for descriptor, event in events
+            ):
+                _write_pidfd_broker_record(
+                    exited_path,
+                    process_id,
+                    expected_start_time,
+                )
+                return
+            for descriptor, event in events:
+                if descriptor != control_descriptor:
+                    continue
+                if not event & (select.POLLIN | select.POLLHUP | select.POLLERR):
+                    continue
+                chunk = os.read(control_descriptor, 4096)
+                if not chunk:
+                    if pending:
+                        raise ValueError("pidfd broker received an incomplete request")
+                    poller.unregister(control_descriptor)
+                    try:
+                        pidfd_send_signal(process_descriptor, signal.SIGTERM)
+                    except ProcessLookupError:
+                        _write_pidfd_broker_record(
+                            exited_path,
+                            process_id,
+                            expected_start_time,
+                        )
+                        return
+                    term_deadline = time.monotonic() + 5
+                    while time.monotonic() < term_deadline:
+                        remaining_ms = max(
+                            1,
+                            int((term_deadline - time.monotonic()) * 1000),
+                        )
+                        if any(
+                            descriptor == process_descriptor and event & process_events
+                            for descriptor, event in poller.poll(remaining_ms)
+                        ):
+                            _write_pidfd_broker_record(
+                                exited_path,
+                                process_id,
+                                expected_start_time,
+                            )
+                            return
+                    try:
+                        pidfd_send_signal(process_descriptor, signal.SIGKILL)
+                    except ProcessLookupError:
+                        _write_pidfd_broker_record(
+                            exited_path,
+                            process_id,
+                            expected_start_time,
+                        )
+                        return
+                    continue
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    raw_request, _, remaining = pending.partition(b"\n")
+                    pending = bytearray(remaining)
+                    request = raw_request.decode("ascii").strip()
+                    if request == "QUIT":
+                        return
+                    signal_number = {
+                        "TERM": signal.SIGTERM,
+                        "INT": signal.SIGINT,
+                        "HUP": signal.SIGHUP,
+                        "KILL": signal.SIGKILL,
+                    }.get(request)
+                    if signal_number is None:
+                        raise ValueError(
+                            "pidfd broker received an invalid signal request"
+                        )
+                    try:
+                        pidfd_send_signal(process_descriptor, signal_number)
+                    except ProcessLookupError:
+                        _write_pidfd_broker_record(
+                            exited_path,
+                            process_id,
+                            expected_start_time,
+                        )
+                        return
+    finally:
+        try:
+            _write_pidfd_broker_record(stopped_path, process_id, expected_start_time)
+        except OSError:
+            pass
+        os.close(process_descriptor)
+
+
+def _process_ancestor_start_times(process_root: Path) -> dict[int, str | None]:
+    current_pid = os.getpid()
+    ancestors: dict[int, str | None] = {current_pid: None}
+    process_id = current_pid
+    for _ in range(1024):
+        process_directory = process_root / str(process_id)
+        try:
+            contents = (process_directory / "stat").read_text(encoding="ascii")
+        except FileNotFoundError:
+            if process_id == current_pid:
+                return ancestors
+            break
+        except (OSError, UnicodeDecodeError) as error:
+            raise ValueError("could not verify Linux process ancestry") from error
+        closing_parenthesis = contents.rfind(")")
+        if closing_parenthesis < 0:
+            raise ValueError("could not verify Linux process ancestry")
+        fields = contents[closing_parenthesis + 1 :].split()
+        if len(fields) <= 19 or not fields[1].isdigit() or not fields[19].isdigit():
+            raise ValueError("could not verify Linux process ancestry")
+        start_time = fields[19]
+        parent_pid = int(fields[1])
+        ancestors[process_id] = start_time
+        if parent_pid <= 0 or parent_pid == process_id or parent_pid in ancestors:
+            break
+        process_id = parent_pid
+    else:
+        raise ValueError("Linux process ancestry exceeds the safety limit")
+    return ancestors
+
+
+def _process_uid(process_directory: Path) -> int:
+    try:
+        status_text = (process_directory / "status").read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ValueError("could not verify a Cuttlefish process owner") from error
+    for line in status_text.splitlines():
+        if line.startswith("Uid:"):
+            fields = line.split()
+            if len(fields) >= 2 and fields[1].isdigit():
+                return int(fields[1])
+    raise ValueError("could not verify a Cuttlefish process owner")
+
+
+def _host_package_process_names(host_dir: Path) -> set[str]:
+    binary_directory = host_dir / "bin"
+    try:
+        entries = list(os.scandir(binary_directory))
+    except OSError as error:
+        raise ValueError("could not inventory the Cuttlefish host package") from error
+    names: set[str] = set()
+    for entry in entries:
+        try:
+            if entry.is_file(follow_symlinks=True):
+                names.add(entry.name[:15])
+        except OSError as error:
+            raise ValueError(
+                "could not inventory the Cuttlefish host package"
+            ) from error
+    if not names:
+        raise ValueError("Cuttlefish host package contains no candidate processes")
+    return names
+
+
+def _process_environment(
+    process_directory: Path,
+) -> dict[bytes, bytes]:
+    try:
+        raw_environment = (process_directory / "environ").read_bytes()
+    except PermissionError:
+        raise
+    except OSError as error:
+        raise ValueError("could not verify a Cuttlefish process environment") from error
+    environment: dict[bytes, bytes] = {}
+    for entry in raw_environment.split(b"\0"):
+        key, separator, value = entry.partition(b"=")
+        if separator:
+            environment[key] = value
+    return environment
+
+
+def _is_trusted_systemd_executable(executable: str) -> bool:
+    executable_path = Path(executable.removesuffix(" (deleted)"))
+    for candidate in SYSTEMD_EXECUTABLE_PATHS:
+        try:
+            candidate_resolved = candidate.resolve(strict=True)
+            candidate_status = candidate_resolved.stat()
+            if (
+                stat.S_ISREG(candidate_status.st_mode)
+                and candidate_status.st_uid == 0
+                and not candidate_status.st_mode & 0o022
+                and _has_trusted_system_directory_chain(candidate_resolved.parent)
+                and _same_file_identity(executable_path, candidate_resolved)
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _has_trusted_system_directory_chain(directory: Path) -> bool:
+    current = directory
+    while True:
+        try:
+            directory_status = current.stat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISDIR(directory_status.st_mode)
+            or directory_status.st_uid != 0
+            or directory_status.st_mode & 0o022
+        ):
+            return False
+        parent = current.parent
+        if parent == current:
+            return True
+        current = parent
+
+
+def _same_file_identity(first: Path, second: Path) -> bool:
+    try:
+        first_status = first.stat()
+        second_status = second.stat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(first_status.st_mode)
+        and first_status.st_dev == second_status.st_dev
+        and first_status.st_ino == second_status.st_ino
+    )
+
+
+def _is_systemd_session_pam(process_directory: Path, owner: int) -> bool:
+    try:
+        cgroup = (process_directory / "cgroup").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise ValueError("could not verify a protected process cgroup") from error
+    expected = f"0::/user.slice/user-{owner}.slice/user@{owner}.service/init.scope"
+    if cgroup != expected:
+        return False
+    try:
+        command_line = (process_directory / "cmdline").read_bytes()
+    except OSError as error:
+        raise ValueError("could not verify the protected systemd process") from error
+    arguments = [argument for argument in command_line.split(b"\0") if argument]
+    if not arguments or arguments[0] != b"(sd-pam)":
+        return False
+
+    try:
+        try:
+            process_executable = os.readlink(process_directory / "exe")
+        except PermissionError:
+            process_executable = None
+        stat_record = (process_directory / "stat").read_bytes()
+        closing_parenthesis = stat_record.rfind(b")")
+        if closing_parenthesis < 0:
+            return False
+        fields = stat_record[closing_parenthesis + 1 :].split()
+        parent_pid = int(fields[1])
+        parent_directory = process_directory.parent / str(parent_pid)
+        parent_comm = (parent_directory / "comm").read_text(encoding="utf-8").strip()
+        parent_cgroup = (
+            (parent_directory / "cgroup").read_text(encoding="ascii").strip()
+        )
+        parent_arguments = [
+            argument
+            for argument in (parent_directory / "cmdline").read_bytes().split(b"\0")
+            if argument
+        ]
+        parent_executable = os.readlink(parent_directory / "exe")
+    except (IndexError, OSError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError(
+            "could not verify the protected systemd session parent"
+        ) from error
+
+    if process_executable is not None and not _is_trusted_systemd_executable(
+        process_executable
+    ):
+        return False
+    expected_manager_arguments = (
+        b"/usr/lib/systemd/systemd",
+        b"/lib/systemd/systemd",
+    )
+    return not (
+        parent_pid <= 0
+        or parent_pid == os.getpid()
+        or _process_uid(parent_directory) != owner
+        or parent_comm != "systemd"
+        or parent_cgroup != expected
+        or len(parent_arguments) < 2
+        or parent_arguments[0] not in expected_manager_arguments
+        or parent_arguments[1] != b"--user"
+        or not _is_trusted_systemd_executable(parent_executable)
+    )
+
+
+def _path_is_within_environment_root(value: bytes | None, root: Path) -> bool:
+    if value is None:
+        return False
+    root_bytes = os.fsencode(root)
+    return value == root_bytes or value.startswith(root_bytes + os.fsencode(os.sep))
+
+
+def _process_references_path(
+    process_directory: Path,
+    root: Path,
+    *,
+    allow_unreadable_cwd_or_descriptors: bool = False,
+) -> bool:
+    root_bytes = os.fsencode(root)
+    references_path = False
+    try:
+        references_path = root_bytes in (process_directory / "cmdline").read_bytes()
+    except PermissionError as error:
+        raise ValueError(
+            "could not verify a Cuttlefish process reference before HOME cleanup"
+        ) from error
+    try:
+        current_directory = os.readlink(process_directory / "cwd").removesuffix(
+            " (deleted)"
+        )
+        references_path = references_path or _path_is_within_environment_root(
+            os.fsencode(current_directory),
+            root,
+        )
+    except PermissionError as error:
+        if not allow_unreadable_cwd_or_descriptors:
+            raise ValueError(
+                "could not verify a Cuttlefish process reference before HOME cleanup"
+            ) from error
+    try:
+        descriptors = list((process_directory / "fd").iterdir())
+    except FileNotFoundError:
+        return references_path
+    except PermissionError as error:
+        if not allow_unreadable_cwd_or_descriptors:
+            raise ValueError(
+                "could not verify a Cuttlefish process reference before HOME cleanup"
+            ) from error
+        descriptors = []
+    except OSError as error:
+        raise ValueError(
+            "could not inspect Linux Cuttlefish process references"
+        ) from error
+    for descriptor in descriptors:
+        try:
+            target = os.readlink(descriptor).removesuffix(" (deleted)")
+        except FileNotFoundError:
+            continue
+        except PermissionError as error:
+            if allow_unreadable_cwd_or_descriptors:
+                continue
+            raise ValueError(
+                "could not verify a Cuttlefish process reference before HOME cleanup"
+            ) from error
+        references_path = references_path or _path_is_within_environment_root(
+            os.fsencode(target),
+            root,
+        )
+    return references_path
+
+
+def _private_cvd_processes(
+    host_dir: Path,
+    home_root: Path,
+    tmpdir_root: Path,
+    process_root: Path,
+) -> list[dict[str, Any]]:
+    if not process_root.is_dir():
+        raise ValueError("Linux process information is unavailable")
+    for label, path in (("Cuttlefish host", host_dir), ("private HOME", home_root)):
+        if not path.is_absolute() or path.is_symlink():
+            raise ValueError(f"{label} path is unsafe")
+    if not tmpdir_root.is_absolute() or tmpdir_root.is_symlink():
+        raise ValueError("private TMPDIR path is unsafe")
+    try:
+        resolved_host_dir = host_dir.resolve(strict=True)
+        resolved_home_root = home_root.resolve(strict=True)
+        resolved_tmpdir_root = tmpdir_root.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("Cuttlefish process-audit paths are unavailable") from error
+    if (
+        not resolved_host_dir.is_dir()
+        or resolved_host_dir != host_dir
+        or not resolved_home_root.is_dir()
+        or resolved_home_root != home_root
+        or not resolved_tmpdir_root.is_dir()
+        or resolved_tmpdir_root != tmpdir_root
+    ):
+        raise ValueError("Cuttlefish process-audit paths are not canonical directories")
+
+    processes: list[dict[str, Any]] = []
+    current_pid = os.getpid()
+    ancestor_start_times = _process_ancestor_start_times(process_root)
+    host_process_names = _host_package_process_names(resolved_host_dir)
+    try:
+        process_entries = list(process_root.iterdir())
+    except OSError as error:
+        raise ValueError("could not inspect Linux Cuttlefish processes") from error
+    for process_directory in process_entries:
+        if not process_directory.name.isdigit():
+            continue
+        process_id = int(process_directory.name)
+        try:
+            if process_id == current_pid:
+                continue
+            if process_id in ancestor_start_times:
+                expected_start_time = ancestor_start_times[process_id]
+                if expected_start_time is not None and (
+                    _process_start_time(process_directory) == expected_start_time
+                ):
+                    continue
+            owner = _process_uid(process_directory)
+            if owner != os.getuid():
+                continue
+            comm = (process_directory / "comm").read_text(encoding="utf-8").strip()
+            is_host_process = comm in host_process_names
+            start_time = _process_start_time(process_directory)
+            try:
+                environment = _process_environment(process_directory)
+            except PermissionError as error:
+                if comm not in {"sd-pam", "(sd-pam)"} or not _is_systemd_session_pam(
+                    process_directory,
+                    owner,
+                ):
+                    raise ValueError(
+                        "could not verify a Cuttlefish process environment for "
+                        f"pid {process_id} ({comm})"
+                    ) from error
+                references_private_paths = _process_references_path(
+                    process_directory,
+                    resolved_home_root,
+                    allow_unreadable_cwd_or_descriptors=True,
+                ) or _process_references_path(
+                    process_directory,
+                    resolved_tmpdir_root,
+                    allow_unreadable_cwd_or_descriptors=True,
+                )
+                if _process_start_time(process_directory) != start_time:
+                    raise ValueError("Cuttlefish process identity changed during audit")
+                if references_private_paths:
+                    processes.append(
+                        {
+                            "pid": process_id,
+                            "startTime": start_time,
+                            "comm": comm,
+                            "isCuttlefishHostBinary": is_host_process,
+                        }
+                    )
+                continue
+            matches_home = _path_is_within_environment_root(
+                environment.get(b"HOME"),
+                resolved_home_root,
+            )
+            matches_tmpdir = _path_is_within_environment_root(
+                environment.get(b"TMPDIR"),
+                resolved_tmpdir_root,
+            )
+            references_private_paths = _process_references_path(
+                process_directory,
+                resolved_home_root,
+            ) or _process_references_path(
+                process_directory,
+                resolved_tmpdir_root,
+            )
+            if not (matches_home or matches_tmpdir or references_private_paths):
+                if _process_start_time(process_directory) != start_time:
+                    raise ValueError("Cuttlefish process identity changed during audit")
+                continue
+            if _process_start_time(process_directory) != start_time:
+                raise ValueError("Cuttlefish process identity changed during audit")
+            processes.append(
+                {
+                    "pid": process_id,
+                    "startTime": start_time,
+                    "comm": comm,
+                    "isCuttlefishHostBinary": is_host_process,
+                }
+            )
+        except FileNotFoundError:
+            continue
+        except PermissionError as error:
+            raise ValueError(
+                "could not verify a Cuttlefish process before HOME cleanup"
+            ) from error
+        except (OSError, UnicodeDecodeError) as error:
+            raise ValueError("could not inspect Linux Cuttlefish processes") from error
+    return processes
+
+
+def require_no_private_cvd_processes(
+    host_dir: Path,
+    home_root: Path,
+    tmpdir_root: Path,
+    process_root: Path = Path("/proc"),
+) -> int:
+    processes = _private_cvd_processes(
+        host_dir,
+        home_root,
+        tmpdir_root,
+        process_root,
+    )
+    if processes:
+        raise ValueError(
+            "a Cuttlefish host process still references the private HOME or TMPDIR"
+        )
+    return 0
+
+
+def _validated_unix_socket_metrics(path: Path) -> dict[str, int | bool]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Cuttlefish Unix socket audit record is unavailable")
+    metrics = _read_json(path)
+    capacity = metrics.get("capacityBytes")
+    nul_bytes = metrics.get("terminatingNulBytes")
+    socket_count = metrics.get("socketCount")
+    path_bytes = metrics.get("maxEncodedPathBytes")
+    sun_path_bytes = metrics.get("maxSunPathBytesIncludingNul")
+    if (
+        type(capacity) is not int
+        or capacity != LINUX_SUN_PATH_CAPACITY
+        or type(nul_bytes) is not int
+        or nul_bytes != 1
+        or type(socket_count) is not int
+        or socket_count < 0
+        or type(path_bytes) is not int
+        or path_bytes < 0
+        or type(sun_path_bytes) is not int
+        or not 0 <= sun_path_bytes <= capacity
+        or (socket_count == 0 and (path_bytes != 0 or sun_path_bytes != 0))
+        or (
+            socket_count > 0
+            and (path_bytes + nul_bytes != sun_path_bytes or path_bytes == 0)
+        )
+    ):
+        raise ValueError("Cuttlefish Unix socket audit record is invalid")
+    return {
+        "capacityBytes": capacity,
+        "terminatingNulBytes": nul_bytes,
+        "socketCount": socket_count,
+        "maxEncodedPathBytes": path_bytes,
+        "maxSunPathBytesIncludingNul": sun_path_bytes,
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -169,54 +896,268 @@ def _git_blob_text(repo_root: Path, revision: str) -> str:
     return result.stdout
 
 
+def _git_blob_bytes(repo_root: Path, revision: str) -> bytes:
+    result = subprocess.run(
+        ["git", "show", revision],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise ValueError("git show failed while verifying committed tool bytes")
+    return result.stdout
+
+
 def _baseline_commit(repo_root: Path, baseline_record: Path) -> str:
-    baseline_host = baseline_record / "host.json"
+    repo_root = repo_root.resolve()
+    baseline_record = baseline_record.resolve()
     try:
-        relative = baseline_host.relative_to(repo_root)
+        relative = baseline_record.relative_to(repo_root)
     except ValueError as error:
         raise ValueError("baseline record must be inside the repository") from error
+    if relative != BASELINE_RELATIVE:
+        raise ValueError("diagnosis must use the pinned canonical baseline record")
+    if not re.fullmatch(r"[0-9a-f]{40}", BASELINE_COMMIT):
+        raise ValueError("pinned baseline commit has an invalid format")
     commit = _git(
         repo_root,
-        "log",
-        "-1",
-        "--format=%H",
-        "--",
-        relative.as_posix(),
+        "rev-parse",
+        "--verify",
+        f"{BASELINE_COMMIT}^{{commit}}",
     )
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise ValueError("could not identify the committed baseline record revision")
+    if commit != BASELINE_COMMIT:
+        raise ValueError("pinned baseline commit is unavailable")
     return commit
 
 
 def _verify_tool_revisions(
     repo_root: Path,
     baseline_record: Path,
-) -> tuple[str, dict[str, str]]:
-    commit = _baseline_commit(repo_root, baseline_record)
-    blobs: dict[str, str] = {}
+) -> tuple[str, dict[str, str], str, dict[str, str]]:
+    baseline_commit = _baseline_commit(repo_root, baseline_record)
+    observed_commit = _git(repo_root, "rev-parse", "HEAD")
+    if not re.fullmatch(r"[0-9a-f]{40}", observed_commit):
+        raise ValueError("could not identify the committed capture tool revision")
+    baseline_blobs: dict[str, str] = {}
+    observed_blobs: dict[str, str] = {}
     for path in TOOL_PATHS:
-        baseline_blob = _git(repo_root, "rev-parse", f"{commit}:{path.as_posix()}")
-        current_blob = _git(repo_root, "hash-object", "--", path.as_posix())
+        baseline_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{baseline_commit}:{path.as_posix()}",
+        )
+        observed_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{observed_commit}:{path.as_posix()}",
+        )
+        working_blob = _git(repo_root, "hash-object", "--", path.as_posix())
         if not re.fullmatch(r"[0-9a-f]{40}", baseline_blob):
             raise ValueError(f"baseline is missing tracked tool {path.as_posix()}")
-        if current_blob != baseline_blob:
+        if not re.fullmatch(r"[0-9a-f]{40}", observed_blob):
             raise ValueError(
-                f"capture tool differs from the baseline revision: {path.as_posix()}"
+                f"current revision is missing tracked tool {path.as_posix()}"
             )
-        blobs[path.as_posix()] = current_blob
-    return commit, blobs
+        if _git(repo_root, "status", "--porcelain", "--", path.as_posix()):
+            raise ValueError(f"capture tool has uncommitted changes: {path.as_posix()}")
+        if working_blob != observed_blob:
+            raise ValueError(
+                f"capture tool differs from committed HEAD: {path.as_posix()}"
+            )
+        baseline_blobs[path.as_posix()] = baseline_blob
+        observed_blobs[path.as_posix()] = observed_blob
+    return baseline_commit, baseline_blobs, observed_commit, observed_blobs
+
+
+def verify_tool_copy(
+    repo_root: Path,
+    baseline_record: Path,
+    host_identity: dict[str, Any],
+    tool_copy_root: Path,
+    canonical_capture_copy: Path,
+    manifest_copy_root: Path,
+    experiment_root: Path,
+    patched_capture: Path,
+) -> None:
+    repo_root = repo_root.resolve()
+    baseline_record = baseline_record.resolve()
+    if baseline_record != repo_root / BASELINE_RELATIVE:
+        raise ValueError("tool provenance must use the pinned canonical baseline")
+    if host_identity.get("baselineRecord") != BASELINE_RELATIVE.as_posix():
+        raise ValueError("tool provenance names an unexpected baseline record")
+
+    baseline_commit = host_identity.get("baselineToolCommit")
+    observed_commit = host_identity.get("observedToolCommit")
+    if not isinstance(baseline_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", baseline_commit
+    ):
+        raise ValueError("baseline tool commit has an invalid format")
+    if not isinstance(observed_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", observed_commit
+    ):
+        raise ValueError("observed tool commit has an invalid format")
+
+    expected_paths = {path.as_posix() for path in TOOL_PATHS}
+    provenance_maps: dict[str, dict[str, str]] = {}
+    for field in ("baselineToolBlobs", "observedToolBlobs"):
+        blob_map = host_identity.get(field)
+        if not isinstance(blob_map, dict) or set(blob_map) != expected_paths:
+            raise ValueError(
+                f"{field} must contain exactly the canonical capture tool paths"
+            )
+        if not all(
+            isinstance(blob, str) and re.fullmatch(r"[0-9a-f]{40}", blob)
+            for blob in blob_map.values()
+        ):
+            raise ValueError(f"{field} contains an invalid Git blob ID")
+        provenance_maps[field] = blob_map
+
+    if baseline_commit != _baseline_commit(repo_root, baseline_record):
+        raise ValueError("baseline tool commit differs from the pinned baseline")
+    if observed_commit != _git(repo_root, "rev-parse", "HEAD"):
+        raise ValueError(
+            "observed tool commit differs from the current repository HEAD"
+        )
+    if tool_copy_root.is_symlink() or not tool_copy_root.is_dir():
+        raise ValueError("private canonical tool copy must be a real directory")
+    if canonical_capture_copy.is_symlink() or not canonical_capture_copy.is_file():
+        raise ValueError("private unpatched capture script copy is missing or unsafe")
+    if manifest_copy_root.is_symlink() or not manifest_copy_root.is_dir():
+        raise ValueError("private manifest copy must be a real directory")
+
+    for path in TOOL_PATHS:
+        relative_path = path.as_posix()
+        baseline_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{baseline_commit}:{relative_path}",
+        )
+        observed_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{observed_commit}:{relative_path}",
+        )
+        if provenance_maps["baselineToolBlobs"][relative_path] != baseline_blob:
+            raise ValueError(
+                f"baseline tool blob differs from committed provenance: {relative_path}"
+            )
+        if provenance_maps["observedToolBlobs"][relative_path] != observed_blob:
+            raise ValueError(
+                f"observed tool blob differs from committed provenance: {relative_path}"
+            )
+
+        if path == MANIFEST_RELATIVE:
+            copied_path = manifest_copy_root / path.name
+        elif path == TOOL_PATHS[0]:
+            copied_path = canonical_capture_copy
+        else:
+            copied_path = tool_copy_root / path.name
+        if copied_path.is_symlink() or not copied_path.is_file():
+            raise ValueError(f"private canonical tool copy is missing: {path.name}")
+        contents = copied_path.read_bytes()
+        copied_blob = hashlib.sha1(
+            f"blob {len(contents)}\0".encode("ascii") + contents
+        ).hexdigest()
+        if copied_blob != observed_blob:
+            raise ValueError(
+                f"private canonical tool copy differs from observed revision: "
+                f"{path.name}"
+            )
+
+    experiment_sources = host_identity.get("experimentSources")
+    expected_experiment_sources = {*EXPERIMENT_TOOL_NAMES, "patched-capture.sh"}
+    if (
+        not isinstance(experiment_sources, dict)
+        or set(experiment_sources) != expected_experiment_sources
+    ):
+        raise ValueError(
+            "experimentSources must contain exactly the copied experiment tools"
+        )
+    if not all(
+        isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+        for digest in experiment_sources.values()
+    ):
+        raise ValueError("experimentSources contains an invalid SHA-256 digest")
+    if experiment_root.is_symlink() or not experiment_root.is_dir():
+        raise ValueError("private experiment tool copy must be a real directory")
+    if patched_capture.is_symlink() or not patched_capture.is_file():
+        raise ValueError("private patched capture copy is missing or unsafe")
+    if patched_capture.resolve() != (tool_copy_root / TOOL_PATHS[0].name).resolve():
+        raise ValueError("patched capture verification must target the runnable copy")
+
+    for name in EXPERIMENT_TOOL_NAMES:
+        copied_path = experiment_root / name
+        if copied_path.is_symlink() or not copied_path.is_file():
+            raise ValueError(f"private experiment tool copy is missing: {name}")
+        relative_path = (EXPERIMENT_RELATIVE / name).as_posix()
+        committed_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{observed_commit}:{relative_path}",
+        )
+        if _git(repo_root, "status", "--porcelain", "--", relative_path):
+            raise ValueError(f"experiment source has uncommitted changes: {name}")
+        if _git(repo_root, "hash-object", "--", relative_path) != committed_blob:
+            raise ValueError(f"experiment source differs from committed HEAD: {name}")
+        committed_source = _git_blob_bytes(
+            repo_root,
+            f"{observed_commit}:{relative_path}",
+        )
+        committed_digest = hashlib.sha256(committed_source).hexdigest()
+        if experiment_sources[name] != committed_digest:
+            raise ValueError(
+                f"experiment source digest differs from committed HEAD: {name}"
+            )
+        if copied_path.read_bytes() != committed_source:
+            raise ValueError(
+                f"private experiment tool copy differs from committed HEAD: {name}"
+            )
+    for name in ("capture_bounded.py", "capture_processes.py"):
+        runtime_copy = tool_copy_root / name
+        if runtime_copy.is_symlink() or not runtime_copy.is_file():
+            raise ValueError(f"private runtime experiment tool copy is missing: {name}")
+        runtime_digest = hashlib.sha256(runtime_copy.read_bytes()).hexdigest()
+        if runtime_digest != experiment_sources[name]:
+            raise ValueError(
+                f"private runtime experiment tool copy differs from committed "
+                f"source: {name}"
+            )
+    patched_digest = hashlib.sha256(patched_capture.read_bytes()).hexdigest()
+    if patched_digest != experiment_sources["patched-capture.sh"]:
+        raise ValueError("private patched capture copy differs from recorded source")
 
 
 def _experiment_source_hashes(
+    repo_root: Path,
+    observed_commit: str,
     experiment_root: Path,
     patched_capture: Path,
 ) -> dict[str, str]:
     sources: dict[str, str] = {}
     for name in EXPERIMENT_TOOL_NAMES:
-        path = experiment_root / name
-        if path.is_symlink() or not path.is_file():
+        copied_path = experiment_root / name
+        if copied_path.is_symlink() or not copied_path.is_file():
             raise ValueError(f"experiment source is missing or unsafe: {name}")
-        sources[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        relative_path = (EXPERIMENT_RELATIVE / name).as_posix()
+        committed_blob = _git(
+            repo_root,
+            "rev-parse",
+            f"{observed_commit}:{relative_path}",
+        )
+        working_blob = _git(repo_root, "hash-object", "--", relative_path)
+        if _git(repo_root, "status", "--porcelain", "--", relative_path):
+            raise ValueError(f"experiment source has uncommitted changes: {name}")
+        if working_blob != committed_blob:
+            raise ValueError(f"experiment source differs from committed HEAD: {name}")
+        committed_source = _git_blob_bytes(
+            repo_root,
+            f"{observed_commit}:{relative_path}",
+        )
+        if copied_path.read_bytes() != committed_source:
+            raise ValueError(
+                f"private experiment source differs from committed HEAD: {name}"
+            )
+        sources[name] = hashlib.sha256(committed_source).hexdigest()
     if patched_capture.is_symlink() or not patched_capture.is_file():
         raise ValueError("patched capture script is missing or unsafe")
     sources["patched-capture.sh"] = hashlib.sha256(
@@ -1074,6 +2015,176 @@ def discard_private_workspace(
         os.close(data_descriptor)
 
 
+def _short_cvd_marker_content(
+    root: Path,
+    work_root: Path,
+    ownership_token: str,
+) -> bytes:
+    if re.fullmatch(r"[a-f0-9]{64}", ownership_token) is None:
+        raise ValueError("short Cuttlefish HOME ownership token is invalid")
+    return (
+        f"APKRun Cuttlefish short HOME v1\n{ownership_token}\n{work_root}\n{root}\n"
+    ).encode()
+
+
+def _restore_short_cvd_marker(
+    root_descriptor: int,
+    root: Path,
+    work_root: Path,
+    ownership_token: str,
+) -> None:
+    descriptor = os.open(
+        ".apkrun-cvd-short-home",
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=root_descriptor,
+    )
+    try:
+        _write_all(
+            descriptor,
+            _short_cvd_marker_content(root, work_root, ownership_token),
+        )
+        os.fsync(descriptor)
+    except BaseException:
+        try:
+            os.unlink(".apkrun-cvd-short-home", dir_fd=root_descriptor)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def discard_short_cvd_home_root(
+    root: Path,
+    work_root: Path,
+    data_root: Path,
+    ownership_token: str,
+    host_dir: Path,
+    state_root: Path,
+    socket_metrics_path: Path,
+) -> None:
+    _validate_generated_work_root(work_root, data_root, ownership_token)
+    physical_tmp = Path(os.path.realpath("/tmp"))
+    if (
+        not root.is_absolute()
+        or root.parent != physical_tmp
+        or re.fullmatch(r"x\.[A-Za-z0-9]{6}", root.name) is None
+        or root.is_symlink()
+    ):
+        raise ValueError("short Cuttlefish HOME root is outside physical /tmp")
+    if not root.exists():
+        return
+    parent_descriptor = _open_directory_chain(physical_tmp)
+    root_descriptor: int | None = None
+    tmp_descriptor: int | None = None
+    expected_marker = _short_cvd_marker_content(root, work_root, ownership_token)
+    tmp_removed = False
+    marker_removed = False
+    try:
+        root_stat = _stat_entry_at(parent_descriptor, root.name)
+        if not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.getuid():
+            raise ValueError("short Cuttlefish HOME root is unsafe")
+        root_descriptor = _open_child_directory(parent_descriptor, root.name)
+        if not _same_inode(os.fstat(root_descriptor), root_stat):
+            raise OSError(errno.EBUSY, "short Cuttlefish HOME root changed", str(root))
+        if stat.S_IMODE(root_stat.st_mode) != 0o700:
+            raise ValueError("short Cuttlefish HOME root is not private")
+
+        marker_stat = _stat_entry_at(root_descriptor, ".apkrun-cvd-short-home")
+        if (
+            not stat.S_ISREG(marker_stat.st_mode)
+            or marker_stat.st_uid != os.getuid()
+            or stat.S_IMODE(marker_stat.st_mode) != 0o600
+        ):
+            raise ValueError("short Cuttlefish HOME marker is unsafe")
+        marker_descriptor = os.open(
+            ".apkrun-cvd-short-home",
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW,
+            dir_fd=root_descriptor,
+        )
+        try:
+            if os.read(marker_descriptor, len(expected_marker) + 1) != expected_marker:
+                raise ValueError("short Cuttlefish HOME marker does not match this run")
+        finally:
+            os.close(marker_descriptor)
+
+        with os.scandir(root_descriptor) as entries:
+            root_entries = {entry.name for entry in entries}
+        if root_entries != {"t", ".apkrun-cvd-short-home"}:
+            raise ValueError("short Cuttlefish HOME root has unexpected entries")
+        tmp_stat = _stat_entry_at(root_descriptor, "t")
+        if not stat.S_ISDIR(tmp_stat.st_mode) or tmp_stat.st_uid != os.getuid():
+            raise ValueError("short Cuttlefish HOME temporary directory is unsafe")
+        tmp_descriptor = _open_child_directory(root_descriptor, "t")
+        if (
+            not _same_inode(os.fstat(tmp_descriptor), tmp_stat)
+            or stat.S_IMODE(tmp_stat.st_mode) != 0o700
+        ):
+            raise OSError(
+                errno.EBUSY,
+                "short Cuttlefish HOME temporary directory changed",
+                str(root / "t"),
+            )
+
+        require_no_private_cvd_processes(host_dir, root / "t", root / "t")
+        with os.scandir(tmp_descriptor) as entries:
+            temporary_has_entries = next(entries, None) is not None
+        if temporary_has_entries:
+            _validated_unix_socket_metrics(socket_metrics_path)
+        audit_unix_socket_paths([root / "t", state_root])
+        require_no_private_cvd_processes(host_dir, root / "t", root / "t")
+        _remove_directory_contents(tmp_descriptor)
+        os.close(tmp_descriptor)
+        tmp_descriptor = None
+        _remove_directory_entry_at(root_descriptor, "t", tmp_stat)
+        tmp_removed = True
+        _unlink_entry_at(
+            root_descriptor,
+            ".apkrun-cvd-short-home",
+            marker_stat,
+        )
+        marker_removed = True
+        current_root_stat = _stat_entry_at(parent_descriptor, root.name)
+        if not _same_inode(current_root_stat, root_stat):
+            raise OSError(
+                errno.EBUSY,
+                "short Cuttlefish HOME root changed before removal",
+                str(root),
+            )
+        os.rmdir(root.name, dir_fd=parent_descriptor)
+    except BaseException:
+        if root_descriptor is not None and (tmp_removed or marker_removed):
+            try:
+                if tmp_removed:
+                    os.mkdir("t", mode=0o700, dir_fd=root_descriptor)
+                if marker_removed:
+                    _restore_short_cvd_marker(
+                        root_descriptor,
+                        root,
+                        work_root,
+                        ownership_token,
+                    )
+            except OSError as restore_error:
+                raise OSError(
+                    errno.EBUSY,
+                    "short Cuttlefish HOME cleanup failed and its ownership "
+                    "marker could not be restored",
+                    str(root),
+                ) from restore_error
+        raise
+    finally:
+        if tmp_descriptor is not None:
+            os.close(tmp_descriptor)
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+        os.close(parent_descriptor)
+
+
 def _rename_directory_no_replace(
     source_parent_descriptor: int,
     source_name: str,
@@ -1335,8 +2446,104 @@ def patch_capture_script(path: Path) -> None:
         ("#!/bin/sh\n", "#!/usr/bin/env bash\n"),
         ("set -eu\n", "set -euo pipefail\n"),
         (
+            'script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)\n',
+            (
+                'if [ -n "${APKRUN_CAPTURE_SCRIPT_DIR:-}" ]; then\n'
+                "  script_dir=$APKRUN_CAPTURE_SCRIPT_DIR\n"
+                "else\n"
+                '  script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)\n'
+                "fi\n"
+            ),
+        ),
+        (
+            (
+                '  if [ "$started" -eq 1 ]; then\n'
+                "    if remove_cvd_group_bounded >/dev/null 2>&1; then\n"
+                "      started=0\n"
+                '      if rm -rf "$cvd_home"; then\n'
+                "        cvd_home=\n"
+                "        preserve_cvd_home=0\n"
+                "      else\n"
+                "        preserve_cvd_home=1\n"
+                "      fi\n"
+                "    else\n"
+                "      preserve_cvd_home=1\n"
+                "    fi\n"
+                "  fi"
+            ),
+            (
+                '  if [ "$started" -eq 1 ]; then\n'
+                "    if remove_cvd_group_bounded >/dev/null 2>&1; then\n"
+                "      started=0\n"
+                "      preserve_cvd_home=0\n"
+                "    else\n"
+                "      preserve_cvd_home=1\n"
+                "    fi\n"
+                "  fi"
+            ),
+        ),
+        (
+            (
+                '  if [ -n "$cvd_home" ] && [ -d "$cvd_home" ]; then\n'
+                '    if [ "$preserve_cvd_home" -eq 1 ]; then\n'
+                "      printf 'Cuttlefish HOME retained for inspection or cleanup: %s\\n' \"$cvd_home\" >&2\n"
+                '    elif rm -rf "$cvd_home"; then\n'
+                "      cvd_home=\n"
+                "    else\n"
+                "      printf 'could not remove temporary Cuttlefish HOME: %s\\n' \"$cvd_home\" >&2\n"
+                "    fi\n"
+                "  fi"
+            ),
+            (
+                '  if [ -n "$cvd_home" ] && [ -d "$cvd_home" ]; then\n'
+                '    if [ "$preserve_cvd_home" -eq 0 ]; then\n'
+                '      if [ -z "${APKRUN_EXPERIMENT_TOOLS:-}" ] \\\n'
+                '        || [ -z "${APKRUN_CVD_HOME_TMPDIR:-}" ] \\\n'
+                '        || [ -z "${APKRUN_CVD_STATE_DIR:-}" ] \\\n'
+                '        || [ -z "${APKRUN_EXPERIMENT_SOCKET_METRICS:-}" ]; then\n'
+                "        preserve_cvd_home=1\n"
+                "        exit_status=1\n"
+                "        printf 'Cuttlefish HOME retained because cleanup verification is not configured.\\n' >&2\n"
+                '      elif ! python3 "$APKRUN_EXPERIMENT_TOOLS/experiment_support.py" \\\n'
+                '        check-cvd-processes --host-dir "$CVD_HOST_DIR" \\\n'
+                '        --home-root "$cvd_home" --tmpdir-root "$APKRUN_CVD_HOME_TMPDIR"; then\n'
+                "        preserve_cvd_home=1\n"
+                "        exit_status=1\n"
+                "        printf 'Cuttlefish HOME retained because a host process may still use it.\\n' >&2\n"
+                '      elif ! python3 "$APKRUN_EXPERIMENT_TOOLS/experiment_support.py" \\\n'
+                '        audit-unix-sockets --root "$APKRUN_CVD_HOME_TMPDIR" \\\n'
+                '        --root "$APKRUN_CVD_STATE_DIR" \\\n'
+                '        --output "$APKRUN_EXPERIMENT_SOCKET_METRICS"; then\n'
+                "        preserve_cvd_home=1\n"
+                "        exit_status=1\n"
+                "        printf 'Cuttlefish HOME retained because socket paths could not be verified.\\n' >&2\n"
+                '      elif ! python3 "$APKRUN_EXPERIMENT_TOOLS/experiment_support.py" \\\n'
+                '        check-cvd-processes --host-dir "$CVD_HOST_DIR" \\\n'
+                '        --home-root "$cvd_home" --tmpdir-root "$APKRUN_CVD_HOME_TMPDIR"; then\n'
+                "        preserve_cvd_home=1\n"
+                "        exit_status=1\n"
+                "        printf 'Cuttlefish HOME retained because a host process appeared during cleanup verification.\\n' >&2\n"
+                '      elif rm -rf "$cvd_home"; then\n'
+                "        cvd_home=\n"
+                "      else\n"
+                "        preserve_cvd_home=1\n"
+                "        exit_status=1\n"
+                "        printf 'could not remove temporary Cuttlefish HOME: %s\\n' \"$cvd_home\" >&2\n"
+                "      fi\n"
+                "    fi\n"
+                '    if [ -n "$cvd_home" ] && [ "$preserve_cvd_home" -eq 1 ]; then\n'
+                "      printf 'Cuttlefish HOME retained for inspection or cleanup: %s\\n' \"$cvd_home\" >&2\n"
+                "    fi\n"
+                "  fi"
+            ),
+        ),
+        (
             'PATH="$CVD_HOST_DIR/bin:$PATH"',
             'PATH="$APKRUN_DIAGNOSTIC_ADB_SHIM_DIR:$CVD_HOST_DIR/bin:$PATH"',
+        ),
+        (
+            'cvd_home=$(mktemp -d "${TMPDIR:-/tmp}/apkrun-cvd-home.${profile}.XXXXXX")',
+            'cvd_home=$(mktemp -d "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX")',
         ),
         (
             ('capture_adb() {\n  HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"\n}\n'),
@@ -1488,7 +2695,7 @@ def patch_capture_script(path: Path) -> None:
                 ': > "$stage/cvd-create-console.log"\n'
                 "cvd_command_failed=0\n"
                 'if ! launch_profile 2>&1 | python3 "$script_dir/capture_bounded.py" \\\n'
-                '  --stdin --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
+                '  --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '  --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-create.json" --append; then\n'
                 "  cvd_command_failed=1\n"
                 "fi\n"
@@ -1496,7 +2703,7 @@ def patch_capture_script(path: Path) -> None:
                 '  && ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\\n'
                 "    start --gpu_mode=none 2>&1 \\\n"
                 '    | python3 "$script_dir/capture_bounded.py" \\\n'
-                '      --stdin --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
+                '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
                 "  cvd_command_failed=1\n"
                 "fi\n"
@@ -1580,6 +2787,8 @@ def verify_host(
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     baseline_record = baseline_record.resolve()
+    if baseline_record != repo_root / BASELINE_RELATIVE:
+        raise ValueError("diagnosis must use the pinned canonical baseline record")
     commit = _baseline_commit(repo_root, baseline_record)
     baseline, _, baseline_console = _committed_baseline(
         repo_root,
@@ -1610,8 +2819,18 @@ def verify_host(
         raise ValueError(
             "installed Cuttlefish version or VCS revision differs from baseline"
         )
-    _, blobs = _verify_tool_revisions(repo_root, baseline_record)
-    experiment_sources = _experiment_source_hashes(experiment_root, patched_capture)
+    (
+        baseline_tool_commit,
+        baseline_tool_blobs,
+        observed_tool_commit,
+        observed_tool_blobs,
+    ) = _verify_tool_revisions(repo_root, baseline_record)
+    experiment_sources = _experiment_source_hashes(
+        repo_root,
+        observed_tool_commit,
+        experiment_root,
+        patched_capture,
+    )
     return {
         "schemaVersion": 1,
         "baselineRecord": BASELINE_RELATIVE.as_posix(),
@@ -1619,8 +2838,10 @@ def verify_host(
         "observedCvd": observed_identity,
         "baselineHost": baseline_host,
         "observedHost": observed_host,
-        "baselineToolCommit": commit,
-        "toolBlobs": blobs,
+        "baselineToolCommit": baseline_tool_commit,
+        "baselineToolBlobs": baseline_tool_blobs,
+        "observedToolCommit": observed_tool_commit,
+        "observedToolBlobs": observed_tool_blobs,
         "experimentSources": experiment_sources,
         "baselineGpuMode": "guest_swiftshader",
         "gpuMode": "none",
@@ -1632,6 +2853,13 @@ def verify_host(
 
 def build_experiment_record(
     capture_record: Path,
+    repo_root: Path,
+    baseline_record: Path,
+    tool_copy_root: Path,
+    canonical_capture_copy: Path,
+    manifest_copy_root: Path,
+    experiment_root: Path,
+    patched_capture: Path,
     host_identity_path: Path,
     logcat_summary_path: Path,
     adb_state_path: Path,
@@ -1639,9 +2867,21 @@ def build_experiment_record(
     adb_endpoint: str,
     capture_status_root: Path,
     capture_run_status_path: Path,
+    socket_metrics_path: Path,
+    fleet_socket_metrics_path: Path,
 ) -> dict[str, Any]:
     host, instance = _gpu_configuration(capture_record)
     host_identity = _read_json(host_identity_path)
+    verify_tool_copy(
+        repo_root,
+        baseline_record,
+        host_identity,
+        tool_copy_root,
+        canonical_capture_copy,
+        manifest_copy_root,
+        experiment_root,
+        patched_capture,
+    )
     logcat_summary = _read_json(logcat_summary_path)
     capture_run_status = _read_json(capture_run_status_path)
     baseline_cvd = host_identity.get("baselineCvd")
@@ -1718,6 +2958,10 @@ def build_experiment_record(
     if not all(isinstance(value, (int, bool)) for value in logcat_summary.values()):
         raise ValueError("logcat summary contains unexpected non-numeric data")
     bounded_capture = _capture_statuses(capture_status_root)
+    socket_metrics = {
+        "capture": _validated_unix_socket_metrics(socket_metrics_path),
+        "fleet": _validated_unix_socket_metrics(fleet_socket_metrics_path),
+    }
     guest_logcat = bounded_capture["files"].get(
         "guest-logcat",
         {
@@ -1740,7 +2984,9 @@ def build_experiment_record(
         "baselineHost": baseline_host,
         "observedHost": observed_host,
         "baselineToolCommit": host_identity["baselineToolCommit"],
-        "toolBlobs": host_identity["toolBlobs"],
+        "baselineToolBlobs": host_identity["baselineToolBlobs"],
+        "observedToolCommit": host_identity["observedToolCommit"],
+        "observedToolBlobs": host_identity["observedToolBlobs"],
         "experimentSources": host_identity["experimentSources"],
         "captureExitCode": capture_exit_code,
         "captureRun": capture_run_status,
@@ -1754,6 +3000,7 @@ def build_experiment_record(
         "adbStateSampleCount": state_sample_count,
         "logcat": logcat_summary,
         "boundedCapture": bounded_capture,
+        "unixSocketPaths": socket_metrics,
         "guestLogcatCapture": guest_logcat,
         "rawLogcatRetained": False,
     }
@@ -1797,8 +3044,47 @@ def main() -> int:
     host_parser.add_argument("--patched-capture", type=Path, required=True)
     host_parser.add_argument("--output", type=Path, required=True)
 
+    tool_copy_parser = subparsers.add_parser("verify-tool-copy")
+    tool_copy_parser.add_argument("--repo-root", type=Path, required=True)
+    tool_copy_parser.add_argument("--baseline-record", type=Path, required=True)
+    tool_copy_parser.add_argument("--host-identity", type=Path, required=True)
+    tool_copy_parser.add_argument("--tool-copy-root", type=Path, required=True)
+    tool_copy_parser.add_argument("--canonical-capture-copy", type=Path, required=True)
+    tool_copy_parser.add_argument("--manifest-copy-root", type=Path, required=True)
+    tool_copy_parser.add_argument("--experiment-root", type=Path, required=True)
+    tool_copy_parser.add_argument("--patched-capture", type=Path, required=True)
+
     patch_parser = subparsers.add_parser("patch-capture")
     patch_parser.add_argument("--path", type=Path, required=True)
+
+    socket_parser = subparsers.add_parser("audit-unix-sockets")
+    socket_parser.add_argument("--root", type=Path, action="append", required=True)
+    socket_parser.add_argument("--output", type=Path, required=True)
+
+    process_parser = subparsers.add_parser("check-cvd-processes")
+    process_parser.add_argument("--host-dir", type=Path, required=True)
+    process_parser.add_argument("--home-root", type=Path, required=True)
+    process_parser.add_argument("--tmpdir-root", type=Path, required=True)
+    process_parser.add_argument("--process-root", type=Path, default=Path("/proc"))
+
+    process_start_parser = subparsers.add_parser("process-start-time")
+    process_start_parser.add_argument("--pid", type=int, required=True)
+
+    signal_broker_parser = subparsers.add_parser("signal-process-broker")
+    signal_broker_parser.add_argument("--pid", type=int, required=True)
+    signal_broker_parser.add_argument("--start-time", required=True)
+    signal_broker_parser.add_argument("--ready-file", type=Path, required=True)
+    signal_broker_parser.add_argument("--exited-file", type=Path, required=True)
+    signal_broker_parser.add_argument("--stopped-file", type=Path, required=True)
+
+    short_root_parser = subparsers.add_parser("discard-short-cvd-root")
+    short_root_parser.add_argument("--root", type=Path, required=True)
+    short_root_parser.add_argument("--work-root", type=Path, required=True)
+    short_root_parser.add_argument("--data-root", type=Path, required=True)
+    short_root_parser.add_argument("--ownership-token", required=True)
+    short_root_parser.add_argument("--host-dir", type=Path, required=True)
+    short_root_parser.add_argument("--state-root", type=Path, required=True)
+    short_root_parser.add_argument("--socket-metrics", type=Path, required=True)
 
     scrub_parser = subparsers.add_parser("scrub-logcat")
     scrub_parser.add_argument("--work-root", type=Path, required=True)
@@ -1826,6 +3112,13 @@ def main() -> int:
 
     record_parser = subparsers.add_parser("record")
     record_parser.add_argument("--capture-record", type=Path, required=True)
+    record_parser.add_argument("--repo-root", type=Path, required=True)
+    record_parser.add_argument("--baseline-record", type=Path, required=True)
+    record_parser.add_argument("--tool-copy-root", type=Path, required=True)
+    record_parser.add_argument("--canonical-capture-copy", type=Path, required=True)
+    record_parser.add_argument("--manifest-copy-root", type=Path, required=True)
+    record_parser.add_argument("--experiment-root", type=Path, required=True)
+    record_parser.add_argument("--patched-capture", type=Path, required=True)
     record_parser.add_argument("--host-identity", type=Path, required=True)
     record_parser.add_argument("--logcat-summary", type=Path, required=True)
     record_parser.add_argument("--adb-state", type=Path, required=True)
@@ -1833,6 +3126,8 @@ def main() -> int:
     record_parser.add_argument("--adb-endpoint", required=True)
     record_parser.add_argument("--capture-status-root", type=Path, required=True)
     record_parser.add_argument("--capture-run-status", type=Path, required=True)
+    record_parser.add_argument("--socket-metrics", type=Path, required=True)
+    record_parser.add_argument("--fleet-socket-metrics", type=Path, required=True)
     record_parser.add_argument("--output", type=Path, required=True)
 
     arguments = parser.parse_args()
@@ -1844,6 +3139,41 @@ def main() -> int:
             return 0
         if arguments.command == "patch-capture":
             patch_capture_script(arguments.path)
+            return 0
+        if arguments.command == "audit-unix-sockets":
+            metrics = audit_unix_socket_paths(arguments.root)
+            _atomic_json(arguments.output, metrics)
+            return 0
+        if arguments.command == "check-cvd-processes":
+            require_no_private_cvd_processes(
+                arguments.host_dir,
+                arguments.home_root,
+                arguments.tmpdir_root,
+                arguments.process_root,
+            )
+            return 0
+        if arguments.command == "process-start-time":
+            print(_process_start_time(Path("/proc") / str(arguments.pid)))
+            return 0
+        if arguments.command == "signal-process-broker":
+            run_process_signal_broker(
+                arguments.pid,
+                arguments.start_time,
+                arguments.ready_file,
+                arguments.exited_file,
+                arguments.stopped_file,
+            )
+            return 0
+        if arguments.command == "discard-short-cvd-root":
+            discard_short_cvd_home_root(
+                arguments.root,
+                arguments.work_root,
+                arguments.data_root,
+                arguments.ownership_token,
+                arguments.host_dir,
+                arguments.state_root,
+                arguments.socket_metrics,
+            )
             return 0
         if arguments.command == "scrub-logcat":
             scrub_raw_logcat(
@@ -1885,9 +3215,28 @@ def main() -> int:
                 arguments.experiment_root,
                 arguments.patched_capture,
             )
+        elif arguments.command == "verify-tool-copy":
+            verify_tool_copy(
+                arguments.repo_root,
+                arguments.baseline_record,
+                _read_json(arguments.host_identity),
+                arguments.tool_copy_root,
+                arguments.canonical_capture_copy,
+                arguments.manifest_copy_root,
+                arguments.experiment_root,
+                arguments.patched_capture,
+            )
+            return 0
         else:
             document = build_experiment_record(
                 arguments.capture_record,
+                arguments.repo_root,
+                arguments.baseline_record,
+                arguments.tool_copy_root,
+                arguments.canonical_capture_copy,
+                arguments.manifest_copy_root,
+                arguments.experiment_root,
+                arguments.patched_capture,
                 arguments.host_identity,
                 arguments.logcat_summary,
                 arguments.adb_state,
@@ -1895,6 +3244,8 @@ def main() -> int:
                 arguments.adb_endpoint,
                 arguments.capture_status_root,
                 arguments.capture_run_status,
+                arguments.socket_metrics,
+                arguments.fleet_socket_metrics,
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

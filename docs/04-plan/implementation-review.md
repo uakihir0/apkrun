@@ -2900,3 +2900,35 @@ configuration path. The separate logical-partition geometry warnings in the
 same capture are not established as causal. This diagnoses the experiment's
 startup failure, not the earlier Android boot stall; repeat the capture and
 continue #064's acceptance checks before drawing that conclusion.
+
+## IR-113: Audit Cuttlefish socket aliases within pinned roots
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, `Experiments/cuttlefish-boot-diagnosis/{experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Traverse each socket-audit root through pinned directory file
+descriptors opened without following symlinks, and recheck directory identity
+and attachment after scanning. Permit a symlink to a socket only when its
+lexically normalized target lies within an audited root, every target-directory
+component opens without following symlinks, and the link, target, parent, and
+root identities remain stable. Measure both the alias and target paths, while
+counting each path once. Continue to reject directory symlinks, targets outside
+the audited roots, symlinked target-directory components, and detected races.
+
+**Reason.** The corrected GPU-none run at
+`$HOME/.local/share/apkrun/cuttlefish-boot-diagnosis-codex-retry-4/results/gpu-none-20261001T215602Z-145104`
+created Cuttlefish's `internal/vhost_user_mac80211` alias to a socket inside
+the same private temporary tree. The target path was 53 bytes including its
+terminating NUL and the alias was 81 bytes, both within Linux's 108-byte
+`sun_path` limit. The previous audit correctly refused to delete the temporary
+root but treated every socket symlink as unsafe. Descriptor-relative target
+verification now accounts for this Cuttlefish layout while still failing
+closed on external targets and path replacement. Regression tests cover
+contained and external aliases, dangling and non-socket target changes, direct
+socket replacement, directory replacement, and a target parent replaced after
+the directory listing. This changes only the isolated diagnostic runner's
+cleanup policy; it does not change the product architecture or establish
+Android boot success.

@@ -1965,3 +1965,103 @@ confirm `sys.boot_completed` nor establish a fatal failure. The host's missing
 GLES support is also only a candidate until the selected graphics path and
 guest-side errors are captured together. Keep the boot cause open until a
 repeat run preserves the live logs and ADB server state before cleanup.
+
+## IR-083: Preserve Cuttlefish logs during startup
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8; `Images/tools/reference/capture.sh`; `Images/tools/reference/capture_cvd_start.py`; `Images/tools/reference/compare_boot.py`; `Images/tools/reference/normalize.yaml`; `Images/tools/tests/test_capture_cvd_start.py`; `Images/tools/tests/test_compare_boot.py`; `Images/tools/tests/test_reference_capture.py` |
+
+**Choice.** Run both `cvd create --nostart` and named-group `cvd start` through
+a Python helper under the shared boot deadline. The helper schedules
+`cvd logs --nopretty` polls 0.5 seconds apart based on each poll's start time,
+then streams its output and snapshots each listed log as soon as its path
+arrives. Poll snapshots stay in a per-poll temporary directory while the
+listing runs. After it exits or is stopped, each complete bounded file
+atomically replaces the last snapshot, even if the listing timed out or
+returned an error. An incomplete read leaves the previous snapshot intact.
+`assemble_cvd.log`, `kernel.log`, and `launcher.log` must each be regular files
+beneath this run's private Cuttlefish HOME and are limited to 64 MiB.
+Each selected log name is attempted at most once per listing poll after its
+path is validated as a regular file beneath the private HOME. An invalid
+duplicate row therefore cannot suppress a later valid path.
+If a listing takes longer than 0.5 seconds, the next poll starts as soon as it
+returns. Final log copies use the same bounded atomic path; a failed copy
+leaves the last snapshot intact. `compare_boot.py` limits plain and compressed
+inputs, decompressed gzip content, normalized output, and compressed gzip
+output to 64 MiB. Before applying each configured substitution, it estimates
+the expanded UTF-8 size and rejects a result above the limit before allocating
+it. Comparison iterates normalized category lines instead of materializing
+`splitlines()` results. JSON and ambiguous command-line redaction enforce the
+same output limit while building their results. Each capture is capped at
+100,000 records and 64 MiB of key/value text across all categories. Log-listing
+paths retain spaces, decoding failures are handled, and child termination runs
+in a `finally` path. Rules and expected-difference input must be regular files,
+are opened without blocking, and are read with a 1 MiB limit. Capture-tree
+walks reject more than 100,000 filesystem entries, and comparison indexes
+recognized files once instead of rescanning and sorting the whole tree for
+every category. Complete PEM private-key blocks are redacted with a single
+linear marker scan whose labels have a fixed length limit.
+The log-listing supervisor remains the process-group leader until the group
+has been terminated and reaped, so failed commands cannot leave same-group
+descendants behind or expose a recycled group ID to cleanup.
+
+**Reason.** Cuttlefish 1.57 removed its live instance logs while cleaning up a
+timed-out `cvd start`, before the previous collector ran; a failed create can
+also leave logs only briefly. Keeping bounded snapshots in the already-private
+capture stage makes failures diagnosable without retaining Cuttlefish HOME.
+The integration tests delay the first listing so the old post-return poll
+schedule misses short-lived create logs. A helper test streams a listed path,
+deletes its source while `cvd logs` is still running, and verifies that the
+snapshot survives. Another test removes the source and times out the listing
+after a valid snapshot was streamed, verifying that the data is kept.
+Other tests cover timed-out start, FIFO rejection, early EOF, paths with
+spaces, malformed or oversized log listings, snapshot-preserving copy
+failure, safe termination of the listing process group, and shutdown of
+TERM-ignoring descendants. Child exit statuses 124 and 137 are mapped to a
+normal command failure so only the helper or shared deadline marks a timeout.
+Normalization redacts host paths attached directly to one-letter options
+across all configured host roots. Quoted JSON paths keep their string
+structure: a tokenizer decodes and rewrites escaped JSON string tokens, then
+re-escapes the value. For an unquoted space-containing host path in a configured
+plain-text host log, a linear token scan applies only to a Cuttlefish
+`command.cc` `Started (pid: …):` record. If a later token containing `/`
+appears, or any continuation token follows the attached path, it redacts the
+path and the ambiguous remainder of that command record. This covers
+dash-prefixed components such as `-x/cvd`, `--workspace/cvd`, and a final
+component without a slash. A short-option token (`-v`, `-vv`, or `-v=1`) or
+`--` immediately followed by a recognized diagnostic phrase preserves it only
+when the remaining context contains known connector words and configured host
+paths; arbitrary suffix tokens are redacted.
+Diagnostic endings at a newline or sentence period are retained, while
+filename-like values such as `error.log` and `error:private` do not qualify.
+Diagnostic suffix paths are preserved only when they are under a configured
+host root and are therefore redacted by the ordinary path rules. Quoted
+host-path normalization treats escaped quotes as part of the path value rather
+than as the end of the quote; disjoint escape and non-escape alternatives keep
+the matcher linear on unterminated input.
+The marker uses the first `Started` record on each line. Ordinary diagnostic
+records do not use this fallback. The scanner processes log lines
+incrementally instead of materializing a line list and avoids
+regular-expression backtracking on long records.
+
+## IR-084: Do not infer composite disks from Cuttlefish instance paths
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8; `Images/reference/16373615/incomplete/default-20261001T001530Z-48053/cuttlefish_config.json`; `Images/tools/reference/capture.sh` |
+
+**Choice.** Keep the normalized `cuttlefish_config.json` and record
+`composite-disk-specs.json` as missing when the config does not expose a
+composite-disk section. Do not synthesize a composite specification from the
+instance's individual image paths.
+
+**Reason.** The real pinned Cuttlefish 1.57.0 capture has an `instances` map
+and no top-level `disks` object, while the existing synthetic fixture used an
+older shape. Individual image paths do not establish the exact
+`os_composite` and persistent-composite topology. Keep the missing-data reason
+visible until an authoritative source for that topology is verified.

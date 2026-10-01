@@ -82,6 +82,7 @@ Images/
 │   │   └── runtime-image-manifest.schema.json
 │   ├── reference/
 │   │   ├── capture.sh             # runs on the Linux reference host (§8)
+│   │   ├── capture_cvd_start.py   # bounds CVD commands and snapshots live logs
 │   │   ├── compare_boot.py
 │   │   └── normalize.yaml         # rules that remove volatile values before diffing
 │   ├── vendor/                    # pinned copies: mkbootimg.py, unpack_bootimg.py (Apache-2.0), avbtool.py (MIT)
@@ -627,7 +628,7 @@ the environment variables in §8.3. The fallback records its source-derived
 | `cuttlefish_runtime/instances/cvd-<n>/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
 | composite disk specs (`os_composite`, persistent composite) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
-| `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
+| `assemble_cvd.log`, `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
 | | `ls -l /dev/hvc*` and which process holds each (`/proc/*/fd`) |
 | | `logcat -d -b all` (gzip), `lshal`, `service list`, `ls /apex`, `pm list features` |
 | | `ip addr`, `ip route`, `ip link`, `dumpsys connectivity` summary |
@@ -657,7 +658,38 @@ shutdown or removal fails. A host-wide lock under `/tmp` serializes
 captures across checkouts on the host, so only one profile capture can run at
 a time. Shutdown is bounded by
 `APKRUN_CVD_STOP_TIMEOUT_SECONDS` (120 seconds by default, followed by a
-10-second forced-stop grace period). An abnormal exit normalizes and moves
+10-second forced-stop grace period).
+
+Both `cvd create --nostart` and named-group `cvd start` run through
+`capture_cvd_start.py` under the remaining shared boot deadline. While either
+command runs, the helper schedules `cvd logs --nopretty` polls 0.5 seconds
+apart from each poll's start time and atomically snapshots
+`assemble_cvd.log`, `kernel.log`, and `launcher.log` into the private staging
+directory. A snapshot is limited to 64 MiB, accepts only regular files beneath
+the private Cuttlefish `HOME`, and remains available if Cuttlefish deletes its
+runtime logs during shutdown. A later artifact copy uses the same bounded,
+atomic path; if that copy fails, the earlier snapshot stays intact. Each log
+name is attempted at most once per listing poll after its path is validated as
+a regular file beneath the private HOME. Invalid duplicate rows cannot suppress
+a later valid path or trigger repeated full-file copies.
+The listing parser preserves spaces in paths. If listing takes longer than
+0.5 seconds, the helper starts the next poll as soon as listing returns, and a
+malformed log listing does not prevent it from terminating the CVD process
+group.
+`compare_boot.py` limits plain and compressed inputs, decompressed gzip
+content, normalized output, and compressed gzip output to 64 MiB. It preflights
+each substitution before allocating an expanded result. Comparison streams
+category lines and rejects each capture above 100,000 records or 64 MiB of
+normalized key/value text across all categories, bounding comparison maps and
+reports. JSON host-path redaction and ambiguous command-line redaction also
+enforce the normalized-output limit while building their results. Rules and
+expected-difference files must be regular files and are opened without
+blocking; reads are limited to 1 MiB. Normalization and comparison reject
+capture trees above 100,000 filesystem entries; comparison indexes recognized
+category files once before reading them. Complete PEM private-key blocks use a
+single linear marker scan with bounded labels.
+
+An abnormal exit normalizes and moves
 staging data under `incomplete/`. If raw logcat cannot be removed, the script
 tries to discard the whole stage and never publishes it. If the host
 filesystem also refuses stage deletion, the script prints the remaining
@@ -678,10 +710,15 @@ When the host cannot run `drm_virgl`, the `target` fallback is explicit:
 properties are copied into `graphics-props-from-source.txt`; the mode and
 revision are recorded in `host.json`.
 
-The host capture also stores `crosvm-command-line.txt`,
+The host capture also stores `assemble_cvd.log`, `crosvm-command-line.txt`,
 `internal-bootconfig.txt` (UTF-8 bootconfig with a valid AVB footer removed),
 `composite-disk-specs.json`, `cuttlefish_config.json`, `kernel.log`, and
-`launcher.log`. The runtime paths are discovered below
+`launcher.log`. During `cvd start`, the capture polls `cvd logs --nopretty`
+and atomically snapshots these three host logs into its private staging
+directory. Each live snapshot is capped at 64 MiB. The final runtime files
+replace the snapshots when available; if Cuttlefish removes them during a
+failed startup, the snapshots remain in the normalized incomplete capture.
+The runtime paths are discovered below
 `$HOME/cuttlefish_runtime`, and stale files from previous runs are excluded.
 
 `guest-capture.txt` is a tab-separated list of output filename and shell
@@ -691,9 +728,12 @@ path remains unverified until the T3 console check. `logcat` is
 compressed on the host with deterministic gzip metadata. The comparator refuses
 gzip artifacts whose compressed or decompressed size exceeds 64 MiB. Serial
 numbers, MAC addresses, common host paths, and complete quoted or unquoted
-secret-keyed values are normalized by
-`normalize.yaml`. The capture is taken from a fresh development guest and must
-not contain secrets or user app data.
+secret-keyed values are normalized by `compare_boot.py` and `normalize.yaml`.
+Private-key blocks are redacted by a linear marker scan.
+JSON host paths are replaced inside escaped JSON string tokens so normalization
+keeps the file valid. Escaped quotes in plain-text paths are handled by
+non-overlapping alternatives to keep matching linear. The capture is taken
+from a fresh development guest and must not contain secrets or user app data.
 
 ### 8.4 Diff against the VZ boot
 

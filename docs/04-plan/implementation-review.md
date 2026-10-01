@@ -2181,13 +2181,49 @@ revision, capture-tool blobs, Linux distribution and kernel, architecture,
 host CPU count, nested-virtualization state, Cuttlefish instance number, four
 guest CPUs, 4096 MiB, and 600-second boot deadline. Write results outside the
 repository by default. Use a dedicated ADB server on a unique private
-`localfilesystem` socket, cap guest outputs and live logcat while streaming,
+`localfilesystem` socket. Pass `--gpu_mode=none` to both `cvd create` and
+`cvd start`, because the first real capture still recorded
+`guest_swiftshader` after only changing the create command. Cap guest outputs
+and live logcat while streaming,
 bound control output before parsing, and enforce a 900-second overall runner
 deadline with process-group cleanup. Publish only counts and boot-state
 samples, and require confirmed capture-process, Cuttlefish, ADB server, ADB
 helper process, and live-logcat cleanup before moving the normalized record
 into the experiment results directory. Scrub regular and in-progress raw
-logcat files before retaining a private failure workspace.
+logcat files before retaining a private failure workspace. If scrubbing fails
+while Cuttlefish still needs cleanup, remove the capture and live-ADB output
+trees with Python's symlink-safe tree removal. Create an ownership marker with
+a per-run random token and the exact workspace path; require the expected
+data-root layout, generated workspace name, and marker before deleting output
+trees or the full workspace. Apply the same token and marker checks to the
+standalone logcat scrub command. Reject control characters in data-root paths
+before printing their canonical spelling to the shell. Open directory
+components without following symbolic links. Create the data root and its
+`work` and `results` children
+through descriptor-relative operations with mode `0700`; reject roots whose
+ancestors are writable by other users unless a root-owned or current-user-owned
+sticky directory protects them. Keep the ownership marker until all other
+workspace entries have been removed so a partial cleanup can be retried. If
+the final directory removal fails, restore the marker through the opened
+workspace descriptor. Retry by generated name only if that name still resolves
+to the same workspace; if it changed, preserve the original marker and require
+manual cleanup rather than replacing the new entry. If all removal attempts
+fail while Cuttlefish remains active,
+preserve its runtime and report that manual cleanup is needed; raw logcat may
+remain in the private workspace until cleanup succeeds. Once Cuttlefish is
+verified clean, attempt to discard the full workspace. Fail closed if the
+startup process check cannot run, and keep normalization, final scrubbing,
+runtime and ADB cleanup verification, destination checks, and result movement
+in one tested publication function. Anchor the final rename to opened source
+and destination directories and use Linux `renameat2(RENAME_NOREPLACE)` so a
+changed results parent or occupied destination cannot redirect or nest the
+published record. Before removal or publication, atomically move the entry to
+an unpredictable quarantine name in its opened private parent and compare
+the moved inode with the pinned identity. Restore an unexpected entry with a
+no-replace rename and fail. After publication, verify the destination inode
+and attempt a no-replace rollback if it changed. Treat other processes under
+the same user ID as trusted: Linux has no inode-conditional `unlink` or
+`rmdir`, and same-user processes can write the mode-0700 data root.
 
 **Reason.** The default capture reached zygote and SurfaceFlinger but did not
 confirm `system_server` or `sys.boot_completed=1`; Cuttlefish also reported
@@ -2197,4 +2233,29 @@ without promoting a diagnostic run to a canonical reference profile. The
 baseline is incomplete and may contain private guest logs, so input identity,
 temporary storage, per-command and aggregate byte limits, content-free
 summaries, experiment-code hashes, and cleanup are checked before publishing
-any result.
+any result. The random token ties deletion to the current run, and
+centralizing publication makes the last cleanup checks observable in focused
+tests. Quarantine-and-verify catches replacements present at the atomic move
+boundary and prevents those unexpected entries from being silently removed or
+published. Safe ancestors plus mode-0700 roots enforce the documented
+same-user trust boundary. Requiring the marker for standalone scrubbing keeps
+a malformed or mistargeted invocation from deleting a similarly named
+workspace's logs. Rejecting Unicode control characters avoids shell command
+substitution changing the canonical path and keeps path-output handling
+unambiguous. Restoring the marker after a final directory-removal failure
+keeps cleanup retryable while the generated name still identifies the opened
+workspace. If another same-user process changes that name, cleanup preserves
+the marker in the original directory and requires manual cleanup. The remaining
+same-user limitation follows from the private directory ownership model and
+available Linux filesystem operations. The 2026-10-01 capture verified that passing the GPU
+mode only to `cvd create` left the saved configuration at
+`guest_swiftshader`; the pinned CLI exposes the same setting on `cvd start`,
+so the runner now sets it on both commands. The follow-up record verified
+`gpu_mode=none`, four CPUs, and 4096 MiB, but Cuttlefish exited after seven
+seconds with no boot-complete or system-server lines and no logcat bytes.
+Cleanup completed and no canonical profile was changed. Three hostile review
+rounds found five actionable issues; all were fixed, and the final round
+reported no findings. The Linux focused suite passed 40 tests, Ruff lint and
+format checks passed, shell and Python syntax checks passed, and all six checks
+in `scripts/ci/run-checks.sh` passed. Keep these choices marked for maintainer
+review.

@@ -4,13 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
+import fnmatch
 import hashlib
 import json
 import os
 import platform
 import re
+import secrets
+import stat
 import subprocess
+import sys
 import tempfile
+import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +35,7 @@ TOOL_PATHS = (
 )
 EXPERIMENT_TOOL_NAMES = (
     "capture-gpu-none.sh",
+    "capture-lifecycle.sh",
     "capture_bounded.py",
     "experiment_support.py",
     "run_capture.py",
@@ -268,6 +277,959 @@ def _capture_statuses(status_root: Path) -> dict[str, Any]:
             name for name, record in files.items() if record["timedOut"]
         ),
     }
+
+
+def _logcat_paths(work_root: Path, adb_log_root: Path) -> tuple[Path, Path]:
+    if not work_root.is_absolute() or work_root.is_symlink() or not work_root.is_dir():
+        raise ValueError("private work root must be an existing non-symlink directory")
+    if adb_log_root != work_root / "adb-live":
+        raise ValueError(
+            "ADB log root must be the private work root's adb-live directory"
+        )
+    return work_root / "Images/reference/16373615", adb_log_root
+
+
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+
+
+def _open_directory_chain(path: Path) -> int:
+    if (
+        not path.is_absolute()
+        or any(component in {".", ".."} for component in path.parts[1:])
+        or not hasattr(os, "O_NOFOLLOW")
+        or not hasattr(os, "O_DIRECTORY")
+    ):
+        raise ValueError("directory path cannot be opened without following links")
+    descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
+    try:
+        for component in path.parts[1:]:
+            next_descriptor = os.open(
+                component,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _is_safe_writable_parent(directory_stat: os.stat_result) -> bool:
+    mode = directory_stat.st_mode
+    group_can_mutate = bool(mode & stat.S_IWGRP and mode & stat.S_IXGRP)
+    other_can_mutate = bool(mode & stat.S_IWOTH and mode & stat.S_IXOTH)
+    if not group_can_mutate and not other_can_mutate:
+        return True
+    return bool(mode & stat.S_ISVTX and directory_stat.st_uid in {0, os.getuid()})
+
+
+def _validate_data_root_path(data_root: Path) -> None:
+    if any(unicodedata.category(character) == "Cc" for character in str(data_root)):
+        raise ValueError("diagnostic data root path contains control characters")
+    if (
+        not data_root.is_absolute()
+        or len(data_root.parts) < 2
+        or any(component in {"", ".", ".."} for component in data_root.parts[1:])
+    ):
+        raise ValueError("diagnostic data root path is unsafe")
+
+
+def _open_private_data_root(data_root: Path) -> int:
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("diagnostic data root path is unsafe")
+    _validate_data_root_path(data_root)
+    descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
+    components = data_root.parts[1:]
+    try:
+        for index, component in enumerate(components):
+            next_descriptor = os.open(
+                component,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=descriptor,
+            )
+            component_stat = os.fstat(next_descriptor)
+            if index == len(components) - 1:
+                if component_stat.st_uid != os.getuid() or component_stat.st_mode & (
+                    stat.S_IWGRP | stat.S_IWOTH
+                ):
+                    os.close(next_descriptor)
+                    raise ValueError(
+                        "diagnostic data root must be current-user-owned and not "
+                        "writable by other users"
+                    )
+            elif not _is_safe_writable_parent(component_stat):
+                os.close(next_descriptor)
+                raise ValueError(
+                    "diagnostic data root has a writable parent without safe "
+                    "sticky-directory ownership"
+                )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def prepare_private_data_root(data_root: Path) -> None:
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("diagnostic data root path is unsafe")
+    _validate_data_root_path(data_root)
+    descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
+    components = data_root.parts[1:]
+    try:
+        for index, component in enumerate(components):
+            try:
+                next_descriptor = os.open(
+                    component,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                next_descriptor = os.open(
+                    component,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=descriptor,
+                )
+            component_stat = os.fstat(next_descriptor)
+            if index == len(components) - 1:
+                if component_stat.st_uid != os.getuid():
+                    os.close(next_descriptor)
+                    raise ValueError(
+                        "diagnostic data root must be owned by the current user"
+                    )
+                os.fchmod(next_descriptor, 0o700)
+            elif not _is_safe_writable_parent(component_stat):
+                os.close(next_descriptor)
+                raise ValueError(
+                    "diagnostic data root has a writable parent without safe "
+                    "sticky-directory ownership"
+                )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        root_stat = os.fstat(descriptor)
+        if root_stat.st_uid != os.getuid() or root_stat.st_mode & (
+            stat.S_IWGRP | stat.S_IWOTH
+        ):
+            raise ValueError("diagnostic data root is not private to the current user")
+        for child_name in ("work", "results"):
+            try:
+                os.mkdir(child_name, mode=0o700, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            child_descriptor = _open_child_directory(descriptor, child_name)
+            try:
+                child_stat = os.fstat(child_descriptor)
+                if child_stat.st_uid != os.getuid():
+                    raise ValueError(
+                        f"diagnostic {child_name} directory must be current-user-owned"
+                    )
+                os.fchmod(child_descriptor, 0o700)
+            finally:
+                os.close(child_descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _open_child_directory(parent_descriptor: int, name: str) -> int:
+    if name in {"", ".", ".."} or "/" in name:
+        raise ValueError("directory component is unsafe")
+    return os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_descriptor)
+
+
+def _verify_private_child_directory(
+    parent_descriptor: int,
+    name: str,
+) -> int:
+    descriptor = _open_child_directory(parent_descriptor, name)
+    child_stat = os.fstat(descriptor)
+    if child_stat.st_uid != os.getuid() or child_stat.st_mode & 0o077:
+        os.close(descriptor)
+        raise ValueError(
+            f"diagnostic {name} directory must be private to the current user"
+        )
+    return descriptor
+
+
+def _open_relative_directory(parent_descriptor: int, path: Path) -> int:
+    if path.is_absolute() or not path.parts:
+        raise ValueError("relative directory path is unsafe")
+    descriptor = os.dup(parent_descriptor)
+    try:
+        for component in path.parts:
+            next_descriptor = _open_child_directory(descriptor, component)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_optional_relative_directory(
+    parent_descriptor: int,
+    path: Path,
+) -> int | None:
+    try:
+        return _open_relative_directory(parent_descriptor, path)
+    except FileNotFoundError:
+        return None
+
+
+def _stat_entry_at(parent_descriptor: int, name: str) -> os.stat_result:
+    return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+
+
+def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
+    return first.st_dev == second.st_dev and first.st_ino == second.st_ino
+
+
+def _renameat2_noreplace(
+    source_parent_descriptor: int,
+    source_name: str,
+    destination_parent_descriptor: int,
+    destination_name: str,
+) -> None:
+    if sys.platform != "linux":
+        raise OSError(errno.ENOTSUP, "atomic no-replace rename requires Linux")
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOTSUP, "renameat2 is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        source_parent_descriptor,
+        os.fsencode(source_name),
+        destination_parent_descriptor,
+        os.fsencode(destination_name),
+        1,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+            destination_name,
+        )
+
+
+def _restore_quarantined_entry(
+    parent_descriptor: int,
+    quarantine_name: str,
+    original_name: str,
+) -> None:
+    try:
+        _renameat2_noreplace(
+            parent_descriptor,
+            quarantine_name,
+            parent_descriptor,
+            original_name,
+        )
+    except OSError as error:
+        raise OSError(
+            errno.EBUSY,
+            f"entry could not be restored; preserved as {quarantine_name}",
+            original_name,
+        ) from error
+
+
+def _quarantine_entry_at(
+    parent_descriptor: int,
+    name: str,
+    expected_stat: os.stat_result,
+    *,
+    require_directory: bool = False,
+) -> str:
+    for _ in range(8):
+        quarantine_name = f".apkrun-quarantine-{secrets.token_hex(16)}"
+        try:
+            _renameat2_noreplace(
+                parent_descriptor,
+                name,
+                parent_descriptor,
+                quarantine_name,
+            )
+        except OSError as error:
+            if error.errno == errno.EEXIST:
+                continue
+            raise
+
+        try:
+            moved_stat = _stat_entry_at(parent_descriptor, quarantine_name)
+        except OSError:
+            _restore_quarantined_entry(
+                parent_descriptor,
+                quarantine_name,
+                name,
+            )
+            raise
+        if _same_inode(moved_stat, expected_stat) and (
+            not require_directory or stat.S_ISDIR(moved_stat.st_mode)
+        ):
+            return quarantine_name
+
+        _restore_quarantined_entry(parent_descriptor, quarantine_name, name)
+        message = (
+            "directory changed during safe removal"
+            if require_directory
+            else "entry changed during safe removal"
+        )
+        raise OSError(errno.EBUSY, message, name)
+
+    raise OSError(errno.EEXIST, "could not reserve a private quarantine name", name)
+
+
+def _unlink_entry_at(
+    parent_descriptor: int,
+    name: str,
+    expected_stat: os.stat_result,
+) -> None:
+    quarantine_name = _quarantine_entry_at(
+        parent_descriptor,
+        name,
+        expected_stat,
+    )
+    try:
+        os.unlink(quarantine_name, dir_fd=parent_descriptor)
+    except OSError:
+        _restore_quarantined_entry(parent_descriptor, quarantine_name, name)
+        raise
+
+
+def _remove_directory_entry_at(
+    parent_descriptor: int,
+    name: str,
+    expected_stat: os.stat_result,
+) -> None:
+    quarantine_name = _quarantine_entry_at(
+        parent_descriptor,
+        name,
+        expected_stat,
+        require_directory=True,
+    )
+    try:
+        os.rmdir(quarantine_name, dir_fd=parent_descriptor)
+    except OSError:
+        _restore_quarantined_entry(parent_descriptor, quarantine_name, name)
+        raise
+
+
+def _remove_directory_contents(
+    directory_descriptor: int,
+    preserved_names: frozenset[str] = frozenset(),
+) -> None:
+    with os.scandir(directory_descriptor) as entries:
+        names = sorted(entry.name for entry in entries)
+    for name in names:
+        if name in preserved_names:
+            continue
+        try:
+            entry_stat = _stat_entry_at(directory_descriptor, name)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(entry_stat.st_mode):
+            child_descriptor = _open_child_directory(directory_descriptor, name)
+            try:
+                child_stat = os.fstat(child_descriptor)
+                if not _same_inode(child_stat, entry_stat):
+                    raise OSError(
+                        errno.EBUSY,
+                        "directory changed during safe removal",
+                        name,
+                    )
+                _remove_directory_contents(child_descriptor)
+                _remove_directory_entry_at(directory_descriptor, name, child_stat)
+            finally:
+                os.close(child_descriptor)
+        else:
+            _unlink_entry_at(directory_descriptor, name, entry_stat)
+
+
+def _workspace_marker_content(work_root: Path, ownership_token: str) -> bytes:
+    if re.fullmatch(r"[a-f0-9]{64}", ownership_token) is None:
+        raise ValueError("workspace ownership token is invalid")
+    return (
+        f"APKRun Cuttlefish boot diagnosis v1\n{ownership_token}\n{work_root}\n"
+    ).encode()
+
+
+def _verify_workspace_marker(
+    work_descriptor: int,
+    work_root: Path,
+    ownership_token: str,
+) -> None:
+    expected = _workspace_marker_content(work_root, ownership_token)
+    marker_descriptor = os.open(
+        ".apkrun-cuttlefish-workspace",
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW,
+        dir_fd=work_descriptor,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
+            raise ValueError("generated workspace ownership marker is unsafe")
+        marker_content = os.read(marker_descriptor, len(expected) + 1)
+    finally:
+        os.close(marker_descriptor)
+    if marker_content != expected:
+        raise ValueError("generated workspace ownership marker is invalid")
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError(errno.EIO, "short write while restoring workspace marker")
+        remaining = remaining[written:]
+
+
+def _restore_workspace_marker(
+    work_descriptor: int,
+    work_root: Path,
+    ownership_token: str,
+    mode: int,
+) -> None:
+    marker_descriptor = os.open(
+        ".apkrun-cuttlefish-workspace",
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW,
+        mode,
+        dir_fd=work_descriptor,
+    )
+    try:
+        _write_all(
+            marker_descriptor,
+            _workspace_marker_content(work_root, ownership_token),
+        )
+        os.fsync(marker_descriptor)
+    except BaseException:
+        try:
+            os.unlink(".apkrun-cuttlefish-workspace", dir_fd=work_descriptor)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(marker_descriptor)
+
+
+def _remove_private_path(work_descriptor: int, relative_path: Path) -> None:
+    if relative_path.is_absolute() or not relative_path.parts:
+        raise ValueError("private removal path is unsafe")
+    parent_descriptor = os.dup(work_descriptor)
+    try:
+        for component in relative_path.parts[:-1]:
+            try:
+                component_stat = _stat_entry_at(parent_descriptor, component)
+            except FileNotFoundError:
+                return
+            if stat.S_ISLNK(component_stat.st_mode):
+                _unlink_entry_at(parent_descriptor, component, component_stat)
+                return
+            if not stat.S_ISDIR(component_stat.st_mode):
+                return
+            next_descriptor = _open_child_directory(parent_descriptor, component)
+            if not _same_inode(os.fstat(next_descriptor), component_stat):
+                os.close(next_descriptor)
+                raise OSError(
+                    errno.EBUSY,
+                    "directory changed during safe removal",
+                    component,
+                )
+            os.close(parent_descriptor)
+            parent_descriptor = next_descriptor
+        name = relative_path.parts[-1]
+        try:
+            target_stat = _stat_entry_at(parent_descriptor, name)
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(target_stat.st_mode):
+            target_descriptor = _open_child_directory(parent_descriptor, name)
+            try:
+                opened_stat = os.fstat(target_descriptor)
+                if not _same_inode(opened_stat, target_stat):
+                    raise OSError(
+                        errno.EBUSY,
+                        "directory changed during safe removal",
+                        name,
+                    )
+                _remove_directory_contents(target_descriptor)
+                _remove_directory_entry_at(
+                    parent_descriptor,
+                    name,
+                    opened_stat,
+                )
+            finally:
+                os.close(target_descriptor)
+        else:
+            _unlink_entry_at(parent_descriptor, name, target_stat)
+    finally:
+        os.close(parent_descriptor)
+
+
+def _is_capture_logcat(name: str) -> bool:
+    return name in {"logcat.txt.gz", ".logcat.raw"}
+
+
+def _is_live_logcat(name: str) -> bool:
+    return fnmatch.fnmatchcase(name, "logcat-*.txt") or fnmatch.fnmatchcase(
+        name,
+        ".logcat-*.txt",
+    )
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _scrub_capture_logcat(root_descriptor: int, remove: bool) -> None:
+    for _, directories, filenames, directory_descriptor in os.fwalk(
+        ".",
+        follow_symlinks=False,
+        onerror=_raise_walk_error,
+        dir_fd=root_descriptor,
+    ):
+        for name in directories:
+            entry_stat = _stat_entry_at(directory_descriptor, name)
+            if stat.S_ISLNK(entry_stat.st_mode):
+                raise ValueError("capture output contains a symlink directory")
+            if _is_capture_logcat(name):
+                raise ValueError(f"matching logcat entry is not a regular file: {name}")
+        for name in filenames:
+            if not _is_capture_logcat(name):
+                continue
+            entry_stat = _stat_entry_at(directory_descriptor, name)
+            if not (
+                stat.S_ISREG(entry_stat.st_mode) or stat.S_ISLNK(entry_stat.st_mode)
+            ):
+                raise ValueError(f"matching logcat entry is not a regular file: {name}")
+            if remove:
+                _unlink_entry_at(directory_descriptor, name, entry_stat)
+            else:
+                raise ValueError("raw logcat remains in capture output")
+
+
+def _scrub_live_logcat(root_descriptor: int, remove: bool) -> None:
+    with os.scandir(root_descriptor) as entries:
+        names = [entry.name for entry in entries]
+    for name in names:
+        entry_stat = _stat_entry_at(root_descriptor, name)
+        if stat.S_ISLNK(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode):
+            raise ValueError("live ADB log output contains a nested or symlink entry")
+        if not _is_live_logcat(name):
+            continue
+        if not stat.S_ISREG(entry_stat.st_mode):
+            raise ValueError(f"matching logcat entry is not a regular file: {name}")
+        if remove:
+            _unlink_entry_at(root_descriptor, name, entry_stat)
+        else:
+            raise ValueError("raw live ADB logcat remains")
+
+
+def _verify_scrub_root_unchanged(
+    work_descriptor: int,
+    relative_path: Path,
+    original_descriptor: int | None,
+) -> None:
+    current_descriptor = _open_optional_relative_directory(
+        work_descriptor,
+        relative_path,
+    )
+    if original_descriptor is None:
+        if current_descriptor is not None:
+            os.close(current_descriptor)
+            raise ValueError("logcat directory appeared during cleanup")
+        return
+    if current_descriptor is None:
+        raise ValueError("logcat directory changed during cleanup")
+    try:
+        if not _same_inode(
+            os.fstat(current_descriptor),
+            os.fstat(original_descriptor),
+        ):
+            raise ValueError("logcat directory changed during cleanup")
+    finally:
+        os.close(current_descriptor)
+
+
+def scrub_raw_logcat(
+    work_root: Path,
+    adb_log_root: Path,
+    data_root: Path,
+    ownership_token: str,
+) -> None:
+    _validate_generated_work_root(work_root, data_root, ownership_token)
+    capture_root, adb_log_root = _logcat_paths(work_root, adb_log_root)
+    work_descriptor = _open_directory_chain(work_root)
+    roots: list[tuple[Path, int | None, Callable[[int, bool], None]]] = []
+    try:
+        _verify_workspace_marker(work_descriptor, work_root, ownership_token)
+        capture_relative = capture_root.relative_to(work_root)
+        adb_relative = adb_log_root.relative_to(work_root)
+        capture_descriptor = _open_optional_relative_directory(
+            work_descriptor,
+            capture_relative,
+        )
+        roots.append((capture_relative, capture_descriptor, _scrub_capture_logcat))
+        adb_descriptor = _open_optional_relative_directory(
+            work_descriptor,
+            adb_relative,
+        )
+        roots.append((adb_relative, adb_descriptor, _scrub_live_logcat))
+        for _, descriptor, scrubber in roots:
+            if descriptor is not None:
+                scrubber(descriptor, True)
+        for _, descriptor, scrubber in roots:
+            if descriptor is not None:
+                scrubber(descriptor, False)
+        for relative_path, descriptor, _ in roots:
+            _verify_scrub_root_unchanged(
+                work_descriptor,
+                relative_path,
+                descriptor,
+            )
+    finally:
+        for _, descriptor, _ in roots:
+            if descriptor is not None:
+                os.close(descriptor)
+        os.close(work_descriptor)
+
+
+def _validate_generated_work_root(
+    work_root: Path,
+    data_root: Path,
+    ownership_token: str,
+) -> None:
+    if not data_root.is_absolute() or data_root.is_symlink() or not data_root.is_dir():
+        raise ValueError(
+            "diagnostic data root must be an existing non-symlink directory"
+        )
+    work_parent = data_root / "work"
+    if (
+        not work_root.is_absolute()
+        or work_root.parent != work_parent
+        or re.fullmatch(r"gpu-none\.[A-Za-z0-9]+", work_root.name) is None
+    ):
+        raise ValueError(
+            "workspace is outside the generated Cuttlefish diagnostic work area"
+        )
+    if work_root.is_symlink() or (work_root.exists() and not work_root.is_dir()):
+        raise ValueError("private work root must be a non-symlink directory")
+    data_descriptor = _open_private_data_root(data_root)
+    try:
+        work_parent_descriptor = _verify_private_child_directory(
+            data_descriptor,
+            "work",
+        )
+        try:
+            results_descriptor = _verify_private_child_directory(
+                data_descriptor,
+                "results",
+            )
+            os.close(results_descriptor)
+            if not work_root.exists():
+                _workspace_marker_content(work_root, ownership_token)
+                return
+            try:
+                work_descriptor = _verify_private_child_directory(
+                    work_parent_descriptor,
+                    work_root.name,
+                )
+            except FileNotFoundError:
+                return
+            try:
+                _verify_workspace_marker(
+                    work_descriptor,
+                    work_root,
+                    ownership_token,
+                )
+            finally:
+                os.close(work_descriptor)
+        finally:
+            os.close(work_parent_descriptor)
+    finally:
+        os.close(data_descriptor)
+
+
+def discard_logcat_trees(
+    work_root: Path,
+    adb_log_root: Path,
+    data_root: Path,
+    ownership_token: str,
+) -> None:
+    _validate_generated_work_root(work_root, data_root, ownership_token)
+    _logcat_paths(work_root, adb_log_root)
+    work_descriptor = _open_directory_chain(work_root)
+    try:
+        _verify_workspace_marker(work_descriptor, work_root, ownership_token)
+        _remove_private_path(work_descriptor, Path("Images/reference/16373615"))
+        _remove_private_path(work_descriptor, Path("adb-live"))
+    finally:
+        os.close(work_descriptor)
+
+
+def discard_private_workspace(
+    work_root: Path,
+    data_root: Path,
+    ownership_token: str,
+) -> None:
+    _validate_generated_work_root(work_root, data_root, ownership_token)
+    data_descriptor = _open_private_data_root(data_root)
+    try:
+        work_parent_descriptor = _verify_private_child_directory(
+            data_descriptor,
+            "work",
+        )
+        try:
+            try:
+                work_descriptor = _open_child_directory(
+                    work_parent_descriptor,
+                    work_root.name,
+                )
+            except FileNotFoundError:
+                return
+            try:
+                _verify_workspace_marker(
+                    work_descriptor,
+                    work_root,
+                    ownership_token,
+                )
+                workspace_stat = os.fstat(work_descriptor)
+                marker_name = ".apkrun-cuttlefish-workspace"
+                marker_stat = _stat_entry_at(work_descriptor, marker_name)
+                if not stat.S_ISREG(marker_stat.st_mode):
+                    raise ValueError("generated workspace ownership marker is unsafe")
+                _remove_directory_contents(
+                    work_descriptor,
+                    frozenset({marker_name}),
+                )
+                _unlink_entry_at(work_descriptor, marker_name, marker_stat)
+                try:
+                    _remove_directory_entry_at(
+                        work_parent_descriptor,
+                        work_root.name,
+                        workspace_stat,
+                    )
+                except OSError as removal_error:
+                    path_still_matches = False
+                    try:
+                        if not _same_inode(os.fstat(work_descriptor), workspace_stat):
+                            raise OSError(
+                                errno.EBUSY,
+                                "opened workspace changed before its ownership "
+                                "marker could be restored",
+                                str(work_root),
+                            )
+                        _restore_workspace_marker(
+                            work_descriptor,
+                            work_root,
+                            ownership_token,
+                            stat.S_IMODE(marker_stat.st_mode),
+                        )
+                        current_workspace_stat = _stat_entry_at(
+                            work_parent_descriptor,
+                            work_root.name,
+                        )
+                        path_still_matches = _same_inode(
+                            current_workspace_stat,
+                            workspace_stat,
+                        )
+                    except OSError as restore_error:
+                        raise OSError(
+                            errno.EBUSY,
+                            "workspace removal failed and its ownership marker "
+                            "could not be restored; manual cleanup is required",
+                            str(work_root),
+                        ) from restore_error
+                    if not path_still_matches:
+                        raise OSError(
+                            errno.EBUSY,
+                            "workspace directory changed during safe removal; "
+                            "the marker was restored in the original directory "
+                            "and manual cleanup is required",
+                            str(work_root),
+                        ) from removal_error
+                    raise
+            finally:
+                os.close(work_descriptor)
+        finally:
+            os.close(work_parent_descriptor)
+    finally:
+        os.close(data_descriptor)
+
+
+def _rename_directory_no_replace(
+    source_parent_descriptor: int,
+    source_name: str,
+    destination_parent_descriptor: int,
+    destination_name: str,
+    expected_source_stat: os.stat_result,
+) -> None:
+    source_descriptor = _open_child_directory(
+        source_parent_descriptor,
+        source_name,
+    )
+    try:
+        pinned_source_stat = os.fstat(source_descriptor)
+        if not _same_inode(pinned_source_stat, expected_source_stat):
+            raise OSError(
+                errno.EBUSY,
+                "capture record changed before atomic publication",
+                source_name,
+            )
+        quarantine_name = _quarantine_entry_at(
+            source_parent_descriptor,
+            source_name,
+            pinned_source_stat,
+            require_directory=True,
+        )
+        try:
+            _renameat2_noreplace(
+                source_parent_descriptor,
+                quarantine_name,
+                destination_parent_descriptor,
+                destination_name,
+            )
+        except OSError:
+            _restore_quarantined_entry(
+                source_parent_descriptor,
+                quarantine_name,
+                source_name,
+            )
+            raise
+
+        try:
+            published_stat = _stat_entry_at(
+                destination_parent_descriptor,
+                destination_name,
+            )
+        except OSError:
+            try:
+                _renameat2_noreplace(
+                    destination_parent_descriptor,
+                    destination_name,
+                    source_parent_descriptor,
+                    source_name,
+                )
+            except OSError as error:
+                raise OSError(
+                    errno.EBUSY,
+                    "capture record could not be rolled back after publication",
+                    destination_name,
+                ) from error
+            raise
+        if not _same_inode(published_stat, pinned_source_stat):
+            try:
+                _renameat2_noreplace(
+                    destination_parent_descriptor,
+                    destination_name,
+                    source_parent_descriptor,
+                    source_name,
+                )
+            except OSError as error:
+                raise OSError(
+                    errno.EBUSY,
+                    "changed capture record could not be rolled back",
+                    destination_name,
+                ) from error
+            raise OSError(
+                errno.EBUSY,
+                "capture record changed during atomic publication",
+                source_name,
+            )
+    finally:
+        os.close(source_descriptor)
+
+
+def publish_normalized_record(
+    capture_record: Path,
+    work_root: Path,
+    data_root: Path,
+    result_path: Path,
+    ownership_token: str,
+) -> None:
+    _validate_generated_work_root(work_root, data_root, ownership_token)
+    results_root = data_root / "results"
+    if (
+        result_path.parent != results_root
+        or re.fullmatch(r"gpu-none-[0-9]{8}T[0-9]{6}Z-[0-9]+", result_path.name) is None
+    ):
+        raise ValueError("diagnostic result path is outside its results directory")
+    try:
+        record_relative = capture_record.relative_to(work_root)
+    except ValueError as error:
+        raise ValueError("capture record is outside the generated workspace") from error
+    if not record_relative.parts or record_relative.is_absolute():
+        raise ValueError("capture record path is invalid")
+    data_descriptor = _open_private_data_root(data_root)
+    try:
+        work_parent_descriptor = _verify_private_child_directory(
+            data_descriptor,
+            "work",
+        )
+        try:
+            results_descriptor = _verify_private_child_directory(
+                data_descriptor,
+                "results",
+            )
+            try:
+                work_descriptor = _open_child_directory(
+                    work_parent_descriptor,
+                    work_root.name,
+                )
+                try:
+                    _verify_workspace_marker(
+                        work_descriptor,
+                        work_root,
+                        ownership_token,
+                    )
+                    capture_parent_descriptor = _open_relative_directory(
+                        work_descriptor,
+                        record_relative.parent,
+                    )
+                    try:
+                        record_stat = os.stat(
+                            record_relative.name,
+                            dir_fd=capture_parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                        if not stat.S_ISDIR(record_stat.st_mode):
+                            raise ValueError(
+                                "normalized capture record is not a directory"
+                            )
+                        _rename_directory_no_replace(
+                            capture_parent_descriptor,
+                            record_relative.name,
+                            results_descriptor,
+                            result_path.name,
+                            record_stat,
+                        )
+                    finally:
+                        os.close(capture_parent_descriptor)
+                finally:
+                    os.close(work_descriptor)
+            finally:
+                os.close(results_descriptor)
+        finally:
+            os.close(work_parent_descriptor)
+    finally:
+        os.close(data_descriptor)
 
 
 def _gpu_configuration(record: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -531,7 +1493,8 @@ def patch_capture_script(path: Path) -> None:
                 "  cvd_command_failed=1\n"
                 "fi\n"
                 'if [ "$cvd_command_failed" -eq 0 ] \\\n'
-                '  && ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" start 2>&1 \\\n'
+                '  && ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\\n'
+                "    start --gpu_mode=none 2>&1 \\\n"
                 '    | python3 "$script_dir/capture_bounded.py" \\\n'
                 '      --stdin --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
@@ -732,8 +1695,19 @@ def build_experiment_record(
         raise ValueError("capture metadata records an unexpected Cuttlefish version")
     expected = {"gpu_mode": "none", "cpus": 4, "memory_mb": 4096}
     for key, value in expected.items():
-        if instance.get(key) != value:
-            raise ValueError(f"captured Cuttlefish configuration has unexpected {key}")
+        observed_value = instance.get(key)
+        if observed_value != value:
+            if (
+                type(observed_value) in (str, int, float, bool)
+                or observed_value is None
+            ):
+                value_summary = repr(observed_value)
+            else:
+                value_summary = f"<{type(observed_value).__name__}>"
+            raise ValueError(
+                "captured Cuttlefish configuration has unexpected "
+                f"{key}: {value_summary}"
+            )
     if not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", adb_endpoint):
         raise ValueError("ADB endpoint must be a loopback address and TCP port")
     if adb_state_path.is_symlink() or not adb_state_path.is_file():
@@ -811,6 +1785,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    prepare_parser = subparsers.add_parser("prepare-data-root")
+    prepare_parser.add_argument("--data-root", type=Path, required=True)
+    prepare_parser.add_argument("--print-canonical", action="store_true")
+
     host_parser = subparsers.add_parser("verify-host")
     host_parser.add_argument("--repo-root", type=Path, required=True)
     host_parser.add_argument("--baseline-record", type=Path, required=True)
@@ -821,6 +1799,30 @@ def main() -> int:
 
     patch_parser = subparsers.add_parser("patch-capture")
     patch_parser.add_argument("--path", type=Path, required=True)
+
+    scrub_parser = subparsers.add_parser("scrub-logcat")
+    scrub_parser.add_argument("--work-root", type=Path, required=True)
+    scrub_parser.add_argument("--adb-log-root", type=Path, required=True)
+    scrub_parser.add_argument("--data-root", type=Path, required=True)
+    scrub_parser.add_argument("--ownership-token", required=True)
+
+    discard_parser = subparsers.add_parser("discard-logcat-trees")
+    discard_parser.add_argument("--work-root", type=Path, required=True)
+    discard_parser.add_argument("--adb-log-root", type=Path, required=True)
+    discard_parser.add_argument("--data-root", type=Path, required=True)
+    discard_parser.add_argument("--ownership-token", required=True)
+
+    workspace_parser = subparsers.add_parser("discard-workspace")
+    workspace_parser.add_argument("--work-root", type=Path, required=True)
+    workspace_parser.add_argument("--data-root", type=Path, required=True)
+    workspace_parser.add_argument("--ownership-token", required=True)
+
+    publish_parser = subparsers.add_parser("publish-record")
+    publish_parser.add_argument("--capture-record", type=Path, required=True)
+    publish_parser.add_argument("--work-root", type=Path, required=True)
+    publish_parser.add_argument("--data-root", type=Path, required=True)
+    publish_parser.add_argument("--result-path", type=Path, required=True)
+    publish_parser.add_argument("--ownership-token", required=True)
 
     record_parser = subparsers.add_parser("record")
     record_parser.add_argument("--capture-record", type=Path, required=True)
@@ -835,8 +1837,45 @@ def main() -> int:
 
     arguments = parser.parse_args()
     try:
+        if arguments.command == "prepare-data-root":
+            prepare_private_data_root(arguments.data_root)
+            if arguments.print_canonical:
+                print(arguments.data_root.resolve(strict=True))
+            return 0
         if arguments.command == "patch-capture":
             patch_capture_script(arguments.path)
+            return 0
+        if arguments.command == "scrub-logcat":
+            scrub_raw_logcat(
+                arguments.work_root,
+                arguments.adb_log_root,
+                arguments.data_root,
+                arguments.ownership_token,
+            )
+            return 0
+        if arguments.command == "discard-logcat-trees":
+            discard_logcat_trees(
+                arguments.work_root,
+                arguments.adb_log_root,
+                arguments.data_root,
+                arguments.ownership_token,
+            )
+            return 0
+        if arguments.command == "discard-workspace":
+            discard_private_workspace(
+                arguments.work_root,
+                arguments.data_root,
+                arguments.ownership_token,
+            )
+            return 0
+        if arguments.command == "publish-record":
+            publish_normalized_record(
+                arguments.capture_record,
+                arguments.work_root,
+                arguments.data_root,
+                arguments.result_path,
+                arguments.ownership_token,
+            )
             return 0
         if arguments.command == "verify-host":
             document = verify_host(

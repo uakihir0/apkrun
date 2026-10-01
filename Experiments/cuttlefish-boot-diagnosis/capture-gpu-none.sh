@@ -5,6 +5,7 @@ umask 077
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 repo_root=$(CDPATH= cd "$script_dir/../.." && pwd)
+source "$script_dir/capture-lifecycle.sh"
 
 if [ "$(uname -s)" != Linux ]; then
   printf 'This diagnostic requires the Linux Cuttlefish reference host.\n' >&2
@@ -47,8 +48,7 @@ fi
 adb_port=$((6520 + instance_num - 1))
 serial="127.0.0.1:$adb_port"
 
-if ps -ww -C crosvm -o pid= | awk 'NF { found=1 } END { exit !found }'; then
-  printf 'A crosvm process is already running; use a dedicated reference VM.\n' >&2
+if ! require_no_crosvm; then
   exit 2
 fi
 
@@ -60,22 +60,29 @@ case "$data_root" in
     exit 2
     ;;
 esac
+requested_data_root=$data_root
+if ! canonical_data_root=$(python3 "$script_dir/experiment_support.py" \
+  prepare-data-root --print-canonical --data-root "$requested_data_root"); then
+  printf 'Could not prepare a private diagnostic data root; check ownership and parent permissions: %s\n' \
+    "$requested_data_root" >&2
+  exit 2
+fi
+data_root=$canonical_data_root
 work_parent="$data_root/work"
 results_root="$data_root/results"
-if [ -L "$data_root" ] || [ -L "$work_parent" ] || [ -L "$results_root" ]; then
-  printf 'Diagnostic data directories must not be symbolic links.\n' >&2
-  exit 2
-fi
-if ! mkdir -p "$work_parent" "$results_root"; then
-  printf 'Could not create the private diagnostic data directory: %s\n' "$data_root" >&2
+workspace_token=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+if [[ ! "$workspace_token" =~ ^[a-f0-9]{64}$ ]]; then
+  printf 'Could not create a private diagnostic workspace token.\n' >&2
   exit 1
 fi
-chmod 700 "$work_parent" "$results_root"
-if [ -L "$data_root" ] || [ -L "$work_parent" ] || [ -L "$results_root" ]; then
-  printf 'Diagnostic data directories must not be symbolic links.\n' >&2
-  exit 2
-fi
 work_root=$(mktemp -d "$work_parent/gpu-none.XXXXXX")
+if ! printf 'APKRun Cuttlefish boot diagnosis v1\n%s\n%s\n' \
+  "$workspace_token" "$work_root" \
+  > "$work_root/.apkrun-cuttlefish-workspace"; then
+  printf 'Could not mark the private diagnostic workspace; manual cleanup may be needed at %s.\n' \
+    "$work_root" >&2
+  exit 1
+fi
 tmp_root="$work_root/tmp"
 adb_home="$work_root/adb-home"
 adb_socket_dir=
@@ -96,29 +103,15 @@ watcher_status=0
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 result_path="$results_root/gpu-none-$timestamp-$$"
-if [ -e "$result_path" ]; then
+if [ -e "$result_path" ] || [ -L "$result_path" ]; then
   printf 'Refusing to overwrite diagnostic result: %s\n' "$result_path" >&2
-  rm -rf "$work_root"
+  discard_workspace_safely || true
   exit 2
 fi
 
 adb_socket_dir=$(mktemp -d /tmp/apkrun-adb.XXXXXX)
 adb_server_socket_path="$adb_socket_dir/server.sock"
 adb_server_socket="localfilesystem:$adb_server_socket_path"
-
-preserve_work() {
-  if ! scrub_raw_logcat; then
-    printf 'Raw logcat could not be scrubbed; refusing to publish or retain it.\n' >&2
-    if cvd_is_clean; then
-      rm -rf "$work_root" || true
-      keep_work=0
-      return 0
-    fi
-    printf 'Cuttlefish cleanup is incomplete; its private workspace must remain available.\n' >&2
-  fi
-  keep_work=1
-  printf 'Private diagnostic workspace retained for cleanup: %s\n' "$work_root" >&2
-}
 
 capture_child_exited() {
   local process_state
@@ -184,36 +177,6 @@ stop_capture_child() {
   printf 'Capture supervisor did not exit after TERM and KILL.\n' >&2
   preserve_work
   return 1
-}
-
-cvd_is_clean() {
-  local remaining_homes remaining_crosvm
-  remaining_homes=$(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d \
-    -name 'apkrun-cvd-home.default.*' -print -quit 2>/dev/null || true)
-  remaining_crosvm=$(ps -ww -C crosvm -o pid= 2>/dev/null || true)
-  [ -z "$remaining_homes" ] && ! printf '%s\n' "$remaining_crosvm" | awk 'NF { found=1 } END { exit !found }'
-}
-
-scrub_raw_logcat() {
-  local remaining
-  if [ -d "$adb_log_root" ]; then
-    find "$adb_log_root" -maxdepth 1 -type f \
-      \( -name 'logcat-*.txt' -o -name '.logcat-*.txt' \) -delete
-  fi
-  if [ -d "$work_root/Images/reference/16373615" ]; then
-    find "$work_root/Images/reference/16373615" -type f -name 'logcat.txt.gz' -delete
-    find "$work_root/Images/reference/16373615" -type f -name '.logcat.raw' -delete
-  fi
-  if [ -d "$adb_log_root" ]; then
-    remaining=$(find "$adb_log_root" -maxdepth 1 -type f \
-      \( -name 'logcat-*.txt' -o -name '.logcat-*.txt' \) -print -quit) || return 1
-    [ -z "$remaining" ] || return 1
-  fi
-  if [ -d "$work_root/Images/reference/16373615" ]; then
-    remaining=$(find "$work_root/Images/reference/16373615" -type f \
-      \( -name 'logcat.txt.gz' -o -name '.logcat.raw' \) -print -quit) || return 1
-    [ -z "$remaining" ] || return 1
-  fi
 }
 
 stop_adb_server() {
@@ -317,9 +280,7 @@ cleanup() {
       preserve_work
     fi
   fi
-  if [ "$keep_work" -eq 0 ]; then
-    rm -rf "$work_root" || preserve_work
-  fi
+  cleanup_generated_workspace
   exit "$original_status"
 }
 
@@ -361,7 +322,8 @@ cp "$repo_root/Images/tools/reference/capture.sh" \
   "$repo_root/Images/tools/reference/normalize.yaml" \
   "$repo_root/Images/tools/reference/guest-capture.txt" \
   "$tool_destination/"
-cp "$script_dir/capture-gpu-none.sh" "$script_dir/capture_bounded.py" \
+cp "$script_dir/capture-gpu-none.sh" "$script_dir/capture-lifecycle.sh" \
+  "$script_dir/capture_bounded.py" \
   "$script_dir/experiment_support.py" "$script_dir/run_capture.py" \
   "$script_dir/summarize_logcat.py" "$experiment_tools/"
 cp "$experiment_tools/capture_bounded.py" "$tool_destination/"
@@ -772,7 +734,7 @@ if [ "$cleanup_incomplete_samples" != 0 ]; then
   preserve_work || true
   exit 1
 fi
-python3 "$experiment_tools/experiment_support.py" record \
+if ! record_or_preserve python3 "$experiment_tools/experiment_support.py" record \
   --capture-record "$capture_record" \
   --host-identity "$host_identity" \
   --logcat-summary "$logcat_summary" \
@@ -781,57 +743,14 @@ python3 "$experiment_tools/experiment_support.py" record \
   --adb-endpoint "$serial" \
   --capture-status-root "$capture_status_root" \
   --capture-run-status "$capture_run_status" \
-  --output "$capture_record/experiment.json"
-
-scrub_raw_logcat
-if find "$work_root/Images/reference/16373615" -type f \
-  \( -name 'logcat.txt.gz' -o -name '.logcat.raw' \) -print -quit | grep -q .; then
-  printf 'Raw capture logcat could not be removed; result will not be published.\n' >&2
-  preserve_work
-  exit 1
-fi
-if find "$adb_log_root" -maxdepth 1 -type f \
-  \( -name 'logcat-*.txt' -o -name '.logcat-*.txt' \) -print -quit | grep -q .; then
-  printf 'Raw live ADB logcat snapshots could not be removed; result will not be published.\n' >&2
-  preserve_work
+  --output "$capture_record/experiment.json"; then
   exit 1
 fi
 
-python3 "$tool_destination/compare_boot.py" normalize "$capture_record"
-python3 - "$capture_record" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-for path in root.rglob("*"):
-    if path.is_symlink() or not path.is_file():
-        continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        continue
-    if re.search(
-        r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])",
-        text,
-    ):
-        raise SystemExit(f"unredacted MAC address remains in {path.name}")
-    if re.search(r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----", text):
-        raise SystemExit(f"private-key marker remains in {path.name}")
-    if re.search(r"/(?:home/lima|var/tmp/cvd|Users/)[^\s\"']*", text):
-        raise SystemExit(f"private host path remains in {path.name}")
-PY
-
-if ! cvd_is_clean || [ "$adb_server_started" -ne 0 ]; then
-  printf 'Cuttlefish or ADB cleanup changed before publication; refusing to publish.\n' >&2
-  preserve_work
+if ! publish_capture_record \
+  "$capture_record" "$tool_destination/compare_boot.py" "$result_path"; then
+  preserve_work || true
   exit 1
 fi
-if [ -e "$result_path" ]; then
-  printf 'Refusing to overwrite diagnostic result: %s\n' "$result_path" >&2
-  preserve_work
-  exit 1
-fi
-mv "$capture_record" "$result_path"
 printf 'Normalized diagnostic record: %s\n' "$result_path"
 printf 'Cuttlefish capture exit status: %s\n' "$capture_status"

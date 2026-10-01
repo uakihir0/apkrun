@@ -145,7 +145,13 @@ def test_capture_script_uses_each_profile_launch_configuration(
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
     reference_tools.mkdir(parents=True)
-    for name in ("capture.sh", "compare_boot.py", "normalize.yaml", "guest-capture.txt"):
+    for name in (
+        "capture.sh",
+        "capture_cvd_start.py",
+        "compare_boot.py",
+        "normalize.yaml",
+        "guest-capture.txt",
+    ):
         shutil.copy2(TOOLS_ROOT / "reference" / name, reference_tools / name)
     lock_root = tmp_path / "locks"
     lock_root.mkdir()
@@ -199,6 +205,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
                 > "$instance/cuttlefish_config.json"
               printf 'synthetic kernel log\\n' > "$instance/kernel.log"
               printf 'synthetic launcher log\\n' > "$instance/launcher.log"
+              printf 'synthetic assemble log\\n' > "$instance/assemble_cvd.log"
               exit 0
             fi
             for argument in "$@"; do
@@ -376,7 +383,13 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
     reference_tools.mkdir(parents=True)
-    for name in ("capture.sh", "compare_boot.py", "normalize.yaml", "guest-capture.txt"):
+    for name in (
+        "capture.sh",
+        "capture_cvd_start.py",
+        "compare_boot.py",
+        "normalize.yaml",
+        "guest-capture.txt",
+    ):
         shutil.copy2(TOOLS_ROOT / "reference" / name, reference_tools / name)
 
     fake_bin = tmp_path / "fake-bin"
@@ -882,6 +895,38 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             ),
             id="real-timeout-kills-stuck-adb-getprop",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            False,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "cvd-create-delayed-logs",
+            id="create-failure-snapshots-logs-after-a-slow-listing",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            False,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "cvd-create-124",
+            id="cvd-create-exit-124-is-not-a-deadline",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -903,7 +948,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
     reference_tools.mkdir(parents=True)
-    for name in ("capture.sh", "compare_boot.py", "normalize.yaml", "guest-capture.txt"):
+    for name in (
+        "capture.sh",
+        "capture_cvd_start.py",
+        "compare_boot.py",
+        "normalize.yaml",
+        "guest-capture.txt",
+    ):
         shutil.copy2(TOOLS_ROOT / "reference" / name, reference_tools / name)
     host_lock_root = tmp_path / "host-locks"
     host_lock_root.mkdir()
@@ -939,6 +990,32 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             #!/bin/sh
             runtime="$HOME"
             base_directory="$runtime"
+            if [ "${1:-}" = logs ]; then
+              if [ "${FAKE_CVD_LOGS_EMPTY_FIRST:-0}" = 1 ] \
+                && [ ! -f "$HOME/cvd-logs-empty-first.txt" ]; then
+                : > "$HOME/cvd-logs-empty-first.txt"
+                if [ "${FAKE_CVD_FIRST_LOGS_DELAY_SECONDS:-0}" != 0 ]; then
+                  sleep "$FAKE_CVD_FIRST_LOGS_DELAY_SECONDS"
+                fi
+                exit 0
+              fi
+              instance_file="$HOME/instance-runtime.txt"
+              [ -f "$instance_file" ] || exit 0
+              instance=$(cat "$instance_file")
+              listing="$HOME/cvd-logs-list-$$.txt"
+              : > "$listing"
+              for name in assemble_cvd.log kernel.log launcher.log; do
+                if [ -f "$instance/$name" ]; then
+                  printf '%s %s/%s\\n' "$name" "$instance" "$name" >> "$listing"
+                fi
+              done
+              cat "$listing"
+              if [ "${FAKE_CVD_LOGS_DELAY_SECONDS:-0}" != 0 ]; then
+                sleep "$FAKE_CVD_LOGS_DELAY_SECONDS"
+              fi
+              rm -f "$listing"
+              exit 0
+            fi
             if [ "${1:-}" != create ]; then
               case "${1:-}" in
                 --base_directory=*)
@@ -949,7 +1026,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
             if [ "${1:-}" = create ]; then
               shift
-              if [ "${FAKE_CVD_CREATE_DELAY_SECONDS:-0}" -gt 0 ]; then
+              if [ "${FAKE_CVD_CREATE_DELAY_SECONDS:-0}" != 0 ]; then
                 sleep "$FAKE_CVD_CREATE_DELAY_SECONDS"
               fi
               printf '%s\\n' "$HOME" > "$CVD_HOME_LOG"
@@ -983,6 +1060,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             JSON
               printf 'VIRTUAL_DEVICE_BOOT_COMPLETED\\n' > "$instance/kernel.log"
               printf 'launcher synthetic log\\n' > "$instance/launcher.log"
+              printf 'assemble synthetic log\\n' > "$instance/assemble_cvd.log"
+              if [ "${FAKE_CVD_CREATE_FAIL_AFTER_LOGS:-0}" = 1 ]; then
+                sleep "${FAKE_CVD_CREATE_FAILURE_DELAY_SECONDS:-0.75}"
+                rm -f "$instance/assemble_cvd.log" \
+                  "$instance/kernel.log" "$instance/launcher.log"
+                exit "${FAKE_CVD_CREATE_EXIT_STATUS:-1}"
+              fi
               if [ "${FAKE_LAUNCH_FAIL:-0}" = 1 ]; then
                 exit 1
               fi
@@ -990,11 +1074,14 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
               for argument in "$@"; do
               if [ "$argument" = start ]; then
+                printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
+                : > "$HOME/cvd-started.txt"
                 if [ "${FAKE_CVD_START_HANG:-0}" = 1 ]; then
-                  trap '' TERM
+                  instance=$(cat "$HOME/instance-runtime.txt")
+                  trap 'rm -f "$instance/assemble_cvd.log" \
+                    "$instance/kernel.log" "$instance/launcher.log"; exit 0' TERM
                   while :; do sleep 1; done
                 fi
-                : > "$HOME/cvd-started.txt"
                 exit 0
               fi
             done
@@ -1162,7 +1249,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 ;;
               *)
                 case "$2" in
-                  */"$FAKE_CP_FAIL_NAME") exit 1 ;;
+                  */"$FAKE_CP_FAIL_NAME"|*/."$FAKE_CP_FAIL_NAME".*) exit 1 ;;
                 esac
                 ;;
             esac
@@ -1189,10 +1276,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         '    case "$3" in\n'
         '      100) printf "crosvm run --instance_num=%s --serial=OTHER\\n" "$other_instance" ;;\n'
         '      101) printf "crosvm run --socket=%s0/vsock.sock\\n" "$instance_runtime" ;;\n'
-        '      123) printf "crosvm run --instance_num=%s --serial=EXTERNAL-SAME-NUMBER\\n" "$instance_num" ;;\n'
-        '      124) printf "crosvm run --instance_num=%s --socket=%s/vsock.sock\\n" "$instance_num" "$instance_runtime" ;;\n'
+        '      123) printf "crosvm run --instance_num=%s --serial=EXTERNAL-SAME-NUMBER\\n" '
+        '"$instance_num" ;;\n'
+        '      124) printf "crosvm run --instance_num=%s --socket=%s/vsock.sock\\n" '
+        '"$instance_num" "$instance_runtime" ;;\n'
         '      127) printf "crosvm run --label=x%s/vsock.sock\\n" "$instance_runtime" ;;\n'
-        '      128) printf "crosvm run --label=x%s --socket=%s/vsock.sock\\n" "$instance_runtime" "$instance_runtime" ;;\n'
+        '      128) printf "crosvm run --label=x%s --socket=%s/vsock.sock\\n" '
+        '"$instance_runtime" "$instance_runtime" ;;\n'
         '      125) printf "awk -v instance_path=%s \\"crosvm\\"\\n" "$instance_runtime" ;;\n'
         '      126) printf "crosvm helper --socket=%s/vsock.sock\\n" "$instance_runtime" ;;\n'
         "    esac\n"
@@ -1272,6 +1362,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     capture_event_log = tmp_path / "capture-events.txt"
     cvd_home_log = tmp_path / "cvd-home.txt"
     launch_log = tmp_path / "launch-command.txt"
+    start_log = tmp_path / "start-command.txt"
     cvd_remove_home_log = tmp_path / "cvd-remove-home.txt"
     expected_instance = requested_instance or 1
     props_file = tmp_path / "drm-virgl-props.txt"
@@ -1284,15 +1375,29 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
             "APKRUN_TARGET_GPU_MODE": gpu_mode,
             "FAKE_LAUNCH_FAIL": "0" if launch_succeeds else "1",
-            "FAKE_CVD_START_TIMEOUT": "1" if boot_timeout_case == "cvd-start" else "0",
-            "FAKE_CVD_START_HANG": ("1" if boot_timeout_case == "real-cvd-start" else "0"),
+            "FAKE_CVD_START_HANG": (
+                "1" if boot_timeout_case in {"cvd-start", "real-cvd-start"} else "0"
+            ),
+            "FAKE_CVD_CREATE_FAIL_AFTER_LOGS": "1" if not launch_succeeds else "0",
+            "FAKE_CVD_LOGS_EMPTY_FIRST": "1" if not launch_succeeds else "0",
+            "FAKE_CVD_CREATE_EXIT_STATUS": (
+                "124" if boot_timeout_case == "cvd-create-124" else "1"
+            ),
+            "FAKE_CVD_CREATE_FAILURE_DELAY_SECONDS": (
+                "0.65" if boot_timeout_case == "cvd-create-delayed-logs" else "0.75"
+            ),
+            "FAKE_CVD_FIRST_LOGS_DELAY_SECONDS": (
+                "0.4" if boot_timeout_case == "cvd-create-delayed-logs" else "0"
+            ),
             "FAKE_ADB_BOOT_TIMEOUT": ("1" if boot_timeout_case == "adb-getprop" else "0"),
             "FAKE_ADB_BOOT_HANG": ("1" if boot_timeout_case == "real-adb-getprop" else "0"),
             "FAKE_ADB_PREFLIGHT_TIMEOUT": ("1" if boot_timeout_case == "adb-preflight" else "0"),
             "FAKE_ADB_WAIT_TIMEOUT": ("1" if boot_timeout_case == "adb-wait-for-device" else "0"),
             "FAKE_ADB_NO_DEVICE": "1" if boot_timeout_case == "adb-no-device" else "0",
             "FAKE_CVD_CREATE_DELAY_SECONDS": (
-                "1"
+                "0.1"
+                if boot_timeout_case == "cvd-create-delayed-logs"
+                else "1"
                 if boot_timeout_case == "cvd-start"
                 else "2"
                 if boot_timeout_case in {"adb-getprop", "shared-deadline", "adb-no-device"}
@@ -1321,6 +1426,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "CVD_REMOVE_HOME_LOG": str(cvd_remove_home_log),
             "CVD_HOME_LOG": str(cvd_home_log),
             "LAUNCH_LOG": str(launch_log),
+            "APKRUN_PROFILE_START_LOG": str(start_log),
             "HOME": str(home),
             "PATH": (f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}"),
             "TMPDIR": str(tmp_path),
@@ -1546,37 +1652,47 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 "Cuttlefish create or start exceeded the "
                 f"{expected_timeout_seconds}-second boot deadline"
             ) in missing
-            assert (
-                "crosvm-command-line.txt\tno crosvm process matched the private Cuttlefish HOME"
-            ) in missing
+            assert "crosvm run" in (
+                (partials[0] / "crosvm-command-line.txt").read_text(encoding="utf-8")
+            )
             timeout_calls = [
                 shlex.split(line.split("\t", maxsplit=1)[1])
                 for line in timeout_log.read_text(encoding="utf-8").splitlines()
             ]
-            create_calls = [
-                call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
-            ]
-            start_calls = [
+            cvd_runner_calls = [
                 call
                 for call in timeout_calls
-                if len(call) >= 5
-                and call[2] == "cvd"
-                and call[3].startswith("--group_name=")
-                and call[4:] == ["start"]
+                if any("capture_cvd_start.py" in value for value in call)
             ]
-            assert len(create_calls) == 1
-            assert len(start_calls) == 1
-            assert create_calls[0][0] == "--kill-after=2s"
-            assert create_calls[0][1].isdigit() and int(create_calls[0][1]) > 0
-            assert start_calls[0][0] == "--kill-after=2s"
-            assert start_calls[0][1].isdigit() and int(start_calls[0][1]) > 0
+            assert len(cvd_runner_calls) == 2
+            assert cvd_runner_calls[0][cvd_runner_calls[0].index("--") + 1] == "cvd"
+            assert cvd_runner_calls[0][cvd_runner_calls[0].index("--") + 2] == "create"
+            start_command = cvd_runner_calls[1][cvd_runner_calls[1].index("--") + 1 :]
+            assert start_command[0] == "cvd"
+            assert start_command[1].startswith("--group_name=apkrun_target_")
+            assert start_command[2] == "start"
+            assert all(call[0] == "--kill-after=2s" for call in cvd_runner_calls)
+            assert all(call[1].isdigit() and int(call[1]) > 0 for call in cvd_runner_calls)
             if boot_timeout_case == "cvd-start":
-                assert int(start_calls[0][1]) < int(create_calls[0][1])
+                assert capture_elapsed_seconds >= 3
+                assert capture_elapsed_seconds < 10
             else:
                 assert capture_elapsed_seconds >= 10
                 assert capture_elapsed_seconds < 25
-            assert start_calls[0][2] == "cvd"
-            assert start_calls[0][3].startswith("--group_name=apkrun_target_")
+            assert start_log.read_text(encoding="utf-8").startswith("--group_name=apkrun_target_")
+            assert (partials[0] / "kernel.log").read_text(encoding="utf-8") == (
+                "VIRTUAL_DEVICE_BOOT_COMPLETED\n"
+            )
+            assert (partials[0] / "launcher.log").read_text(encoding="utf-8") == (
+                "launcher synthetic log\n"
+            )
+            assert (partials[0] / "assemble_cvd.log").read_text(encoding="utf-8") == (
+                "assemble synthetic log\n"
+            )
+            assert not any(
+                f"{name}\t" in missing
+                for name in ("kernel.log", "launcher.log", "assemble_cvd.log")
+            )
             assert_scoped_group_removal()
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
             assert not cvd_home.exists()
@@ -1609,12 +1725,16 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert len(getprop_calls) == 1
             assert getprop_calls[0][0] == "--kill-after=2s"
             assert getprop_calls[0][1].isdigit() and int(getprop_calls[0][1]) > 0
-            create_calls = [
-                call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
+            cvd_runner_calls = [
+                call
+                for call in timeout_calls
+                if any("capture_cvd_start.py" in value for value in call)
             ]
-            assert len(create_calls) == 1
+            assert len(cvd_runner_calls) == 2
+            create_timeout = cvd_runner_calls[0][cvd_runner_calls[0].index("--timeout-seconds") + 1]
+            start_timeout = cvd_runner_calls[1][cvd_runner_calls[1].index("--timeout-seconds") + 1]
             if boot_timeout_case == "adb-getprop":
-                assert int(getprop_calls[0][1]) < int(create_calls[0][1])
+                assert int(getprop_calls[0][1]) <= int(start_timeout) < int(create_timeout)
             else:
                 assert capture_elapsed_seconds >= 10
                 assert capture_elapsed_seconds < 25
@@ -1628,6 +1748,22 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert len(partials) == 1
             assert "Cuttlefish group create or start failed" in (
                 (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            )
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            if boot_timeout_case == "cvd-create-124":
+                assert "exceeded the" not in missing
+            assert (partials[0] / "kernel.log").read_text(encoding="utf-8") == (
+                "VIRTUAL_DEVICE_BOOT_COMPLETED\n"
+            )
+            assert (partials[0] / "launcher.log").read_text(encoding="utf-8") == (
+                "launcher synthetic log\n"
+            )
+            assert (partials[0] / "assemble_cvd.log").read_text(encoding="utf-8") == (
+                "assemble synthetic log\n"
+            )
+            assert not any(
+                f"{name}\t" in missing
+                for name in ("kernel.log", "launcher.log", "assemble_cvd.log")
             )
             assert_scoped_group_removal()
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
@@ -1702,16 +1838,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             shlex.split(line.split("\t", maxsplit=1)[1])
             for line in timeout_log.read_text(encoding="utf-8").splitlines()
         ]
-        create_calls = [
-            call for call in timeout_calls if len(call) >= 4 and call[2:4] == ["cvd", "create"]
-        ]
-        start_calls = [
-            call
-            for call in timeout_calls
-            if len(call) >= 5
-            and call[2] == "cvd"
-            and call[3].startswith("--group_name=")
-            and call[4:] == ["start"]
+        cvd_runner_calls = [
+            call for call in timeout_calls if any("capture_cvd_start.py" in value for value in call)
         ]
         getprop_calls = [
             call
@@ -1727,13 +1855,15 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 "sys.boot_completed",
             ]
         ]
-        assert len(create_calls) == len(start_calls) == len(getprop_calls) == 1
-        assert create_calls[0][0] == "--kill-after=2s"
-        assert create_calls[0][1] == "600"
-        assert start_calls[0][0] == "--kill-after=2s"
-        assert 0 < int(start_calls[0][1]) < 600
+        assert len(cvd_runner_calls) == 2
+        assert len(getprop_calls) == 1
+        create_timeout = cvd_runner_calls[0][cvd_runner_calls[0].index("--timeout-seconds") + 1]
+        start_timeout = cvd_runner_calls[1][cvd_runner_calls[1].index("--timeout-seconds") + 1]
+        assert cvd_runner_calls[0][0] == "--kill-after=2s"
+        assert create_timeout == "600"
+        assert start_log.read_text(encoding="utf-8").startswith("--group_name=apkrun_target_")
         assert getprop_calls[0][0] == "--kill-after=2s"
-        assert 0 < int(getprop_calls[0][1]) <= int(start_calls[0][1])
+        assert 0 < int(getprop_calls[0][1]) <= int(start_timeout) < int(create_timeout)
     if gpu_mode == "guest_swiftshader":
         assert (capture / "graphics-props-from-source.txt").read_text(
             encoding="utf-8"

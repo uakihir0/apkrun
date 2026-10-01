@@ -492,7 +492,7 @@ if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
 fi
 
 create_cvd_group_with_common_options() {
-  run_with_boot_deadline cvd create \
+  run_cvd_command_with_live_logs cvd create \
     --host_path="$CVD_HOST_DIR" \
     --product_path="$private_product_out" \
     --base_directory="$runtime_root" \
@@ -500,8 +500,7 @@ create_cvd_group_with_common_options() {
     --base_instance_num="$cvd_instance_num" \
     --num_instances=1 \
     --nostart \
-    "$@" \
-    && run_with_boot_deadline cvd --group_name="$cvd_group_name" start
+    "$@"
 }
 
 launch_profile() {
@@ -526,6 +525,31 @@ launch_profile() {
   esac
 }
 
+run_cvd_command_with_live_logs() {
+  command_now=$(date +%s)
+  command_remaining=$((boot_timeout_deadline - command_now))
+  if [ "$command_remaining" -le 0 ]; then
+    boot_deadline_expired=1
+    return 124
+  fi
+  if HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
+    python3 \
+    "$script_dir/capture_cvd_start.py" \
+    --home "$cvd_home" \
+    --stage "$stage" \
+    --timeout-seconds "$command_remaining" \
+    -- "$@"; then
+    return 0
+  else
+    command_status=$?
+    if { [ "$command_status" -eq 124 ] || [ "$command_status" -eq 137 ]; } \
+      && [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
+      boot_deadline_expired=1
+    fi
+    return "$command_status"
+  fi
+}
+
 capture_adb() {
   HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"
 }
@@ -533,7 +557,9 @@ capture_adb() {
 boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
 preserve_cvd_home=1
 started=1
-if ! launch_profile > "$stage/cvd-create-console.log" 2>&1; then
+if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
+  || ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" start \
+    >> "$stage/cvd-create-console.log" 2>&1; then
   if [ "$boot_deadline_expired" -eq 1 ]; then
     record_missing "guest" \
       "Cuttlefish create or start exceeded the ${timeout_seconds}-second boot deadline; see cvd-create-console.log"
@@ -543,14 +569,6 @@ if ! launch_profile > "$stage/cvd-create-console.log" 2>&1; then
   fi
 else
   preserve_cvd_home=0
-  discovered_instance_runtime=$(find "$runtime_root" -type d \
-    -path "*/instances/cvd-$cvd_instance_num" -print -quit 2>/dev/null || true)
-  if [ -n "$discovered_instance_runtime" ]; then
-    instance_runtime=$discovered_instance_runtime
-  else
-    record_missing "instance-runtime" \
-      "Cuttlefish did not create the selected instance directory under its private base directory"
-  fi
   booted=0
   device_invalid=0
   adb_poll_failed=0
@@ -678,16 +696,47 @@ else
   fi
 fi
 
+discovered_instance_runtime=$(find "$runtime_root" -type d \
+  -path "*/instances/cvd-$cvd_instance_num" -print -quit 2>/dev/null || true)
+if [ -n "$discovered_instance_runtime" ]; then
+  instance_runtime=$discovered_instance_runtime
+elif [ "$capture_failed" -eq 0 ]; then
+  record_missing "instance-runtime" \
+    "Cuttlefish did not create the selected instance directory under its private base directory"
+fi
+
 copy_first_match() {
   destination_name=$1
   source_path=$(find "$instance_runtime" -newer "$capture_marker" -type f \
     -name "$destination_name" -print -quit 2>/dev/null || true)
   if [ -n "$source_path" ] && [ -f "$source_path" ]; then
-    if ! cp "$source_path" "$stage/$destination_name"; then
-      rm -f "$stage/$destination_name" >/dev/null 2>&1 || true
-      record_missing "$destination_name" "could not copy this Cuttlefish artifact"
-    fi
-  else
+    case "$destination_name" in
+      assemble_cvd.log|kernel.log|launcher.log)
+        if ! HOME="$cvd_home" python3 \
+          "$script_dir/capture_cvd_start.py" \
+          --home "$cvd_home" \
+          --stage "$stage" \
+          --snapshot-source "$source_path" \
+          --snapshot-name "$destination_name"; then
+          if [ ! -s "$stage/$destination_name" ]; then
+            record_missing "$destination_name" "could not copy this bounded Cuttlefish log"
+          fi
+        fi
+        ;;
+      *)
+        temporary_copy="$stage/.${destination_name}.$$"
+        if cp "$source_path" "$temporary_copy" \
+          && mv "$temporary_copy" "$stage/$destination_name"; then
+          :
+        else
+          rm -f "$temporary_copy" >/dev/null 2>&1 || true
+          if [ ! -s "$stage/$destination_name" ]; then
+            record_missing "$destination_name" "could not copy this Cuttlefish artifact"
+          fi
+        fi
+        ;;
+    esac
+  elif [ ! -s "$stage/$destination_name" ]; then
     record_missing "$destination_name" "not found in the selected Cuttlefish instance runtime"
   fi
 }
@@ -773,6 +822,7 @@ fi
 copy_first_match cuttlefish_config.json
 copy_first_match kernel.log
 copy_first_match launcher.log
+copy_first_match assemble_cvd.log
 
 if [ -s "$stage/cuttlefish_config.json" ]; then
   if ! python3 - "$stage/cuttlefish_config.json" "$stage/composite-disk-specs.json" <<'PY'

@@ -2086,3 +2086,62 @@ ignored its live logs, which could leave no diagnostic record when cleanup
 removed the runtime files. The regression test uses the observed prefixed
 format in both listing parsing and live snapshot collection, including an
 outside path before the valid in-home path.
+
+## IR-086: Redact EUI-64-style IPv6 interface identifiers
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/compare_boot.py`; `Images/tools/tests/test_compare_boot.py`; `Images/reference/16373615/incomplete/default-20261001T120904-49816/cuttlefish_config.json` |
+
+**Choice.** During normalization and comparison, parse IPv6 address candidates,
+including compressed, expanded, and IPv4-embedded forms. Replace any address
+whose interface identifier has the EUI-64 `ff:fe` marker at the insertion
+position with `<EUI64_STYLE_IPV6>`. Preserve other IPv6 addresses.
+
+**Reason.** The Cuttlefish configuration's `ethernet_mac` is redacted by the
+existing MAC rule, but its link-local `ethernet_ipv6` encodes the same MAC in
+an EUI-64-style interface identifier. The address alone cannot prove that
+another matching identifier came from a MAC, so this rule conservatively
+redacts all addresses with that byte pattern, including a manually configured
+one. This can hide the value of an uncommon non-MAC address with the same
+layout, while preserving ordinary IPv6 observations. The broader match keeps
+a MAC-derived identifier from bypassing the no-MAC capture requirement.
+
+## IR-087: Give the live log-snapshot test time to observe command completion
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/tests/test_capture_cvd_start.py` |
+
+**Choice.** Set the timeout in
+`test_collect_logs_snapshots_a_log_before_the_listing_command_exits` to three
+seconds. Keep the fake listing command's 0.2-second delay and all assertions.
+
+**Reason.** A full suite run once reached the one-second test deadline after the
+log contents had been snapshotted but before the supervisor's completion
+status was observed. The log-content assertion passed while the expected
+completion entry was absent. A three-second observation window leaves the
+test's before-exit behavior unchanged; the separate timeout regression test
+continues to cover incomplete listings.
+
+## IR-088: Preserve source whitespace in captured Cuttlefish logs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064; `.gitattributes`; `Images/reference/16373615/incomplete/` |
+
+**Choice.** Disable only Git's `blank-at-eol` whitespace check for captured
+Cuttlefish `.log` files and `cuttlefish_config.json` beneath `Images/reference/`.
+Keep the captured file bytes unchanged.
+
+**Reason.** Cuttlefish source logs contain lines ending in spaces, including
+empty diagnostic fields, and its generated configuration JSON also retains
+trailing spaces. Trimming either would mutate the evidence. Restricting the
+attribute to those captured file types keeps whitespace checks active for
+source code and other documentation.

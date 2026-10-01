@@ -730,9 +730,10 @@ the commands are intended to work in the serial shell used by #014, but that
 path remains unverified until the T3 console check. `logcat` is
 compressed on the host with deterministic gzip metadata. The comparator refuses
 gzip artifacts whose compressed or decompressed size exceeds 64 MiB. Serial
-numbers, MAC addresses, common host paths, and complete quoted or unquoted
-secret-keyed values are normalized by `compare_boot.py` and `normalize.yaml`.
-Private-key blocks are redacted by a linear marker scan.
+numbers, MAC addresses, IPv6 addresses with EUI-64-style interface identifiers,
+common host paths, and complete quoted or unquoted secret-keyed values are
+normalized by `compare_boot.py` and `normalize.yaml`. Private-key blocks are
+redacted by a linear marker scan.
 JSON host paths are replaced inside escaped JSON string tokens so normalization
 keeps the file valid. Escaped quotes in plain-text paths are handled by
 non-overlapping alternatives to keep matching linear. The capture is taken

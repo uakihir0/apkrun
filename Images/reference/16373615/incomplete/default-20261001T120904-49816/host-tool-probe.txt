@@ -1,0 +1,44 @@
+Separate host-tool probe, 2026-10-01. This is not part of the 603-second
+default-profile capture in this directory. Host filesystem paths have been
+replaced with `<CVD_HOST_DIR>`; log paths are omitted.
+
+Fresh login shell:
+  CVD_HOST_DIR=<CVD_HOST_DIR>
+  ANDROID_HOST_OUT=<CVD_HOST_DIR>
+  ANDROID_PRODUCT_OUT=<CVD_HOST_DIR>/product
+  launch_cvd=<CVD_HOST_DIR>/bin/launch_cvd
+  adb=<CVD_HOST_DIR>/bin/adb
+  Android Debug Bridge version 1.0.41
+  Version 36.0.0-cuttlefish_common
+  `cvd fleet` version banner: 1.57.0
+
+Sanitized login-profile excerpt:
+  export CVD_HOST_DIR="$HOME/cuttlefish/16373615"
+  export ANDROID_HOST_OUT="$CVD_HOST_DIR"
+  export ANDROID_PRODUCT_OUT="$CVD_HOST_DIR/product"
+  case ":$PATH:" in
+    *":$CVD_HOST_DIR/bin:"*) ;;
+    *) PATH="$CVD_HOST_DIR/bin:$PATH" ;;
+  esac
+  export PATH
+
+45-second `launch_cvd` probe:
+  At 12 seconds: group `cvd_1`, instance `1`, status `Starting`.
+  `cvd logs --nopretty` labels:
+    cvd_1:1:assemble_cvd.log
+    cvd_1:1:kernel.log
+    cvd_1:1:launcher.log
+    cvd_1:assemble_cvd.log
+  crosvm process count: 2
+  ADB device count: 0
+  `timeout` exit status: 124 (45-second deadline)
+
+Cleanup:
+  `cvd remove` exit status: 0
+  Remaining CVD groups: 0
+  Remaining crosvm processes: 0
+  The unique temporary probe HOME contained only Cuttlefish-created state
+  after group removal; that directory was then removed and its absence verified.
+
+This probe confirms command resolution, Cuttlefish launch, and the live log-label
+format. It did not reach an ADB-ready guest or confirm Android boot completion.

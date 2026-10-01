@@ -1,0 +1,3 @@
+# Captured Cuttlefish logs preserve their source whitespace.
+Images/reference/**/*.log whitespace=-blank-at-eol
+Images/reference/**/cuttlefish_config.json whitespace=-blank-at-eol

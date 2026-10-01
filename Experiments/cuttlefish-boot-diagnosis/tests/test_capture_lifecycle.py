@@ -1726,11 +1726,15 @@ def test_gpu_none_runner_uses_short_home_for_fleet_and_capture() -> None:
     assert "stop_pinned_capture_process()" in lifecycle
     assert "_capture_process_abort_start()" in lifecycle
     assert '_capture_process_abort_start "$role"' in lifecycle
+    assert "printf 'CONT\\n' >&\"$control_fd\"" in lifecycle
+    assert 'kill -TERM "$broker_pid"' not in lifecycle
+    assert 'kill -KILL "$broker_pid"' not in lifecycle
+    assert 'kill -CONT "$target_pid"' not in lifecycle
     assert "_capture_close_extra_descriptors()" in lifecycle
     assert "_capture_close_extra_descriptors || exit 125" in lifecycle
     assert (
-        "(\n  _capture_close_extra_descriptors || exit 125\n  watch_adb\n) &"
-    ) in runner
+        'start_pinned_capture_process watcher - - bash -c "$watcher_script"' in runner
+    )
     assert (
         "(\n"
         "  _capture_close_extra_descriptors || exit 125\n"
@@ -1752,10 +1756,24 @@ def test_gpu_none_runner_uses_short_home_for_fleet_and_capture() -> None:
     assert watcher_shutdown.index(
         "printf 'done\\n' > \"$done_marker\""
     ) < watcher_shutdown.index('if [ -n "$watcher_pid" ]')
-    assert "_capture_process_stop_direct_child" in watcher_shutdown
+    assert "stop_pinned_capture_process watcher TERM" in watcher_shutdown
+    assert "start_pinned_capture_process watcher" in runner
+    assert "declare -f" in runner
+    assert "check_bounded_cleanup capture_adb_control_output watch_adb" in runner
     assert "watcher_stop_failed=1" in watcher_shutdown
-    assert "capture_process_starting_role=watcher" in runner
+    assert "capture_process_starting_role=$role" in lifecycle
     assert "capture_process_starting_role=workspace" in runner
+    watcher_shutdown_start = runner.index(': > "$done_marker"\n')
+    watcher_wait = runner.index(
+        'wait "$watcher_pid" || watcher_status=$?',
+        watcher_shutdown_start,
+    )
+    watcher_finish = runner.index(
+        "if ! stop_pinned_capture_process watcher TERM 5 3",
+        watcher_wait,
+    )
+    watcher_clear = runner.index("watcher_pid=", watcher_finish)
+    assert watcher_wait < watcher_finish < watcher_clear
     assert "short_cvd_root=$(trap '' HUP INT TERM; mktemp -d" in lifecycle
     assert "capture_process_starting_role=fleet_home" in runner
     assert runner.index("capture_process_starting_role=fleet_home") < runner.index(
@@ -1775,15 +1793,14 @@ def test_gpu_none_runner_uses_short_home_for_fleet_and_capture() -> None:
         "trap '' HUP INT TERM; python3 \"$script_dir/experiment_support.py\" "
         "discard-short-cvd-root"
     ) in lifecycle
-    assert runner.index("watcher_pid=$!") < runner.index(
-        "_capture_process_complete_startup_signal watcher",
-        runner.index("watcher_pid=$!"),
+    assert (
+        'start_pinned_capture_process watcher - - bash -c "$watcher_script"' in runner
     )
     signal_handler = runner.split("handle_signal() {", 1)[1].split("\n}", 1)[0]
     assert 'rm -rf "$adb_socket_dir"' in signal_handler
     assert "_capture_process_reap_broker()" in lifecycle
     assert (
-        "Capture process broker did not exit after publishing its stopped record."
+        "Capture process broker did not exit after publishing its stopped record; preserving its workspace."
         in lifecycle
     )
     assert "audit-unix-sockets" in runner
@@ -2294,25 +2311,41 @@ exit 33
     sys.platform != "linux",
     reason="direct child cleanup uses Linux /proc process states",
 )
-def test_watcher_stop_marker_failure_stops_and_reaps_its_direct_child(
+def test_watcher_stop_marker_failure_stops_its_pinned_child(
     tmp_path: Path,
 ) -> None:
     experiment_root = Path(__file__).parents[1]
     runner = (experiment_root / "capture-gpu-none.sh").read_text(encoding="utf-8")
     stop_watcher = runner.split("stop_watcher() {", 1)[1].split("\n}", 1)[0]
+    ready_marker = tmp_path / "pinned-watcher-ready"
     script = f"""
 set -euo pipefail
 script_dir={str(experiment_root)!r}
+experiment_tools=$script_dir
+work_root={str(tmp_path)!r}
 done_marker=/proc/apkrun-capture-stop-marker
 watcher_stop_failed=0
 watcher_pid=
+watcher_start_time=
+watcher_signal_broker_pid=
+watcher_control_fd=
+watcher_start_fd=
+watcher_start_fifo=
+watcher_control_fifo=
+watcher_signal_broker_ready_file=
+watcher_signal_broker_exit_file=
+watcher_signal_broker_stopped_file=
+capture_process_starting_role=
+capture_process_starting_released=0
 keep_work=0
 source "$script_dir/capture-lifecycle.sh"
 preserve_work() {{ keep_work=1; }}
 stop_watcher() {{{stop_watcher}
 }}
-python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)' &
-watcher_pid=$!
+start_pinned_capture_process watcher - - python3 -c \
+  'import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text("ready"); time.sleep(30)' \
+  {str(ready_marker)!r}
+while [ ! -f {str(ready_marker)!r} ]; do sleep 0.01; done
 test_pid=$watcher_pid
 if stop_watcher; then
   exit 31
@@ -2328,7 +2361,7 @@ test "$(_capture_process_state "$test_pid")" = missing
         check=False,
         capture_output=True,
         text=True,
-        timeout=8,
+        timeout=12,
     )
 
     assert result.returncode == 0, result.stderr
@@ -2337,23 +2370,97 @@ test "$(_capture_process_state "$test_pid")" = missing
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="broker cleanup uses Linux /proc process states",
+    reason="normal watcher shutdown verifies Linux pidfd broker lifecycle",
 )
-def test_broker_reaping_is_bounded_after_a_stopped_record(
+def test_normal_watcher_shutdown_preserves_work_when_broker_finalization_fails(
     tmp_path: Path,
 ) -> None:
     experiment_root = Path(__file__).parents[1]
+    runner = (experiment_root / "capture-gpu-none.sh").read_text(encoding="utf-8")
+    normal_watcher_shutdown = (
+        ': > "$done_marker"\n'
+        + runner.split(
+            ': > "$done_marker"\n',
+            1,
+        )[1].split('\nrm -f "$capture_supervisor_stderr_fifo"', 1)[0]
+    )
+    done_marker = tmp_path / "watcher-done"
+    script = f"""
+set -euo pipefail
+script_dir={str(experiment_root)!r}
+experiment_tools=$script_dir
+work_root={str(tmp_path)!r}
+done_marker={str(done_marker)!r}
+watcher_status=0
+watcher_pid=
+watcher_start_time=
+watcher_signal_broker_pid=
+watcher_control_fd=
+watcher_start_fd=
+watcher_start_fifo=
+watcher_control_fifo=
+watcher_signal_broker_ready_file=
+watcher_signal_broker_exit_file=
+watcher_signal_broker_stopped_file=
+capture_supervisor_stderr_fifo={str(tmp_path / "stderr.fifo")!r}
+capture_supervisor_stderr_control_fifo={str(tmp_path / "stderr-control.fifo")!r}
+adb_cleanup_failure_marker={str(tmp_path / "incomplete-cleanup")!r}
+broker_finish_attempted=0
+keep_work=0
+source "$script_dir/capture-lifecycle.sh"
+preserve_work() {{ keep_work=1; }}
+eval "$(declare -f _capture_process_finish_broker | sed '1s/_capture_process_finish_broker/_capture_process_finish_broker_impl/')"
+_capture_process_finish_broker() {{
+  broker_finish_attempted=1
+  _capture_process_finish_broker_impl "$@"
+  return 1
+}}
+start_pinned_capture_process watcher - - bash -c \
+  'while [ ! -e "$1" ]; do sleep 0.01; done' _ "$done_marker"
+{normal_watcher_shutdown}
+test "$watcher_status" -eq 1
+test "$broker_finish_attempted" -eq 1
+test "$keep_work" -eq 1
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="broker cleanup uses Linux /proc process states",
+)
+def test_broker_reaping_preserves_an_unpinned_live_child(
+    tmp_path: Path,
+) -> None:
+    experiment_root = Path(__file__).parents[1]
+    release_marker = tmp_path / "release-unpinned-child"
     script = f"""
 set -euo pipefail
 script_dir={str(experiment_root)!r}
 source "$script_dir/capture-lifecycle.sh"
-python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)' &
+python3 -c 'import signal, sys, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+marker = Path(sys.argv[1])
+while not marker.exists():
+    time.sleep(0.01)' {str(release_marker)!r} &
 broker_pid=$!
 test_pid=$broker_pid
 if _capture_process_reap_broker "$broker_pid"; then
   exit 32
 fi
-test "$(_capture_process_state "$test_pid")" = missing
+test "$(_capture_process_state "$test_pid")" = S
+: > {str(release_marker)!r}
+wait "$test_pid"
 """
 
     result = subprocess.run(
@@ -2365,7 +2472,10 @@ test "$(_capture_process_state "$test_pid")" = missing
     )
 
     assert result.returncode == 0, result.stderr
-    assert "did not exit after publishing its stopped record" in result.stderr
+    assert (
+        "did not exit after publishing its stopped record; preserving its workspace"
+        in result.stderr
+    )
 
 
 @pytest.mark.skipif(

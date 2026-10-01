@@ -102,6 +102,15 @@ capture_supervisor_stderr_broker_target_pid=
 capture_supervisor_stderr_broker_target_start_time=
 capture_supervisor_stderr_signal_broker_pid=
 watcher_pid=
+watcher_start_time=
+watcher_signal_broker_pid=
+watcher_control_fd=
+watcher_start_fd=
+watcher_start_fifo=
+watcher_control_fifo=
+watcher_signal_broker_ready_file=
+watcher_signal_broker_exit_file=
+watcher_signal_broker_stopped_file=
 watcher_stop_failed=0
 adb_server_pid=
 adb_server_started=0
@@ -148,9 +157,7 @@ stop_watcher() {
     printf 'Could not signal the logcat watcher through its stop marker.\n' >&2
     watcher_stop_failed=1
     if [ -n "$watcher_pid" ]; then
-      if _capture_process_stop_direct_child "$watcher_pid"; then
-        watcher_pid=
-      else
+      if ! stop_pinned_capture_process watcher TERM 5 3; then
         preserve_work
         return 1
       fi
@@ -159,8 +166,16 @@ stop_watcher() {
     return 1
   fi
   if [ -n "$watcher_pid" ]; then
-    wait "$watcher_pid" || true
-    watcher_pid=
+    for _ in $(seq 1 450); do
+      if _capture_process_exit_state watcher; then
+        break
+      fi
+      sleep 0.1
+    done
+    if ! stop_pinned_capture_process watcher TERM 5 3; then
+      preserve_work
+      return 1
+    fi
   fi
 }
 
@@ -795,17 +810,12 @@ STATUS
   done
 }
 
-capture_process_starting_role=watcher
-capture_process_starting_released=1
-_capture_process_complete_startup_signal watcher
-(
-  _capture_close_extra_descriptors || exit 125
-  watch_adb
-) &
-watcher_pid=$!
-capture_process_starting_role=
-_capture_process_complete_startup_signal watcher
-capture_process_starting_released=0
+export adb_cleanup_failure_marker
+export done_marker short_cvd_home_tmpdir serial adb_log_root
+export tool_destination adb_shim_dir
+watcher_script="$(declare -f \
+  check_bounded_cleanup capture_adb_control_output watch_adb; printf 'watch_adb\n')"
+start_pinned_capture_process watcher - - bash -c "$watcher_script"
 mkfifo "$capture_supervisor_stderr_fifo" \
   "$capture_supervisor_stderr_start_fifo" \
   "$capture_supervisor_stderr_control_fifo"
@@ -1052,7 +1062,12 @@ fi
 set -e
 : > "$done_marker"
 wait "$watcher_pid" || watcher_status=$?
-watcher_pid=
+if ! stop_pinned_capture_process watcher TERM 5 3; then
+  watcher_status=1
+  preserve_work
+else
+  watcher_pid=
+fi
 rm -f "$capture_supervisor_stderr_fifo"
 rm -f "$capture_supervisor_stderr_control_fifo"
 if [ "$watcher_status" -ne 0 ]; then

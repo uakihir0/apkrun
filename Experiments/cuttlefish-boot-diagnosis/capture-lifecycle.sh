@@ -32,7 +32,7 @@ require_no_crosvm() {
 _capture_process_variable() {
   local role=$1 suffix=$2
   case "$role" in
-    capture_child|adb_server) printf '%s_%s' "$role" "$suffix" ;;
+    capture_child|adb_server|watcher) printf '%s_%s' "$role" "$suffix" ;;
     *)
       printf 'Unsupported pinned capture process role.\n' >&2
       return 2
@@ -203,7 +203,7 @@ _capture_process_finish_broker() {
 
 _capture_process_state() {
   local process_id=$1 stat_record stat_fields
-  if ! IFS= read -r stat_record < "/proc/$process_id/stat"; then
+  if ! IFS= read -r stat_record 2>/dev/null < "/proc/$process_id/stat"; then
     if [ -e "/proc/$process_id/stat" ]; then
       printf 'unknown'
     else
@@ -233,18 +233,8 @@ _capture_process_wait_for_exit() {
 
 _capture_process_reap_broker() {
   local broker_pid=$1 broker_status
-  if ! _capture_process_wait_for_exit "$broker_pid" 1; then
-    printf 'Capture process broker did not exit after publishing its stopped record.\n' >&2
-    # This unreaped PID is our direct child, so it cannot be reused.
-    kill -TERM "$broker_pid" 2>/dev/null || true
-    if ! _capture_process_wait_for_exit "$broker_pid" 1; then
-      kill -KILL "$broker_pid" 2>/dev/null || true
-    fi
-    if ! _capture_process_wait_for_exit "$broker_pid" 2; then
-      printf 'Capture process broker could not be stopped; preserving its workspace.\n' >&2
-      return 1
-    fi
-    wait "$broker_pid" 2>/dev/null || true
+  if ! _capture_process_wait_for_exit "$broker_pid" 2; then
+    printf 'Capture process broker did not exit after publishing its stopped record; preserving its workspace.\n' >&2
     return 1
   fi
   if wait "$broker_pid"; then
@@ -254,26 +244,6 @@ _capture_process_reap_broker() {
   fi
   printf 'Capture process broker exited with status %s.\n' "$broker_status" >&2
   return 1
-}
-
-_capture_process_stop_direct_child() {
-  local child_pid=$1
-  if ! [[ "$child_pid" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'Could not verify the direct child process identity.\n' >&2
-    return 1
-  fi
-  if ! _capture_process_wait_for_exit "$child_pid" 1; then
-    # This unreaped PID is our direct child, so it cannot be reused.
-    kill -TERM "$child_pid" 2>/dev/null || true
-    if ! _capture_process_wait_for_exit "$child_pid" 1; then
-      kill -KILL "$child_pid" 2>/dev/null || true
-    fi
-  fi
-  if ! _capture_process_wait_for_exit "$child_pid" 2; then
-    printf 'Direct child process could not be stopped; preserving its workspace.\n' >&2
-    return 1
-  fi
-  wait "$child_pid" 2>/dev/null || true
 }
 
 _capture_process_abort_start() {
@@ -340,23 +310,18 @@ _capture_process_abort_start() {
       sleep 0.1
     done
     if [ -n "$broker_pid" ] && [ "$broker_ready" -eq 0 ]; then
-      printf 'Capture process broker did not become ready during startup abort.\n' >&2
-      # This exact PID is our unreaped direct child, so it cannot be reused.
-      kill -TERM "$broker_pid" 2>/dev/null || true
-      if ! _capture_process_wait_for_exit "$broker_pid" 1; then
-        kill -KILL "$broker_pid" 2>/dev/null || true
+      printf 'Capture process broker did not become ready during startup abort; preserving its workspace.\n' >&2
+      return 1
+    fi
+    if [ -n "$target_pid" ]; then
+      record_state=$(_capture_process_state "$target_pid")
+      if [ "$record_state" = T ] || [ "$record_state" = t ]; then
+        if [[ ! "$control_fd" =~ ^[0-9]+$ ]] || [ "$control_fd" -le 9 ]; then
+          printf 'Stopped capture process has no open pidfd broker control channel.\n' >&2
+          return 1
+        fi
+        printf 'CONT\n' >&"$control_fd" || return 1
       fi
-      if ! _capture_process_wait_for_exit "$broker_pid" 2; then
-        printf 'Capture process broker could not be stopped; preserving its workspace.\n' >&2
-        return 1
-      fi
-      if _capture_process_reap_broker "$broker_pid"; then
-        broker_status=0
-      else
-        broker_status=1
-      fi
-      printf -v "$broker_pid_var" '%s' ''
-      broker_pid=
     fi
     if [[ "$control_fd" =~ ^[0-9]+$ ]] && [ "$control_fd" -gt 2 ]; then
       fd_to_close=$control_fd
@@ -400,11 +365,6 @@ _capture_process_abort_start() {
     broker_status=1
   fi
   if [ -n "$target_pid" ]; then
-    record_state=$(_capture_process_state "$target_pid")
-    if [ "$record_state" = T ] || [ "$record_state" = t ]; then
-      # The unreaped PID is this launch's direct child and remains reserved.
-      kill -CONT "$target_pid" 2>/dev/null || true
-    fi
     if ! _capture_process_wait_for_exit "$target_pid" 5; then
       printf 'Pinned capture process did not exit after startup abort; preserving its workspace.\n' >&2
       return 1

@@ -297,6 +297,13 @@ effective memory size and is recorded separately from the bytes extracted.
 
 The ramdisk fragment policy (all non-recovery fragments, table order) is what a default AOSP bootloader does when no board-specific selection applies. #013 confirms it against the reference capture by comparing the first-stage module list (`lsmod` and the first-stage init log).
 
+For build 16373615, extraction produced an uncompressed 42,031,616-byte
+kernel and one unnamed `PLATFORM` fragment of 18,816,072 bytes, included in
+the ramdisk. The current layout emits a 157-byte command line from the vendor
+command line, the empty boot command line, and `console=hvc0`. This length is
+provisional until #064's `target` capture confirms whether additional
+non-`androidboot` parameters are needed.
+
 ### 4.2 Disk plan (#011)
 
 Cuttlefish under crosvm gives the guest composite disks whose GPT partition names first-stage init and fstab rely on (`/dev/block/by-name/<name>`). APKRun builds raw GPT disk images with the same partition names. The mapping is data (`Images/tools/layouts/cuttlefish-phone-arm64.json`), copied into the runtime manifest, and read by ImageCore. Nothing in Swift lists partitions.
@@ -1179,7 +1186,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Question | Task | Result |
 |---|---|---|
 | VZ virtio-blk logical sector size | #005, #011 | pending (§4.4) |
-| Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | pending (§4.1) |
+| Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | 2026-10-01; macOS 27.0 (26A428); build 16373615: uncompressed 42,031,616-byte kernel; one unnamed `PLATFORM` fragment of 18,816,072 bytes, included; current command line 157 bytes. Reference-derived command-line additions remain pending #064. |
 | Real sizes of the blank partitions; omitted partitions not needed | #011 | pending (§3.2, §4.2) |
 | fstab `formattable` flags and the metadata encryption path | #011 | pending (§5.2) |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5.3) |

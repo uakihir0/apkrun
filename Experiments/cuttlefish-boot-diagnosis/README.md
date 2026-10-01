@@ -7,7 +7,10 @@ host tools, capture tools, CPU count, memory size, and boot deadline to the
 `gpu_vhost_user_mode=off` to both `cvd create` and `cvd start`. Cuttlefish
 1.57.0 does not create its configuration during `cvd create --nostart`, so the
 runner checks both commands' exact arguments and validates the saved GPU
-settings before publication. It also requires the recorded Linux
+settings before publication. It enables Cuttlefish's serial console with
+`--console=true` on both commands and verifies the saved setting, so a retry
+can retain guest serial output that may help diagnose the reset. It also
+requires the recorded Linux
 distribution, kernel, architecture, host CPU count, nested-virtualization
 state, and Cuttlefish instance number to match. It verifies those inputs before
 launching and checks the resulting Cuttlefish configuration before publishing.

@@ -2959,3 +2959,27 @@ values but still reached the 600-second startup deadline without Android boot
 evidence; see the #064 notes. This records the earliest reliable validation
 point available in the pinned Cuttlefish lifecycle and does not establish a
 boot diagnosis.
+
+## IR-115: Enable the serial console for the GPU-none diagnosis
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Pass Cuttlefish's `--console=true` option to both `cvd create`
+and `cvd start` in the isolated GPU-none diagnosis. Before publishing a
+result, require `cuttlefish_config.json` to record `console=true` along with
+the expected GPU settings and VM shape.
+
+**Reason.** The sanitized current-code retry reached its 600-second deadline
+with an empty `kernel.log`. Its launcher log shows crosvm reporting a guest
+system reset about 15 seconds after launch and being restarted; meanwhile, the
+ADB connector repeatedly could not find the guest. These observations do not
+establish the reset's cause. The pinned Cuttlefish 1.57.0 CLI reports that its
+serial console is disabled by default and supports `--console=true`. Enabling
+it is a diagnostic choice to capture guest serial output that may help explain
+the boot failure. It does not guarantee that the reset will be reported on the
+console, change the canonical reference profiles, or establish that the
+console setting caused the failure.

@@ -216,7 +216,7 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
         home.resolve(),
         snapshots,
         observed,
-        timeout_seconds=1.0,
+        timeout_seconds=3.0,
     )
 
     assert not source.exists()

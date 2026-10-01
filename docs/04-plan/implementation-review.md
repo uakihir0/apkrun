@@ -2932,3 +2932,30 @@ socket replacement, directory replacement, and a target parent replaced after
 the directory listing. This changes only the isolated diagnostic runner's
 cleanup policy; it does not change the product architecture or establish
 Android boot success.
+
+## IR-114: Validate the GPU-none configuration after Cuttlefish creates it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Keep `--gpu_mode=none` and `--gpu_vhost_user_mode=off` on the
+actual `cvd create` and `cvd start` invocations. Verify their argument vectors
+in the Linux fake-Cuttlefish integration test. Validate
+`cuttlefish_config.json` after capture and before publishing the experiment
+record; require `gpu_mode=none` and the JSON boolean
+`enable_gpu_vhost_user=false`.
+
+**Reason.** A real Cuttlefish 1.57.0 `cvd create --nostart` probe produced no
+`cuttlefish_config.json`; the file is created during `cvd start`. A pre-start
+configuration guard would reject a valid lifecycle because its input does not
+exist yet. The result builder already rejects mismatched persisted values
+before publication. The integration fixture now confirms the configuration
+file is absent after create, appears after start, and reflects the flags passed
+to both commands. A separate corrected GPU-none run recorded both expected
+values but still reached the 600-second startup deadline without Android boot
+evidence; see the #064 notes. This records the earliest reliable validation
+point available in the pinned Cuttlefish lifecycle and does not establish a
+boot diagnosis.

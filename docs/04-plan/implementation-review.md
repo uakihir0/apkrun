@@ -2836,3 +2836,38 @@ script-directory override preserves the reference capture's existing
 relative-path behavior. Tests change the source after snapshot creation,
 reject digest mismatches and FIFOs, and verify the private tool directory is
 retained.
+
+## IR-111: Distinguish exited processes from incomplete `/proc` inspection
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{experiment_support.py,capture-lifecycle.sh,capture-gpu-none.sh}` |
+
+**Choice.** On the real Linux process table, pin each same-UID process being
+audited with a pidfd. Ignore a process only when its `/proc/<pid>` directory
+has disappeared or its verified state is `Z` or `X`. A readable pidfd paired
+with a live process at the same numeric PID is PID reuse, even when the
+start-time tick matches; fail closed when a live process is missing fields.
+If one descriptor vanishes while the same process remains live, continue only
+after checking the pidfd and start time again. Route watcher and startup-abort
+signals through the existing pidfd broker. If a broker cannot be verified as
+stopped, preserve the workspace without sending a numeric-PID fallback.
+Pin the current process ancestry during each real `/proc` walk, recheck each
+parent-child link and start time, and repeat the ancestry scan after candidate
+process inspection. Fail closed if the chain changes.
+
+**Reason.** `/proc` entries can disappear while short-lived helper processes
+exit. Treating every `FileNotFoundError` as an unsafe live process retained
+otherwise clean private HOME roots; treating every such error as harmless
+could miss a live process that still uses the root. Linux start-time values
+have clock-tick resolution and cannot alone distinguish a process from a
+same-tick PID replacement, so a pidfd remains pinned for each real process
+scan. Reading each ancestor's `/proc` entry separately can splice together a
+chain when an intermediate parent exits and its PID is reused; pinning and
+rechecking the full chain prevents a false ancestor match. Bash can reap
+background children asynchronously, so being the original parent is not a
+sufficient reason to signal by PID later. The verified pidfd path handles
+these races; an unverified broker failure retains data for safe manual
+recovery.

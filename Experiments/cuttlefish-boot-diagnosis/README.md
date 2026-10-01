@@ -49,10 +49,19 @@ inspection, the only exception is `sd-pam` in the exact current-user
 That executable and every parent directory must be root-owned and not
 group-writable or world-writable; the running executable is matched by device
 and inode. When the `sd-pam` executable itself is readable, it must match that
-binary too. Any other unreadable process blocks cleanup. The
-capture HOME is checked again after the socket audit, immediately before
-removal. If a process remains or its identity cannot be verified, the HOME
-and workspace are retained and the result is not published.
+binary too. Any other unreadable process blocks cleanup. On the real Linux
+process table, the audit pins each same-UID process with a pidfd so a reused
+numeric PID cannot alias the process being checked. A process that disappears
+between `/proc` reads is ignored only after confirming its process directory
+is gone or its state is `Z`/`X`; missing fields on a live process and PID
+identity changes block cleanup. The current process ancestry is pinned and
+each parent link is rechecked before classifying ancestors and after the full
+process scan. Managed child signals also use pidfd-backed brokers; if a broker
+cannot be verified as stopped, cleanup preserves the workspace instead of
+signalling its numeric PID. The capture HOME is checked again after the socket
+audit, immediately before removal. If a process remains or its identity cannot
+be verified, the HOME and workspace are retained and the result is not
+published.
 
 Cuttlefish keeps some host state in a UID-wide directory under
 `/var/tmp/cvd/<uid>` (with the legacy `/tmp/cvd/<uid>` location recognized).

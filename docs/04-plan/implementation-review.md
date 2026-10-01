@@ -2145,3 +2145,24 @@ empty diagnostic fields, and its generated configuration JSON also retains
 trailing spaces. Trimming either would mutate the evidence. Restricting the
 attribute to those captured file types keeps whitespace checks active for
 source code and other documentation.
+
+## IR-089: Attribute the early Cuttlefish reset to the auxiliary OpenWrt VM
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/reference/16373615/incomplete/default-20261001T120904-49816/launcher.log` |
+
+**Choice.** Classify the reset at 11:59:25 as an auxiliary OpenWrt crosvm
+reset, not an Android guest reset. Record the distinct process IDs and retain
+the Android boot diagnosis as unresolved.
+
+**Reason.** `launcher.log` shows `run_cvd` starting PID 50263 with
+`--process_name=openwrt`; its child command uses `cvd-wifiap-01` and
+`root=/dev/vda1`. The reset lines are tagged `log_tee(50263)`, followed by a
+restart from that process restarter. The separately started Android crosvm is
+PID 50271. This process evidence makes the earlier M01 wording misleading;
+correcting it avoids treating an auxiliary VM event as evidence of an Android
+reboot. The logs still do not identify why Android never registered the
+`activity` service.

@@ -248,6 +248,10 @@ run_with_boot_deadline() {
     boot_deadline_expired=1
     return 124
   fi
+  if [ "$deadline_program" = sleep ] && [ "$#" -eq 1 ] \
+    && [ "$1" -gt "$deadline_remaining" ]; then
+    set -- "$deadline_remaining"
+  fi
   if HOME="$cvd_home" timeout --kill-after=2s "$deadline_remaining" \
     "$deadline_program" "$@"; then
     return 0

@@ -2225,6 +2225,56 @@ and attempt a no-replace rollback if it changed. Treat other processes under
 the same user ID as trusted: Linux has no inode-conditional `unlink` or
 `rmdir`, and same-user processes can write the mode-0700 data root.
 
+Resolve `/tmp` to its physical directory and create a random mode-0700 short
+Cuttlefish HOME root beneath it. Use short `h.XXXXXX` and `p.XXXXXX` children
+for the capture and fleet preflight. Do not infer the socket-specific suffix
+length from a HOME template: before removing either HOME, audit the actual
+filesystem Unix sockets beneath the private temporary tree and the Cuttlefish
+UID-wide state directory. Count the filesystem-encoded pathname plus its
+terminating NUL against Linux's 108-byte `sun_path` capacity, and record only
+counts and maximum lengths. Keep fleet and capture metrics separately in the
+published diagnostic record. If a socket path is too long or the audit cannot
+complete, preserve the private state and block publication.
+
+Cuttlefish's instance database and server are UID-wide, outside the private
+HOME. Do not run `cvd reset` or terminate a shared Cuttlefish server as part of
+this experiment. Before deleting a generated HOME, inspect same-UID processes
+under `/proc`, verify their owner and start identity, and check environment,
+command line, working directory, and open file descriptors for the private
+HOME or TMPDIR. Exclude the cleanup caller's ancestry only when each PID and
+start time still match. If a process reference cannot be inspected or a
+reference remains, retain the HOME and workspace and block publication. One
+observed Lima systemd session monitor (`sd-pam`) denies environment reads; skip
+it only when its cgroup exactly matches the current user's systemd
+`user@<uid>.service/init.scope`. Any other unreadable same-UID process blocks
+cleanup. The fleet HOME gets the same process-reference check before removal.
+Cuttlefish can leave socket entries in the private temporary tree after its
+group stops, so an empty temporary directory is not the cleanup criterion.
+After the capture record has copied its logs, verify that no process references
+the private tree, repeat the socket audit, and remove only the per-run
+`/tmp/x.XXXXXX` tree through one descriptor-relative, no-follow helper,
+whether `t/` is empty or populated. Check the root inode before `rmdir` through
+the opened `/tmp` directory. Directory symlinks and symlinks to sockets beneath
+an audit root block cleanup; regular-file and dangling symlinks are not
+followed, and recursive removal unlinks them without following. Restore the
+ownership marker if final removal fails. Never delete the UID-wide Cuttlefish
+state directory. Preserve and report the private paths if any check or removal
+is uncertain.
+
+Capture the supervised command's combined stdout and stderr in a mode-0600
+file capped at 1 MiB. Capture the supervisor's own stderr through a private
+FIFO into a separate mode-0600 file capped at 64 KiB; keep draining after the
+limit so the writer cannot stall. Hold the reader at a startup gate until its
+PID and process start time are recorded. Before releasing the gate, open a
+pidfd in a dedicated signal broker and verify the start time. Bound
+stderr-reader shutdown after EXIT or a signal; route TERM and KILL requests
+through the broker's pinned descriptor instead of resolving the PID again.
+Preserve the workspace if the reader identity changes, requires a signal, or
+does not exit. Incomplete or truncated supervisor stderr blocks publication.
+Never include host output in a published result. Retain the private workspace
+and report its path when a nonzero capture exit is published, so the bounded
+output remains available for diagnosis.
+
 **Reason.** The default capture reached zygote and SurfaceFlinger but did not
 confirm `system_server` or `sys.boot_completed=1`; Cuttlefish also reported
 graphics capability failures before selecting `guest_swiftshader`. A single
@@ -2259,3 +2309,530 @@ reported no findings. The Linux focused suite passed 40 tests, Ruff lint and
 format checks passed, shell and Python syntax checks passed, and all six checks
 in `scripts/ci/run-checks.sh` passed. Keep these choices marked for maintainer
 review.
+
+A sanitized Cuttlefish startup log later reported a requested Unix socket
+`sun_path` length of 130 bytes against the 108-byte limit. This occurred before
+Android boot and therefore does not explain the Android boot stall. A retry
+using a short symlink alias still produced the same error because Cuttlefish
+canonicalized its target. The first physical-root attempt restored the pinned
+product images and reached Cuttlefish, but still failed with the same socket
+length. That run shortened the Cuttlefish HOME while leaving `TMPDIR` pointed
+at the long workspace path. The runner now sets both `HOME` and `TMPDIR` to
+short physical paths. A later isolated run measured 12 filesystem socket paths
+with a maximum of 60 bytes including the NUL, then Cuttlefish reported
+`VIRTUAL_DEVICE_BOOT_FAILED`. This measurement covers socket nodes that were
+created; it cannot rule out an overlong path from a failed bind that left no
+node. The earlier 130-byte request therefore remains unexplained. Cuttlefish
+left private socket entries after group removal, so publication correctly
+stopped. Cleanup now rechecks process references and socket lengths, then
+removes only the token-marked per-run `/tmp` tree; this cleanup and the next
+reference run remain subject to maintainer review.
+
+A later real capture showed that Cuttlefish creates dangling and
+regular-file symlinks in its temporary HOME for logs and runtime metadata.
+Rejecting every symlink prevented the capture audit from writing its metrics.
+The revised audit rejects symlinks to directories and sockets, skips only
+missing targets and non-directory, non-socket targets, and leaves removal to
+the descriptor-relative no-follow walker. A process audit also found that
+Lima's `sd-pam` monitor denies `/proc/<pid>/environ`; allow it only with the
+exact current-user systemd service cgroup. All other unreadable same-UID
+processes block cleanup. Ancestry exclusions now require matching PID start
+times so a reused PID cannot be skipped. Empty and populated short HOME roots
+both go through the same descriptor-relative remover, and EXIT/signal cleanup
+uses a bounded stderr-reader shutdown.
+
+The repeat `gpu_mode=none` capture at
+`$HOME/.local/share/apkrun/cuttlefish-boot-diagnosis/results/gpu-none-20261001T165340Z-81386`
+measured 12 filesystem Unix socket paths with a 59-byte maximum pathname
+(60 bytes including NUL). Cuttlefish again reported
+`VIRTUAL_DEVICE_BOOT_FAILED`; the normalized record contains no
+`system_server`, boot-complete, or logcat lines. The child exited 1 without
+truncation, cleanup completed, no `crosvm` remained, and the marked private
+`/tmp` root was removed. Its bounded host output remains in the private
+workspace because the capture exited nonzero. This is not a boot success or a
+root-cause finding. The focused suites passed 82 tests on Linux and 61 on
+macOS, with 21 platform-specific skips; Ruff, shell syntax, and whitespace
+checks passed. These new choices remain marked for maintainer review.
+
+The final cleanup review found that the stderr-reader PID could be reused
+between a liveness check and pidfd opening, including after `wait` reaped it.
+The runner now holds that child behind a startup FIFO until its start time is
+recorded, then starts a broker that verifies the identity and retains a pidfd
+before the child is released. TERM and KILL requests use that pinned
+descriptor. Regression tests confirm a mismatched start time is rejected and
+exercise broker TERM delivery through a real Linux pidfd. The focused suites
+then passed 85 tests on Linux and 63 on macOS, with 22 platform-specific
+skips; the six repository checks passed. A real
+Linux retry published
+`gpu-none-20261001T170532Z-83150`: 12 filesystem sockets measured at a maximum
+of 59 pathname bytes (60 including NUL), capture exit 1, no logcat or boot
+completion signals, and verified cleanup. It remains diagnostic evidence,
+not a successful boot or a root-cause finding. The final hostile re-review is
+pending.
+
+The follow-up replaced shell PID liveness checks with atomic exit and stopped
+records emitted by the broker watching its pinned pidfd. Focused suites passed
+85 tests on Linux and 63 on macOS, with 22 platform-specific skips; Ruff,
+formatting, shell syntax, and whitespace checks passed. A real Linux retry
+published `gpu-none-20261001T172756Z-88844`. It measured 12 filesystem sockets
+with a 59-byte maximum pathname (60 including NUL), exited 1 without timing
+out, and captured no logcat or boot-completion evidence. The stderr reader's
+exit record and broker stopped marker were present, its bounded status reported
+complete cleanup without a signal, and the run-owned short HOME root was
+removed. The normalized record was published, and bounded host output remains
+in its private workspace. This still does not establish Android boot success
+or a root cause. The hostile re-review of the exit-marker version and the full
+repository check are pending.
+
+## IR-091: Verify Lima's protected `sd-pam` process without `/proc/1/exe`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [AGENTS.md](../../AGENTS.md) §8.2 |
+
+**Choice.** Treat an environment-protected process as Lima's session monitor
+only when its `comm` is `sd-pam`, its cgroup is exactly
+`/user.slice/user-<uid>.slice/user@<uid>.service/init.scope`, and its first
+command-line argument is `(sd-pam)`. Also verify that its parent is the same
+UID's `systemd --user` process in that cgroup, and that the parent's executable
+matches the installed systemd binary. If the `sd-pam` executable is readable,
+it must match the same binary. Keep command-line inspection mandatory; check
+the working directory and file descriptors whenever readable, and block
+cleanup if either reveals a private-path reference. All other unreadable
+same-UID processes still block cleanup.
+
+**Reason.** The Linux reference VM denies access to `/proc/1/exe`,
+`/proc/<sd-pam>/exe`, and `/proc/<sd-pam>/environ`. The monitor's parent is
+readable and identifies as the current user's `systemd --user` process in the
+same service cgroup. Requiring this parent lineage and the actual installed
+systemd executable keeps the cleanup exception usable in Lima while rejecting
+a Cuttlefish executable that merely adopts the `sd-pam` name and command line.
+Regression tests cover the verified parent, a Cuttlefish executable decoy,
+other cgroups and command lines, and visible private-path references.
+
+## IR-092: Bound aggregate Cuttlefish log snapshots
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Limit the aggregate size of retained and in-progress Cuttlefish
+host-log snapshots to 384 MiB. Each of the three selected logs remains capped
+at 64 MiB. If an atomic replacement would exceed the aggregate limit, reject
+that snapshot and retain the last complete copy.
+
+**Reason.** Live polling can temporarily keep the previous three-log set while
+building a new set before promotion. Six 64 MiB copies bound that atomic
+old/new overlap and prevent repeated snapshots from growing without limit.
+Counting temporary copies in the stage-wide budget also covers interrupted
+poll directories.
+
+## IR-093: Treat truncated supervisor output as incomplete evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** A capture whose private 1 MiB combined stdout/stderr log is
+truncated keeps its workspace and cannot publish a normalized result.
+
+**Reason.** Missing later host output can hide the startup or cleanup failure
+that explains an incomplete guest capture. The runner already keeps this log
+private, so refusing publication preserves diagnostic value without exposing
+host output in results.
+
+## IR-094: Reap detached Cuttlefish descendants with Linux subreapers
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Enable Linux child-subreaper mode in each Python capture supervisor
+before it starts a Cuttlefish command. After the command exits, terminate and
+reap its adopted descendants as well as any remaining members of its original
+process group. Treat unverified cleanup as incomplete and block publication.
+
+**Reason.** A Cuttlefish child can create a new session and escape the
+supervisor's process group. It may also keep an inherited output pipe open,
+which otherwise delays EOF until the long outer timeout. The Linux-only
+diagnostic runs one supervised process tree per supervisor. Subreaper adoption
+makes orphaned descendants direct children, whose PIDs remain reserved until
+this supervisor reaps them; it can therefore signal that owned tree without
+scanning and signaling unrelated processes. Regression tests exercise a
+detached child that ignores TERM and retains the output pipe.
+
+## IR-095: Pin process leaders until descendant cleanup finishes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Keep each supervised child unreaped while checking and stopping
+its process group and adopted descendants. Reap the child only after cleanup
+is complete, or after the final bounded cleanup check fails. Return as soon as
+an exited child has no live group members or adopted descendants.
+
+**Reason.** Reaping the group leader releases its PID while cleanup may still
+signal adopted children. Keeping it as a zombie reserves the PID and prevents
+a newly adopted descendant from reusing that numeric ID and being skipped.
+Returning early for an empty tree avoids spending the configured cleanup
+grace after ordinary successful commands.
+
+## IR-096: Require EOF before claiming stdin producer cleanup
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** A bounded stdin collector reports `cleanupComplete: true` only
+after it observes EOF. A signal or an early byte-limit stop reports incomplete
+cleanup; callers that require a verified status keep draining until EOF.
+
+**Reason.** The collector does not own or control the process writing to its
+stdin. Closing the read end can make a producer exit, but it cannot prove that
+the producer stopped. EOF is direct evidence that every writer closed its end
+of the pipe.
+
+## IR-097: Abort pinned-process startup through its gate
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Hold startup gate FIFOs open read/write in the parent, defer
+signals while a pinned target is starting, and complete the abort or pidfd
+stop handshake before exiting. Verify the target's exit record before opening
+the gate. Bound startup abort waits, close the broker channel to trigger its
+pidfd owner-disconnect cleanup, and disable the EXIT trap before a signal
+handler performs cleanup. Defer watcher startup signals until its PID has
+been recorded before normal cleanup begins.
+
+**Reason.** A dead gated target can leave a FIFO writer blocked, and a signal
+between fork and PID bookkeeping can otherwise orphan the target. The parent
+gate descriptor makes writes nonblocking; the deferred signal lets startup
+record the exact child and broker state before cleanup. If the target has not
+read the abort token, the closed control channel invokes the broker's bounded
+TERM/KILL fallback. A still-stopped direct child is continued only while its
+unreaped PID remains reserved, so it can consume the abort token. If cleanup
+cannot be verified before the deadline, the workspace is preserved.
+Disabling EXIT cleanup prevents a failed stop from repeating the same long
+wait during shell exit. Deferring watcher signals closes the same
+PID-bookkeeping gap for its direct child.
+
+## IR-098: Trust only a protected systemd executable for the `sd-pam` exception
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Accept the systemd executable used by the `sd-pam` cleanup
+exception only when the binary and every resolved parent directory are
+root-owned and not group-writable or world-writable. Match the running
+executable to that installed binary by device and inode.
+
+**Reason.** Matching a path string or an unprotected user-owned binary would
+let the same user create a fake `systemd --user` parent and spoofed `sd-pam`
+process. The path ownership and mode checks make that exception depend on the
+system installation rather than user-controlled files.
+
+## IR-099: Close inherited descriptors in every background diagnostic worker
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** The ADB watcher, bounded stderr reader, pinned target, and signal
+broker close every inherited descriptor numbered 3 or above before starting
+their work.
+
+**Reason.** A descriptor above the previously enumerated range can keep a
+private FIFO open and delay EOF or cleanup. Applying the same close-all rule
+to every background worker avoids relying on a fixed maximum descriptor
+number. Tests pass descriptor 32 into the pinned target and broker; shell
+contract checks cover the watcher and stderr workers.
+
+## IR-100: Bound broker reaping after its stopped marker
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** After validating the broker's stopped marker, wait for its direct
+child process to exit for a bounded interval. If it remains alive, send TERM
+and then KILL with bounded exit checks; report cleanup failure even when the
+broker is eventually reaped.
+
+**Reason.** The broker publishes the marker before closing its pidfd and
+returning. Waiting on the marker alone does not prove that the process has
+exited, and an unbounded shell `wait` could hang startup abort or normal
+cleanup. The broker PID is still an unreaped direct child, so it remains
+reserved while the bounded fallback signals it.
+
+## IR-101: Complete ADB cleanup after startup signals
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Mark the dedicated ADB server as started before startup signal
+handoff can reach normal cleanup. Signal cleanup removes its private socket
+directory only after the pinned ADB server is verified stopped. Create that
+directory in a command substitution that ignores HUP, INT, and TERM until the
+path has been assigned.
+
+**Reason.** A signal can arrive after the startup gate opens but before the
+caller resumes from the launch helper. Setting the state inside that helper
+prevents cleanup from skipping the server. Removing the socket directory only
+after verified server exit avoids deleting a live server's endpoint. Ignoring
+signals in the short `mktemp` command substitution lets process-group
+interrupts finish returning the created path before the parent runs its trap.
+Regression tests send both INT and TERM to the isolated process group.
+
+## IR-102: Preserve state when watcher shutdown cannot be verified
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** If the watcher stop marker cannot be written, stop and reap its
+unreaped direct child with bounded TERM/KILL checks, mark watcher cleanup
+incomplete, and preserve the diagnostic workspace and ADB server.
+
+**Reason.** Without the marker the watcher can continue polling indefinitely
+when Cuttlefish never exposes a device. The fallback stops its owned child
+without targeting a reused PID. Retaining the workspace and server records
+that the watcher may not have completed its active bounded ADB helper.
+
+## IR-103: Defer signals while creating private workspaces
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Install cleanup and signal traps before allocating the per-run
+workspace. Defer startup signals until the workspace and short Cuttlefish
+HOME have their ownership markers and cleanup paths recorded. Run each `mktemp`
+command substitution with HUP, INT, and TERM ignored so a process-group signal
+cannot kill it between directory creation and path output.
+
+**Reason.** `mktemp` creates a directory before it prints the path captured by
+the parent shell. A process-group signal in that interval could otherwise
+leave an untracked per-run or short HOME directory. Startup deferral lets the
+parent finish recording ownership and then run the normal verified cleanup.
+Regression tests signal the entire process group during workspace, short HOME,
+and ADB socket directory creation.
+
+## IR-104: Invalidate capture status after a late signal
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** A fully completed capture supervisor returns zero and records the
+guest command's exit code separately in its status file. If a signal arrives
+after finalization starts, create an exclusive `<status>.interrupted` marker,
+remove the atomic status file, and exit with the signal status. If either
+invalidation operation fails, exit with a reserved failure status. The outer
+runner rejects every nonzero supervisor exit and the interruption marker
+before recording or publishing the capture.
+
+**Reason.** A signal can arrive after the status file's atomic replacement.
+If the supervisor returned the guest command's exit code, that process exit
+code could equal a naturally returned guest-command code (for example, 143),
+making exit-code comparison alone insufficient to detect the interruption.
+Returning zero for completed supervision keeps this result separate from
+every signal exit; the runner rejects a nonzero supervisor exit even if both
+status invalidation operations fail. Regression tests signal after the real
+status writer commits while the child returns 143, both with successful
+invalidation and with marker creation and status removal forced to fail.
+
+## IR-105: Make short HOME setup and cleanup signal-safe
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Ignore HUP, INT, and TERM in short HOME and fleet HOME filesystem
+setup subprocesses, and defer the fleet HOME signal handoff until its path and
+ownership marker are recorded. On a setup failure, remove only the tracked,
+current-user-owned temporary directory and its expected marker and empty `t/`
+child. Defer signal handoff and ignore those signals in the fleet HOME and
+short HOME deletion subprocesses, clear each recorded path after successful
+removal, remove the fleet HOME before the containing short HOME, and refresh
+the Unix-socket audit immediately before root removal.
+
+**Reason.** Process-group signals can reach a `python3`, `chmod`, or `mktemp`
+child after directory creation but before the shell records or validates the
+path. Untracked partial roots cannot pass the marker-validated normal remover.
+The setup rollback is limited to the exact random paths created by this run,
+and refuses unexpected entries. A fleet HOME may exist before its socket
+metrics are generated, so cleanup must first remove that owned child and
+produce a fresh audit for the containing root. Process-group signals must not
+interrupt removal after the fleet marker is unlinked or after the short-root
+remover quarantines `t`; the shell defers signals while these bounded
+operations finish. Tests signal the whole process group during root and fleet
+HOME `mktemp`, Python, permission, and deletion steps, then verify cleanup.
+
+## IR-106: Record baseline and observed capture tool revisions separately
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Keep the original reference-capture tool commit and its blob IDs
+immutable, and record the current committed tool commit and blob IDs separately
+in the diagnostic record. Require the current working tree copies of those
+tools to match the current commit and have no staged or unstaged changes.
+Verify the private reference-tool and manifest copies against those recorded
+Git blobs before guest launch and again during record creation. Validate that
+the experiment-tool and patched-capture copies match the complete SHA-256 map
+recorded from the exact bytes used. Keep a separate unpatched `capture.sh` copy
+for the Git-blob check; verify the runnable patched copy by its recorded
+SHA-256.
+
+**Reason.** The default reference record predates intentional, committed
+updates to `capture_cvd_start.py` that preserve Cuttlefish startup logs. Requiring
+the current tool to equal the historical baseline rejected the diagnostic
+before guest launch. Rewriting the baseline revision would falsely claim that
+the updated helper produced the original capture; using the historical helper
+would discard its later log-capture fixes. Recording both revisions preserves
+the original provenance and identifies exactly which current tools produced
+the diagnosis. Tests cover an unchanged baseline, a committed tool update, an
+uncommitted tool edit, and a transient source change copied before the
+repository file is restored.
+
+## IR-107: Require the pinned baseline path for GPU-none diagnosis
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Accept only the resolved
+`Images/reference/16373615/incomplete/default-20261001T120904-49816` baseline
+path and commit `64da28a551b0b33e258c8f37057b9a8a6d90846d` in host preflight
+and record validation. Require complete, correctly formatted path and digest
+maps, then verify every recorded Git object and private copy before guest
+launch and record publication.
+
+**Reason.** `verify-host` previously read a caller-supplied baseline path but
+reported the canonical baseline path unconditionally. A second record with
+matching host and Cuttlefish details could therefore be reported as the pinned
+baseline. The path guard binds the report to the documented input; validating
+the private copies also catches files changed between staging and provenance
+collection, including a source file restored before host verification.
+
+## IR-109: Derive experiment source provenance from Git
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Pin the baseline commit instead of resolving the latest commit
+touching its host record. Derive experiment-tool source hashes from the
+observed committed Git revision, require clean tracked working copies, and
+compare the private copies and runtime `capture_bounded.py` and
+`capture_processes.py` copies against those committed bytes. Before host
+identity exists, run `experiment_support.py` only after loading its source
+from `HEAD` and matching the private copy to it.
+
+**Reason.** A later commit could otherwise move the baseline's provenance
+without changing the baseline path. A transient edit copied and then restored
+could also let the initial verifier report a self-generated hash for different
+bytes. Runtime helper copies are separate from the experiment-tool directory,
+so checking that directory alone did not verify the files actually invoked.
+Tests pin a synthetic baseline commit, reject a copied-and-restored verifier,
+and reject a modified runtime helper.
+
+## IR-108: Execute digest-verified publication snapshots
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Immediately before normalization, verify the private tool copies
+again. Read `compare_boot.py` into memory, check it against its recorded Git
+blob ID, then execute those exact bytes. Read the normalization rules, verify
+their Git blob ID, and pass them through a sealed Linux memory file. Run
+`experiment_support.py publish-record` from the private copy after checking
+its recorded SHA-256, executing the exact in-memory bytes.
+
+**Reason.** Record creation occurs before normalization and publication.
+Executing a mutable path later could run different code from the source hashes
+already recorded, and the former publication command loaded `experiment_support.py`
+from the repository checkout instead of the recorded private copy. Snapshot
+execution binds each Python invocation to the bytes that passed its digest
+check, while the sealed rules file prevents replacement between validation
+and normalization. Regression tests replace the on-disk script after snapshot
+loading and verify execution still uses the checked bytes.
+
+## IR-110: Execute the verified capture snapshot under its private tool root
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Load `run_capture.py` and `capture_processes.py` into memory only
+after checking their source bytes against the observed committed revision and
+the host identity's SHA-256 map. Load the host identity and both source files
+through nonblocking, no-follow file descriptors, require regular files, and
+cap their sizes. The supervisor reads the patched `capture.sh` the same way,
+checks its recorded SHA-256, copies it into a sealed Linux memory file, and
+passes that descriptor to Bash. Set `APKRUN_CAPTURE_SCRIPT_DIR` to the private
+reference-tool directory so the script still finds its neighboring helpers
+and manifest when its `$0` is `/proc/self/fd/<n>`. Start an outer GNU
+`timeout` before this bootstrap with the same 900-second budget and send TERM
+when it expires; pass the remaining budget to the capture supervisor.
+
+**Reason.** A mutable pathname left a window for capture code to change after
+verification but before Bash read it. Running the exact sealed snapshot binds
+execution to the verified digest. A nonblocking open, regular-file check, and
+size cap prevent a FIFO or oversized replacement from stopping startup before
+or during its hard deadline. The outer watchdog also bounds Git verification
+and other bootstrap work before the inner supervisor can start. The watchdog
+does not escalate to KILL because the supervisor's guest process runs in its
+own session; the supervisor sends signals to that process group and reports
+incomplete cleanup if it cannot verify the tree is stopped. The private
+script-directory override preserves the reference capture's existing
+relative-path behavior. Tests change the source after snapshot creation,
+reject digest mismatches and FIFOs, and verify the private tool directory is
+retained.

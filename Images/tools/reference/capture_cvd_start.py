@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import os
 import selectors
 import shlex
@@ -19,12 +21,15 @@ from pathlib import Path
 
 LOG_NAMES = {"assemble_cvd.log", "kernel.log", "launcher.log"}
 MAX_LOG_BYTES = 64 * 1024 * 1024
+MAX_LOG_SNAPSHOT_WORKSPACE_BYTES = 6 * MAX_LOG_BYTES
 MAX_LOG_LISTING_BYTES = 1024 * 1024
 LOG_POLL_SECONDS = 0.5
 LOG_COMMAND_TIMEOUT_SECONDS = 0.5
 CHILD_STOP_GRACE_SECONDS = 1.0
+CHILD_POST_KILL_GRACE_SECONDS = 1.0
 LOG_COMMAND_STOP_GRACE_SECONDS = 0.05
 requested_signal: int | None = None
+DARWIN_SIGINFO_PID_OFFSET = 12
 
 
 def parse_log_listing(listing: str) -> dict[str, Path]:
@@ -46,7 +51,38 @@ def _log_name_from_label(label: str) -> str:
     return Path(label.rsplit(":", maxsplit=1)[-1]).name
 
 
-def snapshot_log(source: Path, destination: Path, home: Path) -> tuple[int, int] | None:
+def _log_snapshot_workspace_bytes(root: Path) -> int:
+    """Count retained logs and in-progress atomic copies under a capture stage."""
+    total = 0
+    try:
+        for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+            current = Path(directory)
+            subdirectories[:] = [
+                name for name in subdirectories if not (current / name).is_symlink()
+            ]
+            for filename in filenames:
+                if not any(
+                    filename == name or filename.startswith(f".{name}.") for name in LOG_NAMES
+                ):
+                    continue
+                path = current / filename
+                metadata = path.lstat()
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise ValueError("a Cuttlefish log snapshot is a symlink")
+                if stat.S_ISREG(metadata.st_mode):
+                    total += metadata.st_size
+    except OSError as error:
+        raise ValueError("could not inspect Cuttlefish log snapshot usage") from error
+    return total
+
+
+def snapshot_log(
+    source: Path,
+    destination: Path,
+    home: Path,
+    *,
+    budget_root: Path | None = None,
+) -> tuple[int, int] | None:
     """Atomically copy a bounded regular log file located under the private HOME."""
     try:
         if source.is_symlink() or not source.resolve(strict=True).is_relative_to(home):
@@ -63,6 +99,13 @@ def snapshot_log(source: Path, destination: Path, home: Path) -> tuple[int, int]
         source_stat = os.fstat(descriptor)
         if not stat.S_ISREG(source_stat.st_mode):
             return None
+        if budget_root is not None:
+            expected_size = min(source_stat.st_size, MAX_LOG_BYTES)
+            if (
+                _log_snapshot_workspace_bytes(budget_root) + expected_size
+                > MAX_LOG_SNAPSHOT_WORKSPACE_BYTES
+            ):
+                return None
         complete = True
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             with tempfile.NamedTemporaryFile(
@@ -107,6 +150,7 @@ def _snapshot_listed_log(
     line: str,
     home: Path,
     destination: Path,
+    budget_root: Path,
     observed: dict[tuple[str, str], tuple[int, int]],
     pending_observed: dict[tuple[str, str], tuple[int, int]],
     pending_attempted: set[str],
@@ -131,29 +175,21 @@ def _snapshot_listed_log(
     key = name, str(source)
     if observed.get(key) == marker:
         return
-    copied_marker = snapshot_log(source, destination / name, home)
+    copied_marker = snapshot_log(
+        source,
+        destination / name,
+        home,
+        budget_root=budget_root,
+    )
     if copied_marker is not None:
         pending_observed[key] = copied_marker
 
 
 def _terminate_log_command(process: subprocess.Popen[bytes]) -> None:
-    if process.returncode is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except PermissionError:
-        process.terminate()
-    time.sleep(LOG_COMMAND_STOP_GRACE_SECONDS)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except PermissionError:
-        if process.poll() is None:
-            process.kill()
-    process.wait()
+    _terminate_process_group(
+        process,
+        term_grace_seconds=LOG_COMMAND_STOP_GRACE_SECONDS,
+    )
 
 
 def collect_logs(
@@ -232,6 +268,7 @@ def collect_logs(
                             line,
                             home,
                             poll_directory,
+                            snapshot_directory.parent,
                             observed,
                             pending_observed,
                             pending_attempted,
@@ -258,6 +295,7 @@ def collect_logs(
                     line,
                     home,
                     poll_directory,
+                    snapshot_directory.parent,
                     observed,
                     pending_observed,
                     pending_attempted,
@@ -302,38 +340,131 @@ def _handle_signal(number: int, _frame: object) -> None:
     requested_signal = number
 
 
-def _group_has_live_members(group_id: int) -> bool:
+def _child_exit_observed_without_reaping(
+    process: subprocess.Popen[bytes],
+) -> bool:
+    if process.returncode is not None:
+        return True
+    options = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    if hasattr(os, "waitid"):
+        result = os.waitid(os.P_PID, process.pid, options)
+        return result is not None and result.si_pid == process.pid
+    if sys.platform != "darwin":
+        raise RuntimeError("waitid is unavailable for safe process cleanup")
+    libc = ctypes.CDLL(None, use_errno=True)
+    waitid = getattr(libc, "waitid", None)
+    if waitid is None:
+        raise RuntimeError("waitid is unavailable for safe process cleanup")
+    waitid.argtypes = (ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_int)
+    waitid.restype = ctypes.c_int
+    information = ctypes.create_string_buffer(128)
+    while True:
+        result = waitid(
+            os.P_PID,
+            process.pid,
+            ctypes.cast(information, ctypes.c_void_p),
+            options,
+        )
+        if result == 0:
+            break
+        error_number = ctypes.get_errno()
+        if error_number == errno.EINTR:
+            continue
+        raise OSError(error_number, os.strerror(error_number))
+    process_id = ctypes.c_int.from_buffer(
+        information,
+        DARWIN_SIGINFO_PID_OFFSET,
+    ).value
+    return process_id == process.pid
+
+
+def _group_has_live_members(
+    group_id: int,
+    *,
+    excluding_pid: int | None = None,
+) -> bool:
     """Check whether a process group still has a non-zombie member."""
     result = subprocess.run(
-        ["ps", "-Ao", "pgid=,stat="],
+        ["ps", "-Ao", "pid=,pgid=,stat="],
         capture_output=True,
         text=True,
         check=False,
+        timeout=2,
     )
     if result.returncode != 0:
         raise OSError("could not inspect the Cuttlefish process group after SIGKILL was denied")
     for line in result.stdout.splitlines():
-        fields = line.split(maxsplit=1)
-        if len(fields) == 2 and fields[0].isdigit() and int(fields[0]) == group_id:
-            if not fields[1].lstrip().startswith("Z"):
+        fields = line.split(maxsplit=2)
+        if len(fields) == 3 and all(value.isdigit() for value in fields[:2]):
+            process_id, process_group = map(int, fields[:2])
+            if (
+                process_group == group_id
+                and process_id != excluding_pid
+                and not fields[2].lstrip().startswith(("Z", "X"))
+            ):
                 return True
     return False
 
 
-def _terminate_child(process: subprocess.Popen[bytes]) -> None:
+def _signal_group_while_leader_is_pinned(
+    process: subprocess.Popen[bytes],
+    signum: int,
+) -> bool:
+    if process.returncode is not None:
+        raise RuntimeError("refusing to signal a process group after reaping its leader")
+    if _child_exit_observed_without_reaping(process) and not _group_has_live_members(
+        process.pid,
+        excluding_pid=process.pid,
+    ):
+        return False
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, signum)
     except ProcessLookupError:
-        return
-    time.sleep(CHILD_STOP_GRACE_SECONDS)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
+        return False
     except PermissionError:
-        if _group_has_live_members(process.pid):
-            raise
-    except ProcessLookupError:
-        pass
+        if _child_exit_observed_without_reaping(process) and not _group_has_live_members(
+            process.pid,
+            excluding_pid=process.pid,
+        ):
+            return False
+        raise
+    return True
+
+
+def _terminate_process_group(
+    process: subprocess.Popen[bytes],
+    *,
+    term_grace_seconds: float = CHILD_STOP_GRACE_SECONDS,
+) -> None:
+    if process.returncode is not None:
+        return
+    _signal_group_while_leader_is_pinned(process, signal.SIGTERM)
+    if not _child_exit_observed_without_reaping(process) or _group_has_live_members(
+        process.pid,
+        excluding_pid=process.pid,
+    ):
+        time.sleep(term_grace_seconds)
+    _signal_group_while_leader_is_pinned(process, signal.SIGKILL)
+    deadline = time.monotonic() + CHILD_POST_KILL_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        leader_exited = _child_exit_observed_without_reaping(process)
+        group_has_live_members = _group_has_live_members(
+            process.pid,
+            excluding_pid=process.pid,
+        )
+        if leader_exited and not group_has_live_members:
+            process.wait()
+            return
+        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+    if _group_has_live_members(process.pid, excluding_pid=process.pid):
+        raise OSError("the Cuttlefish process group still has live members after SIGKILL")
+    if not _child_exit_observed_without_reaping(process):
+        raise OSError("the Cuttlefish process leader did not exit after SIGKILL")
     process.wait()
+
+
+def _terminate_child(process: subprocess.Popen[bytes]) -> None:
+    _terminate_process_group(process)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -346,6 +477,7 @@ def run(args: argparse.Namespace) -> int:
             Path(args.snapshot_source),
             destination / args.snapshot_name,
             home,
+            budget_root=destination,
         )
         return 0 if marker is not None else 1
 
@@ -376,7 +508,7 @@ def run(args: argparse.Namespace) -> int:
 
     try:
         process = subprocess.Popen(command, env=environment, start_new_session=True)
-        while process.poll() is None:
+        while not _child_exit_observed_without_reaping(process):
             now = time.monotonic()
             if requested_signal is not None:
                 termination_started = True
@@ -402,12 +534,10 @@ def run(args: argparse.Namespace) -> int:
             wait_until = min(deadline, next_poll)
             wait_seconds = wait_until - time.monotonic()
             if wait_seconds > 0:
-                try:
-                    process.wait(timeout=min(0.25, wait_seconds))
-                except subprocess.TimeoutExpired:
-                    pass
+                time.sleep(min(0.25, wait_seconds))
         if not terminated:
             collect_logs(cvd, home, snapshot_directory, observed)
+            _terminate_child(process)
         return_code = process.returncode
         if return_code is None:
             return_code = process.wait()

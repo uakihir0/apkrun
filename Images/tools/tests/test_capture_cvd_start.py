@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -68,6 +69,39 @@ def test_snapshot_log_is_bounded_and_atomic(
     assert destination.read_bytes().endswith(b"0123456789" * 5)
     assert len(destination.read_bytes()) <= 128
     assert list(stage.iterdir()) == [destination]
+
+
+def test_snapshot_log_respects_the_aggregate_workspace_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "private-home"
+    home.mkdir()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    source = home / "launcher.log"
+    source.write_bytes(b"n" * 101)
+    existing = stage / "kernel.log"
+    existing.write_bytes(b"o" * 100)
+    destination = stage / "launcher.log"
+    monkeypatch.setattr(capture_cvd_start, "MAX_LOG_BYTES", 128)
+    monkeypatch.setattr(
+        capture_cvd_start,
+        "MAX_LOG_SNAPSHOT_WORKSPACE_BYTES",
+        200,
+    )
+
+    result = capture_cvd_start.snapshot_log(
+        source,
+        destination,
+        home.resolve(),
+        budget_root=stage,
+    )
+
+    assert result is None
+    assert existing.read_bytes() == b"o" * 100
+    assert not destination.exists()
+    assert list(stage.iterdir()) == [existing]
 
 
 def test_snapshot_log_rejects_symlink_and_path_outside_private_home(tmp_path: Path) -> None:
@@ -204,10 +238,17 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
         source_path: Path,
         destination_path: Path,
         home_path: Path,
+        *,
+        budget_root: Path | None = None,
     ) -> tuple[int, int] | None:
         nonlocal snapshot_calls
         snapshot_calls += 1
-        return original_snapshot_log(source_path, destination_path, home_path)
+        return original_snapshot_log(
+            source_path,
+            destination_path,
+            home_path,
+            budget_root=budget_root,
+        )
 
     monkeypatch.setattr(capture_cvd_start, "snapshot_log", count_snapshot_calls)
 
@@ -435,6 +476,68 @@ def test_terminate_child_kills_grandchildren_after_leader_exits_on_term(
         time.sleep(0.02)
     else:
         pytest.fail("the Cuttlefish process group left a live descendant after shutdown")
+
+
+def test_terminate_child_handles_natural_leader_exit_with_live_descendant(
+    tmp_path: Path,
+) -> None:
+    grandchild_script = tmp_path / "grandchild.py"
+    grandchild_pid_file = tmp_path / "grandchild.pid"
+    grandchild_script.write_text(
+        "import os, signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"Path({str(grandchild_pid_file)!r}).write_text(str(os.getpid()))\n"
+        "while True: time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    parent_script = tmp_path / "parent.py"
+    parent_script.write_text(
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, sys.argv[1]])\n"
+        "while True: time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [sys.executable, str(parent_script), str(grandchild_script)],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pid_deadline = time.monotonic() + 5
+    while not grandchild_pid_file.exists() and time.monotonic() < pid_deadline:
+        time.sleep(0.02)
+    assert grandchild_pid_file.exists()
+    grandchild_pid = int(grandchild_pid_file.read_text(encoding="utf-8"))
+    os.kill(process.pid, signal.SIGKILL)
+    exit_deadline = time.monotonic() + 5
+    while (
+        not capture_cvd_start._child_exit_observed_without_reaping(process)
+        and time.monotonic() < exit_deadline
+    ):
+        time.sleep(0.02)
+    assert capture_cvd_start._child_exit_observed_without_reaping(process)
+
+    capture_cvd_start._terminate_child(process)
+
+    assert process.returncode == -signal.SIGKILL
+    process_deadline = time.monotonic() + 5
+    while time.monotonic() < process_deadline:
+        try:
+            os.kill(grandchild_pid, 0)
+        except ProcessLookupError:
+            break
+        status = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(grandchild_pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if status.startswith(("Z", "X")):
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("the naturally exited leader left a live descendant behind")
 
 
 def test_invalid_log_listing_does_not_leave_cvd_child_running(tmp_path: Path) -> None:

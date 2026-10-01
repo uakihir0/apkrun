@@ -2182,7 +2182,10 @@ host CPU count, nested-virtualization state, Cuttlefish instance number, four
 guest CPUs, 4096 MiB, and 600-second boot deadline. Write results outside the
 repository by default. Use a dedicated ADB server on a unique private
 `localfilesystem` socket. Pass `--gpu_mode=none` to both `cvd create` and
-`cvd start`, because the first real capture still recorded
+`cvd start`, with `--gpu_vhost_user_mode=off` on both commands, because the
+pinned arm64 host otherwise auto-enables a GPU path that is incompatible with
+`none`. Require the saved config to show both `gpu_mode=none` and
+`enable_gpu_vhost_user=false`. The first real capture still recorded
 `guest_swiftshader` after only changing the create command. Cap guest outputs
 and live logcat while streaming,
 bound control output before parsing, and enforce a 900-second overall runner
@@ -2871,3 +2874,29 @@ background children asynchronously, so being the original parent is not a
 sufficient reason to signal by PID later. The verified pidfd path handles
 these races; an unverified broker failure retains data for safe manual
 recovery.
+
+## IR-112: Disable vhost-user GPU for the `gpu_mode=none` diagnosis
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Pass Cuttlefish's supported `--gpu_vhost_user_mode=off` flag to
+both `cvd create` and `cvd start` in the isolated `gpu_mode=none` profile.
+Before publishing a result, require `cuttlefish_config.json` to record
+`enable_gpu_vhost_user=false` as well as `gpu_mode=none`.
+
+**Reason.** The real GPU-none retry at
+`$HOME/.local/share/apkrun/cuttlefish-boot-diagnosis-codex-retry-3/results/gpu-none-20261001T213427Z-139362`
+showed Cuttlefish 1.57.0 auto-enabling vhost-user GPU on the arm64 host despite
+`gpu_mode=none`. `run_cvd` then failed in `BuildVhostUserGpu` with
+“GPU mode none not yet supported with vhost user gpu” and returned 10 before
+guest boot. The pinned `cvd help start` and `cvd help create` list
+`gpu_vhost_user_mode` values `auto`, `on`, and `off`; selecting `off` avoids
+that unsupported combination and keeps the experiment on Cuttlefish's own
+configuration path. The separate logical-partition geometry warnings in the
+same capture are not established as causal. This diagnoses the experiment's
+startup failure, not the earlier Android boot stall; repeat the capture and
+continue #064's acceptance checks before drawing that conclusion.

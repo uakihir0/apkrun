@@ -3,9 +3,10 @@
 This isolated experiment checks whether the Android boot stall changes when
 Cuttlefish uses `gpu_mode=none`. It holds the pinned Android build, Cuttlefish
 host tools, capture tools, CPU count, memory size, and boot deadline to the
-2026-10-01 `guest_swiftshader` baseline. It passes `gpu_mode=none` to both
-`cvd create` and `cvd start`, and checks the saved Cuttlefish configuration
-before publication. It also requires the recorded Linux
+2026-10-01 `guest_swiftshader` baseline. It passes `gpu_mode=none` and
+`gpu_vhost_user_mode=off` to both `cvd create` and `cvd start`, and requires
+the saved configuration to confirm that vhost-user GPU is disabled before
+publication. It also requires the recorded Linux
 distribution, kernel, architecture, host CPU count, nested-virtualization
 state, and Cuttlefish instance number to match. It verifies those inputs before
 launching and checks the resulting Cuttlefish configuration before publishing.

@@ -3648,3 +3648,65 @@ confirms the no-pause environment and console routes, but it does not resolve
 the traced PC to U-Boot code. The environment-inspection run ended at its
 90-second deadline, followed by successful group removal and verification of
 an empty fleet and no Cuttlefish processes. Temporary files were deleted.
+
+## IR-129: Query U-Boot relocation metadata before boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md), [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [console helper](../../Experiments/cuttlefish-boot-diagnosis/drive_cuttlefish_console.py) |
+
+**Choice.** In the opt-in paused-U-Boot diagnostic, drain PTY output queued
+after the first prompt through a quiet interval, then send the fixed command
+shape `echo APK_<token>; bdinfo; echo APK_<token>`, using a
+fresh 96-bit random token for each run. Require U-Boot to echo the exact
+command, print the matching token before and after `bdinfo`, and return to the
+prompt. Accept only unique 64-bit hexadecimal values from `relocaddr` and
+`reloc off` between the two markers. Send `boot` only after all checks pass;
+stop without booting if the response is late, incomplete, or ambiguous. The
+summary records whether the command echo and both markers were observed, but
+never stores the token or console transcript. Continue accepting schema-3
+summaries and write new summaries as schema 4.
+
+**Reason.** The Cuttlefish package contains the raw AArch64 U-Boot image but
+no map, ELF, or debug artifact. The vCPU PC and fault addresses alone do not
+identify which binary owns the instruction. The U-Boot source for the revision
+embedded in the image's version string prints its runtime relocation address
+and relocation offset from `bdinfo`; these values can narrow the follow-up
+binary-offset and symbol investigation. `bdinfo` can also print network and
+other board data. The pinned
+[`common/cli_readline.c`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/common/cli_readline.c)
+echoes input;
+[`cmd/Kconfig`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/cmd/Kconfig)
+defaults `CMD_ECHO` to enabled. The pinned
+[`common/cli_simple.c`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/common/cli_simple.c)
+and
+[`common/cli_hush.c`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/common/cli_hush.c)
+support sequential semicolon-separated commands. The probe therefore places
+token-printing `echo` commands before and after `bdinfo` in one command line.
+The short command stays within an 80-column console including the U-Boot
+prompt. The helper parses relocation fields only between these fresh markers, so an
+old prompt or data delivered before the start marker cannot authorize boot.
+The boundary assumes an ordered, trusted Cuttlefish console path; an endpoint
+that can synthesize arbitrary output could forge the marker sequence. The
+helper still drains output already queued after the initial prompt, but does
+not rely on that short quiet interval to identify the response. It keeps
+bounded console bytes only in memory and publishes the two allowlisted numeric
+fields. Since Cuttlefish mirrors the serial console to `kernel.log`, publication
+removes that whole file after the probe command was sent and then records the
+omission in `MISSING.txt`. If capture or publication fails, the private
+mode-0700 work area may retain raw `kernel.log` output.
+
+**Verification.** Source revision
+`3fe9647575890b846172e546201eff7614c8cb59` defines `relocaddr` and
+`reloc off` in [`cmd/bdinfo.c`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/cmd/bdinfo.c).
+Synthetic Screen/PTTY tests exercise stale values between the command echo and
+start marker, missing markers, ambiguous duplicate values, unanswered
+queries, and successful responses bounded by both markers. Publication tests verify that
+`kernel.log` is omitted only after successful unlink and that schema-3
+summaries still publish. The Linux suite passed all 213 tests; the macOS suite
+passed 122 tests with 91 Linux-specific skips. The live Cuttlefish probe is
+pending. Until it returns relocation data and the resulting address mapping is
+independently checked, the traced PC remains unattributed and no root cause is
+claimed.

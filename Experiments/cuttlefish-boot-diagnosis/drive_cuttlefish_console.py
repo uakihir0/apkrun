@@ -727,45 +727,94 @@ def _record_console_output(
     return decoded.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _send_console_command(master_fd: int, command: bytes) -> bool:
+def _record_expired_deadline_flags(
+    result_document: dict[str, Any],
+    *,
+    deadline: float,
+    handoff_deadline: float | None,
+    observed_at: float,
+) -> None:
+    if (
+        result_document["kernelHandoffObserved"]
+        or result_document["outputTruncated"]
+        or result_document["screenExitCode"] is not None
+        or result_document["signal"] is not None
+    ):
+        return
+    if (
+        result_document["bootCommandSent"]
+        and handoff_deadline is not None
+        and observed_at >= handoff_deadline
+    ):
+        result_document["handoffTimedOut"] = True
+    elif observed_at >= deadline and not result_document["bdinfoTimedOut"]:
+        result_document["timedOut"] = True
+
+
+def _send_console_command(
+    master_fd: int,
+    command: bytes,
+    *,
+    deadline: float | None = None,
+) -> tuple[bool, bool]:
     if command != b"boot\r" and BDINFO_PROBE_COMMAND.fullmatch(command) is None:
-        return False
+        return False, False
     pending = memoryview(command)
     while pending:
+        if deadline is not None and time.monotonic() >= deadline:
+            return False, True
         try:
             written = os.write(master_fd, pending)
         except (BlockingIOError, OSError):
-            return False
+            return False, False
         if written <= 0:
-            return False
+            return False, False
         pending = pending[written:]
-    return True
+    return True, False
 
 
-def _send_boot_if_not_cancelled(master_fd: int) -> bool:
-    return _send_console_command_if_not_cancelled(master_fd, b"boot\r")
+def _send_boot_if_not_cancelled(
+    master_fd: int,
+    deadline: float,
+) -> tuple[bool, bool]:
+    return _send_console_command_if_not_cancelled(
+        master_fd,
+        b"boot\r",
+        deadline=deadline,
+    )
 
 
 def _send_console_command_if_not_cancelled(
     master_fd: int,
     command: bytes,
-) -> bool:
+    *,
+    deadline: float | None = None,
+) -> tuple[bool, bool]:
     blocked_signals = {signal.SIGTERM, signal.SIGINT}
     if requested_signal is not None:
-        return False
+        return False, False
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked_signals)
     try:
         if requested_signal is not None or signal.sigpending() & blocked_signals:
-            return False
-        return _send_console_command(master_fd, command)
+            return False, False
+        return _send_console_command(master_fd, command, deadline=deadline)
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
-def _send_bdinfo_if_not_cancelled(master_fd: int, sync_token: str) -> bool:
+def _send_bdinfo_if_not_cancelled(
+    master_fd: int,
+    sync_token: str,
+    *,
+    deadline: float,
+) -> tuple[bool, bool]:
     marker = f"APK_{sync_token}"
     command = f"echo {marker}; bdinfo; echo {marker}\r".encode("ascii")
-    return _send_console_command_if_not_cancelled(master_fd, command)
+    return _send_console_command_if_not_cancelled(
+        master_fd,
+        command,
+        deadline=deadline,
+    )
 
 
 def drive_console(
@@ -808,7 +857,7 @@ def drive_console(
         raise ValueError("Screen executable must be a regular executable file")
 
     result_document: dict[str, Any] = {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "consoleEndpointFound": False,
         "screenStarted": False,
         "uBootBannerObserved": False,
@@ -817,7 +866,9 @@ def drive_console(
         "bdinfoCommandEchoObserved": False,
         "bdinfoStartMarkerObserved": False,
         "bdinfoEndMarkerObserved": False,
+        "bdinfoResponsePromptObserved": False,
         "bdinfoResponseObserved": False,
+        "bdinfoResponseRejected": False,
         "bdinfoTimedOut": False,
         "relocationAddress": None,
         "relocationOffset": None,
@@ -871,11 +922,27 @@ def drive_console(
 
                 remaining = max_output_bytes - len(output)
                 chunk = _read_available(master_fd, remaining)
+                observed_at = time.monotonic()
+                if requested_signal is not None:
+                    result_document["signal"] = requested_signal
+                    status = 128 + requested_signal
+                    break
+                if (
+                    result_document["bootCommandSent"]
+                    and handoff_deadline is not None
+                    and observed_at >= handoff_deadline
+                ):
+                    result_document["handoffTimedOut"] = True
+                    break
+                if observed_at >= deadline:
+                    result_document["timedOut"] = True
+                    break
                 if (
                     result_document["bdinfoCommandSent"]
                     and not result_document["bdinfoResponseObserved"]
+                    and not result_document["bdinfoResponseRejected"]
                     and bdinfo_deadline is not None
-                    and time.monotonic() >= bdinfo_deadline
+                    and observed_at >= bdinfo_deadline
                 ):
                     result_document["bdinfoTimedOut"] = True
                     break
@@ -920,10 +987,14 @@ def drive_console(
                             status = 128 + requested_signal
                             break
                         bdinfo_sync_token = secrets.token_hex(12)
-                        if not _send_bdinfo_if_not_cancelled(
+                        bdinfo_sent, deadline_expired = _send_bdinfo_if_not_cancelled(
                             master_fd,
                             bdinfo_sync_token,
-                        ):
+                            deadline=deadline,
+                        )
+                        if not bdinfo_sent:
+                            if deadline_expired:
+                                result_document["timedOut"] = True
                             bdinfo_sync_token = None
                             break
                         result_document["bdinfoCommandSent"] = True
@@ -933,6 +1004,7 @@ def drive_console(
                     if (
                         result_document["bdinfoCommandSent"]
                         and not result_document["bdinfoResponseObserved"]
+                        and not result_document["bdinfoResponseRejected"]
                         and bdinfo_output_offset is not None
                     ):
                         bdinfo_output, _ = _strip_ansi_escape_sequences(
@@ -971,6 +1043,17 @@ def drive_console(
                         ):
                             if len(sync_markers) != 2:
                                 break
+                            observed_at = time.monotonic()
+                            if observed_at >= deadline:
+                                result_document["timedOut"] = True
+                                break
+                            if (
+                                bdinfo_deadline is not None
+                                and observed_at >= bdinfo_deadline
+                            ):
+                                result_document["bdinfoTimedOut"] = True
+                                break
+                            result_document["bdinfoResponsePromptObserved"] = True
                             relocation_address, relocation_offset = (
                                 _parse_bdinfo_addresses(
                                     response_text[
@@ -987,16 +1070,24 @@ def drive_console(
                                     relocation_address
                                 )
                                 result_document["relocationOffset"] = relocation_offset
-                                if not _send_boot_if_not_cancelled(master_fd):
-                                    break
-                                result_document["bootCommandSent"] = True
-                                handoff_output_offset = len(output)
-                                handoff_deadline = min(
-                                    deadline,
-                                    time.monotonic() + handoff_timeout_seconds,
-                                )
                             else:
+                                result_document["bdinfoResponseRejected"] = True
+                            if time.monotonic() >= deadline:
+                                result_document["timedOut"] = True
                                 break
+                            boot_sent, boot_deadline_expired = (
+                                _send_boot_if_not_cancelled(master_fd, deadline)
+                            )
+                            if not boot_sent:
+                                if boot_deadline_expired:
+                                    result_document["timedOut"] = True
+                                break
+                            result_document["bootCommandSent"] = True
+                            handoff_output_offset = len(output)
+                            handoff_deadline = min(
+                                deadline,
+                                time.monotonic() + handoff_timeout_seconds,
+                            )
 
                     handoff_output = (
                         bytes(output[handoff_output_offset:])
@@ -1012,6 +1103,12 @@ def drive_console(
                     if result_document["bootCommandSent"] and KERNEL_HANDOFF.search(
                         handoff_text
                     ):
+                        if (
+                            handoff_deadline is not None
+                            and time.monotonic() >= handoff_deadline
+                        ):
+                            result_document["handoffTimedOut"] = True
+                            break
                         result_document["kernelHandoffObserved"] = True
                         status = 0
                         break
@@ -1032,13 +1129,14 @@ def drive_console(
                     result_document["handoffTimedOut"] = True
                     break
 
-            if (
-                time.monotonic() >= deadline
-                and not result_document["kernelHandoffObserved"]
-            ):
-                result_document["timedOut"] = True
             if len(output) >= max_output_bytes:
                 result_document["outputTruncated"] = True
+            _record_expired_deadline_flags(
+                result_document,
+                deadline=deadline,
+                handoff_deadline=handoff_deadline,
+                observed_at=time.monotonic(),
+            )
             if requested_signal is not None:
                 result_document["signal"] = requested_signal
                 status = 128 + requested_signal

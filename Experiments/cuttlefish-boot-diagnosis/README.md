@@ -19,16 +19,20 @@ command fits within an 80-column U-Boot console including its prompt.
 The helper requires U-Boot to echo that exact command and print the matching
 token both before and after `bdinfo`, then show the prompt. It accepts only
 unique, unambiguous numeric `relocaddr` and `reloc off` fields between those
-two markers, and sends `boot` only after all checks pass. This brackets the
-values with fresh command output: stale lines before the start marker are
-ignored, and duplicate relocation fields are rejected. The boundary assumes
-the ordered Cuttlefish console path is trusted; it does not authenticate an
-endpoint that can synthesize a complete response. If a complete response does
-not arrive within five seconds, the helper stops without sending `boot`. Its
-version-4 status summary records the banner, prompt, command echo, start and
-end markers, `bdinfo`, and handoff states, plus the two numeric relocation
-fields. The bounded console transcript stays in memory and is not included in
-the summary.
+two markers. This brackets the values with fresh command output: stale lines
+before the start marker are ignored, and duplicate relocation fields are
+rejected. When the command echo, both markers, and the following prompt form a
+complete response but the relocation fields are missing, malformed, or
+ambiguous, the helper records a rejected response, leaves both values null,
+and continues with `boot`. It stops without booting if the command echo,
+markers, or following prompt are incomplete, or if the response times out.
+The boundary assumes the ordered Cuttlefish console path is trusted; it does
+not authenticate an endpoint that can synthesize a complete response. Its
+version-5 status summary records the banner, initial and post-response prompts,
+command echo, start and end markers, accepted or rejected `bdinfo` response,
+and handoff states, plus the two numeric relocation fields when accepted.
+The publisher continues to accept version-3 and version-4 summaries. The
+bounded console transcript stays in memory and is not included in the summary.
 Because Cuttlefish mirrors the serial console to `kernel.log`, publication
 removes that whole log whenever the helper sent the probe command, then records
 the omission in `MISSING.txt`. If capture or publication fails, its private

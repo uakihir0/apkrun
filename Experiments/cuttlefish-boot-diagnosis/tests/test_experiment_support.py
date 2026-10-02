@@ -483,6 +483,7 @@ def test_bootloader_console_summary_accepts_sanitized_bdinfo_addresses() -> None
         "bdinfoStartMarkerObserved": True,
         "bdinfoEndMarkerObserved": True,
         "bdinfoResponseObserved": True,
+        "bdinfoResponseRejected": False,
         "bdinfoTimedOut": False,
         "relocationAddress": 0x17F600000,
         "relocationOffset": 0x8000,
@@ -504,6 +505,92 @@ def test_bootloader_console_summary_accepts_sanitized_bdinfo_addresses() -> None
     }
 
     assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+    legacy_summary = dict(summary)
+    legacy_summary.pop("bdinfoResponseRejected")
+    assert (
+        experiment_support._validate_bootloader_console_summary(legacy_summary)
+        == legacy_summary
+    )
+
+    summary["bdinfoResponseRejected"] = True
+    with pytest.raises(ValueError, match="inconsistent or incomplete"):
+        experiment_support._validate_bootloader_console_summary(summary)
+
+
+def test_bootloader_console_summary_accepts_rejected_bdinfo_with_boot() -> None:
+    summary: dict[str, object] = {
+        "schemaVersion": 5,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponsePromptObserved": True,
+        "bdinfoResponseObserved": False,
+        "bdinfoResponseRejected": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": None,
+        "relocationOffset": None,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_rejects_bdinfo_without_following_prompt() -> None:
+    summary: dict[str, object] = {
+        "schemaVersion": 5,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponsePromptObserved": False,
+        "bdinfoResponseObserved": False,
+        "bdinfoResponseRejected": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": None,
+        "relocationOffset": None,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+
+    with pytest.raises(ValueError, match="inconsistent or incomplete"):
+        experiment_support._validate_bootloader_console_summary(summary)
 
 
 @pytest.mark.parametrize(
@@ -530,11 +617,33 @@ def test_bootloader_console_summary_accepts_sanitized_bdinfo_addresses() -> None
             "inconsistent or incomplete",
         ),
         (
+            {"bdinfoResponsePromptObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
             {"relocationAddress": None},
             "inconsistent or incomplete",
         ),
         (
             {"bdinfoTimedOut": True},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"bdinfoResponseRejected": True},
+            "inconsistent or incomplete",
+        ),
+        (
+            {
+                "bdinfoResponsePromptObserved": False,
+                "bdinfoResponseObserved": False,
+                "bdinfoTimedOut": True,
+                "relocationAddress": None,
+                "relocationOffset": None,
+                "bootCommandSent": False,
+                "kernelHandoffObserved": False,
+                "timedOut": True,
+                "exitCode": 1,
+            },
             "inconsistent or incomplete",
         ),
         (
@@ -552,7 +661,7 @@ def test_bootloader_console_summary_rejects_inconsistent_bdinfo(
     message: str,
 ) -> None:
     summary: dict[str, object] = {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "consoleEndpointFound": True,
         "screenStarted": True,
         "uBootBannerObserved": True,
@@ -561,7 +670,9 @@ def test_bootloader_console_summary_rejects_inconsistent_bdinfo(
         "bdinfoCommandEchoObserved": True,
         "bdinfoStartMarkerObserved": True,
         "bdinfoEndMarkerObserved": True,
+        "bdinfoResponsePromptObserved": True,
         "bdinfoResponseObserved": True,
+        "bdinfoResponseRejected": False,
         "bdinfoTimedOut": False,
         "relocationAddress": 0x17F600000,
         "relocationOffset": 0x8000,
@@ -2380,6 +2491,8 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
 
     subprocess.run(["bash", "-n", str(private_copy)], check=True)
     assert "script_dir=$APKRUN_CAPTURE_SCRIPT_DIR" in patched
+    assert "capture_boot_observer=0" in patched
+    assert "capture_boot_observer=${APKRUN_CAPTURE_BOOT_OBSERVER:-0}" not in patched
     assert 'PATH="$APKRUN_DIAGNOSTIC_ADB_SHIM_DIR:$CVD_HOST_DIR/bin:$PATH"' in patched
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (

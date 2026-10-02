@@ -2010,7 +2010,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
     }
     schema_version = summary.get("schemaVersion")
     expected_fields = set(base_fields)
-    if type(schema_version) is int and schema_version == 4:
+    if type(schema_version) is int and schema_version in (4, 5):
         expected_fields.update(
             {
                 "bdinfoCommandSent",
@@ -2023,6 +2023,19 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 "relocationOffset",
             }
         )
+    if type(schema_version) is int and schema_version == 5:
+        expected_fields.update(
+            {
+                "bdinfoResponsePromptObserved",
+                "bdinfoResponseRejected",
+            }
+        )
+    if (
+        type(schema_version) is int
+        and schema_version == 4
+        and set(summary) == expected_fields | {"bdinfoResponseRejected"}
+    ):
+        expected_fields.add("bdinfoResponseRejected")
     if set(summary) != expected_fields:
         raise ValueError("bootloader console summary has an unexpected schema")
     boolean_fields = (
@@ -2038,7 +2051,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "handoffTimedOut",
         "cleanupComplete",
     )
-    if schema_version == 4:
+    if schema_version in (4, 5):
         boolean_fields += (
             "bdinfoCommandSent",
             "bdinfoCommandEchoObserved",
@@ -2047,10 +2060,17 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
             "bdinfoResponseObserved",
             "bdinfoTimedOut",
         )
+    if schema_version == 5:
+        boolean_fields += (
+            "bdinfoResponsePromptObserved",
+            "bdinfoResponseRejected",
+        )
+    elif schema_version == 4 and "bdinfoResponseRejected" in summary:
+        boolean_fields += ("bdinfoResponseRejected",)
     relocation_fields = ("relocationAddress", "relocationOffset")
     if (
         type(summary.get("schemaVersion")) is not int
-        or schema_version not in (3, 4)
+        or schema_version not in (3, 4, 5)
         or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
         or type(summary.get("outputBytesObserved")) is not int
         or type(summary.get("escapeStrippedBytesObserved")) is not int
@@ -2092,7 +2112,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
             )
         )
         or (
-            schema_version == 4
+            schema_version in (4, 5)
             and any(
                 summary.get(field) is not None
                 and (
@@ -2109,6 +2129,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         or summary["cleanupFailure"] is not None
         or summary["cleanupErrorNumber"] is not None
         or (summary["timedOut"] and summary["handoffTimedOut"])
+        or (schema_version == 5 and summary["timedOut"] and summary["bdinfoTimedOut"])
         or (
             summary["signal"] is not None
             and summary["exitCode"] != 128 + summary["signal"]
@@ -2151,7 +2172,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
             and summary["outputBytesObserved"] != summary["outputLimitBytes"]
         )
         or (
-            schema_version == 4
+            schema_version in (4, 5)
             and (
                 (summary["bdinfoCommandSent"] and not summary["promptObserved"])
                 or (
@@ -2177,15 +2198,64 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                     )
                 )
                 or (
+                    schema_version == 5
+                    and summary["bdinfoResponsePromptObserved"]
+                    and (
+                        not summary["bdinfoCommandSent"]
+                        or not summary["bdinfoCommandEchoObserved"]
+                        or not summary["bdinfoStartMarkerObserved"]
+                        or not summary["bdinfoEndMarkerObserved"]
+                        or not (
+                            summary["bdinfoResponseObserved"]
+                            or summary["bdinfoResponseRejected"]
+                        )
+                    )
+                )
+                or (
+                    schema_version == 5
+                    and summary["bdinfoResponseObserved"]
+                    and not summary["bdinfoResponsePromptObserved"]
+                )
+                or (
+                    schema_version == 5
+                    and summary["bdinfoResponseRejected"]
+                    and (
+                        not summary["bdinfoCommandSent"]
+                        or not summary["bdinfoCommandEchoObserved"]
+                        or not summary["bdinfoStartMarkerObserved"]
+                        or not summary["bdinfoEndMarkerObserved"]
+                        or not summary["bdinfoResponsePromptObserved"]
+                        or summary["bdinfoResponseObserved"]
+                        or summary["bdinfoTimedOut"]
+                        or any(
+                            summary[field] is not None for field in relocation_fields
+                        )
+                    )
+                )
+                or (
+                    schema_version == 4
+                    and summary.get("bdinfoResponseRejected") is True
+                )
+                or (
                     summary["bdinfoTimedOut"]
                     and (
                         not summary["bdinfoCommandSent"]
                         or summary["bdinfoResponseObserved"]
+                        or (schema_version == 5 and summary["bdinfoResponseRejected"])
                         or summary["bootCommandSent"]
                     )
                 )
                 or (
-                    summary["bootCommandSent"] and not summary["bdinfoResponseObserved"]
+                    summary["bdinfoResponseObserved"]
+                    and schema_version == 5
+                    and summary["bdinfoResponseRejected"]
+                )
+                or (
+                    summary["bootCommandSent"]
+                    and not (
+                        summary["bdinfoResponseObserved"]
+                        or (schema_version == 5 and summary["bdinfoResponseRejected"])
+                    )
                 )
                 or (
                     any(summary[field] is not None for field in relocation_fields)
@@ -3855,7 +3925,7 @@ def patch_capture_script(
         (
             "launch_profile() {",
             f"""{bootloader_console_start}start_cvd_group_with_gpu_mode() {{
-  run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
+  run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" \\
     start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument}{pause_argument}
 }}
 
@@ -4007,7 +4077,7 @@ launch_profile() {{""",
         (
             (
                 'if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \\\n'
-                '  || ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" start \\\n'
+                '  || ! run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" start \\\n'
                 '    >> "$stage/cvd-create-console.log" 2>&1; then'
             ),
             (
@@ -4033,6 +4103,10 @@ launch_profile() {{""",
                 )
                 + 'if [ "$cvd_command_failed" -ne 0 ]; then'
             ),
+        ),
+        (
+            "capture_boot_observer=${APKRUN_CAPTURE_BOOT_OBSERVER:-0}",
+            "capture_boot_observer=0",
         ),
         (
             (

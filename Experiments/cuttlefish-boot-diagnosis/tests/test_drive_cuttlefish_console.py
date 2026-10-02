@@ -117,6 +117,45 @@ def _run_helper(
     )
 
 
+def _drive_helper_with_delayed_read(
+    home: Path,
+    result: Path,
+    screen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    marker: bytes,
+    delay_seconds: float,
+    timeout_seconds: int,
+    handoff_timeout_seconds: int,
+    bdinfo_timeout_seconds: int,
+) -> tuple[dict[str, object], int]:
+    drive_console = CONSOLE_MODULE["drive_console"]
+    module_globals = drive_console.__globals__
+    original_read = module_globals["_read_available"]
+    delayed = False
+
+    def delayed_read(master_fd: int, remaining_bytes: int) -> bytes:
+        nonlocal delayed
+        chunk = original_read(master_fd, remaining_bytes)
+        if not delayed and marker in chunk:
+            delayed = True
+            time.sleep(delay_seconds)
+        return chunk
+
+    monkeypatch.setitem(module_globals, "_read_available", delayed_read)
+    summary, status = drive_console(
+        home,
+        result,
+        timeout_seconds=timeout_seconds,
+        handoff_timeout_seconds=handoff_timeout_seconds,
+        bdinfo_timeout_seconds=bdinfo_timeout_seconds,
+        max_output_bytes=65_536,
+        screen_program_path=screen,
+    )
+    assert delayed is True
+    return summary, status
+
+
 def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     tmp_path: Path,
 ) -> None:
@@ -133,7 +172,7 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["schemaVersion"] == 4
+    assert summary["schemaVersion"] == 5
     assert summary["consoleEndpointFound"] is True
     assert summary["screenStarted"] is True
     assert summary["uBootBannerObserved"] is True
@@ -142,7 +181,9 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     assert summary["bdinfoCommandEchoObserved"] is True
     assert summary["bdinfoStartMarkerObserved"] is True
     assert summary["bdinfoEndMarkerObserved"] is True
+    assert summary["bdinfoResponsePromptObserved"] is True
     assert summary["bdinfoResponseObserved"] is True
+    assert summary["bdinfoResponseRejected"] is False
     assert summary["bdinfoTimedOut"] is False
     assert summary["relocationAddress"] == 0x17F600000
     assert summary["relocationOffset"] == 0x8000
@@ -230,6 +271,191 @@ def test_console_helper_ignores_kernel_marker_received_before_boot(
     assert summary["handoffTimedOut"] is True
 
 
+def test_console_helper_does_not_boot_after_global_deadline_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + _bdinfo_probe_response()
+        + "time.sleep(10)",
+    )
+
+    summary, status = _drive_helper_with_delayed_read(
+        home,
+        result,
+        screen,
+        monkeypatch,
+        marker=b"relocaddr",
+        delay_seconds=2.1,
+        timeout_seconds=2,
+        handoff_timeout_seconds=1,
+        bdinfo_timeout_seconds=5,
+    )
+
+    assert status == 1
+    assert summary["timedOut"] is True
+    assert summary["bdinfoTimedOut"] is False
+    assert summary["bdinfoResponsePromptObserved"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["kernelHandoffObserved"] is False
+
+
+def test_console_helper_checks_global_deadline_inside_boot_sender(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + _bdinfo_probe_response()
+        + "time.sleep(10)",
+    )
+    drive_console = CONSOLE_MODULE["drive_console"]
+    module_globals = drive_console.__globals__
+    original_sender = module_globals["_send_console_command_if_not_cancelled"]
+
+    def delayed_sender(
+        master_fd: int,
+        command: bytes,
+        *,
+        deadline: float | None = None,
+    ) -> tuple[bool, bool]:
+        if command == b"boot\r":
+            time.sleep(2.1)
+        return original_sender(master_fd, command, deadline=deadline)
+
+    monkeypatch.setitem(
+        module_globals,
+        "_send_console_command_if_not_cancelled",
+        delayed_sender,
+    )
+    summary, status = drive_console(
+        home,
+        result,
+        timeout_seconds=2,
+        handoff_timeout_seconds=1,
+        bdinfo_timeout_seconds=5,
+        max_output_bytes=65_536,
+        screen_program_path=screen,
+    )
+
+    assert status == 1
+    assert summary["timedOut"] is True
+    assert summary["bdinfoTimedOut"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["kernelHandoffObserved"] is False
+
+
+def test_console_helper_checks_global_deadline_inside_bdinfo_sender(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n" + "time.sleep(10)",
+    )
+    drive_console = CONSOLE_MODULE["drive_console"]
+    module_globals = drive_console.__globals__
+    original_sender = module_globals["_send_console_command_if_not_cancelled"]
+
+    def delayed_sender(
+        master_fd: int,
+        command: bytes,
+        *,
+        deadline: float | None = None,
+    ) -> tuple[bool, bool]:
+        if command.startswith(b"echo APK_"):
+            time.sleep(2.1)
+        return original_sender(master_fd, command, deadline=deadline)
+
+    monkeypatch.setitem(
+        module_globals,
+        "_send_console_command_if_not_cancelled",
+        delayed_sender,
+    )
+    summary, status = drive_console(
+        home,
+        result,
+        timeout_seconds=2,
+        handoff_timeout_seconds=1,
+        bdinfo_timeout_seconds=5,
+        max_output_bytes=65_536,
+        screen_program_path=screen,
+    )
+
+    assert status == 1
+    assert summary["timedOut"] is True
+    assert summary["bdinfoTimedOut"] is False
+    assert summary["bdinfoCommandSent"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["kernelHandoffObserved"] is False
+
+
+def test_console_helper_does_not_accept_handoff_after_deadline_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_exchange()
+        + "os.write(1, b'\\r\\nStarting kernel ...\\n')\n"
+        + "time.sleep(10)",
+    )
+
+    summary, status = _drive_helper_with_delayed_read(
+        home,
+        result,
+        screen,
+        monkeypatch,
+        marker=b"Starting kernel",
+        delay_seconds=1.1,
+        timeout_seconds=4,
+        handoff_timeout_seconds=1,
+        bdinfo_timeout_seconds=1,
+    )
+
+    assert status == 1
+    assert summary["kernelHandoffObserved"] is False
+    assert summary["handoffTimedOut"] is True
+    assert summary["timedOut"] is False
+
+
+def test_console_helper_classifies_simultaneous_deadlines_as_handoff_timeout() -> None:
+    summary = {
+        "kernelHandoffObserved": False,
+        "outputTruncated": False,
+        "screenExitCode": None,
+        "signal": None,
+        "bootCommandSent": True,
+        "bdinfoTimedOut": False,
+        "handoffTimedOut": False,
+        "timedOut": False,
+    }
+
+    CONSOLE_MODULE["_record_expired_deadline_flags"](
+        summary,
+        deadline=10,
+        handoff_deadline=10,
+        observed_at=10,
+    )
+
+    assert summary["handoffTimedOut"] is True
+    assert summary["timedOut"] is False
+
+
 def test_console_helper_bounds_bdinfo_wait_and_never_boots_without_response(
     tmp_path: Path,
 ) -> None:
@@ -274,19 +500,25 @@ def test_console_helper_ignores_late_stale_fields_before_start_marker(
         "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n=> \\n"
         "APK_' + sync_token + b'\\n"
         "APK_' + sync_token + b'\\n=> ')\n"
-        "time.sleep(10)",
+        "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
     completed = _run_helper(home, result, screen)
 
-    assert completed.returncode == 1
+    assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["bdinfoCommandEchoObserved"] is True
     assert summary["bdinfoStartMarkerObserved"] is True
     assert summary["bdinfoEndMarkerObserved"] is True
     assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoResponsePromptObserved"] is True
+    assert summary["bdinfoResponseRejected"] is True
     assert summary["relocationAddress"] is None
-    assert summary["bootCommandSent"] is False
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
 
 
 def test_console_helper_never_boots_without_the_unique_bdinfo_marker(
@@ -318,11 +550,13 @@ def test_console_helper_never_boots_without_the_unique_bdinfo_marker(
     assert summary["bdinfoStartMarkerObserved"] is False
     assert summary["bdinfoEndMarkerObserved"] is False
     assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoResponsePromptObserved"] is False
+    assert summary["bdinfoResponseRejected"] is False
     assert summary["bdinfoTimedOut"] is True
     assert summary["bootCommandSent"] is False
 
 
-def test_console_helper_rejects_ambiguous_relocation_output_inside_markers(
+def test_console_helper_rejects_ambiguous_fields_but_continues_boot(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
@@ -337,7 +571,10 @@ def test_console_helper_rejects_ambiguous_relocation_output_inside_markers(
         "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n"
         "relocaddr = 0x17f600000\\nreloc off = 0x8000\\n"
         "APK_' + sync_token + b'\\n=> ')\n"
-        "time.sleep(10)",
+        "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
     completed = _run_helper(
@@ -348,14 +585,17 @@ def test_console_helper_rejects_ambiguous_relocation_output_inside_markers(
         bdinfo_timeout=1,
     )
 
-    assert completed.returncode == 1
+    assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["bdinfoCommandEchoObserved"] is True
     assert summary["bdinfoStartMarkerObserved"] is True
     assert summary["bdinfoEndMarkerObserved"] is True
     assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoResponsePromptObserved"] is True
+    assert summary["bdinfoResponseRejected"] is True
     assert summary["bdinfoTimedOut"] is False
-    assert summary["bootCommandSent"] is False
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
     assert summary["relocationAddress"] is None
 
 
@@ -384,6 +624,7 @@ def test_console_helper_discards_prequeued_bdinfo_text_before_probe_command(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoResponsePromptObserved"] is True
     assert summary["bdinfoResponseObserved"] is True
     assert summary["relocationAddress"] == 0x17F600000
     assert summary["relocationOffset"] == 0x8000
@@ -419,6 +660,8 @@ def test_console_helper_rejects_bdinfo_response_after_timeout(
     assert summary["bdinfoStartMarkerObserved"] is False
     assert summary["bdinfoEndMarkerObserved"] is False
     assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoResponsePromptObserved"] is False
+    assert summary["bdinfoResponseRejected"] is False
     assert summary["bdinfoTimedOut"] is True
     assert summary["bootCommandSent"] is False
 

@@ -1,0 +1,10 @@
+cvd(703927)  I 10-03 02:58:39 703927 703927 main.cc:137] version: 1.57.0 | VCS: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+cvd(703947)  I 10-03 02:58:40 703947 703947 main.cc:137] version: 1.57.0 | VCS: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+10-03 02:58:40.287 703972 703972 E assemble_cvd: reader.cpp:81 [liblp] Logical partition metadata has invalid geometry magic signature.
+10-03 02:58:40.287 703972 703972 E assemble_cvd: reader.cpp:81 [liblp] Logical partition metadata has invalid geometry magic signature.
+SetFlagDefaultsFromConfig: No flag defaults to override.
+  Run `cvd logs` to report paths to device logs.
+  Point your browser to https://localhost:8443 to interact with the device.
+  Serial console is disabled; use -console=true to enable it.
+  Launcher Build ID: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+cvd(703947)  W 10-03 03:18:39 703947 703951 start.cpp:437] Terminated signal received, cleanning up

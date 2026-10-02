@@ -4010,7 +4010,7 @@ crosses 4 GiB for both measures; the Linux banner falls within that sampling
 interval. This is consistent with substantial guest memory becoming resident
 during the U-Boot-to-Linux transition, but the `ddr_mem_mb=4915` setting means
 it does not show that all guest DDR was resident. The observed intervals of
-190, 537, 753, and 206 seconds also vary too much to infer a deterministic
+190, 537, 753, 206, and 266 seconds also vary too much to infer a deterministic
 scan rate. The additional run strengthens the timing correlation without proving
 that the traced instruction owns the PC, that cache maintenance caused the
 delay, or that stage-2 page allocation explains the faults.
@@ -4027,6 +4027,19 @@ separate bounded query took about seven seconds and returned no property
 text. These are Android progress and ADB transport observations, not proof
 that the guest boot completed or a diagnosis of its later state. The
 normalized capture is recorded in M01.
+
+The 1200-second verification run adds a fifth interval: its launcher log
+records U-Boot at 17:58:44Z and Linux at 18:03:10Z, 266 seconds later. Of 239
+valid five-second crosvm samples, VmRSS/RssShmem was 4,167,692/4,146,036 KiB
+at 18:03:05.265Z and 4,216,188/4,194,532 KiB at 18:03:10.265Z; the latter
+first crosses 4 GiB for both measures, within the sample interval containing
+the Linux banner. The config still specifies `ddr_mem_mb=4915`, so the
+crossing does not prove that all guest DDR was resident. This is additional
+timing correlation, not proof of a deterministic scan rate or cause. The
+capture reached first-stage init and zygote. It recorded neither a
+`VIRTUAL_DEVICE_BOOT_COMPLETED` event nor a positive `sys.boot_completed=1`
+value; the kernel log records init setting `sys.bootstat.first_boot_completed`
+to `0` at guest uptime 458.78 seconds. Its full normalized record is in M01.
 
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
@@ -4197,3 +4210,17 @@ passed. After the ten-second cap change, the full Image tools suite passed
 383 tests with four platform-specific skips. The first hostile review found
 an uninitialized property-attempt field and an ambiguous timeout flag; both
 were corrected, and its follow-up review reported no findings.
+
+A subsequent 1200-second `default` capture used a VM copy of
+`boot_observer.py` whose SHA-256 matched the local source with the ten-second
+`getprop` cap. It recorded 33 polls: three initial polls had no device state
+and did not attempt the property query (one connection timeout and two
+`connect` exit-code-0 results); the other 30 reported `device` and attempted
+`getprop`. Twenty-nine timed out, and one exited 0 without an accepted
+property value. One final poll reached the shared deadline, and
+`sysBootCompleted` stayed null throughout. A separate bounded
+`getprop sys.boot_completed` query and `logcat -d -t 1` query, each limited to
+12 seconds through the same private ADB socket, both exited 124. Their output
+was discarded. This verifies that the observer exercised the extended
+property-query path and retained the timeout distinction, but it does not
+show whether a longer guest shell query would return a property.

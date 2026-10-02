@@ -735,11 +735,17 @@ identities and records an observation gap.
 After launcher log event 5, it probes the selected localhost ADB serial on a
 monotonic 15-second schedule through a private ADB server socket and records
 only bounded state fields, including `sys.boot_completed`; raw ADB output is
-not stored. It removes inherited ADB socket, serial, and vendor-key overrides
-from the observer environment. Missed ADB schedule points are skipped rather
-than replayed. Each ADB command is capped by the remaining time before the
-15-second cleanup reserve, and no following command starts once that boundary
-is reached. The mode-0700 socket directory is beneath the run's private HOME.
+not stored. Each `adb_poll` record includes `getpropAttempted` and nullable
+`getpropTimedOut` fields, so a deadline reached before the property query is
+distinguishable from a query that ran and timed out. The aggregate
+`commandTimedOut` field reports whether an ADB subprocess timed out;
+`pollDeadlineReached` reports whether the poll reached its shared deadline,
+including when that prevented a subprocess from starting. It removes
+inherited ADB socket, serial, and vendor-key overrides from the observer
+environment. Missed ADB schedule points are skipped rather than replayed.
+Each ADB command is capped by the remaining time before the 15-second cleanup
+reserve, and no following command starts once that boundary is reached. The
+mode-0700 socket directory is beneath the run's private HOME.
 On Linux, the ADB server receives `SIGKILL` if its observer parent dies,
 including when the observer is terminated without running cleanup. Capture
 cleanup removes the private HOME and any stale socket path. This opt-in

@@ -3850,11 +3850,15 @@ on Linux with one skip. The macOS full Image tools suite passed 365 cases with
 four Linux-only skips before the final process-source filtering change. Ruff,
 formatting, shell syntax, and `git diff --check` passed after that change. The
 active 3000-second run observed launcher event 5 at 16:22:11.114Z and the
-private ADB server ready at 16:22:12.585Z. Its first ADB poll timed out; the
-next two `adb connect` commands exited 0 but reported no device state, and
-`getprop` / `sys.boot_completed` remain unavailable. This verifies the
-event-triggered ADB observer path starts during the live run, but not that the
-guest is ADB-ready or boot-complete.
+private ADB server ready at 16:22:12.585Z. Its first ADB poll timed out;
+later polls reported a connected `device` state, but no `sys.boot_completed`
+value. The saved records have a null `getpropExitCode` and
+`commandTimedOut=true`; that instrumentation did not record whether the
+property query was reached before the deadline, so it cannot distinguish an
+unstarted query from one that timed out. IR-136 adds explicit fields for
+future records. This verifies that the observer starts during the live run
+and eventually sees the ADB transport as `device`, but not that Android is
+boot-complete.
 
 ## IR-132: Detect same-size inventory mutations on coarse-timestamp filesystems
 
@@ -3917,6 +3921,11 @@ uses that walker before disabling the data cache. The captured source contains
 this implementation, but the exact Cuttlefish U-Boot defconfig and whether
 the packaged binary enables that option have not been verified. The attached
 binary scan and relocation arithmetic also remain independently unreplicated.
+The submitted analysis reports scanning 4-KiB-aligned relocation candidates,
+wrapping raw instruction bytes as Mach-O with `xcrun clang`, and disassembling
+them with `xcrun llvm-objdump`. The exact commands and intermediate artifacts
+are not preserved in the repository, so this method is documented as reported
+evidence rather than independently reproducible verification.
 
 The saved `default-20261001T120904-49816` logs record the U-Boot banner at
 11:59:04 and the Linux banner at 12:02:14, a 190-second interval. They later
@@ -3945,13 +3954,20 @@ enough to infer a deterministic RAM-scan rate or prove the cache-maintenance
 hypothesis.
 
 The active 3000-second retry has since recorded Linux and Android first-stage
-init, followed by zygote and vendor service starts through guest uptime 589
-seconds. In one five-second host sample, each of the four crosvm vCPU threads
-used about five CPU seconds. This confirms that the guest continued executing
-after the previously observed handoff boundary. It does not identify which
-guest code consumed the CPU, prove ownership of the earlier PC, or establish
-that U-Boot cache maintenance caused the delay; `system_server`, launcher
-event 5, and ADB readiness remain unobserved while the capture is active.
+init, followed by zygote and vendor service starts through guest uptime
+1716.09 seconds. Its latest kernel tail includes repeated `aidl/activity`
+lookups from audioserver; as the attached diagnosis notes, that message alone
+does not establish a fatal failure. In one five-second host sample, each of
+the four crosvm vCPU threads
+used about five CPU seconds. The run recorded launcher event 5 at 16:22:11Z,
+started its private ADB server at 16:22:12Z, and later observed ADB state
+`device`. Its current poll records still do not confirm `sys.boot_completed`;
+the pre-existing fields cannot distinguish a property command that was
+skipped at the deadline from one that timed out. IR-136 adds that distinction
+to future records. This confirms continued guest progress beyond the earlier
+handoff boundary, but does not identify which guest code consumed the CPU,
+prove ownership of the earlier PC, establish that U-Boot cache maintenance
+caused the delay, or establish a successful Android boot.
 
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
@@ -3973,7 +3989,11 @@ returned failure at 600 seconds. Its `cvd start --help` exposes
 537 seconds after U-Boot, so the fixed inner timeout left too little time to
 observe later Android boot stages. Passing the configured budget keeps the
 inner monitor from preempting the capture; the outer shared deadline remains
-the limit for create, start, and guest readiness.
+the limit for create, start, and guest readiness. The attached diagnostic
+note proposes 2400 seconds; the active retry uses 3000 seconds with the same
+guest settings, adding a bounded ten-minute observation window because the
+guest is progressing slowly. This duration choice does not establish a
+performance root cause.
 
 **Verification.** The capture integration test checks that a configured
 321-second budget is passed as `--boot_timeout_secs=321`. The active live
@@ -4052,3 +4072,43 @@ reference instance confirmed the actual managed symlink chain, current UID,
 ADB-port mapping, direct `process_restarter` parent, staged crosvm `argv[0]`,
 and `/proc/<pid>/exe` same-file check. The active Cuttlefish result and its
 final observer timeline are recorded in M01 when the capture exits.
+
+## IR-136: Distinguish an unstarted ADB property query from a timeout
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Add `getpropAttempted` and nullable `getpropTimedOut` to each
+bounded `adb_poll` record. `getpropAttempted` is true only when the ADB
+subprocess was started. Keep `commandTimedOut` strictly for an ADB subprocess
+that timed out, and add `pollDeadlineReached` for the shared deadline
+preventing the poll from continuing. When the deadline expires before
+`getprop` starts, record `getpropAttempted=false` and
+`getpropTimedOut=null`; when the process starts, record
+`getpropAttempted=true` and its actual timeout result.
+
+**Reason.** The active capture's ADB record has `deviceState="device"`,
+`getpropExitCode=null`, `sysBootCompleted=null`, and
+`commandTimedOut=true`. In the old schema that field could mean an ADB child
+timed out or the poll deadline prevented a later command from starting; it
+does not show whether `getprop` was invoked. Guessing either case would
+overstate the evidence. The new fields distinguish a child timeout from
+deadline exhaustion and identify whether the property query process started,
+without storing raw ADB output.
+
+**Verification.** The observer tests assert the successful property-query
+fields and exercise deadline expiration before the query, expiration in the
+after-connect and after-`get-state` branches, expiration in the small gap
+before process start, a query that times out, an offline device, and a
+timed-out `get-state` command. The active process was started before
+these fields were implemented, so its existing record cannot be
+retroactively disambiguated. Its final status will be recorded in M01; the
+new fields will be verified against a later capture. The focused observer
+suite passed 31 tests with one Linux-only parent-death test skipped on macOS;
+Ruff, formatting, Python compilation, and `git diff --check` passed. The
+first hostile review found an uninitialized property-attempt field and an
+ambiguous timeout flag; both were corrected, and the follow-up review reported
+no findings.

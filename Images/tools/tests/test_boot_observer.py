@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -1103,6 +1104,10 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
         record["event"] == "adb_poll"
         and record["deviceState"] == "device"
         and record["sysBootCompleted"] is True
+        and record["getpropAttempted"] is True
+        and record["getpropTimedOut"] is False
+        and record["commandTimedOut"] is False
+        and record["pollDeadlineReached"] is False
         for record in records
     )
     assert any(record["event"] == "private_adb_server_ready" for record in records)
@@ -1129,6 +1134,127 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     assert all(call["ambientSocket"] is None for call in logged_calls)
     assert all(call["ambientVendorKeys"] is None for call in logged_calls)
     assert str(home) not in output.read_text(encoding="ascii")
+
+
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "expected_state",
+        "expected_attempted",
+        "expected_timed_out",
+        "expected_command_timed_out",
+        "expected_deadline_reached",
+        "expected_call_count",
+    ),
+    (
+        ("deadline_after_connect", None, False, None, False, True, 1),
+        ("deadline_before_getprop", "device", False, None, False, True, 2),
+        ("deadline_before_spawn", "device", False, None, False, True, 3),
+        ("getprop_times_out", "device", True, True, True, False, 3),
+        ("offline", "offline", False, None, False, False, 2),
+        ("getstate_times_out", None, False, None, True, False, 2),
+    ),
+)
+def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected_state: str | None,
+    expected_attempted: bool,
+    expected_timed_out: bool | None,
+    expected_command_timed_out: bool,
+    expected_deadline_reached: bool,
+    expected_call_count: int,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+    calls: list[list[str]] = []
+    launched_commands: list[list[str]] = []
+
+    class FakeClock:
+        current = 0.0
+
+        def monotonic(self) -> float:
+            return self.current
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    clock = FakeClock()
+    monkeypatch.setattr(OBSERVER_MODULE, "time", clock)
+
+    def fake_run_adb(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+    ) -> tuple[int | None, str, bool, bool]:
+        del environment
+        calls.append(command)
+        if "connect" in command:
+            launched_commands.append(command)
+            if scenario == "deadline_after_connect":
+                clock.current = deadline
+            return 0, "", False, True
+        if command[-1:] == ["get-state"]:
+            if scenario == "deadline_before_getprop":
+                clock.current = deadline
+            if scenario == "offline":
+                launched_commands.append(command)
+                return 0, "offline", False, True
+            if scenario == "getstate_times_out":
+                launched_commands.append(command)
+                return None, "", True, True
+            launched_commands.append(command)
+            return 0, "device", False, True
+        if command[-2:] == ["getprop", "sys.boot_completed"]:
+            if scenario == "deadline_before_spawn":
+                clock.current = deadline
+                return None, "", False, False
+            launched_commands.append(command)
+            return None, "", True, True
+        raise AssertionError(f"unexpected adb command: {command!r}")
+
+    monkeypatch.setattr(observer, "_run_adb", fake_run_adb)
+    try:
+        assert observer._record_adb_poll(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            10.0,
+        )
+    finally:
+        observer.close()
+        adb_socket.close()
+
+    poll_records = [record for record in _read_records(output) if record["event"] == "adb_poll"]
+    assert len(poll_records) == 1
+    poll = poll_records[0]
+    assert poll["connectExitCode"] == 0
+    assert poll["deviceState"] == expected_state
+    assert poll["getpropAttempted"] is expected_attempted
+    assert poll["getpropTimedOut"] is expected_timed_out
+    assert poll["getpropExitCode"] is None
+    assert poll["sysBootCompleted"] is None
+    assert poll["commandTimedOut"] is expected_command_timed_out
+    assert poll["pollDeadlineReached"] is expected_deadline_reached
+    assert len(calls) == expected_call_count
+    assert (
+        any(command[-2:] == ["getprop", "sys.boot_completed"] for command in launched_commands)
+        is expected_attempted
+    )
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires Linux parent-death signals")
@@ -1311,7 +1437,7 @@ def test_boot_observer_does_not_start_adb_command_after_cleanup_boundary(
         time.monotonic() - 1,
     )
 
-    assert result == (None, "", True)
+    assert result == (None, "", False, False)
     assert not marker.exists()
 
 

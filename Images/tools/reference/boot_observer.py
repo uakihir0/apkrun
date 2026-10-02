@@ -874,7 +874,7 @@ class BootObserver:
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
         environment = self._adb_environment()
-        connect_code, _, connect_timed_out = self._run_adb(
+        connect_code, _, connect_timed_out, _ = self._run_adb(
             [str(self.adb_path), "-L", adb_socket, "connect", serial],
             environment,
             adb_deadline,
@@ -886,14 +886,17 @@ class BootObserver:
                     "connectExitCode": connect_code,
                     "deviceState": None,
                     "getpropExitCode": None,
+                    "getpropAttempted": False,
+                    "getpropTimedOut": None,
                     "sysBootCompleted": None,
-                    "commandTimedOut": True,
+                    "commandTimedOut": connect_timed_out,
+                    "pollDeadlineReached": True,
                 }
             )
             return True
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
-        state_code, state_output, state_timed_out = self._run_adb(
+        state_code, state_output, state_timed_out, _ = self._run_adb(
             [str(self.adb_path), "-L", adb_socket, "-s", serial, "get-state"],
             environment,
             adb_deadline,
@@ -905,7 +908,9 @@ class BootObserver:
         )
         property_code: int | None = None
         boot_completed: bool | None = None
-        property_timed_out = False
+        property_attempted = False
+        property_timed_out: bool | None = None
+        property_command_timed_out = False
         if state == "device" and (server.poll() is not None or not self._is_socket(socket_path)):
             return False
         if time.monotonic() >= adb_deadline:
@@ -915,13 +920,21 @@ class BootObserver:
                     "connectExitCode": connect_code,
                     "deviceState": state,
                     "getpropExitCode": None,
+                    "getpropAttempted": False,
+                    "getpropTimedOut": None,
                     "sysBootCompleted": None,
-                    "commandTimedOut": True,
+                    "commandTimedOut": (connect_timed_out or state_timed_out),
+                    "pollDeadlineReached": True,
                 }
             )
             return True
         if state == "device":
-            property_code, property_output, property_timed_out = self._run_adb(
+            (
+                property_code,
+                property_output,
+                property_command_timed_out,
+                property_attempted,
+            ) = self._run_adb(
                 [
                     str(self.adb_path),
                     "-L",
@@ -935,6 +948,8 @@ class BootObserver:
                 environment,
                 adb_deadline,
             )
+            if property_attempted:
+                property_timed_out = property_command_timed_out
             if property_code == 0 and property_output in {"0", "1"}:
                 boot_completed = property_output == "1"
         self._record(
@@ -943,8 +958,13 @@ class BootObserver:
                 "connectExitCode": connect_code,
                 "deviceState": state,
                 "getpropExitCode": property_code,
+                "getpropAttempted": property_attempted,
+                "getpropTimedOut": property_timed_out,
                 "sysBootCompleted": boot_completed,
-                "commandTimedOut": (connect_timed_out or state_timed_out or property_timed_out),
+                "commandTimedOut": (
+                    connect_timed_out or state_timed_out or property_command_timed_out
+                ),
+                "pollDeadlineReached": time.monotonic() >= adb_deadline,
             }
         )
         return True
@@ -954,10 +974,10 @@ class BootObserver:
         command: list[str],
         environment: dict[str, str],
         deadline: float,
-    ) -> tuple[int | None, str, bool]:
+    ) -> tuple[int | None, str, bool, bool]:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return None, "", True
+            return None, "", False, False
         try:
             completed = subprocess.run(
                 command,
@@ -969,8 +989,8 @@ class BootObserver:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return None, "", True
+            return None, "", True, True
         except OSError:
-            return None, "", False
+            return None, "", False, False
         output = completed.stdout.decode("utf-8", errors="replace").strip()
-        return completed.returncode, output, False
+        return completed.returncode, output, False, True

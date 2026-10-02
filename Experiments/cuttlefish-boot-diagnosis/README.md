@@ -45,11 +45,27 @@ matching process was visible at artifact-collection time; it does not show
 whether crosvm ran earlier.
 The pinned Cuttlefish 1.57.0 source routes output from the enabled serial
 console through the console forwarder to both its PTY and `kernel.log`.
-Therefore the next focused run compares the helper's banner/prompt flags with
-`kernel.log`. A banner in `kernel.log` without one in Screen points to the
-PTY/Screen observation path. If neither channel records it, the observation
-remains inconclusive because the guest may be silent or the failure may occur
-before the shared forwarding path. The run does not save console bytes. The forwarder's
+The same-commit 180-second pair `gpu-guest-swiftshader-console-on-20261002T081726Z-477707`
+and `gpu-none-console-on-20261002T082317Z-482634` recorded the helper flags
+alongside `kernel.log`. Both normalized launcher logs map the device console
+to `serial` at `console.out`/`console.in` and the kernel log to
+`virtio-console` at `kernel-log-pipe`.
+
+In the SwiftShader run, Screen and `kernel.log` both recorded the U-Boot banner,
+prompt, and `Starting kernel ...`; the helper sent `boot` and observed kernel
+handoff. The helper counted 19,226 PTY bytes, of which 19,143 remained after
+escape stripping. `kernel.log` held 18,870 bytes and no Linux version marker.
+In the GPU-none run, Screen wrote 83 bytes that all stripped as terminal
+controls; it observed no banner or prompt, and `kernel.log` was empty. Both
+runs reached the 180-second Cuttlefish boot deadline, exited with status 1,
+recorded 13 unknown ADB samples, had no guest logcat, and completed cleanup.
+This pair confirms the two observation paths carry U-Boot output in the
+SwiftShader run, but does not establish why the outputs differed by GPU mode
+or whether Linux began executing. It does not demonstrate an Android boot.
+The runs do not save console bytes. A banner in `kernel.log` without one in
+Screen points to the PTY/Screen observation path. If neither channel records
+it, the observation remains inconclusive because the guest may be silent or
+the failure may occur before the shared forwarding path. The forwarder's
 `pty control message: 3` is PTY packet control (`TIOCPKT_FLUSHREAD` and
 `TIOCPKT_FLUSHWRITE`), which it logs rather than forwarding as guest input.
 

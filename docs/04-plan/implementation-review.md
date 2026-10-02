@@ -3340,9 +3340,9 @@ output, and a banner or prompt with zero escape-stripped bytes. The Screen
 readiness handshake now waits for `execve` to close its close-on-exec pipe,
 clamps the deadline remainder, and reaps the child if the wait raises. This
 status refinement does not change Cuttlefish settings or establish an Android
-boot root cause. Continue with a bounded direct-PTY observation of the pinned
-Cuttlefish console path; do not repeat the 600-second run without new
-evidence.
+boot root cause. The bounded direct-PTY observation is recorded in IR-124.
+The earlier live record's 83 raw bytes remain unavailable, so their content
+cannot be compared with the controlled Screen-only PTY output.
 
 ## IR-121: Signal the Screen child during session setup
 
@@ -3430,9 +3430,9 @@ matching crosvm command line is captured when present.
 | Task | #064 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [pinned Cuttlefish source](https://github.com/google/android-cuttlefish/tree/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host) |
 
-**Choice.** For one bounded `guest_swiftshader` + console-on + bootloader-pause
-run, compare the Screen helper's status flags with the captured `kernel.log`.
-Keep the console transcript discarded.
+**Choice.** For a same-commit pair of bounded `guest_swiftshader` and `none`
+runs with console-on and bootloader-pause, compare the Screen helper's status
+flags with each captured `kernel.log`. Keep the console transcript discarded.
 
 **Reason.** In the pinned Cuttlefish 1.57.0 source at revision
 `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`, `crosvm_manager.cpp` maps
@@ -3451,12 +3451,24 @@ overrides. That instance had `console=false` and `pause_in_bootloader=false`,
 so it does not establish what the new paused run will emit.
 
 **Verification.** The source paths above were read at the pinned revision, and
-the Linux `TIOCPKT` constants were checked in the reference VM headers. The
-bounded live comparison remains pending. If `kernel.log` records the U-Boot
-banner but Screen does not, investigate the PTY/Screen observation path. If
-neither records it, the result remains inconclusive because guest silence and
-a failure before the shared forwarding path remain possible. Either outcome
-is diagnostic only and does not establish a successful Android boot.
+the Linux `TIOCPKT` constants were checked in the reference VM headers. A
+same-commit pair used a 180-second boot deadline. In the
+`gpu-guest-swiftshader-console-on-20261002T081726Z-477707` record, Screen
+observed the U-Boot banner and prompt, sent `boot`, and observed kernel
+handoff. Its 19,143 escape-stripped bytes included `Starting kernel ...`;
+`kernel.log` held 18,870 bytes with the same U-Boot, prompt, and handoff
+markers, but no Linux version. In
+`gpu-none-console-on-20261002T082317Z-482634`, Screen counted 83 terminal
+control bytes that stripped to zero, with no banner or prompt; `kernel.log`
+was empty. Both records use the same observed tool commit and blob map, each
+has 13 unknown ADB samples, no guest logcat, and completed cleanup. These
+observations confirm both channels carried U-Boot output in the SwiftShader
+run. The single pair does not establish GPU mode as the cause of the
+difference, prove that Linux began executing, or identify the boot root cause.
+If a future run has a `kernel.log` banner without a Screen banner, investigate
+the PTY/Screen observation path. If neither records it, the result remains
+inconclusive because guest silence and a failure before the shared forwarding
+path remain possible. This does not establish a successful Android boot.
 
 ## IR-125: Redact ambiguous Cuttlefish endpoint paths
 
@@ -3493,18 +3505,19 @@ captures; existing published records are not rewritten.
 **Choice.** Keep the diagnostic runner's default boot deadline at 600 seconds.
 Add an input that allows a deadline from 120 through 600 seconds, validates it
 before starting Cuttlefish, and records the selected value in `experiment.json`.
-Use 180 seconds for the single focused SwiftShader, console-on, bootloader-pause
-comparison.
+Use 180 seconds for a same-commit pair of SwiftShader and GPU-none runs with
+console-on and bootloader-pause.
 
 **Reason.** Two 600-second bootloader-pause retries produced no U-Boot banner
 or prompt, and their retained raw console data is intentionally unavailable.
-The next run compares the direct Screen status with `kernel.log`; an early
-capture of those evidence fields is useful, and another ten-minute wait is not
-needed to distinguish a banner in one observation path. The 120-second
+The paired run compares direct Screen status with `kernel.log` in both GPU
+modes; capturing those fields early is useful, and another ten-minute wait is
+not needed to distinguish output on the observation paths. The 120-second
 minimum leaves time for Cuttlefish setup and the bounded console helper.
 
 **Verification.** Shell input validation and the experiment-record builder
 share the 120–600-second range. Unit tests check its endpoints, reject
 out-of-range and non-integer values, and verify that a selected 180-second
-deadline is recorded. The chosen live-run deadline and observed result will be
-added to #064 notes after capture.
+deadline is recorded. A 119-second input exits with status 2 before Cuttlefish
+starts. The paired SwiftShader and GPU-none captures both recorded the chosen
+180-second deadline and completed cleanup; see IR-124 and the #064 notes.

@@ -3059,3 +3059,32 @@ kernel handoff, but no Linux kernel output; neither mode reached ADB or
 completed Android boot. The pair does not establish why either guest failed
 before ADB. The prior capture that reached zygote and SurfaceFlinger used
 another tool revision and is not part of this comparison.
+
+## IR-117: Compare Cuttlefish serial-console settings
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{capture-gpu-none.sh,experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Add `APKRUN_DIAGNOSTIC_CONSOLE=true|false`, defaulting to `true`,
+to the isolated diagnosis runner. Pass the selection to both `cvd create` and
+`cvd start`, verify the saved `console` value before publication, and record
+the selection in metadata and generated work and result directory names. For
+the next controlled pair, keep `guest_swiftshader`, vhost-user GPU disabled,
+the pinned host, build, CPU and memory settings, capture deadline, and tool
+revision fixed; run `console=true` and `console=false` consecutively from the
+same checkout.
+
+**Reason.** The same-commit GPU-mode pair under IR-116 reached different
+pre-kernel evidence: the SwiftShader run recorded U-Boot through
+`Starting kernel ...`, while the GPU-none run had an empty `kernel.log`.
+Neither reached ADB. The earlier SwiftShader run that reached Linux and
+Android userspace had `console=false`, but it used another tool revision, so
+that observation is context rather than a controlled comparison. Holding
+SwiftShader and the documented host inputs fixed while changing the console
+selection tests whether that setting changes boot progress. The comparison
+can narrow the cause but cannot alone prove it. It does not change canonical
+profiles or claim Android boot success. Per-run generated Cuttlefish fields
+may still differ and must be inspected when interpreting the pair.

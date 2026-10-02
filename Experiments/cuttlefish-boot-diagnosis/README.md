@@ -1,15 +1,15 @@
 # Cuttlefish boot diagnosis
 
-This isolated experiment checks whether the Android boot stall changes when
-Cuttlefish uses `gpu_mode=none`. It holds the pinned Android build, Cuttlefish
+This isolated experiment checks the Android boot stall with selectable GPU
+and serial-console settings. It holds the pinned Android build, Cuttlefish
 host tools, capture tools, CPU count, memory size, and boot deadline to the
-2026-10-01 `guest_swiftshader` baseline. It passes `gpu_mode=none` and
-`gpu_vhost_user_mode=off` to both `cvd create` and `cvd start`. Cuttlefish
-1.57.0 does not create its configuration during `cvd create --nostart`, so the
-runner checks both commands' exact arguments and validates the saved GPU
-settings before publication. It enables Cuttlefish's serial console with
-`--console=true` on both commands and verifies the saved setting. The runner
-does not attach to the advertised Screen endpoint or save a serial transcript.
+2026-10-01 baseline. By default it passes `gpu_mode=none`,
+`gpu_vhost_user_mode=off`, and `--console=true` to both `cvd create` and
+`cvd start`. Cuttlefish 1.57.0 does not create its configuration during
+`cvd create --nostart`. The Linux integration fixture checks the exact argument
+vectors for both commands; the live runner validates the saved GPU and console
+settings before publication. The runner does not attach to the advertised
+Screen endpoint or save a serial transcript.
 In the 2026-10-02 retry, an initial 60-second Screen attempt and a later
 25-second attachment from a pseudoterminal produced no guest text. The first
 attempt left a detached Screen session, which was explicitly quit and verified
@@ -25,20 +25,30 @@ Run `capture-gpu-none.sh` on the Linux reference VM after setting
 `APKRUN_DIAGNOSTIC_ROOT` to choose another absolute, writable directory.
 Published records go under that root's `results/`, outside the repository.
 
-For a controlled comparison, run both modes from the same checkout, one after
-the other. `APKRUN_DIAGNOSTIC_GPU_MODE` accepts `none` or `guest_swiftshader`
-and defaults to `none`. The runner applies the selected mode to both
-`cvd create` and `cvd start`, keeps vhost-user GPU disabled and the serial
-console enabled, validates the saved configuration, and includes the selected
-mode in the result name:
+For a controlled GPU-mode comparison, run both GPU modes from the same
+checkout with the default console setting:
 
 ```bash
 bash capture-gpu-none.sh
 APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader bash capture-gpu-none.sh
 ```
 
-Compare this pair only. Earlier captures use different diagnostic-tool
-revisions and are context, not a controlled GPU-mode comparison.
+For a controlled console comparison, keep SwiftShader selected and run once
+with the default console setting and once with the console disabled:
+
+```bash
+APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader bash capture-gpu-none.sh
+APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader \
+  APKRUN_DIAGNOSTIC_CONSOLE=false bash capture-gpu-none.sh
+```
+
+`APKRUN_DIAGNOSTIC_GPU_MODE` accepts `none` or `guest_swiftshader` and defaults
+to `none`. `APKRUN_DIAGNOSTIC_CONSOLE` accepts `true` or `false` and defaults
+to `true`. The selected settings apply to both Cuttlefish commands, are
+validated against the saved configuration, and appear in result metadata and
+generated work and result directory names.
+Compare each pair only. Earlier captures use different diagnostic-tool
+revisions and are context, not controlled comparison members.
 
 The runner uses a dedicated ADB server process on a unique private
 `localfilesystem` socket under `/tmp`; its directory has mode `0700`, avoiding

@@ -40,6 +40,16 @@ case "$gpu_mode" in
     ;;
 esac
 
+console_enabled=${APKRUN_DIAGNOSTIC_CONSOLE:-true}
+case "$console_enabled" in
+  true) console_mode_slug=on ;;
+  false) console_mode_slug=off ;;
+  *)
+    printf 'APKRUN_DIAGNOSTIC_CONSOLE must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+
 instance_num=${APKRUN_CVD_INSTANCE_NUM:-1}
 case "$instance_num" in
   ''|*[!0-9]*|0*)
@@ -422,7 +432,8 @@ trap 'handle_signal TERM 143' TERM
 capture_process_starting_role=workspace
 capture_process_starting_released=1
 _capture_process_complete_startup_signal workspace
-work_root=$(trap '' HUP INT TERM; mktemp -d "$work_parent/gpu-$gpu_mode_slug.XXXXXX")
+work_root=$(trap '' HUP INT TERM; mktemp -d \
+  "$work_parent/gpu-$gpu_mode_slug-console-$console_mode_slug.XXXXXX")
 if ! printf 'APKRun Cuttlefish boot diagnosis v1\n%s\n%s\n' \
   "$workspace_token" "$work_root" \
   > "$work_root/.apkrun-cuttlefish-workspace"; then
@@ -442,7 +453,7 @@ done_marker="$work_root/capture.done"
 fleet_report="$work_root/cvd-fleet.json"
 host_identity="$work_root/host-identity.json"
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-result_path="$results_root/gpu-$gpu_mode_slug-$timestamp-$$"
+result_path="$results_root/gpu-$gpu_mode_slug-console-$console_mode_slug-$timestamp-$$"
 tool_destination="$work_root/Images/tools/reference"
 manifest_destination="$work_root/Images/manifests/16373615"
 canonical_capture_copy="$work_root/capture.sh.unpatched"
@@ -530,7 +541,8 @@ SHIM
 chmod 700 "$adb_shim_dir/adb"
 
 run_committed_experiment_support \
-  patch-capture --path "$capture_script" --gpu-mode "$gpu_mode"
+  patch-capture --path "$capture_script" \
+  --gpu-mode "$gpu_mode" --console-enabled "$console_enabled"
 bash -n "$capture_script"
 
 export APKRUN_DIAGNOSTIC_ADB_SHIM_DIR="$adb_shim_dir"
@@ -625,6 +637,7 @@ if ! run_committed_experiment_support verify-host \
   --experiment-root "$experiment_tools" \
   --patched-capture "$capture_script" \
   --gpu-mode "$gpu_mode" \
+  --console-enabled "$console_enabled" \
   --output "$host_identity"; then
   preserve_work
   exit 1
@@ -1318,6 +1331,7 @@ if ! record_or_preserve run_verified_experiment_support record \
   --socket-metrics "$capture_socket_metrics" \
   --fleet-socket-metrics "$fleet_socket_metrics" \
   --gpu-mode "$gpu_mode" \
+  --console-enabled "$console_enabled" \
   --output "$capture_record/experiment.json"; then
   exit 1
 fi

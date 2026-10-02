@@ -21,7 +21,7 @@ requires_linux_renameat2 = pytest.mark.skipif(
 
 def _create_generated_workspace(
     tmp_path: Path,
-    name: str = "gpu-none.test123",
+    name: str = "gpu-none-console-on.test123",
 ) -> tuple[Path, Path, str]:
     data_root = tmp_path / "diagnostics"
     work_parent = data_root / "work"
@@ -444,12 +444,28 @@ def test_final_publication_gate_scrubs_logs_created_during_normalization(
     capture_record = work_root / "Images/reference/16373615/default"
     adb_log_root = work_root / "adb-live"
     tmp_root = work_root / "tmp"
-    result_path = data_root / "results/gpu-none-20261001T000000Z-1234"
+    result_path = data_root / ("results/gpu-none-console-on-20261001T000000Z-1234")
     capture_record.mkdir(parents=True)
     adb_log_root.mkdir()
     tmp_root.mkdir()
     (capture_record / "host.json").write_text(
         '{"buildId":"16373615"}\n', encoding="utf-8"
+    )
+    (capture_record / "cuttlefish_config.json").write_text(
+        (
+            '{"instances":{"1":{"gpu_mode":"none",'
+            '"enable_gpu_vhost_user":false,"cpus":4,"memory_mb":4096,'
+            '"console":true}}}\n'
+        ),
+        encoding="utf-8",
+    )
+    (capture_record / "experiment.json").write_text(
+        (
+            '{"experiment":"cuttlefish-gpu-none-console-on-boot-diagnosis",'
+            '"gpuMode":"none","gpuModeSlug":"none",'
+            '"consoleEnabled":true,"consoleModeSlug":"on"}\n'
+        ),
+        encoding="utf-8",
     )
     normalize_tool = tmp_path / "normalize.py"
     normalize_tool.write_text(
@@ -605,7 +621,7 @@ def test_publish_capture_record_keeps_result_private_when_scrub_fails(
     capture_record = work_root / "Images/reference/16373615/default"
     adb_log_root = work_root / "adb-live"
     tmp_root = work_root / "tmp"
-    result_path = data_root / "results/gpu-none-20261001T000001Z-1235"
+    result_path = data_root / ("results/gpu-none-console-on-20261001T000001Z-1235")
     capture_record.mkdir(parents=True)
     adb_log_root.mkdir()
     tmp_root.mkdir()

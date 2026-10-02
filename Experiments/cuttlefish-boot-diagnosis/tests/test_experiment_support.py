@@ -278,6 +278,48 @@ def _mark_generated_workspace(work_root: Path, ownership_token: str) -> None:
     )
 
 
+def _write_publication_experiment(
+    capture_record: Path,
+    gpu_mode_slug: str = "none",
+    console_enabled: bool = False,
+) -> None:
+    gpu_mode = {slug: mode for mode, slug in experiment_support.GPU_MODE_SLUGS.items()}[
+        gpu_mode_slug
+    ]
+    console_mode_slug = experiment_support.CONSOLE_MODE_SLUGS[console_enabled]
+    (capture_record / "experiment.json").write_text(
+        json.dumps(
+            {
+                "experiment": (
+                    f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-"
+                    "boot-diagnosis"
+                ),
+                "gpuMode": gpu_mode,
+                "gpuModeSlug": gpu_mode_slug,
+                "consoleEnabled": console_enabled,
+                "consoleModeSlug": console_mode_slug,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (capture_record / "cuttlefish_config.json").write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "1": {
+                        "gpu_mode": gpu_mode,
+                        "enable_gpu_vhost_user": False,
+                        "cpus": 4,
+                        "memory_mb": 4096,
+                        "console": console_enabled,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _use_reference_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         experiment_support,
@@ -1986,17 +2028,24 @@ def test_parse_fleet_report_rejects_unexpected_trailing_content() -> None:
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
+@pytest.mark.parametrize("console_enabled", (True, False))
 def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     tmp_path: Path,
     gpu_mode: str,
+    console_enabled: bool,
 ) -> None:
     repo_root = Path(__file__).parents[3]
     source = repo_root / "Images/tools/reference/capture.sh"
     private_copy = tmp_path / "capture.sh"
     private_copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-    experiment_support.patch_capture_script(private_copy, gpu_mode)
+    experiment_support.patch_capture_script(
+        private_copy,
+        gpu_mode,
+        console_enabled,
+    )
     patched = private_copy.read_text(encoding="utf-8")
+    console_argument = str(console_enabled).lower()
 
     subprocess.run(["bash", "-n", str(private_copy)], check=True)
     assert "script_dir=$APKRUN_CAPTURE_SCRIPT_DIR" in patched
@@ -2004,7 +2053,8 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (
         f"create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
-        "--gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096" in patched
+        f"--gpu_vhost_user_mode=off --console={console_argument} "
+        "--cpus 4 --memory_mb 4096" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
     assert '--output "$raw_log"' in patched
@@ -2024,8 +2074,8 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
     assert (
-        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true\n}}"
-        in patched
+        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
+        f"--console={console_argument}\n}}" in patched
     )
     default_gpu_mode_arguments = [
         line.strip()
@@ -2038,14 +2088,18 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
         )
     ]
     assert default_gpu_mode_arguments == [
-        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true",
+        (
+            f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
+            f"--console={console_argument}"
+        ),
         (
             "create_cvd_group_with_common_options "
-            f"--gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true "
+            f"--gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
+            f"--console={console_argument} "
             "--cpus 4 --memory_mb 4096"
         ),
     ]
-    assert patched.count("--console=true") == 2
+    assert patched.count(f"--console={console_argument}") == 2
     assert patched.index("start_cvd_group_with_gpu_mode() {") < patched.index(
         "&& ! start_cvd_group_with_gpu_mode 2>&1"
     )
@@ -2070,11 +2124,33 @@ def test_private_capture_patch_rejects_unsupported_gpu_mode_before_writing(
     assert private_copy.read_bytes() == original
 
 
+@pytest.mark.parametrize("console_enabled", (1, None, "false"))
+def test_private_capture_patch_rejects_non_boolean_console_selection(
+    tmp_path: Path,
+    console_enabled: object,
+) -> None:
+    repo_root = Path(__file__).parents[3]
+    source = repo_root / "Images/tools/reference/capture.sh"
+    private_copy = tmp_path / "capture.sh"
+    original = source.read_bytes()
+    private_copy.write_bytes(original)
+
+    with pytest.raises(ValueError, match="console-enabled selection must be a boolean"):
+        experiment_support.patch_capture_script(
+            private_copy,
+            "guest_swiftshader",
+            console_enabled,
+        )
+
+    assert private_copy.read_bytes() == original
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="GPU-none capture runs on Linux")
 @pytest.mark.parametrize(
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
+@pytest.mark.parametrize("console_enabled", (True, False))
 @pytest.mark.parametrize(
     ("persisted_vhost_user", "start_exit_code", "expected_capture_failure"),
     ((False, 0, 0), (True, 0, 0), (False, 17, 1)),
@@ -2082,6 +2158,7 @@ def test_private_capture_patch_rejects_unsupported_gpu_mode_before_writing(
 def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
     tmp_path: Path,
     gpu_mode: str,
+    console_enabled: bool,
     persisted_vhost_user: bool,
     start_exit_code: int,
     expected_capture_failure: int,
@@ -2090,7 +2167,11 @@ def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
     source = repo_root / "Images/tools/reference/capture.sh"
     private_copy = tmp_path / "capture.sh"
     private_copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    experiment_support.patch_capture_script(private_copy, gpu_mode)
+    experiment_support.patch_capture_script(
+        private_copy,
+        gpu_mode,
+        console_enabled,
+    )
     patched = private_copy.read_text(encoding="utf-8")
 
     def extract_shell_function(function_name: str) -> str:
@@ -2147,8 +2228,27 @@ elif "start" in arguments:
         "--gpu_vhost_user_mode=off" in create_arguments
         and "--gpu_vhost_user_mode=off" in arguments
     )
-    console_enabled = (
-        "--console=true" in create_arguments and "--console=true" in arguments
+    create_console_settings = [
+        value.split("=", 1)[1]
+        for value in create_arguments
+        if value.startswith("--console=")
+    ]
+    start_console_settings = [
+        value.split("=", 1)[1]
+        for value in arguments
+        if value.startswith("--console=")
+    ]
+    console_selected = (
+        len(create_console_settings) == 1
+        and len(start_console_settings) == 1
+        and create_console_settings[0] == start_console_settings[0]
+        and create_console_settings[0]
+        == os.environ["APKRUN_TEST_CONSOLE_ENABLED"]
+    )
+    saved_console_setting = (
+        create_console_settings[0] == "true"
+        if len(create_console_settings) == 1
+        else None
     )
     config.parent.mkdir(parents=True)
     config.write_text(
@@ -2165,7 +2265,7 @@ elif "start" in arguments:
                             os.environ["APKRUN_TEST_VHOST_USER"] == "true"
                             or not vhost_user_disabled
                         ),
-                        "console": console_enabled,
+                        "console": saved_console_setting,
                     }
                 }
             }
@@ -2249,6 +2349,7 @@ else:
         "APKRUN_TEST_VHOST_USER": "true" if persisted_vhost_user else "false",
         "APKRUN_TEST_START_EXIT_CODE": str(start_exit_code),
         "APKRUN_TEST_GPU_MODE": gpu_mode,
+        "APKRUN_TEST_CONSOLE_ENABLED": str(console_enabled).lower(),
     }
     result = subprocess.run(
         ["bash", str(harness)],
@@ -2277,7 +2378,7 @@ else:
             "--nostart",
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
-            "--console=true",
+            f"--console={str(console_enabled).lower()}",
             "--cpus",
             "4",
             "--memory_mb",
@@ -2288,14 +2389,14 @@ else:
             "start",
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
-            "--console=true",
+            f"--console={str(console_enabled).lower()}",
         ],
     ]
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     saved_instance = saved_config["instances"]["1"]
     assert saved_instance["gpu_mode"] == gpu_mode
     assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
-    assert saved_instance["console"] is True
+    assert saved_instance["console"] is console_enabled
 
     if persisted_vhost_user:
         capture_record = tmp_path / "capture-record"
@@ -2329,6 +2430,7 @@ else:
                 socket_metrics_path=unused,
                 fleet_socket_metrics_path=unused,
                 gpu_mode=gpu_mode,
+                console_enabled=console_enabled,
             )
 
 
@@ -2353,10 +2455,12 @@ def test_baseline_must_use_the_expected_gpu_and_vm_shape(tmp_path: Path) -> None
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
+@pytest.mark.parametrize("console_enabled", (True, False))
 def test_host_preflight_checks_tool_blobs_and_cvd_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     gpu_mode: str,
+    console_enabled: bool,
 ) -> None:
     _use_reference_host(monkeypatch)
     repo_root, baseline, experiment_root, patched_capture = _make_baseline_repository(
@@ -2375,12 +2479,18 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
         experiment_root,
         patched_capture,
         gpu_mode=gpu_mode,
+        console_enabled=console_enabled,
     )
 
     assert report["baselineCvd"] == report["observedCvd"]
     assert report["baselineHost"] == report["observedHost"]
     assert report["gpuMode"] == gpu_mode
     assert report["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
+    assert report["consoleEnabled"] is console_enabled
+    assert (
+        report["consoleModeSlug"]
+        == (experiment_support.CONSOLE_MODE_SLUGS[console_enabled])
+    )
     assert report["cpuCount"] == 4
     assert len(report["baselineToolBlobs"]) == len(experiment_support.TOOL_PATHS)
     assert report["baselineToolCommit"] == report["observedToolCommit"]
@@ -2718,9 +2828,11 @@ def test_host_preflight_rejects_different_host_conditions(
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
+@pytest.mark.parametrize("console_enabled", (True, False))
 def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     tmp_path: Path,
     gpu_mode: str,
+    console_enabled: bool,
 ) -> None:
     repo_root, baseline_record, source_experiment_root, source_patched_capture = (
         _make_baseline_repository(tmp_path / "repository")
@@ -2778,7 +2890,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                         "enable_gpu_vhost_user": False,
                         "cpus": 4,
                         "memory_mb": 4096,
-                        "console": True,
+                        "console": console_enabled,
                     }
                 }
             }
@@ -2829,6 +2941,10 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                 },
                 "gpuMode": gpu_mode,
                 "gpuModeSlug": experiment_support.GPU_MODE_SLUGS[gpu_mode],
+                "consoleEnabled": console_enabled,
+                "consoleModeSlug": experiment_support.CONSOLE_MODE_SLUGS[
+                    console_enabled
+                ],
                 "baselineToolCommit": baseline_tool_commit,
                 "baselineToolBlobs": baseline_tool_blobs,
                 "observedToolCommit": observed_tool_commit,
@@ -2909,12 +3025,20 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         socket_metrics,
         fleet_socket_metrics,
         gpu_mode=gpu_mode,
+        console_enabled=console_enabled,
     )
 
     assert record["gpuMode"] == gpu_mode
     assert record["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
+    assert record["consoleEnabled"] is console_enabled
+    assert (
+        record["consoleModeSlug"]
+        == (experiment_support.CONSOLE_MODE_SLUGS[console_enabled])
+    )
     assert record["experiment"] == (
-        f"cuttlefish-gpu-{experiment_support.GPU_MODE_SLUGS[gpu_mode]}-boot-diagnosis"
+        f"cuttlefish-gpu-{experiment_support.GPU_MODE_SLUGS[gpu_mode]}-"
+        f"console-{experiment_support.CONSOLE_MODE_SLUGS[console_enabled]}-"
+        "boot-diagnosis"
     )
     assert (
         record["observedCvd"]["vcsRevision"]
@@ -2937,6 +3061,61 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         patched_capture,
     )
     assert "logcat.txt.gz" not in json.dumps(record)
+
+    verified_console_identity = json.loads(host_identity.read_text(encoding="utf-8"))
+
+    def rebuild_experiment_record() -> dict[str, object]:
+        return experiment_support.build_experiment_record(
+            capture_record,
+            repo_root,
+            baseline_record,
+            tool_copy_root,
+            canonical_capture_copy,
+            manifest_copy_root,
+            experiment_root,
+            patched_capture,
+            host_identity,
+            summary,
+            adb_state,
+            1,
+            "127.0.0.1:6520",
+            capture_status_root,
+            capture_run_status,
+            socket_metrics,
+            fleet_socket_metrics,
+            gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
+        )
+
+    mismatched_console_identity = {
+        **verified_console_identity,
+        "consoleEnabled": not console_enabled,
+    }
+    host_identity.write_text(
+        json.dumps(mismatched_console_identity),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="capture GPU or console mode differs from the verified selection",
+    ):
+        rebuild_experiment_record()
+    for missing_field in ("consoleEnabled", "consoleModeSlug"):
+        incomplete_console_identity = dict(verified_console_identity)
+        incomplete_console_identity.pop(missing_field)
+        host_identity.write_text(
+            json.dumps(incomplete_console_identity),
+            encoding="utf-8",
+        )
+        with pytest.raises(
+            ValueError,
+            match="capture GPU or console mode differs from the verified selection",
+        ):
+            rebuild_experiment_record()
+    host_identity.write_text(
+        json.dumps(verified_console_identity),
+        encoding="utf-8",
+    )
 
     incomplete_provenance = json.loads(host_identity.read_text(encoding="utf-8"))
     incomplete_provenance["observedToolBlobs"].pop(
@@ -2967,6 +3146,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
 
     incomplete_experiment_sources = json.loads(
@@ -3010,6 +3190,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
     copied_tool.write_bytes(original_tool_contents)
 
@@ -3079,6 +3260,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
     captured_config["instances"]["1"]["gpu_mode"] = gpu_mode
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = True
@@ -3107,6 +3289,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3136,6 +3319,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3159,9 +3343,10 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         socket_metrics,
         fleet_socket_metrics,
         gpu_mode,
+        console_enabled,
     )
     instance_config = captured_config["instances"]["1"]
-    for console_value in (False, None, 1):
+    for console_value in (not console_enabled, None, int(console_enabled)):
         if console_value is None:
             instance_config.pop("console")
         else:
@@ -3172,7 +3357,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             match="captured Cuttlefish configuration has unexpected console:",
         ):
             experiment_support.build_experiment_record(*record_arguments)
-    instance_config["console"] = True
+    instance_config["console"] = console_enabled
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
 
     incomplete_cleanup = capture_status_root / "adb-helper-cleanup-incomplete.json"
@@ -3210,6 +3395,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
     incomplete_cleanup.unlink()
 
@@ -3237,6 +3423,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             socket_metrics,
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
+            console_enabled=console_enabled,
         )
 
 
@@ -3627,15 +3814,22 @@ def test_publication_rejects_result_directory_without_nesting_capture(
     gpu_mode_slug: str,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work" / f"gpu-{gpu_mode_slug}.012345"
+    work_root = data_root / "work" / (f"gpu-{gpu_mode_slug}-console-off.012345")
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
     results_root.mkdir(parents=True)
     ownership_token = "0123456789abcdef" * 4
     _mark_generated_workspace(work_root, ownership_token)
-    result_path = results_root / f"gpu-{gpu_mode_slug}-20261001T000000Z-1234"
+    result_path = results_root / (
+        f"gpu-{gpu_mode_slug}-console-off-20261001T000000Z-1234"
+    )
     result_path.mkdir()
+    _write_publication_experiment(
+        capture_record,
+        gpu_mode_slug,
+        console_enabled=False,
+    )
 
     with pytest.raises(FileExistsError):
         experiment_support.publish_normalized_record(
@@ -3651,11 +3845,109 @@ def test_publication_rejects_result_directory_without_nesting_capture(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+@pytest.mark.parametrize(
+    ("workspace_console", "result_console", "record_console", "error"),
+    (
+        ("off", "off", True, "diagnostic path console label differs"),
+        ("off", "on", False, "workspace and result path mode labels differ"),
+    ),
+)
+def test_publication_rejects_mismatched_console_labels(
+    tmp_path: Path,
+    workspace_console: str,
+    result_console: str,
+    record_console: bool,
+    error: str,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work" / (f"gpu-none-console-{workspace_console}.012345")
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=record_console,
+    )
+    result_path = results_root / (
+        f"gpu-none-console-{result_console}-20261001T000000Z-1234"
+    )
+
+    with pytest.raises(ValueError, match=error):
+        experiment_support.publish_normalized_record(
+            capture_record,
+            work_root,
+            data_root,
+            result_path,
+            ownership_token,
+        )
+
+    assert capture_record.is_dir()
+    assert not result_path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+@pytest.mark.parametrize(
+    "json_name",
+    ("experiment.json", "cuttlefish_config.json"),
+)
+@pytest.mark.parametrize("corruption", ("symlink", "oversized"))
+def test_publication_rejects_unsafe_mode_json(
+    tmp_path: Path,
+    json_name: str,
+    corruption: str,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(capture_record, console_enabled=True)
+    json_path = capture_record / json_name
+    if corruption == "symlink":
+        target = capture_record / f"{json_name}.target"
+        json_path.rename(target)
+        json_path.symlink_to(target.name)
+    else:
+        json_path.write_bytes(
+            b" " * (experiment_support.MAX_PUBLICATION_EXPERIMENT_BYTES + 1)
+        )
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
+
+    if corruption == "symlink":
+        with pytest.raises(OSError):
+            experiment_support.publish_normalized_record(
+                capture_record,
+                work_root,
+                data_root,
+                result_path,
+                ownership_token,
+            )
+    else:
+        with pytest.raises(ValueError, match="bounded regular file"):
+            experiment_support.publish_normalized_record(
+                capture_record,
+                work_root,
+                data_root,
+                result_path,
+                ownership_token,
+            )
+
+    assert capture_record.is_dir()
+    assert not result_path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
 def test_publication_rejects_symlinked_results_parent(
     tmp_path: Path,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work/gpu-none.012345"
+    work_root = data_root / "work/gpu-none-console-on.012345"
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
@@ -3666,7 +3958,8 @@ def test_publication_rejects_symlinked_results_parent(
     external_results.mkdir()
     results_root.rmdir()
     results_root.symlink_to(external_results, target_is_directory=True)
-    result_path = results_root / "gpu-none-20261001T000000Z-1234"
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
+    _write_publication_experiment(capture_record, console_enabled=True)
 
     with pytest.raises(OSError):
         experiment_support.publish_normalized_record(
@@ -3687,7 +3980,7 @@ def test_publication_rechecks_source_inode_before_rename(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work/gpu-none.012345"
+    work_root = data_root / "work/gpu-none-console-on.012345"
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
@@ -3698,12 +3991,13 @@ def test_publication_rechecks_source_inode_before_rename(
         '{"buildId":"16373615"}\n',
         encoding="utf-8",
     )
+    _write_publication_experiment(capture_record, console_enabled=True)
     external_record = tmp_path / "external-record"
     external_record.mkdir()
     external_file = external_record / "host.json"
     external_file.write_text("preserve", encoding="utf-8")
     displaced_record = capture_record.parent / "displaced-record"
-    result_path = results_root / "gpu-none-20261001T000000Z-1234"
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
     real_rename = experiment_support._rename_directory_no_replace
 
     def replace_source_then_rename(
@@ -3751,7 +4045,7 @@ def test_publication_refuses_source_replacement_at_quarantine_rename(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work/gpu-none.012345"
+    work_root = data_root / "work/gpu-none-console-on.012345"
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
@@ -3762,12 +4056,13 @@ def test_publication_refuses_source_replacement_at_quarantine_rename(
         '{"buildId":"16373615"}\n',
         encoding="utf-8",
     )
+    _write_publication_experiment(capture_record, console_enabled=True)
     external_record = tmp_path / "external-record"
     external_record.mkdir()
     external_file = external_record / "host.json"
     external_file.write_text("preserve", encoding="utf-8")
     displaced_record = capture_record.parent / "displaced-record"
-    result_path = results_root / "gpu-none-20261001T000000Z-1234"
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
     real_rename = experiment_support._renameat2_noreplace
     replaced = False
 
@@ -3822,14 +4117,15 @@ def test_publication_closes_descriptors_when_results_open_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work/gpu-none.012345"
+    work_root = data_root / "work/gpu-none-console-on.012345"
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
     results_root.mkdir(parents=True)
     ownership_token = "0123456789abcdef" * 4
     _mark_generated_workspace(work_root, ownership_token)
-    result_path = results_root / "gpu-none-20261001T000000Z-1234"
+    _write_publication_experiment(capture_record, console_enabled=True)
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
     real_open = experiment_support._open_child_directory
     results_open_count = 0
 

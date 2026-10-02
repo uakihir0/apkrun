@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the isolated Cuttlefish GPU-mode comparison and record provenance."""
+"""Validate isolated Cuttlefish GPU and console comparisons and record provenance."""
 
 from __future__ import annotations
 
@@ -71,6 +71,12 @@ GPU_MODE_SLUGS = {
     "guest_swiftshader": "guest-swiftshader",
 }
 GPU_MODE_PATH_PATTERN = "none|guest-swiftshader"
+CONSOLE_MODE_SLUGS = {
+    True: "on",
+    False: "off",
+}
+CONSOLE_MODE_PATH_PATTERN = "on|off"
+MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
 
 
 def _encoded_unix_socket_path_bytes(path: str | os.PathLike[str]) -> int:
@@ -1455,6 +1461,55 @@ def _read_json(path: Path) -> dict[str, Any]:
     return document
 
 
+def _read_bounded_json_at(directory_descriptor: int, name: str) -> dict[str, Any]:
+    if name in {"", ".", ".."} or "/" in name:
+        raise ValueError("JSON filename is unsafe")
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW | os.O_NONBLOCK,
+        dir_fd=directory_descriptor,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_size > MAX_PUBLICATION_EXPERIMENT_BYTES
+        ):
+            raise ValueError(f"JSON file {name} is not a bounded regular file")
+        content = bytearray()
+        while len(content) <= MAX_PUBLICATION_EXPERIMENT_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(
+                    65_536,
+                    MAX_PUBLICATION_EXPERIMENT_BYTES + 1 - len(content),
+                ),
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+        after = os.fstat(descriptor)
+        if (
+            len(content) > MAX_PUBLICATION_EXPERIMENT_BYTES
+            or not _same_inode(before, after)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+            or len(content) != after.st_size
+        ):
+            raise ValueError(f"JSON file {name} changed during bounded read")
+    finally:
+        os.close(descriptor)
+    try:
+        document = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read JSON file {name}") from error
+    if not isinstance(document, dict):
+        raise TypeError(f"JSON file {name} must contain an object")
+    return document
+
+
 def _baseline_host_fingerprint(host: dict[str, Any]) -> dict[str, Any]:
     fingerprint = {field: host.get(field) for field in HOST_FACT_FIELDS}
     if (
@@ -2528,7 +2583,8 @@ def _validate_generated_work_root(
         not work_root.is_absolute()
         or work_root.parent != work_parent
         or re.fullmatch(
-            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})\.[A-Za-z0-9]+",
+            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})"
+            rf"(?:-console-(?:{CONSOLE_MODE_PATH_PATTERN}))?\.[A-Za-z0-9]+",
             work_root.name,
         )
         is None
@@ -2934,6 +2990,58 @@ def _rename_directory_no_replace(
         os.close(source_descriptor)
 
 
+def _verify_publication_mode_labels(
+    work_root_name: str,
+    result_name: str,
+    experiment: dict[str, Any],
+) -> None:
+    mode_prefix = (
+        rf"gpu-(?P<gpu>{GPU_MODE_PATH_PATTERN})"
+        rf"(?:-console-(?P<console>{CONSOLE_MODE_PATH_PATTERN}))?"
+    )
+    work_match = re.fullmatch(rf"{mode_prefix}\.[A-Za-z0-9]+", work_root_name)
+    result_match = re.fullmatch(
+        rf"{mode_prefix}-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
+        result_name,
+    )
+    if (
+        work_match is None
+        or result_match is None
+        or work_match.group("console") is None
+        or result_match.group("console") is None
+    ):
+        raise ValueError("diagnostic path does not identify its selected modes")
+    if work_match.group("gpu") != result_match.group("gpu") or work_match.group(
+        "console"
+    ) != result_match.group("console"):
+        raise ValueError("diagnostic workspace and result path mode labels differ")
+
+    try:
+        gpu_mode_slug = _gpu_mode_slug(experiment.get("gpuMode"))
+    except ValueError as error:
+        raise ValueError("published experiment has invalid GPU metadata") from error
+    if (
+        experiment.get("gpuModeSlug") != gpu_mode_slug
+        or work_match.group("gpu") != gpu_mode_slug
+    ):
+        raise ValueError("diagnostic path GPU label differs from the capture")
+
+    console_enabled = experiment.get("consoleEnabled")
+    if type(console_enabled) is not bool:
+        raise ValueError("published experiment is missing console metadata")
+    console_mode_slug = _console_mode_slug(console_enabled)
+    if experiment.get("consoleModeSlug") != console_mode_slug or (
+        work_match.group("console") is not None
+        and work_match.group("console") != console_mode_slug
+    ):
+        raise ValueError("diagnostic path console label differs from the capture")
+    expected_experiment = (
+        f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
+    )
+    if experiment.get("experiment") != expected_experiment:
+        raise ValueError("published experiment name differs from its selected modes")
+
+
 def publish_normalized_record(
     capture_record: Path,
     work_root: Path,
@@ -2946,7 +3054,9 @@ def publish_normalized_record(
     if (
         result_path.parent != results_root
         or re.fullmatch(
-            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
+            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})"
+            rf"(?:-console-(?:{CONSOLE_MODE_PATH_PATTERN}))?"
+            rf"-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
             result_path.name,
         )
         is None
@@ -2994,6 +3104,40 @@ def publish_normalized_record(
                             raise ValueError(
                                 "normalized capture record is not a directory"
                             )
+                        capture_descriptor = _open_child_directory(
+                            capture_parent_descriptor,
+                            record_relative.name,
+                        )
+                        try:
+                            if not _same_inode(
+                                os.fstat(capture_descriptor),
+                                record_stat,
+                            ):
+                                raise OSError(
+                                    errno.EBUSY,
+                                    "capture record changed while reading metadata",
+                                    record_relative.name,
+                                )
+                            experiment = _read_bounded_json_at(
+                                capture_descriptor,
+                                "experiment.json",
+                            )
+                            _verify_publication_mode_labels(
+                                work_root.name,
+                                result_path.name,
+                                experiment,
+                            )
+                            captured_config = _read_bounded_json_at(
+                                capture_descriptor,
+                                "cuttlefish_config.json",
+                            )
+                            _verify_gpu_configuration(
+                                _single_instance(captured_config),
+                                experiment["gpuMode"],
+                                experiment["consoleEnabled"],
+                            )
+                        finally:
+                            os.close(capture_descriptor)
                         _rename_directory_no_replace(
                             capture_parent_descriptor,
                             record_relative.name,
@@ -3037,17 +3181,25 @@ def _gpu_mode_slug(gpu_mode: str) -> str:
         raise ValueError(f"GPU mode must be one of: {choices}") from error
 
 
+def _console_mode_slug(console_enabled: bool) -> str:
+    if type(console_enabled) is not bool:
+        raise ValueError("console-enabled selection must be a boolean")
+    return CONSOLE_MODE_SLUGS[console_enabled]
+
+
 def _verify_gpu_configuration(
     instance: dict[str, Any],
     gpu_mode: str,
+    console_enabled: bool = True,
 ) -> None:
     _gpu_mode_slug(gpu_mode)
+    _console_mode_slug(console_enabled)
     expected = {
         "gpu_mode": gpu_mode,
         "enable_gpu_vhost_user": False,
         "cpus": 4,
         "memory_mb": 4096,
-        "console": True,
+        "console": console_enabled,
     }
     for key, value in expected.items():
         observed_value = instance.get(key)
@@ -3141,8 +3293,14 @@ def _committed_baseline(
     return host, instance, contents["cvd-create-console.log"]
 
 
-def patch_capture_script(path: Path, gpu_mode: str = "none") -> None:
+def patch_capture_script(
+    path: Path,
+    gpu_mode: str = "none",
+    console_enabled: bool = True,
+) -> None:
     _gpu_mode_slug(gpu_mode)
+    _console_mode_slug(console_enabled)
+    console_argument = str(console_enabled).lower()
     if path.is_symlink() or not path.is_file():
         raise ValueError("private capture script must be a regular file")
     source = path.read_text(encoding="utf-8")
@@ -3253,7 +3411,7 @@ def patch_capture_script(path: Path, gpu_mode: str = "none") -> None:
             "launch_profile() {",
             f"""start_cvd_group_with_gpu_mode() {{
   run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
-    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true
+    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument}
 }}
 
 launch_profile() {{""",
@@ -3367,7 +3525,8 @@ launch_profile() {{""",
             (
                 "default)\n"
                 f"      create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
-                "--gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096\n"
+                f"--gpu_vhost_user_mode=off --console={console_argument} "
+                "--cpus 4 --memory_mb 4096\n"
                 "      ;;"
             ),
         ),
@@ -3498,8 +3657,10 @@ def verify_host(
     experiment_root: Path,
     patched_capture: Path,
     gpu_mode: str = "none",
+    console_enabled: bool = True,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
+    console_mode_slug = _console_mode_slug(console_enabled)
     repo_root = repo_root.resolve()
     baseline_record = baseline_record.resolve()
     if baseline_record != repo_root / BASELINE_RELATIVE:
@@ -3561,6 +3722,8 @@ def verify_host(
         "baselineGpuMode": "guest_swiftshader",
         "gpuMode": gpu_mode,
         "gpuModeSlug": gpu_mode_slug,
+        "consoleEnabled": console_enabled,
+        "consoleModeSlug": console_mode_slug,
         "cpuCount": 4,
         "memoryMb": 4096,
         "buildId": baseline["buildId"],
@@ -3586,16 +3749,22 @@ def build_experiment_record(
     socket_metrics_path: Path,
     fleet_socket_metrics_path: Path,
     gpu_mode: str = "none",
+    console_enabled: bool = True,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
+    console_mode_slug = _console_mode_slug(console_enabled)
     host, instance = _gpu_configuration(capture_record)
-    _verify_gpu_configuration(instance, gpu_mode)
+    _verify_gpu_configuration(instance, gpu_mode, console_enabled)
     host_identity = _read_json(host_identity_path)
     if (
         host_identity.get("gpuMode", "none") != gpu_mode
         or host_identity.get("gpuModeSlug", gpu_mode_slug) != gpu_mode_slug
+        or host_identity.get("consoleEnabled") is not console_enabled
+        or host_identity.get("consoleModeSlug") != console_mode_slug
     ):
-        raise ValueError("capture GPU mode differs from the verified selection")
+        raise ValueError(
+            "capture GPU or console mode differs from the verified selection"
+        )
     verify_tool_copy(
         repo_root,
         baseline_record,
@@ -3685,8 +3854,11 @@ def build_experiment_record(
     guest_logcat["captured"] = "guest-logcat" in bounded_capture["files"]
     return {
         "schemaVersion": 1,
-        "experiment": f"cuttlefish-gpu-{gpu_mode_slug}-boot-diagnosis",
+        "experiment": (
+            f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
+        ),
         "gpuModeSlug": gpu_mode_slug,
+        "consoleModeSlug": console_mode_slug,
         "baselineRecord": host_identity["baselineRecord"],
         "buildId": host_identity["buildId"],
         "baselineCvd": baseline_cvd,
@@ -3703,6 +3875,7 @@ def build_experiment_record(
         "bootTimeoutSeconds": 600,
         "runnerDeadlineSeconds": 900,
         "gpuMode": gpu_mode,
+        "consoleEnabled": console_enabled,
         "cpuCount": 4,
         "memoryMb": 4096,
         "adbEndpoint": adb_endpoint,
@@ -3757,6 +3930,11 @@ def main() -> int:
         choices=tuple(GPU_MODE_SLUGS),
         default="none",
     )
+    host_parser.add_argument(
+        "--console-enabled",
+        choices=("true", "false"),
+        default="true",
+    )
     host_parser.add_argument("--output", type=Path, required=True)
 
     tool_copy_parser = subparsers.add_parser("verify-tool-copy")
@@ -3775,6 +3953,11 @@ def main() -> int:
         "--gpu-mode",
         choices=tuple(GPU_MODE_SLUGS),
         default="none",
+    )
+    patch_parser.add_argument(
+        "--console-enabled",
+        choices=("true", "false"),
+        default="true",
     )
 
     socket_parser = subparsers.add_parser("audit-unix-sockets")
@@ -3853,6 +4036,11 @@ def main() -> int:
         choices=tuple(GPU_MODE_SLUGS),
         default="none",
     )
+    record_parser.add_argument(
+        "--console-enabled",
+        choices=("true", "false"),
+        default="true",
+    )
     record_parser.add_argument("--output", type=Path, required=True)
 
     arguments = parser.parse_args()
@@ -3863,7 +4051,11 @@ def main() -> int:
                 print(arguments.data_root.resolve(strict=True))
             return 0
         if arguments.command == "patch-capture":
-            patch_capture_script(arguments.path, arguments.gpu_mode)
+            patch_capture_script(
+                arguments.path,
+                arguments.gpu_mode,
+                arguments.console_enabled == "true",
+            )
             return 0
         if arguments.command == "audit-unix-sockets":
             metrics = audit_unix_socket_paths(arguments.root)
@@ -3940,6 +4132,7 @@ def main() -> int:
                 arguments.experiment_root,
                 arguments.patched_capture,
                 arguments.gpu_mode,
+                arguments.console_enabled == "true",
             )
         elif arguments.command == "verify-tool-copy":
             verify_tool_copy(
@@ -3973,6 +4166,7 @@ def main() -> int:
                 arguments.socket_metrics,
                 arguments.fleet_socket_metrics,
                 arguments.gpu_mode,
+                arguments.console_enabled == "true",
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

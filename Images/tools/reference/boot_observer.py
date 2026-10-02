@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 START_EVENT_MARKER = b"Start event (5) received."
-STARTED_PID = re.compile(rb"Started \(pid: ([0-9]+)\):")
+LAUNCHER_SOURCE = re.compile(rb"^([A-Za-z0-9_.-]+)\(([0-9]+)\)")
 SNAPSHOT_TRUNCATION_MARKER = (
     b"[APKRun snapshot truncated; showing the final part of the host log.]\n"
 )
@@ -140,10 +140,11 @@ class BootObserver:
         self._adb_server_process: subprocess.Popen[bytes] | None = None
         self._launcher_offset = 0
         self._launcher_prefix: bytes | None = None
+        self._launcher_tail = b""
         self._launcher_truncated = False
         self._launcher_fragment = bytearray()
-        self._current_started_pid: int | None = None
-        self._crosvm_pids: set[int] = set()
+        self._crosvm_restarter_pids: set[int] = set()
+        self._crosvm_restarter_start_times: dict[int, bytes] = {}
         self._crosvm_start_times: dict[int, bytes] = {}
         self._start_event_observed = False
         self._next_sample = 0.0
@@ -162,6 +163,13 @@ class BootObserver:
         )
         self._output_fd = os.open(self.output_path, flags, 0o600)
         self._record({"event": "observer_started"})
+        if not self.instance_path.is_dir():
+            self._record(
+                {
+                    "event": "instance_path_discovery_failed",
+                    "reason": "instance_directory_missing",
+                }
+            )
         if self.background_sampling:
             self._sample_thread = threading.Thread(
                 target=self._sample_loop,
@@ -187,8 +195,21 @@ class BootObserver:
             self._next_sample += self.sample_interval
             while self._next_sample <= observed_at:
                 self._next_sample += self.sample_interval
+        candidate_pids: set[int] = set()
+        for restarter_pid in sorted(self._crosvm_restarter_pids):
+            identity = self._read_restarter_children(
+                restarter_pid,
+                self._crosvm_restarter_start_times.get(restarter_pid),
+            )
+            if identity is None:
+                continue
+            children, start_time = identity
+            self._crosvm_restarter_start_times.setdefault(restarter_pid, start_time)
+            candidate_pids.update(children)
+        for stale_pid in self._crosvm_start_times.keys() - candidate_pids:
+            self._crosvm_start_times.pop(stale_pid, None)
         candidates: list[dict[str, Any]] = []
-        for pid in sorted(self._crosvm_pids):
+        for pid in sorted(candidate_pids):
             identity = self._read_crosvm_memory(
                 pid,
                 self._crosvm_start_times.get(pid),
@@ -275,6 +296,12 @@ class BootObserver:
                     raise OSError("could not append boot observer record")
                 pending = pending[written:]
 
+    def _clear_launcher_identity(self) -> None:
+        self._launcher_fragment.clear()
+        self._crosvm_restarter_pids.clear()
+        self._crosvm_restarter_start_times.clear()
+        self._crosvm_start_times.clear()
+
     def _refresh_launcher_log(self) -> None:
         flags = (
             os.O_RDONLY
@@ -292,36 +319,57 @@ class BootObserver:
             metadata = os.fstat(descriptor)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_LOG_BYTES:
                 return
-            prefix = os.pread(descriptor, min(metadata.st_size, 4096), 0)
-            if prefix.startswith(SNAPSHOT_TRUNCATION_MARKER):
+            current_prefix = os.pread(descriptor, min(metadata.st_size, 4096), 0)
+            if current_prefix.startswith(SNAPSHOT_TRUNCATION_MARKER):
                 if not self._launcher_truncated:
                     self._record(
                         {
                             "event": "launcher_log_truncated_observation_gap",
-                            "discardedCandidateCount": len(self._crosvm_pids),
+                            "discardedCandidateCount": len(self._crosvm_restarter_pids),
                         }
                     )
-                    self._launcher_fragment.clear()
-                    self._current_started_pid = None
-                    self._crosvm_pids.clear()
-                    self._crosvm_start_times.clear()
+                self._clear_launcher_identity()
+                self._launcher_offset = 0
+                self._launcher_prefix = None
+                self._launcher_tail = b""
                 self._launcher_truncated = True
                 return
             self._launcher_truncated = False
-            if metadata.st_size < self._launcher_offset or (
-                self._launcher_prefix is not None and prefix != self._launcher_prefix
-            ):
+            prefix_matches = (
+                self._launcher_prefix is None
+                or current_prefix[: len(self._launcher_prefix)] == self._launcher_prefix
+            )
+            tail_matches = True
+            if self._launcher_offset and self._launcher_tail:
+                tail_start = self._launcher_offset - len(self._launcher_tail)
+                current_tail = os.pread(
+                    descriptor,
+                    len(self._launcher_tail),
+                    tail_start,
+                )
+                tail_matches = current_tail == self._launcher_tail
+            replaced = (
+                metadata.st_size < self._launcher_offset or not prefix_matches or not tail_matches
+            )
+            if replaced:
+                self._record(
+                    {
+                        "event": "launcher_log_replaced_observation_gap",
+                        "discardedCandidateCount": len(self._crosvm_restarter_pids),
+                    }
+                )
                 self._launcher_offset = 0
-                self._launcher_fragment.clear()
-                self._current_started_pid = None
-                self._crosvm_pids.clear()
-                self._crosvm_start_times.clear()
-            self._launcher_prefix = prefix
+                self._launcher_prefix = None
+                self._launcher_tail = b""
+                self._clear_launcher_identity()
+            if self._launcher_prefix is None and current_prefix:
+                self._launcher_prefix = current_prefix
             length = metadata.st_size - self._launcher_offset
             if length <= 0:
                 return
             chunk = os.pread(descriptor, length, self._launcher_offset)
             self._launcher_offset += len(chunk)
+            self._launcher_tail = (self._launcher_tail + chunk)[-4096:]
         finally:
             os.close(descriptor)
 
@@ -336,15 +384,54 @@ class BootObserver:
                 break
             line = bytes(self._launcher_fragment[:newline]).rstrip(b"\r")
             del self._launcher_fragment[: newline + 1]
-            started = STARTED_PID.search(line)
-            if started is not None:
-                self._current_started_pid = int(started.group(1))
-            if self._current_started_pid is not None and re.search(
-                rb"--process_name=crosvm(?:\s|$)", line
-            ):
-                self._crosvm_pids.add(self._current_started_pid)
+            source = LAUNCHER_SOURCE.match(line)
+            if source is not None and source.group(1) == b"process_restarter":
+                self._crosvm_restarter_pids.add(int(source.group(2)))
         if len(self._launcher_fragment) > 65_536:
+            self._record(
+                {
+                    "event": "launcher_log_oversized_line_observation_gap",
+                    "discardedCandidateCount": len(self._crosvm_restarter_pids),
+                }
+            )
             self._launcher_fragment.clear()
+            self._clear_launcher_identity()
+
+    def _read_restarter_children(
+        self,
+        pid: int,
+        expected_start_time: bytes | None,
+    ) -> tuple[set[int], bytes] | None:
+        process = self.proc_root / str(pid)
+        before = _proc_start_time(process / "stat")
+        if before is None or (expected_start_time is not None and before != expected_start_time):
+            return None
+        try:
+            executable = os.readlink(process / "exe")
+            command_line = (process / "cmdline").read_bytes().split(b"\0")
+            children = (process / "task" / str(pid) / "children").read_bytes().split()
+        except OSError:
+            return None
+        after = _proc_start_time(process / "stat")
+        serial_values = [
+            command_line[index + 1]
+            for index, argument in enumerate(command_line[:-1])
+            if argument == b"--serial"
+        ]
+        serial_values.extend(
+            argument.partition(b"=")[2]
+            for argument in command_line
+            if argument.startswith(b"--serial=")
+        )
+        if (
+            before != after
+            or Path(executable).name != "process_restarter"
+            or not any(self._argument_matches_instance(argument) for argument in command_line)
+            or not any(b"kernel-log-pipe" in value for value in serial_values)
+            or any(b"crosvm_openwrt" in argument for argument in command_line)
+        ):
+            return None
+        return {int(child) for child in children if child.isdigit()}, before
 
     def _read_crosvm_memory(
         self,
@@ -360,10 +447,8 @@ class BootObserver:
             command_line = (process / "cmdline").read_bytes().split(b"\0")
         except OSError:
             return None
-        if (
-            Path(executable).resolve(strict=False) != self.crosvm_path
-            or b"--process_name=crosvm" not in command_line
-            or not any(self._argument_matches_instance(argument) for argument in command_line)
+        if Path(executable).resolve(strict=False) != self.crosvm_path or not any(
+            self._argument_matches_instance(argument) for argument in command_line
         ):
             return None
         memory = _proc_memory_status(process / "status")

@@ -32,17 +32,16 @@ def _fake_proc_process(
     pid: int,
     executable: Path,
     *,
-    process_name: str = "crosvm",
+    process_name: str | None = None,
     start_time: int = 12345,
     instance_path: Path | None = None,
 ) -> None:
     process = proc_root / str(pid)
     process.mkdir(parents=True)
     (process / "exe").symlink_to(executable)
-    command_line = [
-        b"crosvm",
-        f"--process_name={process_name}".encode("ascii"),
-    ]
+    command_line = [b"crosvm"]
+    if process_name is not None:
+        command_line.append(f"--process_name={process_name}".encode("ascii"))
     if instance_path is not None:
         command_line.append(f"--socket={instance_path}/internal/vsock.sock".encode())
     (process / "cmdline").write_bytes(b"\0".join(command_line) + b"\0")
@@ -50,6 +49,52 @@ def _fake_proc_process(
         f"{pid} (crosvm worker) S ".encode("ascii") + b"0 " * 18 + f"{start_time}\n".encode("ascii")
     )
     (process / "status").write_bytes(b"Name:\tcrosvm\nVmRSS:\t987654 kB\nRssShmem:\t1234 kB\n")
+
+
+def _fake_proc_restarter(
+    proc_root: Path,
+    pid: int,
+    executable: Path,
+    *,
+    children: tuple[int, ...],
+    instance_path: Path,
+    android: bool = True,
+) -> None:
+    process = proc_root / str(pid)
+    process.mkdir(parents=True)
+    (process / "exe").symlink_to(executable)
+    serial = (
+        (
+            "hardware=virtio-console,num=1,type=file,"
+            f"path={instance_path}/internal/kernel-log-pipe,console=true"
+        ).encode()
+        if android
+        else f"hardware=serial,path={instance_path}/logs/crosvm_openwrt.log".encode()
+    )
+    (process / "cmdline").write_bytes(
+        b"process_restarter\0"
+        + f"--block=path={instance_path}/disk.img".encode()
+        + b"\0--serial\0"
+        + serial
+        + b"\0"
+    )
+    (process / "stat").write_bytes(
+        f"{pid} (process_restarter) S ".encode("ascii") + b"0 " * 18 + b"12345\n"
+    )
+    task = process / "task" / str(pid)
+    task.mkdir(parents=True)
+    (task / "children").write_text(
+        " ".join(str(child) for child in children),
+        encoding="ascii",
+    )
+
+
+def _write_crosvm_launcher_identity(launcher_log: Path, restarter_pid: int) -> None:
+    launcher_log.write_bytes(
+        b"run_cvd(500)  D Started (pid: 499): /private/cuttlefish home/log_tee\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        + f"process_restarter({restarter_pid})  D Starting Android crosvm\n".encode("ascii")
+    )
 
 
 def _observer(
@@ -63,6 +108,8 @@ def _observer(
 ) -> tuple[BootObserver, Path, Path]:
     home = home_path or tmp_path / "cvd-home"
     home.mkdir(mode=0o700, exist_ok=True)
+    instance_path = home / "cuttlefish" / "instances" / "cvd-1"
+    instance_path.mkdir(parents=True, exist_ok=True)
     stage = tmp_path / "stage"
     log_directory = stage / ".live-cvd-logs"
     log_directory.mkdir(parents=True, mode=0o700)
@@ -75,7 +122,7 @@ def _observer(
     output = stage / "boot-observer.jsonl"
     observer = BootObserver(
         home=home,
-        instance_path=home / "cuttlefish_runtime" / "instances" / "cvd-1",
+        instance_path=instance_path,
         launcher_log=log_directory / "launcher.log",
         output_path=output,
         adb_path=adb,
@@ -112,6 +159,9 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
     executable = tmp_path / "crosvm"
     executable.write_bytes(b"test executable")
     executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
     observer, output, launcher_log = _observer(
         tmp_path,
         proc_root=proc_root,
@@ -130,11 +180,29 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
         executable,
         instance_path=observer.instance_path,
     )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(412,),
+        instance_path=observer.instance_path,
+        android=False,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        411,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
     launcher_log.write_bytes(
-        b"Started (pid: 412): /private/crosvm\n"
-        b"--process_name=openwrt\n"
-        b"Started (pid: 413): /private/crosvm\n"
-        b"--process_name=crosvm\n"
+        b"run_cvd(500)  D Started (pid: 498): /private/log_tee\n"
+        b"run_cvd(500)  D --process_name=openwrt\n"
+        b"process_restarter(410)  D Starting OpenWrt crosvm\n"
+        b"run_cvd(500)  D Started (pid: 499): /private/cuttlefish home/log_tee\n"
+        b"process_restarter(411)  D Started (pid: 413): /private/crosvm\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        b"process_restarter(411)  D Starting Android crosvm\n"
     )
 
     observer.start()
@@ -160,6 +228,9 @@ def test_boot_observer_rejects_reused_launcher_pid_between_samples(
     executable = tmp_path / "crosvm"
     executable.write_bytes(b"test executable")
     executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
     process = proc_root / "413"
     observer, output, launcher_log = _observer(
         tmp_path,
@@ -172,7 +243,14 @@ def test_boot_observer_rejects_reused_launcher_pid_between_samples(
         executable,
         instance_path=observer.instance_path,
     )
-    launcher_log.write_bytes(b"Started (pid: 413): /private/crosvm\n--process_name=crosvm\n")
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
 
     observer.start()
     observer.sample(now=0)
@@ -188,6 +266,162 @@ def test_boot_observer_rejects_reused_launcher_pid_between_samples(
     assert memory[1]["candidateCount"] == 0
 
 
+def test_boot_observer_rejects_reused_restarter_pid_between_samples(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
+
+    observer.start()
+    observer.sample(now=0)
+    restarter_stat = proc_root / "410" / "stat"
+    restarter_stat.write_bytes(b"410 (process_restarter) S " + b"0 " * 18 + b"54321\n")
+    observer.sample(now=2)
+    observer.close()
+
+    memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+    assert len(memory) == 2
+    assert memory[0]["pid"] == 413
+    assert memory[1]["identity"] == "unavailable"
+    assert memory[1]["candidateCount"] == 0
+
+
+def test_boot_observer_keeps_restarter_pid_generation_across_atomic_log_updates(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
+
+    observer.start()
+    observer.sample(now=0)
+    replacement = launcher_log.with_name("launcher.next")
+    replacement.write_bytes(launcher_log.read_bytes() + b"ordinary log append\n")
+    os.replace(replacement, launcher_log)
+    (proc_root / "410" / "stat").write_bytes(
+        b"410 (process_restarter) S " + b"0 " * 18 + b"54321\n"
+    )
+    observer.sample(now=2)
+    observer.close()
+
+    records = _read_records(output)
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(memory) == 2
+    assert memory[0]["pid"] == 413
+    assert memory[1]["identity"] == "unavailable"
+    assert not any(record["event"] == "launcher_log_replaced_observation_gap" for record in records)
+
+
+def test_boot_observer_selects_android_after_interleaved_openwrt_restarter(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        412,
+        executable,
+        process_name="openwrt",
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(412,),
+        instance_path=observer.instance_path,
+        android=False,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        411,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    launcher_log.write_bytes(
+        b"run_cvd(500)  D Started (pid: 499): /private/cuttlefish home/log_tee\n"
+        b"process_restarter(410)  D Started (pid: 412): /private/crosvm\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        b"process_restarter(410)  D --serial Android kernel-log-pipe\n"
+        b"process_restarter(411)  D --serial OpenWrt crosvm_openwrt\n"
+    )
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+    assert len(memory) == 1
+    assert memory[0]["pid"] == 413
+
+
 def test_boot_observer_rejects_same_name_crosvm_from_another_private_instance(
     tmp_path: Path,
 ) -> None:
@@ -196,19 +430,29 @@ def test_boot_observer_rejects_same_name_crosvm_from_another_private_instance(
     executable = tmp_path / "crosvm"
     executable.write_bytes(b"test executable")
     executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
     observer, output, launcher_log = _observer(
         tmp_path,
         proc_root=proc_root,
         sample_interval=1,
     )
-    other_instance = tmp_path / "other-cvd-home" / "cuttlefish_runtime" / "instances" / "cvd-1"
+    other_instance = tmp_path / "other-cvd-home" / "cuttlefish" / "instances" / "cvd-1"
     _fake_proc_process(
         proc_root,
         414,
         executable,
         instance_path=other_instance,
     )
-    launcher_log.write_bytes(b"Started (pid: 414): /private/crosvm\n--process_name=crosvm\n")
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(414,),
+        instance_path=other_instance,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
 
     observer.start()
     observer.sample(now=0)
@@ -228,6 +472,9 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
     executable = tmp_path / "crosvm"
     executable.write_bytes(b"test executable")
     executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
     observer, output, launcher_log = _observer(
         tmp_path,
         proc_root=proc_root,
@@ -239,8 +486,18 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
         executable,
         instance_path=observer.instance_path,
     )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(415,),
+        instance_path=observer.instance_path,
+    )
     launcher_log.write_bytes(
-        b"Started (pid: 415): /private/crosvm\n--process_name=crosvm\nStart event (5) received.\n"
+        b"run_cvd(500)  D Started (pid: 499): /private/log_tee\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        b"process_restarter(410)  D Starting Android crosvm\n"
+        b"Start event (5) received.\n"
     )
 
     observer.start()
@@ -260,6 +517,79 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
     assert gaps[0]["discardedCandidateCount"] == 1
     assert memory[0]["pid"] == 415
     assert memory[1]["identity"] == "unavailable"
+
+
+def test_boot_observer_detects_same_prefix_log_truncation_and_regrowth(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        415,
+        executable,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(415,),
+        instance_path=observer.instance_path,
+    )
+    shared_prefix = b"p" * 4095 + b"\n"
+    identity = (
+        b"run_cvd(500)  D Started (pid: 499): /private/log_tee\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        b"process_restarter(410)  D Starting Android crosvm\n"
+    )
+    launcher_log.write_bytes((shared_prefix + identity).ljust(8192, b"a"))
+
+    observer.start()
+    observer.sample(now=0)
+    launcher_log.write_bytes((shared_prefix + b"replacement log\n").ljust(8192, b"b"))
+    observer.sample(now=2)
+    observer.close()
+
+    records = _read_records(output)
+    gaps = [
+        record for record in records if record["event"] == "launcher_log_replaced_observation_gap"
+    ]
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(gaps) == 1
+    assert gaps[0]["discardedCandidateCount"] == 1
+    assert memory[0]["pid"] == 415
+    assert memory[1]["identity"] == "unavailable"
+
+
+def test_boot_observer_records_missing_instance_path_discovery(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(tmp_path, proc_root=proc_root)
+    observer.instance_path.rmdir()
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    assert any(
+        record["event"] == "instance_path_discovery_failed"
+        and record["reason"] == "instance_directory_missing"
+        for record in _read_records(output)
+    )
 
 
 @pytest.mark.parametrize("ignore_server_terminate", (False, True))

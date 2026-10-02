@@ -647,7 +647,7 @@ the environment variables in §8.3. The fallback records its source-derived
 | Host side | Guest side (via `adb`) |
 |---|---|
 | crosvm command line (from `launcher.log` / `ps -ww`) | `/proc/cmdline`, `/proc/bootconfig` |
-| `cuttlefish_runtime/instances/cvd-<n>/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
+| `cuttlefish_runtime/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
 | composite disk specs (`os_composite`, persistent composite) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
 | `assemble_cvd.log`, `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
@@ -672,11 +672,12 @@ its runtime files and instance group from other Cuttlefish sessions. Guest
 commands are sent only to the `localhost` or `127.0.0.1` ADB serial for that
 instance's port; network ADB devices are not selected. Shutdown runs in the
 same private `HOME`, which contains only the one instance group created by
-this run. Host artifacts are read only from its newly written
-`cuttlefish_runtime/instances/cvd-<n>/` directory. The private `HOME` is
-removed after a successful shutdown. If launch fails, cleanup still targets
-that private group; the directory is preserved with its path printed only if
-shutdown or removal fails. A host-wide lock under `/tmp` serializes
+this run. Host artifacts are read only from the instance directory resolved
+from its `cuttlefish_runtime` link (the link points directly to
+`instances/cvd-<n>/`). The private `HOME` is removed after a successful
+shutdown. If launch fails, cleanup still targets that private group; the
+directory is preserved with its path printed only if shutdown or removal
+fails. A host-wide lock under `/tmp` serializes
 captures across checkouts on the host, so only one profile capture can run at
 a time. Shutdown is bounded by
 `APKRUN_CVD_STOP_TIMEOUT_SECONDS` (120 seconds by default, followed by a
@@ -703,11 +704,23 @@ next poll as soon as listing returns, and a malformed log listing does not
 prevent it from terminating the CVD process group.
 For a long `cvd start`, setting `APKRUN_CAPTURE_BOOT_OBSERVER=1` also writes
 `boot-observer.jsonl` while the command is running. An independent sampler
-checks the launcher-identified Android crosvm process every five seconds; its
-executable, process name, command-line reference to this run's private
-instance path, and first-observed procfs start time must all match before it
-records `VmRSS` and `RssShmem`. If the bounded launcher snapshot is truncated,
-the observer clears prior process identities and records an observation gap.
+checks the Android crosvm every five seconds. Launcher lines identify their
+emitting process by name and PID. The observer collects `process_restarter`
+PIDs directly from those prefixes, then accepts only a process whose
+executable and command line identify the private instance, include Android's
+`kernel-log-pipe` serial, and exclude the OpenWrt serial. This avoids pairing
+interleaved `Started` lines with arguments. The sampler reads the selected
+restarter's direct child and requires the expected crosvm executable, private
+instance path, and stable procfs start times for both processes before
+recording `VmRSS` and `RssShmem`. Ambiguous or mismatched process identities
+are not sampled. The instance path comes from resolving Cuttlefish's
+`cuttlefish_runtime` link;
+missing or invalid paths are recorded as `instance_path_discovery_failed`.
+`capture_cvd_start.py` atomically replaces the launcher-log snapshot, so inode
+identity is not used to detect a new generation. The observer checks the
+initial prefix and bytes around the last consumed offset; if the bounded
+snapshot is truncated or those bytes change, it clears prior process
+identities and records an observation gap.
 After launcher log event 5, it probes the selected localhost ADB serial on a
 monotonic 15-second schedule through a private ADB server socket and records
 only bounded state fields, including `sys.boot_completed`; raw ADB output is

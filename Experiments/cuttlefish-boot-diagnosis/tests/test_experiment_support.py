@@ -284,17 +284,22 @@ def _write_publication_experiment(
     console_enabled: bool = False,
     pause_in_bootloader: bool = False,
     bootloader_console: dict[str, object] | None = None,
+    memory_mb: int | None = None,
 ) -> None:
     gpu_mode = {slug: mode for mode, slug in experiment_support.GPU_MODE_SLUGS.items()}[
         gpu_mode_slug
     ]
     console_mode_slug = experiment_support.CONSOLE_MODE_SLUGS[console_enabled]
+    memory_slug = (
+        experiment_support._memory_mb_slug(memory_mb) if memory_mb is not None else None
+    )
+    memory_suffix = f"-memory-{memory_slug}" if memory_slug is not None else ""
     (capture_record / "experiment.json").write_text(
         json.dumps(
             {
                 "experiment": (
-                    f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-"
-                    "boot-diagnosis"
+                    f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}"
+                    f"{memory_suffix}-boot-diagnosis"
                 ),
                 "gpuMode": gpu_mode,
                 "gpuModeSlug": gpu_mode_slug,
@@ -303,6 +308,15 @@ def _write_publication_experiment(
                 "pauseInBootloader": pause_in_bootloader,
                 "bootTimeoutSeconds": 600,
                 "runnerDeadlineSeconds": 900,
+                **(
+                    {
+                        "baselineMemoryMb": experiment_support.BASELINE_MEMORY_MB,
+                        "memoryMb": memory_mb,
+                        "memorySlug": memory_slug,
+                    }
+                    if memory_mb is not None
+                    else {"memoryMb": experiment_support.BASELINE_MEMORY_MB}
+                ),
                 **(
                     {"bootloaderConsole": bootloader_console}
                     if bootloader_console is not None
@@ -320,7 +334,11 @@ def _write_publication_experiment(
                         "gpu_mode": gpu_mode,
                         "enable_gpu_vhost_user": False,
                         "cpus": 4,
-                        "memory_mb": 4096,
+                        "memory_mb": (
+                            memory_mb
+                            if memory_mb is not None
+                            else experiment_support.BASELINE_MEMORY_MB
+                        ),
                         "console": console_enabled,
                         "pause_in_bootloader": pause_in_bootloader,
                     }
@@ -1034,6 +1052,150 @@ def test_bootloader_pause_requires_console_enabled() -> None:
             "gpu-none-console-off-20261002T120000Z-123",
             experiment,
         )
+
+
+@pytest.mark.parametrize("memory_mb", (2048, 4096))
+def test_cuttlefish_configuration_validates_selected_memory(
+    memory_mb: int,
+) -> None:
+    instance = {
+        "gpu_mode": "guest_swiftshader",
+        "enable_gpu_vhost_user": False,
+        "cpus": 4,
+        "memory_mb": memory_mb,
+        "console": False,
+        "pause_in_bootloader": False,
+    }
+
+    experiment_support._verify_gpu_configuration(
+        instance,
+        "guest_swiftshader",
+        console_enabled=False,
+        memory_mb=memory_mb,
+    )
+
+    instance["memory_mb"] = 4096 if memory_mb == 2048 else 2048
+    with pytest.raises(ValueError, match="unexpected memory_mb"):
+        experiment_support._verify_gpu_configuration(
+            instance,
+            "guest_swiftshader",
+            console_enabled=False,
+            memory_mb=memory_mb,
+        )
+
+
+@pytest.mark.parametrize("memory_mb", (True, 1024, 2049, "2048", None))
+def test_memory_selection_rejects_unsupported_values(memory_mb: object) -> None:
+    with pytest.raises(ValueError, match="memory size must be one of"):
+        experiment_support._memory_mb_slug(memory_mb)
+
+
+def test_publication_mode_labels_validate_selected_memory() -> None:
+    experiment = {
+        "experiment": "cuttlefish-gpu-none-console-off-memory-2g-boot-diagnosis",
+        "gpuMode": "none",
+        "gpuModeSlug": "none",
+        "consoleEnabled": False,
+        "consoleModeSlug": "off",
+        "pauseInBootloader": False,
+        "bootTimeoutSeconds": 600,
+        "runnerDeadlineSeconds": 900,
+        "baselineMemoryMb": 4096,
+        "memoryMb": 2048,
+        "memorySlug": "2g",
+    }
+    experiment_support._verify_publication_mode_labels(
+        "gpu-none-console-off-memory-2g.012345",
+        "gpu-none-console-off-memory-2g-20261002T120000Z-123",
+        experiment,
+    )
+
+    with pytest.raises(ValueError, match="workspace and result memory labels differ"):
+        experiment_support._verify_publication_mode_labels(
+            "gpu-none-console-off-memory-2g.012345",
+            "gpu-none-console-off-memory-4g-20261002T120000Z-123",
+            experiment,
+        )
+
+    experiment["memorySlug"] = "4g"
+    with pytest.raises(ValueError, match="diagnostic path memory label differs"):
+        experiment_support._verify_publication_mode_labels(
+            "gpu-none-console-off-memory-2g.012345",
+            "gpu-none-console-off-memory-2g-20261002T120000Z-123",
+            experiment,
+        )
+
+
+def test_publication_mode_labels_accepts_previous_4g_metadata_shape() -> None:
+    experiment_support._verify_publication_mode_labels(
+        "gpu-none-console-off.012345",
+        "gpu-none-console-off-20261002T120000Z-123",
+        {
+            "experiment": "cuttlefish-gpu-none-console-off-boot-diagnosis",
+            "gpuMode": "none",
+            "gpuModeSlug": "none",
+            "consoleEnabled": False,
+            "consoleModeSlug": "off",
+            "pauseInBootloader": False,
+            "bootTimeoutSeconds": 600,
+            "runnerDeadlineSeconds": 900,
+            "memoryMb": 4096,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("result_name", "expected_memory"),
+    (
+        ("gpu-none-console-off-memory-2g-20261002T120000Z-123", "2g"),
+        ("gpu-none-console-off-memory-4g-20261002T120000Z-123", "4g"),
+        ("gpu-none-console-off-20261002T120000Z-123", None),
+    ),
+)
+def test_result_path_name_pattern_accepts_memory_and_legacy_labels(
+    result_name: str,
+    expected_memory: str | None,
+) -> None:
+    match = experiment_support.RESULT_PATH_NAME_PATTERN.fullmatch(result_name)
+
+    assert match is not None
+    assert match.group("memory") == expected_memory
+
+
+def test_result_path_name_pattern_rejects_unselected_memory_size() -> None:
+    assert (
+        experiment_support.RESULT_PATH_NAME_PATTERN.fullmatch(
+            "gpu-none-console-off-memory-8g-20261002T120000Z-123"
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("work_name", "expected_memory"),
+    (
+        ("gpu-none-console-off-memory-2g.012345", "2g"),
+        ("gpu-none-console-off-memory-4g.012345", "4g"),
+        ("gpu-none-console-off.012345", None),
+    ),
+)
+def test_work_root_name_pattern_accepts_memory_and_legacy_labels(
+    work_name: str,
+    expected_memory: str | None,
+) -> None:
+    match = experiment_support.WORK_ROOT_NAME_PATTERN.fullmatch(work_name)
+
+    assert match is not None
+    assert match.group("memory") == expected_memory
+
+
+def test_work_root_name_pattern_rejects_unselected_memory_size() -> None:
+    assert (
+        experiment_support.WORK_ROOT_NAME_PATTERN.fullmatch(
+            "gpu-none-console-off-memory-8g.012345"
+        )
+        is None
+    )
 
 
 def test_prepare_private_data_root_locks_custom_directories_and_rejects_shared_parent(
@@ -2667,11 +2829,13 @@ def test_parse_fleet_report_rejects_unexpected_trailing_content() -> None:
     ("console_enabled", "pause_in_bootloader"),
     ((True, False), (False, False), (True, True)),
 )
+@pytest.mark.parametrize("memory_mb", (2048, 4096))
 def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_capture(
     tmp_path: Path,
     gpu_mode: str,
     console_enabled: bool,
     pause_in_bootloader: bool,
+    memory_mb: int,
 ) -> None:
     repo_root = Path(__file__).parents[3]
     source = repo_root / "Images/tools/reference/capture.sh"
@@ -2683,6 +2847,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
         gpu_mode,
         console_enabled,
         pause_in_bootloader,
+        memory_mb,
     )
     patched = private_copy.read_text(encoding="utf-8")
     console_argument = str(console_enabled).lower()
@@ -2698,7 +2863,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
         f"create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
         f"--gpu_vhost_user_mode=off --console={console_argument}"
         f"{pause_argument} "
-        "--cpus 4 --memory_mb 4096" in patched
+        f"--cpus 4 --memory_mb {memory_mb}" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
     assert '--output "$raw_log"' in patched
@@ -2737,7 +2902,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
             "create_cvd_group_with_common_options "
             f"--gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
             f"--console={console_argument}{pause_argument} "
-            "--cpus 4 --memory_mb 4096"
+            f"--cpus 4 --memory_mb {memory_mb}"
         ),
     ]
     assert patched.count(f"--console={console_argument}") == 2
@@ -2754,8 +2919,8 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
             "&& ! start_cvd_group_with_gpu_mode 2>&1"
         )
     assert (
-        "default)\n      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096"
-        not in patched
+        "default)\n      create_cvd_group_with_common_options "
+        f"--cpus 4 --memory_mb {memory_mb}" not in patched
     )
 
 
@@ -3104,12 +3269,12 @@ result.write_text(
                 f"runtime_root={shlex.quote(str(runtime_root))}",
                 f"private_product_out={shlex.quote(str(tmp_path / 'product'))}",
                 f"CVD_HOST_DIR={shlex.quote(str(tmp_path / 'host'))}",
-                    "cvd_group_name=apkrun_test",
-                    "cvd_instance_num=1",
-                    f"stage={shlex.quote(str(stage))}",
-                    f"cvd_home={shlex.quote(str(cvd_home))}",
-                    "timeout_seconds=30",
-                    "boot_timeout_deadline=$(($(date +%s) + 30))",
+                "cvd_group_name=apkrun_test",
+                "cvd_instance_num=1",
+                f"stage={shlex.quote(str(stage))}",
+                f"cvd_home={shlex.quote(str(cvd_home))}",
+                "timeout_seconds=30",
+                "boot_timeout_deadline=$(($(date +%s) + 30))",
                 "boot_deadline_expired=0",
                 f"APKRUN_EXPERIMENT_STATUS_ROOT={shlex.quote(str(status_root))}",
                 f"APKRUN_EXPERIMENT_TOOLS={shlex.quote(str(tool_directory))}",
@@ -3171,9 +3336,7 @@ result.write_text(
         json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()
     ]
     start_timeout_arguments = [
-        value
-        for value in calls[-1]
-        if value.startswith("--boot_timeout_secs=")
+        value for value in calls[-1] if value.startswith("--boot_timeout_secs=")
     ]
     assert len(start_timeout_arguments) == 1
     start_timeout_seconds = int(start_timeout_arguments[0].split("=", 1)[1])
@@ -3278,12 +3441,14 @@ def test_baseline_must_use_the_expected_gpu_and_vm_shape(tmp_path: Path) -> None
     ("console_enabled", "pause_in_bootloader"),
     ((True, False), (False, False), (True, True)),
 )
+@pytest.mark.parametrize("memory_mb", (2048, 4096))
 def test_host_preflight_checks_tool_blobs_and_cvd_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     gpu_mode: str,
     console_enabled: bool,
     pause_in_bootloader: bool,
+    memory_mb: int,
 ) -> None:
     _use_reference_host(monkeypatch)
     repo_root, baseline, experiment_root, patched_capture = _make_baseline_repository(
@@ -3304,6 +3469,7 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
         gpu_mode=gpu_mode,
         console_enabled=console_enabled,
         pause_in_bootloader=pause_in_bootloader,
+        memory_mb=memory_mb,
     )
 
     assert report["baselineCvd"] == report["observedCvd"]
@@ -3317,6 +3483,9 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
     )
     assert report["pauseInBootloader"] is pause_in_bootloader
     assert report["cpuCount"] == 4
+    assert report["baselineMemoryMb"] == 4096
+    assert report["memoryMb"] == memory_mb
+    assert report["memorySlug"] == ("2g" if memory_mb == 2048 else "4g")
     assert len(report["baselineToolBlobs"]) == len(experiment_support.TOOL_PATHS)
     assert report["baselineToolCommit"] == report["observedToolCommit"]
     assert report["baselineToolBlobs"] == report["observedToolBlobs"]
@@ -3657,11 +3826,13 @@ def test_host_preflight_rejects_different_host_conditions(
     ("console_enabled", "pause_in_bootloader"),
     ((True, False), (False, False), (True, True)),
 )
+@pytest.mark.parametrize("memory_mb", (2048, 4096))
 def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     tmp_path: Path,
     gpu_mode: str,
     console_enabled: bool,
     pause_in_bootloader: bool,
+    memory_mb: int,
 ) -> None:
     repo_root, baseline_record, source_experiment_root, source_patched_capture = (
         _make_baseline_repository(tmp_path / "repository")
@@ -3718,7 +3889,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                         "gpu_mode": gpu_mode,
                         "enable_gpu_vhost_user": False,
                         "cpus": 4,
-                        "memory_mb": 4096,
+                        "memory_mb": memory_mb,
                         "console": console_enabled,
                         "pause_in_bootloader": pause_in_bootloader,
                     }
@@ -3807,6 +3978,9 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                     console_enabled
                 ],
                 "pauseInBootloader": pause_in_bootloader,
+                "baselineMemoryMb": 4096,
+                "memoryMb": memory_mb,
+                "memorySlug": "2g" if memory_mb == 2048 else "4g",
                 "baselineToolCommit": baseline_tool_commit,
                 "baselineToolBlobs": baseline_tool_blobs,
                 "observedToolCommit": observed_tool_commit,
@@ -3891,12 +4065,16 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         pause_in_bootloader=pause_in_bootloader,
         bootloader_console_summary_path=bootloader_console_summary_path,
         boot_timeout_seconds=180,
+        memory_mb=memory_mb,
     )
 
     assert record["gpuMode"] == gpu_mode
     assert record["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
     assert record["consoleEnabled"] is console_enabled
     assert record["pauseInBootloader"] is pause_in_bootloader
+    assert record["baselineMemoryMb"] == 4096
+    assert record["memoryMb"] == memory_mb
+    assert record["memorySlug"] == ("2g" if memory_mb == 2048 else "4g")
     assert record["bootTimeoutSeconds"] == 180
     assert record["bootloaderConsole"] == (
         json.loads(bootloader_console_summary_path.read_text(encoding="utf-8"))
@@ -3910,6 +4088,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     assert record["experiment"] == (
         f"cuttlefish-gpu-{experiment_support.GPU_MODE_SLUGS[gpu_mode]}-"
         f"console-{experiment_support.CONSOLE_MODE_SLUGS[console_enabled]}-"
+        f"memory-{record['memorySlug']}-"
         "boot-diagnosis"
     )
     assert (
@@ -3959,6 +4138,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
             bootloader_console_summary_path=bootloader_console_summary_path,
+            memory_mb=memory_mb,
         )
 
     mismatched_console_identity = {
@@ -3971,7 +4151,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     )
     with pytest.raises(
         ValueError,
-        match="capture GPU, console, or bootloader mode differs from the verified selection",
+        match="capture GPU, console, bootloader, or memory mode differs from the verified selection",
     ):
         rebuild_experiment_record()
     mismatched_pause_identity = {
@@ -3984,13 +4164,30 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     )
     with pytest.raises(
         ValueError,
-        match="capture GPU, console, or bootloader mode differs from the verified selection",
+        match="capture GPU, console, bootloader, or memory mode differs from the verified selection",
+    ):
+        rebuild_experiment_record()
+    mismatched_memory_identity = {
+        **verified_console_identity,
+        "memoryMb": 4096 if memory_mb == 2048 else 2048,
+        "memorySlug": "4g" if memory_mb == 2048 else "2g",
+    }
+    host_identity.write_text(
+        json.dumps(mismatched_memory_identity),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="capture GPU, console, bootloader, or memory mode differs from the verified selection",
     ):
         rebuild_experiment_record()
     for missing_field in (
         "consoleEnabled",
         "consoleModeSlug",
         "pauseInBootloader",
+        "baselineMemoryMb",
+        "memoryMb",
+        "memorySlug",
     ):
         incomplete_console_identity = dict(verified_console_identity)
         incomplete_console_identity.pop(missing_field)
@@ -4000,7 +4197,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         )
         with pytest.raises(
             ValueError,
-            match="capture GPU, console, or bootloader mode differs from the verified selection",
+            match="capture GPU, console, bootloader, or memory mode differs from the verified selection",
         ):
             rebuild_experiment_record()
     host_identity.write_text(
@@ -4039,6 +4236,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
 
     incomplete_experiment_sources = json.loads(
@@ -4084,6 +4282,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
     copied_tool.write_bytes(original_tool_contents)
 
@@ -4155,6 +4354,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
     captured_config["instances"]["1"]["gpu_mode"] = gpu_mode
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = True
@@ -4185,6 +4385,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -4216,6 +4417,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -4242,6 +4444,8 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         console_enabled,
         pause_in_bootloader,
         bootloader_console_summary_path,
+        180,
+        memory_mb,
     )
     instance_config = captured_config["instances"]["1"]
     for console_value in (not console_enabled, None, int(console_enabled)):
@@ -4314,6 +4518,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
     incomplete_cleanup.unlink()
 
@@ -4343,6 +4548,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
             pause_in_bootloader=pause_in_bootloader,
+            memory_mb=memory_mb,
         )
 
 
@@ -4761,6 +4967,74 @@ def test_publication_rejects_result_directory_without_nesting_capture(
 
     assert capture_record.is_dir()
     assert not list(result_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_accepts_and_records_a_2g_memory_capture(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-off-memory-2g.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(capture_record, memory_mb=2048)
+    result_path = results_root / (
+        "gpu-none-console-off-memory-2g-20261002T120000Z-1234"
+    )
+
+    experiment_support.publish_normalized_record(
+        capture_record,
+        work_root,
+        data_root,
+        result_path,
+        ownership_token,
+    )
+
+    experiment = json.loads((result_path / "experiment.json").read_text())
+    configuration = json.loads((result_path / "cuttlefish_config.json").read_text())
+    assert experiment["baselineMemoryMb"] == 4096
+    assert experiment["memoryMb"] == 2048
+    assert experiment["memorySlug"] == "2g"
+    assert configuration["instances"]["1"]["memory_mb"] == 2048
+    assert not capture_record.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_rejects_2g_record_with_a_4g_saved_configuration(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-off-memory-2g.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(capture_record, memory_mb=2048)
+    config_path = capture_record / "cuttlefish_config.json"
+    configuration = json.loads(config_path.read_text(encoding="utf-8"))
+    configuration["instances"]["1"]["memory_mb"] = 4096
+    config_path.write_text(json.dumps(configuration), encoding="utf-8")
+    result_path = results_root / (
+        "gpu-none-console-off-memory-2g-20261002T120000Z-1234"
+    )
+
+    with pytest.raises(ValueError, match="unexpected memory_mb: 4096"):
+        experiment_support.publish_normalized_record(
+            capture_record,
+            work_root,
+            data_root,
+            result_path,
+            ownership_token,
+        )
+
+    assert capture_record.is_dir()
+    assert not result_path.exists()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")

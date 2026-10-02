@@ -73,11 +73,29 @@ GPU_MODE_SLUGS = {
     "guest_swiftshader": "guest-swiftshader",
 }
 GPU_MODE_PATH_PATTERN = "none|guest-swiftshader"
+MEMORY_MB_SLUGS = {
+    2048: "2g",
+    4096: "4g",
+}
+MEMORY_MB_PATH_PATTERN = "2g|4g"
+BASELINE_MEMORY_MB = 4096
 CONSOLE_MODE_SLUGS = {
     True: "on",
     False: "off",
 }
 CONSOLE_MODE_PATH_PATTERN = "on|off"
+WORK_ROOT_NAME_PATTERN = re.compile(
+    rf"gpu-(?P<gpu>{GPU_MODE_PATH_PATTERN})"
+    rf"(?:-console-(?P<console>{CONSOLE_MODE_PATH_PATTERN}))?"
+    rf"(?:-memory-(?P<memory>{MEMORY_MB_PATH_PATTERN}))?"
+    r"\.[A-Za-z0-9]+"
+)
+RESULT_PATH_NAME_PATTERN = re.compile(
+    rf"gpu-(?P<gpu>{GPU_MODE_PATH_PATTERN})"
+    rf"(?:-console-(?P<console>{CONSOLE_MODE_PATH_PATTERN}))?"
+    rf"(?:-memory-(?P<memory>{MEMORY_MB_PATH_PATTERN}))?"
+    r"-[0-9]{8}T[0-9]{6}Z-[0-9]+"
+)
 MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
 MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES = 65_536
 CONSOLE_PROBE_LOG_OMISSION_NOTE = (
@@ -2340,12 +2358,8 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 or (
                     summary["memoryProbeVariablesCleared"]
                     and (
-                        not summary[
-                            "memoryProbePreparationResponsePromptObserved"
-                        ]
-                        or not summary[
-                            "memoryProbePreparationCommandEchoObserved"
-                        ]
+                        not summary["memoryProbePreparationResponsePromptObserved"]
+                        or not summary["memoryProbePreparationCommandEchoObserved"]
                         or summary["memoryProbePreparationRejected"]
                     )
                 )
@@ -2353,18 +2367,16 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                     summary["memoryProbePreparationRejected"]
                     and (
                         not summary["memoryProbePreparationCommandSent"]
-                        or not summary[
-                            "memoryProbePreparationCommandEchoObserved"
-                        ]
-                        or not summary[
-                            "memoryProbePreparationResponsePromptObserved"
-                        ]
+                        or not summary["memoryProbePreparationCommandEchoObserved"]
+                        or not summary["memoryProbePreparationResponsePromptObserved"]
                         or summary["memoryProbeVariablesCleared"]
                         or summary["memoryProbeTimedOut"]
                         or summary["memoryProbeCommandSent"]
                         or summary["memoryProbeResponseObserved"]
                         or summary["memoryProbeResponseRejected"]
-                        or any(summary[field] is not None for field in instruction_fields)
+                        or any(
+                            summary[field] is not None for field in instruction_fields
+                        )
                     )
                 )
                 or (
@@ -2383,10 +2395,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                     summary["memoryProbeCommandSent"]
                     and not summary["memoryProbeVariablesCleared"]
                 )
-                or (
-                    summary["memoryProbeCommandSent"]
-                    and not summary["promptObserved"]
-                )
+                or (summary["memoryProbeCommandSent"] and not summary["promptObserved"])
                 or (
                     summary["memoryProbeCommandEchoObserved"]
                     and not summary["memoryProbeCommandSent"]
@@ -2418,7 +2427,9 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                         or not summary["memoryProbeResponsePromptObserved"]
                         or summary["memoryProbeResponseObserved"]
                         or summary["memoryProbeTimedOut"]
-                        or any(summary[field] is not None for field in instruction_fields)
+                        or any(
+                            summary[field] is not None for field in instruction_fields
+                        )
                     )
                 )
                 or (
@@ -2440,9 +2451,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                             not summary["memoryProbeCommandSent"]
                             and not summary["memoryProbeCommandAttempted"]
                             and (
-                                summary[
-                                    "memoryProbePreparationResponsePromptObserved"
-                                ]
+                                summary["memoryProbePreparationResponsePromptObserved"]
                                 or summary["memoryProbePreparationRejected"]
                                 or summary["memoryProbeVariablesCleared"]
                             )
@@ -3188,12 +3197,7 @@ def _validate_generated_work_root(
     if (
         not work_root.is_absolute()
         or work_root.parent != work_parent
-        or re.fullmatch(
-            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})"
-            rf"(?:-console-(?:{CONSOLE_MODE_PATH_PATTERN}))?\.[A-Za-z0-9]+",
-            work_root.name,
-        )
-        is None
+        or WORK_ROOT_NAME_PATTERN.fullmatch(work_root.name) is None
     ):
         raise ValueError(
             "workspace is outside the generated Cuttlefish diagnostic work area"
@@ -3601,15 +3605,8 @@ def _verify_publication_mode_labels(
     result_name: str,
     experiment: dict[str, Any],
 ) -> None:
-    mode_prefix = (
-        rf"gpu-(?P<gpu>{GPU_MODE_PATH_PATTERN})"
-        rf"(?:-console-(?P<console>{CONSOLE_MODE_PATH_PATTERN}))?"
-    )
-    work_match = re.fullmatch(rf"{mode_prefix}\.[A-Za-z0-9]+", work_root_name)
-    result_match = re.fullmatch(
-        rf"{mode_prefix}-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
-        result_name,
-    )
+    work_match = WORK_ROOT_NAME_PATTERN.fullmatch(work_root_name)
+    result_match = RESULT_PATH_NAME_PATTERN.fullmatch(result_name)
     if (
         work_match is None
         or result_match is None
@@ -3621,6 +3618,8 @@ def _verify_publication_mode_labels(
         "console"
     ) != result_match.group("console"):
         raise ValueError("diagnostic workspace and result path mode labels differ")
+    if work_match.group("memory") != result_match.group("memory"):
+        raise ValueError("diagnostic workspace and result memory labels differ")
 
     try:
         gpu_mode_slug = _gpu_mode_slug(experiment.get("gpuMode"))
@@ -3631,6 +3630,26 @@ def _verify_publication_mode_labels(
         or work_match.group("gpu") != gpu_mode_slug
     ):
         raise ValueError("diagnostic path GPU label differs from the capture")
+
+    has_explicit_memory_metadata = (
+        "baselineMemoryMb" in experiment or "memorySlug" in experiment
+    )
+    memory_mb = experiment.get("memoryMb", BASELINE_MEMORY_MB)
+    try:
+        memory_slug = _memory_mb_slug(memory_mb)
+    except ValueError as error:
+        raise ValueError("published experiment has invalid memory metadata") from error
+    if has_explicit_memory_metadata:
+        if (
+            "memoryMb" not in experiment
+            or type(experiment.get("baselineMemoryMb")) is not int
+            or experiment["baselineMemoryMb"] != BASELINE_MEMORY_MB
+            or experiment.get("memorySlug") != memory_slug
+            or work_match.group("memory") != memory_slug
+        ):
+            raise ValueError("diagnostic path memory label differs from the capture")
+    elif memory_mb != BASELINE_MEMORY_MB or work_match.group("memory") is not None:
+        raise ValueError("legacy experiment has unsupported memory metadata")
 
     console_enabled = experiment.get("consoleEnabled")
     if type(console_enabled) is not bool:
@@ -3657,8 +3676,10 @@ def _verify_publication_mode_labels(
         experiment["runnerDeadlineSeconds"] != 900
     ):
         raise ValueError("published experiment has invalid runner deadline metadata")
+    memory_suffix = f"-memory-{memory_slug}" if has_explicit_memory_metadata else ""
     expected_experiment = (
-        f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
+        f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}"
+        f"{memory_suffix}-boot-diagnosis"
     )
     if experiment.get("experiment") != expected_experiment:
         raise ValueError("published experiment name differs from its selected modes")
@@ -3685,13 +3706,7 @@ def publish_normalized_record(
     results_root = data_root / "results"
     if (
         result_path.parent != results_root
-        or re.fullmatch(
-            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})"
-            rf"(?:-console-(?:{CONSOLE_MODE_PATH_PATTERN}))?"
-            rf"-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
-            result_path.name,
-        )
-        is None
+        or RESULT_PATH_NAME_PATTERN.fullmatch(result_path.name) is None
     ):
         raise ValueError("diagnostic result path is outside its results directory")
     try:
@@ -3768,6 +3783,7 @@ def publish_normalized_record(
                                 experiment["gpuMode"],
                                 experiment["consoleEnabled"],
                                 experiment["pauseInBootloader"],
+                                experiment.get("memoryMb", BASELINE_MEMORY_MB),
                             )
                             bootloader_console = experiment.get("bootloaderConsole")
                             if experiment["pauseInBootloader"] and (
@@ -3831,6 +3847,13 @@ def _console_mode_slug(console_enabled: bool) -> str:
     return CONSOLE_MODE_SLUGS[console_enabled]
 
 
+def _memory_mb_slug(memory_mb: Any) -> str:
+    if type(memory_mb) is not int or memory_mb not in MEMORY_MB_SLUGS:
+        choices = ", ".join(str(value) for value in MEMORY_MB_SLUGS)
+        raise ValueError(f"memory size must be one of: {choices} MiB")
+    return MEMORY_MB_SLUGS[memory_mb]
+
+
 def _validate_pause_in_bootloader(
     pause_in_bootloader: bool,
     console_enabled: bool,
@@ -3860,15 +3883,17 @@ def _verify_gpu_configuration(
     gpu_mode: str,
     console_enabled: bool = True,
     pause_in_bootloader: bool = False,
+    memory_mb: int = BASELINE_MEMORY_MB,
 ) -> None:
     _gpu_mode_slug(gpu_mode)
     _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
+    _memory_mb_slug(memory_mb)
     expected = {
         "gpu_mode": gpu_mode,
         "enable_gpu_vhost_user": False,
         "cpus": 4,
-        "memory_mb": 4096,
+        "memory_mb": memory_mb,
         "console": console_enabled,
         "pause_in_bootloader": pause_in_bootloader,
     }
@@ -3969,10 +3994,12 @@ def patch_capture_script(
     gpu_mode: str = "none",
     console_enabled: bool = True,
     pause_in_bootloader: bool = False,
+    memory_mb: int = BASELINE_MEMORY_MB,
 ) -> None:
     _gpu_mode_slug(gpu_mode)
     _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
+    _memory_mb_slug(memory_mb)
     console_argument = str(console_enabled).lower()
     pause_argument = " --pause_in_bootloader=true" if pause_in_bootloader else ""
     bootloader_console_start = ""
@@ -4249,7 +4276,7 @@ launch_profile() {{""",
                 f"      create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
                 f"--gpu_vhost_user_mode=off --console={console_argument}"
                 f"{pause_argument} "
-                "--cpus 4 --memory_mb 4096\n"
+                f"--cpus 4 --memory_mb {memory_mb}\n"
                 "      ;;"
             ),
         ),
@@ -4394,10 +4421,12 @@ def verify_host(
     gpu_mode: str = "none",
     console_enabled: bool = True,
     pause_in_bootloader: bool = False,
+    memory_mb: int = BASELINE_MEMORY_MB,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     console_mode_slug = _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
+    memory_slug = _memory_mb_slug(memory_mb)
     repo_root = repo_root.resolve()
     baseline_record = baseline_record.resolve()
     if baseline_record != repo_root / BASELINE_RELATIVE:
@@ -4463,7 +4492,9 @@ def verify_host(
         "consoleModeSlug": console_mode_slug,
         "pauseInBootloader": pause_in_bootloader,
         "cpuCount": 4,
-        "memoryMb": 4096,
+        "baselineMemoryMb": BASELINE_MEMORY_MB,
+        "memoryMb": memory_mb,
+        "memorySlug": memory_slug,
         "buildId": baseline["buildId"],
     }
 
@@ -4491,17 +4522,20 @@ def build_experiment_record(
     pause_in_bootloader: bool = False,
     bootloader_console_summary_path: Path | None = None,
     boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT_SECONDS,
+    memory_mb: int = BASELINE_MEMORY_MB,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     console_mode_slug = _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     boot_timeout_seconds = _validate_boot_timeout_seconds(boot_timeout_seconds)
+    memory_slug = _memory_mb_slug(memory_mb)
     host, instance = _gpu_configuration(capture_record)
     _verify_gpu_configuration(
         instance,
         gpu_mode,
         console_enabled,
         pause_in_bootloader,
+        memory_mb,
     )
     host_identity = _read_json(host_identity_path)
     if (
@@ -4510,9 +4544,12 @@ def build_experiment_record(
         or host_identity.get("consoleEnabled") is not console_enabled
         or host_identity.get("consoleModeSlug") != console_mode_slug
         or host_identity.get("pauseInBootloader") is not pause_in_bootloader
+        or host_identity.get("baselineMemoryMb") != BASELINE_MEMORY_MB
+        or host_identity.get("memoryMb") != memory_mb
+        or host_identity.get("memorySlug") != memory_slug
     ):
         raise ValueError(
-            "capture GPU, console, or bootloader mode differs from the verified selection"
+            "capture GPU, console, bootloader, or memory mode differs from the verified selection"
         )
     verify_tool_copy(
         repo_root,
@@ -4620,7 +4657,8 @@ def build_experiment_record(
     return {
         "schemaVersion": 1,
         "experiment": (
-            f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
+            f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}"
+            f"-memory-{memory_slug}-boot-diagnosis"
         ),
         "gpuModeSlug": gpu_mode_slug,
         "consoleModeSlug": console_mode_slug,
@@ -4644,7 +4682,9 @@ def build_experiment_record(
         "pauseInBootloader": pause_in_bootloader,
         "bootloaderConsole": bootloader_console,
         "cpuCount": 4,
-        "memoryMb": 4096,
+        "baselineMemoryMb": BASELINE_MEMORY_MB,
+        "memoryMb": memory_mb,
+        "memorySlug": memory_slug,
         "adbEndpoint": adb_endpoint,
         "adbServerTransport": "localfilesystem",
         "adbStateSampleCount": state_sample_count,
@@ -4707,6 +4747,12 @@ def main() -> int:
         choices=("true", "false"),
         default="false",
     )
+    host_parser.add_argument(
+        "--memory-mb",
+        type=int,
+        choices=tuple(MEMORY_MB_SLUGS),
+        default=BASELINE_MEMORY_MB,
+    )
     host_parser.add_argument("--output", type=Path, required=True)
 
     tool_copy_parser = subparsers.add_parser("verify-tool-copy")
@@ -4735,6 +4781,12 @@ def main() -> int:
         "--pause-in-bootloader",
         choices=("true", "false"),
         default="false",
+    )
+    patch_parser.add_argument(
+        "--memory-mb",
+        type=int,
+        choices=tuple(MEMORY_MB_SLUGS),
+        default=BASELINE_MEMORY_MB,
     )
 
     socket_parser = subparsers.add_parser("audit-unix-sockets")
@@ -4828,6 +4880,12 @@ def main() -> int:
         type=int,
         default=DEFAULT_BOOT_TIMEOUT_SECONDS,
     )
+    record_parser.add_argument(
+        "--memory-mb",
+        type=int,
+        choices=tuple(MEMORY_MB_SLUGS),
+        default=BASELINE_MEMORY_MB,
+    )
     record_parser.add_argument("--bootloader-console-summary", type=Path)
     record_parser.add_argument("--output", type=Path, required=True)
 
@@ -4844,6 +4902,7 @@ def main() -> int:
                 arguments.gpu_mode,
                 arguments.console_enabled == "true",
                 arguments.pause_in_bootloader == "true",
+                arguments.memory_mb,
             )
             return 0
         if arguments.command == "audit-unix-sockets":
@@ -4923,6 +4982,7 @@ def main() -> int:
                 arguments.gpu_mode,
                 arguments.console_enabled == "true",
                 arguments.pause_in_bootloader == "true",
+                arguments.memory_mb,
             )
         elif arguments.command == "verify-tool-copy":
             verify_tool_copy(
@@ -4960,6 +5020,7 @@ def main() -> int:
                 arguments.pause_in_bootloader == "true",
                 arguments.bootloader_console_summary,
                 arguments.boot_timeout_seconds,
+                arguments.memory_mb,
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

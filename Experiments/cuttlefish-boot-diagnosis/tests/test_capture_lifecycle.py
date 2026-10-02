@@ -1699,6 +1699,12 @@ def test_gpu_none_runner_uses_short_home_for_fleet_and_capture() -> None:
     assert "capture_run_interrupted=" in runner
     assert 'if [ -e "$capture_run_interrupted" ]' in runner
     assert "APKRUN_DIAGNOSTIC_BOOT_TIMEOUT_SECONDS" in runner
+    assert "APKRUN_DIAGNOSTIC_MEMORY_MB:-4096" in runner
+    assert "2048) memory_slug=2g" in runner
+    assert "4096) memory_slug=4g" in runner
+    assert "APKRUN_DIAGNOSTIC_MEMORY_MB must be 2048 or 4096." in runner
+    assert runner.count('--memory-mb "$memory_mb"') == 3
+    assert "memory-$memory_slug" in runner
     assert '"APKRUN_BOOT_TIMEOUT_SECONDS=$boot_timeout_seconds"' in runner
     assert "Capture supervisor exited with status" in runner
     assert '--capture-exit-code "$capture_child_exit_code"' in runner

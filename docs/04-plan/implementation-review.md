@@ -4084,9 +4084,13 @@ The later 2400-second unpaused retry adds a sixth interval: U-Boot at
 crosvm samples, the first sample where both VmRSS and RssShmem reached 4 GiB
 was at 20:55:11.141Z, two seconds after the Linux banner. The guest had
 `ddr_mem_mb=4915`, so this does not prove that all configured DDR was
-resident. It strengthens the timing correlation but does not identify the
-code executed at the traced PC or establish that cache maintenance caused
-the delay; the full incomplete record is in M01.
+resident. Its output directory is named with Lima local time:
+`default-20261003T062208-792872` corresponds to October 2 UTC. This mapping is
+corroborated by the UTC observer start and stop events and the sidecar's
+`verifiedAtUtc` timestamp; `capture.sh` uses local `date` when forming the
+incomplete-record directory name. The timing correlation does not identify the
+code executed at the traced PC or establish that cache maintenance caused the
+delay; the full incomplete record is in M01.
 
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
@@ -4389,3 +4393,39 @@ addresses, or PEM key markers. `experiment.json` records complete helper and
 capture cleanup; `MISSING.txt` says no crosvm process matched the private HOME
 at artifact-collection time. This validates the nonce-framed live exchange
 and the instruction words at the candidate addresses, not Android boot.
+
+## IR-138: Compare Cuttlefish boot with 2048 MiB guest memory
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/{README.md,capture-gpu-none.sh,experiment_support.py}` and tests |
+
+**Choice.** Keep 4096 MiB as the default and add an explicit
+`APKRUN_DIAGNOSTIC_MEMORY_MB=2048` comparison option. Accept only 2048 or 4096
+MiB. The selector changes the `cvd create --memory_mb` input; keep the pinned
+build, four CPUs, `guest_swiftshader`, console disabled, and other explicit
+Cuttlefish arguments fixed. Record the 4096 MiB baseline, selected value, and
+slug in verified host and experiment metadata, include the selection in
+workspace and result names, and reject publication if saved configuration
+does not match. Preserve compatibility with older records that lack memory
+fields and with the previous schema that contains only `memoryMb=4096`.
+
+**Reason.** The supplied U-Boot diagnosis proposes an optional 2 GiB run to
+check whether the long U-Boot-to-Linux interval changes with guest-memory
+size. Restricting the selector prevents accidental uncontrolled values and
+keeps the baseline invocation unchanged. The generated Cuttlefish
+configuration remains in the capture so any derived DDR size is visible. A
+single changed timing is diagnostic evidence only. If the U-Boot start marker
+is observed but Linux is not observed before the configured deadline, report
+the U-Boot-to-Linux interval as right-censored. If the U-Boot marker is absent,
+report that interval as unmeasured. Neither outcome confirms or rejects the
+cache-flush hypothesis.
+
+**Verification.** The full Linux diagnosis suite passes 386 tests. Unit and
+publication coverage checks the 2048 and 4096 MiB selections, generated
+arguments, recorded metadata, directory labels, acceptance of the prior
+`memoryMb=4096` record shape, and rejection of a mismatched saved
+configuration. Ruff, Python compilation, shell syntax, and `git diff --check`
+pass. The live 2048 MiB capture is pending.

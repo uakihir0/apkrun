@@ -1,9 +1,10 @@
 # Cuttlefish boot diagnosis
 
-This isolated experiment checks the Android boot stall with selectable GPU
-and serial-console settings. It holds the pinned Android build, Cuttlefish
-host tools, capture tools, CPU count, and memory size to the 2026-10-01
-baseline. Its boot deadline defaults to the baseline's 600 seconds; a focused
+This isolated experiment checks the Android boot stall with selectable GPU,
+serial-console, and guest-memory settings. It holds the pinned Android build,
+Cuttlefish host tools, capture tools, and CPU count to the 2026-10-01 baseline.
+Memory defaults to the baseline's 4096 MiB; a controlled comparison can select
+2048 MiB. Its boot deadline defaults to the baseline's 600 seconds; a focused
 retry can select 120 through 600 seconds. By default it passes `gpu_mode=none`,
 `gpu_vhost_user_mode=off`, and `--console=true` to both `cvd create` and
 `cvd start`. Cuttlefish 1.57.0 does not create its configuration during
@@ -146,6 +147,24 @@ APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader \
   APKRUN_DIAGNOSTIC_CONSOLE=false bash capture-gpu-none.sh
 ```
 
+For a memory comparison against the baseline's 4096 MiB, keep the GPU,
+console, CPU count, build, and boot deadline fixed and select 2048 MiB:
+
+```bash
+APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader \
+  APKRUN_DIAGNOSTIC_CONSOLE=false \
+  APKRUN_DIAGNOSTIC_MEMORY_MB=2048 \
+  bash capture-gpu-none.sh
+```
+
+The setting changes only Cuttlefish's `--memory_mb` argument. The selected
+value and 4096 MiB baseline are recorded in `host-identity.json` and
+`experiment.json`, and the saved Cuttlefish configuration is checked before
+publication. The memory value is included in private workspace and result
+directory names. Compare runs made with the same other settings; a single
+timing change is diagnostic evidence, not proof of the U-Boot code path or its
+cause.
+
 To pause at U-Boot and continue through the private console, opt in explicitly:
 
 ```bash
@@ -155,10 +174,11 @@ APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER=true bash capture-gpu-none.sh
 `APKRUN_DIAGNOSTIC_GPU_MODE` accepts `none` or `guest_swiftshader` and defaults
 to `none`. `APKRUN_DIAGNOSTIC_CONSOLE` accepts `true` or `false` and defaults
 to `true`. `APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER` accepts `true` or `false`
-and defaults to `false`. Each selected setting applies to both Cuttlefish
-commands, is validated against the saved configuration, and appears in result
-metadata. GPU and console selections also appear in generated work and result
-directory names. The console helper keeps at most 64 KiB of Screen terminal
+and defaults to `false`. `APKRUN_DIAGNOSTIC_MEMORY_MB` accepts `2048` or
+`4096` and defaults to `4096`. Each selected setting is validated against the
+saved configuration and appears in result metadata. GPU, console, and memory
+selections also appear in generated work and result directory names. The
+console helper keeps at most 64 KiB of Screen terminal
 output in memory, records raw and escape-stripped byte counts alongside its
 prompt, incomplete-escape, and post-command kernel-handoff states, and
 atomically writes only its private status summary. Publication validates that

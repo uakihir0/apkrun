@@ -158,6 +158,21 @@ EROFS size is read from the superblock `blocks` field at byte offset 36 and
 scaled by the block-size bits at offset 12. ZIP and directory input bounds,
 stable-file checks, and the output-path rule are specified in
 [android-image-manifest.md](../03-reference/android-image-manifest.md) §4.5.
+Each input is copied into a private, size-bounded seekable snapshot while its
+SHA-256 is computed. Classification reads that exact snapshot, so the emitted
+digest and parsed metadata always describe the same bytes. For directory files
+and ZIP archives, the original input is also re-hashed after parsing; persistent
+content changes are rejected even when the filesystem's timestamps do not
+change at their available resolution. A transient write that is reverted
+during parsing cannot mix one version's digest with another version's
+classification. Snapshots use at most 8 MiB of memory, then spill to a
+per-user mode-0700 temporary directory. A single input snapshot is limited to
+16 GiB; one inventory process per user may hold that scratch budget at a time.
+Before copying and every 64 MiB thereafter, the tool checks that enough
+temporary space remains for the input plus a 256 MiB reserve. ZIP members are
+classified and hashed directly from the immutable archive snapshot, avoiding
+a second expanded copy. The temporary snapshot is removed when inventory
+finishes.
 
 Output (`inventory.json`, one entry per file):
 
@@ -686,6 +701,26 @@ still requires an absolute regular file whose resolved path is beneath the
 private HOME. If listing takes longer than 0.5 seconds, the helper starts the
 next poll as soon as listing returns, and a malformed log listing does not
 prevent it from terminating the CVD process group.
+For a long `cvd start`, setting `APKRUN_CAPTURE_BOOT_OBSERVER=1` also writes
+`boot-observer.jsonl` while the command is running. An independent sampler
+checks the launcher-identified Android crosvm process every five seconds; its
+executable, process name, command-line reference to this run's private
+instance path, and first-observed procfs start time must all match before it
+records `VmRSS` and `RssShmem`. If the bounded launcher snapshot is truncated,
+the observer clears prior process identities and records an observation gap.
+After launcher log event 5, it probes the selected localhost ADB serial on a
+monotonic 15-second schedule through a private ADB server socket and records
+only bounded state fields, including `sys.boot_completed`; raw ADB output is
+not stored. It removes inherited ADB socket, serial, and vendor-key overrides
+from the observer environment. Missed ADB schedule points are skipped rather
+than replayed. Each ADB command is capped by the remaining time before the
+15-second cleanup reserve, and no following command starts once that boundary
+is reached. The mode-0700 socket directory is beneath the run's private HOME.
+On Linux, the ADB server receives `SIGKILL` if its observer parent dies,
+including when the observer is terminated without running cleanup. Capture
+cleanup removes the private HOME and any stale socket path. This opt-in
+evidence does not change the launch configuration or the default capture
+behavior.
 `compare_boot.py` limits plain and compressed inputs, decompressed gzip
 content, normalized output, and compressed gzip output to 64 MiB. It preflights
 each substitution before allocating an expanded result. Comparison streams

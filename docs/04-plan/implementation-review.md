@@ -3663,11 +3663,15 @@ shape `echo APK_<token>; bdinfo; echo APK_<token>`, using a
 fresh 96-bit random token for each run. Require U-Boot to echo the exact
 command, print the matching token before and after `bdinfo`, and return to the
 prompt. Accept only unique 64-bit hexadecimal values from `relocaddr` and
-`reloc off` between the two markers. Send `boot` only after all checks pass;
-stop without booting if the response is late, incomplete, or ambiguous. The
-summary records whether the command echo and both markers were observed, but
-never stores the token or console transcript. Continue accepting schema-3
-summaries and write new summaries as schema 4.
+`reloc off` between the two markers. If the command echo, both markers, and
+the following prompt complete but the fields are absent, malformed, or
+ambiguous, record the response as rejected with null relocation values and
+continue normal boot. Stop without booting if framing or the prompt is
+incomplete or the response times out. The summary records whether the command
+echo and both markers were observed, but never stores the token or console
+transcript. At this implementation stage, continue accepting schema-3
+summaries and write new summaries as schema 4; IR-130 advances the writer to
+schema 5 while retaining schema-3 and schema-4 reads.
 
 **Reason.** The Cuttlefish package contains the raw AArch64 U-Boot image but
 no map, ELF, or debug artifact. The vCPU PC and fault addresses alone do not
@@ -3703,10 +3707,206 @@ mode-0700 work area may retain raw `kernel.log` output.
 `reloc off` in [`cmd/bdinfo.c`](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/cmd/bdinfo.c).
 Synthetic Screen/PTTY tests exercise stale values between the command echo and
 start marker, missing markers, ambiguous duplicate values, unanswered
-queries, and successful responses bounded by both markers. Publication tests verify that
-`kernel.log` is omitted only after successful unlink and that schema-3
-summaries still publish. The Linux suite passed all 213 tests; the macOS suite
-passed 122 tests with 91 Linux-specific skips. The live Cuttlefish probe is
-pending. Until it returns relocation data and the resulting address mapping is
+queries, and successful responses bounded by both markers. Publication tests
+verify that `kernel.log` is omitted only after successful unlink and that
+schema-3 summaries still publish. The initial live Cuttlefish probe observed
+both markers but no relocation fields and stopped before normal boot. The
+follow-up implementation and live result are recorded in IR-130. Until the
+probe returns relocation data and the resulting address mapping is
 independently checked, the traced PC remains unattributed and no root cause is
 claimed.
+
+## IR-130: Continue boot after a complete but unusable relocation response
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [console helper](../../Experiments/cuttlefish-boot-diagnosis/drive_cuttlefish_console.py), [summary validator](../../Experiments/cuttlefish-boot-diagnosis/experiment_support.py) |
+
+**Choice.** Continue boot when the opt-in probe has a complete command echo,
+both fresh markers, and the following U-Boot prompt, even if parsing yields
+missing, malformed, or ambiguous relocation fields. Record
+`bdinfoResponseRejected=true`, retain null relocation values, and require the
+normal kernel-handoff marker before the helper succeeds. Record the
+post-response prompt separately from the initial prompt. Write schema 5 for
+new summaries and continue accepting schema 3 and 4. Continue to fail closed
+without sending `boot` when the echo, framing, or prompt is incomplete, or
+when the bounded probe times out. Recheck deadlines after each console read,
+before sending the `bdinfo` probe or `boot`, and before accepting the
+kernel-handoff marker. When the global deadline and handoff deadline expire
+together, record the handoff timeout only.
+
+**Reason.** The first live probe completed its marker frame but yielded no
+relocation values, so the previous fail-closed behavior left Cuttlefish paused
+and prevented the capture from observing the next boot phase. The exact
+packaged and staged `bootloader.crosvm` binary has SHA-256
+`f464a92c6086fa876c0bc775397d20b7491b6b34e2260feb0e19b5ca97f2dd30`.
+Filtered string inspection found the expected `echo` help text but no
+`bdinfo`, `relocaddr`, or `reloc off` labels. The pinned U-Boot source defaults
+`CMD_BDI` to enabled, so that source default alone does not establish the
+runtime build configuration. A complete response frame is sufficient to
+release the optional diagnostic pause, but its rejected values cannot be used
+to attribute the traced PC. The summary needs a separate post-response prompt
+field so publication validation cannot mistake the initial U-Boot prompt for
+the prompt that ends the bounded query. Screen polling waits briefly for
+console data, so a read that returns at a deadline can contain output that
+arrived too late to accept. Checking the deadline before parsing, acting on,
+or accepting that output keeps late markers from advancing guest state and
+avoids contradictory timeout flags.
+
+**Verification.** Synthetic Screen/PTTY tests cover missing and ambiguous
+fields with successful continuation through a simulated kernel marker, and
+retain the no-boot behavior for a missing marker and a timed-out response.
+Schema-5 validation requires the post-response prompt before accepting either
+relocation metadata or a rejected response; schema-3 and schema-4 summaries
+remain accepted. A regression test rejects a summary that has both markers
+but lacks the post-response prompt. Deadline tests also block before the
+`bdinfo` and `boot` writes and verify that neither command is sent after the
+global deadline. Schema-4 summaries with the interim
+`bdinfoResponseRejected` field set to false are also accepted; schema-4
+rejected responses fail closed because that schema has no separate
+post-response prompt evidence. The full diagnosis suite passed 325 tests on
+Linux and 197 tests on macOS with 128 Linux-specific skips after the deadline
+guards and regressions were added. The deadline-crossing tests passed on
+Linux. Ruff, Python compilation, and `git diff --check` passed. A live
+retry using the pinned binary is pending; its result must not be described as
+a Linux or Android boot unless the corresponding markers are observed.
+
+## IR-131: Observe guest memory and ADB while Cuttlefish start is running
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/{capture.sh,capture_cvd_start.py,boot_observer.py}`; `Images/tools/tests/{test_boot_observer.py,test_capture_cvd_start.py,test_reference_capture.py}` |
+
+**Choice.** Add an opt-in `APKRUN_CAPTURE_BOOT_OBSERVER=1` path for the
+existing `cvd start` capture only. While that process is live, sample the
+launcher-identified Android crosvm `VmRSS` and `RssShmem` every five seconds.
+Use a background monotonic sampler, and accept RSS only when `/proc` reports
+the expected executable and `--process_name=crosvm`, an argument identifies
+this run's private Cuttlefish instance directory, and the first observed
+process start time still matches. If the bounded launcher snapshot is
+truncated, clear retained process identities and record an observation gap.
+Start a private ADB server only after launcher event 5, using a mode-0700
+socket directory beneath the run's private HOME. Remove inherited ADB socket,
+port, serial, and vendor-key overrides from the observer environment. Poll the
+capture's localhost serial on a monotonic 15-second schedule and record
+bounded state, including `sys.boot_completed`. Skip expired polling targets
+instead of replaying them. Do not store raw ADB output. Cap each ADB command by
+the remaining time before the 15-second cleanup reserve, and do not start a
+following command after reaching that boundary. On Linux, launch the private
+ADB server with a `SIGKILL` parent-death signal, so it cannot survive an
+observer killed without cleanup. Capture cleanup removes the private HOME and
+any stale socket path. Leave the observer disabled by default and do not apply
+it to `cvd create`.
+
+**Reason.** The latest incomplete reference capture did not reach
+`capture.sh`'s post-start ADB loop because `cvd start` exhausted the shared
+600-second deadline. The earlier host `adb devices` check ran before launch,
+while Cuttlefish's internal connector logs only establish that it attempted
+connections and saw offline/reconnect states. Neither establishes Android
+readiness or `sys.boot_completed`. A private concurrent probe can fill this
+evidence gap and can distinguish a guest that eventually becomes ADB-ready
+from a process that remains busy without retaining app or shell output. The
+observer is optional so ordinary capture output, ADB configuration, and
+launch behavior remain unchanged.
+
+**Verification.** Synthetic tests cover launcher PID selection against an
+OpenWrt decoy, private-instance command-line matching before the first
+sample, process-start-time changes, capped-log identity gaps, background
+sampling, private-socket client routing, target-based ADB polling, sanitized
+records, inherited vendor-key removal, the cleanup boundary, normal and
+forced ADB-server cleanup, and server exit after its Linux observer parent is
+killed. The parent-death test makes the fake server ignore `SIGTERM`, verifies
+that `SIGKILL` terminates it, and checks that capture cleanup removes its stale
+socket. The focused observer tests passed 11 cases on Linux and 10 on macOS
+with its Linux-only parent-death test skipped on macOS. The full Image tools
+suite passed 363 tests on Linux with one macOS-only skip, and 360 tests on
+macOS with four Linux-only skips. Capture integration tests cover the disabled
+default and enabled SwiftShader profile. The 2400-second setting is a shared
+capture deadline, not a dedicated `cvd start` allowance. A real
+long-running SwiftShader capture is still pending; until it produces verified
+guest markers, it does not establish Linux or Android boot or identify a root
+cause.
+
+## IR-132: Detect same-size inventory mutations on coarse-timestamp filesystems
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1; `Images/tools/apkrun_image/inventory.py`; `Images/tools/tests/test_inventory.py` |
+
+**Choice.** Copy directory files and the ZIP archive into private seekable
+snapshots while hashing them, then classify those exact bytes. Re-hash each
+source after parsing and reject persistent changes. Classify and hash ZIP
+members directly from the immutable archive snapshot so an expanded member
+does not need another temporary copy.
+
+**Reason.** Linux testing on the Lima VM showed that its temporary filesystem
+can report identical `mtime_ns` and `ctime_ns` for immediate same-size writes
+to the same inode. Re-hashing detects persistent changes but alone could miss
+a write that is reverted during parsing, allowing a digest from one version
+to accompany classification from another. The bounded private snapshot makes
+the digest and classification coherent; the final source re-hash detects
+changes that remain in place. Snapshots are capped at 16 GiB per input, use at
+most 8 MiB of memory, and spill into a per-user mode-0700 temporary directory.
+A per-user file lock allows one inventory at a time to use this scratch
+budget. The tool checks free space before copying and every 64 MiB during the
+copy, preserving a 256 MiB reserve. ZIP members reuse the archive snapshot,
+avoiding a second full-size expanded copy.
+
+**Verification.** All 48 inventory tests passed on Linux and macOS, including
+same-size source mutation, mutation-and-revert, archive replacement, concurrent
+inventory serialization, low-scratch-space rejection, and the 16 GiB limit.
+The full Image tools suite passed 363 tests on Linux with one macOS-only skip,
+and 360 tests on macOS with four Linux-only skips. Ruff and formatting checks
+passed. A successful inventory describes one coherent snapshot and verifies
+the source again after parsing; it cannot prevent a writer from changing the
+source after the final check.
+
+## IR-133: Interpret the traced PC as consistent with U-Boot cache maintenance
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [pinned U-Boot source](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/arch/arm/cpu/armv8/cache.S); `Images/reference/16373615/incomplete/default-20261001T120904-49816/{kernel.log,launcher.log}` |
+
+**Choice.** Treat PC `0x000000017f63e1f4` as a strong, testable match for a
+U-Boot virtual-address cache-maintenance loop, with candidate relocated image
+base `0x000000017f63c000`. Describe this as “consistent with” the cache-flush
+hypothesis until the bootloader's exact build configuration and the runtime
+call path are confirmed. Do not call the PC a proven hang or root cause.
+
+**Reason.** The attached static analysis identifies file offset `0x21f4` as
+`dc civac, x0`; subtracting that offset from the traced PC yields a
+4-KiB-aligned candidate image base. The pinned U-Boot source at
+`3fe9647575890b846172e546201eff7614c8cb59` contains the matching
+`__asm_flush_dcache_range` instruction sequence. Its `cache_v8.c` page-table
+walker iterates 512-entry tables, limits cache operations to RAM mappings,
+and calls the range callback; with `CONFIG_CMO_BY_VA_ONLY`, `flush_dcache_all`
+uses that walker before disabling the data cache. The captured source contains
+this implementation, but the exact Cuttlefish U-Boot defconfig and whether
+the packaged binary enables that option have not been verified. The attached
+binary scan and relocation arithmetic also remain independently unreplicated.
+
+The saved `default-20261001T120904-49816` logs record the U-Boot banner at
+11:59:04 and the Linux banner at 12:02:14, a 190-second interval. They later
+record `adbd` startup and Cuttlefish ADB proxy event 5 at 12:05:16, while the
+host connector reports `device offline` at 12:05:29. The capture never reached
+its post-`cvd start` ADB polling loop, so that run did not measure external ADB
+readiness or `sys.boot_completed`. A 120-second run is therefore too short to
+test whether the same path completes; a passive 2400-second capture is the
+next discriminating probe.
+
+**Verification.** Reviewed `cache.S` and `cache_v8.c` from the pinned source
+commit; the assembly loop and conditional page-table walker match the
+reported instruction pattern. Existing `kernel.log` and `launcher.log`
+timestamps confirm Linux boot at +190 seconds, later `adbd` and proxy startup,
+and an offline connector state. This verifies source consistency and the
+captured timeline only. It does not confirm the binary's defconfig, prove the
+candidate relocation base, establish that the traced PC belongs to this
+function, or establish that all observed delay is cache maintenance.

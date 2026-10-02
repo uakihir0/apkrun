@@ -788,6 +788,22 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            "cvd-start-no-crosvm",
+            id="process-snapshot-does-not-claim-crosvm-never-ran",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
             "adb-getprop",
             id="adb-getprop-times-out",
         ),
@@ -1072,9 +1088,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               fi
               exit 0
             fi
-              for argument in "$@"; do
+            for argument in "$@"; do
               if [ "$argument" = start ]; then
                 printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
+                if [ "${FAKE_CVD_START_FAILURE:-0}" = 1 ]; then
+                  exit 1
+                fi
                 : > "$HOME/cvd-started.txt"
                 if [ "${FAKE_CVD_START_HANG:-0}" = 1 ]; then
                   instance=$(cat "$HOME/instance-runtime.txt")
@@ -1378,6 +1397,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_CVD_START_HANG": (
                 "1" if boot_timeout_case in {"cvd-start", "real-cvd-start"} else "0"
             ),
+            "FAKE_CVD_START_FAILURE": ("1" if boot_timeout_case == "cvd-start-no-crosvm" else "0"),
             "FAKE_CVD_CREATE_FAIL_AFTER_LOGS": "1" if not launch_succeeds else "0",
             "FAKE_CVD_LOGS_EMPTY_FIRST": "1" if not launch_succeeds else "0",
             "FAKE_CVD_CREATE_EXIT_STATUS": (
@@ -1436,7 +1456,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         environment["APKRUN_CVD_STOP_TIMEOUT_SECONDS"] = "1"
     if boot_timeout_case in {"real-cvd-start", "real-adb-getprop"}:
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
-    elif boot_timeout_case == "cvd-start":
+    elif boot_timeout_case in {"cvd-start", "cvd-start-no-crosvm"}:
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "3"
     elif boot_timeout_case == "adb-getprop":
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "6"
@@ -1642,19 +1662,32 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert not any("getprop" in call or "exec-out" in call for call in adb_calls)
             assert_adb_disconnect_precedes_group_removal()
             assert_scoped_group_removal()
-        elif boot_timeout_case in {"cvd-start", "real-cvd-start"}:
+        elif boot_timeout_case in {
+            "cvd-start",
+            "cvd-start-no-crosvm",
+            "real-cvd-start",
+        }:
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
             assert len(partials) == 1
             missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
-            expected_timeout_seconds = "10" if boot_timeout_case == "real-cvd-start" else "3"
-            assert (
-                "Cuttlefish create or start exceeded the "
-                f"{expected_timeout_seconds}-second boot deadline"
-            ) in missing
-            assert "crosvm run" in (
-                (partials[0] / "crosvm-command-line.txt").read_text(encoding="utf-8")
-            )
+            if boot_timeout_case == "cvd-start-no-crosvm":
+                assert "Cuttlefish group create or start failed" in missing
+                assert not (partials[0] / "crosvm-command-line.txt").exists()
+                assert (
+                    "crosvm-command-line.txt\tno crosvm process matched the private "
+                    "Cuttlefish HOME at artifact-collection time; this does not establish "
+                    "whether crosvm ran earlier"
+                ) in missing
+            else:
+                expected_timeout_seconds = "10" if boot_timeout_case == "real-cvd-start" else "3"
+                assert (
+                    "Cuttlefish create or start exceeded the "
+                    f"{expected_timeout_seconds}-second boot deadline"
+                ) in missing
+                assert "crosvm run" in (
+                    (partials[0] / "crosvm-command-line.txt").read_text(encoding="utf-8")
+                )
             timeout_calls = [
                 shlex.split(line.split("\t", maxsplit=1)[1])
                 for line in timeout_log.read_text(encoding="utf-8").splitlines()
@@ -1675,6 +1708,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert all(call[1].isdigit() and int(call[1]) > 0 for call in cvd_runner_calls)
             if boot_timeout_case == "cvd-start":
                 assert capture_elapsed_seconds >= 3
+                assert capture_elapsed_seconds < 10
+            elif boot_timeout_case == "cvd-start-no-crosvm":
                 assert capture_elapsed_seconds < 10
             else:
                 assert capture_elapsed_seconds >= 10

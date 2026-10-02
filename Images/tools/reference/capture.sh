@@ -786,7 +786,7 @@ if [ -n "$crosvm_process_rows" ]; then
   printf 'PID COMMAND\n%s\n' "$crosvm_process_rows" > "$stage/crosvm-command-line.txt"
 else
   record_missing "crosvm-command-line.txt" \
-    "no crosvm process matched the private Cuttlefish HOME in ps output"
+    "no crosvm process matched the private Cuttlefish HOME at artifact-collection time; this does not establish whether crosvm ran earlier"
 fi
 
 internal_bootconfig=$(find "$instance_runtime" -newer "$capture_marker" -type f \

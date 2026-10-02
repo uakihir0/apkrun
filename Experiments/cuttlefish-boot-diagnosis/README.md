@@ -12,8 +12,10 @@ settings before publication. Bootloader pause mode is opt-in. In that mode, a
 bounded helper attaches to the run's private Screen endpoint and sends `boot`
 only after it sees the U-Boot prompt. The helper publishes a small status
 summary; it never saves the console transcript. Pause mode requires
-`APKRUN_DIAGNOSTIC_CONSOLE=true`. CVD startup and console handoff run under one
-supervisor: if either process fails, the supervisor stops the other. It uses
+`APKRUN_DIAGNOSTIC_CONSOLE=true` and passes
+`--pause_in_bootloader=true` to both Cuttlefish commands. CVD startup and
+console handoff run under one supervisor: if either process fails, the
+supervisor stops the other. It uses
 the existing boot deadline, with at most ten seconds to observe the kernel
 handoff after sending `boot`.
 In the 2026-10-02 retry, an initial 60-second Screen attempt and a later

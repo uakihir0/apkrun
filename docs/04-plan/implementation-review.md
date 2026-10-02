@@ -3187,10 +3187,10 @@ completes #064.
 
 **Choice.** Add an opt-in
 `APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER=true` mode to the isolated diagnosis
-runner, leaving the default disabled. Pass the pinned Cuttlefish bootloader
-pause setting to both `cvd create` and `cvd start`, verify the saved
-configuration, and require the serial console to be enabled. A supervisor runs
-CVD startup and a bounded console helper together under the existing boot
+runner, leaving the default disabled. Pass
+`--pause_in_bootloader=true` to both `cvd create` and `cvd start`, verify the
+saved configuration, and require the serial console to be enabled. A supervisor
+runs CVD startup and a bounded console helper together under the existing boot
 deadline, and sends termination to both processes before waiting for either
 one. The runner temporarily unblocks INT and TERM for its own cancellation
 handler, blocks them across the CVD spawn boundary, then restores the active
@@ -3232,3 +3232,8 @@ states the helper can actually produce rejects internally contradictory
 summaries. The bounded status-only capture avoids retaining raw bootloader
 text. This diagnostic does not change a canonical profile or claim a successful
 Android boot.
+
+**Initial live-run correction.** Cuttlefish 1.57.0 rejected the enum-like value
+`BOOTLOADER` while parsing `pause_in_bootloader` as a Boolean, before creating
+the instance configuration. The startup arguments now pass `true` to both
+`cvd create` and `cvd start`; the rejected run left no Cuttlefish group.

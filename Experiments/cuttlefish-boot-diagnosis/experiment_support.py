@@ -3487,7 +3487,7 @@ def patch_capture_script(
     _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     console_argument = str(console_enabled).lower()
-    pause_argument = " --pause_in_bootloader=BOOTLOADER" if pause_in_bootloader else ""
+    pause_argument = " --pause_in_bootloader=true" if pause_in_bootloader else ""
     bootloader_console_start = ""
     bootloader_console_launch = ""
     if pause_in_bootloader:

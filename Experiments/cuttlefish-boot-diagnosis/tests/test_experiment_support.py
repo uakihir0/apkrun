@@ -2231,7 +2231,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
     )
     patched = private_copy.read_text(encoding="utf-8")
     console_argument = str(console_enabled).lower()
-    pause_argument = " --pause_in_bootloader=BOOTLOADER" if pause_in_bootloader else ""
+    pause_argument = " --pause_in_bootloader=true" if pause_in_bootloader else ""
 
     subprocess.run(["bash", "-n", str(private_copy)], check=True)
     assert "script_dir=$APKRUN_CAPTURE_SCRIPT_DIR" in patched
@@ -2287,7 +2287,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
         ),
     ]
     assert patched.count(f"--console={console_argument}") == 2
-    assert patched.count("--pause_in_bootloader=BOOTLOADER") == (
+    assert patched.count("--pause_in_bootloader=true") == (
         2 if pause_in_bootloader else 0
     )
     if pause_in_bootloader:
@@ -2504,7 +2504,7 @@ elif "start" in arguments:
         for value in arguments
         if value.startswith("--pause_in_bootloader=")
     ]
-    expected_pause_value = "BOOTLOADER" if (
+    expected_pause_value = "true" if (
         os.environ["APKRUN_TEST_PAUSE_IN_BOOTLOADER"] == "true"
     ) else None
     pause_selected = (
@@ -2712,7 +2712,7 @@ result.write_text(
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
-            *(["--pause_in_bootloader=BOOTLOADER"] if pause_in_bootloader else []),
+            *(["--pause_in_bootloader=true"] if pause_in_bootloader else []),
             "--cpus",
             "4",
             "--memory_mb",
@@ -2724,7 +2724,7 @@ result.write_text(
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
-            *(["--pause_in_bootloader=BOOTLOADER"] if pause_in_bootloader else []),
+            *(["--pause_in_bootloader=true"] if pause_in_bootloader else []),
         ],
     ]
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))

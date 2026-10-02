@@ -1983,6 +1983,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "schemaVersion",
         "consoleEndpointFound",
         "screenStarted",
+        "uBootBannerObserved",
         "promptObserved",
         "bootCommandSent",
         "kernelHandoffObserved",
@@ -2003,6 +2004,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
     boolean_fields = (
         "consoleEndpointFound",
         "screenStarted",
+        "uBootBannerObserved",
         "promptObserved",
         "bootCommandSent",
         "kernelHandoffObserved",
@@ -2013,7 +2015,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
     )
     if (
         type(summary.get("schemaVersion")) is not int
-        or summary["schemaVersion"] != 1
+        or summary["schemaVersion"] != 2
         or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
         or type(summary.get("outputBytesObserved")) is not int
         or type(summary.get("outputLimitBytes")) is not int
@@ -2065,6 +2067,8 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         or (summary["signal"] is None and summary["exitCode"] not in (0, 1))
         or (summary["screenStarted"] and not summary["consoleEndpointFound"])
         or (summary["screenStarted"] != (summary["screenExitCode"] is not None))
+        or (summary["uBootBannerObserved"] and not summary["screenStarted"])
+        or (summary["uBootBannerObserved"] and summary["outputBytesObserved"] == 0)
         or (summary["promptObserved"] and not summary["screenStarted"])
         or (summary["outputBytesObserved"] > 0 and not summary["screenStarted"])
         or (summary["bootCommandSent"] and not summary["promptObserved"])

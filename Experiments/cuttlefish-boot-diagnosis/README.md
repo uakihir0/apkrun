@@ -10,8 +10,9 @@ host tools, capture tools, CPU count, memory size, and boot deadline to the
 vectors for both commands; the live runner validates the saved GPU and console
 settings before publication. Bootloader pause mode is opt-in. In that mode, a
 bounded helper attaches to the run's private Screen endpoint and sends `boot`
-only after it sees the U-Boot prompt. The helper publishes a small status
-summary; it never saves the console transcript. Pause mode requires
+only after it sees the U-Boot prompt. Its version-2 status summary records
+whether a U-Boot banner was observed, along with prompt and handoff states;
+it never saves the console transcript. Pause mode requires
 `APKRUN_DIAGNOSTIC_CONSOLE=true` and passes
 `--pause_in_bootloader=true` to both Cuttlefish commands. CVD startup and
 console handoff run under one supervisor: if either process fails, the

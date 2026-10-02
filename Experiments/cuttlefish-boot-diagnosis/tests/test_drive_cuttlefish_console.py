@@ -82,7 +82,7 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     result = tmp_path / "bootloader-console-summary.json"
     screen = _screen_stub(
         tmp_path,
-        "os.write(1, b'U-Boot\\n=> ')\n"
+        "os.write(1, b'\\x1b=\\x1b(B\\xc4\\x9d\\nU-Boot 2025.01 (test)\\n=> ')\n"
         "command = os.read(0, 32)\n"
         "if b'boot\\r' not in command:\n"
         "    raise SystemExit(19)\n"
@@ -95,6 +95,7 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["consoleEndpointFound"] is True
     assert summary["screenStarted"] is True
+    assert summary["uBootBannerObserved"] is True
     assert summary["promptObserved"] is True
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is True
@@ -110,7 +111,7 @@ def test_console_helper_ignores_kernel_marker_received_before_boot(
     result = tmp_path / "bootloader-console-summary.json"
     screen = _screen_stub(
         tmp_path,
-        "os.write(1, b'Starting kernel ...\\nU-Boot\\n=> ')\n"
+        "os.write(1, b'Starting kernel ...\\nU-Boot 2025.01 (test)\\n=> ')\n"
         "command = os.read(0, 32)\n"
         "if b'boot\\r' not in command:\n"
         "    raise SystemExit(19)\n"
@@ -168,6 +169,88 @@ def test_console_helper_times_out_without_sending_boot_when_prompt_is_absent(
     assert summary["timedOut"] is True
     assert summary["cleanupComplete"] is True
     assert summary["screenExitCode"] == -15
+
+
+def test_console_helper_records_uboot_banner_without_sending_boot(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n')\ntime.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["uBootBannerObserved"] is True
+    assert summary["promptObserved"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["cleanupComplete"] is True
+
+
+@pytest.mark.parametrize(
+    "control_string",
+    (
+        b"\x1b]0;title\x1b\x07",
+        b"\x1bPdata\x1b\x9c",
+    ),
+)
+def test_console_helper_observes_banner_after_control_string_terminator(
+    tmp_path: Path,
+    control_string: bytes,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    output = control_string + b"U-Boot 2025.01\n"
+    screen = _screen_stub(
+        tmp_path,
+        f"os.write(1, {output!r})\ntime.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["uBootBannerObserved"] is True
+    assert summary["promptObserved"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["cleanupComplete"] is True
+
+
+@pytest.mark.parametrize(
+    "console_output",
+    (
+        b"Waiting for U-Boot prompt\n",
+        b"U-Boot\n2025.01\n",
+        b"\x1bP\nU-Boot 2025.01 (hidden)\x1b\\\n",
+        b"\x1b]0;\nU-Boot 2025.01",
+        b"\x90\nU-Boot 2025.01 (hidden)\x9c\n",
+        b"\x9d0;\nU-Boot 2025.01\x9c",
+        b"\x9d0;\xc5\x9c\nU-Boot 2025.01\x9c",
+        b"\xf0\x90\x9d0;\nU-Boot 2025.01\x9c",
+    ),
+)
+def test_console_helper_does_not_treat_uboot_mention_as_banner(
+    tmp_path: Path,
+    console_output: bytes,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        f"os.write(1, {console_output!r})\ntime.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["uBootBannerObserved"] is False
+    assert summary["promptObserved"] is False
+    assert summary["bootCommandSent"] is False
 
 
 def test_console_helper_bounds_output_and_never_sends_boot_without_prompt(

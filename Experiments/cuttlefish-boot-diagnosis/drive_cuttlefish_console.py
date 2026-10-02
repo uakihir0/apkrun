@@ -29,10 +29,128 @@ DEFAULT_HANDOFF_TIMEOUT_SECONDS = 10
 POLL_INTERVAL_SECONDS = 0.1
 CHILD_STOP_GRACE_SECONDS = 2
 CHILD_DESCENDANT_GRACE_SECONDS = 0.5
-ANSI_ESCAPE = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+U_BOOT_BANNER = re.compile(r"(?m)^[ \t]*U-Boot(?:[ \t]+SPL)?[ \t]+v?\d{4}\.\d{2}\b.*$")
 UBOOT_PROMPT = re.compile(r"(?:^|\n)\s*=>\s*$")
 KERNEL_HANDOFF = re.compile(r"Starting kernel|Booting Linux on physical CPU")
 requested_signal: int | None = None
+
+
+def _is_utf8_continuation(data: bytes, index: int) -> bool:
+    if not 0x80 <= data[index] <= 0xBF:
+        return False
+    for distance in range(1, min(index, 3) + 1):
+        start = index - distance
+        lead = data[start]
+        if 0xC2 <= lead <= 0xDF:
+            sequence_length = 2
+            first_continuation_min = 0x80
+            first_continuation_max = 0xBF
+        elif 0xE0 <= lead <= 0xEF:
+            sequence_length = 3
+            first_continuation_min = 0xA0 if lead == 0xE0 else 0x80
+            first_continuation_max = 0x9F if lead == 0xED else 0xBF
+        elif 0xF0 <= lead <= 0xF4:
+            sequence_length = 4
+            first_continuation_min = 0x90 if lead == 0xF0 else 0x80
+            first_continuation_max = 0x8F if lead == 0xF4 else 0xBF
+        else:
+            continue
+        if distance >= sequence_length:
+            continue
+        prefix = data[start + 1 : index + 1]
+        if not all(0x80 <= byte <= 0xBF for byte in prefix):
+            continue
+        if not first_continuation_min <= prefix[0] <= first_continuation_max:
+            continue
+        end = start + sequence_length
+        if end > len(data):
+            return True
+        try:
+            decoded = data[start:end].decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if len(decoded) == 1:
+            return True
+    return False
+
+
+def _skip_control_string(
+    data: bytes,
+    index: int,
+    *,
+    bell_terminates: bool,
+) -> int:
+    while index < len(data):
+        if (
+            data[index] == 0x9C
+            and not _is_utf8_continuation(data, index)
+            or bell_terminates
+            and data[index] == 0x07
+        ):
+            return index + 1
+        if data[index] == 0x1B:
+            if index + 1 >= len(data):
+                return len(data)
+            if data[index + 1] == ord("\\"):
+                return index + 2
+            index += 1
+            continue
+        index += 1
+    return index
+
+
+def _strip_ansi_escape_sequences(data: bytes) -> bytes:
+    result = bytearray()
+    index = 0
+    while index < len(data):
+        if data[index] == 0x9B and not _is_utf8_continuation(data, index):
+            index += 1
+            while index < len(data) and not 0x40 <= data[index] <= 0x7E:
+                index += 1
+            if index < len(data):
+                index += 1
+            continue
+
+        if data[index] == 0x9D and not _is_utf8_continuation(data, index):
+            index = _skip_control_string(data, index + 1, bell_terminates=True)
+            continue
+
+        if data[index] in (0x90, 0x98, 0x9E, 0x9F) and not _is_utf8_continuation(
+            data, index
+        ):
+            index = _skip_control_string(data, index + 1, bell_terminates=False)
+            continue
+
+        if data[index] != 0x1B:
+            result.append(data[index])
+            index += 1
+            continue
+        if index + 1 >= len(data):
+            break
+
+        introducer = data[index + 1]
+        if introducer == ord("["):
+            index += 2
+            while index < len(data) and not 0x40 <= data[index] <= 0x7E:
+                index += 1
+            if index < len(data):
+                index += 1
+            continue
+
+        if introducer == ord("]"):
+            index = _skip_control_string(data, index + 2, bell_terminates=True)
+            continue
+
+        if introducer in (ord("P"), ord("X"), ord("^"), ord("_")):
+            index = _skip_control_string(data, index + 2, bell_terminates=False)
+            continue
+
+        index += 1
+        while index < len(data) and 0x20 <= data[index] <= 0x2F:
+            index += 1
+        if index < len(data) and 0x30 <= data[index] <= 0x7E:
+            index += 1
+    return bytes(result)
 
 
 def _signal_handler(signum: int, _frame: FrameType | None) -> None:
@@ -534,9 +652,10 @@ def drive_console(
         raise ValueError("Screen executable must be a regular executable file")
 
     result_document: dict[str, Any] = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "consoleEndpointFound": False,
         "screenStarted": False,
+        "uBootBannerObserved": False,
         "promptObserved": False,
         "bootCommandSent": False,
         "kernelHandoffObserved": False,
@@ -586,11 +705,13 @@ def drive_console(
                 if chunk:
                     output.extend(chunk)
                     result_document["outputBytesObserved"] = len(output)
-                    decoded = ANSI_ESCAPE.sub(b"", bytes(output)).decode(
+                    decoded = _strip_ansi_escape_sequences(bytes(output)).decode(
                         "utf-8",
                         errors="replace",
                     )
                     normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
+                    if U_BOOT_BANNER.search(normalized):
+                        result_document["uBootBannerObserved"] = True
                     if not result_document["bootCommandSent"] and UBOOT_PROMPT.search(
                         normalized
                     ):
@@ -612,7 +733,7 @@ def drive_console(
                         if handoff_output_offset is not None
                         else b""
                     )
-                    handoff_text = ANSI_ESCAPE.sub(b"", handoff_output).decode(
+                    handoff_text = _strip_ansi_escape_sequences(handoff_output).decode(
                         "utf-8",
                         errors="replace",
                     )

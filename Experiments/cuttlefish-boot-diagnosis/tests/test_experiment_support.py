@@ -414,7 +414,9 @@ def _make_baseline_repository(root: Path) -> tuple[Path, Path, Path, Path]:
     ("field", "value", "message"),
     (
         ("schemaVersion", True, "invalid fields"),
+        ("schemaVersion", 1, "invalid fields"),
         ("cleanupComplete", False, "inconsistent or incomplete"),
+        ("outputBytesObserved", 0, "inconsistent or incomplete"),
         ("promptObserved", False, "inconsistent or incomplete"),
         ("outputTruncated", True, "inconsistent or incomplete"),
         ("timedOut", True, "inconsistent or incomplete"),
@@ -431,9 +433,10 @@ def test_bootloader_console_summary_rejects_invalid_status(
     message: str,
 ) -> None:
     summary = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "consoleEndpointFound": True,
         "screenStarted": True,
+        "uBootBannerObserved": True,
         "promptObserved": True,
         "bootCommandSent": True,
         "kernelHandoffObserved": True,
@@ -483,9 +486,10 @@ def test_bootloader_console_summary_rejects_impossible_process_status(
     message: str,
 ) -> None:
     summary: dict[str, object] = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "consoleEndpointFound": True,
         "screenStarted": True,
+        "uBootBannerObserved": True,
         "promptObserved": True,
         "bootCommandSent": True,
         "kernelHandoffObserved": True,
@@ -511,9 +515,10 @@ def test_bootloader_console_summary_rejects_simultaneous_timeouts(
     tmp_path: Path,
 ) -> None:
     summary = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "consoleEndpointFound": True,
         "screenStarted": True,
+        "uBootBannerObserved": True,
         "promptObserved": True,
         "bootCommandSent": True,
         "kernelHandoffObserved": False,
@@ -2586,9 +2591,10 @@ result = Path(arguments[arguments.index("--result") + 1])
 result.write_text(
     json.dumps(
         {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "consoleEndpointFound": True,
             "screenStarted": True,
+            "uBootBannerObserved": True,
             "promptObserved": True,
             "bootCommandSent": True,
             "kernelHandoffObserved": True,
@@ -3254,9 +3260,10 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         bootloader_console_summary_path.write_text(
             json.dumps(
                 {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "consoleEndpointFound": True,
                     "screenStarted": True,
+                    "uBootBannerObserved": True,
                     "promptObserved": True,
                     "bootCommandSent": True,
                     "kernelHandoffObserved": True,
@@ -4328,9 +4335,10 @@ def test_publication_rejects_mismatched_console_labels(
         ({"schemaVersion": 1}, "unexpected schema"),
         (
             {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "consoleEndpointFound": False,
                 "screenStarted": False,
+                "uBootBannerObserved": False,
                 "promptObserved": False,
                 "bootCommandSent": False,
                 "kernelHandoffObserved": False,

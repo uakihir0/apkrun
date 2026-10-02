@@ -73,18 +73,56 @@ def _console_endpoint(home: Path) -> Path | None:
         (runtime_directory, True),
         (endpoint, False),
     ):
+        description = "runtime directory" if is_directory else "console endpoint"
         try:
             metadata = path.lstat()
         except FileNotFoundError:
             return None
         except OSError as error:
             raise ValueError(
-                "private Cuttlefish console path is unavailable"
+                f"private Cuttlefish {description} is unavailable"
             ) from error
         if stat.S_ISLNK(metadata.st_mode):
-            raise ValueError("private Cuttlefish console path contains a symlink")
+            try:
+                target = path.resolve(strict=True)
+                target_metadata = target.stat()
+            except OSError as error:
+                raise ValueError(
+                    f"private Cuttlefish {description} symlink target is unavailable"
+                ) from error
+            target_type = next(
+                (
+                    name
+                    for name, matches in (
+                        ("directory", stat.S_ISDIR(target_metadata.st_mode)),
+                        ("socket", stat.S_ISSOCK(target_metadata.st_mode)),
+                        ("fifo", stat.S_ISFIFO(target_metadata.st_mode)),
+                        ("character-device", stat.S_ISCHR(target_metadata.st_mode)),
+                        ("regular-file", stat.S_ISREG(target_metadata.st_mode)),
+                        ("block-device", stat.S_ISBLK(target_metadata.st_mode)),
+                    )
+                    if matches
+                ),
+                "other",
+            )
+            target_location = (
+                "within-home"
+                if target == home or target.is_relative_to(home)
+                else "outside-home"
+            )
+            target_owner = (
+                "same-user"
+                if target_metadata.st_uid == os.getuid()
+                else "different-owner"
+            )
+            raise ValueError(
+                f"private Cuttlefish {description} is a symlink "
+                f"({target_type}, {target_location}, {target_owner})"
+            )
         if metadata.st_uid != os.getuid():
-            raise ValueError("private Cuttlefish console path has an unexpected owner")
+            raise ValueError(
+                f"private Cuttlefish {description} has an unexpected owner"
+            )
         if is_directory and not stat.S_ISDIR(metadata.st_mode):
             raise ValueError("private Cuttlefish runtime path is not a directory")
     try:

@@ -230,7 +230,10 @@ def test_console_helper_reports_rejected_runtime_symlink(tmp_path: Path) -> None
     completed = _run_helper(home, result, screen, timeout=1)
 
     assert completed.returncode == 1
-    assert "private Cuttlefish console path contains a symlink" in completed.stderr
+    assert (
+        "private Cuttlefish runtime directory is a symlink "
+        "(directory, outside-home, same-user)" in completed.stderr
+    )
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["consoleEndpointFound"] is False
     assert summary["exitCode"] == 1

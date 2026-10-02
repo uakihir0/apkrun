@@ -3919,13 +3919,23 @@ walker iterates 512-entry tables, limits cache operations to RAM mappings,
 and calls the range callback; with `CONFIG_CMO_BY_VA_ONLY`, `flush_dcache_all`
 uses that walker before disabling the data cache. The captured source contains
 this implementation, but the exact Cuttlefish U-Boot defconfig and whether
-the packaged binary enables that option have not been verified. The attached
-binary scan and relocation arithmetic also remain independently unreplicated.
-The submitted analysis reports scanning 4-KiB-aligned relocation candidates,
-wrapping raw instruction bytes as Mach-O with `xcrun clang`, and disassembling
-them with `xcrun llvm-objdump`. The exact commands and intermediate artifacts
-are not preserved in the repository, so this method is documented as reported
-evidence rather than independently reproducible verification.
+the packaged binary enables that option have not been verified. The
+712,032-byte `bootloader.crosvm` was independently read from the pinned
+Cuttlefish image path and matched SHA-256
+`f464a92c6086fa876c0bc775397d20b7491b6b34e2260feb0e19b5ca97f2dd30`. An
+aligned scan found the little-endian instruction word `0xd50b7e20` only at
+file offset `0x21f4`. Wrapping the bytes in a Mach-O `__TEXT,__text` section
+with `.incbin`, compiling with
+`xcrun clang -target arm64-apple-macosx15.0 -c wrapper.S -o wrapper.o`, and
+disassembling with
+`xcrun llvm-objdump --disassemble --no-show-raw-insn --start-address=0x21dc --stop-address=0x2220 wrapper.o`
+reproduced `dc civac, x0` at `0x21f4` and its cache-line loop. A second window
+from `0x220c` to `0x2250` reproduced the following `dc ivac, x0` loop. The
+traced PC minus the verified file offset gives the 4-KiB-aligned candidate
+base `0x000000017f63c000`. This independently verifies the binary instruction
+and the address arithmetic. The attached analysis's complete 174-candidate
+relocation search, the runtime mapping from file offset to PC, and the
+bootloader configuration remain unverified.
 
 The saved `default-20261001T120904-49816` logs record the U-Boot banner at
 11:59:04 and the Linux banner at 12:02:14, a 190-second interval. They later
@@ -3933,17 +3943,22 @@ record `adbd` startup and Cuttlefish ADB proxy event 5 at 12:05:16, while the
 host connector reports `device offline` at 12:05:29. The capture never reached
 its post-`cvd start` ADB polling loop, so that run did not measure external ADB
 readiness or `sys.boot_completed`. A 120-second run is therefore too short to
-test whether the same path completes; a passive 2400-second capture is the
-next discriminating probe.
+test whether the same path completes. A passive capture of at least 2400
+seconds was the next discriminating probe; the active 3000-second retry is
+documented below.
 
 **Verification.** Reviewed `cache.S` and `cache_v8.c` from the pinned source
-commit; the assembly loop and conditional page-table walker match the
-reported instruction pattern. Existing `kernel.log` and `launcher.log`
-timestamps confirm Linux boot at +190 seconds, later `adbd` and proxy startup,
-and an offline connector state. This verifies source consistency and the
-captured timeline only. It does not confirm the binary's defconfig, prove the
-candidate relocation base, establish that the traced PC belongs to this
-function, or establish that all observed delay is cache maintenance.
+commit and independently reproduced the instruction window from the
+hash-verified Cuttlefish binary using the Mach-O wrapper and `xcrun` commands
+above. The instruction-word scan found one 4-byte-aligned occurrence at
+`0x21f4`; subtracting it from the traced PC yields the aligned candidate
+base. Existing `kernel.log` and `launcher.log` timestamps confirm Linux boot
+at +190 seconds, later `adbd` and proxy startup, and an offline connector
+state. These checks confirm the packaged instruction and that the candidate
+address arithmetic is consistent. They do not confirm that the runtime
+bootloader maps this file offset at the traced PC, verify the binary's
+defconfig or call path, or establish that all observed delay is cache
+maintenance.
 
 The later 2026-10-02 `default` capture recorded the U-Boot banner at 22:34:27
 and the Linux banner at 22:43:24 local time, a 537-second interval. Cuttlefish

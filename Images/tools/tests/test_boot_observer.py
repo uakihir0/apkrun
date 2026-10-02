@@ -27,6 +27,40 @@ OBSERVER_SPEC.loader.exec_module(OBSERVER_MODULE)
 BootObserver = OBSERVER_MODULE.BootObserver
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_managed_cvd_test_directories(tmp_path: Path) -> Iterator[None]:
+    yield
+    marker = tmp_path / ".apkrun-cvd-test-runs"
+    if not marker.exists():
+        return
+    managed_root = Path("/var/tmp/cvd")
+    for line in marker.read_text(encoding="utf-8").splitlines():
+        run_root = Path(line)
+        if run_root.parent.parent == managed_root and run_root.parent.name == str(os.getuid()):
+            shutil.rmtree(run_root, ignore_errors=True)
+
+
+def _managed_instance_path(
+    tmp_path: Path,
+    name: str = "cvd-1",
+    *,
+    home_path: Path | None = None,
+) -> Path:
+    managed_root = Path("/var/tmp/cvd")
+    user_root = managed_root / str(os.getuid())
+    user_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run_root = Path(tempfile.mkdtemp(prefix="apkrun-observer.", dir=user_root))
+    private_home = home_path or tmp_path / "cvd-home"
+    private_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (run_root / "home").symlink_to(private_home, target_is_directory=True)
+    canonical_instance = private_home / "cuttlefish" / "instances" / name
+    canonical_instance.mkdir(parents=True, exist_ok=True)
+    marker = tmp_path / ".apkrun-cvd-test-runs"
+    with marker.open("a", encoding="utf-8") as stream:
+        stream.write(f"{run_root}\n")
+    return run_root / "home" / "cuttlefish" / "instances" / name
+
+
 def _fake_proc_process(
     proc_root: Path,
     pid: int,
@@ -34,19 +68,31 @@ def _fake_proc_process(
     *,
     process_name: str | None = None,
     start_time: int = 12345,
+    parent_pid: int = 0,
     instance_path: Path | None = None,
+    staged_crosvm_target: Path | None = None,
 ) -> None:
     process = proc_root / str(pid)
     process.mkdir(parents=True)
-    (process / "exe").symlink_to(executable)
-    command_line = [b"crosvm"]
+    runtime_executable = executable
+    if instance_path is not None:
+        runtime_executable = (
+            instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / "crosvm"
+        )
+        runtime_executable.parent.mkdir(parents=True, exist_ok=True)
+        if not runtime_executable.exists():
+            runtime_executable.symlink_to((staged_crosvm_target or executable).resolve(strict=True))
+    (process / "exe").symlink_to(executable.resolve(strict=True))
+    command_line = [os.fsencode(runtime_executable)]
     if process_name is not None:
         command_line.append(f"--process_name={process_name}".encode("ascii"))
     if instance_path is not None:
         command_line.append(f"--socket={instance_path}/internal/vsock.sock".encode())
     (process / "cmdline").write_bytes(b"\0".join(command_line) + b"\0")
     (process / "stat").write_bytes(
-        f"{pid} (crosvm worker) S ".encode("ascii") + b"0 " * 18 + f"{start_time}\n".encode("ascii")
+        f"{pid} (crosvm worker) S {parent_pid} ".encode("ascii")
+        + b"0 " * 17
+        + f"{start_time}\n".encode("ascii")
     )
     (process / "status").write_bytes(b"Name:\tcrosvm\nVmRSS:\t987654 kB\nRssShmem:\t1234 kB\n")
 
@@ -63,6 +109,7 @@ def _fake_proc_restarter(
     process = proc_root / str(pid)
     process.mkdir(parents=True)
     (process / "exe").symlink_to(executable)
+    crosvm_executable = instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / "crosvm"
     serial = (
         (
             "hardware=virtio-console,num=1,type=file,"
@@ -74,7 +121,9 @@ def _fake_proc_restarter(
     (process / "cmdline").write_bytes(
         b"process_restarter\0"
         + f"--block=path={instance_path}/disk.img".encode()
-        + b"\0--serial\0"
+        + b"\0--\0"
+        + os.fsencode(crosvm_executable)
+        + b"\0--extended-status\0run\0--serial\0"
         + serial
         + b"\0"
     )
@@ -102,14 +151,19 @@ def _observer(
     *,
     proc_root: Path,
     home_path: Path | None = None,
+    runtime_target: Path | None = None,
+    runtime_link_ready: bool = True,
     sample_interval: float = 5.0,
     adb_interval: float = 15.0,
     background_sampling: bool = False,
 ) -> tuple[BootObserver, Path, Path]:
     home = home_path or tmp_path / "cvd-home"
     home.mkdir(mode=0o700, exist_ok=True)
-    instance_path = home / "cuttlefish" / "instances" / "cvd-1"
+    instance_path = runtime_target or _managed_instance_path(tmp_path, home_path=home)
     instance_path.mkdir(parents=True, exist_ok=True)
+    instance_path_link = home / "cuttlefish_runtime"
+    if runtime_link_ready:
+        instance_path_link.symlink_to(instance_path)
     stage = tmp_path / "stage"
     log_directory = stage / ".live-cvd-logs"
     log_directory.mkdir(parents=True, mode=0o700)
@@ -122,7 +176,7 @@ def _observer(
     output = stage / "boot-observer.jsonl"
     observer = BootObserver(
         home=home,
-        instance_path=instance_path,
+        instance_path=instance_path_link,
         launcher_log=log_directory / "launcher.log",
         output_path=output,
         adb_path=adb,
@@ -156,7 +210,8 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
-    executable = tmp_path / "crosvm"
+    executable = tmp_path / "usr" / "lib" / "cuttlefish-common" / "bin" / "crosvm"
+    executable.parent.mkdir(parents=True)
     executable.write_bytes(b"test executable")
     executable.chmod(0o700)
     restarter_executable = tmp_path / "process_restarter"
@@ -172,12 +227,14 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
         412,
         executable,
         process_name="openwrt",
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_process(
         proc_root,
         413,
         executable,
+        parent_pid=411,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -218,6 +275,133 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
     assert isinstance(memory[0]["timestampUtc"], str)
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert "private/crosvm" not in output.read_text(encoding="ascii")
+    staged_crosvm = (
+        observer.instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / "crosvm"
+    )
+    assert staged_crosvm.is_symlink()
+    assert staged_crosvm.resolve() == executable.resolve()
+
+
+def test_boot_observer_rejects_staged_crosvm_link_to_different_same_name_executable(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "installed" / "crosvm"
+    executable.parent.mkdir()
+    executable.write_bytes(b"installed crosvm executable")
+    executable.chmod(0o700)
+    staged_target = tmp_path / "other-install" / "crosvm"
+    staged_target.parent.mkdir()
+    staged_target.write_bytes(b"different crosvm executable")
+    staged_target.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        parent_pid=410,
+        instance_path=observer.instance_path,
+        staged_crosvm_target=staged_target,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    staged_crosvm = (
+        observer.instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / "crosvm"
+    )
+    assert staged_crosvm.is_symlink()
+    assert staged_crosvm.resolve() == staged_target.resolve()
+    memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+    assert len(memory) == 1
+    assert memory[0]["identity"] == "unavailable"
+    assert memory[0]["candidateCount"] == 0
+
+
+def test_boot_observer_rejects_child_pid_reused_by_another_parent_before_first_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        parent_pid=410,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
+    read_crosvm_memory = observer._read_crosvm_memory
+
+    def replace_child_before_sampling(
+        pid: int,
+        expected_start_time: bytes | None,
+        *,
+        parent_pid: int,
+        parent_start_time: bytes,
+    ) -> tuple[dict[str, object], bytes] | None:
+        child = proc_root / str(pid)
+        shutil.rmtree(child)
+        _fake_proc_process(
+            proc_root,
+            pid,
+            executable,
+            start_time=54321,
+            parent_pid=999,
+            instance_path=observer.instance_path,
+        )
+        return read_crosvm_memory(
+            pid,
+            expected_start_time,
+            parent_pid=parent_pid,
+            parent_start_time=parent_start_time,
+        )
+
+    monkeypatch.setattr(observer, "_read_crosvm_memory", replace_child_before_sampling)
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+    assert len(memory) == 1
+    assert memory[0]["identity"] == "unavailable"
+    assert memory[0]["candidateCount"] == 0
 
 
 def test_boot_observer_rejects_reused_launcher_pid_between_samples(
@@ -241,6 +425,7 @@ def test_boot_observer_rejects_reused_launcher_pid_between_samples(
         proc_root,
         413,
         executable,
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -286,6 +471,7 @@ def test_boot_observer_rejects_reused_restarter_pid_between_samples(
         proc_root,
         413,
         executable,
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -331,6 +517,7 @@ def test_boot_observer_keeps_restarter_pid_generation_across_atomic_log_updates(
         proc_root,
         413,
         executable,
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -382,12 +569,14 @@ def test_boot_observer_selects_android_after_interleaved_openwrt_restarter(
         412,
         executable,
         process_name="openwrt",
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_process(
         proc_root,
         413,
         executable,
+        parent_pid=411,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -438,11 +627,12 @@ def test_boot_observer_rejects_same_name_crosvm_from_another_private_instance(
         proc_root=proc_root,
         sample_interval=1,
     )
-    other_instance = tmp_path / "other-cvd-home" / "cuttlefish" / "instances" / "cvd-1"
+    other_instance = _managed_instance_path(tmp_path, name="cvd-1")
     _fake_proc_process(
         proc_root,
         414,
         executable,
+        parent_pid=410,
         instance_path=other_instance,
     )
     _fake_proc_restarter(
@@ -484,6 +674,7 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
         proc_root,
         415,
         executable,
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -539,6 +730,7 @@ def test_boot_observer_detects_same_prefix_log_truncation_and_regrowth(
         proc_root,
         415,
         executable,
+        parent_pid=410,
         instance_path=observer.instance_path,
     )
     _fake_proc_restarter(
@@ -573,23 +765,242 @@ def test_boot_observer_detects_same_prefix_log_truncation_and_regrowth(
     assert memory[1]["identity"] == "unavailable"
 
 
-def test_boot_observer_records_missing_instance_path_discovery(
+def test_boot_observer_records_unresolved_runtime_link(
     tmp_path: Path,
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
-    observer, output, _ = _observer(tmp_path, proc_root=proc_root)
-    observer.instance_path.rmdir()
+    missing_target = tmp_path / "managed" / "home" / "cuttlefish" / "instances" / "cvd-1"
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        runtime_target=missing_target,
+        runtime_link_ready=False,
+    )
 
     observer.start()
     observer.sample(now=0)
     observer.close()
 
+    records = _read_records(output)
+    assert any(record["event"] == "instance_path_discovery_pending" for record in records)
     assert any(
         record["event"] == "instance_path_discovery_failed"
-        and record["reason"] == "instance_directory_missing"
-        for record in _read_records(output)
+        and record["reason"] == "runtime_link_never_resolved"
+        for record in records
     )
+
+
+def test_boot_observer_rejects_instance_suffix_outside_cuttlefish_managed_root(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    untrusted_target = tmp_path / "managed" / "home" / "cuttlefish" / "instances" / "cvd-1"
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        runtime_target=untrusted_target,
+    )
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    assert not any(record["event"] == "instance_path_discovered" for record in records)
+    assert any(
+        record["event"] == "instance_path_discovery_failed"
+        and record["reason"] == "runtime_link_never_resolved"
+        for record in records
+    )
+
+
+def test_boot_observer_rejects_instance_that_does_not_match_adb_port(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        runtime_target=_managed_instance_path(tmp_path, name="cvd-2"),
+    )
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    assert not any(record["event"] == "instance_path_discovered" for record in records)
+    assert any(
+        record["event"] == "instance_path_discovery_failed"
+        and record["reason"] == "runtime_link_never_resolved"
+        for record in records
+    )
+
+
+@pytest.mark.parametrize("redirect_component", ("home", "instances"))
+def test_boot_observer_rejects_managed_path_symlink_redirects(
+    tmp_path: Path,
+    redirect_component: str,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(tmp_path, proc_root=proc_root)
+
+    if redirect_component == "home":
+        managed_home = observer.instance_path.parents[2]
+        managed_home.unlink()
+        redirected_home = tmp_path / "redirected-home"
+        (redirected_home / "cuttlefish" / "instances" / "cvd-1").mkdir(parents=True)
+        managed_home.symlink_to(redirected_home, target_is_directory=True)
+    else:
+        instances = observer.home / "cuttlefish" / "instances"
+        shutil.rmtree(instances)
+        redirected_instances = tmp_path / "redirected-instances"
+        (redirected_instances / "cvd-1").mkdir(parents=True)
+        instances.symlink_to(redirected_instances, target_is_directory=True)
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    assert any(
+        record["event"] == "instance_path_changed_observation_gap"
+        and record["reason"] == "runtime_link_unavailable"
+        for record in records
+    )
+    assert not any(record["event"] == "crosvm_memory" and "pid" in record for record in records)
+
+
+def test_boot_observer_rejects_runtime_path_from_a_foreign_uid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(tmp_path, proc_root=proc_root)
+    current_uid = os.getuid()
+    monkeypatch.setattr(OBSERVER_MODULE.os, "getuid", lambda: current_uid + 1)
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    assert any(
+        record["event"] == "instance_path_changed_observation_gap"
+        and record["reason"] == "runtime_link_unavailable"
+        for record in records
+    )
+
+
+def test_boot_observer_discovers_delayed_external_runtime_target(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    instance_path = _managed_instance_path(tmp_path)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        runtime_target=instance_path,
+        runtime_link_ready=False,
+    )
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+
+    observer.start()
+    observer.instance_path_link.symlink_to(instance_path)
+    _fake_proc_process(
+        proc_root,
+        513,
+        executable,
+        parent_pid=512,
+        instance_path=instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        512,
+        restarter_executable,
+        children=(513,),
+        instance_path=instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 512)
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    discovered = [record for record in records if record["event"] == "instance_path_discovered"]
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(discovered) == 1
+    assert len(memory) == 1
+    assert memory[0]["pid"] == 513
+    assert memory[0]["vmRssKiB"] == 987654
+
+
+@pytest.mark.parametrize("replace_target", (False, True))
+def test_boot_observer_stops_sampling_if_runtime_link_changes(
+    tmp_path: Path,
+    replace_target: bool,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    first_instance = _managed_instance_path(tmp_path)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        runtime_target=first_instance,
+    )
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    _fake_proc_process(
+        proc_root,
+        523,
+        executable,
+        parent_pid=522,
+        instance_path=first_instance,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        522,
+        restarter_executable,
+        children=(523,),
+        instance_path=first_instance,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 522)
+    observer.start()
+    observer.sample(now=0)
+
+    observer.instance_path_link.unlink()
+    if replace_target:
+        second_instance = _managed_instance_path(tmp_path)
+        observer.instance_path_link.symlink_to(second_instance)
+    observer.sample(now=5)
+    observer.close()
+
+    records = _read_records(output)
+    gaps = [
+        record for record in records if record["event"] == "instance_path_changed_observation_gap"
+    ]
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(gaps) == 1
+    assert gaps[0]["discardedCandidateCount"] == 1
+    assert gaps[0]["reason"] == (
+        "runtime_target_changed" if replace_target else "runtime_link_unavailable"
+    )
+    assert memory[0]["pid"] == 523
+    assert memory[1]["identity"] == "unavailable"
 
 
 @pytest.mark.parametrize("ignore_server_terminate", (False, True))
@@ -790,7 +1201,7 @@ def test_private_adb_server_exits_when_observer_parent_is_killed(
             child_script,
             str(REFERENCE_PATH / "boot_observer.py"),
             str(home),
-            str(observer.instance_path),
+            str(observer.instance_path_link),
             str(launcher_log),
             str(output),
             str(observer.adb_path),

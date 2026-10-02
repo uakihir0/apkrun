@@ -58,7 +58,7 @@ def _timestamp_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
-def _proc_start_time(path: Path) -> bytes | None:
+def _proc_identity(path: Path) -> tuple[int, bytes] | None:
     try:
         raw = path.read_bytes()
     except OSError:
@@ -67,9 +67,14 @@ def _proc_start_time(path: Path) -> bytes | None:
     if closing_parenthesis < 0:
         return None
     fields = raw[closing_parenthesis + 1 :].split()
-    if len(fields) <= 19 or not fields[19].isdigit():
+    if len(fields) <= 19 or not fields[1].isdigit() or not fields[19].isdigit():
         return None
-    return fields[19]
+    return int(fields[1]), fields[19]
+
+
+def _proc_start_time(path: Path) -> bytes | None:
+    identity = _proc_identity(path)
+    return None if identity is None else identity[1]
 
 
 def _proc_memory_status(path: Path) -> tuple[int, int | None] | None:
@@ -115,12 +120,17 @@ class BootObserver:
         if sample_interval <= 0 or adb_interval <= 0:
             raise ValueError("observer intervals must be positive")
         self.home = home.resolve(strict=True)
-        self.instance_path = instance_path.resolve(strict=False)
         try:
-            self.instance_path.relative_to(self.home)
-        except ValueError:
-            raise ValueError("Cuttlefish instance path must be beneath its private HOME") from None
-        self._instance_path_bytes = os.fsencode(self.instance_path)
+            link_parent = Path(os.path.abspath(instance_path)).parent.resolve(strict=True)
+        except OSError:
+            raise ValueError("Cuttlefish runtime link parent must exist") from None
+        if link_parent != self.home or Path(instance_path).name != "cuttlefish_runtime":
+            raise ValueError("Cuttlefish runtime link must be beneath its private HOME") from None
+        self.instance_path_link = self.home / "cuttlefish_runtime"
+        self.instance_path = self.instance_path_link
+        self._instance_path_bytes: bytes | None = None
+        self._instance_path_event_recorded = False
+        self._instance_path_conflicted = False
         self.launcher_log = launcher_log
         self.output_path = output_path
         self.adb_path = adb_path.resolve(strict=True)
@@ -149,6 +159,7 @@ class BootObserver:
         self._start_event_observed = False
         self._next_sample = 0.0
         self._closed = False
+        self._refresh_instance_path(emit_event=False)
 
     def start(self) -> None:
         if self._output_fd is not None:
@@ -163,11 +174,11 @@ class BootObserver:
         )
         self._output_fd = os.open(self.output_path, flags, 0o600)
         self._record({"event": "observer_started"})
-        if not self.instance_path.is_dir():
+        if not self._refresh_instance_path():
             self._record(
                 {
-                    "event": "instance_path_discovery_failed",
-                    "reason": "instance_directory_missing",
+                    "event": "instance_path_discovery_pending",
+                    "reason": "runtime_link_not_ready",
                 }
             )
         if self.background_sampling:
@@ -186,6 +197,7 @@ class BootObserver:
         if self._output_fd is None or self._closed:
             raise RuntimeError("boot observer is not running")
         self._refresh_launcher_log()
+        self._refresh_instance_path()
         observed_at = time.monotonic() if now is None else now
         if observed_at < self._next_sample:
             return
@@ -195,7 +207,8 @@ class BootObserver:
             self._next_sample += self.sample_interval
             while self._next_sample <= observed_at:
                 self._next_sample += self.sample_interval
-        candidate_pids: set[int] = set()
+        candidate_owners: dict[int, tuple[int, bytes]] = {}
+        ambiguous_candidate_pids: set[int] = set()
         for restarter_pid in sorted(self._crosvm_restarter_pids):
             identity = self._read_restarter_children(
                 restarter_pid,
@@ -205,20 +218,31 @@ class BootObserver:
                 continue
             children, start_time = identity
             self._crosvm_restarter_start_times.setdefault(restarter_pid, start_time)
-            candidate_pids.update(children)
+            for child_pid in children:
+                previous_owner = candidate_owners.get(child_pid)
+                if previous_owner is not None and previous_owner[0] != restarter_pid:
+                    ambiguous_candidate_pids.add(child_pid)
+                else:
+                    candidate_owners[child_pid] = (restarter_pid, start_time)
+        candidate_pids = set(candidate_owners)
         for stale_pid in self._crosvm_start_times.keys() - candidate_pids:
             self._crosvm_start_times.pop(stale_pid, None)
         candidates: list[dict[str, Any]] = []
-        for pid in sorted(candidate_pids):
+        for pid in sorted(candidate_pids - ambiguous_candidate_pids):
+            restarter_pid, restarter_start_time = candidate_owners[pid]
             identity = self._read_crosvm_memory(
                 pid,
                 self._crosvm_start_times.get(pid),
+                parent_pid=restarter_pid,
+                parent_start_time=restarter_start_time,
             )
             if identity is None:
                 continue
             sample, start_time = identity
             self._crosvm_start_times.setdefault(pid, start_time)
             candidates.append(sample)
+        if not self._refresh_instance_path():
+            candidates.clear()
         if len(candidates) == 1:
             self._record({"event": "crosvm_memory", **candidates[0]})
         else:
@@ -276,6 +300,18 @@ class BootObserver:
         if self._sample_thread is not None and self._sample_thread.is_alive():
             raise OSError("crosvm memory observer did not stop within its cleanup bound")
         if self._output_fd is not None:
+            self._refresh_instance_path()
+            if self._instance_path_bytes is None:
+                self._record(
+                    {
+                        "event": "instance_path_discovery_failed",
+                        "reason": (
+                            "runtime_link_changed"
+                            if self._instance_path_conflicted
+                            else "runtime_link_never_resolved"
+                        ),
+                    }
+                )
             self._record({"event": "observer_stopped"})
             os.close(self._output_fd)
             self._output_fd = None
@@ -301,6 +337,98 @@ class BootObserver:
         self._crosvm_restarter_pids.clear()
         self._crosvm_restarter_start_times.clear()
         self._crosvm_start_times.clear()
+
+    def _resolve_instance_path(self) -> Path | None:
+        if not self.instance_path_link.is_symlink():
+            return None
+        try:
+            link_target = os.readlink(self.instance_path_link)
+        except OSError:
+            return None
+        target = Path(link_target)
+        managed_root = Path("/var/tmp/cvd")
+        instance_match = re.fullmatch(r"cvd-([0-9]+)", target.name)
+        if (
+            not target.is_absolute()
+            or ".." in target.parts
+            or not target.is_dir()
+            or target.parent.name != "instances"
+            or target.parent.parent.name != "cuttlefish"
+            or target.parent.parent.parent.name != "home"
+            or len(target.parents) < 6
+            or target.parents[5] != managed_root
+            or target.parents[4].name != str(os.getuid())
+            or instance_match is None
+            or 6520 + int(instance_match.group(1)) - 1 != self.adb_port
+        ):
+            return None
+        try:
+            resolved_target = target.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
+        if (
+            not resolved_target.is_dir()
+            or not resolved_target.is_relative_to(self.home)
+            or resolved_target.relative_to(self.home).parts
+            != ("cuttlefish", "instances", target.name)
+        ):
+            return None
+        return target
+
+    def _runtime_crosvm_path(self) -> Path | None:
+        if self._instance_path_bytes is None:
+            return None
+        return (
+            self.instance_path.parents[3]
+            / "artifacts"
+            / "host_tools"
+            / "bin"
+            / self.crosvm_path.name
+        )
+
+    def _refresh_instance_path(self, *, emit_event: bool = True) -> bool:
+        if self._instance_path_conflicted:
+            return False
+        resolved = self._resolve_instance_path()
+        if resolved is None:
+            if self._instance_path_bytes is not None:
+                self._instance_path_conflicted = True
+                discarded = len(self._crosvm_restarter_pids)
+                self._clear_launcher_identity()
+                self._instance_path_bytes = None
+                self._record(
+                    {
+                        "event": "instance_path_changed_observation_gap",
+                        "reason": "runtime_link_unavailable",
+                        "discardedCandidateCount": discarded,
+                    }
+                )
+            return False
+        resolved_bytes = os.fsencode(resolved)
+        if self._instance_path_bytes is not None:
+            if resolved_bytes != self._instance_path_bytes:
+                discarded = len(self._crosvm_restarter_pids)
+                self._instance_path_bytes = None
+                self._record(
+                    {
+                        "event": "instance_path_changed_observation_gap",
+                        "reason": "runtime_target_changed",
+                        "discardedCandidateCount": discarded,
+                    }
+                )
+                self._clear_launcher_identity()
+                self._instance_path_conflicted = True
+                return False
+            if emit_event and not self._instance_path_event_recorded:
+                self._record({"event": "instance_path_discovered"})
+                self._instance_path_event_recorded = True
+            return True
+        self.instance_path = resolved
+        self._instance_path_bytes = resolved_bytes
+        if emit_event:
+            self._record({"event": "instance_path_discovered"})
+            self._instance_path_event_recorded = True
+        return True
 
     def _refresh_launcher_log(self) -> None:
         flags = (
@@ -413,6 +541,19 @@ class BootObserver:
         except OSError:
             return None
         after = _proc_start_time(process / "stat")
+        try:
+            separator = command_line.index(b"--")
+            requested_crosvm = Path(os.fsdecode(command_line[separator + 1]))
+            expected_crosvm = self._runtime_crosvm_path()
+            if (
+                expected_crosvm is None
+                or not requested_crosvm.is_absolute()
+                or ".." in requested_crosvm.parts
+                or not expected_crosvm.is_file()
+            ):
+                return None
+        except (OSError, ValueError, IndexError):
+            return None
         serial_values = [
             command_line[index + 1]
             for index, argument in enumerate(command_line[:-1])
@@ -426,6 +567,7 @@ class BootObserver:
         if (
             before != after
             or Path(executable).name != "process_restarter"
+            or requested_crosvm != expected_crosvm
             or not any(self._argument_matches_instance(argument) for argument in command_line)
             or not any(b"kernel-log-pipe" in value for value in serial_values)
             or any(b"crosvm_openwrt" in argument for argument in command_line)
@@ -437,23 +579,55 @@ class BootObserver:
         self,
         pid: int,
         expected_start_time: bytes | None,
+        *,
+        parent_pid: int,
+        parent_start_time: bytes,
     ) -> tuple[dict[str, Any], bytes] | None:
         process = self.proc_root / str(pid)
-        before = _proc_start_time(process / "stat")
-        if before is None or (expected_start_time is not None and before != expected_start_time):
+        before = _proc_identity(process / "stat")
+        if (
+            before is None
+            or before[0] != parent_pid
+            or (expected_start_time is not None and before[1] != expected_start_time)
+            or _proc_start_time(self.proc_root / str(parent_pid) / "stat") != parent_start_time
+        ):
             return None
         try:
             executable = os.readlink(process / "exe")
             command_line = (process / "cmdline").read_bytes().split(b"\0")
         except OSError:
             return None
-        if Path(executable).resolve(strict=False) != self.crosvm_path or not any(
-            self._argument_matches_instance(argument) for argument in command_line
+        expected_crosvm = self._runtime_crosvm_path()
+        if (
+            expected_crosvm is None
+            or not command_line
+            or not any(self._argument_matches_instance(argument) for argument in command_line)
         ):
             return None
+        executable_path = Path(executable)
+        command_path = Path(os.fsdecode(command_line[0]))
+        if (
+            not expected_crosvm.is_file()
+            or Path(executable).name != self.crosvm_path.name
+            or not executable_path.is_absolute()
+            or ".." in executable_path.parts
+            or not command_path.is_absolute()
+            or ".." in command_path.parts
+            or command_path != expected_crosvm
+        ):
+            return None
+        try:
+            if not os.path.samefile(process / "exe", expected_crosvm):
+                return None
+        except OSError:
+            return None
         memory = _proc_memory_status(process / "status")
-        after = _proc_start_time(process / "stat")
-        if memory is None or before != after:
+        after = _proc_identity(process / "stat")
+        if (
+            memory is None
+            or before != after
+            or _proc_start_time(self.proc_root / str(parent_pid) / "stat") != parent_start_time
+        ):
             return None
         return (
             {
@@ -461,10 +635,12 @@ class BootObserver:
                 "vmRssKiB": memory[0],
                 "rssShmemKiB": memory[1],
             },
-            before,
+            before[1],
         )
 
     def _argument_matches_instance(self, argument: bytes) -> bool:
+        if self._instance_path_bytes is None:
+            return False
         search_from = 0
         while search_from < len(argument):
             position = argument.find(self._instance_path_bytes, search_from)

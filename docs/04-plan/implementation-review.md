@@ -4032,5 +4032,8 @@ Image tools suite passed 374 tests with four skips but had one timing-sensitive
 log-snapshot integration failure; that case passed when rerun alone. A
 low-load full-suite rerun remains pending. The first hostile review found
 three process/path validation gaps; all were fixed, and its follow-up review
-reported no findings. The active Cuttlefish result and its final observer
-timeline are recorded in M01 when the capture exits.
+reported no findings. A read-only procfs cross-check against the active Linux
+reference instance confirmed the actual managed symlink chain, current UID,
+ADB-port mapping, direct `process_restarter` parent, staged crosvm `argv[0]`,
+and `/proc/<pid>/exe` same-file check. The active Cuttlefish result and its
+final observer timeline are recorded in M01 when the capture exits.

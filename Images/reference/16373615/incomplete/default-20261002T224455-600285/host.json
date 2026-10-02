@@ -1,0 +1,16 @@
+{
+  "architecture": "aarch64",
+  "buildId": "16373615",
+  "captureDurationSeconds": 634,
+  "cpuCount": 8,
+  "cvdInstanceNumber": 1,
+  "cvdPackageVersion": "1.57.0",
+  "drmVirglSourceRevision": null,
+  "hostKind": "linux-apple",
+  "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+  "nestedVirtualization": "on",
+  "os": "Ubuntu 24.04.4 LTS",
+  "profile": "default",
+  "schemaVersion": 1,
+  "targetGpuMode": null
+}

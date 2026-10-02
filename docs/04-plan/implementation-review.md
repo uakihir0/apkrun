@@ -3961,13 +3961,15 @@ bootloader maps this file offset at the traced PC, verify the binary's
 defconfig or call path, or establish that all observed delay is cache
 maintenance.
 
-The later 2026-10-02 `default` capture recorded the U-Boot banner at 22:34:27
-and the Linux banner at 22:43:24 local time, a 537-second interval. Cuttlefish
-then failed at 22:44:26 after its independent ten-minute boot-state timeout.
-The run did not record launcher event 5 or ADB readiness. The differing
-190-second and 537-second intervals show that this capture's timing is not
-enough to infer a deterministic RAM-scan rate or prove the cache-maintenance
-hypothesis.
+The recovered `default-20261002T224455-600285` capture records the U-Boot
+banner at 22:34:27 and Linux at 22:43:24 Lima local time, a 537-second
+interval. Its `host.json` records a 634-second duration; the 2400-second outer
+deadline was not reached because Cuttlefish's independent ten-minute
+boot-state timeout logged `VIRTUAL_DEVICE_BOOT_FAILED`. The run did not record
+launcher event 5 or ADB readiness. Its normalized logs are now retained in
+M01. The difference between this interval and the artifact-backed 190-second
+interval does not support a deterministic RAM-scan rate or prove the
+cache-maintenance hypothesis.
 
 The completed 3000-second retry recorded Linux and Android first-stage init,
 followed by zygote and vendor service starts through guest uptime 2240.96
@@ -4000,6 +4002,32 @@ does not identify the executing code, establish a stage-2 fault mechanism,
 confirm the exact bootloader configuration, or explain the subsequent
 Android delay.
 
+The completed 2400-second `default` retry adds another observation: U-Boot was
+logged at 17:07:35Z and Linux at 17:11:01Z, 206 seconds later. Of 479 valid
+five-second crosvm samples, VmRSS/RssShmem was 4,193,260/4,171,596 KiB at
+17:10:59.974Z and 4,216,196/4,194,532 KiB at 17:11:04.974Z. The latter
+crosses 4 GiB for both measures; the Linux banner falls within that sampling
+interval. This is consistent with substantial guest memory becoming resident
+during the U-Boot-to-Linux transition, but the `ddr_mem_mb=4915` setting means
+it does not show that all guest DDR was resident. The observed intervals of
+190, 537, 753, and 206 seconds also vary too much to infer a deterministic
+scan rate. The additional run strengthens the timing correlation without proving
+that the traced instruction owns the PC, that cache maintenance caused the
+delay, or that stage-2 page allocation explains the faults.
+
+The same run reached Android first-stage init and zygote. Servicemanager
+records calls from the `system_server` SELinux domain near guest uptime
+1795.5 seconds, and init later logs an untracked zombie named `system_server`
+exiting with status 0 near uptime 2038.2 seconds. The logs do not establish
+whether those records refer to the same process or why it exited. No boot
+completion marker was observed. ADB reported `device` after launcher event 5,
+but 112 of 113 attempted property queries timed out under the then-current
+two-second cap; one completed without a `sys.boot_completed` value. A
+separate bounded query took about seven seconds and returned no property
+text. These are Android progress and ADB transport observations, not proof
+that the guest boot completed or a diagnosis of its later state. The
+normalized capture is recorded in M01.
+
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
 | Field | Value |
@@ -4013,9 +4041,11 @@ Android delay.
 shared outer capture deadline. Do not let Cuttlefish's independent 600-second
 default end a longer diagnostic capture early.
 
-**Reason.** The 2026-10-02 live run set the outer capture deadline to 2400
-seconds, but Cuttlefish 1.57.0 logged `TimeoutThreadLoop: waiting for 10m` and
-returned failure at 600 seconds. Its `cvd start --help` exposes
+**Reason.** The recovered 2026-10-02 run at
+`Images/reference/16373615/incomplete/default-20261002T224455-600285/` set
+the outer capture deadline to 2400 seconds, but Cuttlefish 1.57.0 logged
+`TimeoutThreadLoop: waiting for 10m` and returned failure at its 600-second
+inner timeout. Its `cvd start --help` exposes
 `--boot_timeout_secs=SECS` with a 600-second default. The run reached Linux
 537 seconds after U-Boot, so the fixed inner timeout left too little time to
 observe later Android boot stages. Passing the configured budget keeps the
@@ -4150,15 +4180,20 @@ after-connect and after-`get-state` branches, expiration in the small gap
 before process start, a query that times out, an offline device, a timed-out
 `get-state` command, and the distinct two-second and ten-second subprocess
 caps, including the shared-deadline clamp. A 2400-second live capture using
-the updated record schema is in progress and has produced three initial
-connection-timeout polls
-with `getpropAttempted=false`, then device-state polls with
-`getpropAttempted=true` and `getpropTimedOut=true`. Its observer still used
-the earlier two-second property cap; a later capture is needed to verify the
-ten-second cap against the guest. The focused observer suite passed 33 tests
-with one Linux-only parent-death test skipped on macOS; Ruff, formatting,
-Python compilation, and `git diff --check` passed. The full Image tools suite
-passed 381 tests with four platform-specific skips before the ten-second cap
-change, so a low-load full-suite rerun remains pending. The first hostile
-review found an uninitialized property-attempt field and an ambiguous timeout
-flag; both were corrected, and its follow-up review reported no findings.
+the updated record schema has completed. It recorded 116 polls: three initial
+polls had no device state and `getpropAttempted=false`; one timed out, while
+the other two had a successful `connect` exit status but still no device
+state. The remaining 113 polls reported `device` and had
+`getpropAttempted=true`. Of the latter, 112 timed out and one exited 0 without
+an accepted property value. All polls had
+`pollDeadlineReached=false`, and `sysBootCompleted` remained null. This
+capture used the earlier two-second property cap. A separate bounded
+read-only query through the same private socket returned no property text in
+about seven seconds under a 12-second limit. A later live capture is still
+needed to verify the new ten-second cap against the guest. The focused
+observer suite passed 33 tests with one Linux-only parent-death test skipped
+on macOS; Ruff, formatting, Python compilation, and `git diff --check`
+passed. After the ten-second cap change, the full Image tools suite passed
+383 tests with four platform-specific skips. The first hostile review found
+an uninitialized property-attempt field and an ambiguous timeout flag; both
+were corrected, and its follow-up review reported no findings.

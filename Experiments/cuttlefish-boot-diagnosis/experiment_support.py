@@ -80,6 +80,9 @@ CONSOLE_MODE_SLUGS = {
 CONSOLE_MODE_PATH_PATTERN = "on|off"
 MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
 MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES = 65_536
+DEFAULT_BOOT_TIMEOUT_SECONDS = 600
+MIN_BOOT_TIMEOUT_SECONDS = 120
+MAX_BOOT_TIMEOUT_SECONDS = 600
 
 
 def _encoded_unix_socket_path_bytes(path: str | os.PathLike[str]) -> int:
@@ -1988,6 +1991,8 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "bootCommandSent",
         "kernelHandoffObserved",
         "outputBytesObserved",
+        "escapeStrippedBytesObserved",
+        "escapeSequenceIncomplete",
         "outputLimitBytes",
         "outputTruncated",
         "timedOut",
@@ -2008,6 +2013,7 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "promptObserved",
         "bootCommandSent",
         "kernelHandoffObserved",
+        "escapeSequenceIncomplete",
         "outputTruncated",
         "timedOut",
         "handoffTimedOut",
@@ -2015,11 +2021,14 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
     )
     if (
         type(summary.get("schemaVersion")) is not int
-        or summary["schemaVersion"] != 2
+        or summary["schemaVersion"] != 3
         or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
         or type(summary.get("outputBytesObserved")) is not int
+        or type(summary.get("escapeStrippedBytesObserved")) is not int
         or type(summary.get("outputLimitBytes")) is not int
         or summary["outputBytesObserved"] < 0
+        or summary["escapeStrippedBytesObserved"] < 0
+        or summary["escapeStrippedBytesObserved"] > summary["outputBytesObserved"]
         or not 1 <= summary["outputLimitBytes"] <= 65_536
         or summary["outputBytesObserved"] > summary["outputLimitBytes"]
         or (
@@ -2069,8 +2078,18 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         or (summary["screenStarted"] != (summary["screenExitCode"] is not None))
         or (summary["uBootBannerObserved"] and not summary["screenStarted"])
         or (summary["uBootBannerObserved"] and summary["outputBytesObserved"] == 0)
+        or (
+            summary["uBootBannerObserved"]
+            and summary["escapeStrippedBytesObserved"] == 0
+        )
+        or (summary["promptObserved"] and summary["escapeStrippedBytesObserved"] == 0)
         or (summary["promptObserved"] and not summary["screenStarted"])
         or (summary["outputBytesObserved"] > 0 and not summary["screenStarted"])
+        or (summary["escapeStrippedBytesObserved"] > 0 and not summary["screenStarted"])
+        or (
+            summary["escapeSequenceIncomplete"]
+            and (not summary["screenStarted"] or summary["outputBytesObserved"] == 0)
+        )
         or (summary["bootCommandSent"] and not summary["promptObserved"])
         or (summary["handoffTimedOut"] and not summary["bootCommandSent"])
         or (
@@ -3200,6 +3219,16 @@ def _verify_publication_mode_labels(
         experiment["pauseInBootloader"],
         console_enabled,
     )
+    try:
+        _validate_boot_timeout_seconds(experiment.get("bootTimeoutSeconds"))
+    except ValueError as error:
+        raise ValueError(
+            "published experiment has invalid boot timeout metadata"
+        ) from error
+    if type(experiment.get("runnerDeadlineSeconds")) is not int or (
+        experiment["runnerDeadlineSeconds"] != 900
+    ):
+        raise ValueError("published experiment has invalid runner deadline metadata")
     expected_experiment = (
         f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
     )
@@ -3370,6 +3399,18 @@ def _validate_pause_in_bootloader(
         raise ValueError(
             "bootloader pause requires the Cuttlefish console to be enabled"
         )
+
+
+def _validate_boot_timeout_seconds(value: Any) -> int:
+    if (
+        type(value) is not int
+        or not MIN_BOOT_TIMEOUT_SECONDS <= value <= MAX_BOOT_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "boot timeout must be an integer between "
+            f"{MIN_BOOT_TIMEOUT_SECONDS} and {MAX_BOOT_TIMEOUT_SECONDS} seconds"
+        )
+    return value
 
 
 def _verify_gpu_configuration(
@@ -4002,10 +4043,12 @@ def build_experiment_record(
     console_enabled: bool = True,
     pause_in_bootloader: bool = False,
     bootloader_console_summary_path: Path | None = None,
+    boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     console_mode_slug = _console_mode_slug(console_enabled)
     _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
+    boot_timeout_seconds = _validate_boot_timeout_seconds(boot_timeout_seconds)
     host, instance = _gpu_configuration(capture_record)
     _verify_gpu_configuration(
         instance,
@@ -4147,7 +4190,7 @@ def build_experiment_record(
         "experimentSources": host_identity["experimentSources"],
         "captureExitCode": capture_exit_code,
         "captureRun": capture_run_status,
-        "bootTimeoutSeconds": 600,
+        "bootTimeoutSeconds": boot_timeout_seconds,
         "runnerDeadlineSeconds": 900,
         "gpuMode": gpu_mode,
         "consoleEnabled": console_enabled,
@@ -4333,6 +4376,11 @@ def main() -> int:
         choices=("true", "false"),
         default="false",
     )
+    record_parser.add_argument(
+        "--boot-timeout-seconds",
+        type=int,
+        default=DEFAULT_BOOT_TIMEOUT_SECONDS,
+    )
     record_parser.add_argument("--bootloader-console-summary", type=Path)
     record_parser.add_argument("--output", type=Path, required=True)
 
@@ -4464,6 +4512,7 @@ def main() -> int:
                 arguments.console_enabled == "true",
                 arguments.pause_in_bootloader == "true",
                 arguments.bootloader_console_summary,
+                arguments.boot_timeout_seconds,
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

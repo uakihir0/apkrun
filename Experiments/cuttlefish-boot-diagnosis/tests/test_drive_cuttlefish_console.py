@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import pty
 import runpy
+import select
 import signal
 import stat
 import subprocess
@@ -93,6 +95,7 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["schemaVersion"] == 3
     assert summary["consoleEndpointFound"] is True
     assert summary["screenStarted"] is True
     assert summary["uBootBannerObserved"] is True
@@ -101,6 +104,58 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     assert summary["kernelHandoffObserved"] is True
     assert summary["cleanupComplete"] is True
     assert summary["exitCode"] == 0
+
+
+def test_console_helper_distinguishes_screen_terminal_controls_from_text(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen_initialization = (
+        b"\x1b[r\x1b[m\x1b[2J\x1b[H\x1b[?7h\x1b[?1;4;6l\x1b[?1049h"
+        b"\x1b[22;0;0t\x1b[4l\x1b[?1h\x1b=\x1b[0m\x1b(B"
+        b"\x1b[1;24r\x1b[H\x1b[2J\x1b[H\x1b[2J"
+    )
+    assert len(screen_initialization) == 83
+    screen = _screen_stub(
+        tmp_path,
+        f"os.write(1, {screen_initialization!r})\ntime.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["outputBytesObserved"] == 83
+    assert summary["escapeStrippedBytesObserved"] == 0
+    assert summary["escapeSequenceIncomplete"] is False
+    assert summary["uBootBannerObserved"] is False
+    assert summary["promptObserved"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["cleanupComplete"] is True
+
+
+def test_console_helper_reports_unterminated_escape_sequence_and_discards_tail(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'\\x1b]0;U-Boot 2025.01\\n=> ')\ntime.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["outputBytesObserved"] > 0
+    assert summary["escapeStrippedBytesObserved"] == 0
+    assert summary["escapeSequenceIncomplete"] is True
+    assert summary["uBootBannerObserved"] is False
+    assert summary["promptObserved"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["cleanupComplete"] is True
     assert stat.S_IMODE(result.stat().st_mode) == 0o600
 
 
@@ -169,6 +224,79 @@ def test_console_helper_times_out_without_sending_boot_when_prompt_is_absent(
     assert summary["timedOut"] is True
     assert summary["cleanupComplete"] is True
     assert summary["screenExitCode"] == -15
+
+
+def test_console_helper_does_not_report_screen_started_when_exec_fails(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = tmp_path / "screen-with-missing-interpreter"
+    screen.write_text("#!/missing/screen/interpreter\n", encoding="ascii")
+    screen.chmod(0o700)
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["consoleEndpointFound"] is True
+    assert summary["screenStarted"] is False
+    assert summary["screenExitCode"] is None
+    assert summary["outputBytesObserved"] == 0
+    assert summary["cleanupComplete"] is True
+
+
+def test_console_helper_reaps_screen_if_startup_wait_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    screen_pid_path = home / "screen.pid"
+    screen = _screen_stub(
+        tmp_path,
+        "from pathlib import Path\n"
+        f"Path({str(screen_pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')\n"
+        "time.sleep(10)",
+    )
+    select_module = CONSOLE_MODULE["select"]
+    original_select = select_module.select
+    helper_globals = CONSOLE_MODULE["_start_screen"].__globals__
+    select_calls = 0
+    cleanup_results: list[tuple[int | None, bool, str | None, int | None]] = []
+    original_stop = helper_globals["_stop_screen"]
+
+    def fail_first_select(
+        *args: object, **kwargs: object
+    ) -> tuple[list[int], list[int], list[int]]:
+        nonlocal select_calls
+        select_calls += 1
+        if select_calls == 1:
+            raise ValueError("injected readiness wait failure")
+        return original_select(*args, **kwargs)
+
+    def record_cleanup(
+        pid: int, master_fd: int
+    ) -> tuple[int | None, bool, str | None, int | None]:
+        result = original_stop(pid, master_fd)
+        cleanup_results.append(result)
+        return result
+
+    monkeypatch.setattr(select_module, "select", fail_first_select)
+    monkeypatch.setitem(helper_globals, "_stop_screen", record_cleanup)
+
+    with pytest.raises(ValueError, match="injected readiness wait failure"):
+        CONSOLE_MODULE["_start_screen"](
+            screen,
+            home / "cuttlefish_runtime/console",
+            home,
+        )
+
+    assert cleanup_results
+    assert cleanup_results[0][1] is True
+    if screen_pid_path.exists():
+        screen_pid = int(screen_pid_path.read_text(encoding="ascii"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(screen_pid, 0)
 
 
 def test_console_helper_records_uboot_banner_without_sending_boot(
@@ -268,6 +396,7 @@ def test_console_helper_bounds_output_and_never_sends_boot_without_prompt(
     assert completed.returncode == 1
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["outputBytesObserved"] == 64
+    assert summary["escapeStrippedBytesObserved"] == 64
     assert summary["outputTruncated"] is True
     assert summary["promptObserved"] is False
     assert summary["bootCommandSent"] is False
@@ -529,6 +658,121 @@ def test_console_helper_stops_screen_group_descendants(tmp_path: Path) -> None:
     assert summary["screenExitCode"] == 0
     assert summary["cleanupComplete"] is True
     assert term_marker.read_text(encoding="ascii") == "term"
+
+
+def test_screen_cleanup_signals_child_before_its_session_exists() -> None:
+    master_fd, slave_fd = pty.openpty()
+    pid = os.fork()
+    if pid == 0:
+        os.close(master_fd)
+        os.close(slave_fd)
+        while True:
+            signal.pause()
+
+    os.close(slave_fd)
+    try:
+        assert os.getpgid(pid) != pid
+        exit_code, cleanup_complete, cleanup_failure, error_number = CONSOLE_MODULE[
+            "_stop_screen"
+        ](pid, master_fd)
+    finally:
+        os.close(master_fd)
+
+    assert exit_code == -signal.SIGTERM
+    assert cleanup_complete is True, (cleanup_failure, error_number)
+
+
+def test_screen_cleanup_retries_group_kill_after_session_setup_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    master_fd, slave_fd = pty.openpty()
+    ready_read_fd, ready_write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(master_fd)
+        os.close(slave_fd)
+        os.close(ready_read_fd)
+
+        def start_descendant(_signum: int, _frame: object) -> None:
+            os.setsid()
+            descendant_pid = os.fork()
+            if descendant_pid == 0:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.write(
+                    ready_write_fd,
+                    f"descendant:{os.getpid()}\n".encode("ascii"),
+                )
+                while True:
+                    signal.pause()
+            os.write(ready_write_fd, b"leader\n")
+
+        signal.signal(signal.SIGTERM, start_descendant)
+        os.write(ready_write_fd, b"armed\n")
+        while True:
+            signal.pause()
+
+    os.close(slave_fd)
+    os.close(ready_write_fd)
+    original_killpg = os.killpg
+    killpg_sigkill_calls = 0
+    race_injected = False
+
+    def inject_session_creation_race(
+        process_group: int,
+        signum: int,
+    ) -> None:
+        nonlocal killpg_sigkill_calls, race_injected
+        if process_group == pid and signum == signal.SIGKILL:
+            killpg_sigkill_calls += 1
+            if killpg_sigkill_calls == 1:
+                deadline = time.monotonic() + 3
+                observed = bytearray()
+                while time.monotonic() < deadline:
+                    ready, _, _ = select.select(
+                        [ready_read_fd],
+                        [],
+                        [],
+                        max(0.0, deadline - time.monotonic()),
+                    )
+                    if not ready:
+                        break
+                    observed.extend(os.read(ready_read_fd, 128))
+                    if b"descendant:" in observed:
+                        race_injected = True
+                        raise ProcessLookupError(errno.ESRCH, "injected session race")
+                raise AssertionError("Screen child did not create its process group")
+        original_killpg(process_group, signum)
+
+    monkeypatch.setattr(os, "killpg", inject_session_creation_race)
+    try:
+        assert os.getpgid(pid) != pid
+        ready, _, _ = select.select([ready_read_fd], [], [], 3)
+        assert ready
+        assert os.read(ready_read_fd, 128) == b"armed\n"
+        exit_code, cleanup_complete, cleanup_failure, error_number = CONSOLE_MODULE[
+            "_stop_screen"
+        ](pid, master_fd)
+        assert race_injected
+        assert killpg_sigkill_calls >= 2
+        assert exit_code == -signal.SIGKILL
+        assert cleanup_complete is True, (cleanup_failure, error_number)
+        assert CONSOLE_MODULE["_live_linux_group_descendants"](pid, pid) is False
+    finally:
+        monkeypatch.setattr(os, "killpg", original_killpg)
+        for descriptor in (master_fd, ready_read_fd):
+            os.close(descriptor)
+        try:
+            original_killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process groups are required")

@@ -453,9 +453,9 @@ def test_final_publication_gate_scrubs_logs_created_during_normalization(
     )
     (capture_record / "cuttlefish_config.json").write_text(
         (
-                '{"instances":{"1":{"gpu_mode":"none",'
-                '"enable_gpu_vhost_user":false,"cpus":4,"memory_mb":4096,'
-                '"console":true,"pause_in_bootloader":false}}}\n'
+            '{"instances":{"1":{"gpu_mode":"none",'
+            '"enable_gpu_vhost_user":false,"cpus":4,"memory_mb":4096,'
+            '"console":true,"pause_in_bootloader":false}}}\n'
         ),
         encoding="utf-8",
     )
@@ -464,7 +464,8 @@ def test_final_publication_gate_scrubs_logs_created_during_normalization(
             '{"experiment":"cuttlefish-gpu-none-console-on-boot-diagnosis",'
             '"gpuMode":"none","gpuModeSlug":"none",'
             '"consoleEnabled":true,"consoleModeSlug":"on",'
-            '"pauseInBootloader":false}\n'
+            '"pauseInBootloader":false,"bootTimeoutSeconds":600,'
+            '"runnerDeadlineSeconds":900}\n'
         ),
         encoding="utf-8",
     )
@@ -1697,8 +1698,11 @@ def test_gpu_none_runner_uses_short_home_for_fleet_and_capture() -> None:
     assert "capture-supervisor-stderr-control.fifo" in runner
     assert "capture_run_interrupted=" in runner
     assert 'if [ -e "$capture_run_interrupted" ]' in runner
+    assert "APKRUN_DIAGNOSTIC_BOOT_TIMEOUT_SECONDS" in runner
+    assert '"APKRUN_BOOT_TIMEOUT_SECONDS=$boot_timeout_seconds"' in runner
     assert "Capture supervisor exited with status" in runner
     assert '--capture-exit-code "$capture_child_exit_code"' in runner
+    assert '--boot-timeout-seconds "$boot_timeout_seconds" \\' in runner
     assert "start_pinned_capture_process adb_server" in runner
     assert "start_pinned_capture_process capture_child" in runner
     assert '--tool-copy-root "$tool_destination"' in runner

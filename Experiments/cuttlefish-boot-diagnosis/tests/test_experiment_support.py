@@ -301,6 +301,8 @@ def _write_publication_experiment(
                 "consoleEnabled": console_enabled,
                 "consoleModeSlug": console_mode_slug,
                 "pauseInBootloader": pause_in_bootloader,
+                "bootTimeoutSeconds": 600,
+                "runnerDeadlineSeconds": 900,
                 **(
                     {"bootloaderConsole": bootloader_console}
                     if bootloader_console is not None
@@ -415,8 +417,12 @@ def _make_baseline_repository(root: Path) -> tuple[Path, Path, Path, Path]:
     (
         ("schemaVersion", True, "invalid fields"),
         ("schemaVersion", 1, "invalid fields"),
+        ("schemaVersion", 2, "invalid fields"),
         ("cleanupComplete", False, "inconsistent or incomplete"),
         ("outputBytesObserved", 0, "inconsistent or incomplete"),
+        ("escapeStrippedBytesObserved", -1, "invalid fields"),
+        ("escapeStrippedBytesObserved", 65, "invalid fields"),
+        ("escapeSequenceIncomplete", 1, "invalid fields"),
         ("promptObserved", False, "inconsistent or incomplete"),
         ("outputTruncated", True, "inconsistent or incomplete"),
         ("timedOut", True, "inconsistent or incomplete"),
@@ -433,7 +439,7 @@ def test_bootloader_console_summary_rejects_invalid_status(
     message: str,
 ) -> None:
     summary = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "consoleEndpointFound": True,
         "screenStarted": True,
         "uBootBannerObserved": True,
@@ -441,6 +447,8 @@ def test_bootloader_console_summary_rejects_invalid_status(
         "bootCommandSent": True,
         "kernelHandoffObserved": True,
         "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
         "outputLimitBytes": 65_536,
         "outputTruncated": False,
         "timedOut": False,
@@ -453,6 +461,8 @@ def test_bootloader_console_summary_rejects_invalid_status(
         "exitCode": 0,
     }
     summary[field] = value
+    if field == "outputBytesObserved" and value == 0:
+        summary["escapeStrippedBytesObserved"] = 0
     path = tmp_path / "bootloader-console-summary.json"
     path.write_text(json.dumps(summary), encoding="utf-8")
 
@@ -474,8 +484,17 @@ def test_bootloader_console_summary_rejects_invalid_status(
                 "bootCommandSent": False,
                 "kernelHandoffObserved": False,
                 "outputBytesObserved": 0,
+                "escapeStrippedBytesObserved": 0,
+                "escapeSequenceIncomplete": False,
                 "screenExitCode": 0,
                 "exitCode": 1,
+            },
+            "inconsistent or incomplete",
+        ),
+        (
+            {
+                "uBootBannerObserved": False,
+                "escapeStrippedBytesObserved": 0,
             },
             "inconsistent or incomplete",
         ),
@@ -486,7 +505,7 @@ def test_bootloader_console_summary_rejects_impossible_process_status(
     message: str,
 ) -> None:
     summary: dict[str, object] = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "consoleEndpointFound": True,
         "screenStarted": True,
         "uBootBannerObserved": True,
@@ -494,6 +513,8 @@ def test_bootloader_console_summary_rejects_impossible_process_status(
         "bootCommandSent": True,
         "kernelHandoffObserved": True,
         "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
         "outputLimitBytes": 65_536,
         "outputTruncated": False,
         "timedOut": False,
@@ -515,7 +536,7 @@ def test_bootloader_console_summary_rejects_simultaneous_timeouts(
     tmp_path: Path,
 ) -> None:
     summary = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "consoleEndpointFound": True,
         "screenStarted": True,
         "uBootBannerObserved": True,
@@ -523,6 +544,8 @@ def test_bootloader_console_summary_rejects_simultaneous_timeouts(
         "bootCommandSent": True,
         "kernelHandoffObserved": False,
         "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
         "outputLimitBytes": 65_536,
         "outputTruncated": False,
         "timedOut": True,
@@ -2394,6 +2417,17 @@ def test_private_capture_patch_rejects_pause_when_console_is_disabled(
     assert private_copy.read_bytes() == original
 
 
+@pytest.mark.parametrize("value", (True, 119, 601, 0, "180", None))
+def test_boot_timeout_rejects_values_outside_diagnostic_range(value: object) -> None:
+    with pytest.raises(ValueError, match="integer between 120 and 600 seconds"):
+        experiment_support._validate_boot_timeout_seconds(value)
+
+
+@pytest.mark.parametrize("value", (120, 180, 600))
+def test_boot_timeout_accepts_values_inside_diagnostic_range(value: int) -> None:
+    assert experiment_support._validate_boot_timeout_seconds(value) == value
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="GPU-none capture runs on Linux")
 @pytest.mark.parametrize(
     "gpu_mode",
@@ -2591,7 +2625,7 @@ result = Path(arguments[arguments.index("--result") + 1])
 result.write_text(
     json.dumps(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "consoleEndpointFound": True,
             "screenStarted": True,
             "uBootBannerObserved": True,
@@ -2599,6 +2633,8 @@ result.write_text(
             "bootCommandSent": True,
             "kernelHandoffObserved": True,
             "outputBytesObserved": 64,
+            "escapeStrippedBytesObserved": 64,
+            "escapeSequenceIncomplete": False,
             "outputLimitBytes": 65536,
             "outputTruncated": False,
             "timedOut": False,
@@ -3260,7 +3296,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         bootloader_console_summary_path.write_text(
             json.dumps(
                 {
-                    "schemaVersion": 2,
+                    "schemaVersion": 3,
                     "consoleEndpointFound": True,
                     "screenStarted": True,
                     "uBootBannerObserved": True,
@@ -3268,6 +3304,8 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                     "bootCommandSent": True,
                     "kernelHandoffObserved": True,
                     "outputBytesObserved": 64,
+                    "escapeStrippedBytesObserved": 64,
+                    "escapeSequenceIncomplete": False,
                     "outputLimitBytes": 65_536,
                     "outputTruncated": False,
                     "timedOut": False,
@@ -3412,12 +3450,14 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         console_enabled=console_enabled,
         pause_in_bootloader=pause_in_bootloader,
         bootloader_console_summary_path=bootloader_console_summary_path,
+        boot_timeout_seconds=180,
     )
 
     assert record["gpuMode"] == gpu_mode
     assert record["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
     assert record["consoleEnabled"] is console_enabled
     assert record["pauseInBootloader"] is pause_in_bootloader
+    assert record["bootTimeoutSeconds"] == 180
     assert record["bootloaderConsole"] == (
         json.loads(bootloader_console_summary_path.read_text(encoding="utf-8"))
         if bootloader_console_summary_path is not None
@@ -4285,6 +4325,50 @@ def test_publication_rejects_result_directory_without_nesting_capture(
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
 @pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        ("bootTimeoutSeconds", 119, "invalid boot timeout metadata"),
+        ("bootTimeoutSeconds", 601, "invalid boot timeout metadata"),
+        ("bootTimeoutSeconds", True, "invalid boot timeout metadata"),
+        ("runnerDeadlineSeconds", 899, "invalid runner deadline metadata"),
+    ),
+)
+def test_publication_revalidates_timeout_metadata(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    error: str,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-off.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(capture_record)
+    experiment_path = capture_record / "experiment.json"
+    experiment = json.loads(experiment_path.read_text(encoding="utf-8"))
+    experiment[field] = value
+    experiment_path.write_text(json.dumps(experiment), encoding="utf-8")
+    result_path = results_root / "gpu-none-console-off-20261001T000000Z-1234"
+
+    with pytest.raises(ValueError, match=error):
+        experiment_support.publish_normalized_record(
+            capture_record,
+            work_root,
+            data_root,
+            result_path,
+            ownership_token,
+        )
+
+    assert capture_record.is_dir()
+    assert not result_path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+@pytest.mark.parametrize(
     ("workspace_console", "result_console", "record_console", "error"),
     (
         ("off", "off", True, "diagnostic path console label differs"),
@@ -4335,7 +4419,7 @@ def test_publication_rejects_mismatched_console_labels(
         ({"schemaVersion": 1}, "unexpected schema"),
         (
             {
-                "schemaVersion": 2,
+                "schemaVersion": 3,
                 "consoleEndpointFound": False,
                 "screenStarted": False,
                 "uBootBannerObserved": False,
@@ -4343,6 +4427,8 @@ def test_publication_rejects_mismatched_console_labels(
                 "bootCommandSent": False,
                 "kernelHandoffObserved": False,
                 "outputBytesObserved": 0,
+                "escapeStrippedBytesObserved": 0,
+                "escapeSequenceIncomplete": False,
                 "outputLimitBytes": 65_536,
                 "outputTruncated": False,
                 "timedOut": True,

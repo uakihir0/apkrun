@@ -63,6 +63,14 @@ if [ "$pause_in_bootloader" = true ] && [ "$console_enabled" = false ]; then
   exit 2
 fi
 
+boot_timeout_seconds=${APKRUN_DIAGNOSTIC_BOOT_TIMEOUT_SECONDS:-600}
+if [[ ! "$boot_timeout_seconds" =~ ^[1-9][0-9]{0,2}$ ]] \
+  || [ "$boot_timeout_seconds" -lt 120 ] \
+  || [ "$boot_timeout_seconds" -gt 600 ]; then
+  printf 'APKRUN_DIAGNOSTIC_BOOT_TIMEOUT_SECONDS must be an integer from 120 to 600.\n' >&2
+  exit 2
+fi
+
 instance_num=${APKRUN_CVD_INSTANCE_NUM:-1}
 case "$instance_num" in
   ''|*[!0-9]*|0*)
@@ -963,7 +971,7 @@ if ! start_pinned_capture_process capture_child /dev/null \
   "APKRUN_CAPTURE_SCRIPT_DIR=$tool_destination" \
   "APKRUN_CVD_HOME_TMPDIR=$short_cvd_home_tmpdir" \
   "APKRUN_CVD_PACKAGE_VERSION=1.57.0" \
-  "APKRUN_BOOT_TIMEOUT_SECONDS=600" \
+  "APKRUN_BOOT_TIMEOUT_SECONDS=$boot_timeout_seconds" \
   timeout --signal=TERM 900 \
   python3 -c '
 import hashlib
@@ -1353,6 +1361,7 @@ if ! record_or_preserve run_verified_experiment_support record \
   --gpu-mode "$gpu_mode" \
   --console-enabled "$console_enabled" \
   --pause-in-bootloader "$pause_in_bootloader" \
+  --boot-timeout-seconds "$boot_timeout_seconds" \
   --bootloader-console-summary "$bootloader_console_summary" \
   --output "$capture_record/experiment.json"; then
   exit 1

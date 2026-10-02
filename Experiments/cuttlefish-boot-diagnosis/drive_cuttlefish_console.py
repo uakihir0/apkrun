@@ -35,6 +35,19 @@ KERNEL_HANDOFF = re.compile(r"Starting kernel|Booting Linux on physical CPU")
 requested_signal: int | None = None
 
 
+class ScreenStartupError(OSError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        cleanup_failure: str,
+        cleanup_error_number: int | None,
+    ) -> None:
+        super().__init__(message)
+        self.cleanup_failure = cleanup_failure
+        self.cleanup_error_number = cleanup_error_number
+
+
 def _is_utf8_continuation(data: bytes, index: int) -> bool:
     if not 0x80 <= data[index] <= 0xBF:
         return False
@@ -79,7 +92,7 @@ def _skip_control_string(
     index: int,
     *,
     bell_terminates: bool,
-) -> int:
+) -> tuple[int, bool]:
     while index < len(data):
         if (
             data[index] == 0x9C
@@ -87,21 +100,22 @@ def _skip_control_string(
             or bell_terminates
             and data[index] == 0x07
         ):
-            return index + 1
+            return index + 1, False
         if data[index] == 0x1B:
             if index + 1 >= len(data):
-                return len(data)
+                return len(data), True
             if data[index + 1] == ord("\\"):
-                return index + 2
+                return index + 2, False
             index += 1
             continue
         index += 1
-    return index
+    return index, True
 
 
-def _strip_ansi_escape_sequences(data: bytes) -> bytes:
+def _strip_ansi_escape_sequences(data: bytes) -> tuple[bytes, bool]:
     result = bytearray()
     index = 0
+    incomplete_sequence = False
     while index < len(data):
         if data[index] == 0x9B and not _is_utf8_continuation(data, index):
             index += 1
@@ -109,16 +123,28 @@ def _strip_ansi_escape_sequences(data: bytes) -> bytes:
                 index += 1
             if index < len(data):
                 index += 1
+            else:
+                incomplete_sequence = True
             continue
 
         if data[index] == 0x9D and not _is_utf8_continuation(data, index):
-            index = _skip_control_string(data, index + 1, bell_terminates=True)
+            index, incomplete = _skip_control_string(
+                data,
+                index + 1,
+                bell_terminates=True,
+            )
+            incomplete_sequence = incomplete_sequence or incomplete
             continue
 
         if data[index] in (0x90, 0x98, 0x9E, 0x9F) and not _is_utf8_continuation(
             data, index
         ):
-            index = _skip_control_string(data, index + 1, bell_terminates=False)
+            index, incomplete = _skip_control_string(
+                data,
+                index + 1,
+                bell_terminates=False,
+            )
+            incomplete_sequence = incomplete_sequence or incomplete
             continue
 
         if data[index] != 0x1B:
@@ -126,6 +152,7 @@ def _strip_ansi_escape_sequences(data: bytes) -> bytes:
             index += 1
             continue
         if index + 1 >= len(data):
+            incomplete_sequence = True
             break
 
         introducer = data[index + 1]
@@ -135,14 +162,26 @@ def _strip_ansi_escape_sequences(data: bytes) -> bytes:
                 index += 1
             if index < len(data):
                 index += 1
+            else:
+                incomplete_sequence = True
             continue
 
         if introducer == ord("]"):
-            index = _skip_control_string(data, index + 2, bell_terminates=True)
+            index, incomplete = _skip_control_string(
+                data,
+                index + 2,
+                bell_terminates=True,
+            )
+            incomplete_sequence = incomplete_sequence or incomplete
             continue
 
         if introducer in (ord("P"), ord("X"), ord("^"), ord("_")):
-            index = _skip_control_string(data, index + 2, bell_terminates=False)
+            index, incomplete = _skip_control_string(
+                data,
+                index + 2,
+                bell_terminates=False,
+            )
+            incomplete_sequence = incomplete_sequence or incomplete
             continue
 
         index += 1
@@ -150,7 +189,9 @@ def _strip_ansi_escape_sequences(data: bytes) -> bytes:
             index += 1
         if index < len(data) and 0x30 <= data[index] <= 0x7E:
             index += 1
-    return bytes(result)
+        elif index == len(data):
+            incomplete_sequence = True
+    return bytes(result), incomplete_sequence
 
 
 def _signal_handler(signum: int, _frame: FrameType | None) -> None:
@@ -397,12 +438,22 @@ def _stop_screen(
     pid: int,
     master_fd: int,
 ) -> tuple[int | None, bool, str | None, int | None]:
+    group_error: OSError | None = None
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     except OSError as error:
-        return None, False, "term-signal-failed", error.errno
+        group_error = error
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        if group_error is None:
+            group_error = error
+    if group_error is not None:
+        return None, False, "term-signal-failed", group_error.errno
 
     use_waitid = callable(getattr(os, "waitid", None))
     deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
@@ -442,11 +493,21 @@ def _stop_screen(
             time.sleep(POLL_INTERVAL_SECONDS)
         return None, False, "child-not-reaped", None
 
+    group_error = None
     try:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     except OSError as error:
+        group_error = error
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        if group_error is None:
+            group_error = error
+    if group_error is not None:
         deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
         while time.monotonic() < deadline:
             reaped, observed_exit_code = _try_reap(pid)
@@ -455,10 +516,10 @@ def _stop_screen(
                     observed_exit_code,
                     False,
                     "kill-signal-failed",
-                    error.errno,
+                    group_error.errno,
                 )
             time.sleep(POLL_INTERVAL_SECONDS)
-        return None, False, "kill-signal-failed", error.errno
+        return None, False, "kill-signal-failed", group_error.errno
 
     deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
     while time.monotonic() < deadline:
@@ -469,23 +530,22 @@ def _stop_screen(
     else:
         return None, False, "child-not-reaped", None
 
-    if sys.platform == "linux":
-        deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
-        while time.monotonic() < deadline:
-            live_descendants = _live_linux_group_descendants(pid, pid)
-            if live_descendants is False:
-                return observed_exit_code, True, None, None
-            if live_descendants is None:
-                return observed_exit_code, False, "process-group-unverified", None
-            time.sleep(POLL_INTERVAL_SECONDS)
-        return observed_exit_code, False, "process-group-remains", None
     deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
     while time.monotonic() < deadline:
-        group_exists = _process_group_exists(pid)
-        if group_exists is False:
+        if sys.platform == "linux":
+            group_alive = _live_linux_group_descendants(pid, pid)
+        else:
+            group_alive = _process_group_exists(pid)
+        if group_alive is False:
             return observed_exit_code, True, None, None
-        if group_exists is None:
+        if group_alive is None:
             return observed_exit_code, False, "process-group-unverified", None
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            return observed_exit_code, False, "kill-signal-failed", error.errno
         time.sleep(POLL_INTERVAL_SECONDS)
     return observed_exit_code, False, "process-group-remains", None
 
@@ -501,6 +561,7 @@ def _start_screen(
         tty.setraw(slave_fd)
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         os.set_blocking(master_fd, False)
+        os.set_inheritable(ready_write_fd, False)
         pid = os.fork()
     except OSError:
         for descriptor in (master_fd, slave_fd, ready_read_fd, ready_write_fd):
@@ -526,7 +587,6 @@ def _start_screen(
                 }
             )
             os.write(ready_write_fd, b"R")
-            os.close(ready_write_fd)
             os.execve(
                 str(screen_program),
                 [str(screen_program), "-c", "/dev/null", str(endpoint)],
@@ -541,39 +601,51 @@ def _start_screen(
 
     os.close(slave_fd)
     os.close(ready_write_fd)
-    ready, _, _ = select.select(
-        [ready_read_fd],
-        [],
-        [],
-        CHILD_STOP_GRACE_SECONDS,
-    )
-    ready_status = os.read(ready_read_fd, 1) if ready else b""
-    os.close(ready_read_fd)
-    if ready_status != b"R":
+    readiness_payload = bytearray()
+    readiness_pipe_closed = False
+    readiness_deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
+    try:
+        while time.monotonic() < readiness_deadline:
+            timeout = max(0.0, readiness_deadline - time.monotonic())
+            ready, _, _ = select.select([ready_read_fd], [], [], timeout)
+            if not ready:
+                break
+            chunk = os.read(ready_read_fd, 3)
+            if not chunk:
+                readiness_pipe_closed = True
+                break
+            readiness_payload.extend(chunk)
+            if len(readiness_payload) > 2:
+                break
+        os.close(ready_read_fd)
+        if not readiness_pipe_closed or bytes(readiness_payload) != b"R":
+            raise OSError("Screen did not establish its private terminal")
+    except BaseException as startup_error:
         try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+            os.close(ready_read_fd)
+        except OSError:
             pass
-        deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
-        while time.monotonic() < deadline:
-            reaped, _ = _try_reap(pid)
-            if reaped:
-                os.close(master_fd)
-                raise OSError("Screen did not establish its private terminal")
-            time.sleep(POLL_INTERVAL_SECONDS)
         try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
-        while time.monotonic() < deadline:
-            reaped, _ = _try_reap(pid)
-            if reaped:
-                os.close(master_fd)
-                raise OSError("Screen did not establish its private terminal")
-            time.sleep(POLL_INTERVAL_SECONDS)
-        os.close(master_fd)
-        raise OSError("Screen setup process could not be reaped")
+            _, cleanup_complete, cleanup_failure, cleanup_error_number = _stop_screen(
+                pid, master_fd
+            )
+        except (OSError, ValueError) as cleanup_error:
+            cleanup_complete = False
+            cleanup_failure = "process-group-unverified"
+            cleanup_error_number = cleanup_error.errno
+        try:
+            os.close(master_fd)
+        except OSError as cleanup_error:
+            cleanup_complete = False
+            cleanup_failure = cleanup_failure or "process-group-unverified"
+            cleanup_error_number = cleanup_error.errno
+        if not cleanup_complete:
+            raise ScreenStartupError(
+                "Screen setup failed and child cleanup could not be verified",
+                cleanup_failure=cleanup_failure or "process-group-unverified",
+                cleanup_error_number=cleanup_error_number,
+            ) from startup_error
+        raise
     return pid, master_fd
 
 
@@ -652,7 +724,7 @@ def drive_console(
         raise ValueError("Screen executable must be a regular executable file")
 
     result_document: dict[str, Any] = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "consoleEndpointFound": False,
         "screenStarted": False,
         "uBootBannerObserved": False,
@@ -660,6 +732,8 @@ def drive_console(
         "bootCommandSent": False,
         "kernelHandoffObserved": False,
         "outputBytesObserved": 0,
+        "escapeStrippedBytesObserved": 0,
+        "escapeSequenceIncomplete": False,
         "outputLimitBytes": max_output_bytes,
         "outputTruncated": False,
         "timedOut": False,
@@ -705,7 +779,14 @@ def drive_console(
                 if chunk:
                     output.extend(chunk)
                     result_document["outputBytesObserved"] = len(output)
-                    decoded = _strip_ansi_escape_sequences(bytes(output)).decode(
+                    escape_stripped_output, incomplete_sequence = (
+                        _strip_ansi_escape_sequences(bytes(output))
+                    )
+                    result_document["escapeStrippedBytesObserved"] = len(
+                        escape_stripped_output
+                    )
+                    result_document["escapeSequenceIncomplete"] = incomplete_sequence
+                    decoded = escape_stripped_output.decode(
                         "utf-8",
                         errors="replace",
                     )
@@ -733,10 +814,8 @@ def drive_console(
                         if handoff_output_offset is not None
                         else b""
                     )
-                    handoff_text = _strip_ansi_escape_sequences(handoff_output).decode(
-                        "utf-8",
-                        errors="replace",
-                    )
+                    handoff_bytes, _ = _strip_ansi_escape_sequences(handoff_output)
+                    handoff_text = handoff_bytes.decode("utf-8", errors="replace")
                     handoff_text = handoff_text.replace("\r\n", "\n").replace(
                         "\r",
                         "\n",
@@ -774,6 +853,12 @@ def drive_console(
             if requested_signal is not None:
                 result_document["signal"] = requested_signal
                 status = 128 + requested_signal
+    except ScreenStartupError as error:
+        print(f"drive_cuttlefish_console: {error}", file=sys.stderr)
+        result_document["cleanupComplete"] = False
+        result_document["cleanupFailure"] = error.cleanup_failure
+        result_document["cleanupErrorNumber"] = error.cleanup_error_number
+        status = 1
     except (OSError, ValueError) as error:
         detail = (
             error.strerror or type(error).__name__

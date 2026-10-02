@@ -3302,3 +3302,209 @@ suite passed 166 tests with 102 skipped. Ruff lint and format checks and
 `git diff --check` passed. These host-side results validate the capture helper
 and its tests; they do not satisfy #064's live Android boot or reference-profile
 acceptance criteria. Keep this review item open.
+
+## IR-120: Separate Screen terminal controls from forwarded text
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{drive_cuttlefish_console.py,experiment_support.py,tests/}` |
+
+**Choice.** Bump the private bootloader-console summary to schema 3 and add
+`escapeStrippedBytesObserved` beside `outputBytesObserved`. The first count
+includes all bytes Screen wrote to the helper's terminal PTY; the second counts
+the remaining bytes after stripping the terminal escape sequences used by the
+helper's banner, prompt, and handoff recognizers. Keep discarding the raw
+transcript. Record whether the parser reaches the end of the observed bytes
+inside an incomplete escape sequence.
+
+**Reason.** In the running Linux reference VM, a controlled PTY with no guest
+data produced exactly 83 bytes from the installed `/usr/bin/screen`. All 83
+were terminal initialization sequences, and stripping them produced zero
+bytes. This matches the earlier live record's byte count but cannot establish
+that the discarded live bytes had the same contents. Recording the second
+count prevents future reviewers from treating Screen's own terminal UI bytes
+as evidence that Cuttlefish forwarded guest text, without retaining the
+transcript or claiming source attribution. An incomplete escape sequence
+causes the parser to discard its ambiguous tail, so a zero escape-stripped
+count alone cannot establish that the tail contained no text.
+
+**Verification.** A deterministic helper test feeds the same 83-byte
+terminal-initialization sequence and checks that the raw count is 83, the
+escape-stripped count is zero, no U-Boot banner or prompt is reported, and no
+`boot` command is sent. A second test confirms the helper flags an unterminated
+escape sequence and does not classify text inside its discarded tail.
+Summary publication rejects negative counts, counts larger than the raw PTY
+output, and a banner or prompt with zero escape-stripped bytes. The Screen
+readiness handshake now waits for `execve` to close its close-on-exec pipe,
+clamps the deadline remainder, and reaps the child if the wait raises. This
+status refinement does not change Cuttlefish settings or establish an Android
+boot root cause. Continue with a bounded direct-PTY observation of the pinned
+Cuttlefish console path; do not repeat the 600-second run without new
+evidence.
+
+## IR-121: Signal the Screen child during session setup
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, `Experiments/cuttlefish-boot-diagnosis/{drive_cuttlefish_console.py,tests/test_drive_cuttlefish_console.py}` |
+
+**Choice.** During Screen cleanup, signal both the expected process group and
+the known child PID. Continue to verify group cleanup and reap the child using
+the existing checks.
+
+**Reason.** The child calls `setsid()` after `fork()`. If the parent fails
+before the child establishes its session, signaling process group `pid` can
+return `ESRCH`, while the child PID still exists. Sending the signal to that
+PID closes the startup race without changing Screen's session or terminal
+setup.
+
+**Verification.** A Linux regression test forks a child that remains in the
+parent's process group and confirms `_stop_screen()` terminates and reaps it.
+A second synchronized regression test makes the child create its own session
+and fork a descendant after the first `SIGKILL` group check reports no group;
+cleanup then retries `SIGKILL` while checking for live group members. Existing
+tests continue to cover Screen descendants and forced group cleanup. This is a
+host-helper lifecycle fix and does not establish a Cuttlefish boot root cause.
+
+## IR-122: Preserve Cuttlefish serial endpoint identity in normalized logs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [normalization rules](../../Images/tools/reference/normalize.yaml), [normalization tests](../../Images/tools/tests/test_compare_boot.py) |
+
+**Choice.** Keep Cuttlefish `--serial=hardware=...` option structure,
+including hardware, port, and type fields. Replace private path prefixes in
+its `path` and `input` endpoints while retaining their final filenames.
+Continue to redact guest serial identifiers such as `androidboot.serialno`.
+
+**Reason.** Existing normalized U-Boot-pause logs replaced the entire
+`--serial=hardware=...` option with `<SERIAL>`, which erased the UART/hvc
+mapping needed to distinguish the kernel-log path from the device-console
+path. The associated temporary work directories no longer contain
+pre-normalized launcher logs, so the lost fields cannot be recovered from
+those records. Retaining endpoint filenames in future normalized captures
+allows that comparison while hiding machine-specific directory prefixes.
+
+**Verification.** A normalization fixture checks that serial hardware,
+number, type, and unambiguous endpoint filenames survive; private directories
+and guest serial identifiers do not. A later review found that paths
+containing spaces could leave a suffix after the original matcher stopped at
+whitespace. IR-125 records the conservative fallback for quoted or ambiguous
+endpoint values. Previously published captures remain unchanged because
+their erased values cannot be reconstructed.
+
+## IR-123: Describe missing crosvm output as a timed process snapshot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [capture script](../../Images/tools/reference/capture.sh), [capture tests](../../Images/tools/tests/test_reference_capture.py) |
+
+**Choice.** When no matching crosvm process is visible, record that the
+process snapshot had no match at artifact-collection time and state that this
+does not establish whether crosvm ran earlier.
+
+**Reason.** A process snapshot taken after a timed-out Cuttlefish start or
+cleanup describes only that observation. The launcher log in the U-Boot-pause
+record shows crosvm was launched, so the former `MISSING.txt` wording could
+mislead readers into treating a later empty process list as evidence that it
+never ran.
+
+**Verification.** The capture integration fixture fails Cuttlefish start
+before a crosvm process is available to the artifact collector and checks the
+time-scoped `MISSING.txt` wording. Existing tests still check that a live
+matching crosvm command line is captured when present.
+
+## IR-124: Compare the two Cuttlefish console observation paths
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [pinned Cuttlefish source](https://github.com/google/android-cuttlefish/tree/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host) |
+
+**Choice.** For one bounded `guest_swiftshader` + console-on + bootloader-pause
+run, compare the Screen helper's status flags with the captured `kernel.log`.
+Keep the console transcript discarded.
+
+**Reason.** In the pinned Cuttlefish 1.57.0 source at revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`, `crosvm_manager.cpp` maps
+`/dev/hvc0` to the kernel log and configures the bootloader's interactive
+serial console on its console pipes when enabled. `console_forwarder/main.cpp`
+queues console-output bytes to its PTY client and kernel-log pipe. A one-byte
+PTY packet with value 3 is logged as a control message; Linux headers define
+that value as `TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE`, and this path does not
+forward it to guest input. `boot_config.cc` implements the bootloader pause by
+wrapping the Android boot entrypoint in its generated environment.
+
+An inventory of a retained older, non-paused instance found
+`mkenvimg_input` and `uboot_env.img`. Its generated input contained `ethprime`
+and `uenvcmd`, with no explicit `stdin`, `stdout`, `bootdelay`, or `bootcmd`
+overrides. That instance had `console=false` and `pause_in_bootloader=false`,
+so it does not establish what the new paused run will emit.
+
+**Verification.** The source paths above were read at the pinned revision, and
+the Linux `TIOCPKT` constants were checked in the reference VM headers. The
+bounded live comparison remains pending. If `kernel.log` records the U-Boot
+banner but Screen does not, investigate the PTY/Screen observation path. If
+neither records it, the result remains inconclusive because guest silence and
+a failure before the shared forwarding path remain possible. Either outcome
+is diagnostic only and does not establish a successful Android boot.
+
+## IR-125: Redact ambiguous Cuttlefish endpoint paths
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), [normalization rules](../../Images/tools/reference/normalize.yaml), [normalization tests](../../Images/tools/tests/test_compare_boot.py) |
+
+**Choice.** Preserve an endpoint basename only when the normalizer can parse
+the Cuttlefish `path` or `input` value unambiguously. Replace the full value
+with `<HOST_PATH>` when it is quoted or contains whitespace.
+
+**Reason.** The endpoint filename helps identify console and kernel-log
+mapping, but a path containing spaces could be partially matched and leave the
+private username and directory suffix visible in a published command line.
+Quoted paths do not always expose a safely separable basename. Full-value
+redaction favors privacy in those ambiguous cases.
+
+**Verification.** Normalization fixtures cover ordinary endpoints with
+retained basenames, an unquoted path containing a space, and a quoted path.
+They assert that path fragments and directory names are absent while serial
+hardware and port fields remain available. This changes only normalized
+captures; existing published records are not rewritten.
+
+## IR-126: Bound a focused bootloader-console retry
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{capture-gpu-none.sh,experiment_support.py,tests/}` |
+
+**Choice.** Keep the diagnostic runner's default boot deadline at 600 seconds.
+Add an input that allows a deadline from 120 through 600 seconds, validates it
+before starting Cuttlefish, and records the selected value in `experiment.json`.
+Use 180 seconds for the single focused SwiftShader, console-on, bootloader-pause
+comparison.
+
+**Reason.** Two 600-second bootloader-pause retries produced no U-Boot banner
+or prompt, and their retained raw console data is intentionally unavailable.
+The next run compares the direct Screen status with `kernel.log`; an early
+capture of those evidence fields is useful, and another ten-minute wait is not
+needed to distinguish a banner in one observation path. The 120-second
+minimum leaves time for Cuttlefish setup and the bounded console helper.
+
+**Verification.** Shell input validation and the experiment-record builder
+share the 120–600-second range. Unit tests check its endpoints, reject
+out-of-range and non-integer values, and verify that a selected 180-second
+deadline is recorded. The chosen live-run deadline and observed result will be
+added to #064 notes after capture.

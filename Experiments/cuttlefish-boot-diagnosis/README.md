@@ -2,17 +2,24 @@
 
 This isolated experiment checks the Android boot stall with selectable GPU
 and serial-console settings. It holds the pinned Android build, Cuttlefish
-host tools, capture tools, CPU count, memory size, and boot deadline to the
-2026-10-01 baseline. By default it passes `gpu_mode=none`,
+host tools, capture tools, CPU count, and memory size to the 2026-10-01
+baseline. Its boot deadline defaults to the baseline's 600 seconds; a focused
+retry can select 120 through 600 seconds. By default it passes `gpu_mode=none`,
 `gpu_vhost_user_mode=off`, and `--console=true` to both `cvd create` and
 `cvd start`. Cuttlefish 1.57.0 does not create its configuration during
 `cvd create --nostart`. The Linux integration fixture checks the exact argument
 vectors for both commands; the live runner validates the saved GPU and console
 settings before publication. Bootloader pause mode is opt-in. In that mode, a
 bounded helper attaches to the run's private Screen endpoint and sends `boot`
-only after it sees the U-Boot prompt. Its version-2 status summary records
-whether a U-Boot banner was observed, along with prompt and handoff states;
-it never saves the console transcript. Pause mode requires
+only after it sees the U-Boot prompt. Its version-3 status summary records
+whether a U-Boot banner was observed, along with prompt and handoff states,
+the bytes Screen wrote to the terminal PTY, and the remaining byte count after
+terminal escape sequences are stripped. Screen can emit control-only startup
+output even when the guest sends nothing; neither count attributes bytes to
+the guest. The summary also marks an incomplete terminal escape sequence: the
+parser discards the ambiguous tail after such a sequence, so a zero
+escape-stripped count does not prove that no text was present. It never saves
+the console transcript. Pause mode requires
 `APKRUN_DIAGNOSTIC_CONSOLE=true` and passes
 `--pause_in_bootloader=true` to both Cuttlefish commands. CVD startup and
 console handoff run under one supervisor: if either process fails, the
@@ -28,6 +35,23 @@ gone. It also requires the recorded Linux
 distribution, kernel, architecture, host CPU count, nested-virtualization
 state, and Cuttlefish instance number to match. It verifies those inputs before
 launching and checks the resulting Cuttlefish configuration before publishing.
+Normalized command lines retain Cuttlefish serial hardware, port, and type
+settings plus endpoint filenames while replacing private directory prefixes.
+If a quoted or space-containing endpoint cannot be parsed without ambiguity,
+normalization replaces its full value to avoid publishing part of a private
+path.
+If `MISSING.txt` says no crosvm command line was captured, that means no
+matching process was visible at artifact-collection time; it does not show
+whether crosvm ran earlier.
+The pinned Cuttlefish 1.57.0 source routes output from the enabled serial
+console through the console forwarder to both its PTY and `kernel.log`.
+Therefore the next focused run compares the helper's banner/prompt flags with
+`kernel.log`. A banner in `kernel.log` without one in Screen points to the
+PTY/Screen observation path. If neither channel records it, the observation
+remains inconclusive because the guest may be silent or the failure may occur
+before the shared forwarding path. The run does not save console bytes. The forwarder's
+`pty control message: 3` is PTY packet control (`TIOCPKT_FLUSHREAD` and
+`TIOCPKT_FLUSHWRITE`), which it logs rather than forwarding as guest input.
 
 Run `capture-gpu-none.sh` on the Linux reference VM after setting
 `CVD_HOST_DIR` and `ANDROID_PRODUCT_OUT` as described in
@@ -65,12 +89,18 @@ to `true`. `APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER` accepts `true` or `false`
 and defaults to `false`. Each selected setting applies to both Cuttlefish
 commands, is validated against the saved configuration, and appears in result
 metadata. GPU and console selections also appear in generated work and result
-directory names. The console helper keeps at most 64 KiB of console output in
-memory, records whether it observed the prompt and a post-command kernel
-handoff, and atomically writes only its private status summary. Publication
-validates that evidence again. The runner sends termination to both supervised
+directory names. The console helper keeps at most 64 KiB of Screen terminal
+output in memory, records raw and escape-stripped byte counts alongside its
+prompt, incomplete-escape, and post-command kernel-handoff states, and
+atomically writes only its private status summary. Publication validates that
+evidence again. The runner
+sends termination to both supervised
 processes before waiting for either; the outer capture supervisor also reaps
 detached descendants if the console helper needs forced termination.
+`APKRUN_DIAGNOSTIC_BOOT_TIMEOUT_SECONDS` accepts values from 120 through 600,
+defaults to 600, and is copied into result metadata. A shorter deadline is
+useful for a focused diagnostic retry; it does not change the separate
+900-second hard runner deadline.
 Compare each pair only. Earlier captures use different diagnostic-tool
 revisions and are context, not controlled comparison members.
 

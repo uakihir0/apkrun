@@ -216,7 +216,36 @@ def test_console_helper_rejects_symlinked_private_paths(
         assert result.is_symlink()
 
 
-def test_console_helper_reports_rejected_runtime_symlink(tmp_path: Path) -> None:
+def test_console_helper_accepts_runtime_symlink_within_home(tmp_path: Path) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    runtime = home / "cuttlefish_runtime"
+    private_runtime = home / "private-runtime"
+    runtime.rename(private_runtime)
+    runtime.symlink_to(private_runtime, target_is_directory=True)
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot\\n=> ')\n"
+        "command = os.read(0, 32)\n"
+        "if b'boot\\r' not in command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["consoleEndpointFound"] is True
+    assert summary["promptObserved"] is True
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+    assert summary["exitCode"] == 0
+
+
+def test_console_helper_rejects_runtime_symlink_outside_home(
+    tmp_path: Path,
+) -> None:
     home = _private_home(tmp_path)
     result = tmp_path / "bootloader-console-summary.json"
     screen = _screen_stub(tmp_path, "time.sleep(10)")
@@ -231,8 +260,8 @@ def test_console_helper_reports_rejected_runtime_symlink(tmp_path: Path) -> None
 
     assert completed.returncode == 1
     assert (
-        "private Cuttlefish runtime directory is a symlink "
-        "(directory, outside-home, same-user)" in completed.stderr
+        "private Cuttlefish runtime directory symlink resolves outside its HOME"
+        in completed.stderr
     )
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["consoleEndpointFound"] is False

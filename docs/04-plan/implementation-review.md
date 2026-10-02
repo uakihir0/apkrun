@@ -3204,9 +3204,10 @@ memory and atomically publishes only a private status summary. The normalized
 record validator rechecks the embedded console evidence before publication:
 the helper may report only SIGINT or SIGTERM, Screen's wait status must be a
 valid process return code and must agree with whether Screen started, and the
-helper exit status must match its recorded signal. Preserve the existing host,
-build, GPU, CPU, memory, and cleanup checks; do not change the canonical
-profiles.
+helper exit status must match its recorded signal. Resolve Cuttlefish console
+symlinks only when their targets stay under the unique private HOME and remain
+owned by the current user. Preserve the existing host, build, GPU, CPU, memory,
+and cleanup checks; do not change the canonical profiles.
 
 **Reason.** The normal-start Screen attempts under IR-115 produced no guest
 text, and the controlled console-off repeat under IR-118 still had no Linux
@@ -3237,3 +3238,9 @@ Android boot.
 `BOOTLOADER` while parsing `pause_in_bootloader` as a Boolean, before creating
 the instance configuration. The startup arguments now pass `true` to both
 `cvd create` and `cvd start`; the rejected run left no Cuttlefish group.
+
+**Console path correction.** The pinned Cuttlefish runtime creates
+`cuttlefish_runtime` as a symlink whose target is inside the unique private
+HOME and owned by the current user. The helper resolves it and verifies both
+conditions before attaching Screen; links that leave HOME or change owner
+remain rejected.

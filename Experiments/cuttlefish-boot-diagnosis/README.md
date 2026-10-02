@@ -17,7 +17,9 @@ summary; it never saves the console transcript. Pause mode requires
 console handoff run under one supervisor: if either process fails, the
 supervisor stops the other. It uses
 the existing boot deadline, with at most ten seconds to observe the kernel
-handoff after sending `boot`.
+handoff after sending `boot`. Console paths are resolved and accepted only
+when their targets remain inside the private Cuttlefish HOME and belong to the
+current user.
 In the 2026-10-02 retry, an initial 60-second Screen attempt and a later
 25-second attachment from a pseudoterminal produced no guest text. The first
 attempt left a detached Screen session, which was explicitly quit and verified

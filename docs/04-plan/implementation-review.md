@@ -1749,11 +1749,14 @@ properties to `avb.py` rather than duplicating them in the static layout.
 
 **Reason.** `extract` requires the committed default layout, and the selected
 image has a usable baseline from source and accepted boot decisions. The
-reference-dependent values cannot be established on this macOS host because
-no Linux Cuttlefish reference VM is available. Shipping this incomplete
-baseline makes extraction reproducible while keeping guessed boot properties
-out of the image. The Android bootconfig is not complete until the reference
-capture fills the omitted entries; #010 remains open.
+reference-dependent values must come from the #064 `target` profile. A nested
+Linux/Cuttlefish reference VM is now available, but the committed captures are
+incomplete `default` diagnostics and no `target` profile has been captured.
+Those records do not establish the target bootconfig or final command line.
+Shipping this incomplete baseline makes extraction reproducible while
+keeping guessed boot properties out of the image. The Android bootconfig is
+not complete until a normalized `target` capture provides the omitted values;
+#010 remains open.
 
 ## IR-075: Normalize manifest decoding errors without echoing input values
 
@@ -3905,11 +3908,13 @@ source after the final check.
 | Task | #064 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #064; [pinned U-Boot source](https://android.googlesource.com/platform/external/u-boot/+/3fe9647575890b846172e546201eff7614c8cb59/arch/arm/cpu/armv8/cache.S); `Images/reference/16373615/incomplete/default-20261001T120904-49816/{kernel.log,launcher.log}` |
 
-**Choice.** Treat PC `0x000000017f63e1f4` as a strong, testable match for a
-U-Boot virtual-address cache-maintenance loop, with candidate relocated image
-base `0x000000017f63c000`. Describe this as “consistent with” the cache-flush
-hypothesis until the bootloader's exact build configuration and the runtime
-call path are confirmed. Do not call the PC a proven hang or root cause.
+**Choice.** Treat PC `0x000000017f63e1f4` as matching a U-Boot
+virtual-address cache-maintenance instruction at candidate relocated image
+base `0x000000017f63c000`. A live paused-U-Boot read corroborates that
+instruction window at runtime. Describe the slow cache-flush explanation as
+“consistent with” the evidence until the bootloader's exact build
+configuration and runtime call path are confirmed. Do not call it a proven
+hang or root cause.
 
 **Reason.** The attached static analysis identifies file offset `0x21f4` as
 `dc civac, x0`; subtracting that offset from the traced PC yields a
@@ -3934,9 +3939,14 @@ reproduced `dc civac, x0` at `0x21f4` and its cache-line loop. A second window
 from `0x220c` to `0x2250` reproduced the following `dc ivac, x0` loop. The
 traced PC minus the verified file offset gives the 4-KiB-aligned candidate
 base `0x000000017f63c000`. This independently verifies the binary instruction
-and the address arithmetic. The attached analysis's complete 174-candidate
-relocation search, the runtime mapping from file offset to PC, and the
-bootloader configuration remain unverified.
+and the address arithmetic. The later nonce-framed paused-U-Boot probe read
+`d50b7e20` at `0x000000017f63e1f4` and `d53b0023` at
+`0x000000017f63e1dc`, corroborating that the expected code window occupies
+those runtime addresses in the pinned Cuttlefish package. The probe and trace
+were separate runs, so the read does not by itself establish the execution
+context of the earlier PC sample. The attached analysis's complete
+174-candidate relocation search has not been independently reproduced, and
+the bootloader configuration and runtime call path remain unverified.
 
 The saved `default-20261001T120904-49816` logs record the U-Boot banner at
 11:59:04 and the Linux banner at 12:02:14, a 190-second interval. They later
@@ -3944,9 +3954,10 @@ record `adbd` startup and Cuttlefish ADB proxy event 5 at 12:05:16, while the
 host connector reports `device offline` at 12:05:29. The capture never reached
 its post-`cvd start` ADB polling loop, so that run did not measure external ADB
 readiness or `sys.boot_completed`. A 120-second run is therefore too short to
-test whether the same path completes. A passive capture of at least 2400
-seconds was the next discriminating probe; the completed 3000-second retry is
-documented below.
+test whether the same path completes. An unpaused capture of at least 2400
+seconds, with memory and ADB observation but without console interaction or
+vCPU tracing, was the next discriminating probe; the completed 3000-second
+retry is documented below.
 
 **Verification.** Reviewed `cache.S` and `cache_v8.c` from the pinned source
 commit and independently reproduced the instruction window from the
@@ -3956,10 +3967,11 @@ above. The instruction-word scan found one 4-byte-aligned occurrence at
 base. Existing `kernel.log` and `launcher.log` timestamps confirm Linux boot
 at +190 seconds, later `adbd` and proxy startup, and an offline connector
 state. These checks confirm the packaged instruction and that the candidate
-address arithmetic is consistent. They do not confirm that the runtime
-bootloader maps this file offset at the traced PC, verify the binary's
-defconfig or call path, or establish that all observed delay is cache
-maintenance.
+address arithmetic is consistent. The later paused-U-Boot memory probe
+separately corroborates the expected instruction words at the candidate
+runtime addresses, but does not establish that the earlier trace sampled this
+code while executing. These observations do not verify the binary's defconfig
+or call path, or establish that all observed delay is cache maintenance.
 
 The recovered `default-20261002T224455-600285` capture records the U-Boot
 banner at 22:34:27 and Linux at 22:43:24 Lima local time, a 537-second
@@ -4202,8 +4214,8 @@ an accepted property value. All polls had
 `pollDeadlineReached=false`, and `sysBootCompleted` remained null. This
 capture used the earlier two-second property cap. A separate bounded
 read-only query through the same private socket returned no property text in
-about seven seconds under a 12-second limit. A later live capture is still
-needed to verify the new ten-second cap against the guest. The focused
+about seven seconds under a 12-second limit. The 1200-second run below
+subsequently exercised the ten-second cap against the guest. The focused
 observer suite passed 33 tests with one Linux-only parent-death test skipped
 on macOS; Ruff, formatting, Python compilation, and `git diff --check`
 passed. After the ten-second cap change, the full Image tools suite passed
@@ -4212,11 +4224,14 @@ an uninitialized property-attempt field and an ambiguous timeout flag; both
 were corrected, and its follow-up review reported no findings.
 
 A subsequent 1200-second `default` capture used a VM copy of
-`boot_observer.py` whose SHA-256 matched the local source with the ten-second
-`getprop` cap. It recorded 33 polls: three initial polls had no device state
-and did not attempt the property query (one connection timeout and two
-`connect` exit-code-0 results); the other 30 reported `device` and attempted
-`getprop`. Twenty-nine timed out, and one exited 0 without an accepted
+`boot_observer.py` with SHA-256
+`d19b56edf45b7011a53b42ca4ab2d1c6c60d89b52163a9780ac49688d2702494`, matching
+the local source; that source sets the `getprop` timeout to ten seconds. The
+source and VM copy were checked before launch. It recorded 33 polls: three
+initial polls had no device state and did not attempt the property query (one
+connection timeout and two `connect` exit-code-0 results); the other 30
+reported `device` and attempted `getprop`. Twenty-nine timed out, and one
+exited 0 without an accepted
 property value. One final poll reached the shared deadline, and
 `sysBootCompleted` stayed null throughout. A separate bounded
 `getprop sys.boot_completed` query and `logcat -d -t 1` query, each limited to
@@ -4261,8 +4276,9 @@ strings exposed no `bdinfo` or relocation labels, and the first live
 `bdinfo` response contained no relocation fields. The user-provided diagnosis
 recommends reading the two known addresses directly. This is its optional
 paused-U-Boot probe (C), pursued after the primary long, untraced capture (A)
-had completed; those passive results are recorded in M01 and IR-133. The
-targeted probe does not replace the passive baseline. Clearing and checking
+had completed; those unpaused, instrumented results are recorded in M01 and
+IR-133. The targeted probe does not replace the unpaused boot observation.
+Clearing and checking
 the variables prevents old U-Boot environment values from masquerading as
 fresh memory reads. Requiring the response to contain the current run's nonce
 also rejects a delayed complete transcript from another run; it is a framing
@@ -4271,9 +4287,12 @@ command and prompt within 79 columns, leaving one column of margin. Draining
 queued PTY output and then requiring the exact command echo prevents
 pre-command stale text from being accepted. The code records the observed
 words rather than treating the expected values as a precondition, so an
-unexpected result remains useful evidence. Neither a matching word pair nor
-the read itself proves that U-Boot owns or executed at the traced PC, verifies
-the runtime address mapping, or establishes the slow boot's cause.
+unexpected result remains useful evidence. The live read is direct evidence
+that the expected instruction words occupy the candidate addresses while
+U-Boot is paused, corroborating the relocated code window. Because the probe
+was a separate run, it does not alone establish the earlier trace's execution
+context or call path, nor does it show that cache maintenance caused the slow
+boot.
 
 **Verification.** The Linux Screen-PTY suite exercises variable clearing,
 stale preparation values, the exact read command, accepted values, duplicate,
@@ -4306,5 +4325,5 @@ Android progress after handoff. The normalized nine-file record is in
 verified all nine capture files. The privacy scan found no host paths, MAC
 addresses, or PEM key markers. `experiment.json` records complete helper and
 capture cleanup; `MISSING.txt` says no crosvm process matched the private HOME
-at artifact-collection time. This validates the nonce-framed live exchange,
-not Android boot.
+at artifact-collection time. This validates the nonce-framed live exchange
+and the instruction words at the candidate addresses, not Android boot.

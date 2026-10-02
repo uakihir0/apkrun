@@ -3155,7 +3155,10 @@ and vendor boot image, then ends at `Starting kernel ...`. It contains no
 later Linux or Android init marker. All 40 ADB samples are unknown, and the
 guest logcat capture wrote zero bytes. The normalized internal bootconfig has
 the same key/value set as the earlier incomplete capture after excluding the
-serial number and Wi-Fi MAC prefix identifiers. A live `ps` sample showed the
+serial number and Wi-Fi MAC prefix identifiers. The sanitized
+`cuttlefish_config.json` also has the same values as the earlier incomplete
+capture after excluding `group_uuid`, `webrtc_device_id`, `serialno`, and
+`wifi_mac_prefix`, and masking absolute paths. A live `ps` sample showed the
 Android crosvm process at 99.9% CPU. A thread sample near eight minutes into
 the run showed `crosvm_vcpu0` at 99.9% and the other three vCPU threads at
 0.0%; subsequent samples still reported 99.9% for vCPU0. These are sampled
@@ -3163,8 +3166,13 @@ observations, not a continuous trace, and were not stored in the normalized
 result. After cleanup, `cvd fleet` was empty and no `crosvm` process remained.
 
 **Interpretation.** The same current-tool `console=false` settings reproduce
-the missing post-handoff log and ADB evidence. The sampled vCPU0 activity is
-consistent with guest CPU activity after U-Boot's handoff, but does not prove
-Linux reached its first log point or identify what it was executing. The older
-capture's later Linux and Android init output remains unexplained; neither
-capture establishes a root cause or completes #064.
+the missing post-handoff log and ADB evidence. The compared bootconfig keys and
+sanitized `cuttlefish_config.json` values match the older incomplete capture.
+That does not explain why the older run produced later logs: the configuration
+comparison omits per-run identifier values and masks absolute paths, the older
+capture-tool revision is not recorded, and other run-to-run variation remains.
+These results do not distinguish a tooling difference from other variation.
+The sampled vCPU0 activity is consistent with guest CPU activity after
+U-Boot's handoff, but does not prove Linux reached its first log point or
+identify what it was executing. Neither capture establishes a root cause or
+completes #064.

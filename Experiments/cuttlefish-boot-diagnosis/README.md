@@ -157,13 +157,14 @@ APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader \
   bash capture-gpu-none.sh
 ```
 
-The setting changes only Cuttlefish's `--memory_mb` argument. The selected
-value and 4096 MiB baseline are recorded in `host-identity.json` and
-`experiment.json`, and the saved Cuttlefish configuration is checked before
-publication. The memory value is included in private workspace and result
-directory names. Compare runs made with the same other settings; a single
-timing change is diagnostic evidence, not proof of the U-Boot code path or its
-cause.
+The selected value is passed to both `cvd create --memory_mb` and
+`cvd start --memory_mb`; passing it only to `create` would let `start` restore
+its 4096 MiB default. The selected value and 4096 MiB baseline are recorded in
+`host-identity.json` and `experiment.json`, and the saved Cuttlefish
+configuration is checked before publication. The memory value is included in
+private workspace and result directory names. Compare runs made with the same
+other settings; a single timing change is diagnostic evidence, not proof of
+the U-Boot code path or its cause.
 
 To pause at U-Boot and continue through the private console, opt in explicitly:
 

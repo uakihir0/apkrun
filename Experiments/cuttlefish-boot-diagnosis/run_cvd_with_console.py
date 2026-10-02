@@ -15,6 +15,7 @@ from types import FrameType
 from typing import BinaryIO
 
 MAX_TIMEOUT_SECONDS = 600
+MEMORY_MB_CHOICES = (2048, 4096)
 POLL_INTERVAL_SECONDS = 0.05
 # The console helper can use up to five seconds to stop and verify Screen.
 PROCESS_STOP_TIMEOUT_SECONDS = 8
@@ -133,6 +134,11 @@ def run_start_with_console(arguments: argparse.Namespace) -> int:
         raise ValueError("Cuttlefish group name is outside the private namespace")
     if arguments.gpu_mode not in {"none", "guest_swiftshader"}:
         raise ValueError("GPU mode is unsupported")
+    if (
+        type(arguments.memory_mb) is not int
+        or arguments.memory_mb not in MEMORY_MB_CHOICES
+    ):
+        raise ValueError("guest memory is unsupported")
     if arguments.console_enabled != "true":
         raise ValueError(
             "bootloader pause requires the Cuttlefish console to be enabled"
@@ -164,6 +170,7 @@ def run_start_with_console(arguments: argparse.Namespace) -> int:
         f"--gpu_mode={arguments.gpu_mode}",
         "--gpu_vhost_user_mode=off",
         f"--console={str(arguments.console_enabled).lower()}",
+        f"--memory_mb={arguments.memory_mb}",
         f"--boot_timeout_secs={arguments.timeout_seconds}",
         "--pause_in_bootloader=true",
     ]
@@ -307,6 +314,12 @@ def _parse_arguments() -> argparse.Namespace:
         required=True,
     )
     parser.add_argument("--console-enabled", choices=("true", "false"), required=True)
+    parser.add_argument(
+        "--memory-mb",
+        type=int,
+        choices=MEMORY_MB_CHOICES,
+        required=True,
+    )
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--handoff-timeout-seconds", type=int, default=10)
     return parser.parse_args()

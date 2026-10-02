@@ -4404,13 +4404,15 @@ and the instruction words at the candidate addresses, not Android boot.
 
 **Choice.** Keep 4096 MiB as the default and add an explicit
 `APKRUN_DIAGNOSTIC_MEMORY_MB=2048` comparison option. Accept only 2048 or 4096
-MiB. The selector changes the `cvd create --memory_mb` input; keep the pinned
-build, four CPUs, `guest_swiftshader`, console disabled, and other explicit
-Cuttlefish arguments fixed. Record the 4096 MiB baseline, selected value, and
-slug in verified host and experiment metadata, include the selection in
-workspace and result names, and reject publication if saved configuration
-does not match. Preserve compatibility with older records that lack memory
-fields and with the previous schema that contains only `memoryMb=4096`.
+MiB. Pass the selected value to both `cvd create --memory_mb` and
+`cvd start --memory_mb`; the latter otherwise restores its 4096 MiB default.
+Keep the pinned build, four CPUs, `guest_swiftshader`, console disabled, and
+other explicit Cuttlefish arguments fixed. Record the 4096 MiB baseline,
+selected value, and slug in verified host and experiment
+metadata, include the selection in workspace and result names, and reject
+publication if saved configuration does not match. Preserve compatibility
+with older records that lack memory fields and with the previous schema that
+contains only `memoryMb=4096`.
 
 **Reason.** The supplied U-Boot diagnosis proposes an optional 2 GiB run to
 check whether the long U-Boot-to-Linux interval changes with guest-memory
@@ -4423,9 +4425,13 @@ the U-Boot-to-Linux interval as right-censored. If the U-Boot marker is absent,
 report that interval as unmeasured. Neither outcome confirms or rejects the
 cache-flush hypothesis.
 
-**Verification.** The full Linux diagnosis suite passes 386 tests. Unit and
-publication coverage checks the 2048 and 4096 MiB selections, generated
-arguments, recorded metadata, directory labels, acceptance of the prior
-`memoryMb=4096` record shape, and rejection of a mismatched saved
-configuration. Ruff, Python compilation, shell syntax, and `git diff --check`
-pass. The live 2048 MiB capture is pending.
+**Verification.** Unit and publication coverage checks the 2048 and 4096 MiB
+selections, generated `create` and `start` arguments, recorded metadata,
+directory labels, acceptance of the prior `memoryMb=4096` record shape, and
+rejection of a mismatched saved configuration. The first live 2048 MiB
+attempt was rejected before publication: the requested value appeared in
+`cvd create`, but Cuttlefish 1.57.0's `cvd start` default rewrote the saved
+configuration to 4096 MiB. The pinned CLI help confirms that `cvd start`
+accepts `--memory_mb`; the launch path now passes and checks the selected
+value in both commands. The rejected attempt is not comparison evidence. A
+valid live 2048 MiB capture is pending.

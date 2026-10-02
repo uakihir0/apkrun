@@ -23,6 +23,7 @@ def _runner_command(
     start_helper: Path,
     console_helper: Path,
     *,
+    memory_mb: int = 4096,
     timeout_seconds: int = 8,
 ) -> list[str]:
     return [
@@ -46,6 +47,8 @@ def _runner_command(
         "none",
         "--console-enabled",
         "true",
+        "--memory-mb",
+        str(memory_mb),
         "--timeout-seconds",
         str(timeout_seconds),
         "--handoff-timeout-seconds",
@@ -263,6 +266,8 @@ while True:
             "none",
             "--console-enabled",
             "true",
+            "--memory-mb",
+            "4096",
             "--timeout-seconds",
             "8",
             "--handoff-timeout-seconds",
@@ -583,9 +588,11 @@ def test_success_after_the_shared_deadline_is_reported_as_timeout(
         group_name="apkrun_deadline_test",
         gpu_mode="none",
         console_enabled="true",
+        memory_mb=2048,
     )
 
     assert runner_function(arguments) == 124
+    assert any("--memory_mb=2048" in command for command in popen_commands)
     assert any(
         "--boot_timeout_secs=1" in command
         for command in popen_commands

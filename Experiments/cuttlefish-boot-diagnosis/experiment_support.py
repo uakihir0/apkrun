@@ -4034,6 +4034,7 @@ def patch_capture_script(
             '    --console-summary "$APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY" \\\n'
             '    --group-name "$cvd_group_name" --gpu-mode '
             f"{gpu_mode} --console-enabled {console_argument} \\\n"
+            f"    --memory-mb {memory_mb} \\\n"
             '    --timeout-seconds "$remaining" \\\n'
             '    --handoff-timeout-seconds "$handoff_timeout"\n'
             "}\n\n"
@@ -4160,7 +4161,7 @@ def patch_capture_script(
             f"""{bootloader_console_start}start_cvd_group_with_gpu_mode() {{
   run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" \\
     start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument} \\
-    --boot_timeout_secs=$timeout_seconds{pause_argument}
+    --memory_mb={memory_mb} --boot_timeout_secs=$timeout_seconds{pause_argument}
 }}
 
 launch_profile() {{""",

@@ -2883,6 +2883,14 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
     assert f"--boot_timeout_secs=$timeout_seconds{pause_argument}" in patched
+    assert (
+        f"--memory_mb={memory_mb} --boot_timeout_secs=$timeout_seconds{pause_argument}"
+        in patched
+    )
+    if pause_in_bootloader:
+        assert f"--memory-mb {memory_mb}" in patched
+    else:
+        assert "--memory-mb " not in patched
     default_gpu_mode_arguments = [
         line.strip()
         for line in patched.splitlines()
@@ -3024,6 +3032,7 @@ def test_boot_timeout_accepts_values_inside_diagnostic_range(value: int) -> None
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
+@pytest.mark.parametrize("memory_mb", (2048, 4096))
 @pytest.mark.parametrize(
     ("console_enabled", "pause_in_bootloader"),
     ((True, False), (False, False), (True, True)),
@@ -3035,6 +3044,7 @@ def test_boot_timeout_accepts_values_inside_diagnostic_range(value: int) -> None
 def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
     tmp_path: Path,
     gpu_mode: str,
+    memory_mb: int,
     console_enabled: bool,
     pause_in_bootloader: bool,
     persisted_vhost_user: bool,
@@ -3050,6 +3060,7 @@ def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
         gpu_mode,
         console_enabled,
         pause_in_bootloader,
+        memory_mb,
     )
     patched = private_copy.read_text(encoding="utf-8")
 
@@ -3092,10 +3103,20 @@ elif "start" in arguments:
         for value in create_arguments
         if value.startswith("--gpu_mode=")
     ]
+    create_memory_values = [
+        create_arguments[index + 1]
+        for index, value in enumerate(create_arguments[:-1])
+        if value == "--memory_mb"
+    ]
     start_gpu_modes = [
         value.split("=", 1)[1]
         for value in arguments
         if value.startswith("--gpu_mode=")
+    ]
+    start_memory_values = [
+        value.split("=", 1)[1]
+        for value in arguments
+        if value.startswith("--memory_mb=")
     ]
     gpu_mode_selected = (
         len(create_gpu_modes) == 1
@@ -3106,6 +3127,12 @@ elif "start" in arguments:
     vhost_user_disabled = (
         "--gpu_vhost_user_mode=off" in create_arguments
         and "--gpu_vhost_user_mode=off" in arguments
+    )
+    memory_selected = (
+        len(create_memory_values) == 1
+        and len(start_memory_values) == 1
+        and create_memory_values[0] == start_memory_values[0]
+        and create_memory_values[0] == os.environ["APKRUN_TEST_MEMORY_MB"]
     )
     create_console_settings = [
         value.split("=", 1)[1]
@@ -3170,6 +3197,11 @@ elif "start" in arguments:
                         ),
                         "console": saved_console_setting,
                         "pause_in_bootloader": saved_pause_setting,
+                        "memory_mb": (
+                            int(os.environ["APKRUN_TEST_MEMORY_MB"])
+                            if memory_selected
+                            else 0
+                        ),
                     }
                 }
             }
@@ -3313,6 +3345,7 @@ result.write_text(
         "APKRUN_TEST_VHOST_USER": "true" if persisted_vhost_user else "false",
         "APKRUN_TEST_START_EXIT_CODE": str(start_exit_code),
         "APKRUN_TEST_GPU_MODE": gpu_mode,
+        "APKRUN_TEST_MEMORY_MB": str(memory_mb),
         "APKRUN_TEST_CONSOLE_ENABLED": str(console_enabled).lower(),
         "APKRUN_TEST_PAUSE_IN_BOOTLOADER": str(pause_in_bootloader).lower(),
     }
@@ -3360,7 +3393,7 @@ result.write_text(
             "--cpus",
             "4",
             "--memory_mb",
-            "4096",
+            str(memory_mb),
         ],
         [
             "--group_name=apkrun_test",
@@ -3368,6 +3401,7 @@ result.write_text(
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
+            f"--memory_mb={memory_mb}",
             start_timeout_arguments[0],
             *(["--pause_in_bootloader=true"] if pause_in_bootloader else []),
         ],
@@ -3378,6 +3412,7 @@ result.write_text(
     assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
     assert saved_instance["console"] is console_enabled
     assert saved_instance["pause_in_bootloader"] is pause_in_bootloader
+    assert saved_instance["memory_mb"] == memory_mb
 
     if persisted_vhost_user:
         capture_record = tmp_path / "capture-record"

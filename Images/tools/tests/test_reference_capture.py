@@ -198,6 +198,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
               done
               instance="$base_directory/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
               mkdir -p "$instance/internal"
+              ln -s "$instance" "$base_directory/cuttlefish_runtime"
               printf '%s\\n' "$*" > "$APKRUN_PROFILE_LAUNCH_LOG"
               printf '%s\\n' "$instance" > "$APKRUN_PROFILE_INSTANCE_FILE"
               python3 - "$instance/internal/bootconfig" <<'PY'
@@ -274,7 +275,13 @@ def test_capture_script_uses_each_profile_launch_configuration(
         encoding="utf-8",
     )
     (fake_bin / "readlink").write_text(
-        "#!/bin/sh\n[ \"$1\" = /proc/100/exe ] || exit 1\nprintf '/opt/crosvm\\n'\n",
+        "#!/bin/sh\n"
+        'if [ "$1" = -f ]; then\n'
+        "  python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$2\"\n"
+        "  exit $?\n"
+        "fi\n"
+        '[ "$1" = /proc/100/exe ] || exit 1\n'
+        "printf '/opt/crosvm\\n'\n",
         encoding="utf-8",
     )
     (fake_bin / "timeout").write_text(
@@ -331,6 +338,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
         {
             "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
             "APKRUN_CAPTURE_BOOT_OBSERVER": "1" if observer_enabled else "0",
+            "APKRUN_BOOT_TIMEOUT_SECONDS": "321",
             "APKRUN_PROFILE_INSTANCE_FILE": str(instance_file),
             "APKRUN_PROFILE_INITIAL_HOME": str(home),
             "APKRUN_PROFILE_LAUNCH_LOG": str(launch_log),
@@ -357,7 +365,11 @@ def test_capture_script_uses_each_profile_launch_configuration(
     group_argument = next(
         argument for argument in launch_arguments if argument.startswith("--group_name=")
     )
-    assert start_log.read_text(encoding="utf-8").split() == [group_argument, "start"]
+    assert start_log.read_text(encoding="utf-8").split() == [
+        group_argument,
+        "start",
+        "--boot_timeout_secs=321",
+    ]
     assert f"--base_directory={tmp_path}/apkrun-cvd-home.{profile}." in " ".join(launch_arguments)
     if expected_gpu_mode is None:
         assert not any(argument.startswith("--gpu_mode=") for argument in launch_arguments)
@@ -1207,7 +1219,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               exec /usr/bin/timeout "$@"
             fi
             case "$1" in
-              --kill-after=*) shift ;;
+              --kill-after=*|--signal=*) shift ;;
             esac
             timeout_seconds=$1
             shift
@@ -1478,11 +1490,11 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     if boot_timeout_case in {"real-cvd-start", "real-adb-getprop"}:
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
     elif boot_timeout_case in {"cvd-start", "cvd-start-no-crosvm"}:
-        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "3"
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
     elif boot_timeout_case == "adb-getprop":
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "6"
     elif boot_timeout_case == "adb-no-device":
-        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "5"
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
     elif boot_timeout_case != "shared-deadline":
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "600"
     environment.pop("APKRUN_CVD_INSTANCE_NUM", None)
@@ -1658,7 +1670,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert any(
                 diagnostic in missing
                 for diagnostic in (
-                    "sys.boot_completed did not become 1 within 5s",
+                    "sys.boot_completed did not become 1 within 10s",
                     "ADB did not respond before APKRUN_BOOT_TIMEOUT_SECONDS expired",
                     "ADB did not report sys.boot_completed before "
                     "APKRUN_BOOT_TIMEOUT_SECONDS expired",
@@ -1701,7 +1713,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                     "whether crosvm ran earlier"
                 ) in missing
             else:
-                expected_timeout_seconds = "10" if boot_timeout_case == "real-cvd-start" else "3"
+                expected_timeout_seconds = "10"
                 assert (
                     "Cuttlefish create or start exceeded the "
                     f"{expected_timeout_seconds}-second boot deadline"
@@ -1725,17 +1737,21 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert start_command[0] == "cvd"
             assert start_command[1].startswith("--group_name=apkrun_target_")
             assert start_command[2] == "start"
+            assert start_command[3].startswith("--boot_timeout_secs=")
             assert all(call[0] == "--kill-after=2s" for call in cvd_runner_calls)
             assert all(call[1].isdigit() and int(call[1]) > 0 for call in cvd_runner_calls)
             if boot_timeout_case == "cvd-start":
-                assert capture_elapsed_seconds >= 3
-                assert capture_elapsed_seconds < 10
+                assert capture_elapsed_seconds >= 10
+                assert capture_elapsed_seconds < 18
             elif boot_timeout_case == "cvd-start-no-crosvm":
                 assert capture_elapsed_seconds < 10
             else:
                 assert capture_elapsed_seconds >= 10
                 assert capture_elapsed_seconds < 25
-            assert start_log.read_text(encoding="utf-8").startswith("--group_name=apkrun_target_")
+            start_log_arguments = start_log.read_text(encoding="utf-8").split()
+            assert start_log_arguments[0].startswith("--group_name=apkrun_target_")
+            assert start_log_arguments[1] == "start"
+            assert start_log_arguments[2] == start_command[3]
             assert (partials[0] / "kernel.log").read_text(encoding="utf-8") == (
                 "VIRTUAL_DEVICE_BOOT_COMPLETED\n"
             )
@@ -1917,7 +1933,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         start_timeout = cvd_runner_calls[1][cvd_runner_calls[1].index("--timeout-seconds") + 1]
         assert cvd_runner_calls[0][0] == "--kill-after=2s"
         assert create_timeout == "600"
-        assert start_log.read_text(encoding="utf-8").startswith("--group_name=apkrun_target_")
+        start_log_arguments = start_log.read_text(encoding="utf-8").split()
+        assert start_log_arguments[0].startswith("--group_name=apkrun_target_")
+        assert start_log_arguments[1] == "start"
+        assert start_log_arguments[2].startswith("--boot_timeout_secs=")
         assert getprop_calls[0][0] == "--kill-after=2s"
         assert 0 < int(getprop_calls[0][1]) <= int(start_timeout) < int(create_timeout)
     if gpu_mode == "guest_swiftshader":

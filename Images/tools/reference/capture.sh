@@ -553,6 +553,23 @@ run_cvd_command_with_live_logs() {
   fi
   if [ "$observe_boot" -eq 1 ] \
     && [ "${capture_boot_observer:-0}" -eq 1 ]; then
+    observer_instance_path=$(timeout --signal=KILL "$command_remaining" \
+      readlink -f "$cvd_home/cuttlefish_runtime" 2>/dev/null || true)
+    command_now=$(date +%s)
+    command_remaining=$((boot_timeout_deadline - command_now))
+    if [ "$command_remaining" -le 0 ]; then
+      boot_deadline_expired=1
+      return 124
+    fi
+    case "$observer_instance_path" in
+      "$cvd_home"/*/instances/cvd-"$cvd_instance_num")
+        [ -d "$observer_instance_path" ] || observer_instance_path=
+        ;;
+      *) observer_instance_path= ;;
+    esac
+    if [ -z "$observer_instance_path" ]; then
+      observer_instance_path="$cvd_home/.unresolved-cvd-instance-$cvd_instance_num"
+    fi
     if HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
       python3 \
       "$script_dir/capture_cvd_start.py" \
@@ -564,7 +581,7 @@ run_cvd_command_with_live_logs() {
       --boot-observer-adb-port "$adb_port" \
       --boot-observer-crosvm "$CVD_HOST_DIR/bin/crosvm" \
       --boot-observer-instance-path \
-      "$cvd_home/cuttlefish_runtime/instances/cvd-$cvd_instance_num" \
+      "$observer_instance_path" \
       -- "$@"; then
       return 0
     else
@@ -597,6 +614,7 @@ preserve_cvd_home=1
 started=1
 if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
   || ! run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" start \
+    "--boot_timeout_secs=$timeout_seconds" \
     >> "$stage/cvd-create-console.log" 2>&1; then
   if [ "$boot_deadline_expired" -eq 1 ]; then
     record_missing "guest" \

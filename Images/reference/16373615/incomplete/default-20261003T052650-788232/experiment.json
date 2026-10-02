@@ -1,0 +1,188 @@
+{
+  "adbEndpoint": "127.0.0.1:6520",
+  "adbServerTransport": "localfilesystem",
+  "adbStateSampleCount": 13,
+  "baselineCvd": {
+    "packageVersion": "1.57.0",
+    "vcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d"
+  },
+  "baselineHost": {
+    "architecture": "aarch64",
+    "cpuCount": 8,
+    "cvdInstanceNumber": 1,
+    "hostKind": "linux-apple",
+    "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+    "nestedVirtualization": "on",
+    "os": "Ubuntu 24.04.4 LTS"
+  },
+  "baselineRecord": "Images/reference/16373615/incomplete/default-20261001T120904-49816",
+  "baselineToolBlobs": {
+    "Images/manifests/16373615/android-image.json": "456b1cf3f8e32e2d54c8a7017e86ad3b4331bf75",
+    "Images/tools/reference/capture.sh": "da59e773ef5ed6fd13872fd9eb703093b7b37648",
+    "Images/tools/reference/capture_cvd_start.py": "eb789687fb543cea95024a38a1e1b72e515434cf",
+    "Images/tools/reference/compare_boot.py": "89952761a4844c435eea128fcb55b4c9275d7254",
+    "Images/tools/reference/guest-capture.txt": "998b9ce99338e69945bf8a3f9ea3712bfdc039a9",
+    "Images/tools/reference/normalize.yaml": "d8c7bc28c4c2e66f37cdc846fe8214991a22d5cb"
+  },
+  "baselineToolCommit": "64da28a551b0b33e258c8f37057b9a8a6d90846d",
+  "bootTimeoutSeconds": 180,
+  "bootloaderConsole": {
+    "bootCommandSent": true,
+    "cleanupComplete": true,
+    "cleanupErrorNumber": null,
+    "cleanupFailure": null,
+    "consoleEndpointFound": true,
+    "escapeSequenceIncomplete": false,
+    "escapeStrippedBytesObserved": 19329,
+    "exitCode": 0,
+    "handoffTimedOut": false,
+    "kernelHandoffObserved": true,
+    "memoryProbeCommandAttempted": true,
+    "memoryProbeCommandEchoObserved": true,
+    "memoryProbeCommandSent": true,
+    "memoryProbePreparationCommandAttempted": true,
+    "memoryProbePreparationCommandEchoObserved": true,
+    "memoryProbePreparationCommandSent": true,
+    "memoryProbePreparationRejected": false,
+    "memoryProbePreparationResponsePromptObserved": true,
+    "memoryProbeResponseObserved": true,
+    "memoryProbeResponsePromptObserved": true,
+    "memoryProbeResponseRejected": false,
+    "memoryProbeTimedOut": false,
+    "memoryProbeVariablesCleared": true,
+    "outputBytesObserved": 19412,
+    "outputLimitBytes": 65536,
+    "outputTruncated": false,
+    "promptObserved": true,
+    "schemaVersion": 6,
+    "screenExitCode": -15,
+    "screenStarted": true,
+    "signal": null,
+    "timedOut": false,
+    "uBootBannerObserved": true,
+    "wordAtObservedPc": 3574300192,
+    "wordBeforeObservedPc": 3577413667
+  },
+  "boundedCapture": {
+    "aggregateBytes": 1061,
+    "files": {
+      "cvd-create": {
+        "bytesWritten": 121,
+        "childExitCode": null,
+        "cleanupComplete": true,
+        "signal": null,
+        "timedOut": false,
+        "truncated": false
+      },
+      "cvd-start": {
+        "bytesWritten": 940,
+        "childExitCode": null,
+        "cleanupComplete": true,
+        "signal": null,
+        "timedOut": false,
+        "truncated": false
+      }
+    },
+    "timedOutFiles": [],
+    "truncatedFiles": []
+  },
+  "buildId": "16373615",
+  "captureExitCode": 1,
+  "captureRun": {
+    "childExitCode": 1,
+    "cleanupComplete": true,
+    "schemaVersion": 1,
+    "signal": null,
+    "timedOut": false
+  },
+  "consoleEnabled": true,
+  "consoleModeSlug": "on",
+  "cpuCount": 4,
+  "experiment": "cuttlefish-gpu-guest-swiftshader-console-on-boot-diagnosis",
+  "experimentSources": {
+    "capture-gpu-none.sh": "8fdcd3b33cce87e529efc02c4f4d0f654347242a4401bd1d22984b306819235c",
+    "capture-lifecycle.sh": "e5f963f9800cf0d6aedcb5dedeced0c08885a539f12335e74591e90272095e82",
+    "capture_bounded.py": "e728a40456fc02a50abf91470642f3ad9a87bbc792e05decd3bc6687dfa41a7c",
+    "capture_processes.py": "ece9da42131ef24adf71d296efb923279f8a7c229e5efff09789cd2b7f0bbf9c",
+    "drive_cuttlefish_console.py": "0a04db7ff0ea7fba889edd8b06394c133e1764f2ec270b6f4c7689e94f0f49cf",
+    "experiment_support.py": "d197466abb641d2c924e53a64545aff57e2aaefee8ade0dcf2f67462f0d587ab",
+    "patched-capture.sh": "b3a5ff8bdbafc3b81a3472cc27821c79705bc545778105d72df5afa0fb331418",
+    "run_capture.py": "27fd2edd29837132c9b0b271d60f3c0c7614e9e4172c95f50c30e499190b6bf4",
+    "run_cvd_with_console.py": "cc5fb6569d59f260d43d4ebe67bfe8dcf7f5bf442d478599e33d734bc8721d2e",
+    "summarize_logcat.py": "a151d9b9498e3110b570955957e82950642de0d4144e8855454758355c286033"
+  },
+  "gpuMode": "guest_swiftshader",
+  "gpuModeSlug": "guest-swiftshader",
+  "guestLogcatCapture": {
+    "bytesWritten": 0,
+    "captured": false,
+    "childExitCode": null,
+    "cleanupComplete": true,
+    "signal": null,
+    "timedOut": false,
+    "truncated": false
+  },
+  "logcat": {
+    "activityManagerLines": 0,
+    "activityServiceLookupFailures": 0,
+    "bootCompletedLines": 0,
+    "captureLogcatPresent": false,
+    "graphicsFailureLines": 0,
+    "lineCount": 0,
+    "liveLogcatBytes": 0,
+    "liveLogcatCleanupIncompleteSampleCount": 0,
+    "liveLogcatFailedSampleCount": 0,
+    "liveLogcatSampleCount": 0,
+    "liveLogcatTimedOutSampleCount": 0,
+    "liveLogcatTruncatedSampleCount": 0,
+    "schemaVersion": 1,
+    "snapshotCount": 0,
+    "surfaceFlingerLines": 0,
+    "systemServerFatalLines": 0,
+    "systemServerLines": 0,
+    "uncompressedBytes": 0
+  },
+  "memoryMb": 4096,
+  "observedCvd": {
+    "packageVersion": "1.57.0",
+    "vcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d"
+  },
+  "observedHost": {
+    "architecture": "aarch64",
+    "cpuCount": 8,
+    "cvdInstanceNumber": 1,
+    "hostKind": "linux-apple",
+    "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+    "nestedVirtualization": "on",
+    "os": "Ubuntu 24.04.4 LTS"
+  },
+  "observedToolBlobs": {
+    "Images/manifests/16373615/android-image.json": "456b1cf3f8e32e2d54c8a7017e86ad3b4331bf75",
+    "Images/tools/reference/capture.sh": "5f09efd4e1a9fba9fc9fa952cdd47308c275c3a3",
+    "Images/tools/reference/capture_cvd_start.py": "30357f6d9474bdcb89648f17f99d2baae97b2e86",
+    "Images/tools/reference/compare_boot.py": "89952761a4844c435eea128fcb55b4c9275d7254",
+    "Images/tools/reference/guest-capture.txt": "998b9ce99338e69945bf8a3f9ea3712bfdc039a9",
+    "Images/tools/reference/normalize.yaml": "9497ab5f0580e9fd58fc0039b6357c06f18ee260"
+  },
+  "observedToolCommit": "638a5963febcd2172b96091a58e1a035e9a4833c",
+  "pauseInBootloader": true,
+  "rawLogcatRetained": false,
+  "runnerDeadlineSeconds": 900,
+  "schemaVersion": 1,
+  "unixSocketPaths": {
+    "capture": {
+      "capacityBytes": 108,
+      "maxEncodedPathBytes": 0,
+      "maxSunPathBytesIncludingNul": 0,
+      "socketCount": 0,
+      "terminatingNulBytes": 1
+    },
+    "fleet": {
+      "capacityBytes": 108,
+      "maxEncodedPathBytes": 0,
+      "maxSunPathBytesIncludingNul": 0,
+      "socketCount": 0,
+      "terminatingNulBytes": 1
+    }
+  }
+}

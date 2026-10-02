@@ -4231,7 +4231,7 @@ show whether a longer guest shell query would return a property.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/README.md`; `Experiments/cuttlefish-boot-diagnosis/drive_cuttlefish_console.py`; `Experiments/cuttlefish-boot-diagnosis/experiment_support.py` |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/README.md`; `Experiments/cuttlefish-boot-diagnosis/drive_cuttlefish_console.py`; `Experiments/cuttlefish-boot-diagnosis/experiment_support.py`; `Images/reference/16373615/incomplete/default-20261003T052650-788232/{capture files, LIMA-SHA256SUMS}` |
 
 **Choice.** Before the paused-U-Boot memory read, clear the dedicated `w0` and
 `w1` environment variables and require an exact echo, the empty-state marker
@@ -4289,6 +4289,22 @@ legacy schema 3–5 coverage. Publication tests verify that sending either
 probe command omits the mirrored `kernel.log` and records that omission. The
 full Linux experiment suite passes 349 tests. Adversarial review found a
 documentation mismatch and a stale-response test-ordering gap; both were
-fixed, and final follow-up review found no remaining findings. An earlier
-pre-nonce live probe recorded the expected word pair and a kernel-handoff
-marker; live validation of this nonce-framed revision remains pending.
+fixed, and final follow-up review found no remaining findings.
+
+A live validation of commit `638a596` used the paused-U-Boot path with
+SwiftShader, console enabled, and a 180-second deadline. The helper observed
+the U-Boot banner and exact echoes, accepted the current run's nonce-framed
+response with words `d50b7e20` and `d53b0023`, sent `boot`, and observed the
+kernel-handoff marker without a probe timeout. The capture lasted 185 seconds
+and returned exit code 1 at the guest deadline; `cvd-start`'s child exit code
+is null. All 13 ADB samples were
+`unknown`; there was no positive `sys.boot_completed` result or guest logcat.
+The publisher omitted `kernel.log`, so this result does not show Linux or
+Android progress after handoff. The normalized nine-file record is in
+`Images/reference/16373615/incomplete/default-20261003T052650-788232/`.
+`LIMA-SHA256SUMS` contains Lima-side digests, and host-side `sha256sum -c`
+verified all nine capture files. The privacy scan found no host paths, MAC
+addresses, or PEM key markers. `experiment.json` records complete helper and
+capture cleanup; `MISSING.txt` says no crosvm process matched the private HOME
+at artifact-collection time. This validates the nonce-framed live exchange,
+not Android boot.

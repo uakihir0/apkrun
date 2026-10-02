@@ -106,6 +106,22 @@ the failure may occur before the shared forwarding path. The forwarder's
 `pty control message: 3` is PTY packet control (`TIOCPKT_FLUSHREAD` and
 `TIOCPKT_FLUSHWRITE`), which it logs rather than forwarding as guest input.
 
+The nonce-framed paused-U-Boot validation (2026-10-02 UTC) is retained in
+`Images/reference/16373615/incomplete/default-20261003T052650-788232/`.
+The accompanying `LIMA-SHA256SUMS` sidecar verifies the nine normalized
+capture files.
+`experiment.json` records the U-Boot banner, an accepted response containing
+`d50b7e20 d53b0023`, `bootCommandSent=true`, and
+`kernelHandoffObserved=true`. The capture used a 180-second deadline and
+lasted 185 seconds before Cuttlefish reported device launch failure. All 13
+ADB samples were `unknown`; there was no positive `sys.boot_completed` value
+or guest logcat. The publisher omitted `kernel.log` because the probe commands
+were sent, so the record does not show whether Linux or Android booted after
+the kernel handoff. `MISSING.txt` records the guest deadline and missing
+crosvm process without the former false bootloader-console handoff entry.
+This confirms the nonce-framed command and response on the live Cuttlefish
+console, not successful Linux or Android boot.
+
 Run `capture-gpu-none.sh` on the Linux reference VM after setting
 `CVD_HOST_DIR` and `ANDROID_PRODUCT_OUT` as described in
 `docs/05-development/environment-setup.md`. The default output root is

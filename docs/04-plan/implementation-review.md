@@ -3176,3 +3176,59 @@ The sampled vCPU0 activity is consistent with guest CPU activity after
 U-Boot's handoff, but does not prove Linux reached its first log point or
 identify what it was executing. Neither capture establishes a root cause or
 completes #064.
+
+## IR-119: Pause at U-Boot and continue through the private console
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{capture-gpu-none.sh,experiment_support.py,drive_cuttlefish_console.py,run_cvd_with_console.py,tests/}` |
+
+**Choice.** Add an opt-in
+`APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER=true` mode to the isolated diagnosis
+runner, leaving the default disabled. Pass the pinned Cuttlefish bootloader
+pause setting to both `cvd create` and `cvd start`, verify the saved
+configuration, and require the serial console to be enabled. A supervisor runs
+CVD startup and a bounded console helper together under the existing boot
+deadline, and sends termination to both processes before waiting for either
+one. The runner temporarily unblocks INT and TERM for its own cancellation
+handler, blocks them across the CVD spawn boundary, then restores the active
+signal mask in the child before exec and the caller's original mask on exit.
+The outer capture supervisor reaps detached descendants if the console helper
+has to be forcibly stopped. The helper sends `boot` once only after it observes
+the U-Boot prompt, then allows at most ten seconds for a kernel handoff
+received after that command. A successful handoff observed after the shared
+deadline still counts as a timeout. It keeps at most 64 KiB of console text in
+memory and atomically publishes only a private status summary. The normalized
+record validator rechecks the embedded console evidence before publication:
+the helper may report only SIGINT or SIGTERM, Screen's wait status must be a
+valid process return code and must agree with whether Screen started, and the
+helper exit status must match its recorded signal. Preserve the existing host,
+build, GPU, CPU, memory, and cleanup checks; do not change the canonical
+profiles.
+
+**Reason.** The normal-start Screen attempts under IR-115 produced no guest
+text, and the controlled console-off repeat under IR-118 still had no Linux
+output after U-Boot's kernel handoff. Those attempts did not hold U-Boot at an
+interactive prompt. The [Cuttlefish bootloader debugging
+instructions](https://source.android.com/docs/devices/cuttlefish/bootloader-dev)
+describe pausing at the bootloader, connecting to the private console, and
+typing `boot` to continue. Testing that documented flow can distinguish a
+console-attachment problem from the existing boot stall. Console-disabled
+pause mode cannot provide the documented connection, so it is rejected before
+startup instead of spending the shared boot deadline waiting for an endpoint.
+The shared cleanup grace prevents a slow Screen shutdown from delaying the
+CVD stop request. Managing signal masks keeps cancellation deliverable to the
+runner and CVD helper even when the caller initially blocked those signals.
+Deadline precedence prevents a completion observed after the run budget from
+being recorded as success. A post-command byte boundary prevents an earlier
+kernel marker in the console buffer from being mistaken for a successful
+handoff. Atomic publication avoids leaving a readable success summary when
+writing its contents fails. Revalidating the summary and its allowed exit
+codes at record publication prevents later metadata edits from bypassing the
+original capture checks. Restricting signal and Screen wait-status values to
+states the helper can actually produce rejects internally contradictory
+summaries. The bounded status-only capture avoids retaining raw bootloader
+text. This diagnostic does not change a canonical profile or claim a successful
+Android boot.

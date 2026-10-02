@@ -216,6 +216,26 @@ def test_console_helper_rejects_symlinked_private_paths(
         assert result.is_symlink()
 
 
+def test_console_helper_reports_rejected_runtime_symlink(tmp_path: Path) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(tmp_path, "time.sleep(10)")
+    runtime = home / "cuttlefish_runtime"
+    (runtime / "console").unlink()
+    runtime.rmdir()
+    outside_runtime = tmp_path / "outside-runtime"
+    outside_runtime.mkdir()
+    runtime.symlink_to(outside_runtime, target_is_directory=True)
+
+    completed = _run_helper(home, result, screen, timeout=1)
+
+    assert completed.returncode == 1
+    assert "private Cuttlefish console path contains a symlink" in completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["consoleEndpointFound"] is False
+    assert summary["exitCode"] == 1
+
+
 def test_console_helper_rejects_group_accessible_home(tmp_path: Path) -> None:
     home = _private_home(tmp_path)
     home.chmod(0o750)

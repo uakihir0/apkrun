@@ -573,7 +573,13 @@ def drive_console(
             if requested_signal is not None:
                 result_document["signal"] = requested_signal
                 status = 128 + requested_signal
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        detail = (
+            error.strerror or type(error).__name__
+            if isinstance(error, OSError) and error.filename is not None
+            else str(error)
+        )
+        print(f"drive_cuttlefish_console: {detail}", file=sys.stderr)
         status = 1
     finally:
         if child_pid is not None and master_fd is not None:

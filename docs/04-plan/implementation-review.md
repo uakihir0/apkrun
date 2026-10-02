@@ -3848,10 +3848,13 @@ socket. The latest `test_boot_observer.py` and `test_reference_capture.py`
 regressions passed 48 cases on macOS with four Linux-only skips and 51 cases
 on Linux with one skip. The macOS full Image tools suite passed 365 cases with
 four Linux-only skips before the final process-source filtering change. Ruff,
-formatting, shell syntax, and `git diff --check` passed after that change. A
-follow-up live capture is pending to verify process selection and the
-`cvd start` boot-timeout setting; the 2400-second value remains a shared
-capture deadline, not a dedicated `cvd start` allowance.
+formatting, shell syntax, and `git diff --check` passed after that change. The
+active 3000-second run observed launcher event 5 at 16:22:11.114Z and the
+private ADB server ready at 16:22:12.585Z. Its first ADB poll timed out; the
+next two `adb connect` commands exited 0 but reported no device state, and
+`getprop` / `sys.boot_completed` remain unavailable. This verifies the
+event-triggered ADB observer path starts during the live run, but not that the
+guest is ADB-ready or boot-complete.
 
 ## IR-132: Detect same-size inventory mutations on coarse-timestamp filesystems
 
@@ -3941,6 +3944,15 @@ The run did not record launcher event 5 or ADB readiness. The differing
 enough to infer a deterministic RAM-scan rate or prove the cache-maintenance
 hypothesis.
 
+The active 3000-second retry has since recorded Linux and Android first-stage
+init, followed by zygote and vendor service starts through guest uptime 589
+seconds. In one five-second host sample, each of the four crosvm vCPU threads
+used about five CPU seconds. This confirms that the guest continued executing
+after the previously observed handoff boundary. It does not identify which
+guest code consumed the CPU, prove ownership of the earlier PC, or establish
+that U-Boot cache maintenance caused the delay; `system_server`, launcher
+event 5, and ADB readiness remain unobserved while the capture is active.
+
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
 | Field | Value |
@@ -3964,9 +3976,12 @@ inner monitor from preempting the capture; the outer shared deadline remains
 the limit for create, start, and guest readiness.
 
 **Verification.** The capture integration test checks that a configured
-321-second budget is passed as `--boot_timeout_secs=321`. A new live capture
-with the pinned Cuttlefish package is required to verify that the CLI accepts
-the value and continues beyond the previous 600-second cutoff.
+321-second budget is passed as `--boot_timeout_secs=321`. The active live
+capture passes 3000 seconds to the pinned Cuttlefish CLI and remains running
+well beyond the old 600-second cutoff; it has reached Linux, Android init,
+zygote, vendor services, and `adbd`. This confirms that the CLI accepts the
+longer value and that its previous independent timeout no longer ends startup
+at 600 seconds. The final capture result remains pending.
 
 ## IR-135: Resolve Cuttlefish's runtime link during boot observation
 

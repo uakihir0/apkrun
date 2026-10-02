@@ -4224,3 +4224,60 @@ property value. One final poll reached the shared deadline, and
 was discarded. This verifies that the observer exercised the extended
 property-query path and retained the timeout distinction, but it does not
 show whether a longer guest shell query would return a property.
+
+## IR-137: Read the traced guest words directly when `bdinfo` is unavailable
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/README.md`; `Experiments/cuttlefish-boot-diagnosis/drive_cuttlefish_console.py`; `Experiments/cuttlefish-boot-diagnosis/experiment_support.py` |
+
+**Choice.** Before the paused-U-Boot memory read, clear the dedicated `w0` and
+`w1` environment variables and require an exact echo, the empty-state marker
+`APKRUN_PROBE_READY`, and the following prompt. If the marker includes
+variable values or the framing is otherwise rejected while a prompt is
+available, skip the read and continue boot. Then send the bounded command
+`setexpr.l w0 *0x17f63e1f4; setexpr.l w1 *0x17f63e1dc; echo ${w0} ${w1}`. It
+reads one 32-bit word at the traced PC and one at the preceding loop
+instruction address; it does not write the inspected guest-memory locations.
+Accept only an exact echo of that command, one nonempty response line
+containing only a pair of 32-bit hexadecimal words, and the next U-Boot
+prompt. Record a unique well-formed pair even if it differs from the expected
+`d50b7e20 d53b0023`. Reject additional output, missing, malformed, or
+duplicate values when the prompt arrives and continue boot; leave the VM
+paused if the command echo or prompt is missing or the shared five-second
+preparation/read timeout expires. Start that timeout before sending the
+preparation command and enforce it while sending both commands and waiting for
+their responses. Write these states and values in summary schema 6 while
+continuing to validate schema 3–5 records. Publication removes the mirrored
+`kernel.log` as soon as either preparation or memory-read command is sent,
+before moving the record into results.
+
+**Reason.** The packaged `bootloader.crosvm` hash was verified, but filtered
+strings exposed no `bdinfo` or relocation labels, and the first live
+`bdinfo` response contained no relocation fields. The user-provided diagnosis
+recommends reading the two known addresses directly. Clearing and checking the
+variables prevents old U-Boot environment values from masquerading as fresh
+memory reads. Requiring the response to contain only the expected marker also
+avoids accepting stale or unrelated console output. The read command is 70
+characters, 73 including the prompt, and fits the existing 80-column console.
+Draining queued PTY output and then requiring the exact command echo prevents
+pre-command stale text from being accepted. The code records the observed
+words rather than treating the expected values as a precondition, so an
+unexpected result remains useful evidence. Neither a matching word pair nor
+the read itself proves that U-Boot owns or executed at the traced PC, verifies
+the runtime address mapping, or establishes the slow boot's cause.
+
+**Verification.** The Linux Screen-PTY suite exercises variable clearing,
+stale preparation values, the exact read command, accepted values, duplicate,
+malformed, and additional output, stale pre-command output, missing response
+prompt, timeout during either phase and during command transmission, global
+deadline handling, and the subsequent kernel-handoff signal. The Cuttlefish launch tests verify that both
+the direct and supervised start paths pass the boot timeout to Cuttlefish. The
+summary validator checks schema 6 value ranges and state consistency while
+retaining legacy schema 3–5 coverage. Publication tests verify that sending
+either probe command omits the mirrored `kernel.log` and records that
+omission. The full Linux experiment suite passes 347 tests. Hostile follow-up
+review found no remaining actionable issues. A live paused-U-Boot capture
+remains pending.

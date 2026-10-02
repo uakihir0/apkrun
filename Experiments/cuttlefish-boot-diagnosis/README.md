@@ -12,33 +12,43 @@ vectors for both commands; the live runner validates the saved GPU and console
 settings before publication. Bootloader pause mode is opt-in. In that mode, a
 bounded helper attaches to the run's private Screen endpoint. After the first
 U-Boot prompt it drains already queued PTY output until the console is quiet,
-then sends the fixed probe command shape
-`echo APK_<per-run-token>; bdinfo; echo APK_<per-run-token>`. The token is
-random, has 96 bits of entropy, and is not saved in the result. This compact
-command fits within an 80-column U-Boot console including its prompt.
-The helper requires U-Boot to echo that exact command and print the matching
-token both before and after `bdinfo`, then show the prompt. It accepts only
-unique, unambiguous numeric `relocaddr` and `reloc off` fields between those
-two markers. This brackets the values with fresh command output: stale lines
-before the start marker are ignored, and duplicate relocation fields are
-rejected. When the command echo, both markers, and the following prompt form a
-complete response but the relocation fields are missing, malformed, or
-ambiguous, the helper records a rejected response, leaves both values null,
-and continues with `boot`. It stops without booting if the command echo,
-markers, or following prompt are incomplete, or if the response times out.
-The boundary assumes the ordered Cuttlefish console path is trusted; it does
-not authenticate an endpoint that can synthesize a complete response. Its
-version-5 status summary records the banner, initial and post-response prompts,
-command echo, start and end markers, accepted or rejected `bdinfo` response,
-and handoff states, plus the two numeric relocation fields when accepted.
-The publisher continues to accept version-3 and version-4 summaries. The
-bounded console transcript stays in memory and is not included in the summary.
+then clears the dedicated `w0` and `w1` environment variables with
+`setenv w0; setenv w1; echo APKRUN_PROBE_READY ${w0} ${w1}`. It requires the
+exact command echo, a response line containing only `APKRUN_PROBE_READY`, and
+the following prompt before it reads guest memory. A stale or malformed
+readiness response with complete framing is rejected and the helper continues
+with `boot` without sending the memory read. Missing echo or prompt leaves the
+VM paused when the bounded probe timeout expires. It then sends the fixed probe command
+`setexpr.l w0 *0x17f63e1f4; setexpr.l w1 *0x17f63e1dc; echo ${w0} ${w1}`.
+The command is 70 characters (73 with the prompt), so it fits an
+80-column U-Boot console. It reads two 32-bit words at the traced PC and the
+preceding loop instruction address without writing those guest-memory
+locations. The expected words are `d50b7e20` and `d53b0023`; observed values
+are recorded even when they differ.
+
+The helper requires the exact read-command echo, one nonempty response line
+containing only two 32-bit hexadecimal words, and the following prompt.
+Additional output, stale PTY text before the command echo, malformed words, or
+duplicate pairs cannot supply accepted values. A complete but invalid response
+is recorded as rejected with null words, after which the helper continues
+with `boot`; a missing echo or prompt, or the shared five-second probe timeout,
+leaves the VM paused. The probe timeout starts before the preparation command
+is sent, covers both command transmissions and their responses, and is also
+bounded by the overall capture deadline. This framing assumes an ordered,
+trusted Cuttlefish console
+path; it does not authenticate an endpoint that can synthesize a complete
+response. Its version-6 status summary records preparation, prompt, echo,
+accepted or rejected response, and handoff states, plus the two 32-bit values
+when accepted. The publisher continues to accept version-3 through version-5
+summaries. The bounded console transcript stays in memory and is not included
+in the summary.
 Because Cuttlefish mirrors the serial console to `kernel.log`, publication
-removes that whole log whenever the helper sent the probe command, then records
-the omission in `MISSING.txt`. If capture or publication fails, its private
-mode-0700 work area may retain the Cuttlefish log for diagnosis; such an
-unpublished log can contain raw console output. The summary also records the
-bytes Screen wrote to the terminal PTY
+removes that whole log as soon as the helper sends either probe command, then
+records the omission in `MISSING.txt`. This also protects variable values if
+preparation finds stale environment state. If capture or publication fails,
+its private mode-0700 work area may retain the Cuttlefish log for diagnosis;
+such an unpublished log can contain raw console output. The summary also
+records the bytes Screen wrote to the terminal PTY
 and the remaining byte count after terminal escape sequences are stripped.
 Screen can emit control-only startup output even when the guest sends nothing;
 neither count attributes bytes to the guest. The summary marks an incomplete
@@ -48,9 +58,10 @@ present. Pause mode requires
 `APKRUN_DIAGNOSTIC_CONSOLE=true` and passes
 `--pause_in_bootloader=true` to both Cuttlefish commands. CVD startup and
 console handoff run under one supervisor: if either process fails, the
-supervisor stops the other. It uses
-the existing boot deadline, with at most ten seconds to observe the kernel
-handoff after sending `boot`. Console paths must resolve inside the private
+supervisor stops the other. Both startup paths pass their bounded timeout to
+Cuttlefish's `--boot_timeout_secs`, alongside the host-side deadline. The
+supervisor allows at most ten seconds to observe the kernel handoff after
+sending `boot`. Console paths must resolve inside the private
 Cuttlefish HOME, except that the endpoint may resolve to a current-user
 character device under the root-owned, non-writable `/dev/pts`.
 In the 2026-10-02 retry, an initial 60-second Screen attempt and a later

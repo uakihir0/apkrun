@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
+import shutil
 import stat
 import struct
 import sys
 import tempfile
 import unicodedata
 import zipfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -33,12 +36,16 @@ MAX_TEXT_SIZE = 1024 * 1024
 MAX_VENDOR_RAMDISK_TABLE_SIZE = 16 * 1024 * 1024
 MAX_VENDOR_RAMDISK_ENTRIES = 4096
 MAX_ARCHIVE_SIZE = 16 * 1024 * 1024 * 1024
+MAX_INVENTORY_SNAPSHOT_SIZE = 16 * 1024 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 4096
 MAX_CENTRAL_DIRECTORY_SIZE = 64 * 1024 * 1024
 MAX_ZIP64_RECORD_SIZE = 1024 * 1024
 MAX_MEMBER_SIZE = 16 * 1024 * 1024 * 1024
 MAX_TOTAL_INPUT_SIZE = 64 * 1024 * 1024 * 1024
 HASH_CHUNK_SIZE = 1024 * 1024
+INVENTORY_SNAPSHOT_MEMORY_LIMIT = 8 * 1024 * 1024
+INVENTORY_SNAPSHOT_DISK_RESERVE = 256 * 1024 * 1024
+INVENTORY_SNAPSHOT_DISK_CHECK_INTERVAL = 64 * 1024 * 1024
 VENDOR_RAMDISK_TYPES = {
     0: "NONE",
     1: "PLATFORM",
@@ -88,6 +95,7 @@ class InputFile:
     open_stream: Callable[[], BinaryIO]
     source_path: Path | None = None
     expected_version: tuple[int, int, int, int, int] | None = None
+    source_is_snapshot: bool = False
 
 
 @dataclass(frozen=True)
@@ -714,11 +722,14 @@ def _hash_stream(
     """Hash an input file and verify that it did not change while being read."""
     digest = hashlib.sha256()
     size = 0
-    while chunk := stream.read(HASH_CHUNK_SIZE):
-        digest.update(chunk)
-        size += len(chunk)
-        if size > expected_size or (maximum_size is not None and size > maximum_size):
-            raise InventoryError(f"{path}: input expanded beyond its declared size limit")
+    try:
+        while chunk := stream.read(HASH_CHUNK_SIZE):
+            digest.update(chunk)
+            size += len(chunk)
+            if size > expected_size or (maximum_size is not None and size > maximum_size):
+                raise InventoryError(f"{path}: input expanded beyond its declared size limit")
+    except OSError as error:
+        raise InventoryError(f"{path}: could not read input file: {error}") from error
     if size != expected_size:
         raise InventoryError(f"{path}: changed size while the inventory was being generated")
     try:
@@ -726,6 +737,174 @@ def _hash_stream(
     except OSError as error:
         raise InventoryError(f"{path}: input stream is not seekable") from error
     return digest.hexdigest()
+
+
+def _private_inventory_directory(parent: Path) -> Path:
+    """Create or validate one per-user directory for inventory scratch files."""
+    directory = parent / f"apkrun-image-inventory-{os.getuid()}"
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    except OSError as error:
+        raise InventoryError(
+            f"could not create private inventory scratch directory {directory}: {error}"
+        ) from error
+    try:
+        directory_stat = directory.lstat()
+    except OSError as error:
+        raise InventoryError(
+            f"could not inspect private inventory scratch directory {directory}: {error}"
+        ) from error
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or directory_stat.st_uid != os.getuid()
+        or directory_stat.st_mode & 0o077
+    ):
+        raise InventoryError(
+            f"private inventory scratch directory has unsafe ownership or permissions: {directory}"
+        )
+    return directory
+
+
+def _inventory_scratch_directory() -> Path:
+    """Return the current user's private temporary inventory directory."""
+    return _private_inventory_directory(Path(tempfile.gettempdir()))
+
+
+@contextmanager
+def _inventory_scratch_lock() -> Iterator[Path]:
+    """Serialize inventory work for this user to bound aggregate scratch use."""
+    lock_directory = _private_inventory_directory(Path("/tmp"))
+    scratch_directory = _inventory_scratch_directory()
+    lock_path = lock_directory / "inventory.lock"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+            0o600,
+        )
+        file_stat = os.fstat(descriptor)
+        path_stat = lock_path.lstat()
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != os.getuid()
+            or file_stat.st_mode & 0o077
+            or file_stat.st_nlink != 1
+            or file_stat.st_dev != path_stat.st_dev
+            or file_stat.st_ino != path_stat.st_ino
+        ):
+            raise InventoryError(f"inventory scratch lock has unsafe metadata: {lock_path}")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except InventoryError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise InventoryError(f"could not lock inventory scratch space: {error}") from error
+    try:
+        yield scratch_directory
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _ensure_snapshot_space(
+    directory: Path,
+    path: str,
+    expected_size: int,
+    *,
+    remaining_size: int,
+) -> None:
+    """Keep a fixed amount of temporary disk free before and during a snapshot."""
+    if expected_size <= INVENTORY_SNAPSHOT_MEMORY_LIMIT:
+        return
+    required = remaining_size + INVENTORY_SNAPSHOT_DISK_RESERVE
+    try:
+        available = shutil.disk_usage(directory).free
+    except OSError as error:
+        raise InventoryError(
+            f"{path}: could not inspect temporary space for inventory snapshot: {error}"
+        ) from error
+    if available < required:
+        raise InventoryError(
+            f"{path}: inventory snapshot needs {required} bytes of free temporary space "
+            f"({remaining_size} bytes plus a "
+            f"{INVENTORY_SNAPSHOT_DISK_RESERVE}-byte reserve); "
+            f"only {available} bytes are available"
+        )
+
+
+def _snapshot_and_hash(
+    stream: BinaryIO,
+    expected_size: int,
+    path: str,
+    *,
+    maximum_size: int | None = None,
+) -> tuple[BinaryIO, str]:
+    """Copy bounded input to a private seekable snapshot while hashing it."""
+    if expected_size > MAX_INVENTORY_SNAPSHOT_SIZE:
+        raise InventoryError(
+            f"{path}: private inventory snapshot exceeds {MAX_INVENTORY_SNAPSHOT_SIZE} bytes"
+        )
+    scratch_directory = _inventory_scratch_directory()
+    _ensure_snapshot_space(
+        scratch_directory,
+        path,
+        expected_size,
+        remaining_size=expected_size,
+    )
+    snapshot = tempfile.SpooledTemporaryFile(
+        max_size=INVENTORY_SNAPSHOT_MEMORY_LIMIT,
+        mode="w+b",
+        dir=scratch_directory,
+    )
+    digest = hashlib.sha256()
+    size = 0
+    last_space_check = 0
+    try:
+        while chunk := stream.read(HASH_CHUNK_SIZE):
+            size += len(chunk)
+            if size > expected_size or (maximum_size is not None and size > maximum_size):
+                raise InventoryError(f"{path}: input expanded beyond its declared size limit")
+            snapshot.write(chunk)
+            digest.update(chunk)
+            if (
+                size - last_space_check >= INVENTORY_SNAPSHOT_DISK_CHECK_INTERVAL
+                or size == expected_size
+            ):
+                _ensure_snapshot_space(
+                    scratch_directory,
+                    path,
+                    expected_size,
+                    remaining_size=expected_size - size,
+                )
+                last_space_check = size
+        if size != expected_size:
+            raise InventoryError(f"{path}: changed size while the inventory was being generated")
+        snapshot.seek(0)
+        return snapshot, digest.hexdigest()
+    except OSError as error:
+        snapshot.close()
+        raise InventoryError(f"{path}: could not read input file: {error}") from error
+    except BaseException:
+        snapshot.close()
+        raise
+
+
+def _same_file_identity(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    """Compare stable filesystem identity independently of timestamp precision."""
+    return (
+        first.st_dev == second.st_dev
+        and first.st_ino == second.st_ino
+        and first.st_size == second.st_size
+    )
 
 
 def _inventory_file(entry: InputFile) -> dict[str, object]:
@@ -741,20 +920,44 @@ def _inventory_file(entry: InputFile) -> dict[str, object]:
                     or _file_version(opened_stat) != initial_version
                 ):
                     raise InventoryError(f"{entry.path}: input file changed before inventory")
-            digest = _hash_stream(
-                stream,
-                entry.size,
-                entry.path,
-                maximum_size=MAX_MEMBER_SIZE,
-            )
-            classification = _classify(stream, entry.size, entry.path)
+            if entry.source_is_snapshot:
+                classification = _classify(stream, entry.size, entry.path)
+                stream.seek(0)
+                digest = _hash_stream(
+                    stream,
+                    entry.size,
+                    entry.path,
+                    maximum_size=MAX_MEMBER_SIZE,
+                )
+            else:
+                snapshot, digest = _snapshot_and_hash(
+                    stream,
+                    entry.size,
+                    entry.path,
+                    maximum_size=MAX_MEMBER_SIZE,
+                )
+                with snapshot:
+                    classification = _classify(snapshot, entry.size, entry.path)
             if entry.source_path is not None:
+                stream.seek(0)
+                verified_digest = _hash_stream(
+                    stream,
+                    entry.size,
+                    entry.path,
+                    maximum_size=MAX_MEMBER_SIZE,
+                )
                 final_stat = os.fstat(stream.fileno())
                 path_stat = entry.source_path.lstat()
                 if (
                     initial_version is None
-                    or _file_version(final_stat) != initial_version
-                    or _file_version(path_stat) != initial_version
+                    or verified_digest != digest
+                    or (
+                        final_stat.st_dev,
+                        final_stat.st_ino,
+                        final_stat.st_size,
+                    )
+                    != initial_version[:3]
+                    or not _same_file_identity(final_stat, path_stat)
                     or not stat.S_ISREG(path_stat.st_mode)
                 ):
                     raise InventoryError(f"{entry.path}: input file changed during inventory")
@@ -854,6 +1057,7 @@ def _zip_entries(archive: zipfile.ZipFile) -> list[InputFile]:
                 path=member,
                 size=info.file_size,
                 open_stream=lambda item=info: archive.open(item, "r"),
+                source_is_snapshot=True,
             )
         )
     return sorted(entries, key=lambda entry: entry.path.encode("utf-8"))
@@ -1205,40 +1409,53 @@ def _inventory_archive(
             raise InventoryError(
                 f"{source}: zip archive exceeds the {MAX_ARCHIVE_SIZE}-byte input limit"
             )
-        entry_count = _zip_entry_count(stream, source)
-        if entry_count > MAX_ARCHIVE_ENTRIES:
-            raise InventoryError(
-                f"{source}: zip archive exceeds the {MAX_ARCHIVE_ENTRIES}-entry limit"
-            )
-        archive_sha256 = _hash_stream(stream, archive_size, str(source))
-        source_info: dict[str, object] = {
-            "name": source.name,
-            "sha256": archive_sha256,
-            "size": archive_size,
-            "type": "zip",
-        }
-        if fetch_context is not None:
-            artifact = fetch_context["artifact"]
-            if not isinstance(artifact, dict):
-                raise InventoryError("fetch metadata contains an invalid artifact record")
-            if artifact.get("size") != archive_size or artifact.get("sha256") != archive_sha256:
+        archive_snapshot, archive_sha256 = _snapshot_and_hash(
+            stream,
+            archive_size,
+            str(source),
+            maximum_size=MAX_ARCHIVE_SIZE,
+        )
+        with archive_snapshot:
+            entry_count = _zip_entry_count(archive_snapshot, source)
+            if entry_count > MAX_ARCHIVE_ENTRIES:
                 raise InventoryError(
-                    f"{source.name}: archive size or SHA-256 does not match fetch.json"
+                    f"{source}: zip archive exceeds the {MAX_ARCHIVE_ENTRIES}-entry limit"
                 )
-            source_info.update(
-                {
-                    "branch": fetch_context["branch"],
-                    "branchProvenance": fetch_context["branchProvenance"],
-                    "buildId": fetch_context["buildId"],
-                    "target": fetch_context["target"],
-                }
-            )
-        try:
-            with zipfile.ZipFile(stream, "r") as archive:
-                entries = _zip_entries(archive)
-                files = [_inventory_file(entry) for entry in entries]
-        except (OSError, zipfile.BadZipFile) as error:
-            raise InventoryError(f"{source}: could not read zip archive: {error}") from error
+            source_info: dict[str, object] = {
+                "name": source.name,
+                "sha256": archive_sha256,
+                "size": archive_size,
+                "type": "zip",
+            }
+            if fetch_context is not None:
+                artifact = fetch_context["artifact"]
+                if not isinstance(artifact, dict):
+                    raise InventoryError("fetch metadata contains an invalid artifact record")
+                if artifact.get("size") != archive_size or artifact.get("sha256") != archive_sha256:
+                    raise InventoryError(
+                        f"{source.name}: archive size or SHA-256 does not match fetch.json"
+                    )
+                source_info.update(
+                    {
+                        "branch": fetch_context["branch"],
+                        "branchProvenance": fetch_context["branchProvenance"],
+                        "buildId": fetch_context["buildId"],
+                        "target": fetch_context["target"],
+                    }
+                )
+            try:
+                with zipfile.ZipFile(archive_snapshot, "r") as archive:
+                    entries = _zip_entries(archive)
+                    files = [_inventory_file(entry) for entry in entries]
+            except (OSError, zipfile.BadZipFile) as error:
+                raise InventoryError(f"{source}: could not read zip archive: {error}") from error
+        stream.seek(0)
+        verified_archive_sha256 = _hash_stream(
+            stream,
+            archive_size,
+            str(source),
+            maximum_size=MAX_ARCHIVE_SIZE,
+        )
         final_stat = os.fstat(descriptor)
         try:
             path_stat = source.lstat()
@@ -1246,8 +1463,9 @@ def _inventory_archive(
             raise InventoryError(f"{source}: archive path changed during inventory") from error
         if (
             not stat.S_ISREG(path_stat.st_mode)
-            or _file_version(final_stat) != _file_version(initial_stat)
-            or _file_version(path_stat) != _file_version(final_stat)
+            or verified_archive_sha256 != archive_sha256
+            or not _same_file_identity(final_stat, initial_stat)
+            or not _same_file_identity(path_stat, final_stat)
         ):
             raise InventoryError(f"{source}: archive changed during inventory")
     return {
@@ -1260,6 +1478,12 @@ def _inventory_archive(
 
 def inventory(source_path: Path) -> dict[str, object]:
     """Build a deterministic inventory from a zip archive or unpacked directory."""
+    with _inventory_scratch_lock():
+        return _inventory_unlocked(source_path)
+
+
+def _inventory_unlocked(source_path: Path) -> dict[str, object]:
+    """Build an inventory while holding the per-user snapshot-space lock."""
     source = source_path.expanduser()
     if source.is_symlink():
         raise InventoryError(f"{source}: input must not be a symbolic link")

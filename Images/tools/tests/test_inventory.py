@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import struct
+import subprocess
+import sys
+import time
 import zipfile
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import BinaryIO
 
 import pytest
@@ -674,6 +679,39 @@ def test_directory_inventory_detects_same_size_writes_between_hash_and_parse(
     assert member.read_bytes() == replacement
 
 
+def test_directory_inventory_classifies_one_snapshot_when_source_changes_and_reverts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The emitted digest and parsed fields come from the same private snapshot."""
+    root = tmp_path / "download"
+    root.mkdir()
+    member = root / "boot.img"
+    original = boot_image(kernel_size=1024, ramdisk_size=0)
+    replacement = boot_image(kernel_size=512, ramdisk_size=0)
+    assert len(original) == len(replacement)
+    member.write_bytes(original)
+    classify = inventory_module._classify
+
+    def change_and_restore_source(
+        stream: BinaryIO,
+        size: int,
+        path: str,
+    ) -> inventory_module.Classification:
+        member.write_bytes(replacement)
+        classification = classify(stream, size, path)
+        member.write_bytes(original)
+        return classification
+
+    monkeypatch.setattr(inventory_module, "_classify", change_and_restore_source)
+
+    result = inventory(root)["files"][0]
+
+    assert result["sha256"] == hashlib.sha256(original).hexdigest()
+    assert result["details"]["kernelSize"] == 1024
+    assert member.read_bytes() == original
+
+
 def test_inventory_stops_when_a_stream_exceeds_its_declared_size() -> None:
     """A dishonest stream cannot force inventory to consume unbounded output."""
     entry = inventory_module.InputFile(
@@ -684,6 +722,104 @@ def test_inventory_stops_when_a_stream_exceeds_its_declared_size() -> None:
 
     with pytest.raises(InventoryError, match="expanded beyond its declared size limit"):
         inventory_module._inventory_file(entry)
+
+
+def test_snapshot_fails_before_reading_when_temp_space_reserve_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large private snapshot must not consume the reserved temp-space margin."""
+
+    class ReadCounter(io.BytesIO):
+        reads = 0
+
+        def read(self, size: int = -1) -> bytes:
+            self.reads += 1
+            return super().read(size)
+
+    size = inventory_module.INVENTORY_SNAPSHOT_MEMORY_LIMIT + 1
+    available = size + inventory_module.INVENTORY_SNAPSHOT_DISK_RESERVE - 1
+    monkeypatch.setattr(
+        inventory_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=available),
+    )
+    stream = ReadCounter(b"x" * size)
+
+    with pytest.raises(InventoryError, match="temporary space"):
+        inventory_module._snapshot_and_hash(stream, size, "large.img")
+
+    assert stream.reads == 0
+
+
+def test_snapshot_size_limit_is_checked_before_reading() -> None:
+    """The per-input scratch limit is enforced before consuming the source."""
+
+    class ReadCounter(io.BytesIO):
+        reads = 0
+
+        def read(self, size: int = -1) -> bytes:
+            self.reads += 1
+            return super().read(size)
+
+    stream = ReadCounter(b"")
+
+    with pytest.raises(InventoryError, match="private inventory snapshot exceeds"):
+        inventory_module._snapshot_and_hash(
+            stream,
+            inventory_module.MAX_INVENTORY_SNAPSHOT_SIZE + 1,
+            "oversized.img",
+        )
+
+    assert stream.reads == 0
+
+
+def test_inventory_scratch_lock_serializes_same_user_processes() -> None:
+    """Parallel inventories by one user cannot multiply their scratch budget."""
+    package_root = Path(__file__).parents[1]
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value for value in (str(package_root), existing_pythonpath) if value
+    )
+    lock_script = (
+        "import time\n"
+        "from apkrun_image.inventory import _inventory_scratch_lock\n"
+        "with _inventory_scratch_lock():\n"
+        " print('locked', flush=True)\n"
+        " time.sleep(0.7)\n"
+    )
+    first = subprocess.Popen(
+        [sys.executable, "-c", lock_script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        text=True,
+    )
+    try:
+        assert first.stdout is not None
+        assert first.stderr is not None
+        assert first.stdout.readline() == "locked\n", first.stderr.read()
+        second_started = time.monotonic()
+        second = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from apkrun_image.inventory import _inventory_scratch_lock\n"
+                "with _inventory_scratch_lock(): print('acquired')\n",
+            ],
+            capture_output=True,
+            env=environment,
+            text=True,
+            check=False,
+        )
+        wait_time = time.monotonic() - second_started
+        assert second.returncode == 0, second.stderr
+        assert second.stdout == "acquired\n"
+        assert wait_time >= 0.5
+    finally:
+        if first.poll() is None:
+            first.kill()
+        first.wait(timeout=2)
 
 
 def test_download_directory_inventories_its_archive_and_provenance(tmp_path: Path) -> None:
@@ -829,23 +965,33 @@ def test_inventory_rejects_archive_replaced_after_hashing(
         ),
         encoding="utf-8",
     )
-    original_hash = inventory_module._hash_stream
+    original_snapshot = inventory_module._snapshot_and_hash
+    snapshot_paths: list[str] = []
 
-    def hash_then_replace(
+    def snapshot_then_replace(
         stream: BinaryIO,
         size: int,
         path: str,
         *,
         maximum_size: int | None = None,
-    ) -> str:
-        digest = original_hash(stream, size, path, maximum_size=maximum_size)
-        archive.write_bytes(replacement_archive.read_bytes())
-        return digest
+    ) -> tuple[BinaryIO, str]:
+        snapshot_paths.append(path)
+        snapshot, digest = original_snapshot(
+            stream,
+            size,
+            path,
+            maximum_size=maximum_size,
+        )
+        if path == str(archive):
+            archive.write_bytes(replacement_archive.read_bytes())
+        return snapshot, digest
 
-    monkeypatch.setattr(inventory_module, "_hash_stream", hash_then_replace)
+    monkeypatch.setattr(inventory_module, "_snapshot_and_hash", snapshot_then_replace)
 
     with pytest.raises(InventoryError, match="archive changed during inventory"):
         inventory(download)
+
+    assert snapshot_paths == [str(archive)]
 
 
 def test_zip_inventory_rejects_parent_traversal(tmp_path: Path) -> None:

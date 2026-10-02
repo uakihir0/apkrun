@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import runpy
 import signal
 import stat
@@ -266,6 +267,43 @@ def test_console_helper_rejects_runtime_symlink_outside_home(
     summary = json.loads(result.read_text(encoding="utf-8"))
     assert summary["consoleEndpointFound"] is False
     assert summary["exitCode"] == 1
+
+
+def test_console_helper_follows_owned_devpts_console_symlink(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    master_fd, slave_fd = pty.openpty()
+    console = home / "cuttlefish_runtime/console"
+    console.unlink()
+    console.symlink_to(os.ttyname(slave_fd))
+    screen = _screen_stub(
+        tmp_path,
+        "import stat\n"
+        "import sys\n"
+        "if not stat.S_ISCHR(os.stat(sys.argv[-1]).st_mode):\n"
+        "    raise SystemExit(20)\n"
+        "os.write(1, b'U-Boot\\n=> ')\n"
+        "command = os.read(0, 32)\n"
+        "if b'boot\\r' not in command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    try:
+        completed = _run_helper(home, result, screen, timeout=1)
+    finally:
+        os.close(master_fd)
+        os.close(slave_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["consoleEndpointFound"] is True
+    assert summary["promptObserved"] is True
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+    assert summary["exitCode"] == 0
 
 
 def test_console_helper_rejects_group_accessible_home(tmp_path: Path) -> None:

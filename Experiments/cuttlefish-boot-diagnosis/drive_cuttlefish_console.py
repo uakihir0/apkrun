@@ -66,6 +66,30 @@ def _private_result_path(path: Path) -> Path:
     return parent / path.name
 
 
+def _is_current_user_devpts_character_device(
+    path: Path,
+    metadata: os.stat_result,
+) -> bool:
+    devpts_root = Path("/dev/pts")
+    if (
+        path.parent != devpts_root
+        or not path.name.isascii()
+        or not path.name.isdecimal()
+        or not stat.S_ISCHR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+    ):
+        return False
+    try:
+        root_metadata = devpts_root.stat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(root_metadata.st_mode)
+        and root_metadata.st_uid == 0
+        and not root_metadata.st_mode & 0o022
+    )
+
+
 def _console_endpoint(home: Path) -> Path | None:
     runtime_directory = home / "cuttlefish_runtime"
     endpoint = runtime_directory / "console"
@@ -114,15 +138,21 @@ def _console_endpoint(home: Path) -> Path | None:
                 if target == home or target.is_relative_to(home)
                 else "outside-home"
             )
-            if target_location != "within-home":
-                raise ValueError(
-                    f"private Cuttlefish {description} symlink resolves outside "
-                    f"its HOME ({target_type})"
-                )
             if target_metadata.st_uid != os.getuid():
                 raise ValueError(
                     f"private Cuttlefish {description} symlink target has an "
                     "unexpected owner"
+                )
+            if target_location != "within-home" and not (
+                not is_directory
+                and _is_current_user_devpts_character_device(
+                    target,
+                    target_metadata,
+                )
+            ):
+                raise ValueError(
+                    f"private Cuttlefish {description} symlink resolves outside "
+                    f"its HOME ({target_type})"
                 )
             metadata = target_metadata
         if is_directory and not stat.S_ISDIR(metadata.st_mode):
@@ -134,7 +164,17 @@ def _console_endpoint(home: Path) -> Path | None:
         else:
             endpoint = path.resolve(strict=True)
     if not endpoint.is_relative_to(home):
-        raise ValueError("private Cuttlefish console endpoint escaped its HOME")
+        try:
+            endpoint_metadata = endpoint.stat()
+        except OSError as error:
+            raise ValueError(
+                "private Cuttlefish console endpoint is unavailable"
+            ) from error
+        if not _is_current_user_devpts_character_device(
+            endpoint,
+            endpoint_metadata,
+        ):
+            raise ValueError("private Cuttlefish console endpoint escaped its HOME")
     return endpoint
 
 

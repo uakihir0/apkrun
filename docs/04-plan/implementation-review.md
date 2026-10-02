@@ -3204,9 +3204,11 @@ memory and atomically publishes only a private status summary. The normalized
 record validator rechecks the embedded console evidence before publication:
 the helper may report only SIGINT or SIGTERM, Screen's wait status must be a
 valid process return code and must agree with whether Screen started, and the
-helper exit status must match its recorded signal. Resolve Cuttlefish console
+helper exit status must match its recorded signal. Resolve Cuttlefish runtime
 symlinks only when their targets stay under the unique private HOME and remain
-owned by the current user. Preserve the existing host, build, GPU, CPU, memory,
+owned by the current user. The console endpoint may additionally resolve to a
+current-user character device with a numeric name directly under root-owned,
+non-writable `/dev/pts`. Preserve the existing host, build, GPU, CPU, memory,
 and cleanup checks; do not change the canonical profiles.
 
 **Reason.** The normal-start Screen attempts under IR-115 produced no guest
@@ -3241,6 +3243,7 @@ the instance configuration. The startup arguments now pass `true` to both
 
 **Console path correction.** The pinned Cuttlefish runtime creates
 `cuttlefish_runtime` as a symlink whose target is inside the unique private
-HOME and owned by the current user. The helper resolves it and verifies both
-conditions before attaching Screen; links that leave HOME or change owner
-remain rejected.
+HOME and owned by the current user. Its `console` endpoint is a symlink to a
+current-user PTY character device under `/dev/pts`. The helper resolves the
+runtime link within HOME and accepts the console link only for that verified
+PTY shape; other links that leave HOME or change owner remain rejected.

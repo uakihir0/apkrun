@@ -710,12 +710,23 @@ PIDs directly from those prefixes, then accepts only a process whose
 executable and command line identify the private instance, include Android's
 `kernel-log-pipe` serial, and exclude the OpenWrt serial. This avoids pairing
 interleaved `Started` lines with arguments. The sampler reads the selected
-restarter's direct child and requires the expected crosvm executable, private
-instance path, and stable procfs start times for both processes before
-recording `VmRSS` and `RssShmem`. Ambiguous or mismatched process identities
-are not sampled. The instance path comes from resolving Cuttlefish's
-`cuttlefish_runtime` link;
-missing or invalid paths are recorded as `instance_path_discovery_failed`.
+restarter's direct child, confirms the child's procfs parent PID is that
+restarter, and rechecks both processes' pinned start times before recording
+`VmRSS` and `RssShmem`. It requires the staged crosvm path and verifies that
+`/proc/<pid>/exe` refers to the same file, even when the staged path is a
+symlink. Ambiguous or mismatched process identities are not sampled. Resolve
+the private HOME's `cuttlefish_runtime` link during sampling because Cuttlefish
+may create it only after `cvd start` begins. The link points into
+Cuttlefish-managed storage outside the private HOME, so validate its direct
+target as `/var/tmp/cvd/<current-uid>/<run>/home/cuttlefish/instances/cvd-<n>`.
+Resolve that path through Cuttlefish's symlink chain and require its
+destination to be exactly the matching `cuttlefish/instances/cvd-<n>` beneath
+this capture's private HOME. This accepts the normal managed `home` link and
+rejects redirected `home` or `instances` components. The instance number must
+match the selected ADB port. Pin the first valid target; record a pending
+event while the link is absent, a discovered event when it resolves, and a
+failure if it never resolves. If the target changes, clear process identity
+and record an observation gap rather than switching instances.
 `capture_cvd_start.py` atomically replaces the launcher-log snapshot, so inode
 identity is not used to detect a new generation. The observer checks the
 initial prefix and bytes around the last consumed offset; if the bounded

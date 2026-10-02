@@ -3784,11 +3784,31 @@ a Linux or Android boot unless the corresponding markers are observed.
 **Choice.** Add an opt-in `APKRUN_CAPTURE_BOOT_OBSERVER=1` path for the
 existing `cvd start` capture only. While that process is live, sample the
 launcher-identified Android crosvm `VmRSS` and `RssShmem` every five seconds.
-Use a background monotonic sampler, and accept RSS only when `/proc` reports
-the expected executable and `--process_name=crosvm`, an argument identifies
-this run's private Cuttlefish instance directory, and the first observed
-process start time still matches. If the bounded launcher snapshot is
-truncated, clear retained process identities and record an observation gap.
+Use a background monotonic sampler. In Cuttlefish 1.57, `--process_name=crosvm`
+belongs to the corresponding `log_tee`, while the actual crosvm process is a
+child of the following `process_restarter` and has no `--process_name` argument.
+Launcher output includes source process names and PIDs. Collect candidate
+restarter PIDs directly from `process_restarter(<pid>)` prefixes; do not infer
+them by pairing interleaved `Started` lines with argument lines. Accept RSS
+only when a candidate's executable and command line identify this run's
+private instance, include Android's `kernel-log-pipe` serial, and exclude the
+OpenWrt serial. This role filter distinguishes Android from an interleaved
+OpenWrt restarter. Require the selected restarter's direct child to have the
+expected crosvm executable and private instance path. Pin and recheck procfs
+start times for both restarter and crosvm.
+Pass the private HOME's `cuttlefish_runtime` link to the observer without
+resolving it before `cvd start`: Cuttlefish may create that link during start,
+and its target is Cuttlefish-managed storage outside the private HOME. Resolve
+it during sampling, accept only a target with the
+`home/cuttlefish/instances/cvd-<n>` layout, and pin the first valid target.
+Record a pending event while the link is absent and a failure if it never
+resolves. If it later points to another instance, clear process identities,
+record an observation gap, and stop sampling rather than switching targets.
+`capture_cvd_start.py` atomically replaces the bounded launcher snapshot, so
+do not use inode identity to detect log generations.
+Check the initial prefix and bytes around the consumed offset. If the snapshot
+is truncated or those bytes change, clear retained process identities and
+record an observation gap.
 Start a private ADB server only after launcher event 5, using a mode-0700
 socket directory beneath the run's private HOME. Remove inherited ADB socket,
 port, serial, and vendor-key overrides from the observer environment. Poll the
@@ -3802,16 +3822,19 @@ observer killed without cleanup. Capture cleanup removes the private HOME and
 any stale socket path. Leave the observer disabled by default and do not apply
 it to `cvd create`.
 
-**Reason.** The latest incomplete reference capture did not reach
-`capture.sh`'s post-start ADB loop because `cvd start` exhausted the shared
-600-second deadline. The earlier host `adb devices` check ran before launch,
-while Cuttlefish's internal connector logs only establish that it attempted
-connections and saw offline/reconnect states. Neither establishes Android
-readiness or `sys.boot_completed`. A private concurrent probe can fill this
-evidence gap and can distinguish a guest that eventually becomes ADB-ready
-from a process that remains busy without retaining app or shell output. The
-observer is optional so ordinary capture output, ADB configuration, and
-launch behavior remain unchanged.
+**Reason.** The earlier incomplete reference capture did not reach
+`capture.sh`'s post-start ADB loop because `cvd start` exhausted its 600-second
+budget. A later 2400-second outer capture found that Cuttlefish itself still
+used a 600-second boot-state timeout, which ended `cvd start` before the outer
+deadline. That run reached the Linux banner 537 seconds after the U-Boot
+banner, but had no launcher event 5 or ADB readiness result. Its first observer
+also reported no crosvm candidates: the logger marker identifies a `log_tee`,
+not the Android crosvm PID, and the configured instance path incorrectly
+appended another `instances/cvd-1` below the runtime symlink. The private
+concurrent probe is needed to track the process through this launcher
+relationship and measure guest ADB state if event 5 arrives, without retaining
+app or shell output. The observer is optional so ordinary capture output, ADB
+configuration, and launch behavior remain unchanged.
 
 **Verification.** Synthetic tests cover launcher PID selection against an
 OpenWrt decoy, private-instance command-line matching before the first
@@ -3821,15 +3844,14 @@ records, inherited vendor-key removal, the cleanup boundary, normal and
 forced ADB-server cleanup, and server exit after its Linux observer parent is
 killed. The parent-death test makes the fake server ignore `SIGTERM`, verifies
 that `SIGKILL` terminates it, and checks that capture cleanup removes its stale
-socket. The focused observer tests passed 11 cases on Linux and 10 on macOS
-with its Linux-only parent-death test skipped on macOS. The full Image tools
-suite passed 363 tests on Linux with one macOS-only skip, and 360 tests on
-macOS with four Linux-only skips. Capture integration tests cover the disabled
-default and enabled SwiftShader profile. The 2400-second setting is a shared
-capture deadline, not a dedicated `cvd start` allowance. A real
-long-running SwiftShader capture is still pending; until it produces verified
-guest markers, it does not establish Linux or Android boot or identify a root
-cause.
+socket. The latest `test_boot_observer.py` and `test_reference_capture.py`
+regressions passed 48 cases on macOS with four Linux-only skips and 51 cases
+on Linux with one skip. The macOS full Image tools suite passed 365 cases with
+four Linux-only skips before the final process-source filtering change. Ruff,
+formatting, shell syntax, and `git diff --check` passed after that change. A
+follow-up live capture is pending to verify process selection and the
+`cvd start` boot-timeout setting; the 2400-second value remains a shared
+capture deadline, not a dedicated `cvd start` allowance.
 
 ## IR-132: Detect same-size inventory mutations on coarse-timestamp filesystems
 
@@ -3910,3 +3932,105 @@ and an offline connector state. This verifies source consistency and the
 captured timeline only. It does not confirm the binary's defconfig, prove the
 candidate relocation base, establish that the traced PC belongs to this
 function, or establish that all observed delay is cache maintenance.
+
+The later 2026-10-02 `default` capture recorded the U-Boot banner at 22:34:27
+and the Linux banner at 22:43:24 local time, a 537-second interval. Cuttlefish
+then failed at 22:44:26 after its independent ten-minute boot-state timeout.
+The run did not record launcher event 5 or ADB readiness. The differing
+190-second and 537-second intervals show that this capture's timing is not
+enough to infer a deterministic RAM-scan rate or prove the cache-maintenance
+hypothesis.
+
+## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; Cuttlefish 1.57.0 `cvd start --help` |
+
+**Choice.** Pass the configured `APKRUN_BOOT_TIMEOUT_SECONDS` value to
+`cvd start` as `--boot_timeout_secs`, in addition to enforcing the existing
+shared outer capture deadline. Do not let Cuttlefish's independent 600-second
+default end a longer diagnostic capture early.
+
+**Reason.** The 2026-10-02 live run set the outer capture deadline to 2400
+seconds, but Cuttlefish 1.57.0 logged `TimeoutThreadLoop: waiting for 10m` and
+returned failure at 600 seconds. Its `cvd start --help` exposes
+`--boot_timeout_secs=SECS` with a 600-second default. The run reached Linux
+537 seconds after U-Boot, so the fixed inner timeout left too little time to
+observe later Android boot stages. Passing the configured budget keeps the
+inner monitor from preempting the capture; the outer shared deadline remains
+the limit for create, start, and guest readiness.
+
+**Verification.** The capture integration test checks that a configured
+321-second budget is passed as `--boot_timeout_secs=321`. A new live capture
+with the pinned Cuttlefish package is required to verify that the CLI accepts
+the value and continues beyond the previous 600-second cutoff.
+
+## IR-135: Resolve Cuttlefish's runtime link during boot observation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/{capture.sh,boot_observer.py}`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Pass the private HOME's `cuttlefish_runtime` symlink to the
+observer without resolving it before `cvd start`. During sampling, read its
+direct target and accept only `/var/tmp/cvd/<uid>/<run>/home/cuttlefish/instances/cvd-N`,
+where the UID is the current user and `N` agrees with the selected ADB port.
+Resolve that direct target and require its destination to be exactly
+`<private HOME>/cuttlefish/instances/cvd-N`; this accepts Cuttlefish's managed
+`home` symlink while rejecting redirected path components. Pin the first
+valid target. If the symlink disappears, becomes invalid, or points to
+another target, clear the process identities, record an observation gap, and
+stop sampling. Check the target again immediately before recording RSS.
+Identify the crosvm binary from the Android `process_restarter` command after
+its exact `--` separator, require its path to be this Cuttlefish run's
+`artifacts/host_tools/bin/crosvm`, and match both `/proc/<pid>/exe` and the
+child's `argv[0]` to that path (`samefile` for `/proc/<pid>/exe`, since the
+staged file is a symlink to Cuttlefish's installed binary). Also read the
+child's PPID from procfs and require it to remain a direct child of the
+identified restarter while both pinned process start times still match.
+
+**Reason.** The pinned Cuttlefish 1.57.0 runtime creates `cuttlefish_runtime`
+during `cvd start`, with a direct target under `/var/tmp/cvd` outside the
+capture's private HOME. A pre-start `readlink` therefore found no target and
+substituted an unmatched sentinel. Resolving the target with `realpath` is
+also incorrect: symlinks inside Cuttlefish's managed tree can resolve back
+into the private HOME. The live path has the expected
+`/var/tmp/cvd/<uid>/<run>/home/cuttlefish/instances/cvd-N` form, and its
+resolved destination is the matching instance beneath the private HOME.
+Checking both forms rejects a symlink that keeps the expected suffix but
+redirects elsewhere. Separately, Cuttlefish stages a stripped host-tool
+crosvm copy in the per-run `artifacts/host_tools/bin/` directory; the running
+process's executable differs in size and hash from `$CVD_HOST_DIR/bin/crosvm`.
+Comparing those paths directly rejected the actual Android process. The
+launcher-identified Android restarter provides the intended staged executable
+path, and its direct child, serial role, exact instance path, executable, and
+stable procfs start time jointly identify the process. The child's PPID is
+rechecked at sampling time so a stale child PID or a replacement process
+cannot inherit the restarter's identity. Constraining the direct link target
+to Cuttlefish's managed root, binding its resolved target to this private
+HOME, and matching `cvd-N` to the ADB port prevents a similarly named
+directory or another instance from being accepted.
+
+**Verification.** Regression tests cover a delayed link to a target outside
+the private HOME, rejection of a matching path suffix outside
+`/var/tmp/cvd`, symlink redirection through `home` or `instances`, a
+foreign-UID target, rejection of a mismatched instance number, runtime-link
+replacement and disappearance, a child PID reused by a different parent
+between enumeration and sampling, and selection of the run-staged crosvm
+through the verified Android restarter. The tests also accept the production
+staged symlink to a `cuttlefish-common/bin/crosvm` executable and reject a
+different executable with the same basename. The focused observer suite
+passed 25 tests with one macOS-only skip; an earlier focused capture-script
+suite passed 33 tests with three GNU-timeout skips. Ruff lint and formatting,
+Python compilation, shell syntax, and `git diff --check` passed. The full
+Image tools suite passed 374 tests with four skips but had one timing-sensitive
+log-snapshot integration failure; that case passed when rerun alone. A
+low-load full-suite rerun remains pending. The first hostile review found
+three process/path validation gaps; all were fixed, and its follow-up review
+reported no findings. The active Cuttlefish result and its final observer
+timeline are recorded in M01 when the capture exits.

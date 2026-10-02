@@ -370,7 +370,14 @@ def test_stdin_mode_exits_on_signal_and_closes_the_producer_pipe(
     )
     producer.stdout.close()
     try:
-        time.sleep(0.1)
+        # The output file is opened only after the helper installs its signal
+        # handlers, so its appearance is a deterministic readiness signal.
+        deadline = time.monotonic() + 3
+        while not output.exists() and helper.poll() is None:
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+        assert output.exists()
         os.kill(helper.pid, signal.SIGTERM)
         assert helper.wait(timeout=3) == 128 + signal.SIGTERM
         assert producer.poll() is None

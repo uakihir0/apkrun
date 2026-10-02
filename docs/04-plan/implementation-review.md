@@ -3028,3 +3028,34 @@ other captured settings held constant makes GPU mode the only planned
 configuration change within the new pair. The comparison can narrow the cause
 but cannot alone prove it. It remains an isolated diagnostic and does not
 change the canonical profiles or claim Android boot success.
+
+**Observed pair (2026-10-02).** The records
+`gpu-none-20261002T010755Z-222215` and
+`gpu-guest-swiftshader-20261002T011835Z-233820` both identify tool commit
+`508658fea65ca701eea382f6720d3d91c15c65cc`, the same observed capture-tool
+blob map, host, pinned build, and Cuttlefish 1.57.0 revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`. The baseline capture-tool commit
+is `64da28a551b0b33e258c8f37057b9a8a6d90846d` in both records. The experiment
+source hashes match except for `patched-capture.sh`, which embeds the selected
+GPU mode. Both saved the shared explicit settings `console=true`,
+`enable_gpu_vhost_user=false`, four CPUs, and 4096 MiB. The saved config also
+differs in mode-derived ANGLE and hwcomposer settings, per-run WebRTC and
+group identifiers. The `host.json` `captureDurationSeconds` values are 603
+and 604.
+
+**Result.** Both captures ended with exit status 1 at the 600-second boot
+deadline; the outer 900-second capture runner completed cleanup. The `none`
+record has an empty `kernel.log`; the `guest_swiftshader` record has 10,308
+bytes across 158 lines of U-Boot output, 103 of which mention virtio. It ends
+at the `Starting kernel ...` handoff and contains no Linux version or init
+marker.
+Both records have 40/40 ADB samples unknown, no guest logcat, and no boot
+completion or Android userspace evidence. After each run, `cvd fleet` was
+empty and a host-side `pgrep -x crosvm` check found no process. The failed-run
+workspaces retain the bounded host output for diagnosis.
+
+**Interpretation.** The SwiftShader run recorded U-Boot output through the
+kernel handoff, but no Linux kernel output; neither mode reached ADB or
+completed Android boot. The pair does not establish why either guest failed
+before ADB. The prior capture that reached zygote and SurfaceFlinger used
+another tool revision and is not part of this comparison.

@@ -24,6 +24,8 @@ MAX_LOG_BYTES = 64 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 5.0
 ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
+# Starting an Android shell can be slower than checking its ADB transport.
+ADB_GETPROP_TIMEOUT_SECONDS = 10.0
 ADB_SERVER_START_TIMEOUT_SECONDS = 3.0
 ADB_CLEANUP_RESERVE_SECONDS = 15.0
 ADB_SERVER_SOCKET_LIMIT = 107
@@ -947,6 +949,7 @@ class BootObserver:
                 ],
                 environment,
                 adb_deadline,
+                timeout_seconds=ADB_GETPROP_TIMEOUT_SECONDS,
             )
             if property_attempted:
                 property_timed_out = property_command_timed_out
@@ -974,6 +977,8 @@ class BootObserver:
         command: list[str],
         environment: dict[str, str],
         deadline: float,
+        *,
+        timeout_seconds: float = ADB_COMMAND_TIMEOUT_SECONDS,
     ) -> tuple[int | None, str, bool, bool]:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -985,7 +990,7 @@ class BootObserver:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 env=environment,
-                timeout=min(ADB_COMMAND_TIMEOUT_SECONDS, remaining),
+                timeout=min(timeout_seconds, remaining),
                 check=False,
             )
         except subprocess.TimeoutExpired:

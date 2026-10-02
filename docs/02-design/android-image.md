@@ -743,6 +743,11 @@ distinguishable from a query that ran and timed out. The aggregate
 including when that prevented a subprocess from starting. It removes
 inherited ADB socket, serial, and vendor-key overrides from the observer
 environment. Missed ADB schedule points are skipped rather than replayed.
+The host-side `connect` and `get-state` commands have a two-second cap; the
+guest-side `getprop sys.boot_completed` command has a ten-second cap because
+starting an Android shell can take longer. Both remain bounded by the shared
+capture deadline and cleanup reserve; the three command caps total fourteen
+seconds, with missed 15-second schedule points skipped.
 Each ADB command is capped by the remaining time before the 15-second cleanup
 reserve, and no following command starts once that boundary is reached. The
 mode-0700 socket directory is beneath the run's private HOME.

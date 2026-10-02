@@ -4123,28 +4123,42 @@ that timed out, and add `pollDeadlineReached` for the shared deadline
 preventing the poll from continuing. When the deadline expires before
 `getprop` starts, record `getpropAttempted=false` and
 `getpropTimedOut=null`; when the process starts, record
-`getpropAttempted=true` and its actual timeout result.
+`getpropAttempted=true` and its actual timeout result. Keep the quick
+`connect` and `get-state` commands capped at two seconds, but allow the guest
+`getprop` shell command up to ten seconds, still subject to the shared
+deadline and cleanup reserve.
 
-**Reason.** The completed capture's ADB record has `deviceState="device"`,
-`getpropExitCode=null`, `sysBootCompleted=null`, and
+**Reason.** The preceding 3000-second capture's ADB record has
+`deviceState="device"`, `getpropExitCode=null`, `sysBootCompleted=null`, and
 `commandTimedOut=true`. In the old schema that field could mean an ADB child
 timed out or the poll deadline prevented a later command from starting; it
 does not show whether `getprop` was invoked. Guessing either case would
 overstate the evidence. The new fields distinguish a child timeout from
 deadline exhaustion and identify whether the property query process started,
-without storing raw ADB output.
+without storing raw ADB output. In the updated live run, an ADB `device` state
+was followed by repeated `getprop` timeouts under the existing two-second
+cap. A separate bounded query through the same private socket finished in
+about seven seconds with no property text under a 12-second limit. The
+two-second cap therefore cannot distinguish a slow guest shell from an
+unavailable property. The ten-second property cap leaves the transport
+commands unchanged; the three subprocess caps total fourteen seconds against
+the 15-second poll interval, and missed points are skipped.
 
 **Verification.** The observer tests assert the successful property-query
 fields and exercise deadline expiration before the query, expiration in the
 after-connect and after-`get-state` branches, expiration in the small gap
-before process start, a query that times out, an offline device, and a
-timed-out `get-state` command. The observer process for that capture started
-before these fields were implemented, so its existing record cannot be
-retroactively disambiguated. Its final status is recorded in M01. The new
-fields require a later live capture for verification. The focused observer
-suite passed 31 tests with one Linux-only parent-death test skipped on macOS;
-Ruff, formatting, Python compilation, and `git diff --check` passed. The full
-Image tools suite then passed 381 tests with four platform-specific skips.
-The first hostile review found an uninitialized property-attempt field and an
-ambiguous timeout flag; both were corrected, and the follow-up review reported
-no findings.
+before process start, a query that times out, an offline device, a timed-out
+`get-state` command, and the distinct two-second and ten-second subprocess
+caps, including the shared-deadline clamp. A 2400-second live capture using
+the updated record schema is in progress and has produced three initial
+connection-timeout polls
+with `getpropAttempted=false`, then device-state polls with
+`getpropAttempted=true` and `getpropTimedOut=true`. Its observer still used
+the earlier two-second property cap; a later capture is needed to verify the
+ten-second cap against the guest. The focused observer suite passed 33 tests
+with one Linux-only parent-death test skipped on macOS; Ruff, formatting,
+Python compilation, and `git diff --check` passed. The full Image tools suite
+passed 381 tests with four platform-specific skips before the ten-second cap
+change, so a low-load full-suite rerun remains pending. The first hostile
+review found an uninitialized property-attempt field and an ambiguous timeout
+flag; both were corrected, and its follow-up review reported no findings.

@@ -1179,6 +1179,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     adb_socket.bind(str(socket_path))
     calls: list[list[str]] = []
+    timeouts: list[float] = []
     launched_commands: list[list[str]] = []
 
     class FakeClock:
@@ -1199,9 +1200,12 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         command: list[str],
         environment: dict[str, str],
         deadline: float,
+        *,
+        timeout_seconds: float = OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS,
     ) -> tuple[int | None, str, bool, bool]:
         del environment
         calls.append(command)
+        timeouts.append(timeout_seconds)
         if "connect" in command:
             launched_commands.append(command)
             if scenario == "deadline_after_connect":
@@ -1251,6 +1255,12 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     assert poll["commandTimedOut"] is expected_command_timed_out
     assert poll["pollDeadlineReached"] is expected_deadline_reached
     assert len(calls) == expected_call_count
+    assert timeouts[:2] == [OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS] * min(
+        expected_call_count,
+        2,
+    )
+    if expected_call_count == 3:
+        assert timeouts[2] == OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS
     assert (
         any(command[-2:] == ["getprop", "sys.boot_completed"] for command in launched_commands)
         is expected_attempted
@@ -1439,6 +1449,41 @@ def test_boot_observer_does_not_start_adb_command_after_cleanup_boundary(
 
     assert result == (None, "", False, False)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("remaining", "expected_timeout"),
+    ((20.0, 10.0), (3.0, 3.0)),
+)
+def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    remaining: float,
+    expected_timeout: float,
+) -> None:
+    class FakeClock:
+        @staticmethod
+        def monotonic() -> float:
+            return 0.0
+
+    observed_timeouts: list[float] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, (int, float))
+        observed_timeouts.append(float(timeout))
+        return subprocess.CompletedProcess(command, 0, stdout=b"1")
+
+    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
+    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
+    result = BootObserver._run_adb(
+        ["adb", "shell", "getprop", "sys.boot_completed"],
+        {},
+        remaining,
+        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
+    )
+
+    assert result == (0, "1", False, True)
+    assert observed_timeouts == [expected_timeout]
 
 
 def test_boot_observer_records_private_socket_directory_failure(

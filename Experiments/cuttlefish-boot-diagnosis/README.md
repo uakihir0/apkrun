@@ -8,8 +8,14 @@ host tools, capture tools, CPU count, memory size, and boot deadline to the
 `cvd start`. Cuttlefish 1.57.0 does not create its configuration during
 `cvd create --nostart`. The Linux integration fixture checks the exact argument
 vectors for both commands; the live runner validates the saved GPU and console
-settings before publication. The runner does not attach to the advertised
-Screen endpoint or save a serial transcript.
+settings before publication. Bootloader pause mode is opt-in. In that mode, a
+bounded helper attaches to the run's private Screen endpoint and sends `boot`
+only after it sees the U-Boot prompt. The helper publishes a small status
+summary; it never saves the console transcript. Pause mode requires
+`APKRUN_DIAGNOSTIC_CONSOLE=true`. CVD startup and console handoff run under one
+supervisor: if either process fails, the supervisor stops the other. It uses
+the existing boot deadline, with at most ten seconds to observe the kernel
+handoff after sending `boot`.
 In the 2026-10-02 retry, an initial 60-second Screen attempt and a later
 25-second attachment from a pseudoterminal produced no guest text. The first
 attempt left a detached Screen session, which was explicitly quit and verified
@@ -42,11 +48,24 @@ APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader \
   APKRUN_DIAGNOSTIC_CONSOLE=false bash capture-gpu-none.sh
 ```
 
+To pause at U-Boot and continue through the private console, opt in explicitly:
+
+```bash
+APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER=true bash capture-gpu-none.sh
+```
+
 `APKRUN_DIAGNOSTIC_GPU_MODE` accepts `none` or `guest_swiftshader` and defaults
 to `none`. `APKRUN_DIAGNOSTIC_CONSOLE` accepts `true` or `false` and defaults
-to `true`. The selected settings apply to both Cuttlefish commands, are
-validated against the saved configuration, and appear in result metadata and
-generated work and result directory names.
+to `true`. `APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER` accepts `true` or `false`
+and defaults to `false`. Each selected setting applies to both Cuttlefish
+commands, is validated against the saved configuration, and appears in result
+metadata. GPU and console selections also appear in generated work and result
+directory names. The console helper keeps at most 64 KiB of console output in
+memory, records whether it observed the prompt and a post-command kernel
+handoff, and atomically writes only its private status summary. Publication
+validates that evidence again. The runner sends termination to both supervised
+processes before waiting for either; the outer capture supervisor also reaps
+detached descendants if the console helper needs forced termination.
 Compare each pair only. Earlier captures use different diagnostic-tool
 revisions and are context, not controlled comparison members.
 

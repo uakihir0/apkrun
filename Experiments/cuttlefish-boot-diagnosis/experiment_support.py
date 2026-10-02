@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate isolated Cuttlefish GPU and console comparisons and record provenance."""
+"""Validate isolated Cuttlefish boot diagnostics and record provenance."""
 
 from __future__ import annotations
 
@@ -47,6 +47,8 @@ EXPERIMENT_TOOL_NAMES = (
     "experiment_support.py",
     "run_capture.py",
     "summarize_logcat.py",
+    "drive_cuttlefish_console.py",
+    "run_cvd_with_console.py",
 )
 SYSTEMD_EXECUTABLE_PATHS = (
     Path("/usr/lib/systemd/systemd"),
@@ -77,6 +79,7 @@ CONSOLE_MODE_SLUGS = {
 }
 CONSOLE_MODE_PATH_PATTERN = "on|off"
 MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
+MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES = 65_536
 
 
 def _encoded_unix_socket_path_bytes(path: str | os.PathLike[str]) -> int:
@@ -1461,9 +1464,15 @@ def _read_json(path: Path) -> dict[str, Any]:
     return document
 
 
-def _read_bounded_json_at(directory_descriptor: int, name: str) -> dict[str, Any]:
+def _read_bounded_json_at(
+    directory_descriptor: int,
+    name: str,
+    maximum_bytes: int = MAX_PUBLICATION_EXPERIMENT_BYTES,
+) -> dict[str, Any]:
     if name in {"", ".", ".."} or "/" in name:
         raise ValueError("JSON filename is unsafe")
+    if type(maximum_bytes) is not int or maximum_bytes < 1:
+        raise ValueError("JSON size limit is invalid")
     descriptor = os.open(
         name,
         os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -1474,24 +1483,21 @@ def _read_bounded_json_at(directory_descriptor: int, name: str) -> dict[str, Any
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid()
-            or before.st_size > MAX_PUBLICATION_EXPERIMENT_BYTES
+            or before.st_size > maximum_bytes
         ):
             raise ValueError(f"JSON file {name} is not a bounded regular file")
         content = bytearray()
-        while len(content) <= MAX_PUBLICATION_EXPERIMENT_BYTES:
+        while len(content) <= maximum_bytes:
             chunk = os.read(
                 descriptor,
-                min(
-                    65_536,
-                    MAX_PUBLICATION_EXPERIMENT_BYTES + 1 - len(content),
-                ),
+                min(65_536, maximum_bytes + 1 - len(content)),
             )
             if not chunk:
                 break
             content.extend(chunk)
         after = os.fstat(descriptor)
         if (
-            len(content) > MAX_PUBLICATION_EXPERIMENT_BYTES
+            len(content) > maximum_bytes
             or not _same_inode(before, after)
             or before.st_size != after.st_size
             or before.st_mtime_ns != after.st_mtime_ns
@@ -1935,6 +1941,155 @@ def _capture_statuses(status_root: Path) -> dict[str, Any]:
             name for name, record in files.items() if record["timedOut"]
         ),
     }
+
+
+def _bootloader_console_summary(
+    summary_path: Path | None,
+    pause_in_bootloader: bool,
+) -> dict[str, Any] | None:
+    if not pause_in_bootloader:
+        if summary_path is not None and (
+            summary_path.exists() or summary_path.is_symlink()
+        ):
+            raise ValueError(
+                "bootloader console summary is unexpected when the pause is disabled"
+            )
+        return None
+    if summary_path is None:
+        raise ValueError("paused bootloader console summary is unavailable")
+    try:
+        directory_descriptor = _open_directory_chain(summary_path.parent)
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            "paused bootloader console summary directory is unsafe"
+        ) from error
+    try:
+        summary = _read_bounded_json_at(
+            directory_descriptor,
+            summary_path.name,
+            MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise ValueError("paused bootloader console summary is unavailable") from error
+    finally:
+        os.close(directory_descriptor)
+    return _validate_bootloader_console_summary(summary)
+
+
+def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        raise ValueError("bootloader console summary must be an object")
+    expected_fields = {
+        "schemaVersion",
+        "consoleEndpointFound",
+        "screenStarted",
+        "promptObserved",
+        "bootCommandSent",
+        "kernelHandoffObserved",
+        "outputBytesObserved",
+        "outputLimitBytes",
+        "outputTruncated",
+        "timedOut",
+        "handoffTimedOut",
+        "screenExitCode",
+        "signal",
+        "cleanupComplete",
+        "cleanupFailure",
+        "cleanupErrorNumber",
+        "exitCode",
+    }
+    if set(summary) != expected_fields:
+        raise ValueError("bootloader console summary has an unexpected schema")
+    boolean_fields = (
+        "consoleEndpointFound",
+        "screenStarted",
+        "promptObserved",
+        "bootCommandSent",
+        "kernelHandoffObserved",
+        "outputTruncated",
+        "timedOut",
+        "handoffTimedOut",
+        "cleanupComplete",
+    )
+    if (
+        type(summary.get("schemaVersion")) is not int
+        or summary["schemaVersion"] != 1
+        or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
+        or type(summary.get("outputBytesObserved")) is not int
+        or type(summary.get("outputLimitBytes")) is not int
+        or summary["outputBytesObserved"] < 0
+        or not 1 <= summary["outputLimitBytes"] <= 65_536
+        or summary["outputBytesObserved"] > summary["outputLimitBytes"]
+        or (
+            summary.get("screenExitCode") is not None
+            and (
+                type(summary["screenExitCode"]) is not int
+                or not -signal.NSIG < summary["screenExitCode"] <= 255
+            )
+        )
+        or (summary.get("signal") is not None and type(summary["signal"]) is not int)
+        or (
+            summary.get("signal") is not None
+            and summary["signal"] not in (signal.SIGINT, signal.SIGTERM)
+        )
+        or type(summary.get("exitCode")) is not int
+        or (
+            summary.get("cleanupErrorNumber") is not None
+            and (
+                type(summary["cleanupErrorNumber"]) is not int
+                or summary["cleanupErrorNumber"] <= 0
+            )
+        )
+        or (
+            summary.get("cleanupFailure") is not None
+            and summary["cleanupFailure"]
+            not in (
+                "term-signal-failed",
+                "kill-signal-failed",
+                "child-not-reaped",
+                "process-group-unverified",
+                "process-group-remains",
+            )
+        )
+    ):
+        raise ValueError("bootloader console summary contains invalid fields")
+    if (
+        not summary["cleanupComplete"]
+        or summary["cleanupFailure"] is not None
+        or summary["cleanupErrorNumber"] is not None
+        or (summary["timedOut"] and summary["handoffTimedOut"])
+        or (
+            summary["signal"] is not None
+            and summary["exitCode"] != 128 + summary["signal"]
+        )
+        or (summary["signal"] is None and summary["exitCode"] not in (0, 1))
+        or (summary["screenStarted"] and not summary["consoleEndpointFound"])
+        or (summary["screenStarted"] != (summary["screenExitCode"] is not None))
+        or (summary["promptObserved"] and not summary["screenStarted"])
+        or (summary["outputBytesObserved"] > 0 and not summary["screenStarted"])
+        or (summary["bootCommandSent"] and not summary["promptObserved"])
+        or (summary["handoffTimedOut"] and not summary["bootCommandSent"])
+        or (
+            summary["kernelHandoffObserved"]
+            and (
+                not summary["bootCommandSent"]
+                or summary["timedOut"]
+                or summary["handoffTimedOut"]
+                or summary["exitCode"]
+                not in (
+                    0,
+                    128 + (summary["signal"] or 0),
+                )
+            )
+        )
+        or (not summary["kernelHandoffObserved"] and summary["exitCode"] == 0)
+        or (
+            summary["outputTruncated"]
+            and summary["outputBytesObserved"] != summary["outputLimitBytes"]
+        )
+    ):
+        raise ValueError("bootloader console summary is inconsistent or incomplete")
+    return summary
 
 
 def _logcat_paths(work_root: Path, adb_log_root: Path) -> tuple[Path, Path]:
@@ -3035,11 +3190,24 @@ def _verify_publication_mode_labels(
         and work_match.group("console") != console_mode_slug
     ):
         raise ValueError("diagnostic path console label differs from the capture")
+    if type(experiment.get("pauseInBootloader")) is not bool:
+        raise ValueError("published experiment is missing bootloader-pause metadata")
+    _validate_pause_in_bootloader(
+        experiment["pauseInBootloader"],
+        console_enabled,
+    )
     expected_experiment = (
         f"cuttlefish-gpu-{gpu_mode_slug}-console-{console_mode_slug}-boot-diagnosis"
     )
     if experiment.get("experiment") != expected_experiment:
         raise ValueError("published experiment name differs from its selected modes")
+    bootloader_console = experiment.get("bootloaderConsole")
+    if experiment["pauseInBootloader"]:
+        _validate_bootloader_console_summary(bootloader_console)
+    elif bootloader_console is not None:
+        raise ValueError(
+            "published experiment has unexpected bootloader console evidence"
+        )
 
 
 def publish_normalized_record(
@@ -3135,6 +3303,7 @@ def publish_normalized_record(
                                 _single_instance(captured_config),
                                 experiment["gpuMode"],
                                 experiment["consoleEnabled"],
+                                experiment["pauseInBootloader"],
                             )
                         finally:
                             os.close(capture_descriptor)
@@ -3187,19 +3356,34 @@ def _console_mode_slug(console_enabled: bool) -> str:
     return CONSOLE_MODE_SLUGS[console_enabled]
 
 
+def _validate_pause_in_bootloader(
+    pause_in_bootloader: bool,
+    console_enabled: bool,
+) -> None:
+    if type(pause_in_bootloader) is not bool:
+        raise ValueError("bootloader-pause selection must be a boolean")
+    if pause_in_bootloader and not console_enabled:
+        raise ValueError(
+            "bootloader pause requires the Cuttlefish console to be enabled"
+        )
+
+
 def _verify_gpu_configuration(
     instance: dict[str, Any],
     gpu_mode: str,
     console_enabled: bool = True,
+    pause_in_bootloader: bool = False,
 ) -> None:
     _gpu_mode_slug(gpu_mode)
     _console_mode_slug(console_enabled)
+    _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     expected = {
         "gpu_mode": gpu_mode,
         "enable_gpu_vhost_user": False,
         "cpus": 4,
         "memory_mb": 4096,
         "console": console_enabled,
+        "pause_in_bootloader": pause_in_bootloader,
     }
     for key, value in expected.items():
         observed_value = instance.get(key)
@@ -3297,10 +3481,62 @@ def patch_capture_script(
     path: Path,
     gpu_mode: str = "none",
     console_enabled: bool = True,
+    pause_in_bootloader: bool = False,
 ) -> None:
     _gpu_mode_slug(gpu_mode)
     _console_mode_slug(console_enabled)
+    _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     console_argument = str(console_enabled).lower()
+    pause_argument = " --pause_in_bootloader=BOOTLOADER" if pause_in_bootloader else ""
+    bootloader_console_start = ""
+    bootloader_console_launch = ""
+    if pause_in_bootloader:
+        bootloader_console_start = (
+            "start_cvd_group_with_bootloader_console() {\n"
+            "  local remaining handoff_timeout\n"
+            '  if [ -z "${APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY:-}" ] \\\n'
+            '    || [ -z "${APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY_ROOT:-}" ] \\\n'
+            '    || [ -z "${APKRUN_EXPERIMENT_TOOLS:-}" ]; then\n'
+            "    record_missing bootloader-console \\\n"
+            "      'the private bootloader console helper is not configured'\n"
+            "    return 1\n"
+            "  fi\n"
+            "  remaining=$((boot_timeout_deadline - $(date +%s)))\n"
+            '  if [ "$remaining" -lt 1 ]; then\n'
+            "    record_missing bootloader-console \\\n"
+            "      'the boot deadline expired before console attachment'\n"
+            "    return 1\n"
+            "  fi\n"
+            "  handoff_timeout=10\n"
+            '  if [ "$handoff_timeout" -gt "$remaining" ]; then\n'
+            "    handoff_timeout=$remaining\n"
+            "  fi\n"
+            '  HOME="$cvd_home" TMPDIR="$cvd_home" python3 \\\n'
+            '    "$APKRUN_EXPERIMENT_TOOLS/run_cvd_with_console.py" \\\n'
+            '    --home "$cvd_home" --stage "$stage" \\\n'
+            '    --summary-root "$APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY_ROOT" \\\n'
+            '    --cvd-start-helper "$script_dir/capture_cvd_start.py" \\\n'
+            '    --console-helper "$APKRUN_EXPERIMENT_TOOLS/drive_cuttlefish_console.py" \\\n'
+            '    --console-summary "$APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY" \\\n'
+            '    --group-name "$cvd_group_name" --gpu-mode '
+            f"{gpu_mode} --console-enabled {console_argument} \\\n"
+            '    --timeout-seconds "$remaining" \\\n'
+            '    --handoff-timeout-seconds "$handoff_timeout"\n'
+            "}\n\n"
+        )
+        bootloader_console_launch = (
+            'if [ "$cvd_command_failed" -eq 0 ]; then\n'
+            "  if ! start_cvd_group_with_bootloader_console 2>&1 \\\n"
+            '    | python3 "$script_dir/capture_bounded.py" \\\n'
+            "      --stdin --drain-after-limit --max-bytes 8388608 \\\n"
+            '      --output "$stage/cvd-create-console.log" \\\n'
+            '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
+            "    cvd_command_failed=1\n"
+            "    record_missing bootloader-console \\\n"
+            "      'the U-Boot prompt did not reach the kernel handoff successfully'\n"
+            "  fi\n"
+            "fi\n"
+        )
     if path.is_symlink() or not path.is_file():
         raise ValueError("private capture script must be a regular file")
     source = path.read_text(encoding="utf-8")
@@ -3409,9 +3645,9 @@ def patch_capture_script(
         ),
         (
             "launch_profile() {",
-            f"""start_cvd_group_with_gpu_mode() {{
+            f"""{bootloader_console_start}start_cvd_group_with_gpu_mode() {{
   run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
-    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument}
+    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument}{pause_argument}
 }}
 
 launch_profile() {{""",
@@ -3525,7 +3761,8 @@ launch_profile() {{""",
             (
                 "default)\n"
                 f"      create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
-                f"--gpu_vhost_user_mode=off --console={console_argument} "
+                f"--gpu_vhost_user_mode=off --console={console_argument}"
+                f"{pause_argument} "
                 "--cpus 4 --memory_mb 4096\n"
                 "      ;;"
             ),
@@ -3572,14 +3809,20 @@ launch_profile() {{""",
                 '  --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-create.json" --append; then\n'
                 "  cvd_command_failed=1\n"
                 "fi\n"
-                'if [ "$cvd_command_failed" -eq 0 ] \\\n'
-                "  && ! start_cvd_group_with_gpu_mode 2>&1 \\\n"
-                '    | python3 "$script_dir/capture_bounded.py" \\\n'
-                '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
-                '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
-                "  cvd_command_failed=1\n"
-                "fi\n"
-                'if [ "$cvd_command_failed" -ne 0 ]; then'
+                + (
+                    bootloader_console_launch
+                    if pause_in_bootloader
+                    else (
+                        'if [ "$cvd_command_failed" -eq 0 ] \\\n'
+                        + "  && ! start_cvd_group_with_gpu_mode 2>&1 \\\n"
+                        + '    | python3 "$script_dir/capture_bounded.py" \\\n'
+                        + '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
+                        + '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
+                        + "  cvd_command_failed=1\n"
+                        + "fi\n"
+                    )
+                )
+                + 'if [ "$cvd_command_failed" -ne 0 ]; then'
             ),
         ),
         (
@@ -3658,9 +3901,11 @@ def verify_host(
     patched_capture: Path,
     gpu_mode: str = "none",
     console_enabled: bool = True,
+    pause_in_bootloader: bool = False,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     console_mode_slug = _console_mode_slug(console_enabled)
+    _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     repo_root = repo_root.resolve()
     baseline_record = baseline_record.resolve()
     if baseline_record != repo_root / BASELINE_RELATIVE:
@@ -3724,6 +3969,7 @@ def verify_host(
         "gpuModeSlug": gpu_mode_slug,
         "consoleEnabled": console_enabled,
         "consoleModeSlug": console_mode_slug,
+        "pauseInBootloader": pause_in_bootloader,
         "cpuCount": 4,
         "memoryMb": 4096,
         "buildId": baseline["buildId"],
@@ -3750,20 +3996,29 @@ def build_experiment_record(
     fleet_socket_metrics_path: Path,
     gpu_mode: str = "none",
     console_enabled: bool = True,
+    pause_in_bootloader: bool = False,
+    bootloader_console_summary_path: Path | None = None,
 ) -> dict[str, Any]:
     gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     console_mode_slug = _console_mode_slug(console_enabled)
+    _validate_pause_in_bootloader(pause_in_bootloader, console_enabled)
     host, instance = _gpu_configuration(capture_record)
-    _verify_gpu_configuration(instance, gpu_mode, console_enabled)
+    _verify_gpu_configuration(
+        instance,
+        gpu_mode,
+        console_enabled,
+        pause_in_bootloader,
+    )
     host_identity = _read_json(host_identity_path)
     if (
         host_identity.get("gpuMode", "none") != gpu_mode
         or host_identity.get("gpuModeSlug", gpu_mode_slug) != gpu_mode_slug
         or host_identity.get("consoleEnabled") is not console_enabled
         or host_identity.get("consoleModeSlug") != console_mode_slug
+        or host_identity.get("pauseInBootloader") is not pause_in_bootloader
     ):
         raise ValueError(
-            "capture GPU or console mode differs from the verified selection"
+            "capture GPU, console, or bootloader mode differs from the verified selection"
         )
     verify_tool_copy(
         repo_root,
@@ -3836,6 +4091,22 @@ def build_experiment_record(
     if not all(isinstance(value, (int, bool)) for value in logcat_summary.values()):
         raise ValueError("logcat summary contains unexpected non-numeric data")
     bounded_capture = _capture_statuses(capture_status_root)
+    expected_bootloader_console_summary = (
+        host_identity_path.parent / "bootloader-console-summary.json"
+    )
+    if (
+        bootloader_console_summary_path is not None
+        and bootloader_console_summary_path != expected_bootloader_console_summary
+    ):
+        raise ValueError(
+            "bootloader console summary must be in the host identity workspace"
+        )
+    if pause_in_bootloader and bootloader_console_summary_path is None:
+        bootloader_console_summary_path = expected_bootloader_console_summary
+    bootloader_console = _bootloader_console_summary(
+        bootloader_console_summary_path,
+        pause_in_bootloader,
+    )
     socket_metrics = {
         "capture": _validated_unix_socket_metrics(socket_metrics_path),
         "fleet": _validated_unix_socket_metrics(fleet_socket_metrics_path),
@@ -3876,6 +4147,8 @@ def build_experiment_record(
         "runnerDeadlineSeconds": 900,
         "gpuMode": gpu_mode,
         "consoleEnabled": console_enabled,
+        "pauseInBootloader": pause_in_bootloader,
+        "bootloaderConsole": bootloader_console,
         "cpuCount": 4,
         "memoryMb": 4096,
         "adbEndpoint": adb_endpoint,
@@ -3935,6 +4208,11 @@ def main() -> int:
         choices=("true", "false"),
         default="true",
     )
+    host_parser.add_argument(
+        "--pause-in-bootloader",
+        choices=("true", "false"),
+        default="false",
+    )
     host_parser.add_argument("--output", type=Path, required=True)
 
     tool_copy_parser = subparsers.add_parser("verify-tool-copy")
@@ -3958,6 +4236,11 @@ def main() -> int:
         "--console-enabled",
         choices=("true", "false"),
         default="true",
+    )
+    patch_parser.add_argument(
+        "--pause-in-bootloader",
+        choices=("true", "false"),
+        default="false",
     )
 
     socket_parser = subparsers.add_parser("audit-unix-sockets")
@@ -4041,6 +4324,12 @@ def main() -> int:
         choices=("true", "false"),
         default="true",
     )
+    record_parser.add_argument(
+        "--pause-in-bootloader",
+        choices=("true", "false"),
+        default="false",
+    )
+    record_parser.add_argument("--bootloader-console-summary", type=Path)
     record_parser.add_argument("--output", type=Path, required=True)
 
     arguments = parser.parse_args()
@@ -4055,6 +4344,7 @@ def main() -> int:
                 arguments.path,
                 arguments.gpu_mode,
                 arguments.console_enabled == "true",
+                arguments.pause_in_bootloader == "true",
             )
             return 0
         if arguments.command == "audit-unix-sockets":
@@ -4133,6 +4423,7 @@ def main() -> int:
                 arguments.patched_capture,
                 arguments.gpu_mode,
                 arguments.console_enabled == "true",
+                arguments.pause_in_bootloader == "true",
             )
         elif arguments.command == "verify-tool-copy":
             verify_tool_copy(
@@ -4167,6 +4458,8 @@ def main() -> int:
                 arguments.fleet_socket_metrics,
                 arguments.gpu_mode,
                 arguments.console_enabled == "true",
+                arguments.pause_in_bootloader == "true",
+                arguments.bootloader_console_summary,
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

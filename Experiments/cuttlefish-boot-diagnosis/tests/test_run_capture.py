@@ -407,6 +407,7 @@ def test_capture_supervisor_stops_detached_descendants_after_command_exit(
 
 def test_capture_cli_forwards_signal_and_records_cleanup(tmp_path: Path) -> None:
     status_path = tmp_path / "capture-status.json"
+    child_ready_path = tmp_path / "child-ready"
     process = subprocess.Popen(
         [
             sys.executable,
@@ -420,13 +421,22 @@ def test_capture_cli_forwards_signal_and_records_cleanup(tmp_path: Path) -> None
             "--",
             sys.executable,
             "-c",
-            "import time; time.sleep(30)",
+            "import pathlib, sys, time; "
+            "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(30)",
+            str(child_ready_path),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        time.sleep(0.1)
+        deadline = time.monotonic() + 5
+        while (
+            not child_ready_path.exists()
+            and process.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert child_ready_path.exists(), "supervised child did not become ready"
         os.kill(process.pid, signal.SIGTERM)
         assert process.wait(timeout=5) == 128 + signal.SIGTERM
     finally:

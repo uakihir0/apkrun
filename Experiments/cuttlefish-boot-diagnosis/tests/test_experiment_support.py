@@ -282,6 +282,8 @@ def _write_publication_experiment(
     capture_record: Path,
     gpu_mode_slug: str = "none",
     console_enabled: bool = False,
+    pause_in_bootloader: bool = False,
+    bootloader_console: dict[str, object] | None = None,
 ) -> None:
     gpu_mode = {slug: mode for mode, slug in experiment_support.GPU_MODE_SLUGS.items()}[
         gpu_mode_slug
@@ -298,6 +300,12 @@ def _write_publication_experiment(
                 "gpuModeSlug": gpu_mode_slug,
                 "consoleEnabled": console_enabled,
                 "consoleModeSlug": console_mode_slug,
+                "pauseInBootloader": pause_in_bootloader,
+                **(
+                    {"bootloaderConsole": bootloader_console}
+                    if bootloader_console is not None
+                    else {}
+                ),
             }
         ),
         encoding="utf-8",
@@ -312,6 +320,7 @@ def _write_publication_experiment(
                         "cpus": 4,
                         "memory_mb": 4096,
                         "console": console_enabled,
+                        "pause_in_bootloader": pause_in_bootloader,
                     }
                 }
             }
@@ -399,6 +408,177 @@ def _make_baseline_repository(root: Path) -> tuple[Path, Path, Path, Path]:
         text=True,
     ).stdout.strip()
     return root, baseline, experiment_root, patched_capture
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("schemaVersion", True, "invalid fields"),
+        ("cleanupComplete", False, "inconsistent or incomplete"),
+        ("promptObserved", False, "inconsistent or incomplete"),
+        ("outputTruncated", True, "inconsistent or incomplete"),
+        ("timedOut", True, "inconsistent or incomplete"),
+        ("handoffTimedOut", True, "inconsistent or incomplete"),
+        ("outputBytesObserved", 65_537, "invalid fields"),
+        ("screenExitCode", 256, "invalid fields"),
+        ("transcript", "private console text", "unexpected schema"),
+    ),
+)
+def test_bootloader_console_summary_rejects_invalid_status(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    summary = {
+        "schemaVersion": 1,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "promptObserved": True,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    summary[field] = value
+    path = tmp_path / "bootloader-console-summary.json"
+    path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        experiment_support._bootloader_console_summary(path, True)
+
+
+@pytest.mark.parametrize(
+    ("status_change", "message"),
+    (
+        (
+            {"signal": signal.SIGKILL, "exitCode": 128 + signal.SIGKILL},
+            "invalid fields",
+        ),
+        (
+            {
+                "screenStarted": False,
+                "promptObserved": False,
+                "bootCommandSent": False,
+                "kernelHandoffObserved": False,
+                "outputBytesObserved": 0,
+                "screenExitCode": 0,
+                "exitCode": 1,
+            },
+            "inconsistent or incomplete",
+        ),
+    ),
+)
+def test_bootloader_console_summary_rejects_impossible_process_status(
+    status_change: dict[str, object],
+    message: str,
+) -> None:
+    summary: dict[str, object] = {
+        "schemaVersion": 1,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "promptObserved": True,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    summary.update(status_change)
+
+    with pytest.raises(ValueError, match=message):
+        experiment_support._validate_bootloader_console_summary(summary)
+
+
+def test_bootloader_console_summary_rejects_simultaneous_timeouts(
+    tmp_path: Path,
+) -> None:
+    summary = {
+        "schemaVersion": 1,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "promptObserved": True,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": False,
+        "outputBytesObserved": 64,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": True,
+        "handoffTimedOut": True,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 124,
+    }
+    path = tmp_path / "bootloader-console-summary.json"
+    path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="inconsistent or incomplete"):
+        experiment_support._bootloader_console_summary(path, True)
+
+
+def test_bootloader_console_summary_is_required_only_when_pause_is_enabled(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bootloader-console-summary.json"
+
+    assert experiment_support._bootloader_console_summary(None, False) is None
+    with pytest.raises(ValueError, match="summary is unavailable"):
+        experiment_support._bootloader_console_summary(path, True)
+
+    path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="unexpected when the pause is disabled"):
+        experiment_support._bootloader_console_summary(path, False)
+
+
+def test_bootloader_pause_requires_console_enabled() -> None:
+    with pytest.raises(
+        ValueError,
+        match="bootloader pause requires the Cuttlefish console to be enabled",
+    ):
+        experiment_support._verify_gpu_configuration(
+            {},
+            "none",
+            console_enabled=False,
+            pause_in_bootloader=True,
+        )
+
+    experiment = {
+        "gpuMode": "none",
+        "gpuModeSlug": "none",
+        "consoleEnabled": False,
+        "consoleModeSlug": "off",
+        "pauseInBootloader": True,
+        "experiment": "cuttlefish-gpu-none-console-off-boot-diagnosis",
+    }
+    with pytest.raises(
+        ValueError,
+        match="bootloader pause requires the Cuttlefish console to be enabled",
+    ):
+        experiment_support._verify_publication_mode_labels(
+            "gpu-none-console-off.deadbeef",
+            "gpu-none-console-off-20261002T120000Z-123",
+            experiment,
+        )
 
 
 def test_prepare_private_data_root_locks_custom_directories_and_rejects_shared_parent(
@@ -2028,11 +2208,15 @@ def test_parse_fleet_report_rejects_unexpected_trailing_content() -> None:
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
-@pytest.mark.parametrize("console_enabled", (True, False))
-def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
+@pytest.mark.parametrize(
+    ("console_enabled", "pause_in_bootloader"),
+    ((True, False), (False, False), (True, True)),
+)
+def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_capture(
     tmp_path: Path,
     gpu_mode: str,
     console_enabled: bool,
+    pause_in_bootloader: bool,
 ) -> None:
     repo_root = Path(__file__).parents[3]
     source = repo_root / "Images/tools/reference/capture.sh"
@@ -2043,9 +2227,11 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
         private_copy,
         gpu_mode,
         console_enabled,
+        pause_in_bootloader,
     )
     patched = private_copy.read_text(encoding="utf-8")
     console_argument = str(console_enabled).lower()
+    pause_argument = " --pause_in_bootloader=BOOTLOADER" if pause_in_bootloader else ""
 
     subprocess.run(["bash", "-n", str(private_copy)], check=True)
     assert "script_dir=$APKRUN_CAPTURE_SCRIPT_DIR" in patched
@@ -2053,7 +2239,8 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (
         f"create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
-        f"--gpu_vhost_user_mode=off --console={console_argument} "
+        f"--gpu_vhost_user_mode=off --console={console_argument}"
+        f"{pause_argument} "
         "--cpus 4 --memory_mb 4096" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
@@ -2075,7 +2262,7 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert "set -euo pipefail" in patched
     assert (
         f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
-        f"--console={console_argument}\n}}" in patched
+        f"--console={console_argument}{pause_argument}\n}}" in patched
     )
     default_gpu_mode_arguments = [
         line.strip()
@@ -2090,19 +2277,28 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert default_gpu_mode_arguments == [
         (
             f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
-            f"--console={console_argument}"
+            f"--console={console_argument}{pause_argument}"
         ),
         (
             "create_cvd_group_with_common_options "
             f"--gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
-            f"--console={console_argument} "
+            f"--console={console_argument}{pause_argument} "
             "--cpus 4 --memory_mb 4096"
         ),
     ]
     assert patched.count(f"--console={console_argument}") == 2
-    assert patched.index("start_cvd_group_with_gpu_mode() {") < patched.index(
-        "&& ! start_cvd_group_with_gpu_mode 2>&1"
+    assert patched.count("--pause_in_bootloader=BOOTLOADER") == (
+        2 if pause_in_bootloader else 0
     )
+    if pause_in_bootloader:
+        assert patched.index(
+            "start_cvd_group_with_bootloader_console() {"
+        ) < patched.index("start_cvd_group_with_bootloader_console 2>&1")
+        assert "&& ! start_cvd_group_with_gpu_mode 2>&1" not in patched
+    else:
+        assert patched.index("start_cvd_group_with_gpu_mode() {") < patched.index(
+            "&& ! start_cvd_group_with_gpu_mode 2>&1"
+        )
     assert (
         "default)\n      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096"
         not in patched
@@ -2145,12 +2341,63 @@ def test_private_capture_patch_rejects_non_boolean_console_selection(
     assert private_copy.read_bytes() == original
 
 
+@pytest.mark.parametrize("pause_in_bootloader", (1, None, "false"))
+def test_private_capture_patch_rejects_non_boolean_bootloader_pause(
+    tmp_path: Path,
+    pause_in_bootloader: object,
+) -> None:
+    repo_root = Path(__file__).parents[3]
+    source = repo_root / "Images/tools/reference/capture.sh"
+    private_copy = tmp_path / "capture.sh"
+    original = source.read_bytes()
+    private_copy.write_bytes(original)
+
+    with pytest.raises(
+        ValueError,
+        match="bootloader-pause selection must be a boolean",
+    ):
+        experiment_support.patch_capture_script(
+            private_copy,
+            "guest_swiftshader",
+            True,
+            pause_in_bootloader,
+        )
+
+    assert private_copy.read_bytes() == original
+
+
+def test_private_capture_patch_rejects_pause_when_console_is_disabled(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).parents[3]
+    source = repo_root / "Images/tools/reference/capture.sh"
+    private_copy = tmp_path / "capture.sh"
+    original = source.read_bytes()
+    private_copy.write_bytes(original)
+
+    with pytest.raises(
+        ValueError,
+        match="bootloader pause requires the Cuttlefish console to be enabled",
+    ):
+        experiment_support.patch_capture_script(
+            private_copy,
+            "none",
+            False,
+            True,
+        )
+
+    assert private_copy.read_bytes() == original
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="GPU-none capture runs on Linux")
 @pytest.mark.parametrize(
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
-@pytest.mark.parametrize("console_enabled", (True, False))
+@pytest.mark.parametrize(
+    ("console_enabled", "pause_in_bootloader"),
+    ((True, False), (False, False), (True, True)),
+)
 @pytest.mark.parametrize(
     ("persisted_vhost_user", "start_exit_code", "expected_capture_failure"),
     ((False, 0, 0), (True, 0, 0), (False, 17, 1)),
@@ -2159,6 +2406,7 @@ def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
     tmp_path: Path,
     gpu_mode: str,
     console_enabled: bool,
+    pause_in_bootloader: bool,
     persisted_vhost_user: bool,
     start_exit_code: int,
     expected_capture_failure: int,
@@ -2171,6 +2419,7 @@ def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
         private_copy,
         gpu_mode,
         console_enabled,
+        pause_in_bootloader,
     )
     patched = private_copy.read_text(encoding="utf-8")
 
@@ -2245,6 +2494,30 @@ elif "start" in arguments:
         and create_console_settings[0]
         == os.environ["APKRUN_TEST_CONSOLE_ENABLED"]
     )
+    create_pause_settings = [
+        value.split("=", 1)[1]
+        for value in create_arguments
+        if value.startswith("--pause_in_bootloader=")
+    ]
+    start_pause_settings = [
+        value.split("=", 1)[1]
+        for value in arguments
+        if value.startswith("--pause_in_bootloader=")
+    ]
+    expected_pause_value = "BOOTLOADER" if (
+        os.environ["APKRUN_TEST_PAUSE_IN_BOOTLOADER"] == "true"
+    ) else None
+    pause_selected = (
+        create_pause_settings == (
+            [expected_pause_value] if expected_pause_value is not None else []
+        )
+        and start_pause_settings == (
+            [expected_pause_value] if expected_pause_value is not None else []
+        )
+    )
+    saved_pause_setting = (
+        expected_pause_value is not None and pause_selected
+    )
     saved_console_setting = (
         create_console_settings[0] == "true"
         if len(create_console_settings) == 1
@@ -2266,6 +2539,7 @@ elif "start" in arguments:
                             or not vhost_user_disabled
                         ),
                         "console": saved_console_setting,
+                        "pause_in_bootloader": saved_pause_setting,
                     }
                 }
             }
@@ -2297,10 +2571,51 @@ else:
         repo_root / "Experiments/cuttlefish-boot-diagnosis/capture_processes.py",
         tool_directory / "capture_processes.py",
     )
+    shutil.copyfile(
+        repo_root / "Experiments/cuttlefish-boot-diagnosis/run_cvd_with_console.py",
+        tool_directory / "run_cvd_with_console.py",
+    )
+    fake_bootloader_helper = tool_directory / "drive_cuttlefish_console.py"
+    fake_bootloader_helper.write_text(
+        """import json
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+result = Path(arguments[arguments.index("--result") + 1])
+result.write_text(
+    json.dumps(
+        {
+            "schemaVersion": 1,
+            "consoleEndpointFound": True,
+            "screenStarted": True,
+            "promptObserved": True,
+            "bootCommandSent": True,
+            "kernelHandoffObserved": True,
+            "outputBytesObserved": 64,
+            "outputLimitBytes": 65536,
+            "outputTruncated": False,
+            "timedOut": False,
+            "handoffTimedOut": False,
+            "screenExitCode": 0,
+            "signal": None,
+            "cleanupComplete": True,
+            "cleanupFailure": None,
+            "cleanupErrorNumber": None,
+            "exitCode": 0,
+        }
+    ),
+    encoding="utf-8",
+)
+""",
+        encoding="utf-8",
+    )
     stage = tmp_path / "stage"
     stage.mkdir()
+    stage.chmod(0o700)
     cvd_home = tmp_path / "cvd-home"
     cvd_home.mkdir()
+    cvd_home.chmod(0o700)
     status_root = tmp_path / "status"
     status_root.mkdir()
     capture_status_path = tmp_path / "capture-failure-status"
@@ -2321,16 +2636,31 @@ else:
                 f"runtime_root={shlex.quote(str(runtime_root))}",
                 f"private_product_out={shlex.quote(str(tmp_path / 'product'))}",
                 f"CVD_HOST_DIR={shlex.quote(str(tmp_path / 'host'))}",
-                "cvd_group_name=apkrun-test",
+                "cvd_group_name=apkrun_test",
                 "cvd_instance_num=1",
                 f"stage={shlex.quote(str(stage))}",
                 f"cvd_home={shlex.quote(str(cvd_home))}",
                 "boot_timeout_deadline=$(($(date +%s) + 30))",
                 "boot_deadline_expired=0",
                 f"APKRUN_EXPERIMENT_STATUS_ROOT={shlex.quote(str(status_root))}",
+                f"APKRUN_EXPERIMENT_TOOLS={shlex.quote(str(tool_directory))}",
+                (
+                    "APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY="
+                    f"{shlex.quote(str(tmp_path / 'bootloader-console-summary.json'))}"
+                ),
+                (
+                    "APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY_ROOT="
+                    f"{shlex.quote(str(tmp_path))}"
+                ),
+                'record_missing() { printf \'%s\\t%s\\n\' "$1" "$2"; }',
                 extract_shell_function("create_cvd_group_with_common_options"),
                 extract_shell_function("launch_profile"),
                 extract_shell_function("start_cvd_group_with_gpu_mode"),
+                *(
+                    [extract_shell_function("start_cvd_group_with_bootloader_console")]
+                    if pause_in_bootloader
+                    else []
+                ),
                 extract_shell_function("run_cvd_command_with_live_logs"),
                 "profile=default",
                 launch_block,
@@ -2350,6 +2680,7 @@ else:
         "APKRUN_TEST_START_EXIT_CODE": str(start_exit_code),
         "APKRUN_TEST_GPU_MODE": gpu_mode,
         "APKRUN_TEST_CONSOLE_ENABLED": str(console_enabled).lower(),
+        "APKRUN_TEST_PAUSE_IN_BOOTLOADER": str(pause_in_bootloader).lower(),
     }
     result = subprocess.run(
         ["bash", str(harness)],
@@ -2361,7 +2692,9 @@ else:
     assert result.returncode == 0, result.stderr
     assert int(capture_status_path.read_text(encoding="ascii").strip()) == (
         expected_capture_failure
-    )
+    ), (result.stdout, result.stderr)
+    summary_path = tmp_path / "bootloader-console-summary.json"
+    assert summary_path.exists() is pause_in_bootloader
 
     calls = [
         json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()
@@ -2372,24 +2705,26 @@ else:
             f"--host_path={tmp_path / 'host'}",
             f"--product_path={tmp_path / 'product'}",
             f"--base_directory={runtime_root}",
-            "--group_name=apkrun-test",
+            "--group_name=apkrun_test",
             "--base_instance_num=1",
             "--num_instances=1",
             "--nostart",
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
+            *(["--pause_in_bootloader=BOOTLOADER"] if pause_in_bootloader else []),
             "--cpus",
             "4",
             "--memory_mb",
             "4096",
         ],
         [
-            "--group_name=apkrun-test",
+            "--group_name=apkrun_test",
             "start",
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
+            *(["--pause_in_bootloader=BOOTLOADER"] if pause_in_bootloader else []),
         ],
     ]
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -2397,6 +2732,7 @@ else:
     assert saved_instance["gpu_mode"] == gpu_mode
     assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
     assert saved_instance["console"] is console_enabled
+    assert saved_instance["pause_in_bootloader"] is pause_in_bootloader
 
     if persisted_vhost_user:
         capture_record = tmp_path / "capture-record"
@@ -2431,6 +2767,7 @@ else:
                 fleet_socket_metrics_path=unused,
                 gpu_mode=gpu_mode,
                 console_enabled=console_enabled,
+                pause_in_bootloader=pause_in_bootloader,
             )
 
 
@@ -2455,12 +2792,16 @@ def test_baseline_must_use_the_expected_gpu_and_vm_shape(tmp_path: Path) -> None
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
-@pytest.mark.parametrize("console_enabled", (True, False))
+@pytest.mark.parametrize(
+    ("console_enabled", "pause_in_bootloader"),
+    ((True, False), (False, False), (True, True)),
+)
 def test_host_preflight_checks_tool_blobs_and_cvd_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     gpu_mode: str,
     console_enabled: bool,
+    pause_in_bootloader: bool,
 ) -> None:
     _use_reference_host(monkeypatch)
     repo_root, baseline, experiment_root, patched_capture = _make_baseline_repository(
@@ -2480,6 +2821,7 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
         patched_capture,
         gpu_mode=gpu_mode,
         console_enabled=console_enabled,
+        pause_in_bootloader=pause_in_bootloader,
     )
 
     assert report["baselineCvd"] == report["observedCvd"]
@@ -2491,6 +2833,7 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
         report["consoleModeSlug"]
         == (experiment_support.CONSOLE_MODE_SLUGS[console_enabled])
     )
+    assert report["pauseInBootloader"] is pause_in_bootloader
     assert report["cpuCount"] == 4
     assert len(report["baselineToolBlobs"]) == len(experiment_support.TOOL_PATHS)
     assert report["baselineToolCommit"] == report["observedToolCommit"]
@@ -2828,11 +3171,15 @@ def test_host_preflight_rejects_different_host_conditions(
     "gpu_mode",
     ("none", "guest_swiftshader"),
 )
-@pytest.mark.parametrize("console_enabled", (True, False))
+@pytest.mark.parametrize(
+    ("console_enabled", "pause_in_bootloader"),
+    ((True, False), (False, False), (True, True)),
+)
 def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     tmp_path: Path,
     gpu_mode: str,
     console_enabled: bool,
+    pause_in_bootloader: bool,
 ) -> None:
     repo_root, baseline_record, source_experiment_root, source_patched_capture = (
         _make_baseline_repository(tmp_path / "repository")
@@ -2891,6 +3238,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                         "cpus": 4,
                         "memory_mb": 4096,
                         "console": console_enabled,
+                        "pause_in_bootloader": pause_in_bootloader,
                     }
                 }
             }
@@ -2901,6 +3249,34 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         "version: 1.57.0 | VCS: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d\n",
         encoding="utf-8",
     )
+    bootloader_console_summary_path = tmp_path / "bootloader-console-summary.json"
+    if pause_in_bootloader:
+        bootloader_console_summary_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "consoleEndpointFound": True,
+                    "screenStarted": True,
+                    "promptObserved": True,
+                    "bootCommandSent": True,
+                    "kernelHandoffObserved": True,
+                    "outputBytesObserved": 64,
+                    "outputLimitBytes": 65_536,
+                    "outputTruncated": False,
+                    "timedOut": False,
+                    "handoffTimedOut": False,
+                    "screenExitCode": 0,
+                    "signal": None,
+                    "cleanupComplete": True,
+                    "cleanupFailure": None,
+                    "cleanupErrorNumber": None,
+                    "exitCode": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+    else:
+        bootloader_console_summary_path = None
     capture_status_root = tmp_path / "capture-status"
     capture_status_root.mkdir()
     (capture_status_root / "guest-logcat.json").write_text(
@@ -2945,6 +3321,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                 "consoleModeSlug": experiment_support.CONSOLE_MODE_SLUGS[
                     console_enabled
                 ],
+                "pauseInBootloader": pause_in_bootloader,
                 "baselineToolCommit": baseline_tool_commit,
                 "baselineToolBlobs": baseline_tool_blobs,
                 "observedToolCommit": observed_tool_commit,
@@ -3026,11 +3403,19 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         fleet_socket_metrics,
         gpu_mode=gpu_mode,
         console_enabled=console_enabled,
+        pause_in_bootloader=pause_in_bootloader,
+        bootloader_console_summary_path=bootloader_console_summary_path,
     )
 
     assert record["gpuMode"] == gpu_mode
     assert record["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
     assert record["consoleEnabled"] is console_enabled
+    assert record["pauseInBootloader"] is pause_in_bootloader
+    assert record["bootloaderConsole"] == (
+        json.loads(bootloader_console_summary_path.read_text(encoding="utf-8"))
+        if bootloader_console_summary_path is not None
+        else None
+    )
     assert (
         record["consoleModeSlug"]
         == (experiment_support.CONSOLE_MODE_SLUGS[console_enabled])
@@ -3085,6 +3470,8 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
+            bootloader_console_summary_path=bootloader_console_summary_path,
         )
 
     mismatched_console_identity = {
@@ -3097,10 +3484,27 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     )
     with pytest.raises(
         ValueError,
-        match="capture GPU or console mode differs from the verified selection",
+        match="capture GPU, console, or bootloader mode differs from the verified selection",
     ):
         rebuild_experiment_record()
-    for missing_field in ("consoleEnabled", "consoleModeSlug"):
+    mismatched_pause_identity = {
+        **verified_console_identity,
+        "pauseInBootloader": not pause_in_bootloader,
+    }
+    host_identity.write_text(
+        json.dumps(mismatched_pause_identity),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="capture GPU, console, or bootloader mode differs from the verified selection",
+    ):
+        rebuild_experiment_record()
+    for missing_field in (
+        "consoleEnabled",
+        "consoleModeSlug",
+        "pauseInBootloader",
+    ):
         incomplete_console_identity = dict(verified_console_identity)
         incomplete_console_identity.pop(missing_field)
         host_identity.write_text(
@@ -3109,7 +3513,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         )
         with pytest.raises(
             ValueError,
-            match="capture GPU or console mode differs from the verified selection",
+            match="capture GPU, console, or bootloader mode differs from the verified selection",
         ):
             rebuild_experiment_record()
     host_identity.write_text(
@@ -3147,6 +3551,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
 
     incomplete_experiment_sources = json.loads(
@@ -3191,6 +3596,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
     copied_tool.write_bytes(original_tool_contents)
 
@@ -3261,6 +3667,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
     captured_config["instances"]["1"]["gpu_mode"] = gpu_mode
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = True
@@ -3290,6 +3697,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3320,6 +3728,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3344,6 +3753,8 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         fleet_socket_metrics,
         gpu_mode,
         console_enabled,
+        pause_in_bootloader,
+        bootloader_console_summary_path,
     )
     instance_config = captured_config["instances"]["1"]
     for console_value in (not console_enabled, None, int(console_enabled)):
@@ -3358,6 +3769,25 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         ):
             experiment_support.build_experiment_record(*record_arguments)
     instance_config["console"] = console_enabled
+    config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+    for pause_value in (
+        not pause_in_bootloader,
+        None,
+        int(pause_in_bootloader),
+    ):
+        if pause_value is None:
+            instance_config.pop("pause_in_bootloader")
+        else:
+            instance_config["pause_in_bootloader"] = pause_value
+        config_path.write_text(json.dumps(captured_config), encoding="utf-8")
+        with pytest.raises(
+            ValueError,
+            match=(
+                "captured Cuttlefish configuration has unexpected pause_in_bootloader:"
+            ),
+        ):
+            experiment_support.build_experiment_record(*record_arguments)
+    instance_config["pause_in_bootloader"] = pause_in_bootloader
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
 
     incomplete_cleanup = capture_status_root / "adb-helper-cleanup-incomplete.json"
@@ -3396,6 +3826,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
     incomplete_cleanup.unlink()
 
@@ -3424,6 +3855,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             fleet_socket_metrics,
             gpu_mode=gpu_mode,
             console_enabled=console_enabled,
+            pause_in_bootloader=pause_in_bootloader,
         )
 
 
@@ -3874,6 +4306,70 @@ def test_publication_rejects_mismatched_console_labels(
     result_path = results_root / (
         f"gpu-none-console-{result_console}-20261001T000000Z-1234"
     )
+
+    with pytest.raises(ValueError, match=error):
+        experiment_support.publish_normalized_record(
+            capture_record,
+            work_root,
+            data_root,
+            result_path,
+            ownership_token,
+        )
+
+    assert capture_record.is_dir()
+    assert not result_path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+@pytest.mark.parametrize(
+    ("bootloader_console", "error"),
+    (
+        (None, "summary must be an object"),
+        ({"schemaVersion": 1}, "unexpected schema"),
+        (
+            {
+                "schemaVersion": 1,
+                "consoleEndpointFound": False,
+                "screenStarted": False,
+                "promptObserved": False,
+                "bootCommandSent": False,
+                "kernelHandoffObserved": False,
+                "outputBytesObserved": 0,
+                "outputLimitBytes": 65_536,
+                "outputTruncated": False,
+                "timedOut": True,
+                "handoffTimedOut": False,
+                "screenExitCode": None,
+                "signal": None,
+                "cleanupComplete": True,
+                "cleanupFailure": None,
+                "cleanupErrorNumber": None,
+                "exitCode": 42,
+            },
+            "inconsistent or incomplete",
+        ),
+    ),
+)
+def test_publication_revalidates_bootloader_console_evidence(
+    tmp_path: Path,
+    bootloader_console: dict[str, object] | None,
+    error: str,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=bootloader_console,
+    )
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
 
     with pytest.raises(ValueError, match=error):
         experiment_support.publish_normalized_record(

@@ -453,9 +453,9 @@ def test_final_publication_gate_scrubs_logs_created_during_normalization(
     )
     (capture_record / "cuttlefish_config.json").write_text(
         (
-            '{"instances":{"1":{"gpu_mode":"none",'
-            '"enable_gpu_vhost_user":false,"cpus":4,"memory_mb":4096,'
-            '"console":true}}}\n'
+                '{"instances":{"1":{"gpu_mode":"none",'
+                '"enable_gpu_vhost_user":false,"cpus":4,"memory_mb":4096,'
+                '"console":true,"pause_in_bootloader":false}}}\n'
         ),
         encoding="utf-8",
     )
@@ -463,7 +463,8 @@ def test_final_publication_gate_scrubs_logs_created_during_normalization(
         (
             '{"experiment":"cuttlefish-gpu-none-console-on-boot-diagnosis",'
             '"gpuMode":"none","gpuModeSlug":"none",'
-            '"consoleEnabled":true,"consoleModeSlug":"on"}\n'
+            '"consoleEnabled":true,"consoleModeSlug":"on",'
+            '"pauseInBootloader":false}\n'
         ),
         encoding="utf-8",
     )

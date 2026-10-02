@@ -50,6 +50,19 @@ case "$console_enabled" in
     ;;
 esac
 
+pause_in_bootloader=${APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER:-false}
+case "$pause_in_bootloader" in
+  true|false) ;;
+  *)
+    printf 'APKRUN_DIAGNOSTIC_PAUSE_IN_BOOTLOADER must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+if [ "$pause_in_bootloader" = true ] && [ "$console_enabled" = false ]; then
+  printf 'Bootloader pause requires APKRUN_DIAGNOSTIC_CONSOLE=true.\n' >&2
+  exit 2
+fi
+
 instance_num=${APKRUN_CVD_INSTANCE_NUM:-1}
 case "$instance_num" in
   ''|*[!0-9]*|0*)
@@ -465,6 +478,7 @@ capture_output_log="$work_root/capture-process-output.log"
 capture_output_status="$work_root/capture-process-output.json"
 fleet_socket_metrics="$work_root/fleet-socket-paths.json"
 capture_socket_metrics="$work_root/capture-socket-paths.json"
+bootloader_console_summary="$work_root/bootloader-console-summary.json"
 capture_supervisor_stderr_fifo="$work_root/capture-supervisor-stderr.fifo"
 capture_supervisor_stderr_log="$work_root/capture-supervisor-stderr.log"
 capture_supervisor_stderr_status="$work_root/capture-supervisor-stderr.json"
@@ -511,7 +525,9 @@ cp "$script_dir/capture-gpu-none.sh" "$script_dir/capture-lifecycle.sh" \
   "$script_dir/capture_bounded.py" \
   "$script_dir/capture_processes.py" \
   "$script_dir/experiment_support.py" "$script_dir/run_capture.py" \
-  "$script_dir/summarize_logcat.py" "$experiment_tools/"
+  "$script_dir/summarize_logcat.py" \
+  "$script_dir/drive_cuttlefish_console.py" \
+  "$script_dir/run_cvd_with_console.py" "$experiment_tools/"
 cp "$experiment_tools/capture_bounded.py" \
   "$experiment_tools/capture_processes.py" "$tool_destination/"
 cp "$repo_root/Images/manifests/16373615/android-image.json" "$manifest_destination/"
@@ -542,7 +558,8 @@ chmod 700 "$adb_shim_dir/adb"
 
 run_committed_experiment_support \
   patch-capture --path "$capture_script" \
-  --gpu-mode "$gpu_mode" --console-enabled "$console_enabled"
+  --gpu-mode "$gpu_mode" --console-enabled "$console_enabled" \
+  --pause-in-bootloader "$pause_in_bootloader"
 bash -n "$capture_script"
 
 export APKRUN_DIAGNOSTIC_ADB_SHIM_DIR="$adb_shim_dir"
@@ -551,6 +568,8 @@ export APKRUN_DIAGNOSTIC_ADB_SERVER_SOCKET="$adb_server_socket"
 export APKRUN_DIAGNOSTIC_ADB_SERVER_SOCKET_PATH="$adb_server_socket_path"
 export APKRUN_EXPERIMENT_STATUS_ROOT="$capture_status_root"
 export APKRUN_EXPERIMENT_TOOLS="$experiment_tools"
+export APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY="$bootloader_console_summary"
+export APKRUN_EXPERIMENT_BOOTLOADER_SUMMARY_ROOT="$work_root"
 export APKRUN_CVD_HOME_TMPDIR="$short_cvd_home_tmpdir"
 export APKRUN_CVD_STATE_DIR="$cvd_state_dir"
 export APKRUN_EXPERIMENT_SOCKET_METRICS="$capture_socket_metrics"
@@ -638,6 +657,7 @@ if ! run_committed_experiment_support verify-host \
   --patched-capture "$capture_script" \
   --gpu-mode "$gpu_mode" \
   --console-enabled "$console_enabled" \
+  --pause-in-bootloader "$pause_in_bootloader" \
   --output "$host_identity"; then
   preserve_work
   exit 1
@@ -1332,6 +1352,8 @@ if ! record_or_preserve run_verified_experiment_support record \
   --fleet-socket-metrics "$fleet_socket_metrics" \
   --gpu-mode "$gpu_mode" \
   --console-enabled "$console_enabled" \
+  --pause-in-bootloader "$pause_in_bootloader" \
+  --bootloader-console-summary "$bootloader_console_summary" \
   --output "$capture_record/experiment.json"; then
   exit 1
 fi

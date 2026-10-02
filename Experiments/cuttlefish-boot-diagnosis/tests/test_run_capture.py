@@ -421,8 +421,10 @@ def test_capture_cli_forwards_signal_and_records_cleanup(tmp_path: Path) -> None
             "--",
             sys.executable,
             "-c",
-            "import pathlib, sys, time; "
-            "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(30)",
+            (
+                "import pathlib, sys, time; "
+                "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(30)"
+            ),
             str(child_ready_path),
         ],
         stdout=subprocess.DEVNULL,

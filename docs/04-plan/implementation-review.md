@@ -3071,10 +3071,10 @@ another tool revision and is not part of this comparison.
 **Choice.** Add `APKRUN_DIAGNOSTIC_CONSOLE=true|false`, defaulting to `true`,
 to the isolated diagnosis runner. Pass the selection to both `cvd create` and
 `cvd start`, verify the saved `console` value before publication, and record
-the selection in metadata and generated work and result directory names. For
-the next controlled pair, keep `guest_swiftshader`, vhost-user GPU disabled,
-the pinned host, build, CPU and memory settings, capture deadline, and tool
-revision fixed; run `console=true` and `console=false` consecutively from the
+the selection in metadata and generated work and result directory names. The
+controlled pair keeps `guest_swiftshader`, vhost-user GPU disabled, the pinned
+host, build, CPU and memory settings, capture deadline, and tool revision
+fixed while running `console=true` and `console=false` consecutively from the
 same checkout.
 
 **Reason.** The same-commit GPU-mode pair under IR-116 reached different
@@ -3088,3 +3088,83 @@ selection tests whether that setting changes boot progress. The comparison
 can narrow the cause but cannot alone prove it. It does not change canonical
 profiles or claim Android boot success. Per-run generated Cuttlefish fields
 may still differ and must be inspected when interpreting the pair.
+
+**Observed pair (2026-10-02).** The records
+`gpu-guest-swiftshader-console-on-20261002T020749Z-266868` and
+`gpu-guest-swiftshader-console-off-20261002T021851Z-278509` both identify
+tool commit `6ff41f8fd698f67958369a9dba8b86bb7dabbe13`, the same observed
+capture-tool blob map, host, pinned build, and Cuttlefish 1.57.0 revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`. The baseline capture-tool commit
+is `64da28a551b0b33e258c8f37057b9a8a6d90846d` in both records. Experiment
+source hashes match except for `patched-capture.sh`. Both saved
+`guest_swiftshader`, `enable_gpu_vhost_user=false`, four CPUs, and 4096 MiB;
+the selected `console` value matches the metadata and generated directory
+names. The other saved-config differences are per-run `group_uuid` and
+`webrtc_device_id`. Both `host.json` records show a 604-second capture.
+
+**Result.** Both captures exited 1 at the 600-second boot deadline, and the
+900-second runner completed cleanup. Each `kernel.log` has 10,308 bytes across
+158 lines of U-Boot output and ends at `Starting kernel ...`; neither contains
+a Linux version marker. Each has 40/40 ADB samples unknown and no guest
+logcat. After the second run, `cvd fleet` was empty and no `crosvm` process
+remained. The bounded host output is retained in the private workspaces.
+
+**Interpretation.** The console toggle did not change the observed log stage:
+both U-Boot logs end at `Starting kernel ...`, and neither record contains
+later Linux-kernel output or Android-userspace evidence. The records do not
+establish whether the kernel started or why post-handoff evidence is absent.
+
+## IR-118: Repeat the current SwiftShader console-off capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/capture-gpu-none.sh` |
+
+**Choice.** Run one additional capture with
+`APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader` and
+`APKRUN_DIAGNOSTIC_CONSOLE=false`, using the same pinned host, build, CPU and
+memory settings, deadline, and committed capture-tool revision as IR-117.
+Treat it as a repeatability check of the console-off result, not as another
+console-setting comparison. Do not change the canonical profiles.
+
+**Reason.** The earlier incomplete capture
+`default-20261001T120904-49816` used `console=false` and recorded Linux boot,
+Android init, zygote, and SurfaceFlinger activity, but it did not pass the
+reference-boot acceptance check and its capture-tool revision is not recorded
+in the result. The console-off member of IR-117 used the current pinned tool
+revision and stopped producing logs at U-Boot's kernel handoff. A repeat with
+the current revision can establish whether that observed stopping point
+repeats under the same selected settings. It cannot alone identify whether the
+kernel started or explain the missing later evidence.
+
+**Observed repeat (2026-10-02).** The incomplete result at
+`$HOME/.local/share/apkrun/cuttlefish-boot-diagnosis/results/gpu-guest-swiftshader-console-off-20261002T023646Z-290359`
+identifies tool commit `6ff41f8fd698f67958369a9dba8b86bb7dabbe13`, baseline
+capture-tool commit `64da28a551b0b33e258c8f37057b9a8a6d90846d`, host
+`linux-apple` / Ubuntu 24.04.4 / Linux 6.8.0-134, build `16373615`, and
+Cuttlefish 1.57.0 revision `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`.
+Its saved configuration has `gpu_mode=guest_swiftshader`,
+`enable_gpu_vhost_user=false`, `console=false`, four CPUs, and 4096 MiB.
+`captureDurationSeconds` is 605; Cuttlefish exceeded the 600-second boot
+deadline and exited 1, while the capture supervisor completed cleanup
+(`timedOut=false`, `cleanupComplete=true`). The 10,308-byte, 158-line
+`kernel.log` shows U-Boot verification and loading the init boot image, kernel,
+and vendor boot image, then ends at `Starting kernel ...`. It contains no
+later Linux or Android init marker. All 40 ADB samples are unknown, and the
+guest logcat capture wrote zero bytes. The normalized internal bootconfig has
+the same key/value set as the earlier incomplete capture after excluding the
+serial number and Wi-Fi MAC prefix identifiers. A live `ps` sample showed the
+Android crosvm process at 99.9% CPU. A thread sample near eight minutes into
+the run showed `crosvm_vcpu0` at 99.9% and the other three vCPU threads at
+0.0%; subsequent samples still reported 99.9% for vCPU0. These are sampled
+observations, not a continuous trace, and were not stored in the normalized
+result. After cleanup, `cvd fleet` was empty and no `crosvm` process remained.
+
+**Interpretation.** The same current-tool `console=false` settings reproduce
+the missing post-handoff log and ADB evidence. The sampled vCPU0 activity is
+consistent with guest CPU activity after U-Boot's handoff, but does not prove
+Linux reached its first log point or identify what it was executing. The older
+capture's later Linux and Android init output remains unexplained; neither
+capture establishes a root cause or completes #064.

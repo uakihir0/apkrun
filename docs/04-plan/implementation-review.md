@@ -2955,8 +2955,9 @@ exist yet. The result builder already rejects mismatched persisted values
 before publication. The integration fixture now confirms the configuration
 file is absent after create, appears after start, and reflects the flags passed
 to both commands. A separate corrected GPU-none run recorded both expected
-values but still reached the 600-second startup deadline without Android boot
-evidence; see the #064 notes. This records the earliest reliable validation
+values, but Cuttlefish create/start exceeded the 600-second boot deadline
+without Android boot evidence. Capture completed under the separate 900-second
+runner deadline; see the #064 notes. This records the earliest reliable validation
 point available in the pinned Cuttlefish lifecycle and does not establish a
 boot diagnosis.
 
@@ -2973,13 +2974,28 @@ and `cvd start` in the isolated GPU-none diagnosis. Before publishing a
 result, require `cuttlefish_config.json` to record `console=true` along with
 the expected GPU settings and VM shape.
 
-**Reason.** The sanitized current-code retry reached its 600-second deadline
-with an empty `kernel.log`. Its launcher log shows crosvm reporting a guest
-system reset about 15 seconds after launch and being restarted; meanwhile, the
-ADB connector repeatedly could not find the guest. These observations do not
-establish the reset's cause. The pinned Cuttlefish 1.57.0 CLI reports that its
-serial console is disabled by default and supports `--console=true`. Enabling
-it is a diagnostic choice to capture guest serial output that may help explain
-the boot failure. It does not guarantee that the reset will be reported on the
-console, change the canonical reference profiles, or establish that the
-console setting caused the failure.
+**Reason.** In the sanitized current-code retry, Cuttlefish create/start
+exceeded the 600-second boot deadline with an empty `kernel.log`; capture
+cleanup completed before the separate 900-second runner deadline. Its launcher
+log shows an early crosvm system
+reset about 15 seconds after launch. Process attribution identifies that event
+as the auxiliary OpenWrt crosvm (`process_name=openwrt`), not the Android VM;
+see IR-089. The ADB connector repeatedly could not find the guest, so the
+Android boot failure remained undiagnosed. The pinned Cuttlefish 1.57.0 CLI
+reports that its serial console is disabled by default and supports
+`--console=true`. Enabling it is a diagnostic choice to expose the guest serial
+endpoint and see whether it provides additional evidence. It does not
+guarantee guest output, change the canonical reference profiles, or establish
+the Android boot failure's cause.
+
+The 2026-10-02 retry verified `console=true` and `enable_kernel_log=true` in
+the saved Cuttlefish configuration, but `kernel.log` stayed empty. An initial
+60-second Screen attempt and a later 25-second attachment from a pseudoterminal
+to the advertised endpoint showed no guest text. The first attempt left a
+detached Screen session, which was explicitly quit and verified gone. The
+diagnosis runner does not currently persist a Screen transcript. The normalized
+launcher log records the auxiliary OpenWrt crosvm (`process_name=openwrt`)
+resetting about 18 seconds after launch and its process restarter starting a
+replacement. This is not evidence of an Android VM reset. All 40 ADB samples
+remained unknown. The retry therefore verifies that the setting was applied,
+but does not validate serial capture or Android boot.

@@ -3247,3 +3247,58 @@ HOME and owned by the current user. Its `console` endpoint is a symlink to a
 current-user PTY character device under `/dev/pts`. The helper resolves the
 runtime link within HOME and accepts the console link only for that verified
 PTY shape; other links that leave HOME or change owner remain rejected.
+
+**Initial live result.** The 2026-10-02 run recorded under
+`Images/reference/16373615/incomplete/gpu-none-console-on-20261002T062002Z-375629/`
+saved `pause_in_bootloader=true` and `console=true`. Cuttlefish 1.57.0's
+`cvd start --help` says this flag stops the bootflow in U-Boot until `boot` is
+typed at the device console, and the selected `bootloader.crosvm` contains
+U-Boot markers. The private PTY endpoint was found and Screen started, but
+the bounded summary reports no prompt, no command, and no kernel handoff
+after the 600-second deadline. It counted 83 bytes from the Screen session;
+because raw bytes are intentionally discarded, that count does not establish
+that guest console text was received. A separate synthetic PTY check with the
+installed Screen executable passed prompt recognition, command delivery, and
+kernel-marker recognition, which checks the local Screen/PTY path but not
+Cuttlefish.
+
+Keep the exact prompt gate and do not send `boot` without observing it. The
+live result gives no evidence that a U-Boot prompt was present, while the
+synthetic check confirms the helper can drive one through Screen. Relaxing
+the gate would risk sending input at an unknown boot stage without
+distinguishing the observed timeout.
+
+**Status-only follow-up.** The helper now emits summary schema 2 with a
+`uBootBannerObserved` Boolean, computed from a line-anchored, version-shaped
+U-Boot banner match in its existing bounded in-memory buffer and revalidated
+before publication. It strips Screen's short display escapes and OSC/DCS
+control strings through their terminators (or through the end of an
+unterminated sequence) before matching. It treats 8-bit C1 controls as such
+only when the byte is not a valid UTF-8 continuation, preserving ordinary
+UTF-8 text. Validation rejects the flag when no output bytes were observed.
+The helper still discards the transcript. A synthetic run through the
+installed Screen executable observed the versioned banner, prompt, sent
+`boot`, and observed the kernel marker. The first Cuttlefish run predates this
+field and remains schema 1.
+
+**Schema-2 live repeat and review decision.** The retry recorded under
+`Images/reference/16373615/incomplete/gpu-none-console-on-20261002T070032Z-417640/`
+used observed tool commit `ee60ce575deeea3f69d962d74c85e89110492449`.
+After 600 seconds, its summary reports `uBootBannerObserved=false`,
+`promptObserved=false`, `bootCommandSent=false`, and
+`kernelHandoffObserved=false`. The helper found the PTY endpoint and started
+Screen; it counted 83 bytes, whose raw contents remain discarded. Therefore,
+the run shows that the helper did not recognize a versioned U-Boot banner;
+it does not prove the console carried no guest text or explain why the banner
+was absent. ADB remained unknown in all 40 samples, `kernel.log` remained
+empty, and cleanup left the Cuttlefish fleet empty with no helper processes.
+Do not repeat this identical 600-second pause run without new evidence. The
+next useful diagnosis is a bounded inspection of Cuttlefish's console-forwarder
+and bootloader output path. The #064 capture remains incomplete and no boot
+root cause has been established.
+
+**Verification.** The final Linux host suite passed 268 tests; the macOS host
+suite passed 166 tests with 102 skipped. Ruff lint and format checks and
+`git diff --check` passed. These host-side results validate the capture helper
+and its tests; they do not satisfy #064's live Android boot or reference-profile
+acceptance criteria. Keep this review item open.

@@ -1,0 +1,171 @@
+{
+  "adbEndpoint": "127.0.0.1:6520",
+  "adbServerTransport": "localfilesystem",
+  "adbStateSampleCount": 40,
+  "baselineCvd": {
+    "packageVersion": "1.57.0",
+    "vcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d"
+  },
+  "baselineHost": {
+    "architecture": "aarch64",
+    "cpuCount": 8,
+    "cvdInstanceNumber": 1,
+    "hostKind": "linux-apple",
+    "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+    "nestedVirtualization": "on",
+    "os": "Ubuntu 24.04.4 LTS"
+  },
+  "baselineRecord": "Images/reference/16373615/incomplete/default-20261001T120904-49816",
+  "baselineToolBlobs": {
+    "Images/manifests/16373615/android-image.json": "456b1cf3f8e32e2d54c8a7017e86ad3b4331bf75",
+    "Images/tools/reference/capture.sh": "da59e773ef5ed6fd13872fd9eb703093b7b37648",
+    "Images/tools/reference/capture_cvd_start.py": "eb789687fb543cea95024a38a1e1b72e515434cf",
+    "Images/tools/reference/compare_boot.py": "89952761a4844c435eea128fcb55b4c9275d7254",
+    "Images/tools/reference/guest-capture.txt": "998b9ce99338e69945bf8a3f9ea3712bfdc039a9",
+    "Images/tools/reference/normalize.yaml": "d8c7bc28c4c2e66f37cdc846fe8214991a22d5cb"
+  },
+  "baselineToolCommit": "64da28a551b0b33e258c8f37057b9a8a6d90846d",
+  "bootTimeoutSeconds": 600,
+  "bootloaderConsole": {
+    "bootCommandSent": false,
+    "cleanupComplete": true,
+    "cleanupErrorNumber": null,
+    "cleanupFailure": null,
+    "consoleEndpointFound": true,
+    "exitCode": 143,
+    "handoffTimedOut": false,
+    "kernelHandoffObserved": false,
+    "outputBytesObserved": 83,
+    "outputLimitBytes": 65536,
+    "outputTruncated": false,
+    "promptObserved": false,
+    "schemaVersion": 2,
+    "screenExitCode": -15,
+    "screenStarted": true,
+    "signal": 15,
+    "timedOut": true,
+    "uBootBannerObserved": false
+  },
+  "boundedCapture": {
+    "aggregateBytes": 985,
+    "files": {
+      "cvd-create": {
+        "bytesWritten": 121,
+        "childExitCode": null,
+        "cleanupComplete": true,
+        "signal": null,
+        "timedOut": false,
+        "truncated": false
+      },
+      "cvd-start": {
+        "bytesWritten": 864,
+        "childExitCode": null,
+        "cleanupComplete": true,
+        "signal": null,
+        "timedOut": false,
+        "truncated": false
+      }
+    },
+    "timedOutFiles": [],
+    "truncatedFiles": []
+  },
+  "buildId": "16373615",
+  "captureExitCode": 1,
+  "captureRun": {
+    "childExitCode": 1,
+    "cleanupComplete": true,
+    "schemaVersion": 1,
+    "signal": null,
+    "timedOut": false
+  },
+  "consoleEnabled": true,
+  "consoleModeSlug": "on",
+  "cpuCount": 4,
+  "experiment": "cuttlefish-gpu-none-console-on-boot-diagnosis",
+  "experimentSources": {
+    "capture-gpu-none.sh": "6582c12ada7398dce9591a7444d09b280306dd562bb65c56b2dd23fd7897885f",
+    "capture-lifecycle.sh": "e5f963f9800cf0d6aedcb5dedeced0c08885a539f12335e74591e90272095e82",
+    "capture_bounded.py": "e728a40456fc02a50abf91470642f3ad9a87bbc792e05decd3bc6687dfa41a7c",
+    "capture_processes.py": "ece9da42131ef24adf71d296efb923279f8a7c229e5efff09789cd2b7f0bbf9c",
+    "drive_cuttlefish_console.py": "09830d22099bc044e1864e8b675451567aa672addfbac139e8b00f1c6c989618",
+    "experiment_support.py": "8b02c58730789f8e1827e58709706e1e9da212f20077277dbd41a1dfad268d04",
+    "patched-capture.sh": "775abd503d46a2d5cfa45b5f0d9c41f254a9159c86e41ebc3e642c3bd3d95516",
+    "run_capture.py": "27fd2edd29837132c9b0b271d60f3c0c7614e9e4172c95f50c30e499190b6bf4",
+    "run_cvd_with_console.py": "a831333faf18634fe592dad252b9aabd7f088b0ede0ef6722e93f241310f33f9",
+    "summarize_logcat.py": "a151d9b9498e3110b570955957e82950642de0d4144e8855454758355c286033"
+  },
+  "gpuMode": "none",
+  "gpuModeSlug": "none",
+  "guestLogcatCapture": {
+    "bytesWritten": 0,
+    "captured": false,
+    "childExitCode": null,
+    "cleanupComplete": true,
+    "signal": null,
+    "timedOut": false,
+    "truncated": false
+  },
+  "logcat": {
+    "activityManagerLines": 0,
+    "activityServiceLookupFailures": 0,
+    "bootCompletedLines": 0,
+    "captureLogcatPresent": false,
+    "graphicsFailureLines": 0,
+    "lineCount": 0,
+    "liveLogcatBytes": 0,
+    "liveLogcatCleanupIncompleteSampleCount": 0,
+    "liveLogcatFailedSampleCount": 0,
+    "liveLogcatSampleCount": 0,
+    "liveLogcatTimedOutSampleCount": 0,
+    "liveLogcatTruncatedSampleCount": 0,
+    "schemaVersion": 1,
+    "snapshotCount": 0,
+    "surfaceFlingerLines": 0,
+    "systemServerFatalLines": 0,
+    "systemServerLines": 0,
+    "uncompressedBytes": 0
+  },
+  "memoryMb": 4096,
+  "observedCvd": {
+    "packageVersion": "1.57.0",
+    "vcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d"
+  },
+  "observedHost": {
+    "architecture": "aarch64",
+    "cpuCount": 8,
+    "cvdInstanceNumber": 1,
+    "hostKind": "linux-apple",
+    "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+    "nestedVirtualization": "on",
+    "os": "Ubuntu 24.04.4 LTS"
+  },
+  "observedToolBlobs": {
+    "Images/manifests/16373615/android-image.json": "456b1cf3f8e32e2d54c8a7017e86ad3b4331bf75",
+    "Images/tools/reference/capture.sh": "a539eb6e6cba8e434747db3d629b5d6a0be07961",
+    "Images/tools/reference/capture_cvd_start.py": "c4282a8be4352f889e68580ae07b732431e7d210",
+    "Images/tools/reference/compare_boot.py": "89952761a4844c435eea128fcb55b4c9275d7254",
+    "Images/tools/reference/guest-capture.txt": "998b9ce99338e69945bf8a3f9ea3712bfdc039a9",
+    "Images/tools/reference/normalize.yaml": "d8c7bc28c4c2e66f37cdc846fe8214991a22d5cb"
+  },
+  "observedToolCommit": "ee60ce575deeea3f69d962d74c85e89110492449",
+  "pauseInBootloader": true,
+  "rawLogcatRetained": false,
+  "runnerDeadlineSeconds": 900,
+  "schemaVersion": 1,
+  "unixSocketPaths": {
+    "capture": {
+      "capacityBytes": 108,
+      "maxEncodedPathBytes": 0,
+      "maxSunPathBytesIncludingNul": 0,
+      "socketCount": 0,
+      "terminatingNulBytes": 1
+    },
+    "fleet": {
+      "capacityBytes": 108,
+      "maxEncodedPathBytes": 0,
+      "maxSunPathBytesIncludingNul": 0,
+      "socketCount": 0,
+      "terminatingNulBytes": 1
+    }
+  }
+}

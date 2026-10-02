@@ -4237,32 +4237,38 @@ show whether a longer guest shell query would return a property.
 `w1` environment variables and require an exact echo, the empty-state marker
 `APKRUN_PROBE_READY`, and the following prompt. If the marker includes
 variable values or the framing is otherwise rejected while a prompt is
-available, skip the read and continue boot. Then send the bounded command
-`setexpr.l w0 *0x17f63e1f4; setexpr.l w1 *0x17f63e1dc; echo ${w0} ${w1}`. It
-reads one 32-bit word at the traced PC and one at the preceding loop
-instruction address; it does not write the inspected guest-memory locations.
-Accept only an exact echo of that command, one nonempty response line
-containing only a pair of 32-bit hexadecimal words, and the next U-Boot
-prompt. Record a unique well-formed pair even if it differs from the expected
-`d50b7e20 d53b0023`. Reject additional output, missing, malformed, or
-duplicate values when the prompt arrives and continue boot; leave the VM
-paused if the command echo or prompt is missing or the shared five-second
-preparation/read timeout expires. Start that timeout before sending the
-preparation command and enforce it while sending both commands and waiting for
-their responses. Write these states and values in summary schema 6 while
-continuing to validate schema 3–5 records. Publication removes the mirrored
-`kernel.log` as soon as either preparation or memory-read command is sent,
-before moving the record into results.
+available, skip the read and continue boot. Then send
+`setexpr.l w0 *0x17f63e1f4;setexpr.l w1 *0x17f63e1dc;echo ${w0} ${w1} <nonce>`,
+where each helper run creates a fresh seven-character nonce. The command and
+the `=> ` prompt occupy 79 of the console's 80 columns. It reads one 32-bit
+word at the traced PC and one at the preceding loop instruction address; it
+does not write the inspected guest-memory locations. Accept only the exact
+echoed command, one response line containing a pair of 32-bit hexadecimal
+words and the same run's nonce, and the next U-Boot prompt. Record a unique
+well-formed pair even if it differs from the expected `d50b7e20 d53b0023`.
+Reject additional output, missing or malformed values, duplicate pairs, and
+responses carrying another run's nonce when the prompt arrives, then continue
+boot. Leave the VM paused if the command echo or prompt is missing or the
+shared five-second preparation/read timeout expires. Start that timeout before
+sending the preparation command and enforce it while sending both commands
+and waiting for their responses. Write these states and values in summary
+schema 6 while continuing to validate schema 3–5 records. Publication omits
+the mirrored `kernel.log` after either command has been sent and records the
+omission before moving the record into results.
 
 **Reason.** The packaged `bootloader.crosvm` hash was verified, but filtered
 strings exposed no `bdinfo` or relocation labels, and the first live
 `bdinfo` response contained no relocation fields. The user-provided diagnosis
-recommends reading the two known addresses directly. Clearing and checking the
-variables prevents old U-Boot environment values from masquerading as fresh
-memory reads. Requiring the response to contain only the expected marker also
-avoids accepting stale or unrelated console output. The read command is 70
-characters, 73 including the prompt, and fits the existing 80-column console.
-Draining queued PTY output and then requiring the exact command echo prevents
+recommends reading the two known addresses directly. This is its optional
+paused-U-Boot probe (C), pursued after the primary long, untraced capture (A)
+had completed; those passive results are recorded in M01 and IR-133. The
+targeted probe does not replace the passive baseline. Clearing and checking
+the variables prevents old U-Boot environment values from masquerading as
+fresh memory reads. Requiring the response to contain the current run's nonce
+also rejects a delayed complete transcript from another run; it is a framing
+guard, not endpoint authentication. The seven-character nonce keeps the
+command and prompt within 79 columns, leaving one column of margin. Draining
+queued PTY output and then requiring the exact command echo prevents
 pre-command stale text from being accepted. The code records the observed
 words rather than treating the expected values as a precondition, so an
 unexpected result remains useful evidence. Neither a matching word pair nor
@@ -4271,13 +4277,18 @@ the runtime address mapping, or establishes the slow boot's cause.
 
 **Verification.** The Linux Screen-PTY suite exercises variable clearing,
 stale preparation values, the exact read command, accepted values, duplicate,
-malformed, and additional output, stale pre-command output, missing response
-prompt, timeout during either phase and during command transmission, global
-deadline handling, and the subsequent kernel-handoff signal. The Cuttlefish launch tests verify that both
-the direct and supervised start paths pass the boot timeout to Cuttlefish. The
-summary validator checks schema 6 value ranges and state consistency while
-retaining legacy schema 3–5 coverage. Publication tests verify that sending
-either probe command omits the mirrored `kernel.log` and records that
-omission. The full Linux experiment suite passes 347 tests. Hostile follow-up
-review found no remaining actionable issues. A live paused-U-Boot capture
-remains pending.
+malformed, and additional output, stale pre-command output, and a delayed
+response carrying another run's nonce after the current command echo. It also
+checks that the wrong-nonce response is rejected, command width, nonce
+validation, a missing response prompt, timeouts during either phase and
+command transmission, global deadline handling, and the subsequent
+kernel-handoff signal. The Cuttlefish launch tests verify that both the direct
+and supervised start paths pass the boot timeout to Cuttlefish. The summary
+validator checks schema 6 value ranges and state consistency while retaining
+legacy schema 3–5 coverage. Publication tests verify that sending either
+probe command omits the mirrored `kernel.log` and records that omission. The
+full Linux experiment suite passes 349 tests. Adversarial review found a
+documentation mismatch and a stale-response test-ordering gap; both were
+fixed, and final follow-up review found no remaining findings. An earlier
+pre-nonce live probe recorded the expected word pair and a kernel-handoff
+marker; live validation of this nonce-framed revision remains pending.

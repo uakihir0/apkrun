@@ -9,6 +9,7 @@ import json
 import os
 import pty
 import re
+import secrets
 import select
 import shutil
 import signal
@@ -42,15 +43,22 @@ MEMORY_PROBE_PREPARATION_COMMAND_ECHO = re.compile(
     rf"(?m)^[ \t]*(?:=>[ \t]*)?"
     rf"{re.escape(MEMORY_PROBE_PREPARATION_COMMAND_TEXT)}[ \t]*$"
 )
-MEMORY_PROBE_COMMAND_TEXT = (
-    "setexpr.l w0 *0x17f63e1f4; setexpr.l w1 *0x17f63e1dc; echo ${w0} ${w1}"
+MEMORY_PROBE_NONCE_LENGTH = 7
+MEMORY_PROBE_NONCE_ALPHABET = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 )
-MEMORY_PROBE_COMMAND = f"{MEMORY_PROBE_COMMAND_TEXT}\r".encode("ascii")
-MEMORY_PROBE_COMMAND_ECHO = re.compile(
-    rf"(?m)^[ \t]*(?:=>[ \t]*)?{re.escape(MEMORY_PROBE_COMMAND_TEXT)}[ \t]*$"
+MEMORY_PROBE_NONCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_]{6}\Z")
+MEMORY_PROBE_COMMAND_PREFIX = (
+    "setexpr.l w0 *0x17f63e1f4;setexpr.l w1 *0x17f63e1dc;"
+    "echo ${w0} ${w1} "
+)
+MEMORY_PROBE_COMMAND_PATTERN = re.compile(
+    rb"setexpr\.l w0 \*0x17f63e1f4;setexpr\.l w1 \*0x17f63e1dc;"
+    rb"echo \$\{w0\} \$\{w1\} ([A-Za-z0-9][A-Za-z0-9_]{6})\r"
 )
 MEMORY_PROBE_WORDS = re.compile(
-    r"(?:0x)?([0-9a-f]{8})[ \t]+(?:0x)?([0-9a-f]{8})",
+    r"(?:0x)?([0-9a-f]{8})[ \t]+(?:0x)?([0-9a-f]{8})[ \t]+"
+    r"([A-Za-z0-9][A-Za-z0-9_]{6})",
     re.IGNORECASE,
 )
 KERNEL_HANDOFF = re.compile(r"Starting kernel|Booting Linux on physical CPU")
@@ -247,13 +255,38 @@ def _private_result_path(path: Path) -> Path:
     return parent / path.name
 
 
-def _parse_memory_probe_words(text: str) -> tuple[int | None, int | None]:
-    """Accept one response line containing only one complete pair of words."""
+def _memory_probe_command(nonce: str) -> tuple[str, bytes]:
+    if not isinstance(nonce, str) or MEMORY_PROBE_NONCE.fullmatch(nonce) is None:
+        raise ValueError("memory-probe nonce must be seven safe alphanumeric characters")
+    command_text = f"{MEMORY_PROBE_COMMAND_PREFIX}{nonce}"
+    if len("=> ") + len(command_text) > 80:
+        raise ValueError("memory-probe command exceeds the U-Boot console width")
+    return command_text, f"{command_text}\r".encode("ascii")
+
+
+def _memory_probe_command_echo(command_text: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?m)^[ \t]*(?:=>[ \t]*)?{re.escape(command_text)}[ \t]*$"
+    )
+
+
+def _memory_probe_nonce_from_command(command: bytes) -> str | None:
+    match = MEMORY_PROBE_COMMAND_PATTERN.fullmatch(command)
+    if match is None:
+        return None
+    return match.group(1).decode("ascii")
+
+
+def _parse_memory_probe_words(
+    text: str,
+    expected_nonce: str,
+) -> tuple[int | None, int | None]:
+    """Accept one response line containing two words and this run's nonce."""
     response_lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(response_lines) != 1:
         return None, None
     match = MEMORY_PROBE_WORDS.fullmatch(response_lines[0])
-    if match is None:
+    if match is None or match.group(3) != expected_nonce:
         return None, None
     return int(match.group(1), 16), int(match.group(2), 16)
 
@@ -768,10 +801,8 @@ def _send_console_command(
     *,
     deadline: float | None = None,
 ) -> tuple[bool, bool]:
-    if command not in (
-        b"boot\r",
-        MEMORY_PROBE_PREPARATION_COMMAND,
-        MEMORY_PROBE_COMMAND,
+    if command not in (b"boot\r", MEMORY_PROBE_PREPARATION_COMMAND) and (
+        _memory_probe_nonce_from_command(command) is None
     ):
         return False, False
     pending = memoryview(command)
@@ -819,12 +850,13 @@ def _send_console_command_if_not_cancelled(
 
 def _send_memory_probe_if_not_cancelled(
     master_fd: int,
+    command: bytes,
     *,
     deadline: float,
 ) -> tuple[bool, bool]:
     return _send_console_command_if_not_cancelled(
         master_fd,
-        MEMORY_PROBE_COMMAND,
+        command,
         deadline=deadline,
     )
 
@@ -875,6 +907,17 @@ def drive_console(
         or not 1 <= max_output_bytes <= MAX_OUTPUT_BYTES
     ):
         raise ValueError("console output limit is outside the supported range")
+    nonce_alphabet = MEMORY_PROBE_NONCE_ALPHABET
+    memory_probe_nonce = secrets.choice(nonce_alphabet[:-1]) + "".join(
+        secrets.choice(nonce_alphabet)
+        for _ in range(MEMORY_PROBE_NONCE_LENGTH - 1)
+    )
+    memory_probe_command_text, memory_probe_command = _memory_probe_command(
+        memory_probe_nonce
+    )
+    memory_probe_command_echo = _memory_probe_command_echo(
+        memory_probe_command_text
+    )
     screen_program = screen_program_path.resolve(strict=True)
     metadata = screen_program.stat()
     if not stat.S_ISREG(metadata.st_mode) or not os.access(screen_program, os.X_OK):
@@ -1128,6 +1171,7 @@ def drive_console(
                                 preparation_sent, _ = (
                                     _send_memory_probe_if_not_cancelled(
                                         master_fd,
+                                        memory_probe_command,
                                         deadline=min(
                                             deadline,
                                             memory_probe_deadline or deadline,
@@ -1165,7 +1209,7 @@ def drive_console(
                             "\r",
                             "\n",
                         )
-                        command_echo = MEMORY_PROBE_COMMAND_ECHO.search(probe_text)
+                        command_echo = memory_probe_command_echo.search(probe_text)
                         if command_echo is not None:
                             result_document["memoryProbeCommandEchoObserved"] = True
                             response_text = probe_text[command_echo.end() :]
@@ -1186,7 +1230,8 @@ def drive_console(
                             result_document["memoryProbeResponsePromptObserved"] = True
                             instruction_at_pc, instruction_before_pc = (
                                 _parse_memory_probe_words(
-                                    response_text[: response_prompt.start()]
+                                    response_text[: response_prompt.start()],
+                                    memory_probe_nonce,
                                 )
                             )
                             if (

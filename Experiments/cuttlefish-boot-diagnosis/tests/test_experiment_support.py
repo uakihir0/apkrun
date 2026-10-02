@@ -3164,6 +3164,8 @@ result.write_text(
     ), (result.stdout, result.stderr)
     summary_path = tmp_path / "bootloader-console-summary.json"
     assert summary_path.exists() is pause_in_bootloader
+    if pause_in_bootloader and start_exit_code != 0:
+        assert "bootloader-console\t" not in result.stdout
 
     calls = [
         json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()

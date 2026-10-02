@@ -4019,8 +4019,6 @@ def patch_capture_script(
             '      --output "$stage/cvd-create-console.log" \\\n'
             '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
             "    cvd_command_failed=1\n"
-            "    record_missing bootloader-console \\\n"
-            "      'the U-Boot prompt did not reach the kernel handoff successfully'\n"
             "  fi\n"
             "fi\n"
         )

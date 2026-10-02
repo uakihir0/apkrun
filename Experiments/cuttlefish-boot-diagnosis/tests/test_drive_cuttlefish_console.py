@@ -38,7 +38,7 @@ def _private_home(tmp_path: Path) -> Path:
 def _screen_stub(tmp_path: Path, body: str) -> Path:
     program = tmp_path / "fake-screen"
     program.write_text(
-        f"#!/usr/bin/env python3\nimport os\nimport time\n{body}\n",
+        f"#!/usr/bin/env python3\nimport os\nimport re\nimport time\n{body}\n",
         encoding="utf-8",
     )
     program.chmod(0o700)
@@ -60,24 +60,46 @@ def _memory_probe_preparation_reader(
 
 
 def _memory_probe_reader() -> str:
-    command = CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]
+    command_pattern = CONSOLE_MODULE["MEMORY_PROBE_COMMAND_PATTERN"].pattern
     return (
         _memory_probe_preparation_reader()
         + f"probe_command = os.read(0, 128)\n"
-        f"if probe_command != {command!r}:\n"
+        f"probe_command_match = re.fullmatch({command_pattern!r}, probe_command)\n"
+        "if probe_command_match is None:\n"
         "    raise SystemExit(18)\n"
+        "probe_nonce = probe_command_match.group(1).decode('ascii')\n"
     )
 
 
 def _memory_probe_response(
     *,
     include_prompt: bool = True,
+    include_prompt_prefix: bool = True,
     words: bytes = b"d50b7e20 d53b0023",
+    nonce: str | None = None,
 ) -> str:
-    command = CONSOLE_MODULE["MEMORY_PROBE_COMMAND"][:-1]
+    if nonce is None:
+        command_expression = "probe_command[:-1]"
+        nonce_expression = "probe_nonce.encode('ascii')"
+    else:
+        _, command = CONSOLE_MODULE["_memory_probe_command"](nonce)
+        command_expression = repr(command[:-1])
+        nonce_expression = repr(nonce.encode("ascii"))
     prompt = b"=> " if include_prompt else b""
-    payload = b"=> " + command + b"\r\n" + words + b"\r\n" + prompt
-    return f"os.write(1, {payload!r})\n"
+    prompt_prefix = b"=> " if include_prompt_prefix else b""
+    return (
+        f"response_command = {command_expression}\n"
+        f"response_nonce = {nonce_expression}\n"
+        f"response_words = {words!r}\n"
+        "response_lines = b'\\r\\n'.join(\n"
+        "    (line.rstrip(b'\\r') + b' ' + response_nonce)\n"
+        "    if line else line\n"
+        "    for line in response_words.split(b'\\n')\n"
+        ")\n"
+        f"payload = {prompt_prefix!r} + response_command + b'\\r\\n' + response_lines"
+        f" + b'\\r\\n' + {prompt!r}\n"
+        "os.write(1, payload)\n"
+    )
 
 
 def _memory_probe_exchange() -> str:
@@ -390,7 +412,10 @@ def test_console_helper_checks_global_deadline_inside_memory_probe_sender(
         *,
         deadline: float | None = None,
     ) -> tuple[bool, bool]:
-        if command == CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]:
+        if (
+            CONSOLE_MODULE["_memory_probe_nonce_from_command"](command)
+            is not None
+        ):
             time.sleep(2.1)
         return original_sender(master_fd, command, deadline=deadline)
 
@@ -490,7 +515,10 @@ def test_console_helper_probe_deadline_bounds_memory_read_command_send(
         *,
         deadline: float | None = None,
     ) -> tuple[bool, bool]:
-        if command == CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]:
+        if (
+            CONSOLE_MODULE["_memory_probe_nonce_from_command"](command)
+            is not None
+        ):
             time.sleep(1.1)
         return original_sender(master_fd, command, deadline=deadline)
 
@@ -703,6 +731,49 @@ def test_console_helper_ignores_stale_words_before_probe_command(
     assert summary["kernelHandoffObserved"] is True
 
 
+def test_console_helper_rejects_delayed_response_from_another_run(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
+        + "os.write(1, b'=> ' + probe_command[:-1] + b'\\r\\n')\n"
+        "stale_nonce = b'deadbee' if probe_nonce != 'deadbee' else b'deadbe0'\n"
+        "os.write(1, b'd50b7e20 d53b0023 ' + stale_nonce + b'\\r\\n=> ')\n"
+        + "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    completed = _run_helper(home, result, screen)
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["memoryProbeCommandEchoObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["memoryProbeResponsePromptObserved"] is True
+    assert summary["memoryProbeResponseRejected"] is True
+    assert summary["wordAtObservedPc"] is None
+    assert summary["wordBeforeObservedPc"] is None
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+
+
+def test_memory_probe_command_fits_with_a_seven_character_run_nonce() -> None:
+    command_text, command = CONSOLE_MODULE["_memory_probe_command"]("a1b2c3d")
+
+    assert command == f"{command_text}\r".encode("ascii")
+    assert command_text.endswith("a1b2c3d")
+    assert len("=> ") + len(command_text) == 79
+    assert CONSOLE_MODULE["_memory_probe_nonce_from_command"](command) == "a1b2c3d"
+    with pytest.raises(ValueError, match="seven safe alphanumeric characters"):
+        CONSOLE_MODULE["_memory_probe_command"]("not-hex")
+
+
 def test_console_helper_never_boots_without_the_probe_response_prompt(
     tmp_path: Path,
 ) -> None:
@@ -870,11 +941,28 @@ def test_console_output_drain_does_not_claim_quiet_at_deadline() -> None:
 def test_memory_probe_parser_rejects_ambiguous_or_malformed_words() -> None:
     parse = CONSOLE_MODULE["_parse_memory_probe_words"]
 
-    assert parse("d50b7e20 d53b0023\n") == (0xD50B7E20, 0xD53B0023)
-    assert parse("d50b7e20 d53b0023\nd50b7e20 d53b0023\n") == (None, None)
-    assert parse("d50b7e2 d53b0023\n") == (None, None)
-    assert parse("read failed\nd50b7e20 d53b0023\n") == (None, None)
-    assert parse("d50b7e20 d53b0023 extra\n") == (None, None)
+    assert parse("d50b7e20 d53b0023 a1b2c3d\n", "a1b2c3d") == (
+        0xD50B7E20,
+        0xD53B0023,
+    )
+    assert parse("d50b7e20 d53b0023 deadbee\n", "a1b2c3d") == (None, None)
+    assert parse(
+        "d50b7e20 d53b0023 a1b2c3d\n"
+        "d50b7e20 d53b0023 a1b2c3d\n",
+        "a1b2c3d",
+    ) == (None, None)
+    assert parse("d50b7e2 d53b0023 a1b2c3d\n", "a1b2c3d") == (None, None)
+    assert parse(
+        "read failed\nd50b7e20 d53b0023 a1b2c3d\n",
+        "a1b2c3d",
+    ) == (
+        None,
+        None,
+    )
+    assert parse(
+        "d50b7e20 d53b0023 extra a1b2c3d\n",
+        "a1b2c3d",
+    ) == (None, None)
 
 
 def test_console_summary_is_not_published_when_atomic_link_fails(

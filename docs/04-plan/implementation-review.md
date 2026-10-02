@@ -3521,3 +3521,130 @@ out-of-range and non-integer values, and verify that a selected 180-second
 deadline is recorded. A 119-second input exits with status 2 before Cuttlefish
 starts. The paired SwiftShader and GPU-none captures both recorded the chosen
 180-second deadline and completed cleanup; see IR-124 and the #064 notes.
+
+## IR-127: Trace vCPU PC after the handoff log marker
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Use short KVM traces filtered to the Android guest's exact vCPU
+thread to capture its PC and guest-fault addresses after `kernel.log` records
+`Starting kernel ...`. Record event formats, the PID/TID selection, filter,
+monotonic event spans, and loss statistics. Treat the PC only as a high
+guest-DRAM address until it is resolved against the exact bootloader mapping;
+do not attribute it to U-Boot based on its address alone.
+
+**Reason.** Repeated U-Boot logs ended at the handoff marker without showing
+whether the guest began executing Linux. A high guest-DRAM address does not
+identify which image owns the instruction. Filtering by one vCPU TID avoids
+collecting unrelated VM events; retaining trace metadata but not the raw trace
+keeps the result auditable without committing raw host data. The fault records
+do not establish why execution remained at that address.
+
+**Verification.** On the Ubuntu 24.04 arm64 Lima host with Linux 6.8 and
+`trace-cmd` 3.2.0, a direct Cuttlefish 1.57.0 launch of build 16373615 used
+four CPUs, 4096 MiB, and no bootloader-pause flag. It ended at the 120-second
+deadline with exit status 124; `kernel.log` contained 10,308 bytes and ended
+at `Starting kernel ...`, with no Linux earlycon or init marker. In a
+four-vCPU Android crosvm process was PID 489124; its `crosvm_vcpu0` thread was
+TID 489213. A separate one-vCPU crosvm was present and excluded. All captures
+used the event filter `common_pid == 489213`.
+
+The two PC captures used
+`trace-cmd record -b 1024 -e kvm:kvm_entry -f 'common_pid == 489213' -e kvm:kvm_exit -f 'common_pid == 489213' -- sleep 3`.
+Their monotonic event spans were 130225.286633–130228.287169 and
+130269.782893–130272.783049. They contained 10,182 and 7,601 `kvm_entry`
+events respectively, with the same count of `kvm_exit` events in each window.
+Every reported `vcpu_pc` was `0x000000017f63e1f4`. In the first window,
+`esr_ec` rendered as `DABT_LOW` 7,645 times and `UNKNOWN` 2,537 times.
+
+The third capture enabled `kvm_guest_fault`, `kvm_access_fault`, and
+`kvm_mmio` with the same TID filter and a three-second duration. Its monotonic
+event span was 130285.831603–130288.831846. It contained 4,410
+`kvm_guest_fault` events at the same PC. IPA and HXFAR were equal and advanced
+by 4096 bytes per event from `0xb37a9000` through `0xb48e2000`. HSR was
+`0x92000147` for 4,401 events and `0x92000146` for 9. No
+`kvm_access_fault` or `kvm_mmio` events appeared.
+
+Tracefs formats exposed `vcpu_pc` for `kvm_entry`; `esr_ec` and `vcpu_pc` for
+`kvm_exit`; `vcpu_pc`, `hsr`, `hxfar`, and `ipa` for `kvm_guest_fault`; `ipa`
+for `kvm_access_fault`; and `type`, `len`, `gpa`, and `val` for `kvm_mmio`.
+`trace-cmd report --stat` showed zero dropped, overrun, and commit-overrun
+events in all three captures. Each trace started after the log marker was
+already present; the marker-to-trace delay was not measured. The exact
+instruction and code owner remain unknown.
+
+**Syndrome interpretation.** Under Arm's [ESR_EL2 definition](https://developer.arm.com/docs/ddi0601/latest/aarch64-system-registers/esr_el2),
+both HSR values encode a Data Abort from a lower exception level with `CM=1`,
+which identifies a cache-maintenance or address-translation operation.
+DFSC `0x07` and `0x06` mean translation faults at levels 3 and 2. This narrows
+the operation but does not identify its code owner or explain the missing
+translation.
+
+**Cleanup.** `cvd remove` succeeded, `cvd fleet` was empty, and no Cuttlefish
+VM process remained. The private ADB socket was absent; the pre-existing
+shared ADB server was left untouched. The private HOME, trace files, product
+copy, and temporary source checkout were removed after recording their
+necessary metadata.
+
+**Next probe.** Resolve PC `0x000000017f63e1f4` against the exact bootloader
+binary and its load/relocation map, then correlate the instruction with the
+guest translation state for the sequential IPA range. IR-128 records the
+binary hash and the environment inspection. Do not attribute the failure to
+KASLR or graphics without evidence from that probe.
+
+## IR-128: Verify pinned Cuttlefish console and boot configuration
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [pinned Cuttlefish source](https://github.com/google/android-cuttlefish/tree/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host) |
+
+**Choice.** Use the Cuttlefish source at the observed host-tool revision and
+the generated runtime U-Boot environment as the authority for serial routing
+and bootloader pause behavior. Keep binary and environment fingerprints with
+the diagnosis so that a later PC-to-symbol lookup uses the exact bootloader.
+
+**Reason.** The attached diagnosis correctly cautioned against inferring
+console-forwarder behavior from GPU-none silence, but some of its source
+descriptions were based on memory. Checking the pinned source and a live,
+inventoried runtime environment distinguishes the PTY path, kernel-log path,
+and generated boot variables without changing the boot configuration.
+
+**Verification.** Reviewed `crosvm_manager.cpp`,
+`console_forwarder/main.cpp`, and `boot_config.cc` at Cuttlefish revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`. When the bootloader is enabled
+and `console=true`, `crosvm_manager.cpp` maps the serial console to
+`ConsoleOutPipeName` and `ConsoleInPipeName`; when `console=false` and kernel
+logging is enabled, it maps the bootloader UART to the kernel-log pipe. The
+HVC kernel-log port is configured separately. `console_forwarder` enables
+`TIOCPKT`; a one-byte control notification read from the PTY client is logged
+and not forwarded as guest input. Linux UAPI defines `TIOCPKT_FLUSHREAD` as 1 and
+`TIOCPKT_FLUSHWRITE` as 2, so a control byte of 3 is the combination of
+those flags, not guest output. See the pinned
+[`crosvm_manager.cpp`](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host/libs/vm_manager/crosvm_manager.cpp),
+[`console_forwarder/main.cpp`](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host/commands/console_forwarder/main.cpp),
+and [`boot_config.cc`](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host/commands/assemble_cvd/boot_config.cc).
+
+`boot_config.cc` wraps the Android entrypoint with the `paused` sentinel only
+when `pause_in_bootloader` is true; otherwise it writes the entrypoint
+directly. The inventoried direct-launch instance contained `mkenvimg_input`
+(229 bytes) and `uboot_env.img` (73,728 bytes). The supplemental environment
+set only `ethprime` and `uenvcmd`, and did not override `bootcmd`, `bootdelay`,
+`stdin`, or `stdout`. The generated `uenvcmd` sets kernel arguments, checks
+the BCB quiescent command, then runs `bootcmd_android`.
+
+The Cuttlefish host package and its staged runtime copy of
+`bootloader.crosvm` had identical SHA-256
+`f464a92c6086fa876c0bc775397d20b7491b6b34e2260feb0e19b5ca97f2dd30`; the
+binary contains version string `U-Boot 2024.04-g3fe964757589-ab15108624`.
+The inventoried `bootloader_aarch64` directory contained `bootloader.crosvm`
+and `bootloader.qemu`, with no map file. Thus the source/runtime check
+confirms the no-pause environment and console routes, but it does not resolve
+the traced PC to U-Boot code. The environment-inspection run ended at its
+90-second deadline, followed by successful group removal and verification of
+an empty fleet and no Cuttlefish processes. Temporary files were deleted.

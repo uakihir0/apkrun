@@ -471,6 +471,69 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
     assert "aa:bb:cc:dd:ee:ff" not in compressed
 
 
+def test_normalize_preserves_crosvm_serial_mapping_and_pipe_names(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "launcher.log").write_text(
+        "crosvm run "
+        "--serial=hardware=serial,num=1,type=file,"
+        "path=/home/alice/.local/share/cuttlefish/serial0,"
+        "input=/tmp/cuttlefish-private/serial0-in,earlycon=true,console=true "
+        "--serial=hardware=virtio-console,num=2,type=stdin\n"
+        "androidboot.serialno=SERIAL-PRIVATE\n",
+        encoding="utf-8",
+    )
+    (capture / "properties.txt").write_text(
+        "serial=hardware=PRIVATE-SERIAL-VALUE\n",
+        encoding="utf-8",
+    )
+
+    result = _run("normalize", str(capture))
+
+    assert result.returncode == 0, result.stderr
+    normalized = (capture / "launcher.log").read_text(encoding="utf-8")
+    assert (
+        "--serial=hardware=serial,num=1,type=file,"
+        "path=<HOST_PATH>/serial0,input=<HOST_PATH>/serial0-in,"
+        "earlycon=true,console=true"
+    ) in normalized
+    assert "--serial=hardware=virtio-console,num=2,type=stdin" in normalized
+    assert "androidboot.serialno=<SERIAL>" in normalized
+    assert (capture / "properties.txt").read_text(encoding="utf-8") == ("serial=<SERIAL>\n")
+    assert "/home/alice" not in normalized
+    assert "/tmp/cuttlefish-private" not in normalized
+    assert "SERIAL-PRIVATE" not in normalized
+    assert "PRIVATE-SERIAL-VALUE" not in (capture / "properties.txt").read_text(encoding="utf-8")
+
+
+def test_normalize_redacts_ambiguous_crosvm_endpoint_paths(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "launcher.log").write_text(
+        "crosvm run "
+        "--serial=hardware=serial,num=3,type=file,"
+        "path=/home/Alice Smith/.local/share/cuttlefish/serial0,"
+        "earlycon=true "
+        "--serial=hardware=serial,num=4,type=file,"
+        'path="/tmp/Private User/cuttlefish/console out"\n',
+        encoding="utf-8",
+    )
+
+    result = _run("normalize", str(capture))
+
+    assert result.returncode == 0, result.stderr
+    normalized = (capture / "launcher.log").read_text(encoding="utf-8")
+    assert ("--serial=hardware=serial,num=3,type=file,path=<HOST_PATH>,earlycon=true") in normalized
+    assert ("--serial=hardware=serial,num=4,type=file,path=<HOST_PATH>") in normalized
+    assert "Alice" not in normalized
+    assert "Private User" not in normalized
+    assert "console out" not in normalized
+
+
 def test_normalize_handles_long_ambiguous_started_record(tmp_path: Path) -> None:
     capture = tmp_path / "capture"
     capture.mkdir()

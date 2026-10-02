@@ -2,8 +2,52 @@
   "schemaVersion": 1,
   "substitutions": [
     {
+      "pattern": "(?i)--serial\\s*=\\s*hardware\\s*=",
+      "replacement": "--<CVD_ENDPOINT>=",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
+    },
+    {
       "pattern": "(?i)(\\b(?:androidboot\\.|ro\\.)?serial(?:_?number|no)?\\b[\\\"']?\\s*\\]?\\s*[=:]\\s*[\\\"']?\\[?)([^\\]\\s,;\\\"']+)",
       "replacement": "\\1<SERIAL>"
+    },
+    {
+      "pattern": "(?i)(,\\s*(?:path|input)=)/(?:[^/\\s,\\\"']*/)*([^/\\s,\\\"']+)",
+      "replacement": "\\1<HOST_PATH>/\\2",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
+    },
+    {
+      "pattern": "(?i)(,\\s*(?:path|input)=)(?:\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|'(?:\\\\.|[^'\\\\])*')",
+      "replacement": "\\1<HOST_PATH>",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
+    },
+    {
+      "pattern": "(?i)(,\\s*(?:path|input)=)(?=[^,\\r\\n]*\\s)[^,\\r\\n]*?(?=,|\\s+--|\\s*$)",
+      "replacement": "\\1<HOST_PATH>",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
     },
     {
       "pattern": "\\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\\b",
@@ -53,6 +97,17 @@
     {
       "pattern": "(?i)([\\\"']?\\[?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*\\]?[\\\"']?\\s*[=:]\\s*\\[?)([^\\]\\s,;\\\"']+)",
       "replacement": "\\1<REDACTED>"
+    },
+    {
+      "pattern": "(?i)--<CVD_ENDPOINT>=",
+      "replacement": "--serial=hardware=",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
     }
   ]
 }

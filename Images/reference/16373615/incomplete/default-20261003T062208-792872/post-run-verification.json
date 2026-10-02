@@ -1,0 +1,46 @@
+{
+  "cleanupChecks": {
+    "adbLoopbackListeners": [
+      "127.0.0.1:5037"
+    ],
+    "crosvmProcessCount": 0,
+    "cvdFleetGroups": [],
+    "loopbackAdb5037Preserved": true,
+    "observerPrivateServerStopped": {
+      "cleanupComplete": true,
+      "event": "private_adb_server_stopped",
+      "timestampUtc": "2026-10-02T21:21:50.146+00:00"
+    },
+    "observerStopped": {
+      "event": "observer_stopped",
+      "timestampUtc": "2026-10-02T21:22:06.247+00:00"
+    },
+    "observerStoppedBeforeDeadline": {
+      "event": "adb_observer_stopped_before_deadline",
+      "reason": "cleanup_reserve",
+      "timestampUtc": "2026-10-02T21:21:50.144+00:00"
+    },
+    "privateAdbPort6520Listening": false,
+    "screenProcessCount": 0
+  },
+  "schemaVersion": 1,
+  "sourceCopyChecks": {
+    "Images/manifests/16373615/android-image.json": {
+      "limaSha256": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+      "localSha256": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+      "matches": true
+    },
+    "Images/tools/reference/boot_observer.py": {
+      "limaSha256": "d19b56edf45b7011a53b42ca4ab2d1c6c60d89b52163a9780ac49688d2702494",
+      "localSha256": "d19b56edf45b7011a53b42ca4ab2d1c6c60d89b52163a9780ac49688d2702494",
+      "matches": true
+    },
+    "Images/tools/reference/capture.sh": {
+      "limaSha256": "923ea9b41df642de9120f35319ae9672fdaa5156bf4dd311464588ef72622526",
+      "localSha256": "923ea9b41df642de9120f35319ae9672fdaa5156bf4dd311464588ef72622526",
+      "matches": true
+    }
+  },
+  "verificationStage": "post-capture",
+  "verifiedAtUtc": "2026-10-02T21:39:48Z"
+}

@@ -3772,9 +3772,12 @@ rejected responses fail closed because that schema has no separate
 post-response prompt evidence. The full diagnosis suite passed 325 tests on
 Linux and 197 tests on macOS with 128 Linux-specific skips after the deadline
 guards and regressions were added. The deadline-crossing tests passed on
-Linux. Ruff, Python compilation, and `git diff --check` passed. A live
-retry using the pinned binary is pending; its result must not be described as
-a Linux or Android boot unless the corresponding markers are observed.
+Linux. Ruff, Python compilation, and `git diff --check` passed. A live retry
+of this schema-5 `bdinfo` rejection path was planned but was superseded by the
+direct memory-read protocol in IR-137. The active helper no longer sends
+`bdinfo`; schema-5 fixture validation remains covered by the diagnosis suite.
+Do not describe the earlier `bdinfo` probe as a Linux or Android boot unless
+the corresponding markers were observed.
 
 ## IR-131: Observe guest memory and ADB while Cuttlefish start is running
 
@@ -3944,9 +3947,16 @@ and the address arithmetic. The later nonce-framed paused-U-Boot probe read
 `0x000000017f63e1dc`, corroborating that the expected code window occupies
 those runtime addresses in the pinned Cuttlefish package. The probe and trace
 were separate runs, so the read does not by itself establish the execution
-context of the earlier PC sample. The attached analysis's complete
-174-candidate relocation search has not been independently reproduced, and
-the bootloader configuration and runtime call path remain unverified.
+context of the earlier PC sample. The 174-candidate relocation search has
+since been independently reproduced; the generated bootloader configuration
+and whether the packaged binary uses this runtime call path remain
+unverified.
+
+Together, the reproduced relocation result and repeated RSS timing make a
+RAM-wide virtual-address cache flush the leading working hypothesis for the
+long U-Boot interval. The build setting, the caller in the packaged binary,
+and the proposed nested stage-2 fault cost remain unverified; this is not a
+proven hang or root cause.
 
 The saved `default-20261001T120904-49816` logs record the U-Boot banner at
 11:59:04 and the Linux banner at 12:02:14, a 190-second interval. They later
@@ -3970,8 +3980,24 @@ state. These checks confirm the packaged instruction and that the candidate
 address arithmetic is consistent. The later paused-U-Boot memory probe
 separately corroborates the expected instruction words at the candidate
 runtime addresses, but does not establish that the earlier trace sampled this
-code while executing. These observations do not verify the binary's defconfig
-or call path, or establish that all observed delay is cache maintenance.
+code while executing. These observations do not show that the shipped binary
+was built with the relevant option or that the traced PC was executing this
+call path, and they do not establish that all observed delay is cache
+maintenance.
+
+Follow-up verification used the Lima-packaged binary with the same SHA-256.
+Enumerating `0x1f4 + 0x1000*n` offsets within its 712,032 bytes yielded 174
+aligned-base candidates and a single matching instruction at `0x21f4`.
+Disassembling the whole image found only the one `dc civac` and one `dc ivac`
+instruction, with no set/way cache operation. The exact U-Boot source commit
+`3fe9647575890b846172e546201eff7614c8cb59` confirms the conditional
+`cleanup_before_linux()` to `dcache_disable()` to `flush_dcache_all()` path,
+the 512-entry `__cmo_on_leaves()` walk, and the RAM-bounded VA callback. Its
+`CONFIG_CMO_BY_VA_ONLY` Kconfig symbol has no default, and its
+`cuttlefish.fragment` does not set the symbol. No generated `.config` or
+defconfig was present beside the packaged bootloader. Thus the source path is
+verified, but whether the shipped binary was built with the option and
+executed that path remains unknown.
 
 The recovered `default-20261002T224455-600285` capture records the U-Boot
 banner at 22:34:27 and Linux at 22:43:24 Lima local time, a 537-second
@@ -4053,6 +4079,15 @@ capture reached first-stage init and zygote. It recorded neither a
 value; the kernel log records init setting `sys.bootstat.first_boot_completed`
 to `0` at guest uptime 458.78 seconds. Its full normalized record is in M01.
 
+The later 2400-second unpaused retry adds a sixth interval: U-Boot at
+20:42:09Z and Linux at 20:55:09Z, 780 seconds later. Of 479 valid five-second
+crosvm samples, the first sample where both VmRSS and RssShmem reached 4 GiB
+was at 20:55:11.141Z, two seconds after the Linux banner. The guest had
+`ddr_mem_mb=4915`, so this does not prove that all configured DDR was
+resident. It strengthens the timing correlation but does not identify the
+code executed at the traced PC or establish that cache maintenance caused
+the delay; the full incomplete record is in M01.
+
 ## IR-134: Carry the capture deadline into Cuttlefish boot-state monitoring
 
 | Field | Value |
@@ -4084,12 +4119,16 @@ performance root cause.
 **Verification.** The capture integration test checks that a configured
 321-second budget is passed as `--boot_timeout_secs=321`. The completed
 capture passed 3000 seconds to the pinned Cuttlefish CLI and ran for 3004
-seconds before the shared deadline ended startup. It reached Linux, Android
-init, zygote, vendor services, and `adbd`, but did not reach
+seconds in total; the shared deadline then ended startup. It reached Linux,
+Android init, zygote, vendor services, and `adbd`, but did not reach
 `sys.boot_completed=1`; the normalized incomplete record is in M01. This
 confirms the CLI accepts the longer value and that its independent 600-second
 default no longer ends startup early. The run did not establish a successful
-boot.
+boot. A later 2400-second run also passed the configured value to Cuttlefish:
+`launcher.log` records `TimeoutThreadLoop: waiting for 40m`. `host.json`
+records a total capture duration of 2403 seconds when the outer deadline
+ended startup. It likewise did not reach `sys.boot_completed=1`; see the
+normalized record in M01.
 
 ## IR-135: Resolve Cuttlefish's runtime link during boot observation
 
@@ -4232,13 +4271,28 @@ initial polls had no device state and did not attempt the property query (one
 connection timeout and two `connect` exit-code-0 results); the other 30
 reported `device` and attempted `getprop`. Twenty-nine timed out, and one
 exited 0 without an accepted
-property value. One final poll reached the shared deadline, and
+property value. One final poll reached the ADB polling cutoff before the
+15-second cleanup reserve, and
 `sysBootCompleted` stayed null throughout. A separate bounded
 `getprop sys.boot_completed` query and `logcat -d -t 1` query, each limited to
 12 seconds through the same private ADB socket, both exited 124. Their output
 was discarded. This verifies that the observer exercised the extended
 property-query path and retained the timeout distinction, but it does not
 show whether a longer guest shell query would return a property.
+
+A later 2400-second `default` capture used a surviving Lima copy of
+`boot_observer.py` with SHA-256
+`d19b56edf45b7011a53b42ca4ab2d1c6c60d89b52163a9780ac49688d2702494`; the
+post-capture source comparison is retained in `post-run-verification.json`.
+It recorded 70 polls: three initial polls had no device state (one
+connection command timed out and two `connect` commands exited 0); the other
+67 reported `device` and attempted `getprop` under the ten-second cap. Fifty-
+five timed out, and twelve exited 0 without an accepted property value. The
+final poll reached the ADB polling cutoff before the 15-second cleanup
+reserve, and `sysBootCompleted` remained null.
+This confirms repeated execution of the extended query path and stable ADB
+transport state, but not Android boot completion or the reason that the
+property text was unavailable. The normalized record is in M01.
 
 ## IR-137: Read the traced guest words directly when `bdinfo` is unavailable
 
@@ -4267,8 +4321,11 @@ boot. Leave the VM paused if the command echo or prompt is missing or the
 shared five-second preparation/read timeout expires. Start that timeout before
 sending the preparation command and enforce it while sending both commands
 and waiting for their responses. Write these states and values in summary
-schema 6 while continuing to validate schema 3–5 records. Publication omits
-the mirrored `kernel.log` after either command has been sent and records the
+schema 6 while continuing to validate schema 3–5 records. Do not send
+`bdinfo` in this active path. Keep its schema-4/5 fields to validate legacy
+summaries and to omit the mirrored `kernel.log` when an older paused-U-Boot
+record says the `bdinfo` command was sent. Publication also omits that log
+after either current memory-probe command has been sent and records the
 omission before moving the record into results.
 
 **Reason.** The packaged `bootloader.crosvm` hash was verified, but filtered
@@ -4277,7 +4334,12 @@ strings exposed no `bdinfo` or relocation labels, and the first live
 recommends reading the two known addresses directly. This is its optional
 paused-U-Boot probe (C), pursued after the primary long, untraced capture (A)
 had completed; those unpaused, instrumented results are recorded in M01 and
-IR-133. The targeted probe does not replace the unpaused boot observation.
+IR-133. The current driver sends the direct memory-read command and no longer
+executes `bdinfo`. The old fields remain for schema-4/5 validation and to
+preserve the legacy `kernel.log` omission safeguard when those records are
+published. This avoids repeating a probe that returned no relocation
+metadata while preserving compatibility with prior summaries. The targeted
+probe does not replace the unpaused boot observation.
 Clearing and checking
 the variables prevents old U-Boot environment values from masquerading as
 fresh memory reads. Requiring the response to contain the current run's nonce

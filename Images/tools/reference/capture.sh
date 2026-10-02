@@ -553,23 +553,7 @@ run_cvd_command_with_live_logs() {
   fi
   if [ "$observe_boot" -eq 1 ] \
     && [ "${capture_boot_observer:-0}" -eq 1 ]; then
-    observer_instance_path=$(timeout --signal=KILL "$command_remaining" \
-      readlink -f "$cvd_home/cuttlefish_runtime" 2>/dev/null || true)
-    command_now=$(date +%s)
-    command_remaining=$((boot_timeout_deadline - command_now))
-    if [ "$command_remaining" -le 0 ]; then
-      boot_deadline_expired=1
-      return 124
-    fi
-    case "$observer_instance_path" in
-      "$cvd_home"/*/instances/cvd-"$cvd_instance_num")
-        [ -d "$observer_instance_path" ] || observer_instance_path=
-        ;;
-      *) observer_instance_path= ;;
-    esac
-    if [ -z "$observer_instance_path" ]; then
-      observer_instance_path="$cvd_home/.unresolved-cvd-instance-$cvd_instance_num"
-    fi
+    observer_instance_path="$cvd_home/cuttlefish_runtime"
     if HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
       python3 \
       "$script_dir/capture_cvd_start.py" \

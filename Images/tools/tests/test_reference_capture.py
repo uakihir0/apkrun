@@ -285,7 +285,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
         encoding="utf-8",
     )
     (fake_bin / "timeout").write_text(
-        '#!/bin/sh\nshift 2\nexec "$@"\n',
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$TIMEOUT_LOG"\nshift 2\nexec "$@"\n',
         encoding="utf-8",
     )
     (fake_bin / "mv").write_text(
@@ -330,6 +330,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     (host_bin / "crosvm").chmod(0o755)
     launch_log = tmp_path / "launch-args.txt"
     start_log = tmp_path / "start-args.txt"
+    timeout_log = tmp_path / "timeout-commands.txt"
     instance_file = tmp_path / "instance-path.txt"
     home = tmp_path / "home"
     home.mkdir()
@@ -343,6 +344,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
             "APKRUN_PROFILE_INITIAL_HOME": str(home),
             "APKRUN_PROFILE_LAUNCH_LOG": str(launch_log),
             "APKRUN_PROFILE_START_LOG": str(start_log),
+            "TIMEOUT_LOG": str(timeout_log),
             "CVD_HOST_DIR": str(cvd_host),
             "ANDROID_PRODUCT_OUT": str(product_out),
             "HOME": str(home),
@@ -377,6 +379,19 @@ def test_capture_script_uses_each_profile_launch_configuration(
         assert f"--gpu_mode={expected_gpu_mode}" in launch_arguments
     secure_hals = "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure"
     assert (secure_hals in launch_arguments) is expected_secure_hals
+
+    if observer_enabled:
+        runner_calls = [
+            shlex.split(line)
+            for line in timeout_log.read_text(encoding="utf-8").splitlines()
+            if "capture_cvd_start.py" in line
+        ]
+        observer_calls = [call for call in runner_calls if "--boot-observer-instance-path" in call]
+        assert len(observer_calls) == 1
+        observer_path_index = observer_calls[0].index("--boot-observer-instance-path")
+        observer_path = Path(observer_calls[0][observer_path_index + 1])
+        assert observer_path.name == "cuttlefish_runtime"
+        assert ".unresolved-cvd-instance-" not in str(observer_path)
 
     capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))

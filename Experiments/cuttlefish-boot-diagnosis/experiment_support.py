@@ -80,6 +80,10 @@ CONSOLE_MODE_SLUGS = {
 CONSOLE_MODE_PATH_PATTERN = "on|off"
 MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
 MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES = 65_536
+BDINFO_LOG_OMISSION_NOTE = (
+    b"kernel.log\tomitted from published paused-U-Boot probe because "
+    b"Cuttlefish mirrors bdinfo output to this log\n"
+)
 DEFAULT_BOOT_TIMEOUT_SECONDS = 600
 MIN_BOOT_TIMEOUT_SECONDS = 120
 MAX_BOOT_TIMEOUT_SECONDS = 600
@@ -1981,8 +1985,8 @@ def _bootloader_console_summary(
 
 def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict):
-        raise ValueError("bootloader console summary must be an object")
-    expected_fields = {
+        raise TypeError("bootloader console summary must be an object")
+    base_fields = {
         "schemaVersion",
         "consoleEndpointFound",
         "screenStarted",
@@ -2004,6 +2008,21 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "cleanupErrorNumber",
         "exitCode",
     }
+    schema_version = summary.get("schemaVersion")
+    expected_fields = set(base_fields)
+    if type(schema_version) is int and schema_version == 4:
+        expected_fields.update(
+            {
+                "bdinfoCommandSent",
+                "bdinfoCommandEchoObserved",
+                "bdinfoStartMarkerObserved",
+                "bdinfoEndMarkerObserved",
+                "bdinfoResponseObserved",
+                "bdinfoTimedOut",
+                "relocationAddress",
+                "relocationOffset",
+            }
+        )
     if set(summary) != expected_fields:
         raise ValueError("bootloader console summary has an unexpected schema")
     boolean_fields = (
@@ -2019,9 +2038,19 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         "handoffTimedOut",
         "cleanupComplete",
     )
+    if schema_version == 4:
+        boolean_fields += (
+            "bdinfoCommandSent",
+            "bdinfoCommandEchoObserved",
+            "bdinfoStartMarkerObserved",
+            "bdinfoEndMarkerObserved",
+            "bdinfoResponseObserved",
+            "bdinfoTimedOut",
+        )
+    relocation_fields = ("relocationAddress", "relocationOffset")
     if (
         type(summary.get("schemaVersion")) is not int
-        or summary["schemaVersion"] != 3
+        or schema_version not in (3, 4)
         or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
         or type(summary.get("outputBytesObserved")) is not int
         or type(summary.get("escapeStrippedBytesObserved")) is not int
@@ -2060,6 +2089,17 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 "child-not-reaped",
                 "process-group-unverified",
                 "process-group-remains",
+            )
+        )
+        or (
+            schema_version == 4
+            and any(
+                summary.get(field) is not None
+                and (
+                    type(summary[field]) is not int
+                    or not 0 <= summary[field] <= 0xFFFF_FFFF_FFFF_FFFF
+                )
+                for field in relocation_fields
             )
         )
     ):
@@ -2109,6 +2149,49 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         or (
             summary["outputTruncated"]
             and summary["outputBytesObserved"] != summary["outputLimitBytes"]
+        )
+        or (
+            schema_version == 4
+            and (
+                (summary["bdinfoCommandSent"] and not summary["promptObserved"])
+                or (
+                    summary["bdinfoCommandEchoObserved"]
+                    and not summary["bdinfoCommandSent"]
+                )
+                or (
+                    summary["bdinfoStartMarkerObserved"]
+                    and not summary["bdinfoCommandEchoObserved"]
+                )
+                or (
+                    summary["bdinfoEndMarkerObserved"]
+                    and not summary["bdinfoStartMarkerObserved"]
+                )
+                or (
+                    summary["bdinfoResponseObserved"]
+                    and (
+                        not summary["bdinfoCommandSent"]
+                        or not summary["bdinfoCommandEchoObserved"]
+                        or not summary["bdinfoStartMarkerObserved"]
+                        or not summary["bdinfoEndMarkerObserved"]
+                        or any(summary[field] is None for field in relocation_fields)
+                    )
+                )
+                or (
+                    summary["bdinfoTimedOut"]
+                    and (
+                        not summary["bdinfoCommandSent"]
+                        or summary["bdinfoResponseObserved"]
+                        or summary["bootCommandSent"]
+                    )
+                )
+                or (
+                    summary["bootCommandSent"] and not summary["bdinfoResponseObserved"]
+                )
+                or (
+                    any(summary[field] is not None for field in relocation_fields)
+                    and not summary["bdinfoResponseObserved"]
+                )
+            )
         )
     ):
         raise ValueError("bootloader console summary is inconsistent or incomplete")
@@ -2444,6 +2527,78 @@ def _unlink_entry_at(
     except OSError:
         _restore_quarantined_entry(parent_descriptor, quarantine_name, name)
         raise
+
+
+def _append_missing_record_note(directory_descriptor: int, note: bytes) -> None:
+    descriptor = os.open(
+        "MISSING.txt",
+        os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW | os.O_NONBLOCK,
+        dir_fd=directory_descriptor,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_size > MAX_PUBLICATION_EXPERIMENT_BYTES
+        ):
+            raise ValueError("MISSING.txt is not a bounded regular file")
+        content = bytearray()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while len(content) <= MAX_PUBLICATION_EXPERIMENT_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(65_536, MAX_PUBLICATION_EXPERIMENT_BYTES + 1 - len(content)),
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+        after_read = os.fstat(descriptor)
+        if (
+            len(content) > MAX_PUBLICATION_EXPERIMENT_BYTES
+            or len(content) != before.st_size
+            or not _same_inode(before, after_read)
+            or before.st_mtime_ns != after_read.st_mtime_ns
+            or before.st_ctime_ns != after_read.st_ctime_ns
+        ):
+            raise ValueError("MISSING.txt changed during bounded read")
+        if note.rstrip(b"\n") in content.splitlines():
+            return
+        suffix = (b"" if not content or content.endswith(b"\n") else b"\n") + note
+        os.lseek(descriptor, 0, os.SEEK_END)
+        pending = memoryview(suffix)
+        while pending:
+            written = os.write(descriptor, pending)
+            if written <= 0:
+                raise OSError(
+                    errno.EIO, "could not append omission note to MISSING.txt"
+                )
+            pending = pending[written:]
+        os.fsync(descriptor)
+        after_write = os.fstat(descriptor)
+        if not _same_inode(
+            before, after_write
+        ) or after_write.st_size != before.st_size + len(suffix):
+            raise OSError(errno.EBUSY, "MISSING.txt changed during omission note write")
+    finally:
+        os.close(descriptor)
+
+
+def _omit_bdinfo_kernel_log(directory_descriptor: int) -> None:
+    try:
+        kernel_log_stat = _stat_entry_at(directory_descriptor, "kernel.log")
+    except FileNotFoundError:
+        kernel_log_stat = None
+    if kernel_log_stat is not None:
+        if (
+            not stat.S_ISREG(kernel_log_stat.st_mode)
+            or kernel_log_stat.st_uid != os.getuid()
+        ):
+            raise ValueError(
+                "kernel.log is not a regular file owned by the current user"
+            )
+        _unlink_entry_at(directory_descriptor, "kernel.log", kernel_log_stat)
+    _append_missing_record_note(directory_descriptor, BDINFO_LOG_OMISSION_NOTE)
 
 
 def _remove_directory_entry_at(
@@ -3236,7 +3391,10 @@ def _verify_publication_mode_labels(
         raise ValueError("published experiment name differs from its selected modes")
     bootloader_console = experiment.get("bootloaderConsole")
     if experiment["pauseInBootloader"]:
-        _validate_bootloader_console_summary(bootloader_console)
+        try:
+            _validate_bootloader_console_summary(bootloader_console)
+        except TypeError as error:
+            raise ValueError(str(error)) from error
     elif bootloader_console is not None:
         raise ValueError(
             "published experiment has unexpected bootloader console evidence"
@@ -3338,6 +3496,12 @@ def publish_normalized_record(
                                 experiment["consoleEnabled"],
                                 experiment["pauseInBootloader"],
                             )
+                            bootloader_console = experiment.get("bootloaderConsole")
+                            if (
+                                experiment["pauseInBootloader"]
+                                and bootloader_console.get("bdinfoCommandSent") is True
+                            ):
+                                _omit_bdinfo_kernel_log(capture_descriptor)
                         finally:
                             os.close(capture_descriptor)
                         _rename_directory_no_replace(

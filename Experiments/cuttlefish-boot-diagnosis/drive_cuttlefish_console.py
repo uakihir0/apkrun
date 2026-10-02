@@ -9,6 +9,7 @@ import json
 import os
 import pty
 import re
+import secrets
 import select
 import shutil
 import signal
@@ -26,12 +27,20 @@ from typing import Any
 MAX_TIMEOUT_SECONDS = 600
 MAX_OUTPUT_BYTES = 65_536
 DEFAULT_HANDOFF_TIMEOUT_SECONDS = 10
+DEFAULT_BDINFO_TIMEOUT_SECONDS = 5
 POLL_INTERVAL_SECONDS = 0.1
 CHILD_STOP_GRACE_SECONDS = 2
 CHILD_DESCENDANT_GRACE_SECONDS = 0.5
 U_BOOT_BANNER = re.compile(r"(?m)^[ \t]*U-Boot(?:[ \t]+SPL)?[ \t]+v?\d{4}\.\d{2}\b.*$")
 UBOOT_PROMPT = re.compile(r"(?:^|\n)\s*=>\s*$")
+BDINFO_PROBE_COMMAND = re.compile(rb"echo APK_([0-9a-f]{24}); bdinfo; echo APK_\1\r")
 KERNEL_HANDOFF = re.compile(r"Starting kernel|Booting Linux on physical CPU")
+BDINFO_RELOCADDR = re.compile(
+    r"(?mi)^[ \t]*relocaddr[ \t]*=[ \t]*(0x[0-9a-f]{1,16})[ \t]*$"
+)
+BDINFO_RELOC_OFFSET = re.compile(
+    r"(?mi)^[ \t]*reloc off[ \t]*=[ \t]*(0x[0-9a-f]{1,16})[ \t]*$"
+)
 requested_signal: int | None = None
 
 
@@ -223,6 +232,19 @@ def _private_result_path(path: Path) -> Path:
     if path.name != "bootloader-console-summary.json":
         raise ValueError("result path must use the expected summary name")
     return parent / path.name
+
+
+def _parse_bdinfo_addresses(text: str) -> tuple[int | None, int | None]:
+    """Keep only unambiguous 64-bit U-Boot relocation values."""
+    parsed: list[int | None] = []
+    for pattern in (BDINFO_RELOCADDR, BDINFO_RELOC_OFFSET):
+        matches = pattern.findall(text)
+        if len(matches) != 1:
+            parsed.append(None)
+            continue
+        value = int(matches[0], 16)
+        parsed.append(value if value <= 0xFFFF_FFFF_FFFF_FFFF else None)
+    return parsed[0], parsed[1]
 
 
 def _is_current_user_devpts_character_device(
@@ -664,8 +686,51 @@ def _read_available(master_fd: int, remaining_bytes: int) -> bytes:
         return b""
 
 
-def _send_boot(master_fd: int) -> bool:
-    pending = memoryview(b"boot\r")
+def _drain_console_output(
+    master_fd: int,
+    remaining_bytes: int,
+    deadline: float,
+) -> tuple[bytes, bool]:
+    output = bytearray()
+    while remaining_bytes > 0 and time.monotonic() < deadline:
+        timeout = min(POLL_INTERVAL_SECONDS, deadline - time.monotonic())
+        try:
+            readable, _, _ = select.select([master_fd], [], [], timeout)
+        except (OSError, ValueError):
+            return bytes(output), False
+        if not readable:
+            return bytes(output), time.monotonic() < deadline
+        try:
+            chunk = os.read(master_fd, min(4096, remaining_bytes))
+        except (BlockingIOError, OSError):
+            return bytes(output), False
+        if not chunk:
+            return bytes(output), False
+        output.extend(chunk)
+        remaining_bytes -= len(chunk)
+    return bytes(output), False
+
+
+def _record_console_output(
+    output: bytearray,
+    result_document: dict[str, Any],
+    chunk: bytes,
+) -> str:
+    output.extend(chunk)
+    result_document["outputBytesObserved"] = len(output)
+    escape_stripped_output, incomplete_sequence = _strip_ansi_escape_sequences(
+        bytes(output)
+    )
+    result_document["escapeStrippedBytesObserved"] = len(escape_stripped_output)
+    result_document["escapeSequenceIncomplete"] = incomplete_sequence
+    decoded = escape_stripped_output.decode("utf-8", errors="replace")
+    return decoded.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _send_console_command(master_fd: int, command: bytes) -> bool:
+    if command != b"boot\r" and BDINFO_PROBE_COMMAND.fullmatch(command) is None:
+        return False
+    pending = memoryview(command)
     while pending:
         try:
             written = os.write(master_fd, pending)
@@ -678,6 +743,13 @@ def _send_boot(master_fd: int) -> bool:
 
 
 def _send_boot_if_not_cancelled(master_fd: int) -> bool:
+    return _send_console_command_if_not_cancelled(master_fd, b"boot\r")
+
+
+def _send_console_command_if_not_cancelled(
+    master_fd: int,
+    command: bytes,
+) -> bool:
     blocked_signals = {signal.SIGTERM, signal.SIGINT}
     if requested_signal is not None:
         return False
@@ -685,9 +757,15 @@ def _send_boot_if_not_cancelled(master_fd: int) -> bool:
     try:
         if requested_signal is not None or signal.sigpending() & blocked_signals:
             return False
-        return _send_boot(master_fd)
+        return _send_console_command(master_fd, command)
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def _send_bdinfo_if_not_cancelled(master_fd: int, sync_token: str) -> bool:
+    marker = f"APK_{sync_token}"
+    command = f"echo {marker}; bdinfo; echo {marker}\r".encode("ascii")
+    return _send_console_command_if_not_cancelled(master_fd, command)
 
 
 def drive_console(
@@ -696,6 +774,7 @@ def drive_console(
     *,
     timeout_seconds: int,
     handoff_timeout_seconds: int,
+    bdinfo_timeout_seconds: int,
     max_output_bytes: int,
     screen_program_path: Path,
 ) -> tuple[dict[str, Any], int]:
@@ -714,6 +793,11 @@ def drive_console(
     ):
         raise ValueError("kernel-handoff timeout is outside the supported range")
     if (
+        type(bdinfo_timeout_seconds) is not int
+        or not 1 <= bdinfo_timeout_seconds <= MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError("U-Boot bdinfo timeout is outside the supported range")
+    if (
         type(max_output_bytes) is not int
         or not 1 <= max_output_bytes <= MAX_OUTPUT_BYTES
     ):
@@ -724,11 +808,19 @@ def drive_console(
         raise ValueError("Screen executable must be a regular executable file")
 
     result_document: dict[str, Any] = {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "consoleEndpointFound": False,
         "screenStarted": False,
         "uBootBannerObserved": False,
         "promptObserved": False,
+        "bdinfoCommandSent": False,
+        "bdinfoCommandEchoObserved": False,
+        "bdinfoStartMarkerObserved": False,
+        "bdinfoEndMarkerObserved": False,
+        "bdinfoResponseObserved": False,
+        "bdinfoTimedOut": False,
+        "relocationAddress": None,
+        "relocationOffset": None,
         "bootCommandSent": False,
         "kernelHandoffObserved": False,
         "outputBytesObserved": 0,
@@ -748,6 +840,9 @@ def drive_console(
     master_fd: int | None = None
     status = 1
     output = bytearray()
+    bdinfo_output_offset: int | None = None
+    bdinfo_deadline: float | None = None
+    bdinfo_sync_token: str | None = None
     handoff_output_offset: int | None = None
     deadline = time.monotonic() + timeout_seconds
 
@@ -776,24 +871,23 @@ def drive_console(
 
                 remaining = max_output_bytes - len(output)
                 chunk = _read_available(master_fd, remaining)
+                if (
+                    result_document["bdinfoCommandSent"]
+                    and not result_document["bdinfoResponseObserved"]
+                    and bdinfo_deadline is not None
+                    and time.monotonic() >= bdinfo_deadline
+                ):
+                    result_document["bdinfoTimedOut"] = True
+                    break
                 if chunk:
-                    output.extend(chunk)
-                    result_document["outputBytesObserved"] = len(output)
-                    escape_stripped_output, incomplete_sequence = (
-                        _strip_ansi_escape_sequences(bytes(output))
+                    normalized = _record_console_output(
+                        output,
+                        result_document,
+                        chunk,
                     )
-                    result_document["escapeStrippedBytesObserved"] = len(
-                        escape_stripped_output
-                    )
-                    result_document["escapeSequenceIncomplete"] = incomplete_sequence
-                    decoded = escape_stripped_output.decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                    normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
                     if U_BOOT_BANNER.search(normalized):
                         result_document["uBootBannerObserved"] = True
-                    if not result_document["bootCommandSent"] and UBOOT_PROMPT.search(
+                    if not result_document["promptObserved"] and UBOOT_PROMPT.search(
                         normalized
                     ):
                         result_document["promptObserved"] = True
@@ -801,14 +895,109 @@ def drive_console(
                             result_document["signal"] = requested_signal
                             status = 128 + requested_signal
                             break
-                        if not _send_boot_if_not_cancelled(master_fd):
-                            break
-                        result_document["bootCommandSent"] = True
-                        handoff_output_offset = len(output)
-                        handoff_deadline = min(
+                        pending_output, console_quiet = _drain_console_output(
+                            master_fd,
+                            max_output_bytes - len(output),
                             deadline,
-                            time.monotonic() + handoff_timeout_seconds,
                         )
+                        if pending_output:
+                            pending_normalized = _record_console_output(
+                                output,
+                                result_document,
+                                pending_output,
+                            )
+                            if U_BOOT_BANNER.search(pending_normalized):
+                                result_document["uBootBannerObserved"] = True
+                        if len(output) >= max_output_bytes:
+                            result_document["outputTruncated"] = True
+                            break
+                        if not console_quiet:
+                            if time.monotonic() >= deadline:
+                                result_document["timedOut"] = True
+                            break
+                        if requested_signal is not None:
+                            result_document["signal"] = requested_signal
+                            status = 128 + requested_signal
+                            break
+                        bdinfo_sync_token = secrets.token_hex(12)
+                        if not _send_bdinfo_if_not_cancelled(
+                            master_fd,
+                            bdinfo_sync_token,
+                        ):
+                            bdinfo_sync_token = None
+                            break
+                        result_document["bdinfoCommandSent"] = True
+                        bdinfo_output_offset = len(output)
+                        bdinfo_deadline = time.monotonic() + bdinfo_timeout_seconds
+
+                    if (
+                        result_document["bdinfoCommandSent"]
+                        and not result_document["bdinfoResponseObserved"]
+                        and bdinfo_output_offset is not None
+                    ):
+                        bdinfo_output, _ = _strip_ansi_escape_sequences(
+                            bytes(output[bdinfo_output_offset:])
+                        )
+                        bdinfo_text = bdinfo_output.decode("utf-8", errors="replace")
+                        bdinfo_text = bdinfo_text.replace("\r\n", "\n").replace(
+                            "\r",
+                            "\n",
+                        )
+                        sync_token_pattern = re.escape(f"APK_{bdinfo_sync_token}")
+                        command_echo_pattern = re.compile(
+                            rf"(?m)^[ \t]*(?:=>[ \t]*)?echo {sync_token_pattern}; "
+                            rf"bdinfo; echo {sync_token_pattern}[ \t]*$"
+                        )
+                        command_echo = command_echo_pattern.search(bdinfo_text)
+                        if command_echo is not None:
+                            result_document["bdinfoCommandEchoObserved"] = True
+                            response_text = bdinfo_text[command_echo.end() :]
+                        else:
+                            response_text = ""
+                        sync_marker_pattern = re.compile(
+                            rf"(?m)^[ \t]*{sync_token_pattern}[ \t]*$"
+                        )
+                        sync_markers = list(sync_marker_pattern.finditer(response_text))
+                        if sync_markers:
+                            result_document["bdinfoStartMarkerObserved"] = True
+                        if len(sync_markers) >= 2:
+                            result_document["bdinfoEndMarkerObserved"] = True
+                            end_marker = sync_markers[1]
+                        else:
+                            end_marker = None
+                        if end_marker is not None and UBOOT_PROMPT.search(
+                            response_text,
+                            end_marker.end(),
+                        ):
+                            if len(sync_markers) != 2:
+                                break
+                            relocation_address, relocation_offset = (
+                                _parse_bdinfo_addresses(
+                                    response_text[
+                                        sync_markers[0].end() : end_marker.start()
+                                    ]
+                                )
+                            )
+                            if (
+                                relocation_address is not None
+                                and relocation_offset is not None
+                            ):
+                                result_document["bdinfoResponseObserved"] = True
+                                result_document["relocationAddress"] = (
+                                    relocation_address
+                                )
+                                result_document["relocationOffset"] = relocation_offset
+                                if not _send_boot_if_not_cancelled(master_fd):
+                                    break
+                                result_document["bootCommandSent"] = True
+                                handoff_output_offset = len(output)
+                                handoff_deadline = min(
+                                    deadline,
+                                    time.monotonic() + handoff_timeout_seconds,
+                                )
+                            else:
+                                break
+
                     handoff_output = (
                         bytes(output[handoff_output_offset:])
                         if handoff_output_offset is not None
@@ -912,6 +1101,11 @@ def _parse_arguments() -> argparse.Namespace:
         type=int,
         default=DEFAULT_HANDOFF_TIMEOUT_SECONDS,
     )
+    parser.add_argument(
+        "--bdinfo-timeout-seconds",
+        type=int,
+        default=DEFAULT_BDINFO_TIMEOUT_SECONDS,
+    )
     parser.add_argument("--max-output-bytes", type=int, default=MAX_OUTPUT_BYTES)
     parser.add_argument("--screen-program", type=Path)
     return parser.parse_args()
@@ -940,6 +1134,7 @@ def main() -> int:
             arguments.result,
             timeout_seconds=arguments.timeout_seconds,
             handoff_timeout_seconds=arguments.handoff_timeout_seconds,
+            bdinfo_timeout_seconds=arguments.bdinfo_timeout_seconds,
             max_output_bytes=arguments.max_output_bytes,
             screen_program_path=screen_program,
         )

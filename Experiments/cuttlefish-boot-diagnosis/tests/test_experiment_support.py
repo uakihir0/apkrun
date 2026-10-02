@@ -418,6 +418,7 @@ def _make_baseline_repository(root: Path) -> tuple[Path, Path, Path, Path]:
         ("schemaVersion", True, "invalid fields"),
         ("schemaVersion", 1, "invalid fields"),
         ("schemaVersion", 2, "invalid fields"),
+        ("schemaVersion", 4.0, "invalid fields"),
         ("cleanupComplete", False, "inconsistent or incomplete"),
         ("outputBytesObserved", 0, "inconsistent or incomplete"),
         ("escapeStrippedBytesObserved", -1, "invalid fields"),
@@ -468,6 +469,122 @@ def test_bootloader_console_summary_rejects_invalid_status(
 
     with pytest.raises(ValueError, match=message):
         experiment_support._bootloader_console_summary(path, True)
+
+
+def test_bootloader_console_summary_accepts_sanitized_bdinfo_addresses() -> None:
+    summary: dict[str, object] = {
+        "schemaVersion": 4,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponseObserved": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": 0x17F600000,
+        "relocationOffset": 0x8000,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    (
+        (
+            {"bdinfoResponseObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"promptObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"bdinfoCommandEchoObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"bdinfoStartMarkerObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"bdinfoEndMarkerObserved": False},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"relocationAddress": None},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"bdinfoTimedOut": True},
+            "inconsistent or incomplete",
+        ),
+        (
+            {"relocationAddress": True},
+            "invalid fields",
+        ),
+        (
+            {"relocationOffset": 0x1_0000_0000_0000_0000},
+            "invalid fields",
+        ),
+    ),
+)
+def test_bootloader_console_summary_rejects_inconsistent_bdinfo(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    summary: dict[str, object] = {
+        "schemaVersion": 4,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponseObserved": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": 0x17F600000,
+        "relocationOffset": 0x8000,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    summary.update(updates)
+
+    with pytest.raises(ValueError, match=message):
+        experiment_support._validate_bootloader_console_summary(summary)
 
 
 @pytest.mark.parametrize(
@@ -4321,6 +4438,244 @@ def test_publication_rejects_result_directory_without_nesting_capture(
 
     assert capture_record.is_dir()
     assert not list(result_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_omits_kernel_log_after_bdinfo_was_sent(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    summary = {
+        "schemaVersion": 4,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponseObserved": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": 0x17F600000,
+        "relocationOffset": 0x8000,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 128,
+        "escapeStrippedBytesObserved": 128,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=summary,
+    )
+    (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
+    (capture_record / "kernel.log").write_text(
+        "U-Boot bdinfo\nethaddr = 02:00:00:00:00:01\n"
+        "relocaddr = 0x17f600000\nreloc off = 0x8000\n",
+        encoding="utf-8",
+    )
+    result_path = results_root / "gpu-none-console-on-20261001T000000Z-1234"
+
+    experiment_support.publish_normalized_record(
+        capture_record,
+        work_root,
+        data_root,
+        result_path,
+        ownership_token,
+    )
+
+    assert not (result_path / "kernel.log").exists()
+    missing = (result_path / "MISSING.txt").read_text(encoding="utf-8")
+    assert "kernel.log\tomitted from published paused-U-Boot probe" in missing
+    published_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in result_path.iterdir()
+        if path.is_file()
+    )
+    assert "ethaddr" not in published_text
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_accepts_legacy_console_summary_without_bdinfo_fields(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    summary = {
+        "schemaVersion": 3,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=summary,
+    )
+    (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
+    (capture_record / "kernel.log").write_text(
+        "Starting kernel ...\n",
+        encoding="utf-8",
+    )
+    result_path = results_root / "gpu-none-console-on-20261002T000000Z-1234"
+
+    experiment_support.publish_normalized_record(
+        capture_record,
+        work_root,
+        data_root,
+        result_path,
+        ownership_token,
+    )
+
+    assert (result_path / "kernel.log").read_text(encoding="utf-8") == (
+        "Starting kernel ...\n"
+    )
+    assert (result_path / "MISSING.txt").read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_refuses_symlinked_kernel_log_after_bdinfo(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    summary = {
+        "schemaVersion": 4,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "bdinfoCommandSent": True,
+        "bdinfoCommandEchoObserved": True,
+        "bdinfoStartMarkerObserved": True,
+        "bdinfoEndMarkerObserved": True,
+        "bdinfoResponseObserved": True,
+        "bdinfoTimedOut": False,
+        "relocationAddress": 0x17F600000,
+        "relocationOffset": 0x8000,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 128,
+        "escapeStrippedBytesObserved": 128,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=summary,
+    )
+    (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
+    external_log = tmp_path / "external-kernel.log"
+    external_log.write_text("ethaddr = 02:00:00:00:00:01\n", encoding="utf-8")
+    (capture_record / "kernel.log").symlink_to(external_log)
+    result_path = results_root / "gpu-none-console-on-20261002T000000Z-1235"
+
+    with pytest.raises(ValueError, match="kernel.log is not a regular file"):
+        experiment_support.publish_normalized_record(
+            capture_record,
+            work_root,
+            data_root,
+            result_path,
+            ownership_token,
+        )
+
+    assert (capture_record / "kernel.log").is_symlink()
+    assert external_log.read_text(encoding="utf-8") == ("ethaddr = 02:00:00:00:00:01\n")
+    assert (capture_record / "MISSING.txt").read_text(encoding="utf-8") == ""
+    assert not result_path.exists()
+
+
+def test_kernel_log_omission_does_not_record_success_when_unlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture_record = tmp_path / "capture"
+    capture_record.mkdir()
+    kernel_log = capture_record / "kernel.log"
+    kernel_log.write_text("private bdinfo output\n", encoding="utf-8")
+    missing = capture_record / "MISSING.txt"
+    missing.write_text("", encoding="utf-8")
+    directory_descriptor = os.open(
+        capture_record,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+
+    def fail_unlink(
+        parent_descriptor: int,
+        name: str,
+        expected_stat: os.stat_result,
+    ) -> None:
+        raise OSError(errno.EPERM, "injected unlink failure")
+
+    monkeypatch.setattr(experiment_support, "_unlink_entry_at", fail_unlink)
+    try:
+        with pytest.raises(OSError, match="injected unlink failure"):
+            experiment_support._omit_bdinfo_kernel_log(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+    assert kernel_log.read_text(encoding="utf-8") == "private bdinfo output\n"
+    assert missing.read_text(encoding="utf-8") == ""
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")

@@ -10,16 +10,37 @@ retry can select 120 through 600 seconds. By default it passes `gpu_mode=none`,
 `cvd create --nostart`. The Linux integration fixture checks the exact argument
 vectors for both commands; the live runner validates the saved GPU and console
 settings before publication. Bootloader pause mode is opt-in. In that mode, a
-bounded helper attaches to the run's private Screen endpoint and sends `boot`
-only after it sees the U-Boot prompt. Its version-3 status summary records
-whether a U-Boot banner was observed, along with prompt and handoff states,
-the bytes Screen wrote to the terminal PTY, and the remaining byte count after
-terminal escape sequences are stripped. Screen can emit control-only startup
-output even when the guest sends nothing; neither count attributes bytes to
-the guest. The summary also marks an incomplete terminal escape sequence: the
-parser discards the ambiguous tail after such a sequence, so a zero
-escape-stripped count does not prove that no text was present. It never saves
-the console transcript. Pause mode requires
+bounded helper attaches to the run's private Screen endpoint. After the first
+U-Boot prompt it drains already queued PTY output until the console is quiet,
+then sends the fixed probe command shape
+`echo APK_<per-run-token>; bdinfo; echo APK_<per-run-token>`. The token is
+random, has 96 bits of entropy, and is not saved in the result. This compact
+command fits within an 80-column U-Boot console including its prompt.
+The helper requires U-Boot to echo that exact command and print the matching
+token both before and after `bdinfo`, then show the prompt. It accepts only
+unique, unambiguous numeric `relocaddr` and `reloc off` fields between those
+two markers, and sends `boot` only after all checks pass. This brackets the
+values with fresh command output: stale lines before the start marker are
+ignored, and duplicate relocation fields are rejected. The boundary assumes
+the ordered Cuttlefish console path is trusted; it does not authenticate an
+endpoint that can synthesize a complete response. If a complete response does
+not arrive within five seconds, the helper stops without sending `boot`. Its
+version-4 status summary records the banner, prompt, command echo, start and
+end markers, `bdinfo`, and handoff states, plus the two numeric relocation
+fields. The bounded console transcript stays in memory and is not included in
+the summary.
+Because Cuttlefish mirrors the serial console to `kernel.log`, publication
+removes that whole log whenever the helper sent the probe command, then records
+the omission in `MISSING.txt`. If capture or publication fails, its private
+mode-0700 work area may retain the Cuttlefish log for diagnosis; such an
+unpublished log can contain raw console output. The summary also records the
+bytes Screen wrote to the terminal PTY
+and the remaining byte count after terminal escape sequences are stripped.
+Screen can emit control-only startup output even when the guest sends nothing;
+neither count attributes bytes to the guest. The summary marks an incomplete
+terminal escape sequence: the parser discards the ambiguous tail after such a
+sequence, so a zero escape-stripped count does not prove that no text was
+present. Pause mode requires
 `APKRUN_DIAGNOSTIC_CONSOLE=true` and passes
 `--pause_in_bootloader=true` to both Cuttlefish commands. CVD startup and
 console handoff run under one supervisor: if either process fails, the

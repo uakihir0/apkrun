@@ -10,6 +10,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,42 @@ def _screen_stub(tmp_path: Path, body: str) -> Path:
     return program
 
 
+def _bdinfo_probe_reader() -> str:
+    return (
+        "import re\n"
+        "bdinfo_command = os.read(0, 128)\n"
+        "bdinfo_match = re.fullmatch("
+        "rb'echo APK_([0-9a-f]{24}); bdinfo; "
+        "echo APK_\\1\\r', bdinfo_command)\n"
+        "if bdinfo_match is None:\n"
+        "    raise SystemExit(18)\n"
+        "sync_token = bdinfo_match.group(1)\n"
+    )
+
+
+def _bdinfo_probe_response(*, include_prompt: bool = True) -> str:
+    prompt_prefix = "=> " if include_prompt else ""
+    return (
+        f"os.write(1, b'{prompt_prefix}echo APK_' "
+        "+ sync_token + b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
+        "APK_' + sync_token + b'\\n"
+        "ethaddr = 02:00:00:00:00:01\\n"
+        "relocaddr   = 0x000000017f600000\\n"
+        "reloc off   = 0x0000000000008000\\n"
+        "APK_' + sync_token + b'\\n=> ')\n"
+    )
+
+
+def _bdinfo_exchange() -> str:
+    return (
+        _bdinfo_probe_reader()
+        + _bdinfo_probe_response()
+        + "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+    )
+
+
 def _run_helper(
     home: Path,
     result: Path,
@@ -51,6 +88,7 @@ def _run_helper(
     *,
     timeout: int = 2,
     handoff_timeout: int = 1,
+    bdinfo_timeout: int = 1,
     output_limit: int = 65_536,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -65,6 +103,8 @@ def _run_helper(
             str(timeout),
             "--handoff-timeout-seconds",
             str(handoff_timeout),
+            "--bdinfo-timeout-seconds",
+            str(bdinfo_timeout),
             "--max-output-bytes",
             str(output_limit),
             "--screen-program",
@@ -85,25 +125,34 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'\\x1b=\\x1b(B\\xc4\\x9d\\nU-Boot 2025.01 (test)\\n=> ')\n"
-        "command = os.read(0, 32)\n"
-        "if b'boot\\r' not in command:\n"
-        "    raise SystemExit(19)\n"
-        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+        + _bdinfo_exchange()
+        + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
     completed = _run_helper(home, result, screen)
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["schemaVersion"] == 3
+    assert summary["schemaVersion"] == 4
     assert summary["consoleEndpointFound"] is True
     assert summary["screenStarted"] is True
     assert summary["uBootBannerObserved"] is True
     assert summary["promptObserved"] is True
+    assert summary["bdinfoCommandSent"] is True
+    assert summary["bdinfoCommandEchoObserved"] is True
+    assert summary["bdinfoStartMarkerObserved"] is True
+    assert summary["bdinfoEndMarkerObserved"] is True
+    assert summary["bdinfoResponseObserved"] is True
+    assert summary["bdinfoTimedOut"] is False
+    assert summary["relocationAddress"] == 0x17F600000
+    assert summary["relocationOffset"] == 0x8000
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is True
     assert summary["cleanupComplete"] is True
     assert summary["exitCode"] == 0
+    summary_text = result.read_text(encoding="utf-8")
+    assert "ethaddr" not in summary_text
+    assert "transcript" not in summary_text
 
 
 def test_console_helper_distinguishes_screen_terminal_controls_from_text(
@@ -167,10 +216,8 @@ def test_console_helper_ignores_kernel_marker_received_before_boot(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'Starting kernel ...\\nU-Boot 2025.01 (test)\\n=> ')\n"
-        "command = os.read(0, 32)\n"
-        "if b'boot\\r' not in command:\n"
-        "    raise SystemExit(19)\n"
-        "time.sleep(10)",
+        + _bdinfo_exchange()
+        + "time.sleep(10)",
     )
 
     completed = _run_helper(home, result, screen, timeout=3, handoff_timeout=1)
@@ -181,6 +228,244 @@ def test_console_helper_ignores_kernel_marker_received_before_boot(
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is False
     assert summary["handoffTimedOut"] is True
+
+
+def test_console_helper_bounds_bdinfo_wait_and_never_boots_without_response(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + "time.sleep(10)",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=3,
+        bdinfo_timeout=1,
+    )
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoCommandSent"] is True
+    assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoTimedOut"] is True
+    assert summary["bootCommandSent"] is False
+    assert summary["relocationAddress"] is None
+    assert summary["cleanupComplete"] is True
+
+
+def test_console_helper_ignores_late_stale_fields_before_start_marker(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + "os.write(1, b'=> echo APK_' + sync_token + "
+        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
+        "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n=> \\n"
+        "APK_' + sync_token + b'\\n"
+        "APK_' + sync_token + b'\\n=> ')\n"
+        "time.sleep(10)",
+    )
+
+    completed = _run_helper(home, result, screen)
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoCommandEchoObserved"] is True
+    assert summary["bdinfoStartMarkerObserved"] is True
+    assert summary["bdinfoEndMarkerObserved"] is True
+    assert summary["bdinfoResponseObserved"] is False
+    assert summary["relocationAddress"] is None
+    assert summary["bootCommandSent"] is False
+
+
+def test_console_helper_never_boots_without_the_unique_bdinfo_marker(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + "os.write(1, b'=> echo APK_' + sync_token + "
+        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
+        "relocaddr = 0x17f600000\\nreloc off = 0x8000\\n=> ')\n"
+        "time.sleep(10)",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=3,
+        bdinfo_timeout=1,
+    )
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoCommandEchoObserved"] is True
+    assert summary["bdinfoStartMarkerObserved"] is False
+    assert summary["bdinfoEndMarkerObserved"] is False
+    assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoTimedOut"] is True
+    assert summary["bootCommandSent"] is False
+
+
+def test_console_helper_rejects_ambiguous_relocation_output_inside_markers(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + "os.write(1, b'=> echo APK_' + sync_token + "
+        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
+        "APK_' + sync_token + b'\\n"
+        "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n"
+        "relocaddr = 0x17f600000\\nreloc off = 0x8000\\n"
+        "APK_' + sync_token + b'\\n=> ')\n"
+        "time.sleep(10)",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=3,
+        bdinfo_timeout=1,
+    )
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoCommandEchoObserved"] is True
+    assert summary["bdinfoStartMarkerObserved"] is True
+    assert summary["bdinfoEndMarkerObserved"] is True
+    assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoTimedOut"] is False
+    assert summary["bootCommandSent"] is False
+    assert summary["relocationAddress"] is None
+
+
+def test_console_helper_discards_prequeued_bdinfo_text_before_probe_command(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "prefix = b'U-Boot 2025.01\\n' + b'x' * (4096 - 19) + b'\\n=> '\n"
+        "if len(prefix) != 4096:\n"
+        "    raise SystemExit(17)\n"
+        "os.write(1, prefix)\n"
+        "os.write(1, b'bdinfo\\r\\nrelocaddr = 0x17f500000\\n"
+        "reloc off = 0x7000\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + _bdinfo_probe_response()
+        + "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    completed = _run_helper(home, result, screen)
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoResponseObserved"] is True
+    assert summary["relocationAddress"] == 0x17F600000
+    assert summary["relocationOffset"] == 0x8000
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+
+
+def test_console_helper_rejects_bdinfo_response_after_timeout(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _bdinfo_probe_reader()
+        + "time.sleep(1.2)\n"
+        + _bdinfo_probe_response()
+        + "time.sleep(1)",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=4,
+        bdinfo_timeout=1,
+    )
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["bdinfoCommandEchoObserved"] is False
+    assert summary["bdinfoStartMarkerObserved"] is False
+    assert summary["bdinfoEndMarkerObserved"] is False
+    assert summary["bdinfoResponseObserved"] is False
+    assert summary["bdinfoTimedOut"] is True
+    assert summary["bootCommandSent"] is False
+
+
+def test_console_output_drain_does_not_claim_quiet_at_deadline() -> None:
+    master_fd, slave_fd = pty.openpty()
+    stop_writer = threading.Event()
+
+    def write_until_stopped() -> None:
+        while not stop_writer.is_set():
+            try:
+                os.write(slave_fd, b"x")
+            except OSError:
+                return
+            time.sleep(0.02)
+
+    writer = threading.Thread(target=write_until_stopped)
+    writer.start()
+    try:
+        deadline = time.monotonic() + 0.2
+        drained, quiet = CONSOLE_MODULE["_drain_console_output"](
+            master_fd,
+            1024,
+            deadline,
+        )
+    finally:
+        stop_writer.set()
+        writer.join(timeout=1)
+        os.close(master_fd)
+        os.close(slave_fd)
+
+    assert drained
+    assert quiet is False
+
+
+def test_bdinfo_parser_rejects_ambiguous_or_malformed_addresses() -> None:
+    parse = CONSOLE_MODULE["_parse_bdinfo_addresses"]
+
+    assert parse("relocaddr = 0x10\nreloc off = 0x20\n") == (0x10, 0x20)
+    assert parse("relocaddr = 0x10\nrelocaddr = 0x11\nreloc off = 0x20\n") == (
+        None,
+        0x20,
+    )
+    assert parse("relocaddr = 0x10000000000000000\nreloc off = nope\n") == (
+        None,
+        None,
+    )
 
 
 def test_console_summary_is_not_published_when_atomic_link_fails(
@@ -439,10 +724,8 @@ def test_console_helper_accepts_runtime_symlink_within_home(tmp_path: Path) -> N
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot\\n=> ')\n"
-        "command = os.read(0, 32)\n"
-        "if b'boot\\r' not in command:\n"
-        "    raise SystemExit(19)\n"
-        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+        + _bdinfo_exchange()
+        + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
     completed = _run_helper(home, result, screen, timeout=1)
@@ -497,10 +780,8 @@ def test_console_helper_follows_owned_devpts_console_symlink(
         "if not stat.S_ISCHR(os.stat(sys.argv[-1]).st_mode):\n"
         "    raise SystemExit(20)\n"
         "os.write(1, b'U-Boot\\n=> ')\n"
-        "command = os.read(0, 32)\n"
-        "if b'boot\\r' not in command:\n"
-        "    raise SystemExit(19)\n"
-        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+        + _bdinfo_exchange()
+        + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
     try:

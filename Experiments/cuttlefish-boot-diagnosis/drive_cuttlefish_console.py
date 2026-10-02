@@ -9,7 +9,6 @@ import json
 import os
 import pty
 import re
-import secrets
 import select
 import shutil
 import signal
@@ -27,20 +26,34 @@ from typing import Any
 MAX_TIMEOUT_SECONDS = 600
 MAX_OUTPUT_BYTES = 65_536
 DEFAULT_HANDOFF_TIMEOUT_SECONDS = 10
-DEFAULT_BDINFO_TIMEOUT_SECONDS = 5
+DEFAULT_MEMORY_PROBE_TIMEOUT_SECONDS = 5
 POLL_INTERVAL_SECONDS = 0.1
 CHILD_STOP_GRACE_SECONDS = 2
 CHILD_DESCENDANT_GRACE_SECONDS = 0.5
 U_BOOT_BANNER = re.compile(r"(?m)^[ \t]*U-Boot(?:[ \t]+SPL)?[ \t]+v?\d{4}\.\d{2}\b.*$")
 UBOOT_PROMPT = re.compile(r"(?:^|\n)\s*=>\s*$")
-BDINFO_PROBE_COMMAND = re.compile(rb"echo APK_([0-9a-f]{24}); bdinfo; echo APK_\1\r")
+MEMORY_PROBE_PREPARATION_COMMAND_TEXT = (
+    "setenv w0; setenv w1; echo APKRUN_PROBE_READY ${w0} ${w1}"
+)
+MEMORY_PROBE_PREPARATION_COMMAND = (
+    f"{MEMORY_PROBE_PREPARATION_COMMAND_TEXT}\r".encode("ascii")
+)
+MEMORY_PROBE_PREPARATION_COMMAND_ECHO = re.compile(
+    rf"(?m)^[ \t]*(?:=>[ \t]*)?"
+    rf"{re.escape(MEMORY_PROBE_PREPARATION_COMMAND_TEXT)}[ \t]*$"
+)
+MEMORY_PROBE_COMMAND_TEXT = (
+    "setexpr.l w0 *0x17f63e1f4; setexpr.l w1 *0x17f63e1dc; echo ${w0} ${w1}"
+)
+MEMORY_PROBE_COMMAND = f"{MEMORY_PROBE_COMMAND_TEXT}\r".encode("ascii")
+MEMORY_PROBE_COMMAND_ECHO = re.compile(
+    rf"(?m)^[ \t]*(?:=>[ \t]*)?{re.escape(MEMORY_PROBE_COMMAND_TEXT)}[ \t]*$"
+)
+MEMORY_PROBE_WORDS = re.compile(
+    r"(?:0x)?([0-9a-f]{8})[ \t]+(?:0x)?([0-9a-f]{8})",
+    re.IGNORECASE,
+)
 KERNEL_HANDOFF = re.compile(r"Starting kernel|Booting Linux on physical CPU")
-BDINFO_RELOCADDR = re.compile(
-    r"(?mi)^[ \t]*relocaddr[ \t]*=[ \t]*(0x[0-9a-f]{1,16})[ \t]*$"
-)
-BDINFO_RELOC_OFFSET = re.compile(
-    r"(?mi)^[ \t]*reloc off[ \t]*=[ \t]*(0x[0-9a-f]{1,16})[ \t]*$"
-)
 requested_signal: int | None = None
 
 
@@ -234,17 +247,15 @@ def _private_result_path(path: Path) -> Path:
     return parent / path.name
 
 
-def _parse_bdinfo_addresses(text: str) -> tuple[int | None, int | None]:
-    """Keep only unambiguous 64-bit U-Boot relocation values."""
-    parsed: list[int | None] = []
-    for pattern in (BDINFO_RELOCADDR, BDINFO_RELOC_OFFSET):
-        matches = pattern.findall(text)
-        if len(matches) != 1:
-            parsed.append(None)
-            continue
-        value = int(matches[0], 16)
-        parsed.append(value if value <= 0xFFFF_FFFF_FFFF_FFFF else None)
-    return parsed[0], parsed[1]
+def _parse_memory_probe_words(text: str) -> tuple[int | None, int | None]:
+    """Accept one response line containing only one complete pair of words."""
+    response_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(response_lines) != 1:
+        return None, None
+    match = MEMORY_PROBE_WORDS.fullmatch(response_lines[0])
+    if match is None:
+        return None, None
+    return int(match.group(1), 16), int(match.group(2), 16)
 
 
 def _is_current_user_devpts_character_device(
@@ -747,7 +758,7 @@ def _record_expired_deadline_flags(
         and observed_at >= handoff_deadline
     ):
         result_document["handoffTimedOut"] = True
-    elif observed_at >= deadline and not result_document["bdinfoTimedOut"]:
+    elif observed_at >= deadline and not result_document["memoryProbeTimedOut"]:
         result_document["timedOut"] = True
 
 
@@ -757,7 +768,11 @@ def _send_console_command(
     *,
     deadline: float | None = None,
 ) -> tuple[bool, bool]:
-    if command != b"boot\r" and BDINFO_PROBE_COMMAND.fullmatch(command) is None:
+    if command not in (
+        b"boot\r",
+        MEMORY_PROBE_PREPARATION_COMMAND,
+        MEMORY_PROBE_COMMAND,
+    ):
         return False, False
     pending = memoryview(command)
     while pending:
@@ -802,17 +817,26 @@ def _send_console_command_if_not_cancelled(
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
-def _send_bdinfo_if_not_cancelled(
+def _send_memory_probe_if_not_cancelled(
     master_fd: int,
-    sync_token: str,
     *,
     deadline: float,
 ) -> tuple[bool, bool]:
-    marker = f"APK_{sync_token}"
-    command = f"echo {marker}; bdinfo; echo {marker}\r".encode("ascii")
     return _send_console_command_if_not_cancelled(
         master_fd,
-        command,
+        MEMORY_PROBE_COMMAND,
+        deadline=deadline,
+    )
+
+
+def _send_memory_probe_preparation_if_not_cancelled(
+    master_fd: int,
+    *,
+    deadline: float,
+) -> tuple[bool, bool]:
+    return _send_console_command_if_not_cancelled(
+        master_fd,
+        MEMORY_PROBE_PREPARATION_COMMAND,
         deadline=deadline,
     )
 
@@ -823,7 +847,7 @@ def drive_console(
     *,
     timeout_seconds: int,
     handoff_timeout_seconds: int,
-    bdinfo_timeout_seconds: int,
+    memory_probe_timeout_seconds: int,
     max_output_bytes: int,
     screen_program_path: Path,
 ) -> tuple[dict[str, Any], int]:
@@ -842,10 +866,10 @@ def drive_console(
     ):
         raise ValueError("kernel-handoff timeout is outside the supported range")
     if (
-        type(bdinfo_timeout_seconds) is not int
-        or not 1 <= bdinfo_timeout_seconds <= MAX_TIMEOUT_SECONDS
+        type(memory_probe_timeout_seconds) is not int
+        or not 1 <= memory_probe_timeout_seconds <= MAX_TIMEOUT_SECONDS
     ):
-        raise ValueError("U-Boot bdinfo timeout is outside the supported range")
+        raise ValueError("U-Boot memory probe timeout is outside the supported range")
     if (
         type(max_output_bytes) is not int
         or not 1 <= max_output_bytes <= MAX_OUTPUT_BYTES
@@ -857,21 +881,26 @@ def drive_console(
         raise ValueError("Screen executable must be a regular executable file")
 
     result_document: dict[str, Any] = {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "consoleEndpointFound": False,
         "screenStarted": False,
         "uBootBannerObserved": False,
         "promptObserved": False,
-        "bdinfoCommandSent": False,
-        "bdinfoCommandEchoObserved": False,
-        "bdinfoStartMarkerObserved": False,
-        "bdinfoEndMarkerObserved": False,
-        "bdinfoResponsePromptObserved": False,
-        "bdinfoResponseObserved": False,
-        "bdinfoResponseRejected": False,
-        "bdinfoTimedOut": False,
-        "relocationAddress": None,
-        "relocationOffset": None,
+        "memoryProbePreparationCommandAttempted": False,
+        "memoryProbePreparationCommandSent": False,
+        "memoryProbePreparationCommandEchoObserved": False,
+        "memoryProbePreparationResponsePromptObserved": False,
+        "memoryProbeVariablesCleared": False,
+        "memoryProbePreparationRejected": False,
+        "memoryProbeCommandAttempted": False,
+        "memoryProbeCommandSent": False,
+        "memoryProbeCommandEchoObserved": False,
+        "memoryProbeResponsePromptObserved": False,
+        "memoryProbeResponseObserved": False,
+        "memoryProbeResponseRejected": False,
+        "memoryProbeTimedOut": False,
+        "wordAtObservedPc": None,
+        "wordBeforeObservedPc": None,
         "bootCommandSent": False,
         "kernelHandoffObserved": False,
         "outputBytesObserved": 0,
@@ -891,9 +920,9 @@ def drive_console(
     master_fd: int | None = None
     status = 1
     output = bytearray()
-    bdinfo_output_offset: int | None = None
-    bdinfo_deadline: float | None = None
-    bdinfo_sync_token: str | None = None
+    memory_probe_preparation_output_offset: int | None = None
+    memory_probe_output_offset: int | None = None
+    memory_probe_deadline: float | None = None
     handoff_output_offset: int | None = None
     deadline = time.monotonic() + timeout_seconds
 
@@ -914,6 +943,28 @@ def drive_console(
             child_pid, master_fd = _start_screen(screen_program, endpoint, home)
             result_document["screenStarted"] = True
             handoff_deadline: float | None = None
+
+            def send_boot_after_probe_prompt() -> bool:
+                nonlocal handoff_deadline, handoff_output_offset
+                if time.monotonic() >= deadline:
+                    result_document["timedOut"] = True
+                    return False
+                boot_sent, boot_deadline_expired = _send_boot_if_not_cancelled(
+                    master_fd,
+                    deadline,
+                )
+                if not boot_sent:
+                    if boot_deadline_expired:
+                        result_document["timedOut"] = True
+                    return False
+                result_document["bootCommandSent"] = True
+                handoff_output_offset = len(output)
+                handoff_deadline = min(
+                    deadline,
+                    time.monotonic() + handoff_timeout_seconds,
+                )
+                return True
+
             while time.monotonic() < deadline:
                 if requested_signal is not None:
                     result_document["signal"] = requested_signal
@@ -938,13 +989,15 @@ def drive_console(
                     result_document["timedOut"] = True
                     break
                 if (
-                    result_document["bdinfoCommandSent"]
-                    and not result_document["bdinfoResponseObserved"]
-                    and not result_document["bdinfoResponseRejected"]
-                    and bdinfo_deadline is not None
-                    and observed_at >= bdinfo_deadline
+                    result_document["memoryProbePreparationCommandSent"]
+                    and not result_document["memoryProbePreparationRejected"]
+                    and not result_document["memoryProbeResponseObserved"]
+                    and not result_document["memoryProbeResponseRejected"]
+                    and not result_document["bootCommandSent"]
+                    and memory_probe_deadline is not None
+                    and observed_at >= memory_probe_deadline
                 ):
-                    result_document["bdinfoTimedOut"] = True
+                    result_document["memoryProbeTimedOut"] = True
                     break
                 if chunk:
                     normalized = _record_console_output(
@@ -986,108 +1039,169 @@ def drive_console(
                             result_document["signal"] = requested_signal
                             status = 128 + requested_signal
                             break
-                        bdinfo_sync_token = secrets.token_hex(12)
-                        bdinfo_sent, deadline_expired = _send_bdinfo_if_not_cancelled(
-                            master_fd,
-                            bdinfo_sync_token,
-                            deadline=deadline,
+                        memory_probe_deadline = min(
+                            deadline,
+                            time.monotonic() + memory_probe_timeout_seconds,
                         )
-                        if not bdinfo_sent:
-                            if deadline_expired:
+                        result_document[
+                            "memoryProbePreparationCommandAttempted"
+                        ] = True
+                        preparation_sent, _ = (
+                            _send_memory_probe_preparation_if_not_cancelled(
+                                master_fd,
+                                deadline=memory_probe_deadline,
+                            )
+                        )
+                        if not preparation_sent:
+                            observed_at = time.monotonic()
+                            if observed_at >= deadline:
                                 result_document["timedOut"] = True
-                            bdinfo_sync_token = None
+                            elif observed_at >= memory_probe_deadline:
+                                result_document["memoryProbeTimedOut"] = True
                             break
-                        result_document["bdinfoCommandSent"] = True
-                        bdinfo_output_offset = len(output)
-                        bdinfo_deadline = time.monotonic() + bdinfo_timeout_seconds
+                        result_document["memoryProbePreparationCommandSent"] = True
+                        memory_probe_preparation_output_offset = len(output)
 
                     if (
-                        result_document["bdinfoCommandSent"]
-                        and not result_document["bdinfoResponseObserved"]
-                        and not result_document["bdinfoResponseRejected"]
-                        and bdinfo_output_offset is not None
+                        result_document["memoryProbePreparationCommandSent"]
+                        and not result_document["memoryProbeVariablesCleared"]
+                        and not result_document["memoryProbePreparationRejected"]
+                        and memory_probe_preparation_output_offset is not None
                     ):
-                        bdinfo_output, _ = _strip_ansi_escape_sequences(
-                            bytes(output[bdinfo_output_offset:])
+                        preparation_output, _ = _strip_ansi_escape_sequences(
+                            bytes(output[memory_probe_preparation_output_offset:])
                         )
-                        bdinfo_text = bdinfo_output.decode("utf-8", errors="replace")
-                        bdinfo_text = bdinfo_text.replace("\r\n", "\n").replace(
-                            "\r",
+                        preparation_text = preparation_output.decode(
+                            "utf-8",
+                            errors="replace",
+                        )
+                        preparation_text = preparation_text.replace(
+                            "\r\n",
                             "\n",
+                        ).replace("\r", "\n")
+                        preparation_echo = (
+                            MEMORY_PROBE_PREPARATION_COMMAND_ECHO.search(
+                                preparation_text
+                            )
                         )
-                        sync_token_pattern = re.escape(f"APK_{bdinfo_sync_token}")
-                        command_echo_pattern = re.compile(
-                            rf"(?m)^[ \t]*(?:=>[ \t]*)?echo {sync_token_pattern}; "
-                            rf"bdinfo; echo {sync_token_pattern}[ \t]*$"
-                        )
-                        command_echo = command_echo_pattern.search(bdinfo_text)
-                        if command_echo is not None:
-                            result_document["bdinfoCommandEchoObserved"] = True
-                            response_text = bdinfo_text[command_echo.end() :]
+                        if preparation_echo is not None:
+                            result_document[
+                                "memoryProbePreparationCommandEchoObserved"
+                            ] = True
+                            preparation_response = preparation_text[
+                                preparation_echo.end() :
+                            ]
                         else:
-                            response_text = ""
-                        sync_marker_pattern = re.compile(
-                            rf"(?m)^[ \t]*{sync_token_pattern}[ \t]*$"
+                            preparation_response = ""
+                        preparation_prompt = UBOOT_PROMPT.search(
+                            preparation_response
                         )
-                        sync_markers = list(sync_marker_pattern.finditer(response_text))
-                        if sync_markers:
-                            result_document["bdinfoStartMarkerObserved"] = True
-                        if len(sync_markers) >= 2:
-                            result_document["bdinfoEndMarkerObserved"] = True
-                            end_marker = sync_markers[1]
-                        else:
-                            end_marker = None
-                        if end_marker is not None and UBOOT_PROMPT.search(
-                            response_text,
-                            end_marker.end(),
-                        ):
-                            if len(sync_markers) != 2:
-                                break
+                        if preparation_prompt is not None:
                             observed_at = time.monotonic()
                             if observed_at >= deadline:
                                 result_document["timedOut"] = True
                                 break
                             if (
-                                bdinfo_deadline is not None
-                                and observed_at >= bdinfo_deadline
+                                memory_probe_deadline is not None
+                                and observed_at >= memory_probe_deadline
                             ):
-                                result_document["bdinfoTimedOut"] = True
+                                result_document["memoryProbeTimedOut"] = True
                                 break
-                            result_document["bdinfoResponsePromptObserved"] = True
-                            relocation_address, relocation_offset = (
-                                _parse_bdinfo_addresses(
-                                    response_text[
-                                        sync_markers[0].end() : end_marker.start()
-                                    ]
+                            result_document[
+                                "memoryProbePreparationResponsePromptObserved"
+                            ] = True
+                            preparation_lines = [
+                                line.strip()
+                                for line in preparation_response[
+                                    : preparation_prompt.start()
+                                ].splitlines()
+                                if line.strip()
+                            ]
+                            if (
+                                result_document[
+                                    "memoryProbePreparationCommandEchoObserved"
+                                ]
+                                and preparation_lines == ["APKRUN_PROBE_READY"]
+                            ):
+                                result_document["memoryProbeVariablesCleared"] = True
+                                result_document["memoryProbeCommandAttempted"] = True
+                                preparation_sent, _ = (
+                                    _send_memory_probe_if_not_cancelled(
+                                        master_fd,
+                                        deadline=min(
+                                            deadline,
+                                            memory_probe_deadline or deadline,
+                                        ),
+                                    )
+                                )
+                                if not preparation_sent:
+                                    observed_at = time.monotonic()
+                                    if observed_at >= deadline:
+                                        result_document["timedOut"] = True
+                                    elif (
+                                        memory_probe_deadline is not None
+                                        and observed_at >= memory_probe_deadline
+                                    ):
+                                        result_document["memoryProbeTimedOut"] = True
+                                    break
+                                result_document["memoryProbeCommandSent"] = True
+                                memory_probe_output_offset = len(output)
+                            else:
+                                result_document["memoryProbePreparationRejected"] = True
+                                if not send_boot_after_probe_prompt():
+                                    break
+
+                    if (
+                        result_document["memoryProbeCommandSent"]
+                        and not result_document["memoryProbeResponseObserved"]
+                        and not result_document["memoryProbeResponseRejected"]
+                        and memory_probe_output_offset is not None
+                    ):
+                        probe_output, _ = _strip_ansi_escape_sequences(
+                            bytes(output[memory_probe_output_offset:])
+                        )
+                        probe_text = probe_output.decode("utf-8", errors="replace")
+                        probe_text = probe_text.replace("\r\n", "\n").replace(
+                            "\r",
+                            "\n",
+                        )
+                        command_echo = MEMORY_PROBE_COMMAND_ECHO.search(probe_text)
+                        if command_echo is not None:
+                            result_document["memoryProbeCommandEchoObserved"] = True
+                            response_text = probe_text[command_echo.end() :]
+                        else:
+                            response_text = ""
+                        response_prompt = UBOOT_PROMPT.search(response_text)
+                        if response_prompt is not None:
+                            observed_at = time.monotonic()
+                            if observed_at >= deadline:
+                                result_document["timedOut"] = True
+                                break
+                            if (
+                                memory_probe_deadline is not None
+                                and observed_at >= memory_probe_deadline
+                            ):
+                                result_document["memoryProbeTimedOut"] = True
+                                break
+                            result_document["memoryProbeResponsePromptObserved"] = True
+                            instruction_at_pc, instruction_before_pc = (
+                                _parse_memory_probe_words(
+                                    response_text[: response_prompt.start()]
                                 )
                             )
                             if (
-                                relocation_address is not None
-                                and relocation_offset is not None
+                                instruction_at_pc is not None
+                                and instruction_before_pc is not None
                             ):
-                                result_document["bdinfoResponseObserved"] = True
-                                result_document["relocationAddress"] = (
-                                    relocation_address
+                                result_document["memoryProbeResponseObserved"] = True
+                                result_document["wordAtObservedPc"] = instruction_at_pc
+                                result_document["wordBeforeObservedPc"] = (
+                                    instruction_before_pc
                                 )
-                                result_document["relocationOffset"] = relocation_offset
                             else:
-                                result_document["bdinfoResponseRejected"] = True
-                            if time.monotonic() >= deadline:
-                                result_document["timedOut"] = True
+                                result_document["memoryProbeResponseRejected"] = True
+                            if not send_boot_after_probe_prompt():
                                 break
-                            boot_sent, boot_deadline_expired = (
-                                _send_boot_if_not_cancelled(master_fd, deadline)
-                            )
-                            if not boot_sent:
-                                if boot_deadline_expired:
-                                    result_document["timedOut"] = True
-                                break
-                            result_document["bootCommandSent"] = True
-                            handoff_output_offset = len(output)
-                            handoff_deadline = min(
-                                deadline,
-                                time.monotonic() + handoff_timeout_seconds,
-                            )
 
                     handoff_output = (
                         bytes(output[handoff_output_offset:])
@@ -1200,9 +1314,9 @@ def _parse_arguments() -> argparse.Namespace:
         default=DEFAULT_HANDOFF_TIMEOUT_SECONDS,
     )
     parser.add_argument(
-        "--bdinfo-timeout-seconds",
+        "--memory-probe-timeout-seconds",
         type=int,
-        default=DEFAULT_BDINFO_TIMEOUT_SECONDS,
+        default=DEFAULT_MEMORY_PROBE_TIMEOUT_SECONDS,
     )
     parser.add_argument("--max-output-bytes", type=int, default=MAX_OUTPUT_BYTES)
     parser.add_argument("--screen-program", type=Path)
@@ -1232,7 +1346,7 @@ def main() -> int:
             arguments.result,
             timeout_seconds=arguments.timeout_seconds,
             handoff_timeout_seconds=arguments.handoff_timeout_seconds,
-            bdinfo_timeout_seconds=arguments.bdinfo_timeout_seconds,
+            memory_probe_timeout_seconds=arguments.memory_probe_timeout_seconds,
             max_output_bytes=arguments.max_output_bytes,
             screen_program_path=screen_program,
         )

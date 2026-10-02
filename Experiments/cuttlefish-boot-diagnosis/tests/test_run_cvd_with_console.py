@@ -552,7 +552,13 @@ def test_success_after_the_shared_deadline_is_reported_as_timeout(
             FinishedProcess([0], cvd_stdout),
         )
     )
-    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: next(processes))
+    popen_commands: list[list[str]] = []
+
+    def fake_popen(command: list[str], *_args: object, **_kwargs: object) -> object:
+        popen_commands.append(command)
+        return next(processes)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     capture_module = ModuleType("capture_cvd_start")
     capture_module._terminate_child = lambda _process: None  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "capture_cvd_start", capture_module)
@@ -580,3 +586,7 @@ def test_success_after_the_shared_deadline_is_reported_as_timeout(
     )
 
     assert runner_function(arguments) == 124
+    assert any(
+        "--boot_timeout_secs=1" in command
+        for command in popen_commands
+    )

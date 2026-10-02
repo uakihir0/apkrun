@@ -80,9 +80,9 @@ CONSOLE_MODE_SLUGS = {
 CONSOLE_MODE_PATH_PATTERN = "on|off"
 MAX_PUBLICATION_EXPERIMENT_BYTES = 1_048_576
 MAX_BOOTLOADER_CONSOLE_SUMMARY_BYTES = 65_536
-BDINFO_LOG_OMISSION_NOTE = (
+CONSOLE_PROBE_LOG_OMISSION_NOTE = (
     b"kernel.log\tomitted from published paused-U-Boot probe because "
-    b"Cuttlefish mirrors bdinfo output to this log\n"
+    b"Cuttlefish mirrors console output to this log\n"
 )
 DEFAULT_BOOT_TIMEOUT_SECONDS = 600
 MIN_BOOT_TIMEOUT_SECONDS = 120
@@ -2030,6 +2030,26 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 "bdinfoResponseRejected",
             }
         )
+    if type(schema_version) is int and schema_version == 6:
+        expected_fields.update(
+            {
+                "memoryProbePreparationCommandAttempted",
+                "memoryProbePreparationCommandSent",
+                "memoryProbePreparationCommandEchoObserved",
+                "memoryProbePreparationResponsePromptObserved",
+                "memoryProbeVariablesCleared",
+                "memoryProbePreparationRejected",
+                "memoryProbeCommandAttempted",
+                "memoryProbeCommandSent",
+                "memoryProbeCommandEchoObserved",
+                "memoryProbeResponsePromptObserved",
+                "memoryProbeResponseObserved",
+                "memoryProbeResponseRejected",
+                "memoryProbeTimedOut",
+                "wordAtObservedPc",
+                "wordBeforeObservedPc",
+            }
+        )
     if (
         type(schema_version) is int
         and schema_version == 4
@@ -2067,10 +2087,27 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         )
     elif schema_version == 4 and "bdinfoResponseRejected" in summary:
         boolean_fields += ("bdinfoResponseRejected",)
+    if schema_version == 6:
+        boolean_fields += (
+            "memoryProbePreparationCommandAttempted",
+            "memoryProbePreparationCommandSent",
+            "memoryProbePreparationCommandEchoObserved",
+            "memoryProbePreparationResponsePromptObserved",
+            "memoryProbeVariablesCleared",
+            "memoryProbePreparationRejected",
+            "memoryProbeCommandAttempted",
+            "memoryProbeCommandSent",
+            "memoryProbeCommandEchoObserved",
+            "memoryProbeResponsePromptObserved",
+            "memoryProbeResponseObserved",
+            "memoryProbeResponseRejected",
+            "memoryProbeTimedOut",
+        )
     relocation_fields = ("relocationAddress", "relocationOffset")
+    instruction_fields = ("wordAtObservedPc", "wordBeforeObservedPc")
     if (
         type(summary.get("schemaVersion")) is not int
-        or schema_version not in (3, 4, 5)
+        or schema_version not in (3, 4, 5, 6)
         or any(not isinstance(summary.get(field), bool) for field in boolean_fields)
         or type(summary.get("outputBytesObserved")) is not int
         or type(summary.get("escapeStrippedBytesObserved")) is not int
@@ -2122,6 +2159,17 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 for field in relocation_fields
             )
         )
+        or (
+            schema_version == 6
+            and any(
+                summary[field] is not None
+                and (
+                    type(summary[field]) is not int
+                    or not 0 <= summary[field] <= 0xFFFF_FFFF
+                )
+                for field in instruction_fields
+            )
+        )
     ):
         raise ValueError("bootloader console summary contains invalid fields")
     if (
@@ -2130,6 +2178,11 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
         or summary["cleanupErrorNumber"] is not None
         or (summary["timedOut"] and summary["handoffTimedOut"])
         or (schema_version == 5 and summary["timedOut"] and summary["bdinfoTimedOut"])
+        or (
+            schema_version == 6
+            and summary["timedOut"]
+            and summary["memoryProbeTimedOut"]
+        )
         or (
             summary["signal"] is not None
             and summary["exitCode"] != 128 + summary["signal"]
@@ -2260,6 +2313,153 @@ def _validate_bootloader_console_summary(summary: Any) -> dict[str, Any]:
                 or (
                     any(summary[field] is not None for field in relocation_fields)
                     and not summary["bdinfoResponseObserved"]
+                )
+            )
+        )
+        or (
+            schema_version == 6
+            and (
+                (
+                    summary["memoryProbePreparationCommandSent"]
+                    and not summary["memoryProbePreparationCommandAttempted"]
+                )
+                or (
+                    summary["memoryProbePreparationCommandEchoObserved"]
+                    and not summary["memoryProbePreparationCommandSent"]
+                )
+                or (
+                    summary["memoryProbePreparationResponsePromptObserved"]
+                    and (
+                        not summary["memoryProbePreparationCommandSent"]
+                        or not (
+                            summary["memoryProbeVariablesCleared"]
+                            or summary["memoryProbePreparationRejected"]
+                        )
+                    )
+                )
+                or (
+                    summary["memoryProbeVariablesCleared"]
+                    and (
+                        not summary[
+                            "memoryProbePreparationResponsePromptObserved"
+                        ]
+                        or not summary[
+                            "memoryProbePreparationCommandEchoObserved"
+                        ]
+                        or summary["memoryProbePreparationRejected"]
+                    )
+                )
+                or (
+                    summary["memoryProbePreparationRejected"]
+                    and (
+                        not summary["memoryProbePreparationCommandSent"]
+                        or not summary[
+                            "memoryProbePreparationCommandEchoObserved"
+                        ]
+                        or not summary[
+                            "memoryProbePreparationResponsePromptObserved"
+                        ]
+                        or summary["memoryProbeVariablesCleared"]
+                        or summary["memoryProbeTimedOut"]
+                        or summary["memoryProbeCommandSent"]
+                        or summary["memoryProbeResponseObserved"]
+                        or summary["memoryProbeResponseRejected"]
+                        or any(summary[field] is not None for field in instruction_fields)
+                    )
+                )
+                or (
+                    summary["memoryProbePreparationCommandSent"]
+                    and not summary["promptObserved"]
+                )
+                or (
+                    summary["memoryProbeCommandAttempted"]
+                    and not summary["memoryProbeVariablesCleared"]
+                )
+                or (
+                    summary["memoryProbeCommandSent"]
+                    and not summary["memoryProbeCommandAttempted"]
+                )
+                or (
+                    summary["memoryProbeCommandSent"]
+                    and not summary["memoryProbeVariablesCleared"]
+                )
+                or (
+                    summary["memoryProbeCommandSent"]
+                    and not summary["promptObserved"]
+                )
+                or (
+                    summary["memoryProbeCommandEchoObserved"]
+                    and not summary["memoryProbeCommandSent"]
+                )
+                or (
+                    summary["memoryProbeResponsePromptObserved"]
+                    and (
+                        not summary["memoryProbeCommandSent"]
+                        or not summary["memoryProbeCommandEchoObserved"]
+                        or not (
+                            summary["memoryProbeResponseObserved"]
+                            or summary["memoryProbeResponseRejected"]
+                        )
+                    )
+                )
+                or (
+                    summary["memoryProbeResponseObserved"]
+                    and (
+                        not summary["memoryProbeResponsePromptObserved"]
+                        or summary["memoryProbeResponseRejected"]
+                        or any(summary[field] is None for field in instruction_fields)
+                    )
+                )
+                or (
+                    summary["memoryProbeResponseRejected"]
+                    and (
+                        not summary["memoryProbeCommandSent"]
+                        or not summary["memoryProbeCommandEchoObserved"]
+                        or not summary["memoryProbeResponsePromptObserved"]
+                        or summary["memoryProbeResponseObserved"]
+                        or summary["memoryProbeTimedOut"]
+                        or any(summary[field] is not None for field in instruction_fields)
+                    )
+                )
+                or (
+                    summary["memoryProbeTimedOut"]
+                    and (
+                        not (
+                            summary["memoryProbePreparationCommandAttempted"]
+                            or summary["memoryProbeCommandAttempted"]
+                        )
+                        or summary["bootCommandSent"]
+                        or (
+                            summary["memoryProbeCommandSent"]
+                            and (
+                                summary["memoryProbeResponseObserved"]
+                                or summary["memoryProbeResponseRejected"]
+                            )
+                        )
+                        or (
+                            not summary["memoryProbeCommandSent"]
+                            and not summary["memoryProbeCommandAttempted"]
+                            and (
+                                summary[
+                                    "memoryProbePreparationResponsePromptObserved"
+                                ]
+                                or summary["memoryProbePreparationRejected"]
+                                or summary["memoryProbeVariablesCleared"]
+                            )
+                        )
+                    )
+                )
+                or (
+                    summary["bootCommandSent"]
+                    and not (
+                        summary["memoryProbePreparationRejected"]
+                        or summary["memoryProbeResponseObserved"]
+                        or summary["memoryProbeResponseRejected"]
+                    )
+                )
+                or (
+                    any(summary[field] is not None for field in instruction_fields)
+                    and not summary["memoryProbeResponseObserved"]
                 )
             )
         )
@@ -2654,7 +2854,7 @@ def _append_missing_record_note(directory_descriptor: int, note: bytes) -> None:
         os.close(descriptor)
 
 
-def _omit_bdinfo_kernel_log(directory_descriptor: int) -> None:
+def _omit_paused_uboot_kernel_log(directory_descriptor: int) -> None:
     try:
         kernel_log_stat = _stat_entry_at(directory_descriptor, "kernel.log")
     except FileNotFoundError:
@@ -2668,7 +2868,10 @@ def _omit_bdinfo_kernel_log(directory_descriptor: int) -> None:
                 "kernel.log is not a regular file owned by the current user"
             )
         _unlink_entry_at(directory_descriptor, "kernel.log", kernel_log_stat)
-    _append_missing_record_note(directory_descriptor, BDINFO_LOG_OMISSION_NOTE)
+    _append_missing_record_note(
+        directory_descriptor,
+        CONSOLE_PROBE_LOG_OMISSION_NOTE,
+    )
 
 
 def _remove_directory_entry_at(
@@ -3567,11 +3770,16 @@ def publish_normalized_record(
                                 experiment["pauseInBootloader"],
                             )
                             bootloader_console = experiment.get("bootloaderConsole")
-                            if (
-                                experiment["pauseInBootloader"]
-                                and bootloader_console.get("bdinfoCommandSent") is True
+                            if experiment["pauseInBootloader"] and (
+                                bootloader_console.get("bdinfoCommandSent") is True
+                                or bootloader_console.get(
+                                    "memoryProbePreparationCommandSent"
+                                )
+                                is True
+                                or bootloader_console.get("memoryProbeCommandSent")
+                                is True
                             ):
-                                _omit_bdinfo_kernel_log(capture_descriptor)
+                                _omit_paused_uboot_kernel_log(capture_descriptor)
                         finally:
                             os.close(capture_descriptor)
                         _rename_directory_no_replace(
@@ -3926,7 +4134,8 @@ def patch_capture_script(
             "launch_profile() {",
             f"""{bootloader_console_start}start_cvd_group_with_gpu_mode() {{
   run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" \\
-    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument}{pause_argument}
+    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console={console_argument} \\
+    --boot_timeout_secs=$timeout_seconds{pause_argument}
 }}
 
 launch_profile() {{""",
@@ -4078,6 +4287,7 @@ launch_profile() {{""",
             (
                 'if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \\\n'
                 '  || ! run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" start \\\n'
+                '    "--boot_timeout_secs=$timeout_seconds" \\\n'
                 '    >> "$stage/cvd-create-console.log" 2>&1; then'
             ),
             (
@@ -4167,10 +4377,11 @@ launch_profile() {{""",
             ),
         ),
     )
-    for old, new in replacements:
+    for replacement_index, (old, new) in enumerate(replacements):
         if source.count(old) != 1:
             raise ValueError(
-                "private capture script no longer matches the reviewed baseline"
+                "private capture script no longer matches the reviewed baseline "
+                f"at replacement {replacement_index}"
             )
         source = source.replace(old, new)
     path.write_text(source, encoding="utf-8")

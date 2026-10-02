@@ -164,6 +164,7 @@ def run_start_with_console(arguments: argparse.Namespace) -> int:
         f"--gpu_mode={arguments.gpu_mode}",
         "--gpu_vhost_user_mode=off",
         f"--console={str(arguments.console_enabled).lower()}",
+        f"--boot_timeout_secs={arguments.timeout_seconds}",
         "--pause_in_bootloader=true",
     ]
     console_command = [

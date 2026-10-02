@@ -698,6 +698,205 @@ def test_bootloader_console_summary_rejects_inconsistent_bdinfo(
         experiment_support._validate_bootloader_console_summary(summary)
 
 
+def _valid_memory_probe_summary() -> dict[str, object]:
+    return {
+        "schemaVersion": 6,
+        "consoleEndpointFound": True,
+        "screenStarted": True,
+        "uBootBannerObserved": True,
+        "promptObserved": True,
+        "memoryProbePreparationCommandAttempted": True,
+        "memoryProbePreparationCommandSent": True,
+        "memoryProbePreparationCommandEchoObserved": True,
+        "memoryProbePreparationResponsePromptObserved": True,
+        "memoryProbeVariablesCleared": True,
+        "memoryProbePreparationRejected": False,
+        "memoryProbeCommandAttempted": True,
+        "memoryProbeCommandSent": True,
+        "memoryProbeCommandEchoObserved": True,
+        "memoryProbeResponsePromptObserved": True,
+        "memoryProbeResponseObserved": True,
+        "memoryProbeResponseRejected": False,
+        "memoryProbeTimedOut": False,
+        "wordAtObservedPc": 0xD50B7E20,
+        "wordBeforeObservedPc": 0xD53B0023,
+        "bootCommandSent": True,
+        "kernelHandoffObserved": True,
+        "outputBytesObserved": 64,
+        "escapeStrippedBytesObserved": 64,
+        "escapeSequenceIncomplete": False,
+        "outputLimitBytes": 65_536,
+        "outputTruncated": False,
+        "timedOut": False,
+        "handoffTimedOut": False,
+        "screenExitCode": 0,
+        "signal": None,
+        "cleanupComplete": True,
+        "cleanupFailure": None,
+        "cleanupErrorNumber": None,
+        "exitCode": 0,
+    }
+
+
+def test_bootloader_console_summary_accepts_sanitized_memory_probe_words() -> None:
+    summary = _valid_memory_probe_summary()
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_rejected_memory_probe_with_boot() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=True,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_memory_probe_timeout() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        memoryProbeTimedOut=True,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+        bootCommandSent=False,
+        kernelHandoffObserved=False,
+        exitCode=1,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_memory_read_send_timeout() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbeCommandSent=False,
+        memoryProbeCommandEchoObserved=False,
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        memoryProbeTimedOut=True,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+        bootCommandSent=False,
+        kernelHandoffObserved=False,
+        exitCode=1,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_rejected_preparation_with_boot() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbeVariablesCleared=False,
+        memoryProbePreparationRejected=True,
+        memoryProbeCommandAttempted=False,
+        memoryProbeCommandSent=False,
+        memoryProbeCommandEchoObserved=False,
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_preparation_timeout() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbePreparationCommandEchoObserved=False,
+        memoryProbePreparationResponsePromptObserved=False,
+        memoryProbeVariablesCleared=False,
+        memoryProbeCommandAttempted=False,
+        memoryProbeCommandSent=False,
+        memoryProbeCommandEchoObserved=False,
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        memoryProbeTimedOut=True,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+        bootCommandSent=False,
+        kernelHandoffObserved=False,
+        exitCode=1,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+def test_bootloader_console_summary_accepts_preparation_send_timeout() -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbePreparationCommandSent=False,
+        memoryProbePreparationCommandEchoObserved=False,
+        memoryProbePreparationResponsePromptObserved=False,
+        memoryProbeVariablesCleared=False,
+        memoryProbeCommandAttempted=False,
+        memoryProbeCommandSent=False,
+        memoryProbeCommandEchoObserved=False,
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        memoryProbeTimedOut=True,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+        bootCommandSent=False,
+        kernelHandoffObserved=False,
+        exitCode=1,
+    )
+
+    assert experiment_support._validate_bootloader_console_summary(summary) == summary
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    (
+        ({"wordAtObservedPc": True}, "invalid fields"),
+        ({"wordBeforeObservedPc": 0x1_0000_0000}, "invalid fields"),
+        ({"memoryProbeCommandEchoObserved": False}, "inconsistent or incomplete"),
+        ({"memoryProbeResponsePromptObserved": False}, "inconsistent or incomplete"),
+        ({"memoryProbeTimedOut": True}, "inconsistent or incomplete"),
+        ({"memoryProbeResponseRejected": True}, "inconsistent or incomplete"),
+        ({"bootCommandSent": False}, "inconsistent or incomplete"),
+        ({"wordAtObservedPc": None}, "inconsistent or incomplete"),
+        (
+            {
+                "memoryProbePreparationCommandEchoObserved": False,
+                "memoryProbeVariablesCleared": False,
+                "memoryProbePreparationRejected": True,
+                "memoryProbeCommandAttempted": False,
+                "memoryProbeCommandSent": False,
+                "memoryProbeCommandEchoObserved": False,
+                "memoryProbeResponsePromptObserved": False,
+                "memoryProbeResponseObserved": False,
+                "memoryProbeResponseRejected": False,
+                "wordAtObservedPc": None,
+                "wordBeforeObservedPc": None,
+            },
+            "inconsistent or incomplete",
+        ),
+    ),
+)
+def test_bootloader_console_summary_rejects_inconsistent_memory_probe(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    summary = _valid_memory_probe_summary()
+    summary.update(updates)
+
+    with pytest.raises(ValueError, match=message):
+        experiment_support._validate_bootloader_console_summary(summary)
+
+
 @pytest.mark.parametrize(
     ("status_change", "message"),
     (
@@ -2518,10 +2717,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
     assert "run_with_boot_deadline adb" not in patched
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
-    assert (
-        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
-        f"--console={console_argument}{pause_argument}\n}}" in patched
-    )
+    assert f"--boot_timeout_secs=$timeout_seconds{pause_argument}" in patched
     default_gpu_mode_arguments = [
         line.strip()
         for line in patched.splitlines()
@@ -2535,7 +2731,7 @@ def test_private_capture_patch_changes_gpu_adb_console_bootloader_and_logcat_cap
     assert default_gpu_mode_arguments == [
         (
             f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off "
-            f"--console={console_argument}{pause_argument}"
+            f"--console={console_argument} \\"
         ),
         (
             "create_cvd_group_with_common_options "
@@ -2908,11 +3104,12 @@ result.write_text(
                 f"runtime_root={shlex.quote(str(runtime_root))}",
                 f"private_product_out={shlex.quote(str(tmp_path / 'product'))}",
                 f"CVD_HOST_DIR={shlex.quote(str(tmp_path / 'host'))}",
-                "cvd_group_name=apkrun_test",
-                "cvd_instance_num=1",
-                f"stage={shlex.quote(str(stage))}",
-                f"cvd_home={shlex.quote(str(cvd_home))}",
-                "boot_timeout_deadline=$(($(date +%s) + 30))",
+                    "cvd_group_name=apkrun_test",
+                    "cvd_instance_num=1",
+                    f"stage={shlex.quote(str(stage))}",
+                    f"cvd_home={shlex.quote(str(cvd_home))}",
+                    "timeout_seconds=30",
+                    "boot_timeout_deadline=$(($(date +%s) + 30))",
                 "boot_deadline_expired=0",
                 f"APKRUN_EXPERIMENT_STATUS_ROOT={shlex.quote(str(status_root))}",
                 f"APKRUN_EXPERIMENT_TOOLS={shlex.quote(str(tool_directory))}",
@@ -2971,6 +3168,16 @@ result.write_text(
     calls = [
         json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()
     ]
+    start_timeout_arguments = [
+        value
+        for value in calls[-1]
+        if value.startswith("--boot_timeout_secs=")
+    ]
+    assert len(start_timeout_arguments) == 1
+    start_timeout_seconds = int(start_timeout_arguments[0].split("=", 1)[1])
+    assert 1 <= start_timeout_seconds <= 30
+    if not pause_in_bootloader:
+        assert start_timeout_seconds == 30
     assert calls == [
         [
             "create",
@@ -2996,6 +3203,7 @@ result.write_text(
             f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             f"--console={str(console_enabled).lower()}",
+            start_timeout_arguments[0],
             *(["--pause_in_bootloader=true"] if pause_in_bootloader else []),
         ],
     ]
@@ -4554,7 +4762,7 @@ def test_publication_rejects_result_directory_without_nesting_capture(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
-def test_publication_omits_kernel_log_after_bdinfo_was_sent(
+def test_publication_omits_kernel_log_after_console_probe_was_sent(
     tmp_path: Path,
 ) -> None:
     data_root = tmp_path / "diagnostics"
@@ -4603,7 +4811,7 @@ def test_publication_omits_kernel_log_after_bdinfo_was_sent(
     )
     (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
     (capture_record / "kernel.log").write_text(
-        "U-Boot bdinfo\nethaddr = 02:00:00:00:00:01\n"
+        "U-Boot console probe\nethaddr = 02:00:00:00:00:01\n"
         "relocaddr = 0x17f600000\nreloc off = 0x8000\n",
         encoding="utf-8",
     )
@@ -4626,6 +4834,109 @@ def test_publication_omits_kernel_log_after_bdinfo_was_sent(
         if path.is_file()
     )
     assert "ethaddr" not in published_text
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_omits_kernel_log_after_memory_probe_was_sent(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    summary = _valid_memory_probe_summary()
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=summary,
+    )
+    (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
+    (capture_record / "kernel.log").write_text(
+        "U-Boot memory probe\nword0=d50b7e20 word1=d53b0023\n",
+        encoding="utf-8",
+    )
+    result_path = results_root / "gpu-none-console-on-20261002T000000Z-5678"
+
+    experiment_support.publish_normalized_record(
+        capture_record,
+        work_root,
+        data_root,
+        result_path,
+        ownership_token,
+    )
+
+    assert not (result_path / "kernel.log").exists()
+    missing = (result_path / "MISSING.txt").read_text(encoding="utf-8")
+    assert "kernel.log\tomitted from published paused-U-Boot probe" in missing
+    published_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in result_path.iterdir()
+        if path.is_file()
+    )
+    assert "d50b7e20" not in published_text
+    assert "d53b0023" not in published_text
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+def test_publication_omits_kernel_log_after_probe_preparation_was_sent(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work/gpu-none-console-on.012345"
+    results_root = data_root / "results"
+    capture_record = work_root / "Images/reference/16373615/default"
+    capture_record.mkdir(parents=True)
+    results_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    summary = _valid_memory_probe_summary()
+    summary.update(
+        memoryProbeVariablesCleared=False,
+        memoryProbePreparationRejected=True,
+        memoryProbeCommandAttempted=False,
+        memoryProbeCommandSent=False,
+        memoryProbeCommandEchoObserved=False,
+        memoryProbeResponsePromptObserved=False,
+        memoryProbeResponseObserved=False,
+        memoryProbeResponseRejected=False,
+        wordAtObservedPc=None,
+        wordBeforeObservedPc=None,
+    )
+    _write_publication_experiment(
+        capture_record,
+        console_enabled=True,
+        pause_in_bootloader=True,
+        bootloader_console=summary,
+    )
+    (capture_record / "MISSING.txt").write_text("", encoding="utf-8")
+    (capture_record / "kernel.log").write_text(
+        "APKRUN_PROBE_READY stale-secret-like-value\n",
+        encoding="utf-8",
+    )
+    result_path = results_root / "gpu-none-console-on-20261002T000000Z-5679"
+
+    experiment_support.publish_normalized_record(
+        capture_record,
+        work_root,
+        data_root,
+        result_path,
+        ownership_token,
+    )
+
+    assert not (result_path / "kernel.log").exists()
+    missing = (result_path / "MISSING.txt").read_text(encoding="utf-8")
+    assert "kernel.log\tomitted from published paused-U-Boot probe" in missing
+    published_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in result_path.iterdir()
+        if path.is_file()
+    )
+    assert "stale-secret-like-value" not in published_text
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
@@ -4765,7 +5076,7 @@ def test_kernel_log_omission_does_not_record_success_when_unlink_fails(
     capture_record = tmp_path / "capture"
     capture_record.mkdir()
     kernel_log = capture_record / "kernel.log"
-    kernel_log.write_text("private bdinfo output\n", encoding="utf-8")
+    kernel_log.write_text("private console output\n", encoding="utf-8")
     missing = capture_record / "MISSING.txt"
     missing.write_text("", encoding="utf-8")
     directory_descriptor = os.open(
@@ -4783,11 +5094,11 @@ def test_kernel_log_omission_does_not_record_success_when_unlink_fails(
     monkeypatch.setattr(experiment_support, "_unlink_entry_at", fail_unlink)
     try:
         with pytest.raises(OSError, match="injected unlink failure"):
-            experiment_support._omit_bdinfo_kernel_log(directory_descriptor)
+            experiment_support._omit_paused_uboot_kernel_log(directory_descriptor)
     finally:
         os.close(directory_descriptor)
 
-    assert kernel_log.read_text(encoding="utf-8") == "private bdinfo output\n"
+    assert kernel_log.read_text(encoding="utf-8") == "private console output\n"
     assert missing.read_text(encoding="utf-8") == ""
 
 

@@ -45,36 +45,45 @@ def _screen_stub(tmp_path: Path, body: str) -> Path:
     return program
 
 
-def _bdinfo_probe_reader() -> str:
+def _memory_probe_preparation_reader(
+    response_line: bytes = b"APKRUN_PROBE_READY",
+) -> str:
+    preparation_command = CONSOLE_MODULE["MEMORY_PROBE_PREPARATION_COMMAND"]
     return (
-        "import re\n"
-        "bdinfo_command = os.read(0, 128)\n"
-        "bdinfo_match = re.fullmatch("
-        "rb'echo APK_([0-9a-f]{24}); bdinfo; "
-        "echo APK_\\1\\r', bdinfo_command)\n"
-        "if bdinfo_match is None:\n"
+        f"preparation_command = os.read(0, 128)\n"
+        f"if preparation_command != {preparation_command!r}:\n"
+        "    raise SystemExit(17)\n"
+        f"preparation_echo = {preparation_command[:-1]!r}\n"
+        f"os.write(1, b'=> ' + preparation_echo + b'\\r\\n' + "
+        f"{response_line!r} + b'\\r\\n=> ')\n"
+    )
+
+
+def _memory_probe_reader() -> str:
+    command = CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]
+    return (
+        _memory_probe_preparation_reader()
+        + f"probe_command = os.read(0, 128)\n"
+        f"if probe_command != {command!r}:\n"
         "    raise SystemExit(18)\n"
-        "sync_token = bdinfo_match.group(1)\n"
     )
 
 
-def _bdinfo_probe_response(*, include_prompt: bool = True) -> str:
-    prompt_prefix = "=> " if include_prompt else ""
-    return (
-        f"os.write(1, b'{prompt_prefix}echo APK_' "
-        "+ sync_token + b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
-        "APK_' + sync_token + b'\\n"
-        "ethaddr = 02:00:00:00:00:01\\n"
-        "relocaddr   = 0x000000017f600000\\n"
-        "reloc off   = 0x0000000000008000\\n"
-        "APK_' + sync_token + b'\\n=> ')\n"
-    )
+def _memory_probe_response(
+    *,
+    include_prompt: bool = True,
+    words: bytes = b"d50b7e20 d53b0023",
+) -> str:
+    command = CONSOLE_MODULE["MEMORY_PROBE_COMMAND"][:-1]
+    prompt = b"=> " if include_prompt else b""
+    payload = b"=> " + command + b"\r\n" + words + b"\r\n" + prompt
+    return f"os.write(1, {payload!r})\n"
 
 
-def _bdinfo_exchange() -> str:
+def _memory_probe_exchange() -> str:
     return (
-        _bdinfo_probe_reader()
-        + _bdinfo_probe_response()
+        _memory_probe_reader()
+        + _memory_probe_response()
         + "boot_command = os.read(0, 32)\n"
         "if b'boot\\r' not in boot_command:\n"
         "    raise SystemExit(19)\n"
@@ -88,7 +97,7 @@ def _run_helper(
     *,
     timeout: int = 2,
     handoff_timeout: int = 1,
-    bdinfo_timeout: int = 1,
+    memory_probe_timeout: int = 1,
     output_limit: int = 65_536,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -103,8 +112,8 @@ def _run_helper(
             str(timeout),
             "--handoff-timeout-seconds",
             str(handoff_timeout),
-            "--bdinfo-timeout-seconds",
-            str(bdinfo_timeout),
+            "--memory-probe-timeout-seconds",
+            str(memory_probe_timeout),
             "--max-output-bytes",
             str(output_limit),
             "--screen-program",
@@ -127,7 +136,7 @@ def _drive_helper_with_delayed_read(
     delay_seconds: float,
     timeout_seconds: int,
     handoff_timeout_seconds: int,
-    bdinfo_timeout_seconds: int,
+    memory_probe_timeout_seconds: int,
 ) -> tuple[dict[str, object], int]:
     drive_console = CONSOLE_MODULE["drive_console"]
     module_globals = drive_console.__globals__
@@ -148,7 +157,7 @@ def _drive_helper_with_delayed_read(
         result,
         timeout_seconds=timeout_seconds,
         handoff_timeout_seconds=handoff_timeout_seconds,
-        bdinfo_timeout_seconds=bdinfo_timeout_seconds,
+        memory_probe_timeout_seconds=memory_probe_timeout_seconds,
         max_output_bytes=65_536,
         screen_program_path=screen,
     )
@@ -164,7 +173,7 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'\\x1b=\\x1b(B\\xc4\\x9d\\nU-Boot 2025.01 (test)\\n=> ')\n"
-        + _bdinfo_exchange()
+        + _memory_probe_exchange()
         + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
@@ -172,21 +181,26 @@ def test_console_helper_sends_boot_only_at_prompt_and_observes_handoff(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["schemaVersion"] == 5
+    assert summary["schemaVersion"] == 6
     assert summary["consoleEndpointFound"] is True
     assert summary["screenStarted"] is True
     assert summary["uBootBannerObserved"] is True
     assert summary["promptObserved"] is True
-    assert summary["bdinfoCommandSent"] is True
-    assert summary["bdinfoCommandEchoObserved"] is True
-    assert summary["bdinfoStartMarkerObserved"] is True
-    assert summary["bdinfoEndMarkerObserved"] is True
-    assert summary["bdinfoResponsePromptObserved"] is True
-    assert summary["bdinfoResponseObserved"] is True
-    assert summary["bdinfoResponseRejected"] is False
-    assert summary["bdinfoTimedOut"] is False
-    assert summary["relocationAddress"] == 0x17F600000
-    assert summary["relocationOffset"] == 0x8000
+    assert summary["memoryProbePreparationCommandAttempted"] is True
+    assert summary["memoryProbePreparationCommandSent"] is True
+    assert summary["memoryProbePreparationCommandEchoObserved"] is True
+    assert summary["memoryProbePreparationResponsePromptObserved"] is True
+    assert summary["memoryProbeVariablesCleared"] is True
+    assert summary["memoryProbePreparationRejected"] is False
+    assert summary["memoryProbeCommandAttempted"] is True
+    assert summary["memoryProbeCommandSent"] is True
+    assert summary["memoryProbeCommandEchoObserved"] is True
+    assert summary["memoryProbeResponsePromptObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is True
+    assert summary["memoryProbeResponseRejected"] is False
+    assert summary["memoryProbeTimedOut"] is False
+    assert summary["wordAtObservedPc"] == 0xD50B7E20
+    assert summary["wordBeforeObservedPc"] == 0xD53B0023
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is True
     assert summary["cleanupComplete"] is True
@@ -257,7 +271,7 @@ def test_console_helper_ignores_kernel_marker_received_before_boot(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'Starting kernel ...\\nU-Boot 2025.01 (test)\\n=> ')\n"
-        + _bdinfo_exchange()
+        + _memory_probe_exchange()
         + "time.sleep(10)",
     )
 
@@ -280,8 +294,8 @@ def test_console_helper_does_not_boot_after_global_deadline_during_read(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + _bdinfo_probe_response()
+        + _memory_probe_reader()
+        + _memory_probe_response()
         + "time.sleep(10)",
     )
 
@@ -290,17 +304,17 @@ def test_console_helper_does_not_boot_after_global_deadline_during_read(
         result,
         screen,
         monkeypatch,
-        marker=b"relocaddr",
+        marker=b"d50b7e20",
         delay_seconds=2.1,
         timeout_seconds=2,
         handoff_timeout_seconds=1,
-        bdinfo_timeout_seconds=5,
+        memory_probe_timeout_seconds=5,
     )
 
     assert status == 1
     assert summary["timedOut"] is True
-    assert summary["bdinfoTimedOut"] is False
-    assert summary["bdinfoResponsePromptObserved"] is False
+    assert summary["memoryProbeTimedOut"] is False
+    assert summary["memoryProbeResponsePromptObserved"] is False
     assert summary["bootCommandSent"] is False
     assert summary["kernelHandoffObserved"] is False
 
@@ -314,8 +328,8 @@ def test_console_helper_checks_global_deadline_inside_boot_sender(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + _bdinfo_probe_response()
+        + _memory_probe_reader()
+        + _memory_probe_response()
         + "time.sleep(10)",
     )
     drive_console = CONSOLE_MODULE["drive_console"]
@@ -342,19 +356,19 @@ def test_console_helper_checks_global_deadline_inside_boot_sender(
         result,
         timeout_seconds=2,
         handoff_timeout_seconds=1,
-        bdinfo_timeout_seconds=5,
+        memory_probe_timeout_seconds=5,
         max_output_bytes=65_536,
         screen_program_path=screen,
     )
 
     assert status == 1
     assert summary["timedOut"] is True
-    assert summary["bdinfoTimedOut"] is False
+    assert summary["memoryProbeTimedOut"] is False
     assert summary["bootCommandSent"] is False
     assert summary["kernelHandoffObserved"] is False
 
 
-def test_console_helper_checks_global_deadline_inside_bdinfo_sender(
+def test_console_helper_checks_global_deadline_inside_memory_probe_sender(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -362,7 +376,9 @@ def test_console_helper_checks_global_deadline_inside_bdinfo_sender(
     result = tmp_path / "bootloader-console-summary.json"
     screen = _screen_stub(
         tmp_path,
-        "os.write(1, b'U-Boot 2025.01\\n=> ')\n" + "time.sleep(10)",
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
+        + "time.sleep(10)",
     )
     drive_console = CONSOLE_MODULE["drive_console"]
     module_globals = drive_console.__globals__
@@ -374,7 +390,7 @@ def test_console_helper_checks_global_deadline_inside_bdinfo_sender(
         *,
         deadline: float | None = None,
     ) -> tuple[bool, bool]:
-        if command.startswith(b"echo APK_"):
+        if command == CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]:
             time.sleep(2.1)
         return original_sender(master_fd, command, deadline=deadline)
 
@@ -388,17 +404,119 @@ def test_console_helper_checks_global_deadline_inside_bdinfo_sender(
         result,
         timeout_seconds=2,
         handoff_timeout_seconds=1,
-        bdinfo_timeout_seconds=5,
+        memory_probe_timeout_seconds=5,
         max_output_bytes=65_536,
         screen_program_path=screen,
     )
 
     assert status == 1
     assert summary["timedOut"] is True
-    assert summary["bdinfoTimedOut"] is False
-    assert summary["bdinfoCommandSent"] is False
+    assert summary["memoryProbeTimedOut"] is False
+    assert summary["memoryProbeCommandSent"] is False
     assert summary["bootCommandSent"] is False
     assert summary["kernelHandoffObserved"] is False
+
+
+def test_console_helper_probe_deadline_bounds_preparation_command_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
+        + "time.sleep(10)",
+    )
+    drive_console = CONSOLE_MODULE["drive_console"]
+    module_globals = drive_console.__globals__
+    original_sender = module_globals["_send_console_command_if_not_cancelled"]
+
+    def delayed_sender(
+        master_fd: int,
+        command: bytes,
+        *,
+        deadline: float | None = None,
+    ) -> tuple[bool, bool]:
+        if command == CONSOLE_MODULE["MEMORY_PROBE_PREPARATION_COMMAND"]:
+            time.sleep(1.1)
+        return original_sender(master_fd, command, deadline=deadline)
+
+    monkeypatch.setitem(
+        module_globals,
+        "_send_console_command_if_not_cancelled",
+        delayed_sender,
+    )
+    summary, status = drive_console(
+        home,
+        result,
+        timeout_seconds=4,
+        handoff_timeout_seconds=1,
+        memory_probe_timeout_seconds=1,
+        max_output_bytes=65_536,
+        screen_program_path=screen,
+    )
+
+    assert status == 1
+    assert summary["timedOut"] is False
+    assert summary["memoryProbeTimedOut"] is True
+    assert summary["memoryProbePreparationCommandAttempted"] is True
+    assert summary["memoryProbePreparationCommandSent"] is False
+    assert summary["memoryProbeCommandAttempted"] is False
+    assert summary["bootCommandSent"] is False
+
+
+def test_console_helper_probe_deadline_bounds_memory_read_command_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
+        + _memory_probe_response()
+        + "time.sleep(10)",
+    )
+    drive_console = CONSOLE_MODULE["drive_console"]
+    module_globals = drive_console.__globals__
+    original_sender = module_globals["_send_console_command_if_not_cancelled"]
+
+    def delayed_sender(
+        master_fd: int,
+        command: bytes,
+        *,
+        deadline: float | None = None,
+    ) -> tuple[bool, bool]:
+        if command == CONSOLE_MODULE["MEMORY_PROBE_COMMAND"]:
+            time.sleep(1.1)
+        return original_sender(master_fd, command, deadline=deadline)
+
+    monkeypatch.setitem(
+        module_globals,
+        "_send_console_command_if_not_cancelled",
+        delayed_sender,
+    )
+    summary, status = drive_console(
+        home,
+        result,
+        timeout_seconds=4,
+        handoff_timeout_seconds=1,
+        memory_probe_timeout_seconds=1,
+        max_output_bytes=65_536,
+        screen_program_path=screen,
+    )
+
+    assert status == 1
+    assert summary["timedOut"] is False
+    assert summary["memoryProbeTimedOut"] is True
+    assert summary["memoryProbePreparationCommandSent"] is True
+    assert summary["memoryProbeVariablesCleared"] is True
+    assert summary["memoryProbeCommandAttempted"] is True
+    assert summary["memoryProbeCommandSent"] is False
+    assert summary["bootCommandSent"] is False
 
 
 def test_console_helper_does_not_accept_handoff_after_deadline_during_read(
@@ -410,7 +528,7 @@ def test_console_helper_does_not_accept_handoff_after_deadline_during_read(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_exchange()
+        + _memory_probe_exchange()
         + "os.write(1, b'\\r\\nStarting kernel ...\\n')\n"
         + "time.sleep(10)",
     )
@@ -424,7 +542,7 @@ def test_console_helper_does_not_accept_handoff_after_deadline_during_read(
         delay_seconds=1.1,
         timeout_seconds=4,
         handoff_timeout_seconds=1,
-        bdinfo_timeout_seconds=1,
+        memory_probe_timeout_seconds=1,
     )
 
     assert status == 1
@@ -440,7 +558,7 @@ def test_console_helper_classifies_simultaneous_deadlines_as_handoff_timeout() -
         "screenExitCode": None,
         "signal": None,
         "bootCommandSent": True,
-        "bdinfoTimedOut": False,
+        "memoryProbeTimedOut": False,
         "handoffTimedOut": False,
         "timedOut": False,
     }
@@ -456,7 +574,7 @@ def test_console_helper_classifies_simultaneous_deadlines_as_handoff_timeout() -
     assert summary["timedOut"] is False
 
 
-def test_console_helper_bounds_bdinfo_wait_and_never_boots_without_response(
+def test_console_helper_bounds_memory_probe_wait_and_never_boots_without_response(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
@@ -464,7 +582,7 @@ def test_console_helper_bounds_bdinfo_wait_and_never_boots_without_response(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
+        + _memory_probe_reader()
         + "time.sleep(10)",
     )
 
@@ -473,20 +591,22 @@ def test_console_helper_bounds_bdinfo_wait_and_never_boots_without_response(
         result,
         screen,
         timeout=3,
-        bdinfo_timeout=1,
+        memory_probe_timeout=1,
     )
 
     assert completed.returncode == 1
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoCommandSent"] is True
-    assert summary["bdinfoResponseObserved"] is False
-    assert summary["bdinfoTimedOut"] is True
+    assert summary["memoryProbePreparationCommandAttempted"] is True
+    assert summary["memoryProbeCommandSent"] is True
+    assert summary["memoryProbeCommandAttempted"] is True
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["memoryProbeTimedOut"] is True
     assert summary["bootCommandSent"] is False
-    assert summary["relocationAddress"] is None
+    assert summary["wordAtObservedPc"] is None
     assert summary["cleanupComplete"] is True
 
 
-def test_console_helper_ignores_late_stale_fields_before_start_marker(
+def test_console_helper_rejects_uncleared_probe_variables_and_continues_boot(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
@@ -494,14 +614,9 @@ def test_console_helper_ignores_late_stale_fields_before_start_marker(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + "os.write(1, b'=> echo APK_' + sync_token + "
-        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
-        "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n=> \\n"
-        "APK_' + sync_token + b'\\n"
-        "APK_' + sync_token + b'\\n=> ')\n"
-        "boot_command = os.read(0, 32)\n"
-        "if b'boot\\r' not in boot_command:\n"
+        + _memory_probe_preparation_reader(b"APKRUN_PROBE_READY stale0 stale1")
+        + "boot_command = os.read(0, 32)\n"
+        "if boot_command != b'boot\\r':\n"
         "    raise SystemExit(19)\n"
         "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
@@ -510,29 +625,31 @@ def test_console_helper_ignores_late_stale_fields_before_start_marker(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoCommandEchoObserved"] is True
-    assert summary["bdinfoStartMarkerObserved"] is True
-    assert summary["bdinfoEndMarkerObserved"] is True
-    assert summary["bdinfoResponseObserved"] is False
-    assert summary["bdinfoResponsePromptObserved"] is True
-    assert summary["bdinfoResponseRejected"] is True
-    assert summary["relocationAddress"] is None
+    assert summary["memoryProbePreparationCommandSent"] is True
+    assert summary["memoryProbePreparationCommandEchoObserved"] is True
+    assert summary["memoryProbePreparationResponsePromptObserved"] is True
+    assert summary["memoryProbeVariablesCleared"] is False
+    assert summary["memoryProbePreparationRejected"] is True
+    assert summary["memoryProbeCommandSent"] is False
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["wordAtObservedPc"] is None
+    assert summary["wordBeforeObservedPc"] is None
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is True
 
 
-def test_console_helper_never_boots_without_the_unique_bdinfo_marker(
+def test_console_helper_bounds_probe_variable_preparation_wait(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
     result = tmp_path / "bootloader-console-summary.json"
+    preparation_command = CONSOLE_MODULE["MEMORY_PROBE_PREPARATION_COMMAND"]
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + "os.write(1, b'=> echo APK_' + sync_token + "
-        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
-        "relocaddr = 0x17f600000\\nreloc off = 0x8000\\n=> ')\n"
+        f"preparation_command = os.read(0, 128)\n"
+        f"if preparation_command != {preparation_command!r}:\n"
+        "    raise SystemExit(17)\n"
         "time.sleep(10)",
     )
 
@@ -541,79 +658,31 @@ def test_console_helper_never_boots_without_the_unique_bdinfo_marker(
         result,
         screen,
         timeout=3,
-        bdinfo_timeout=1,
+        memory_probe_timeout=1,
     )
 
     assert completed.returncode == 1
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoCommandEchoObserved"] is True
-    assert summary["bdinfoStartMarkerObserved"] is False
-    assert summary["bdinfoEndMarkerObserved"] is False
-    assert summary["bdinfoResponseObserved"] is False
-    assert summary["bdinfoResponsePromptObserved"] is False
-    assert summary["bdinfoResponseRejected"] is False
-    assert summary["bdinfoTimedOut"] is True
+    assert summary["memoryProbePreparationCommandSent"] is True
+    assert summary["memoryProbePreparationCommandEchoObserved"] is False
+    assert summary["memoryProbePreparationResponsePromptObserved"] is False
+    assert summary["memoryProbeVariablesCleared"] is False
+    assert summary["memoryProbeCommandSent"] is False
+    assert summary["memoryProbeTimedOut"] is True
     assert summary["bootCommandSent"] is False
 
 
-def test_console_helper_rejects_ambiguous_fields_but_continues_boot(
+def test_console_helper_ignores_stale_words_before_probe_command(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
     result = tmp_path / "bootloader-console-summary.json"
     screen = _screen_stub(
         tmp_path,
-        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + "os.write(1, b'=> echo APK_' + sync_token + "
-        "b'; bdinfo; echo APK_' + sync_token + b'\\r\\n"
-        "APK_' + sync_token + b'\\n"
-        "relocaddr = 0x17f500000\\nreloc off = 0x7000\\n"
-        "relocaddr = 0x17f600000\\nreloc off = 0x8000\\n"
-        "APK_' + sync_token + b'\\n=> ')\n"
-        "boot_command = os.read(0, 32)\n"
-        "if b'boot\\r' not in boot_command:\n"
-        "    raise SystemExit(19)\n"
-        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
-    )
-
-    completed = _run_helper(
-        home,
-        result,
-        screen,
-        timeout=3,
-        bdinfo_timeout=1,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoCommandEchoObserved"] is True
-    assert summary["bdinfoStartMarkerObserved"] is True
-    assert summary["bdinfoEndMarkerObserved"] is True
-    assert summary["bdinfoResponseObserved"] is False
-    assert summary["bdinfoResponsePromptObserved"] is True
-    assert summary["bdinfoResponseRejected"] is True
-    assert summary["bdinfoTimedOut"] is False
-    assert summary["bootCommandSent"] is True
-    assert summary["kernelHandoffObserved"] is True
-    assert summary["relocationAddress"] is None
-
-
-def test_console_helper_discards_prequeued_bdinfo_text_before_probe_command(
-    tmp_path: Path,
-) -> None:
-    home = _private_home(tmp_path)
-    result = tmp_path / "bootloader-console-summary.json"
-    screen = _screen_stub(
-        tmp_path,
-        "prefix = b'U-Boot 2025.01\\n' + b'x' * (4096 - 19) + b'\\n=> '\n"
-        "if len(prefix) != 4096:\n"
-        "    raise SystemExit(17)\n"
-        "os.write(1, prefix)\n"
-        "os.write(1, b'bdinfo\\r\\nrelocaddr = 0x17f500000\\n"
-        "reloc off = 0x7000\\n=> ')\n"
-        + _bdinfo_probe_reader()
-        + _bdinfo_probe_response()
+        "os.write(1, b'U-Boot 2025.01\\n=> \\n"
+        "d50b7e20 d53b0023\\n=> ')\n"
+        + _memory_probe_reader()
+        + _memory_probe_response()
         + "boot_command = os.read(0, 32)\n"
         "if b'boot\\r' not in boot_command:\n"
         "    raise SystemExit(19)\n"
@@ -624,15 +693,17 @@ def test_console_helper_discards_prequeued_bdinfo_text_before_probe_command(
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoResponsePromptObserved"] is True
-    assert summary["bdinfoResponseObserved"] is True
-    assert summary["relocationAddress"] == 0x17F600000
-    assert summary["relocationOffset"] == 0x8000
+    assert summary["memoryProbeCommandEchoObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is True
+    assert summary["memoryProbeResponsePromptObserved"] is True
+    assert summary["memoryProbeResponseRejected"] is False
+    assert summary["wordAtObservedPc"] == 0xD50B7E20
+    assert summary["wordBeforeObservedPc"] == 0xD53B0023
     assert summary["bootCommandSent"] is True
     assert summary["kernelHandoffObserved"] is True
 
 
-def test_console_helper_rejects_bdinfo_response_after_timeout(
+def test_console_helper_never_boots_without_the_probe_response_prompt(
     tmp_path: Path,
 ) -> None:
     home = _private_home(tmp_path)
@@ -640,9 +711,110 @@ def test_console_helper_rejects_bdinfo_response_after_timeout(
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
-        + _bdinfo_probe_reader()
+        + _memory_probe_reader()
+        + _memory_probe_response(include_prompt=False)
+        + "time.sleep(10)",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=3,
+        memory_probe_timeout=1,
+    )
+
+    assert completed.returncode == 1
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["memoryProbeCommandEchoObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["memoryProbeResponsePromptObserved"] is False
+    assert summary["memoryProbeResponseRejected"] is False
+    assert summary["memoryProbeTimedOut"] is True
+    assert summary["bootCommandSent"] is False
+
+
+def test_console_helper_rejects_duplicate_instruction_words_but_continues_boot(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
+        + _memory_probe_response(
+            words=b"d50b7e20 d53b0023\nd50b7e20 d53b0023"
+        )
+        + "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    completed = _run_helper(
+        home,
+        result,
+        screen,
+        timeout=3,
+        memory_probe_timeout=1,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["memoryProbeCommandEchoObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["memoryProbeResponsePromptObserved"] is True
+    assert summary["memoryProbeResponseRejected"] is True
+    assert summary["memoryProbeTimedOut"] is False
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+    assert summary["wordAtObservedPc"] is None
+
+
+def test_console_helper_discards_prequeued_probe_text_before_probe_command(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "prefix = b'U-Boot 2025.01\\n' + b'x' * (4096 - 19) + b'\\n=> '\n"
+        "if len(prefix) != 4096:\n"
+        "    raise SystemExit(17)\n"
+        "os.write(1, prefix)\n"
+        "os.write(1, b'd50b7e20 d53b0023\\n=> ')\n"
+        + _memory_probe_reader()
+        + _memory_probe_response()
+        + "boot_command = os.read(0, 32)\n"
+        "if b'boot\\r' not in boot_command:\n"
+        "    raise SystemExit(19)\n"
+        "os.write(1, b'\\r\\nStarting kernel ...\\n')",
+    )
+
+    completed = _run_helper(home, result, screen)
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(result.read_text(encoding="utf-8"))
+    assert summary["memoryProbeResponsePromptObserved"] is True
+    assert summary["memoryProbeResponseObserved"] is True
+    assert summary["wordAtObservedPc"] == 0xD50B7E20
+    assert summary["wordBeforeObservedPc"] == 0xD53B0023
+    assert summary["bootCommandSent"] is True
+    assert summary["kernelHandoffObserved"] is True
+
+
+def test_console_helper_rejects_memory_probe_response_after_timeout(
+    tmp_path: Path,
+) -> None:
+    home = _private_home(tmp_path)
+    result = tmp_path / "bootloader-console-summary.json"
+    screen = _screen_stub(
+        tmp_path,
+        "os.write(1, b'U-Boot 2025.01\\n=> ')\n"
+        + _memory_probe_reader()
         + "time.sleep(1.2)\n"
-        + _bdinfo_probe_response()
+        + _memory_probe_response()
         + "time.sleep(1)",
     )
 
@@ -651,18 +823,16 @@ def test_console_helper_rejects_bdinfo_response_after_timeout(
         result,
         screen,
         timeout=4,
-        bdinfo_timeout=1,
+        memory_probe_timeout=1,
     )
 
     assert completed.returncode == 1
     summary = json.loads(result.read_text(encoding="utf-8"))
-    assert summary["bdinfoCommandEchoObserved"] is False
-    assert summary["bdinfoStartMarkerObserved"] is False
-    assert summary["bdinfoEndMarkerObserved"] is False
-    assert summary["bdinfoResponseObserved"] is False
-    assert summary["bdinfoResponsePromptObserved"] is False
-    assert summary["bdinfoResponseRejected"] is False
-    assert summary["bdinfoTimedOut"] is True
+    assert summary["memoryProbeCommandEchoObserved"] is False
+    assert summary["memoryProbeResponseObserved"] is False
+    assert summary["memoryProbeResponsePromptObserved"] is False
+    assert summary["memoryProbeResponseRejected"] is False
+    assert summary["memoryProbeTimedOut"] is True
     assert summary["bootCommandSent"] is False
 
 
@@ -697,18 +867,14 @@ def test_console_output_drain_does_not_claim_quiet_at_deadline() -> None:
     assert quiet is False
 
 
-def test_bdinfo_parser_rejects_ambiguous_or_malformed_addresses() -> None:
-    parse = CONSOLE_MODULE["_parse_bdinfo_addresses"]
+def test_memory_probe_parser_rejects_ambiguous_or_malformed_words() -> None:
+    parse = CONSOLE_MODULE["_parse_memory_probe_words"]
 
-    assert parse("relocaddr = 0x10\nreloc off = 0x20\n") == (0x10, 0x20)
-    assert parse("relocaddr = 0x10\nrelocaddr = 0x11\nreloc off = 0x20\n") == (
-        None,
-        0x20,
-    )
-    assert parse("relocaddr = 0x10000000000000000\nreloc off = nope\n") == (
-        None,
-        None,
-    )
+    assert parse("d50b7e20 d53b0023\n") == (0xD50B7E20, 0xD53B0023)
+    assert parse("d50b7e20 d53b0023\nd50b7e20 d53b0023\n") == (None, None)
+    assert parse("d50b7e2 d53b0023\n") == (None, None)
+    assert parse("read failed\nd50b7e20 d53b0023\n") == (None, None)
+    assert parse("d50b7e20 d53b0023 extra\n") == (None, None)
 
 
 def test_console_summary_is_not_published_when_atomic_link_fails(
@@ -967,7 +1133,7 @@ def test_console_helper_accepts_runtime_symlink_within_home(tmp_path: Path) -> N
     screen = _screen_stub(
         tmp_path,
         "os.write(1, b'U-Boot\\n=> ')\n"
-        + _bdinfo_exchange()
+        + _memory_probe_exchange()
         + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 
@@ -1023,7 +1189,7 @@ def test_console_helper_follows_owned_devpts_console_symlink(
         "if not stat.S_ISCHR(os.stat(sys.argv[-1]).st_mode):\n"
         "    raise SystemExit(20)\n"
         "os.write(1, b'U-Boot\\n=> ')\n"
-        + _bdinfo_exchange()
+        + _memory_probe_exchange()
         + "os.write(1, b'\\r\\nStarting kernel ...\\n')",
     )
 

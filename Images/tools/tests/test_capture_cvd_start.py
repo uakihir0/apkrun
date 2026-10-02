@@ -14,6 +14,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 HELPER_PATH = Path(__file__).parents[1] / "reference" / "capture_cvd_start.py"
+REFERENCE_PATH = HELPER_PATH.parent
+if str(REFERENCE_PATH) not in sys.path:
+    sys.path.insert(0, str(REFERENCE_PATH))
 MODULE_SPEC = importlib.util.spec_from_file_location("capture_cvd_start", HELPER_PATH)
 assert MODULE_SPEC is not None
 assert MODULE_SPEC.loader is not None
@@ -168,6 +171,11 @@ def test_snapshot_mode_keeps_existing_snapshot_when_source_is_rejected(
         snapshot_name="kernel.log",
         timeout_seconds=None,
         command=[],
+        boot_observer_output=None,
+        boot_observer_adb=None,
+        boot_observer_adb_port=None,
+        boot_observer_crosvm=None,
+        boot_observer_instance_path=None,
     )
 
     assert capture_cvd_start.run(arguments) == 1
@@ -191,6 +199,11 @@ def test_snapshot_mode_applies_the_log_size_limit(
         snapshot_name="kernel.log",
         timeout_seconds=None,
         command=[],
+        boot_observer_output=None,
+        boot_observer_adb=None,
+        boot_observer_adb_port=None,
+        boot_observer_crosvm=None,
+        boot_observer_instance_path=None,
     )
     monkeypatch.setattr(capture_cvd_start, "MAX_LOG_BYTES", 128)
 

@@ -129,11 +129,16 @@ def test_compare_boot_can_be_invoked_directly_with_the_project_python() -> None:
 
 
 @pytest.mark.parametrize(
-    ("profile", "expected_gpu_mode", "expected_secure_hals"),
     (
-        ("default", None, False),
-        ("target", "drm_virgl", True),
-        ("swiftshader", "guest_swiftshader", True),
+        "profile",
+        "expected_gpu_mode",
+        "expected_secure_hals",
+        "observer_enabled",
+    ),
+    (
+        ("default", None, False, False),
+        ("target", "drm_virgl", True, False),
+        ("swiftshader", "guest_swiftshader", True, True),
     ),
 )
 def test_capture_script_uses_each_profile_launch_configuration(
@@ -141,6 +146,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     profile: str,
     expected_gpu_mode: str | None,
     expected_secure_hals: bool,
+    observer_enabled: bool,
 ) -> None:
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
@@ -148,6 +154,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
         "guest-capture.txt",
@@ -312,6 +319,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
     (host_bin / "cvd").symlink_to(fake_bin / "cvd")
     (host_bin / "launch_cvd").symlink_to(fake_bin / "cvd")
     (host_bin / "adb").symlink_to(fake_bin / "adb")
+    (host_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (host_bin / "crosvm").chmod(0o755)
     launch_log = tmp_path / "launch-args.txt"
     start_log = tmp_path / "start-args.txt"
     instance_file = tmp_path / "instance-path.txt"
@@ -321,6 +330,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     environment.update(
         {
             "APKRUN_CVD_PACKAGE_VERSION": "synthetic-cvd",
+            "APKRUN_CAPTURE_BOOT_OBSERVER": "1" if observer_enabled else "0",
             "APKRUN_PROFILE_INSTANCE_FILE": str(instance_file),
             "APKRUN_PROFILE_INITIAL_HOME": str(home),
             "APKRUN_PROFILE_LAUNCH_LOG": str(launch_log),
@@ -360,6 +370,15 @@ def test_capture_script_uses_each_profile_launch_configuration(
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
+    if observer_enabled:
+        observer_records = [
+            json.loads(line)
+            for line in (capture / "boot-observer.jsonl").read_text(encoding="ascii").splitlines()
+        ]
+        assert observer_records[0]["event"] == "observer_started"
+        assert observer_records[-1]["event"] == "observer_stopped"
+    else:
+        assert not (capture / "boot-observer.jsonl").exists()
     assert "androidboot.synthetic=1\n" == (capture / "internal-bootconfig.txt").read_text(
         encoding="utf-8"
     )
@@ -386,6 +405,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
         "guest-capture.txt",
@@ -967,6 +987,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
         "guest-capture.txt",

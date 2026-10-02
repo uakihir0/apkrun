@@ -18,6 +18,7 @@ import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 LOG_NAMES = {"assemble_cvd.log", "kernel.log", "launcher.log"}
 MAX_LOG_BYTES = 64 * 1024 * 1024
@@ -492,11 +493,26 @@ def run(args: argparse.Namespace) -> int:
     cvd = shutil.which("cvd")
     if cvd is None:
         raise FileNotFoundError("cvd was not found on PATH")
+    deadline = time.monotonic() + args.timeout_seconds
+    observer: Any | None = None
+    if args.boot_observer_output is not None:
+        from boot_observer import BootObserver
+
+        observer = BootObserver(
+            home=home,
+            instance_path=Path(args.boot_observer_instance_path),
+            launcher_log=snapshot_directory / "launcher.log",
+            output_path=Path(args.boot_observer_output),
+            adb_path=Path(args.boot_observer_adb),
+            adb_port=args.boot_observer_adb_port,
+            crosvm_path=Path(args.boot_observer_crosvm),
+            deadline=deadline,
+            background_sampling=True,
+        )
 
     environment = os.environ.copy()
     environment["HOME"] = str(home)
     observed: dict[tuple[str, str], tuple[int, int]] = {}
-    deadline = time.monotonic() + args.timeout_seconds
     next_poll = 0.0
     process: subprocess.Popen[bytes] | None = None
     timed_out = False
@@ -507,6 +523,8 @@ def run(args: argparse.Namespace) -> int:
         signal.signal(number, _handle_signal)
 
     try:
+        if observer is not None:
+            observer.start()
         process = subprocess.Popen(command, env=environment, start_new_session=True)
         while not _child_exit_observed_without_reaping(process):
             now = time.monotonic()
@@ -530,6 +548,8 @@ def run(args: argparse.Namespace) -> int:
             if now >= next_poll:
                 poll_started = now
                 collect_logs(cvd, home, snapshot_directory, observed)
+                if observer is not None:
+                    observer.sample()
                 next_poll = poll_started + LOG_POLL_SECONDS
             wait_until = min(deadline, next_poll)
             wait_seconds = wait_until - time.monotonic()
@@ -542,18 +562,19 @@ def run(args: argparse.Namespace) -> int:
         if return_code is None:
             return_code = process.wait()
     except BaseException:
+        if process is not None and process.returncode is None and not termination_started:
+            termination_started = True
+            try:
+                collect_logs(cvd, home, snapshot_directory, observed, timeout_seconds=0.2)
+            finally:
+                _terminate_child(process)
+        raise
+    finally:
         try:
-            if process is not None and process.returncode is None and not termination_started:
-                termination_started = True
-                try:
-                    collect_logs(cvd, home, snapshot_directory, observed, timeout_seconds=0.2)
-                finally:
-                    _terminate_child(process)
+            if observer is not None:
+                observer.close()
         finally:
             promote_snapshots(snapshot_directory, destination)
-        raise
-
-    promote_snapshots(snapshot_directory, destination)
     if requested_signal is not None:
         return 128 + requested_signal
     if timed_out:
@@ -571,6 +592,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float)
     parser.add_argument("--snapshot-source")
     parser.add_argument("--snapshot-name", choices=sorted(LOG_NAMES))
+    parser.add_argument("--boot-observer-output")
+    parser.add_argument("--boot-observer-adb")
+    parser.add_argument("--boot-observer-adb-port", type=int)
+    parser.add_argument("--boot-observer-crosvm")
+    parser.add_argument("--boot-observer-instance-path")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
     if args.snapshot_source is not None:
@@ -578,6 +604,17 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 "snapshot mode needs --snapshot-name and cannot include a timeout or command"
             )
+        if any(
+            value is not None
+            for value in (
+                args.boot_observer_output,
+                args.boot_observer_adb,
+                args.boot_observer_adb_port,
+                args.boot_observer_crosvm,
+                args.boot_observer_instance_path,
+            )
+        ):
+            parser.error("snapshot mode cannot include boot observer options")
         return args
     if args.snapshot_name is not None:
         parser.error("--snapshot-name requires --snapshot-source")
@@ -585,6 +622,19 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("run mode requires --timeout-seconds")
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be greater than zero")
+    observer_options = (
+        args.boot_observer_output,
+        args.boot_observer_adb,
+        args.boot_observer_adb_port,
+        args.boot_observer_crosvm,
+        args.boot_observer_instance_path,
+    )
+    if any(value is not None for value in observer_options) and not all(
+        value is not None for value in observer_options
+    ):
+        parser.error(
+            "boot observer mode requires output, ADB, ADB port, crosvm, and instance paths"
+        )
     return args
 
 

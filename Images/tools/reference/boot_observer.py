@@ -1,0 +1,715 @@
+"""Record bounded Cuttlefish Android-guest memory and ADB boot observations."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+START_EVENT_MARKER = b"Start event (5) received."
+STARTED_PID = re.compile(rb"Started \(pid: ([0-9]+)\):")
+SNAPSHOT_TRUNCATION_MARKER = (
+    b"[APKRun snapshot truncated; showing the final part of the host log.]\n"
+)
+MAX_LOG_BYTES = 64 * 1024 * 1024
+SAMPLE_INTERVAL_SECONDS = 5.0
+ADB_INTERVAL_SECONDS = 15.0
+ADB_COMMAND_TIMEOUT_SECONDS = 2.0
+ADB_SERVER_START_TIMEOUT_SECONDS = 3.0
+ADB_CLEANUP_RESERVE_SECONDS = 15.0
+ADB_SERVER_SOCKET_LIMIT = 107
+ADB_SERVER_EXEC_SCRIPT = """
+import ctypes
+import os
+import signal
+import sys
+
+parent_pid = int(sys.argv[1])
+adb_path = sys.argv[2]
+if os.getppid() != parent_pid:
+    os._exit(125)
+libc = ctypes.CDLL(None, use_errno=True)
+libc.prctl.argtypes = [
+    ctypes.c_int,
+    ctypes.c_ulong,
+    ctypes.c_ulong,
+    ctypes.c_ulong,
+    ctypes.c_ulong,
+]
+libc.prctl.restype = ctypes.c_int
+if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+    os._exit(125)
+if os.getppid() != parent_pid:
+    os.kill(os.getpid(), signal.SIGKILL)
+os.execv(adb_path, sys.argv[2:])
+"""
+
+
+def _timestamp_utc() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def _proc_start_time(path: Path) -> bytes | None:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    closing_parenthesis = raw.rfind(b")")
+    if closing_parenthesis < 0:
+        return None
+    fields = raw[closing_parenthesis + 1 :].split()
+    if len(fields) <= 19 or not fields[19].isdigit():
+        return None
+    return fields[19]
+
+
+def _proc_memory_status(path: Path) -> tuple[int, int | None] | None:
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return None
+    values: dict[bytes, int] = {}
+    for line in content.splitlines():
+        name, separator, value = line.partition(b":")
+        if not separator or name not in {b"VmRSS", b"RssShmem"}:
+            continue
+        fields = value.split()
+        if len(fields) != 2 or fields[1] != b"kB" or not fields[0].isdigit():
+            return None
+        values[name] = int(fields[0])
+    if b"VmRSS" not in values:
+        return None
+    return values[b"VmRSS"], values.get(b"RssShmem")
+
+
+class BootObserver:
+    """Observe the Android crosvm process and probe ADB through a private socket."""
+
+    def __init__(
+        self,
+        *,
+        home: Path,
+        instance_path: Path,
+        launcher_log: Path,
+        output_path: Path,
+        adb_path: Path,
+        adb_port: int,
+        crosvm_path: Path,
+        proc_root: Path = Path("/proc"),
+        sample_interval: float = SAMPLE_INTERVAL_SECONDS,
+        adb_interval: float = ADB_INTERVAL_SECONDS,
+        deadline: float | None = None,
+        background_sampling: bool = False,
+    ) -> None:
+        if type(adb_port) is not int or not 1 <= adb_port <= 65_535:
+            raise ValueError("ADB port is outside the supported range")
+        if sample_interval <= 0 or adb_interval <= 0:
+            raise ValueError("observer intervals must be positive")
+        self.home = home.resolve(strict=True)
+        self.instance_path = instance_path.resolve(strict=False)
+        try:
+            self.instance_path.relative_to(self.home)
+        except ValueError:
+            raise ValueError("Cuttlefish instance path must be beneath its private HOME") from None
+        self._instance_path_bytes = os.fsencode(self.instance_path)
+        self.launcher_log = launcher_log
+        self.output_path = output_path
+        self.adb_path = adb_path.resolve(strict=True)
+        self.adb_port = adb_port
+        self.crosvm_path = crosvm_path.resolve(strict=True)
+        self.proc_root = proc_root
+        self.sample_interval = sample_interval
+        self.adb_interval = adb_interval
+        self.deadline = deadline
+        self.background_sampling = background_sampling
+        self._output_fd: int | None = None
+        self._output_lock = threading.Lock()
+        self._sample_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._sample_thread: threading.Thread | None = None
+        self._adb_thread: threading.Thread | None = None
+        self._adb_server_process: subprocess.Popen[bytes] | None = None
+        self._launcher_offset = 0
+        self._launcher_prefix: bytes | None = None
+        self._launcher_truncated = False
+        self._launcher_fragment = bytearray()
+        self._current_started_pid: int | None = None
+        self._crosvm_pids: set[int] = set()
+        self._crosvm_start_times: dict[int, bytes] = {}
+        self._start_event_observed = False
+        self._next_sample = 0.0
+        self._closed = False
+
+    def start(self) -> None:
+        if self._output_fd is not None:
+            raise RuntimeError("boot observer has already started")
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_APPEND
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        self._output_fd = os.open(self.output_path, flags, 0o600)
+        self._record({"event": "observer_started"})
+        if self.background_sampling:
+            self._sample_thread = threading.Thread(
+                target=self._sample_loop,
+                name="apkrun-crosvm-memory-observer",
+                daemon=True,
+            )
+            self._sample_thread.start()
+
+    def sample(self, now: float | None = None) -> None:
+        with self._sample_lock:
+            self._sample(now)
+
+    def _sample(self, now: float | None) -> None:
+        if self._output_fd is None or self._closed:
+            raise RuntimeError("boot observer is not running")
+        self._refresh_launcher_log()
+        observed_at = time.monotonic() if now is None else now
+        if observed_at < self._next_sample:
+            return
+        if self._next_sample == 0:
+            self._next_sample = observed_at + self.sample_interval
+        else:
+            self._next_sample += self.sample_interval
+            while self._next_sample <= observed_at:
+                self._next_sample += self.sample_interval
+        candidates: list[dict[str, Any]] = []
+        for pid in sorted(self._crosvm_pids):
+            identity = self._read_crosvm_memory(
+                pid,
+                self._crosvm_start_times.get(pid),
+            )
+            if identity is None:
+                continue
+            sample, start_time = identity
+            self._crosvm_start_times.setdefault(pid, start_time)
+            candidates.append(sample)
+        if len(candidates) == 1:
+            self._record({"event": "crosvm_memory", **candidates[0]})
+        else:
+            self._record(
+                {
+                    "event": "crosvm_memory",
+                    "identity": "ambiguous" if candidates else "unavailable",
+                    "candidateCount": len(candidates),
+                }
+            )
+        if (
+            self._start_event_observed
+            and self._adb_thread is None
+            and not self._stop_event.is_set()
+        ):
+            self._adb_thread = threading.Thread(
+                target=self._poll_adb,
+                name="apkrun-private-adb-observer",
+                daemon=True,
+            )
+            self._adb_thread.start()
+
+    def _sample_loop(self) -> None:
+        next_sample = time.monotonic()
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            if now < next_sample:
+                if self._stop_event.wait(next_sample - now):
+                    return
+                now = time.monotonic()
+            self.sample(now)
+            next_sample += self.sample_interval
+            now = time.monotonic()
+            while next_sample <= now:
+                next_sample += self.sample_interval
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._stop_event.set()
+        if self._sample_thread is not None:
+            self._sample_thread.join(timeout=2)
+        if self._adb_thread is not None:
+            self._adb_thread.join(timeout=12)
+            if self._adb_thread.is_alive():
+                server = self._adb_server_process
+                if server is not None and server.poll() is None:
+                    try:
+                        server.kill()
+                    except OSError:
+                        pass
+                self._adb_thread.join(timeout=2)
+            if self._adb_thread.is_alive():
+                raise OSError("private ADB observer did not stop within its cleanup bound")
+        if self._sample_thread is not None and self._sample_thread.is_alive():
+            raise OSError("crosvm memory observer did not stop within its cleanup bound")
+        if self._output_fd is not None:
+            self._record({"event": "observer_stopped"})
+            os.close(self._output_fd)
+            self._output_fd = None
+        self._closed = True
+
+    def _record(self, fields: dict[str, Any]) -> None:
+        with self._output_lock:
+            if self._output_fd is None:
+                return
+            record = {"timestampUtc": _timestamp_utc(), **fields}
+            encoded = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode(
+                "ascii"
+            )
+            pending = memoryview(encoded)
+            while pending:
+                written = os.write(self._output_fd, pending)
+                if written <= 0:
+                    raise OSError("could not append boot observer record")
+                pending = pending[written:]
+
+    def _refresh_launcher_log(self) -> None:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        try:
+            descriptor = os.open(self.launcher_log, flags)
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_LOG_BYTES:
+                return
+            prefix = os.pread(descriptor, min(metadata.st_size, 4096), 0)
+            if prefix.startswith(SNAPSHOT_TRUNCATION_MARKER):
+                if not self._launcher_truncated:
+                    self._record(
+                        {
+                            "event": "launcher_log_truncated_observation_gap",
+                            "discardedCandidateCount": len(self._crosvm_pids),
+                        }
+                    )
+                    self._launcher_fragment.clear()
+                    self._current_started_pid = None
+                    self._crosvm_pids.clear()
+                    self._crosvm_start_times.clear()
+                self._launcher_truncated = True
+                return
+            self._launcher_truncated = False
+            if metadata.st_size < self._launcher_offset or (
+                self._launcher_prefix is not None and prefix != self._launcher_prefix
+            ):
+                self._launcher_offset = 0
+                self._launcher_fragment.clear()
+                self._current_started_pid = None
+                self._crosvm_pids.clear()
+                self._crosvm_start_times.clear()
+            self._launcher_prefix = prefix
+            length = metadata.st_size - self._launcher_offset
+            if length <= 0:
+                return
+            chunk = os.pread(descriptor, length, self._launcher_offset)
+            self._launcher_offset += len(chunk)
+        finally:
+            os.close(descriptor)
+
+        self._launcher_fragment.extend(chunk)
+        if START_EVENT_MARKER in self._launcher_fragment:
+            if not self._start_event_observed:
+                self._start_event_observed = True
+                self._record({"event": "cuttlefish_start_event_5_observed"})
+        while True:
+            newline = self._launcher_fragment.find(b"\n")
+            if newline < 0:
+                break
+            line = bytes(self._launcher_fragment[:newline]).rstrip(b"\r")
+            del self._launcher_fragment[: newline + 1]
+            started = STARTED_PID.search(line)
+            if started is not None:
+                self._current_started_pid = int(started.group(1))
+            if self._current_started_pid is not None and re.search(
+                rb"--process_name=crosvm(?:\s|$)", line
+            ):
+                self._crosvm_pids.add(self._current_started_pid)
+        if len(self._launcher_fragment) > 65_536:
+            self._launcher_fragment.clear()
+
+    def _read_crosvm_memory(
+        self,
+        pid: int,
+        expected_start_time: bytes | None,
+    ) -> tuple[dict[str, Any], bytes] | None:
+        process = self.proc_root / str(pid)
+        before = _proc_start_time(process / "stat")
+        if before is None or (expected_start_time is not None and before != expected_start_time):
+            return None
+        try:
+            executable = os.readlink(process / "exe")
+            command_line = (process / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            return None
+        if (
+            Path(executable).resolve(strict=False) != self.crosvm_path
+            or b"--process_name=crosvm" not in command_line
+            or not any(self._argument_matches_instance(argument) for argument in command_line)
+        ):
+            return None
+        memory = _proc_memory_status(process / "status")
+        after = _proc_start_time(process / "stat")
+        if memory is None or before != after:
+            return None
+        return (
+            {
+                "pid": pid,
+                "vmRssKiB": memory[0],
+                "rssShmemKiB": memory[1],
+            },
+            before,
+        )
+
+    def _argument_matches_instance(self, argument: bytes) -> bool:
+        search_from = 0
+        while search_from < len(argument):
+            position = argument.find(self._instance_path_bytes, search_from)
+            if position < 0:
+                return False
+            end = position + len(self._instance_path_bytes)
+            before = argument[position - 1 : position]
+            after = argument[end : end + 1]
+            if (not before or before in {b"=", b":", b"/"}) and (
+                not after or after in {b"/", b",", b":"}
+            ):
+                return True
+            search_from = position + 1
+        return False
+
+    def _adb_environment(self) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment["HOME"] = str(self.home)
+        for name in (
+            "ADB_SERVER_SOCKET",
+            "ADB_SERVER_PORT",
+            "ADB_VENDOR_KEYS",
+            "ANDROID_SERIAL",
+        ):
+            environment.pop(name, None)
+        return environment
+
+    def _poll_adb(self) -> None:
+        if self._stop_event.is_set():
+            return
+        try:
+            socket_directory = Path(tempfile.mkdtemp(prefix="apkrun-boot-adb.", dir=self.home))
+        except OSError:
+            self._record(
+                {
+                    "event": "adb_observer_unavailable",
+                    "reason": "private_socket_directory_creation_failed",
+                }
+            )
+            return
+        socket_path = socket_directory / "adb.sock"
+        adb_socket = f"localfilesystem:{socket_path}"
+        server: subprocess.Popen[bytes] | None = None
+        cleanup_complete = True
+        adb_deadline = (
+            self.deadline - ADB_CLEANUP_RESERVE_SECONDS
+            if self.deadline is not None
+            else float("inf")
+        )
+        try:
+            if time.monotonic() >= adb_deadline:
+                self._record(
+                    {
+                        "event": "adb_observer_stopped_before_deadline",
+                        "reason": "cleanup_reserve",
+                    }
+                )
+                return
+            if len(os.fsencode(socket_path)) > ADB_SERVER_SOCKET_LIMIT:
+                self._record(
+                    {
+                        "event": "adb_observer_unavailable",
+                        "reason": "private_socket_path_too_long",
+                    }
+                )
+                return
+            if (
+                socket_directory.is_symlink()
+                or not socket_directory.is_dir()
+                or stat.S_IMODE(socket_directory.stat().st_mode) != 0o700
+            ):
+                self._record(
+                    {
+                        "event": "adb_observer_unavailable",
+                        "reason": "private_socket_directory_invalid",
+                    }
+                )
+                return
+            if self._stop_event.is_set():
+                return
+            try:
+                adb_command = [
+                    str(self.adb_path),
+                    "-L",
+                    adb_socket,
+                    "nodaemon",
+                    "server",
+                ]
+                if sys.platform == "linux":
+                    adb_command = [
+                        sys.executable,
+                        "-c",
+                        ADB_SERVER_EXEC_SCRIPT,
+                        str(os.getpid()),
+                        *adb_command,
+                    ]
+                server = subprocess.Popen(
+                    adb_command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=self._adb_environment(),
+                    close_fds=True,
+                )
+                self._adb_server_process = server
+            except OSError:
+                self._record({"event": "adb_observer_unavailable", "reason": "server_start_failed"})
+                return
+            startup_deadline = time.monotonic() + ADB_SERVER_START_TIMEOUT_SECONDS
+            while not self._stop_event.is_set() and time.monotonic() < startup_deadline:
+                if server.poll() is not None:
+                    self._record({"event": "adb_observer_unavailable", "reason": "server_exited"})
+                    return
+                try:
+                    if stat.S_ISSOCK(socket_path.lstat().st_mode):
+                        break
+                except OSError:
+                    pass
+                self._stop_event.wait(0.05)
+            else:
+                if self._stop_event.is_set():
+                    return
+                self._record(
+                    {
+                        "event": "adb_observer_unavailable",
+                        "reason": "server_start_timed_out",
+                    }
+                )
+                return
+
+            self._record({"event": "private_adb_server_ready"})
+            serial = f"127.0.0.1:{self.adb_port}"
+            next_poll = time.monotonic()
+            cleanup_reserve_reached = False
+            while not self._stop_event.is_set():
+                now = time.monotonic()
+                if now >= adb_deadline:
+                    cleanup_reserve_reached = True
+                    break
+                if now < next_poll:
+                    self._stop_event.wait(min(next_poll - now, adb_deadline - now))
+                    continue
+                if server.poll() is not None or not self._is_socket(socket_path):
+                    self._record(
+                        {
+                            "event": "adb_observer_unavailable",
+                            "reason": "server_lost",
+                        }
+                    )
+                    break
+                poll_started = time.monotonic()
+                if not self._record_adb_poll(
+                    adb_socket,
+                    serial,
+                    server,
+                    socket_path,
+                    adb_deadline,
+                ):
+                    self._record(
+                        {
+                            "event": "adb_observer_unavailable",
+                            "reason": "server_lost",
+                        }
+                    )
+                    break
+                next_poll = poll_started + self.adb_interval
+                after_poll = time.monotonic()
+                if next_poll <= after_poll:
+                    next_poll = after_poll + self.adb_interval
+            if cleanup_reserve_reached:
+                self._record(
+                    {
+                        "event": "adb_observer_stopped_before_deadline",
+                        "reason": "cleanup_reserve",
+                    }
+                )
+        finally:
+            if server is not None and server.poll() is None:
+                try:
+                    server.terminate()
+                    server.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        server.kill()
+                        server.wait(timeout=2)
+                    except (OSError, subprocess.TimeoutExpired):
+                        if server.poll() is None:
+                            cleanup_complete = False
+                except OSError:
+                    if server.poll() is None:
+                        cleanup_complete = False
+            if socket_path.exists() or socket_path.is_symlink():
+                try:
+                    if stat.S_ISSOCK(socket_path.lstat().st_mode):
+                        socket_path.unlink()
+                    else:
+                        cleanup_complete = False
+                except OSError:
+                    cleanup_complete = False
+            try:
+                socket_directory.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleanup_complete = False
+            if server is not None:
+                self._record(
+                    {
+                        "event": "private_adb_server_stopped",
+                        "cleanupComplete": cleanup_complete,
+                    }
+                )
+            if self._adb_server_process is server:
+                self._adb_server_process = None
+
+    @staticmethod
+    def _is_socket(path: Path) -> bool:
+        try:
+            return stat.S_ISSOCK(path.lstat().st_mode)
+        except OSError:
+            return False
+
+    def _record_adb_poll(
+        self,
+        adb_socket: str,
+        serial: str,
+        server: subprocess.Popen[bytes],
+        socket_path: Path,
+        adb_deadline: float,
+    ) -> bool:
+        if server.poll() is not None or not self._is_socket(socket_path):
+            return False
+        environment = self._adb_environment()
+        connect_code, _, connect_timed_out = self._run_adb(
+            [str(self.adb_path), "-L", adb_socket, "connect", serial],
+            environment,
+            adb_deadline,
+        )
+        if time.monotonic() >= adb_deadline:
+            self._record(
+                {
+                    "event": "adb_poll",
+                    "connectExitCode": connect_code,
+                    "deviceState": None,
+                    "getpropExitCode": None,
+                    "sysBootCompleted": None,
+                    "commandTimedOut": True,
+                }
+            )
+            return True
+        if server.poll() is not None or not self._is_socket(socket_path):
+            return False
+        state_code, state_output, state_timed_out = self._run_adb(
+            [str(self.adb_path), "-L", adb_socket, "-s", serial, "get-state"],
+            environment,
+            adb_deadline,
+        )
+        state = (
+            state_output
+            if state_code == 0 and state_output in {"device", "offline", "unauthorized"}
+            else None
+        )
+        property_code: int | None = None
+        boot_completed: bool | None = None
+        property_timed_out = False
+        if state == "device" and (server.poll() is not None or not self._is_socket(socket_path)):
+            return False
+        if time.monotonic() >= adb_deadline:
+            self._record(
+                {
+                    "event": "adb_poll",
+                    "connectExitCode": connect_code,
+                    "deviceState": state,
+                    "getpropExitCode": None,
+                    "sysBootCompleted": None,
+                    "commandTimedOut": True,
+                }
+            )
+            return True
+        if state == "device":
+            property_code, property_output, property_timed_out = self._run_adb(
+                [
+                    str(self.adb_path),
+                    "-L",
+                    adb_socket,
+                    "-s",
+                    serial,
+                    "shell",
+                    "getprop",
+                    "sys.boot_completed",
+                ],
+                environment,
+                adb_deadline,
+            )
+            if property_code == 0 and property_output in {"0", "1"}:
+                boot_completed = property_output == "1"
+        self._record(
+            {
+                "event": "adb_poll",
+                "connectExitCode": connect_code,
+                "deviceState": state,
+                "getpropExitCode": property_code,
+                "sysBootCompleted": boot_completed,
+                "commandTimedOut": (connect_timed_out or state_timed_out or property_timed_out),
+            }
+        )
+        return True
+
+    @staticmethod
+    def _run_adb(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+    ) -> tuple[int | None, str, bool]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, "", True
+        try:
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                timeout=min(ADB_COMMAND_TIMEOUT_SECONDS, remaining),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "", True
+        except OSError:
+            return None, "", False
+        output = completed.stdout.decode("utf-8", errors="replace").strip()
+        return completed.returncode, output, False

@@ -175,6 +175,19 @@ if [ "$timeout_seconds" -lt 1 ]; then
   printf 'APKRUN_BOOT_TIMEOUT_SECONDS must be greater than zero.\n' >&2
   exit 2
 fi
+capture_boot_observer=${APKRUN_CAPTURE_BOOT_OBSERVER:-0}
+case "$capture_boot_observer" in
+  0|1) ;;
+  *)
+    printf 'APKRUN_CAPTURE_BOOT_OBSERVER must be 0 or 1.\n' >&2
+    exit 2
+    ;;
+esac
+if [ "$capture_boot_observer" -eq 1 ] \
+  && [ ! -x "$CVD_HOST_DIR/bin/crosvm" ]; then
+  printf 'boot observation requires executable CVD_HOST_DIR/bin/crosvm.\n' >&2
+  exit 2
+fi
 stop_timeout_seconds=${APKRUN_CVD_STOP_TIMEOUT_SECONDS:-120}
 case "$stop_timeout_seconds" in
   ''|*[!0-9]*)
@@ -496,7 +509,7 @@ if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
 fi
 
 create_cvd_group_with_common_options() {
-  run_cvd_command_with_live_logs cvd create \
+  run_cvd_command_with_live_logs 0 cvd create \
     --host_path="$CVD_HOST_DIR" \
     --product_path="$private_product_out" \
     --base_directory="$runtime_root" \
@@ -530,13 +543,34 @@ launch_profile() {
 }
 
 run_cvd_command_with_live_logs() {
+  observe_boot=$1
+  shift
   command_now=$(date +%s)
   command_remaining=$((boot_timeout_deadline - command_now))
   if [ "$command_remaining" -le 0 ]; then
     boot_deadline_expired=1
     return 124
   fi
-  if HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
+  if [ "$observe_boot" -eq 1 ] \
+    && [ "${capture_boot_observer:-0}" -eq 1 ]; then
+    if HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
+      python3 \
+      "$script_dir/capture_cvd_start.py" \
+      --home "$cvd_home" \
+      --stage "$stage" \
+      --timeout-seconds "$command_remaining" \
+      --boot-observer-output "$stage/boot-observer.jsonl" \
+      --boot-observer-adb "$CVD_HOST_DIR/bin/adb" \
+      --boot-observer-adb-port "$adb_port" \
+      --boot-observer-crosvm "$CVD_HOST_DIR/bin/crosvm" \
+      --boot-observer-instance-path \
+      "$cvd_home/cuttlefish_runtime/instances/cvd-$cvd_instance_num" \
+      -- "$@"; then
+      return 0
+    else
+      command_status=$?
+    fi
+  elif HOME="$cvd_home" timeout --kill-after=2s "$command_remaining" \
     python3 \
     "$script_dir/capture_cvd_start.py" \
     --home "$cvd_home" \
@@ -546,12 +580,12 @@ run_cvd_command_with_live_logs() {
     return 0
   else
     command_status=$?
-    if { [ "$command_status" -eq 124 ] || [ "$command_status" -eq 137 ]; } \
-      && [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
-      boot_deadline_expired=1
-    fi
-    return "$command_status"
   fi
+  if { [ "$command_status" -eq 124 ] || [ "$command_status" -eq 137 ]; } \
+    && [ "$(date +%s)" -ge "$boot_timeout_deadline" ]; then
+    boot_deadline_expired=1
+  fi
+  return "$command_status"
 }
 
 capture_adb() {
@@ -562,7 +596,7 @@ boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
 preserve_cvd_home=1
 started=1
 if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
-  || ! run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" start \
+  || ! run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" start \
     >> "$stage/cvd-create-console.log" 2>&1; then
   if [ "$boot_deadline_expired" -eq 1 ]; then
     record_missing "guest" \

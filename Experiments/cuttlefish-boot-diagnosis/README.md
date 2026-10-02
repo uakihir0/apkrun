@@ -25,6 +25,21 @@ Run `capture-gpu-none.sh` on the Linux reference VM after setting
 `APKRUN_DIAGNOSTIC_ROOT` to choose another absolute, writable directory.
 Published records go under that root's `results/`, outside the repository.
 
+For a controlled comparison, run both modes from the same checkout, one after
+the other. `APKRUN_DIAGNOSTIC_GPU_MODE` accepts `none` or `guest_swiftshader`
+and defaults to `none`. The runner applies the selected mode to both
+`cvd create` and `cvd start`, keeps vhost-user GPU disabled and the serial
+console enabled, validates the saved configuration, and includes the selected
+mode in the result name:
+
+```bash
+bash capture-gpu-none.sh
+APKRUN_DIAGNOSTIC_GPU_MODE=guest_swiftshader bash capture-gpu-none.sh
+```
+
+Compare this pair only. Earlier captures use different diagnostic-tool
+revisions and are context, not a controlled GPU-mode comparison.
+
 The runner uses a dedicated ADB server process on a unique private
 `localfilesystem` socket under `/tmp`; its directory has mode `0700`, avoiding
 TCP port races. The guest remains addressed through its loopback ADB endpoint.

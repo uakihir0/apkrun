@@ -30,6 +30,16 @@ if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'; then
   exit 2
 fi
 
+gpu_mode=${APKRUN_DIAGNOSTIC_GPU_MODE:-none}
+case "$gpu_mode" in
+  none) gpu_mode_slug=none ;;
+  guest_swiftshader) gpu_mode_slug=guest-swiftshader ;;
+  *)
+    printf 'APKRUN_DIAGNOSTIC_GPU_MODE must be none or guest_swiftshader.\n' >&2
+    exit 2
+    ;;
+esac
+
 instance_num=${APKRUN_CVD_INSTANCE_NUM:-1}
 case "$instance_num" in
   ''|*[!0-9]*|0*)
@@ -412,7 +422,7 @@ trap 'handle_signal TERM 143' TERM
 capture_process_starting_role=workspace
 capture_process_starting_released=1
 _capture_process_complete_startup_signal workspace
-work_root=$(trap '' HUP INT TERM; mktemp -d "$work_parent/gpu-none.XXXXXX")
+work_root=$(trap '' HUP INT TERM; mktemp -d "$work_parent/gpu-$gpu_mode_slug.XXXXXX")
 if ! printf 'APKRun Cuttlefish boot diagnosis v1\n%s\n%s\n' \
   "$workspace_token" "$work_root" \
   > "$work_root/.apkrun-cuttlefish-workspace"; then
@@ -432,7 +442,7 @@ done_marker="$work_root/capture.done"
 fleet_report="$work_root/cvd-fleet.json"
 host_identity="$work_root/host-identity.json"
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-result_path="$results_root/gpu-none-$timestamp-$$"
+result_path="$results_root/gpu-$gpu_mode_slug-$timestamp-$$"
 tool_destination="$work_root/Images/tools/reference"
 manifest_destination="$work_root/Images/manifests/16373615"
 canonical_capture_copy="$work_root/capture.sh.unpatched"
@@ -520,7 +530,7 @@ SHIM
 chmod 700 "$adb_shim_dir/adb"
 
 run_committed_experiment_support \
-  patch-capture --path "$capture_script"
+  patch-capture --path "$capture_script" --gpu-mode "$gpu_mode"
 bash -n "$capture_script"
 
 export APKRUN_DIAGNOSTIC_ADB_SHIM_DIR="$adb_shim_dir"
@@ -614,6 +624,7 @@ if ! run_committed_experiment_support verify-host \
   --fleet-report "$fleet_report" \
   --experiment-root "$experiment_tools" \
   --patched-capture "$capture_script" \
+  --gpu-mode "$gpu_mode" \
   --output "$host_identity"; then
   preserve_work
   exit 1
@@ -1306,6 +1317,7 @@ if ! record_or_preserve run_verified_experiment_support record \
   --capture-run-status "$capture_run_status" \
   --socket-metrics "$capture_socket_metrics" \
   --fleet-socket-metrics "$fleet_socket_metrics" \
+  --gpu-mode "$gpu_mode" \
   --output "$capture_record/experiment.json"; then
   exit 1
 fi

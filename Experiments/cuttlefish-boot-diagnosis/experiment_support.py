@@ -66,6 +66,11 @@ VERSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 LINUX_SUN_PATH_CAPACITY = 108
+GPU_MODE_SLUGS = {
+    "none": "none",
+    "guest_swiftshader": "guest-swiftshader",
+}
+GPU_MODE_PATH_PATTERN = "none|guest-swiftshader"
 
 
 def _encoded_unix_socket_path_bytes(path: str | os.PathLike[str]) -> int:
@@ -2522,7 +2527,11 @@ def _validate_generated_work_root(
     if (
         not work_root.is_absolute()
         or work_root.parent != work_parent
-        or re.fullmatch(r"gpu-none\.[A-Za-z0-9]+", work_root.name) is None
+        or re.fullmatch(
+            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})\.[A-Za-z0-9]+",
+            work_root.name,
+        )
+        is None
     ):
         raise ValueError(
             "workspace is outside the generated Cuttlefish diagnostic work area"
@@ -2936,7 +2945,11 @@ def publish_normalized_record(
     results_root = data_root / "results"
     if (
         result_path.parent != results_root
-        or re.fullmatch(r"gpu-none-[0-9]{8}T[0-9]{6}Z-[0-9]+", result_path.name) is None
+        or re.fullmatch(
+            rf"gpu-(?:{GPU_MODE_PATH_PATTERN})-[0-9]{{8}}T[0-9]{{6}}Z-[0-9]+",
+            result_path.name,
+        )
+        is None
     ):
         raise ValueError("diagnostic result path is outside its results directory")
     try:
@@ -3016,9 +3029,21 @@ def _single_instance(config: dict[str, Any]) -> dict[str, Any]:
     return instance
 
 
-def _verify_gpu_none_configuration(instance: dict[str, Any]) -> None:
+def _gpu_mode_slug(gpu_mode: str) -> str:
+    try:
+        return GPU_MODE_SLUGS[gpu_mode]
+    except (KeyError, TypeError) as error:
+        choices = ", ".join(GPU_MODE_SLUGS)
+        raise ValueError(f"GPU mode must be one of: {choices}") from error
+
+
+def _verify_gpu_configuration(
+    instance: dict[str, Any],
+    gpu_mode: str,
+) -> None:
+    _gpu_mode_slug(gpu_mode)
     expected = {
-        "gpu_mode": "none",
+        "gpu_mode": gpu_mode,
         "enable_gpu_vhost_user": False,
         "cpus": 4,
         "memory_mb": 4096,
@@ -3116,7 +3141,8 @@ def _committed_baseline(
     return host, instance, contents["cvd-create-console.log"]
 
 
-def patch_capture_script(path: Path) -> None:
+def patch_capture_script(path: Path, gpu_mode: str = "none") -> None:
+    _gpu_mode_slug(gpu_mode)
     if path.is_symlink() or not path.is_file():
         raise ValueError("private capture script must be a regular file")
     source = path.read_text(encoding="utf-8")
@@ -3225,12 +3251,12 @@ def patch_capture_script(path: Path) -> None:
         ),
         (
             "launch_profile() {",
-            """start_cvd_group_with_gpu_none() {
+            f"""start_cvd_group_with_gpu_mode() {{
   run_cvd_command_with_live_logs cvd "--group_name=$cvd_group_name" \\
-    start --gpu_mode=none --gpu_vhost_user_mode=off --console=true
-}
+    start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true
+}}
 
-launch_profile() {""",
+launch_profile() {{""",
         ),
         (
             ('capture_adb() {\n  HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"\n}\n'),
@@ -3340,7 +3366,8 @@ launch_profile() {""",
             ),
             (
                 "default)\n"
-                "      create_cvd_group_with_common_options --gpu_mode=none --gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096\n"
+                f"      create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
+                "--gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096\n"
                 "      ;;"
             ),
         ),
@@ -3387,7 +3414,7 @@ launch_profile() {""",
                 "  cvd_command_failed=1\n"
                 "fi\n"
                 'if [ "$cvd_command_failed" -eq 0 ] \\\n'
-                "  && ! start_cvd_group_with_gpu_none 2>&1 \\\n"
+                "  && ! start_cvd_group_with_gpu_mode 2>&1 \\\n"
                 '    | python3 "$script_dir/capture_bounded.py" \\\n'
                 '      --stdin --drain-after-limit --max-bytes 8388608 --output "$stage/cvd-create-console.log" \\\n'
                 '      --status "$APKRUN_EXPERIMENT_STATUS_ROOT/cvd-start.json" --append; then\n'
@@ -3470,7 +3497,9 @@ def verify_host(
     fleet_report_path: Path,
     experiment_root: Path,
     patched_capture: Path,
+    gpu_mode: str = "none",
 ) -> dict[str, Any]:
+    gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     repo_root = repo_root.resolve()
     baseline_record = baseline_record.resolve()
     if baseline_record != repo_root / BASELINE_RELATIVE:
@@ -3530,7 +3559,8 @@ def verify_host(
         "observedToolBlobs": observed_tool_blobs,
         "experimentSources": experiment_sources,
         "baselineGpuMode": "guest_swiftshader",
-        "gpuMode": "none",
+        "gpuMode": gpu_mode,
+        "gpuModeSlug": gpu_mode_slug,
         "cpuCount": 4,
         "memoryMb": 4096,
         "buildId": baseline["buildId"],
@@ -3555,10 +3585,17 @@ def build_experiment_record(
     capture_run_status_path: Path,
     socket_metrics_path: Path,
     fleet_socket_metrics_path: Path,
+    gpu_mode: str = "none",
 ) -> dict[str, Any]:
+    gpu_mode_slug = _gpu_mode_slug(gpu_mode)
     host, instance = _gpu_configuration(capture_record)
-    _verify_gpu_none_configuration(instance)
+    _verify_gpu_configuration(instance, gpu_mode)
     host_identity = _read_json(host_identity_path)
+    if (
+        host_identity.get("gpuMode", "none") != gpu_mode
+        or host_identity.get("gpuModeSlug", gpu_mode_slug) != gpu_mode_slug
+    ):
+        raise ValueError("capture GPU mode differs from the verified selection")
     verify_tool_copy(
         repo_root,
         baseline_record,
@@ -3648,7 +3685,8 @@ def build_experiment_record(
     guest_logcat["captured"] = "guest-logcat" in bounded_capture["files"]
     return {
         "schemaVersion": 1,
-        "experiment": "cuttlefish-gpu-none-boot-diagnosis",
+        "experiment": f"cuttlefish-gpu-{gpu_mode_slug}-boot-diagnosis",
+        "gpuModeSlug": gpu_mode_slug,
         "baselineRecord": host_identity["baselineRecord"],
         "buildId": host_identity["buildId"],
         "baselineCvd": baseline_cvd,
@@ -3664,7 +3702,7 @@ def build_experiment_record(
         "captureRun": capture_run_status,
         "bootTimeoutSeconds": 600,
         "runnerDeadlineSeconds": 900,
-        "gpuMode": "none",
+        "gpuMode": gpu_mode,
         "cpuCount": 4,
         "memoryMb": 4096,
         "adbEndpoint": adb_endpoint,
@@ -3714,6 +3752,11 @@ def main() -> int:
     host_parser.add_argument("--fleet-report", type=Path, required=True)
     host_parser.add_argument("--experiment-root", type=Path, required=True)
     host_parser.add_argument("--patched-capture", type=Path, required=True)
+    host_parser.add_argument(
+        "--gpu-mode",
+        choices=tuple(GPU_MODE_SLUGS),
+        default="none",
+    )
     host_parser.add_argument("--output", type=Path, required=True)
 
     tool_copy_parser = subparsers.add_parser("verify-tool-copy")
@@ -3728,6 +3771,11 @@ def main() -> int:
 
     patch_parser = subparsers.add_parser("patch-capture")
     patch_parser.add_argument("--path", type=Path, required=True)
+    patch_parser.add_argument(
+        "--gpu-mode",
+        choices=tuple(GPU_MODE_SLUGS),
+        default="none",
+    )
 
     socket_parser = subparsers.add_parser("audit-unix-sockets")
     socket_parser.add_argument("--root", type=Path, action="append", required=True)
@@ -3800,6 +3848,11 @@ def main() -> int:
     record_parser.add_argument("--capture-run-status", type=Path, required=True)
     record_parser.add_argument("--socket-metrics", type=Path, required=True)
     record_parser.add_argument("--fleet-socket-metrics", type=Path, required=True)
+    record_parser.add_argument(
+        "--gpu-mode",
+        choices=tuple(GPU_MODE_SLUGS),
+        default="none",
+    )
     record_parser.add_argument("--output", type=Path, required=True)
 
     arguments = parser.parse_args()
@@ -3810,7 +3863,7 @@ def main() -> int:
                 print(arguments.data_root.resolve(strict=True))
             return 0
         if arguments.command == "patch-capture":
-            patch_capture_script(arguments.path)
+            patch_capture_script(arguments.path, arguments.gpu_mode)
             return 0
         if arguments.command == "audit-unix-sockets":
             metrics = audit_unix_socket_paths(arguments.root)
@@ -3886,6 +3939,7 @@ def main() -> int:
                 arguments.fleet_report,
                 arguments.experiment_root,
                 arguments.patched_capture,
+                arguments.gpu_mode,
             )
         elif arguments.command == "verify-tool-copy":
             verify_tool_copy(
@@ -3918,6 +3972,7 @@ def main() -> int:
                 arguments.capture_run_status,
                 arguments.socket_metrics,
                 arguments.fleet_socket_metrics,
+                arguments.gpu_mode,
             )
         _atomic_json(arguments.output, document)
     except (OSError, TypeError, ValueError, KeyError) as error:

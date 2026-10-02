@@ -2999,3 +2999,32 @@ resetting about 18 seconds after launch and its process restarter starting a
 replacement. This is not evidence of an Android VM reset. All 40 ADB samples
 remained unknown. The retry therefore verifies that the setting was applied,
 but does not validate serial capture or Android boot.
+
+## IR-116: Compare GPU modes with the same diagnostic revision
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU boot diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md), `Experiments/cuttlefish-boot-diagnosis/{capture-gpu-none.sh,experiment_support.py,tests/test_experiment_support.py}` |
+
+**Choice.** Extend the isolated GPU diagnosis runner to accept
+`APKRUN_DIAGNOSTIC_GPU_MODE=none` or `guest_swiftshader`, defaulting to `none`.
+Pass the selected mode to both `cvd create` and `cvd start`, keep
+`--gpu_vhost_user_mode=off`, `--console=true`, the pinned build, host, CPU,
+memory, and deadline unchanged, and reject results whose saved configuration
+does not match the selection. Include the mode in result names and metadata.
+Run fresh `none` and `guest_swiftshader` captures consecutively from the same
+checkout, then compare that pair. Treat earlier captures as diagnostic context,
+not as members of the controlled pair.
+
+**Reason.** The prior default capture used `guest_swiftshader` and recorded
+Linux, zygote, and SurfaceFlinger output. The current GPU-none capture used the
+same Cuttlefish package and host conditions but produced no `kernel.log`
+bytes. The records differ in GPU mode, console setting, and capture-tool
+revision, so they do not establish that GPU mode caused the boot difference.
+Running both modes with this same diagnostic revision, `console=true`, and all
+other captured settings held constant makes GPU mode the only planned
+configuration change within the new pair. The comparison can narrow the cause
+but cannot alone prove it. It remains an isolated diagnostic and does not
+change the canonical profiles or claim Android boot success.

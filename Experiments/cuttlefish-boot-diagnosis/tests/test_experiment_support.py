@@ -1982,15 +1982,20 @@ def test_parse_fleet_report_rejects_unexpected_trailing_content() -> None:
         experiment_support.parse_fleet_report(report)
 
 
+@pytest.mark.parametrize(
+    "gpu_mode",
+    ("none", "guest_swiftshader"),
+)
 def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     tmp_path: Path,
+    gpu_mode: str,
 ) -> None:
     repo_root = Path(__file__).parents[3]
     source = repo_root / "Images/tools/reference/capture.sh"
     private_copy = tmp_path / "capture.sh"
     private_copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-    experiment_support.patch_capture_script(private_copy)
+    experiment_support.patch_capture_script(private_copy, gpu_mode)
     patched = private_copy.read_text(encoding="utf-8")
 
     subprocess.run(["bash", "-n", str(private_copy)], check=True)
@@ -1998,7 +2003,7 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert 'PATH="$APKRUN_DIAGNOSTIC_ADB_SHIM_DIR:$CVD_HOST_DIR/bin:$PATH"' in patched
     assert "${APKRUN_CVD_HOME_TMPDIR:-${TMPDIR:-/tmp}}/h.XXXXXX" in patched
     assert (
-        "create_cvd_group_with_common_options --gpu_mode=none "
+        f"create_cvd_group_with_common_options --gpu_mode={gpu_mode} "
         "--gpu_vhost_user_mode=off --console=true --cpus 4 --memory_mb 4096" in patched
     )
     assert "--timeout-seconds 30 --max-bytes 8388608" in patched
@@ -2014,17 +2019,35 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     assert "Cuttlefish HOME retained" in patched
     assert 'capture_adb_value 4096 10 adb connect "127.0.0.1:$adb_port"' in patched
     assert 'capture_adb_value 4096 10 adb -s "$adb_serial" wait-for-device' in patched
-    assert "start_cvd_group_with_gpu_none() {" in patched
+    assert "start_cvd_group_with_gpu_mode() {" in patched
     assert "run_with_boot_deadline adb" not in patched
     assert "--fail-on-truncate --output" in patched
     assert "set -euo pipefail" in patched
     assert (
-        "start --gpu_mode=none --gpu_vhost_user_mode=off --console=true\n}" in patched
+        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true\n}}"
+        in patched
     )
-    assert patched.count("--gpu_mode=none") == 2
+    default_gpu_mode_arguments = [
+        line.strip()
+        for line in patched.splitlines()
+        if line.strip().startswith(
+            (
+                "start --gpu_mode=",
+                "create_cvd_group_with_common_options --gpu_mode=",
+            )
+        )
+    ]
+    assert default_gpu_mode_arguments == [
+        f"start --gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true",
+        (
+            "create_cvd_group_with_common_options "
+            f"--gpu_mode={gpu_mode} --gpu_vhost_user_mode=off --console=true "
+            "--cpus 4 --memory_mb 4096"
+        ),
+    ]
     assert patched.count("--console=true") == 2
-    assert patched.index("start_cvd_group_with_gpu_none() {") < patched.index(
-        "&& ! start_cvd_group_with_gpu_none 2>&1"
+    assert patched.index("start_cvd_group_with_gpu_mode() {") < patched.index(
+        "&& ! start_cvd_group_with_gpu_mode 2>&1"
     )
     assert (
         "default)\n      create_cvd_group_with_common_options --cpus 4 --memory_mb 4096"
@@ -2032,13 +2055,33 @@ def test_private_capture_patch_changes_gpu_adb_console_and_logcat_capture(
     )
 
 
+def test_private_capture_patch_rejects_unsupported_gpu_mode_before_writing(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).parents[3]
+    source = repo_root / "Images/tools/reference/capture.sh"
+    private_copy = tmp_path / "capture.sh"
+    original = source.read_bytes()
+    private_copy.write_bytes(original)
+
+    with pytest.raises(ValueError, match="GPU mode must be one of"):
+        experiment_support.patch_capture_script(private_copy, "gpu_vulkan")
+
+    assert private_copy.read_bytes() == original
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="GPU-none capture runs on Linux")
+@pytest.mark.parametrize(
+    "gpu_mode",
+    ("none", "guest_swiftshader"),
+)
 @pytest.mark.parametrize(
     ("persisted_vhost_user", "start_exit_code", "expected_capture_failure"),
     ((False, 0, 0), (True, 0, 0), (False, 17, 1)),
 )
-def test_gpu_none_launch_pipeline_passes_flags_and_checks_the_saved_config(
+def test_gpu_mode_launch_pipeline_passes_flags_and_checks_the_saved_config(
     tmp_path: Path,
+    gpu_mode: str,
     persisted_vhost_user: bool,
     start_exit_code: int,
     expected_capture_failure: int,
@@ -2047,7 +2090,7 @@ def test_gpu_none_launch_pipeline_passes_flags_and_checks_the_saved_config(
     source = repo_root / "Images/tools/reference/capture.sh"
     private_copy = tmp_path / "capture.sh"
     private_copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    experiment_support.patch_capture_script(private_copy)
+    experiment_support.patch_capture_script(private_copy, gpu_mode)
     patched = private_copy.read_text(encoding="utf-8")
 
     def extract_shell_function(function_name: str) -> str:
@@ -2084,8 +2127,21 @@ elif "start" in arguments:
         .splitlines()
     ]
     create_arguments = calls[0]
-    gpu_none_selected = (
-        "--gpu_mode=none" in create_arguments and "--gpu_mode=none" in arguments
+    create_gpu_modes = [
+        value.split("=", 1)[1]
+        for value in create_arguments
+        if value.startswith("--gpu_mode=")
+    ]
+    start_gpu_modes = [
+        value.split("=", 1)[1]
+        for value in arguments
+        if value.startswith("--gpu_mode=")
+    ]
+    gpu_mode_selected = (
+        len(create_gpu_modes) == 1
+        and len(start_gpu_modes) == 1
+        and create_gpu_modes[0] == start_gpu_modes[0]
+        and create_gpu_modes[0] == os.environ["APKRUN_TEST_GPU_MODE"]
     )
     vhost_user_disabled = (
         "--gpu_vhost_user_mode=off" in create_arguments
@@ -2100,7 +2156,11 @@ elif "start" in arguments:
             {
                 "instances": {
                     "1": {
-                        "gpu_mode": "none" if gpu_none_selected else "guest_swiftshader",
+                        "gpu_mode": (
+                            os.environ["APKRUN_TEST_GPU_MODE"]
+                            if gpu_mode_selected
+                            else "unexpected"
+                        ),
                         "enable_gpu_vhost_user": (
                             os.environ["APKRUN_TEST_VHOST_USER"] == "true"
                             or not vhost_user_disabled
@@ -2170,7 +2230,7 @@ else:
                 f"APKRUN_EXPERIMENT_STATUS_ROOT={shlex.quote(str(status_root))}",
                 extract_shell_function("create_cvd_group_with_common_options"),
                 extract_shell_function("launch_profile"),
-                extract_shell_function("start_cvd_group_with_gpu_none"),
+                extract_shell_function("start_cvd_group_with_gpu_mode"),
                 extract_shell_function("run_cvd_command_with_live_logs"),
                 "profile=default",
                 launch_block,
@@ -2188,6 +2248,7 @@ else:
         "APKRUN_TEST_CONFIG_PATH": str(config_path),
         "APKRUN_TEST_VHOST_USER": "true" if persisted_vhost_user else "false",
         "APKRUN_TEST_START_EXIT_CODE": str(start_exit_code),
+        "APKRUN_TEST_GPU_MODE": gpu_mode,
     }
     result = subprocess.run(
         ["bash", str(harness)],
@@ -2214,7 +2275,7 @@ else:
             "--base_instance_num=1",
             "--num_instances=1",
             "--nostart",
-            "--gpu_mode=none",
+            f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             "--console=true",
             "--cpus",
@@ -2225,14 +2286,14 @@ else:
         [
             "--group_name=apkrun-test",
             "start",
-            "--gpu_mode=none",
+            f"--gpu_mode={gpu_mode}",
             "--gpu_vhost_user_mode=off",
             "--console=true",
         ],
     ]
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     saved_instance = saved_config["instances"]["1"]
-    assert saved_instance["gpu_mode"] == "none"
+    assert saved_instance["gpu_mode"] == gpu_mode
     assert saved_instance["enable_gpu_vhost_user"] is persisted_vhost_user
     assert saved_instance["console"] is True
 
@@ -2267,6 +2328,7 @@ else:
                 capture_run_status_path=unused,
                 socket_metrics_path=unused,
                 fleet_socket_metrics_path=unused,
+                gpu_mode=gpu_mode,
             )
 
 
@@ -2287,9 +2349,14 @@ def test_baseline_must_use_the_expected_gpu_and_vm_shape(tmp_path: Path) -> None
         experiment_support.validate_baseline_configuration(baseline)
 
 
+@pytest.mark.parametrize(
+    "gpu_mode",
+    ("none", "guest_swiftshader"),
+)
 def test_host_preflight_checks_tool_blobs_and_cvd_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    gpu_mode: str,
 ) -> None:
     _use_reference_host(monkeypatch)
     repo_root, baseline, experiment_root, patched_capture = _make_baseline_repository(
@@ -2302,12 +2369,18 @@ def test_host_preflight_checks_tool_blobs_and_cvd_revision(
         encoding="utf-8",
     )
     report = experiment_support.verify_host(
-        repo_root, baseline, fleet_report, experiment_root, patched_capture
+        repo_root,
+        baseline,
+        fleet_report,
+        experiment_root,
+        patched_capture,
+        gpu_mode=gpu_mode,
     )
 
     assert report["baselineCvd"] == report["observedCvd"]
     assert report["baselineHost"] == report["observedHost"]
-    assert report["gpuMode"] == "none"
+    assert report["gpuMode"] == gpu_mode
+    assert report["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
     assert report["cpuCount"] == 4
     assert len(report["baselineToolBlobs"]) == len(experiment_support.TOOL_PATHS)
     assert report["baselineToolCommit"] == report["observedToolCommit"]
@@ -2641,8 +2714,13 @@ def test_host_preflight_rejects_different_host_conditions(
         )
 
 
+@pytest.mark.parametrize(
+    "gpu_mode",
+    ("none", "guest_swiftshader"),
+)
 def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
     tmp_path: Path,
+    gpu_mode: str,
 ) -> None:
     repo_root, baseline_record, source_experiment_root, source_patched_capture = (
         _make_baseline_repository(tmp_path / "repository")
@@ -2696,7 +2774,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             {
                 "instances": {
                     "1": {
-                        "gpu_mode": "none",
+                        "gpu_mode": gpu_mode,
                         "enable_gpu_vhost_user": False,
                         "cpus": 4,
                         "memory_mb": 4096,
@@ -2749,6 +2827,8 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
                     "packageVersion": "1.57.0",
                     "vcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d",
                 },
+                "gpuMode": gpu_mode,
+                "gpuModeSlug": experiment_support.GPU_MODE_SLUGS[gpu_mode],
                 "baselineToolCommit": baseline_tool_commit,
                 "baselineToolBlobs": baseline_tool_blobs,
                 "observedToolCommit": observed_tool_commit,
@@ -2828,9 +2908,14 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         capture_run_status,
         socket_metrics,
         fleet_socket_metrics,
+        gpu_mode=gpu_mode,
     )
 
-    assert record["gpuMode"] == "none"
+    assert record["gpuMode"] == gpu_mode
+    assert record["gpuModeSlug"] == experiment_support.GPU_MODE_SLUGS[gpu_mode]
+    assert record["experiment"] == (
+        f"cuttlefish-gpu-{experiment_support.GPU_MODE_SLUGS[gpu_mode]}-boot-diagnosis"
+    )
     assert (
         record["observedCvd"]["vcsRevision"]
         == "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d"
@@ -2881,6 +2966,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
 
     incomplete_experiment_sources = json.loads(
@@ -2923,6 +3009,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
     copied_tool.write_bytes(original_tool_contents)
 
@@ -2963,12 +3050,15 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
 
     config_path = capture_record / "cuttlefish_config.json"
     captured_config = json.loads(config_path.read_text(encoding="utf-8"))
-    captured_config["instances"]["1"]["gpu_mode"] = "guest_swiftshader"
+    other_gpu_mode = "guest_swiftshader" if gpu_mode == "none" else "none"
+    captured_config["instances"]["1"]["gpu_mode"] = other_gpu_mode
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
     with pytest.raises(
         ValueError,
-        match="captured Cuttlefish configuration has unexpected gpu_mode: "
-        r"'guest_swiftshader'",
+        match=(
+            "captured Cuttlefish configuration has unexpected gpu_mode: "
+            f"{other_gpu_mode!r}"
+        ),
     ):
         experiment_support.build_experiment_record(
             capture_record,
@@ -2988,8 +3078,9 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
-    captured_config["instances"]["1"]["gpu_mode"] = "none"
+    captured_config["instances"]["1"]["gpu_mode"] = gpu_mode
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = True
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
     with pytest.raises(
@@ -3015,6 +3106,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3043,6 +3135,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
     captured_config["instances"]["1"]["enable_gpu_vhost_user"] = False
     config_path.write_text(json.dumps(captured_config), encoding="utf-8")
@@ -3065,6 +3158,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
         capture_run_status,
         socket_metrics,
         fleet_socket_metrics,
+        gpu_mode,
     )
     instance_config = captured_config["instances"]["1"]
     for console_value in (False, None, 1):
@@ -3115,6 +3209,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
     incomplete_cleanup.unlink()
 
@@ -3141,6 +3236,7 @@ def test_experiment_record_validates_actual_gpu_mode_and_keeps_only_summary(
             capture_run_status,
             socket_metrics,
             fleet_socket_metrics,
+            gpu_mode=gpu_mode,
         )
 
 
@@ -3179,6 +3275,34 @@ def test_workspace_removal_is_limited_to_generated_diagnostic_work(
         )
 
     assert unmarked_workspace.is_dir()
+
+
+@pytest.mark.parametrize(
+    "gpu_mode_slug",
+    ("none", "guest-swiftshader"),
+)
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="workspace removal uses Linux renameat2",
+)
+def test_workspace_cleanup_accepts_each_supported_gpu_mode(
+    tmp_path: Path,
+    gpu_mode_slug: str,
+) -> None:
+    data_root = tmp_path / "diagnostics"
+    work_root = data_root / "work" / f"gpu-{gpu_mode_slug}.cleanup123"
+    work_root.mkdir(parents=True)
+    ownership_token = "0123456789abcdef" * 4
+    _mark_generated_workspace(work_root, ownership_token)
+    (work_root / "capture.txt").write_text("private capture", encoding="utf-8")
+
+    experiment_support.discard_private_workspace(
+        work_root,
+        data_root,
+        ownership_token,
+    )
+
+    assert not work_root.exists()
 
 
 def test_log_tree_removal_is_limited_to_generated_diagnostic_work(
@@ -3494,18 +3618,23 @@ def test_removal_refuses_replacement_at_quarantine_rename(
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="publication uses Linux renameat2")
+@pytest.mark.parametrize(
+    "gpu_mode_slug",
+    ("none", "guest-swiftshader"),
+)
 def test_publication_rejects_result_directory_without_nesting_capture(
     tmp_path: Path,
+    gpu_mode_slug: str,
 ) -> None:
     data_root = tmp_path / "diagnostics"
-    work_root = data_root / "work/gpu-none.012345"
+    work_root = data_root / "work" / f"gpu-{gpu_mode_slug}.012345"
     results_root = data_root / "results"
     capture_record = work_root / "Images/reference/16373615/default"
     capture_record.mkdir(parents=True)
     results_root.mkdir(parents=True)
     ownership_token = "0123456789abcdef" * 4
     _mark_generated_workspace(work_root, ownership_token)
-    result_path = results_root / "gpu-none-20261001T000000Z-1234"
+    result_path = results_root / f"gpu-{gpu_mode_slug}-20261001T000000Z-1234"
     result_path.mkdir()
 
     with pytest.raises(FileExistsError):

@@ -29,6 +29,8 @@ ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
+ADB_CLIENT_TERMINATE_SECONDS = 0.5
+ADB_CLIENT_KILL_SECONDS = 1.0
 BOOT_PROPERTIES_SHELL_COMMAND = (
     "newline=$(printf '\\n_'); newline=${newline%_}; "
     "boot_completed_reply=$(getprop sys.boot_completed; "
@@ -52,14 +54,17 @@ BOOT_PROPERTIES_SHELL_COMMAND = (
     "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
     '"$system_server_value" "$system_server_status"'
 )
-ADB_POLL_FINAL_RESERVE_SECONDS = ADB_COMMAND_TIMEOUT_SECONDS * 2 + ADB_GETPROP_TIMEOUT_SECONDS + 4.0
+ADB_POLL_FINAL_RESERVE_SECONDS = (
+    ADB_COMMAND_TIMEOUT_SECONDS * 2
+    + ADB_GETPROP_TIMEOUT_SECONDS
+    + (ADB_CLIENT_TERMINATE_SECONDS + ADB_CLIENT_KILL_SECONDS * 2) * 3
+    + 4.0
+)
 ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
 ADB_LOGCAT_TIMEOUT_SECONDS = 10.0
 ADB_LOGCAT_TAIL_LINES = 128
 ADB_LOGCAT_MAX_BYTES = 64 * 1024
 ADB_LOGCAT_QUERY_COUNT = 2
-ADB_CLIENT_TERMINATE_SECONDS = 0.5
-ADB_CLIENT_KILL_SECONDS = 1.0
 ADB_PROBE_WINDOW_MARGIN_SECONDS = 1.0
 ADB_SERVER_TERMINATE_SECONDS = 2.0
 ADB_SERVER_KILL_SECONDS = 2.0
@@ -538,7 +543,7 @@ class BootObserver:
             self._output_fd = None
         self._closed = True
         if self._adb_probe_cleanup_failed:
-            raise OSError("bounded ADB logcat probe did not complete child cleanup")
+            raise OSError("bounded ADB client did not complete child cleanup")
 
     def _record(self, fields: dict[str, Any]) -> None:
         with self._output_lock:
@@ -1050,6 +1055,14 @@ class BootObserver:
                         }
                     )
                     break
+                if self._adb_probe_cleanup_failed:
+                    self._record(
+                        {
+                            "event": "adb_observer_unavailable",
+                            "reason": "client_cleanup_failed",
+                        }
+                    )
+                    break
                 next_poll = poll_started + self.adb_interval
                 after_poll = time.monotonic()
                 if next_poll <= after_poll:
@@ -1118,54 +1131,122 @@ class BootObserver:
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
         environment = self._adb_environment()
-        connect_code, _, connect_timed_out, connect_attempted = self._run_adb(
-            [str(self.adb_path), "-L", adb_socket, "connect", serial],
-            environment,
-            adb_deadline,
-        )
-        adb_stage_fields: dict[str, Any] = {
-            "connectExitCode": connect_code,
-            "connectAttempted": connect_attempted,
-            "connectTimedOut": connect_timed_out if connect_attempted else None,
+        poll_fields: dict[str, Any] = {
+            "connectExitCode": None,
+            "connectAttempted": False,
+            "connectTimedOut": None,
+            "connectTruncated": False,
+            "connectCleanupComplete": True,
+            "connectProbeError": False,
             "getStateAttempted": False,
             "getStateExitCode": None,
             "getStateTimedOut": None,
+            "getStateTruncated": False,
+            "getStateCleanupComplete": True,
+            "getStateProbeError": False,
             "getStateResult": "notAttempted",
             "deviceState": None,
+            "getpropExitCode": None,
+            "getpropAttempted": False,
+            "getpropTimedOut": None,
+            "getpropTruncated": False,
+            "getpropCleanupComplete": True,
+            "getpropProbeError": False,
+            "systemServerStartCount": None,
+            "systemServerStartCountPresent": None,
+            "systemServerGetpropExitCode": None,
+            "bootCompletedGetpropExitCode": None,
+            "sysBootCompleted": None,
+            "sysBootCompletedPresent": None,
+            "cleanupComplete": True,
+            "probeError": False,
         }
-        if time.monotonic() >= adb_deadline:
+
+        def record_poll() -> None:
             self._record(
                 {
                     "event": "adb_poll",
-                    **adb_stage_fields,
-                    "getpropExitCode": None,
-                    "getpropAttempted": False,
-                    "getpropTimedOut": None,
-                    "systemServerStartCount": None,
-                    "systemServerStartCountPresent": None,
-                    "systemServerGetpropExitCode": None,
-                    "bootCompletedGetpropExitCode": None,
-                    "sysBootCompleted": None,
-                    "sysBootCompletedPresent": None,
-                    "commandTimedOut": connect_timed_out if connect_attempted else False,
-                    "pollDeadlineReached": True,
+                    **poll_fields,
+                    "commandTimedOut": any(
+                        poll_fields[field] is True
+                        for field in (
+                            "connectTimedOut",
+                            "getStateTimedOut",
+                            "getpropTimedOut",
+                        )
+                    ),
+                    "pollDeadlineReached": time.monotonic() >= adb_deadline,
                 }
             )
+
+        (
+            connect_code,
+            _,
+            connect_timed_out,
+            connect_attempted,
+            connect_truncated,
+            connect_cleanup_complete,
+            connect_probe_error,
+        ) = self._run_adb_bounded(
+            [str(self.adb_path), "-L", adb_socket, "connect", serial],
+            environment,
+            adb_deadline,
+            timeout_seconds=ADB_COMMAND_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
+        )
+        poll_fields.update(
+            {
+                "connectExitCode": connect_code,
+                "connectAttempted": connect_attempted,
+                "connectTimedOut": connect_timed_out if connect_attempted else None,
+                "connectTruncated": connect_truncated,
+                "connectCleanupComplete": connect_cleanup_complete,
+                "connectProbeError": connect_probe_error,
+                "cleanupComplete": connect_cleanup_complete,
+                "probeError": connect_probe_error,
+            }
+        )
+        if not connect_cleanup_complete:
+            self._adb_probe_cleanup_failed = True
+            record_poll()
+            return True
+        if connect_truncated:
+            record_poll()
+            return True
+        if time.monotonic() >= adb_deadline:
+            record_poll()
             return True
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
-        state_code, state_output, state_timed_out, state_attempted = self._run_adb(
+        (
+            state_code,
+            state_output,
+            state_timed_out,
+            state_attempted,
+            state_truncated,
+            state_cleanup_complete,
+            state_probe_error,
+        ) = self._run_adb_bounded(
             [str(self.adb_path), "-L", adb_socket, "-s", serial, "get-state"],
             environment,
             adb_deadline,
+            timeout_seconds=ADB_COMMAND_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
         )
-        state_text = state_output.strip()
+        state_text = state_output.decode("utf-8", errors="replace").strip()
         state = (
             state_text
-            if state_code == 0 and state_text in {"device", "offline", "unauthorized"}
+            if (
+                state_code == 0
+                and not state_truncated
+                and not state_probe_error
+                and state_text in {"device", "offline", "unauthorized"}
+            )
             else None
         )
-        if not state_attempted:
+        if state_probe_error:
+            state_result = "probeError"
+        elif not state_attempted:
             state_result = "notAttempted"
         elif state_timed_out:
             state_result = "timedOut"
@@ -1177,53 +1258,39 @@ class BootObserver:
             state_result = "empty"
         else:
             state_result = "other"
-        adb_stage_fields.update(
+        poll_fields.update(
             {
                 "getStateAttempted": state_attempted,
                 "getStateExitCode": state_code,
                 "getStateTimedOut": state_timed_out if state_attempted else None,
+                "getStateTruncated": state_truncated,
+                "getStateCleanupComplete": state_cleanup_complete,
+                "getStateProbeError": state_probe_error,
                 "getStateResult": state_result,
                 "deviceState": state,
+                "cleanupComplete": poll_fields["cleanupComplete"] and state_cleanup_complete,
+                "probeError": poll_fields["probeError"] or state_probe_error,
             }
         )
-        property_code: int | None = None
-        boot_completed: bool | None = None
-        property_attempted = False
-        property_timed_out: bool | None = None
-        property_command_timed_out = False
-        system_server_start_count: int | None = None
-        system_server_start_count_present: bool | None = None
-        boot_completed_present: bool | None = None
-        system_server_getprop_exit_code: int | None = None
-        boot_completed_getprop_exit_code: int | None = None
+        if not state_cleanup_complete:
+            self._adb_probe_cleanup_failed = True
+            record_poll()
+            return True
         if state == "device" and (server.poll() is not None or not self._is_socket(socket_path)):
             return False
         if time.monotonic() >= adb_deadline:
-            self._record(
-                {
-                    "event": "adb_poll",
-                    **adb_stage_fields,
-                    "getpropExitCode": None,
-                    "getpropAttempted": False,
-                    "getpropTimedOut": None,
-                    "systemServerStartCount": None,
-                    "systemServerStartCountPresent": None,
-                    "systemServerGetpropExitCode": None,
-                    "bootCompletedGetpropExitCode": None,
-                    "sysBootCompleted": None,
-                    "sysBootCompletedPresent": None,
-                    "commandTimedOut": (connect_timed_out or state_timed_out),
-                    "pollDeadlineReached": True,
-                }
-            )
+            record_poll()
             return True
-        if state == "device":
+        if state == "device" and not state_truncated and not state_probe_error:
             (
                 property_code,
                 property_output,
                 property_command_timed_out,
                 property_attempted,
-            ) = self._run_adb(
+                property_truncated,
+                property_cleanup_complete,
+                property_probe_error,
+            ) = self._run_adb_bounded(
                 [
                     str(self.adb_path),
                     "-L",
@@ -1238,39 +1305,37 @@ class BootObserver:
                 environment,
                 adb_deadline,
                 timeout_seconds=ADB_GETPROP_TIMEOUT_SECONDS,
+                max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
             )
-            if property_attempted:
-                property_timed_out = property_command_timed_out
-            (
-                system_server_start_count,
-                system_server_start_count_present,
-                boot_completed,
-                boot_completed_present,
-                system_server_getprop_exit_code,
-                boot_completed_getprop_exit_code,
-            ) = parse_boot_properties(
-                property_output,
-                allow_truncated_tail=property_command_timed_out,
+            poll_fields.update(
+                {
+                    "getpropExitCode": property_code,
+                    "getpropAttempted": property_attempted,
+                    "getpropTimedOut": (property_command_timed_out if property_attempted else None),
+                    "getpropTruncated": property_truncated,
+                    "getpropCleanupComplete": property_cleanup_complete,
+                    "getpropProbeError": property_probe_error,
+                    "cleanupComplete": (
+                        poll_fields["cleanupComplete"] and property_cleanup_complete
+                    ),
+                    "probeError": poll_fields["probeError"] or property_probe_error,
+                }
             )
-        self._record(
-            {
-                "event": "adb_poll",
-                **adb_stage_fields,
-                "getpropExitCode": property_code,
-                "getpropAttempted": property_attempted,
-                "getpropTimedOut": property_timed_out,
-                "systemServerStartCount": system_server_start_count,
-                "systemServerStartCountPresent": system_server_start_count_present,
-                "systemServerGetpropExitCode": system_server_getprop_exit_code,
-                "bootCompletedGetpropExitCode": boot_completed_getprop_exit_code,
-                "sysBootCompleted": boot_completed,
-                "sysBootCompletedPresent": boot_completed_present,
-                "commandTimedOut": (
-                    connect_timed_out or state_timed_out or property_command_timed_out
-                ),
-                "pollDeadlineReached": time.monotonic() >= adb_deadline,
-            }
-        )
+            if not property_cleanup_complete:
+                self._adb_probe_cleanup_failed = True
+            elif not property_truncated and not property_probe_error:
+                (
+                    poll_fields["systemServerStartCount"],
+                    poll_fields["systemServerStartCountPresent"],
+                    poll_fields["sysBootCompleted"],
+                    poll_fields["sysBootCompletedPresent"],
+                    poll_fields["systemServerGetpropExitCode"],
+                    poll_fields["bootCompletedGetpropExitCode"],
+                ) = parse_boot_properties(
+                    property_output.decode("utf-8", errors="replace"),
+                    allow_truncated_tail=property_command_timed_out,
+                )
+        record_poll()
         return True
 
     def _record_final_logcat_summary(
@@ -1615,41 +1680,6 @@ class BootObserver:
         elif not attempted:
             fields["reason"] = "logcat_not_started"
         return fields
-
-    @staticmethod
-    def _run_adb(
-        command: list[str],
-        environment: dict[str, str],
-        deadline: float,
-        *,
-        timeout_seconds: float = ADB_COMMAND_TIMEOUT_SECONDS,
-    ) -> tuple[int | None, str, bool, bool]:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None, "", False, False
-        try:
-            completed = subprocess.run(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=environment,
-                timeout=min(timeout_seconds, remaining),
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            partial_output = error.stdout
-            if isinstance(partial_output, bytes):
-                output = partial_output.decode("utf-8", errors="replace")
-            elif isinstance(partial_output, str):
-                output = partial_output
-            else:
-                output = ""
-            return None, output, True, True
-        except OSError:
-            return None, "", False, False
-        output = completed.stdout.decode("utf-8", errors="replace")
-        return completed.returncode, output, False, True
 
     @staticmethod
     def _process_group_exists(process_group_id: int) -> bool:

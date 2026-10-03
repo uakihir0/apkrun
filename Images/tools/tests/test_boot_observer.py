@@ -1429,6 +1429,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         ("getstate_failed", None, False, None, False, False, 2),
         ("getstate_empty", None, False, None, False, False, 2),
         ("getstate_other", None, False, None, False, False, 2),
+        ("getstate_probe_error", None, False, None, False, False, 2),
     ),
 )
 def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
@@ -1456,6 +1457,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     adb_socket.bind(str(socket_path))
     calls: list[list[str]] = []
     timeouts: list[float] = []
+    output_limits: list[int] = []
     launched_commands: list[list[str]] = []
 
     class FakeClock:
@@ -1472,45 +1474,60 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     clock = FakeClock()
     monkeypatch.setattr(OBSERVER_MODULE, "time", clock)
 
+    def bounded_result(
+        exit_code: int | None,
+        output: str = "",
+        *,
+        timed_out: bool = False,
+        attempted: bool = True,
+        probe_error: bool = False,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        return exit_code, output.encode(), timed_out, attempted, False, True, probe_error
+
     def fake_run_adb(
         command: list[str],
         environment: dict[str, str],
         deadline: float,
         *,
-        timeout_seconds: float = OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS,
-    ) -> tuple[int | None, str, bool, bool]:
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
         del environment
         calls.append(command)
         timeouts.append(timeout_seconds)
+        output_limits.append(max_output_bytes)
         if "connect" in command:
             if scenario == "connect_not_attempted":
-                return None, "", False, False
+                return bounded_result(None, attempted=False)
             if scenario == "connect_times_out":
-                return None, "", True, True
+                return bounded_result(None, timed_out=True)
             launched_commands.append(command)
             if scenario == "deadline_after_connect":
                 clock.current = deadline
-            return 0, "", False, True
+            return bounded_result(0)
         if command[-1:] == ["get-state"]:
             if scenario == "deadline_before_getprop":
                 clock.current = deadline
             if scenario in {"connect_not_attempted", "offline"}:
                 launched_commands.append(command)
-                return 0, "offline", False, True
+                return bounded_result(0, "offline")
             if scenario == "getstate_times_out":
                 launched_commands.append(command)
-                return None, "", True, True
+                return bounded_result(None, timed_out=True)
+            if scenario == "getstate_probe_error":
+                launched_commands.append(command)
+                return bounded_result(0, "device", probe_error=True)
             if scenario == "getstate_failed":
                 launched_commands.append(command)
-                return 19, "private-device-name", False, True
+                return bounded_result(19, "private-device-name")
             if scenario == "getstate_empty":
                 launched_commands.append(command)
-                return 0, "", False, True
+                return bounded_result(0)
             if scenario == "getstate_other":
                 launched_commands.append(command)
-                return 0, "private-device-name", False, True
+                return bounded_result(0, "private-device-name")
             launched_commands.append(command)
-            return 0, "device", False, True
+            return bounded_result(0, "device")
         if command[-3:] == [
             "sh",
             "-c",
@@ -1518,36 +1535,31 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         ]:
             if scenario == "deadline_before_spawn":
                 clock.current = deadline
-                return None, "", False, False
+                return bounded_result(None, attempted=False)
             launched_commands.append(command)
             if scenario == "system_server_query_failed":
-                return (
+                return bounded_result(
                     0,
                     "boot_completed=0\nboot_completed_status=0\n"
                     "system_server=2\nsystem_server_status=7",
-                    False,
-                    True,
                 )
             if scenario == "boot_completed_query_failed":
-                return (
+                return bounded_result(
                     0,
                     "boot_completed=1\nboot_completed_status=7\n"
                     "system_server=2\nsystem_server_status=0",
-                    False,
-                    True,
                 )
             if scenario == "getprop_times_out_after_boot_query":
-                return (
+                return bounded_result(
                     None,
                     "boot_completed=1\nboot_completed_status=0\n"
                     "system_server=2\nsystem_server_stat",
-                    True,
-                    True,
+                    timed_out=True,
                 )
-            return None, "", True, True
+            return bounded_result(None, timed_out=True)
         raise AssertionError(f"unexpected adb command: {command!r}")
 
-    monkeypatch.setattr(observer, "_run_adb", fake_run_adb)
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_adb)
     try:
         assert observer._record_adb_poll(
             "localfilesystem:/tmp/adb.sock",
@@ -1603,6 +1615,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
             "getstate_failed": "commandFailed",
             "getstate_empty": "empty",
             "getstate_other": "other",
+            "getstate_probe_error": "probeError",
         }[scenario]
     )
     assert poll["getpropAttempted"] is expected_attempted
@@ -1644,6 +1657,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     if scenario in {"getstate_failed", "getstate_other"}:
         assert "private-device-name" not in output.read_text(encoding="ascii")
     assert len(calls) == expected_call_count
+    assert output_limits == [OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES] * expected_call_count
     assert timeouts[:2] == [OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS] * min(
         expected_call_count,
         2,
@@ -1662,6 +1676,154 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         )
         is expected_attempted
     )
+
+
+@pytest.mark.parametrize(
+    ("failed_stage", "expected_call_count"),
+    (("connect", 1), ("get-state", 2), ("getprop", 3)),
+)
+def test_regular_adb_poll_fails_closed_when_client_cleanup_is_unverified(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_stage: str,
+    expected_call_count: int,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+    calls: list[list[str]] = []
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    def fake_run_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline, timeout_seconds, max_output_bytes
+        calls.append(command)
+        stage = (
+            "connect"
+            if "connect" in command
+            else "get-state"
+            if command[-1:] == ["get-state"]
+            else "getprop"
+        )
+        output_bytes = (
+            b"boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=0"
+            if stage == "getprop"
+            else b"device\n"
+            if stage == "get-state"
+            else b""
+        )
+        return 0, output_bytes, False, True, False, stage != failed_stage, False
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
+    try:
+        assert observer._record_adb_poll(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            time.monotonic() + 5,
+        )
+        with pytest.raises(OSError, match="did not complete child cleanup"):
+            observer.close()
+    finally:
+        if not observer._closed:
+            observer.close()
+        adb_socket.close()
+
+    poll = next(record for record in _read_records(output) if record["event"] == "adb_poll")
+    cleanup_fields = {
+        "connect": "connectCleanupComplete",
+        "get-state": "getStateCleanupComplete",
+        "getprop": "getpropCleanupComplete",
+    }
+    assert len(calls) == expected_call_count
+    assert poll["cleanupComplete"] is False
+    assert poll[cleanup_fields[failed_stage]] is False
+    assert poll["sysBootCompleted"] is None
+
+
+def test_regular_adb_poll_does_not_parse_truncated_property_output(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    def fake_run_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline, timeout_seconds, max_output_bytes
+        if "connect" in command:
+            return 0, b"", False, True, False, True, False
+        if command[-1:] == ["get-state"]:
+            return 0, b"device\n", False, True, False, True, False
+        return (
+            0,
+            b"boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=0",
+            False,
+            True,
+            True,
+            True,
+            False,
+        )
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
+    try:
+        assert observer._record_adb_poll(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            time.monotonic() + 5,
+        )
+    finally:
+        observer.close()
+        adb_socket.close()
+
+    poll = next(record for record in _read_records(output) if record["event"] == "adb_poll")
+    assert poll["getpropTruncated"] is True
+    assert poll["getpropCleanupComplete"] is True
+    assert poll["sysBootCompleted"] is None
+    assert poll["systemServerStartCount"] is None
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires Linux parent-death signals")
@@ -1838,67 +2000,30 @@ def test_boot_observer_does_not_start_adb_command_after_cleanup_boundary(
     )
     fake_adb.chmod(0o700)
 
-    result = BootObserver._run_adb(
+    result = BootObserver._run_adb_bounded(
         [str(fake_adb), "get-state"],
         {},
         time.monotonic() - 1,
+        timeout_seconds=OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS,
+        max_output_bytes=OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES,
     )
 
-    assert result == (None, "", False, False)
+    assert result == (None, b"", False, False, False, True, False)
     assert not marker.exists()
 
 
-@pytest.mark.parametrize(
-    ("remaining", "expected_timeout"),
-    ((20.0, 10.0), (3.0, 3.0)),
-)
-def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-    remaining: float,
-    expected_timeout: float,
-) -> None:
-    class FakeClock:
-        @staticmethod
-        def monotonic() -> float:
-            return 0.0
-
-    observed_timeouts: list[float] = []
-
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        timeout = kwargs.get("timeout")
-        assert isinstance(timeout, (int, float))
-        observed_timeouts.append(float(timeout))
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=(
-                b"boot_completed=1\nboot_completed_status=0\n"
-                b"system_server=2\nsystem_server_status=0"
-            ),
-        )
-
-    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
-    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
-    result = BootObserver._run_adb(
-        [
-            "adb",
-            "shell",
-            "sh",
-            "-c",
-            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
-        ],
-        {},
-        remaining,
-        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
+def test_adb_poll_reserve_covers_command_and_process_group_cleanup_bounds() -> None:
+    cleanup_timeout = (
+        OBSERVER_MODULE.ADB_CLIENT_TERMINATE_SECONDS + OBSERVER_MODULE.ADB_CLIENT_KILL_SECONDS * 2
+    )
+    expected_reserve = (
+        OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS * 2
+        + OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS
+        + cleanup_timeout * 3
+        + 4.0
     )
 
-    assert result == (
-        0,
-        "boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=0",
-        False,
-        True,
-    )
-    assert observed_timeouts == [expected_timeout]
+    assert OBSERVER_MODULE.ADB_POLL_FINAL_RESERVE_SECONDS == expected_reserve
 
 
 @pytest.mark.parametrize(
@@ -1911,97 +2036,29 @@ def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
     ),
 )
 def test_boot_observer_preserves_adb_property_reply_framing(
-    monkeypatch: pytest.MonkeyPatch,
     suffix: str,
     timed_out: bool,
     expected_properties: tuple[
         int | None, bool | None, bool | None, bool | None, int | None, int | None
     ],
 ) -> None:
-    class FakeClock:
-        @staticmethod
-        def monotonic() -> float:
-            return 0.0
-
     raw_output = (
         "boot_completed=1\nboot_completed_status=0\n"
         "system_server=2\nsystem_server_status=0" + suffix
     )
 
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        del kwargs
-        if timed_out:
-            raise subprocess.TimeoutExpired(
-                command,
-                timeout=10,
-                output=raw_output.encode(),
-            )
-        return subprocess.CompletedProcess(command, 0, stdout=raw_output.encode())
-
-    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
-    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
-    result = BootObserver._run_adb(
-        [
-            "adb",
-            "shell",
-            "sh",
-            "-c",
-            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
-        ],
-        {},
-        20,
-        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
-    )
-
-    assert result == (
-        None if timed_out else 0,
-        raw_output,
-        timed_out,
-        True,
-    )
-    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == expected_properties
-
-
-def test_boot_observer_preserves_partial_boot_properties_on_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeClock:
-        @staticmethod
-        def monotonic() -> float:
-            return 0.0
-
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        del kwargs
-        raise subprocess.TimeoutExpired(
-            command,
-            timeout=10,
-            output=(
-                b"boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_stat"
-            ),
+    assert (
+        OBSERVER_MODULE.parse_boot_properties(
+            raw_output,
+            allow_truncated_tail=timed_out,
         )
-
-    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
-    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
-    result = BootObserver._run_adb(
-        [
-            "adb",
-            "shell",
-            "sh",
-            "-c",
-            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
-        ],
-        {},
-        20,
-        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
+        == expected_properties
     )
 
-    assert result == (
-        None,
-        "boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_stat",
-        True,
-        True,
-    )
-    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == (
+
+def test_boot_observer_preserves_partial_boot_properties_on_timeout() -> None:
+    raw_output = "boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_stat"
+    assert OBSERVER_MODULE.parse_boot_properties(raw_output) == (
         None,
         None,
         None,
@@ -2010,7 +2067,7 @@ def test_boot_observer_preserves_partial_boot_properties_on_timeout(
         None,
     )
     assert OBSERVER_MODULE.parse_boot_properties(
-        result[1],
+        raw_output,
         allow_truncated_tail=True,
     ) == (
         None,

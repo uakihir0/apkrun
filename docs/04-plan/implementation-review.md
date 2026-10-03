@@ -5317,8 +5317,25 @@ shell syntax, and `git diff --check` passed.
 Adversarial review requested explicit no-retry coverage after a launched
 timeout or missing marker; the multi-poll test now verifies both outcomes
 resume at the property query without repeating the one-shot. Follow-up
-hostile review found no actionable findings. A fresh live capture remains
-pending.
+hostile review found no actionable findings.
+
+**Live verification (2026-10-03 UTC).** The 2404-second SwiftShader capture
+at [the normalized incomplete record](../../Images/reference/16373615/incomplete/swiftshader-20261004T034715-1337678/)
+used source revision `f2a152421003701302ceb64c9e2812221e839a33`. The ADB poll
+record stamped `2026-10-03T18:23:27.943Z` shows that its first standalone
+shell probe timed out with exit `-15`, returned no marker, and completed
+process-group cleanup; the probe's start time was not recorded. Of 94 ADB
+polls, 91 reported `device`; the 90 property queries had 88 timeouts and two
+exit-zero results, but no accepted property values. The kernel log recorded
+Android first-stage init at guest uptime 25.868 seconds and zygote started at
+197.418 seconds, but no `sys.boot_completed=1`,
+`VIRTUAL_DEVICE_BOOT_COMPLETED`, or `VIRTUAL_DEVICE_BOOT_FAILED`. The final
+bounded logcat requests completed, without recognized process events. The
+capture remains incomplete. This confirms that the timeout was not limited to
+the `getprop` query, but does not establish whether the guest shell began
+executing the command or identify a boot cause. All 11 manifest entries and
+seven source-copy hashes verified; privacy scans were clear and a second
+normalization pass changed zero files.
 
 ## IR-154: Preserve the ADB observer's monotonic poll schedule
 

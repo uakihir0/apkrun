@@ -231,14 +231,18 @@ def test_capture_script_uses_each_profile_launch_configuration(
                 instance=$(cat "$APKRUN_PROFILE_INSTANCE_FILE")
                 instance_num=${instance##*/cvd-}
                 selected_gpu_mode=guest_swiftshader
+                gpu_vhost_user_enabled=true
                 for start_argument in "$@"; do
                   case "$start_argument" in
                     --gpu_mode=*) selected_gpu_mode=${start_argument#*=} ;;
+                    --gpu_vhost_user_mode=off) gpu_vhost_user_enabled=false ;;
                   esac
                 done
-                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\"}}}\\n' \
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\",' \
                   "$instance_num" "$selected_gpu_mode" \
                   > "$instance/cuttlefish_config.json"
+                printf '\"enable_gpu_vhost_user\":%s}}}\\n' \
+                  "$gpu_vhost_user_enabled" >> "$instance/cuttlefish_config.json"
                 exit 0
               fi
             done
@@ -398,6 +402,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     ]
     if expected_gpu_mode is not None:
         expected_start_arguments.append(f"--gpu_mode={expected_gpu_mode}")
+    expected_start_arguments.append("--gpu_vhost_user_mode=off")
     assert start_log.read_text(encoding="utf-8").split() == expected_start_arguments
     expected_tmp_root = Path("/tmp").resolve()
     assert tmpdir_log.read_text(encoding="utf-8") == f"{expected_tmp_root}\n"
@@ -408,6 +413,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
         assert not any(argument.startswith("--gpu_mode=") for argument in launch_arguments)
     else:
         assert f"--gpu_mode={expected_gpu_mode}" in launch_arguments
+    assert "--gpu_vhost_user_mode=off" in launch_arguments
+    assert "--gpu_vhost_user_mode=off" in expected_start_arguments
     secure_hals = "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure"
     assert (secure_hals in launch_arguments) is expected_secure_hals
 
@@ -428,6 +435,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
     assert metadata["selectedGpuMode"] == (expected_gpu_mode or "guest_swiftshader")
+    assert metadata["gpuVhostUserEnabled"] is False
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     if observer_enabled:
         observer_records = [
@@ -684,6 +692,38 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+            "gpu-vhost-user-enabled",
+            id="selected-vhost-user-gpu-is-rejected",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-vhost-user-invalid-type",
+            id="selected-vhost-user-setting-must-be-a-json-boolean",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
             "gpu-mode-missing",
             id="missing-selected-mode-skips-adb-capture",
         ),
@@ -766,6 +806,38 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             "gpu-mode-staged-mismatch",
             id="staged-config-is-revalidated-before-publish",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-vhost-user-staged-enabled",
+            id="staged-vhost-user-gpu-change-invalidates-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-vhost-user-staged-invalid-type",
+            id="staged-vhost-user-setting-must-be-a-json-boolean",
         ),
         pytest.param(
             "drm_virgl",
@@ -1377,26 +1449,41 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 instance=$(cat "$HOME/instance-runtime.txt")
                 instance_num=$(cat "$HOME/instance-num.txt")
                 selected_gpu_mode=guest_swiftshader
+                selected_gpu_vhost_user_enabled=true
                 for start_argument in "$@"; do
                   case "$start_argument" in
                     --gpu_mode=*) selected_gpu_mode=${start_argument#*=} ;;
+                    --gpu_vhost_user_mode=off) selected_gpu_vhost_user_enabled=false ;;
                   esac
                 done
                 if [ "${FAKE_CVD_CONFIG_GPU_MODE_MISMATCH:-0}" = 1 ]; then
                   selected_gpu_mode=guest_swiftshader
+                fi
+                if [ "${FAKE_CVD_CONFIG_GPU_VHOST_USER_ENABLED:-0}" = 1 ]; then
+                  selected_gpu_vhost_user_enabled=true
                 fi
                 if [ "${FAKE_CVD_CONFIG_DUPLICATE_KEY:-0}" = 1 ]; then
                   duplicate_gpu_config='{"instances":{"'
                   duplicate_gpu_config="${duplicate_gpu_config}${instance_num}"
                   duplicate_gpu_config="${duplicate_gpu_config}"'":{"gpu_mode":"guest_swiftshader","gpu_mode":"'
                   duplicate_gpu_config="${duplicate_gpu_config}${selected_gpu_mode}"
-                  duplicate_gpu_config="${duplicate_gpu_config}"'"}}}'
+                  duplicate_gpu_config="${duplicate_gpu_config}"'","enable_gpu_vhost_user":true,"enable_gpu_vhost_user":'
+                  duplicate_gpu_config="${duplicate_gpu_config}${selected_gpu_vhost_user_enabled}"
+                  duplicate_gpu_config="${duplicate_gpu_config}"'}}}'
                   printf '%s\\n' "$duplicate_gpu_config" \
                     > "$instance/cuttlefish_config.json"
-                else
-                  printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\"}}}\\n' \
+                elif [ "${FAKE_CVD_CONFIG_GPU_VHOST_USER_INVALID_TYPE:-0}" = 1 ]; then
+                  printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\",' \
                     "$instance_num" "$selected_gpu_mode" \
                     > "$instance/cuttlefish_config.json"
+                  printf '\"enable_gpu_vhost_user\":\"false\"}}}\\n' \
+                    >> "$instance/cuttlefish_config.json"
+                else
+                  printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\",' \
+                    "$instance_num" "$selected_gpu_mode" \
+                    > "$instance/cuttlefish_config.json"
+                  printf '\"enable_gpu_vhost_user\":%s}}}\\n' \
+                    "$selected_gpu_vhost_user_enabled" >> "$instance/cuttlefish_config.json"
                 fi
                 if [ "${APKRUN_CAPTURE_BOOT_OBSERVER:-0}" = 1 ]; then
                   printf 'Start event (5) received.\\n' >> "$instance/launcher.log"
@@ -1464,14 +1551,28 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
             if [ "$1" = connect ] \
               && { [ "${FAKE_CVD_CONFIG_STAGED_MISMATCH:-0}" = 1 ] \
+                || [ "${FAKE_CVD_CONFIG_STAGED_VHOST_USER_ENABLED:-0}" = 1 ] \
+                || [ "${FAKE_CVD_CONFIG_STAGED_VHOST_USER_INVALID_TYPE:-0}" = 1 ] \
                 || [ "${FAKE_CVD_CONFIG_STAGED_INVALID:-0}" = 1 ] \
                 || [ "${FAKE_CVD_CONFIG_STAGED_MISSING:-0}" = 1 ]; } \
               && [ ! -f "$HOME/cuttlefish-config-changed.txt" ]; then
               instance=$(cat "$HOME/instance-runtime.txt")
               instance_num=$(cat "$HOME/instance-num.txt")
               if [ "${FAKE_CVD_CONFIG_STAGED_MISMATCH:-0}" = 1 ]; then
-                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"guest_swiftshader\"}}}\\n' \
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"guest_swiftshader\",' \
                   "$instance_num" > "$instance/cuttlefish_config.json"
+                printf '\"enable_gpu_vhost_user\":false}}}\\n' \
+                  >> "$instance/cuttlefish_config.json"
+              elif [ "${FAKE_CVD_CONFIG_STAGED_VHOST_USER_ENABLED:-0}" = 1 ]; then
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"drm_virgl\",' \
+                  "$instance_num" > "$instance/cuttlefish_config.json"
+                printf '\"enable_gpu_vhost_user\":true}}}\\n' \
+                  >> "$instance/cuttlefish_config.json"
+              elif [ "${FAKE_CVD_CONFIG_STAGED_VHOST_USER_INVALID_TYPE:-0}" = 1 ]; then
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"drm_virgl\",' \
+                  "$instance_num" > "$instance/cuttlefish_config.json"
+                printf '\"enable_gpu_vhost_user\":\"false\"}}}\\n' \
+                  >> "$instance/cuttlefish_config.json"
               elif [ "${FAKE_CVD_CONFIG_STAGED_INVALID:-0}" = 1 ]; then
                 printf '{' > "$instance/cuttlefish_config.json"
               elif [ "${FAKE_CVD_CONFIG_STAGED_MISSING:-0}" = 1 ]; then
@@ -1762,6 +1863,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 if boot_timeout_case in {"gpu-mode-mismatch", "gpu-mode-mismatch-observed"}
                 else "0"
             ),
+            "FAKE_CVD_CONFIG_GPU_VHOST_USER_ENABLED": (
+                "1" if boot_timeout_case == "gpu-vhost-user-enabled" else "0"
+            ),
+            "FAKE_CVD_CONFIG_GPU_VHOST_USER_INVALID_TYPE": (
+                "1" if boot_timeout_case == "gpu-vhost-user-invalid-type" else "0"
+            ),
             "FAKE_CVD_CONFIG_MISSING": ("1" if boot_timeout_case == "gpu-mode-missing" else "0"),
             "FAKE_CVD_CONFIG_INVALID": ("1" if boot_timeout_case == "gpu-mode-invalid" else "0"),
             "FAKE_CVD_CONFIG_NONSTANDARD_JSON": (
@@ -1772,6 +1879,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             ),
             "FAKE_CVD_CONFIG_STAGED_MISMATCH": (
                 "1" if boot_timeout_case == "gpu-mode-staged-mismatch" else "0"
+            ),
+            "FAKE_CVD_CONFIG_STAGED_VHOST_USER_ENABLED": (
+                "1" if boot_timeout_case == "gpu-vhost-user-staged-enabled" else "0"
+            ),
+            "FAKE_CVD_CONFIG_STAGED_VHOST_USER_INVALID_TYPE": (
+                "1" if boot_timeout_case == "gpu-vhost-user-staged-invalid-type" else "0"
             ),
             "FAKE_CVD_CONFIG_STAGED_INVALID": (
                 "1" if boot_timeout_case == "gpu-mode-staged-invalid" else "0"
@@ -1988,6 +2101,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         elif boot_timeout_case in {
             "gpu-mode-mismatch",
             "gpu-mode-mismatch-observed",
+            "gpu-vhost-user-enabled",
+            "gpu-vhost-user-invalid-type",
             "gpu-mode-missing",
             "gpu-mode-invalid",
             "gpu-mode-oversized",
@@ -2001,7 +2116,47 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
             metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
             assert metadata["targetGpuMode"] == "drm_virgl"
-            assert missing.count("selected-gpu-mode\t") == 1
+            if boot_timeout_case == "gpu-vhost-user-enabled":
+                assert missing.count("selected-gpu-mode\t") == 0
+                assert missing.count("selected-gpu-vhost-user\t") == 1
+                assert (
+                    "selected-gpu-vhost-user\tCuttlefish selected "
+                    "enable_gpu_vhost_user=true instead of the requested off state; "
+                    "do not use this capture for GPU-profile comparison"
+                ) in missing
+                assert metadata["selectedGpuMode"] == "drm_virgl"
+                assert metadata["gpuVhostUserEnabled"] is True
+                config = json.loads(
+                    (partial / "cuttlefish_config.json").read_text(encoding="utf-8")
+                )
+                assert config["instances"][str(expected_instance)]["enable_gpu_vhost_user"] is True
+            elif boot_timeout_case == "gpu-vhost-user-invalid-type":
+                assert missing.count("selected-gpu-mode\t") == 1
+                assert missing.count("selected-gpu-vhost-user\t") == 0
+                assert (
+                    "selected-gpu-mode\tCuttlefish did not record valid GPU settings "
+                    "for the selected instance; do not use this capture for GPU-profile "
+                    "comparison"
+                ) in missing
+                assert metadata["selectedGpuMode"] is None
+                assert metadata["gpuVhostUserEnabled"] is None
+                config = json.loads(
+                    (partial / "cuttlefish_config.json").read_text(encoding="utf-8")
+                )
+                assert (
+                    config["instances"][str(expected_instance)]["enable_gpu_vhost_user"] == "false"
+                )
+            else:
+                assert missing.count("selected-gpu-mode\t") == 1
+                assert metadata["gpuVhostUserEnabled"] is (
+                    False
+                    if boot_timeout_case
+                    in {
+                        "gpu-mode-mismatch",
+                        "gpu-mode-mismatch-observed",
+                    }
+                    else None
+                )
             if boot_timeout_case in {
                 "gpu-mode-mismatch",
                 "gpu-mode-mismatch-observed",
@@ -2017,7 +2172,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 assert (
                     config["instances"][str(expected_instance)]["gpu_mode"] == "guest_swiftshader"
                 )
-            else:
+            elif boot_timeout_case not in {
+                "gpu-vhost-user-enabled",
+                "gpu-vhost-user-invalid-type",
+            }:
                 assert "do not use this capture for GPU-profile comparison" in missing
                 assert metadata["selectedGpuMode"] is None
                 if boot_timeout_case == "gpu-mode-missing":
@@ -2027,9 +2185,15 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 elif boot_timeout_case == "gpu-mode-nonstandard-json":
                     assert "NaN" in (partial / "cuttlefish_config.json").read_text(encoding="utf-8")
                 elif boot_timeout_case == "gpu-mode-duplicate-key":
+                    duplicate_config = (partial / "cuttlefish_config.json").read_text(
+                        encoding="utf-8"
+                    )
                     assert '"gpu_mode":"guest_swiftshader","gpu_mode":"drm_virgl"' in (
-                        partial / "cuttlefish_config.json"
-                    ).read_text(encoding="utf-8")
+                        duplicate_config
+                    )
+                    assert '"enable_gpu_vhost_user":true,"enable_gpu_vhost_user":false' in (
+                        duplicate_config
+                    )
                 else:
                     assert (
                         "cuttlefish_config.json\tnot a regular Cuttlefish config or exceeds 64 MiB"
@@ -2303,6 +2467,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
 
     if boot_timeout_case in {
         "gpu-mode-staged-mismatch",
+        "gpu-vhost-user-staged-enabled",
+        "gpu-vhost-user-staged-invalid-type",
         "gpu-mode-staged-invalid",
         "gpu-mode-staged-missing",
     }:
@@ -2313,7 +2479,21 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
         metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
         assert metadata["targetGpuMode"] == "drm_virgl"
-        assert missing.count("selected-gpu-mode\t") == 1
+        if boot_timeout_case == "gpu-vhost-user-staged-enabled":
+            assert missing.count("selected-gpu-mode\t") == 0
+            assert missing.count("selected-gpu-vhost-user\t") == 1
+            assert (
+                "selected-gpu-vhost-user\tcaptured Cuttlefish config selected "
+                "enable_gpu_vhost_user=true instead of the requested off state; "
+                "do not use this capture for GPU-profile comparison"
+            ) in missing
+            assert metadata["selectedGpuMode"] == "drm_virgl"
+            assert metadata["gpuVhostUserEnabled"] is True
+            config = json.loads((partial / "cuttlefish_config.json").read_text(encoding="utf-8"))
+            assert config["instances"][str(expected_instance)]["enable_gpu_vhost_user"] is True
+        else:
+            assert missing.count("selected-gpu-mode\t") == 1
+            assert metadata["gpuVhostUserEnabled"] is False
         if boot_timeout_case == "gpu-mode-staged-mismatch":
             assert (
                 "selected-gpu-mode\tcaptured Cuttlefish config selected guest_swiftshader "
@@ -2324,13 +2504,22 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert config["instances"][str(expected_instance)]["gpu_mode"] == "guest_swiftshader"
         elif boot_timeout_case == "gpu-mode-staged-invalid":
             assert (
-                "selected-gpu-mode\tcaptured cuttlefish_config.json did not contain a valid "
-                "GPU mode for the selected instance; do not use this capture for "
+                "selected-gpu-mode\tcaptured cuttlefish_config.json did not contain valid "
+                "GPU settings for the selected instance; do not use this capture for "
                 "GPU-profile comparison"
             ) in missing
             assert metadata["selectedGpuMode"] == "drm_virgl"
             assert (partial / "cuttlefish_config.json").read_text(encoding="utf-8") == "{"
-        else:
+        elif boot_timeout_case == "gpu-vhost-user-staged-invalid-type":
+            assert (
+                "selected-gpu-mode\tcaptured cuttlefish_config.json did not contain valid "
+                "GPU settings for the selected instance; do not use this capture for "
+                "GPU-profile comparison"
+            ) in missing
+            assert metadata["selectedGpuMode"] == "drm_virgl"
+            config = json.loads((partial / "cuttlefish_config.json").read_text(encoding="utf-8"))
+            assert config["instances"][str(expected_instance)]["enable_gpu_vhost_user"] == "false"
+        elif boot_timeout_case == "gpu-mode-staged-missing":
             assert (
                 "selected-gpu-mode\tcaptured cuttlefish_config.json is unavailable for the "
                 "selected instance; do not use this capture for GPU-profile comparison"
@@ -2359,6 +2548,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert metadata["cvdInstanceNumber"] == expected_instance
     assert metadata["targetGpuMode"] == gpu_mode
     assert metadata["selectedGpuMode"] == gpu_mode
+    assert metadata["gpuVhostUserEnabled"] is False
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     assert (capture / "internal-bootconfig.txt").read_bytes() == b"androidboot.synthetic=1\n"
     composite_specs = json.loads(
@@ -2384,6 +2574,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert f"/instances/cvd-{expected_instance}0/" not in crosvm_command
     launch_arguments = launch_log.read_text(encoding="utf-8").split()
     assert f"--gpu_mode={gpu_mode}" in launch_arguments
+    assert "--gpu_vhost_user_mode=off" in launch_arguments
     assert "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure" in launch_arguments
     assert f"--base_instance_num={expected_instance}" in launch_arguments
     assert "--num_instances=1" in launch_arguments
@@ -2397,6 +2588,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     )
     assert group_argument == group_argument.lower()
     assert "-" not in group_argument.split("=", maxsplit=1)[1]
+    start_arguments = start_log.read_text(encoding="utf-8").split()
+    assert f"--gpu_mode={gpu_mode}" in start_arguments
+    assert "--gpu_vhost_user_mode=off" in start_arguments
     assert_scoped_group_removal()
     assert not cvd_home.exists()
     assert not (host_lock_root / "apkrun-cvd-capture.lock").exists()

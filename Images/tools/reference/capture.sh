@@ -240,6 +240,8 @@ capture_failed=0
 boot_deadline_expired=0
 selected_gpu_mode=
 selected_gpu_mode_failure_recorded=0
+selected_gpu_vhost_user_enabled=
+selected_gpu_vhost_user_failure_recorded=0
 capture_lock_owned=0
 lock_initializing=0
 pending_signal_status=
@@ -529,6 +531,13 @@ record_selected_gpu_mode_failure() {
   fi
 }
 
+record_selected_gpu_vhost_user_failure() {
+  if [ "$selected_gpu_vhost_user_failure_recorded" -eq 0 ]; then
+    record_missing "selected-gpu-vhost-user" "$1"
+    selected_gpu_vhost_user_failure_recorded=1
+  fi
+}
+
 private_product_out="$cvd_home/product"
 if ! mkdir -p "$private_product_out" \
   || ! cp -a "$ANDROID_PRODUCT_OUT/." "$private_product_out/" \
@@ -569,6 +578,7 @@ create_cvd_group_with_common_options() {
     --group_name="$cvd_group_name" \
     --base_instance_num="$cvd_instance_num" \
     --num_instances=1 \
+    --gpu_vhost_user_mode=off \
     --nostart \
     "$@"
 }
@@ -600,24 +610,27 @@ start_profile() {
     default)
       run_cvd_command_with_live_logs 1 cvd \
         "--group_name=$cvd_group_name" start \
-        "--boot_timeout_secs=$timeout_seconds"
+        "--boot_timeout_secs=$timeout_seconds" \
+        --gpu_vhost_user_mode=off
       ;;
     target)
       run_cvd_command_with_live_logs 1 cvd \
         "--group_name=$cvd_group_name" start \
         "--boot_timeout_secs=$timeout_seconds" \
-        "--gpu_mode=$target_gpu_mode"
+        "--gpu_mode=$target_gpu_mode" \
+        --gpu_vhost_user_mode=off
       ;;
     swiftshader)
       run_cvd_command_with_live_logs 1 cvd \
         "--group_name=$cvd_group_name" start \
         "--boot_timeout_secs=$timeout_seconds" \
-        --gpu_mode=guest_swiftshader
+        --gpu_mode=guest_swiftshader \
+        --gpu_vhost_user_mode=off
       ;;
   esac
 }
 
-read_selected_gpu_mode() {
+read_selected_gpu_settings() {
 python3 - "$1" "$2" <<'PY'
 import json
 import os
@@ -657,39 +670,53 @@ try:
     instances = document.get("instances")
     instance = instances.get(sys.argv[2]) if isinstance(instances, dict) else None
     gpu_mode = instance.get("gpu_mode") if isinstance(instance, dict) else None
+    gpu_vhost_user_enabled = (
+        instance.get("enable_gpu_vhost_user") if isinstance(instance, dict) else None
+    )
 except (OSError, UnicodeDecodeError, ValueError):
     raise SystemExit(1)
 finally:
     if "descriptor" in locals():
         os.close(descriptor)
 
-if not isinstance(gpu_mode, str) or not gpu_mode or any(
-    ord(character) < 0x20 or ord(character) == 0x7F for character in gpu_mode
+if (
+    not isinstance(gpu_mode, str)
+    or not gpu_mode
+    or ":" in gpu_mode
+    or any(ord(character) < 0x20 or ord(character) == 0x7F for character in gpu_mode)
+    or type(gpu_vhost_user_enabled) is not bool
 ):
     raise SystemExit(1)
-print(gpu_mode)
+print(f"{gpu_mode}:{str(gpu_vhost_user_enabled).lower()}")
 PY
 }
 
-verify_profile_gpu_mode() {
+verify_profile_gpu_configuration() {
   case "$profile" in
     target) expected_gpu_mode=$target_gpu_mode ;;
     swiftshader) expected_gpu_mode=guest_swiftshader ;;
-    *) return 0 ;;
+    *) expected_gpu_mode= ;;
   esac
   selected_config=$(find "$runtime_root" -newer "$capture_marker" \
     -type f -path "*/instances/cvd-$cvd_instance_num/cuttlefish_config.json" \
     -print -quit 2>/dev/null || true)
   if [ -z "$selected_config" ] \
-    || ! selected_gpu_mode=$(read_selected_gpu_mode \
+    || ! selected_gpu_settings=$(read_selected_gpu_settings \
       "$selected_config" "$cvd_instance_num" 2>/dev/null); then
     record_selected_gpu_mode_failure \
-      "Cuttlefish did not record a valid GPU mode for the selected instance; do not use this capture for GPU-profile comparison"
+      "Cuttlefish did not record valid GPU settings for the selected instance; do not use this capture for GPU-profile comparison"
     return 1
   fi
-  if [ "$selected_gpu_mode" != "$expected_gpu_mode" ]; then
+  selected_gpu_mode=${selected_gpu_settings%%:*}
+  selected_gpu_vhost_user_enabled=${selected_gpu_settings#*:}
+  if [ -n "$expected_gpu_mode" ] && [ "$selected_gpu_mode" != "$expected_gpu_mode" ]; then
     record_selected_gpu_mode_failure \
       "Cuttlefish selected $selected_gpu_mode instead of requested $expected_gpu_mode; do not use this capture for GPU-profile comparison"
+    return 1
+  fi
+  if [ "$selected_gpu_vhost_user_enabled" != false ]; then
+    record_selected_gpu_vhost_user_failure \
+      "Cuttlefish selected enable_gpu_vhost_user=true instead of the requested off state; do not use this capture for GPU-profile comparison"
     return 1
   fi
   return 0
@@ -758,7 +785,7 @@ if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
     record_missing "guest" \
       "Cuttlefish group create or start failed; see cvd-create-console.log"
   fi
-elif ! verify_profile_gpu_mode; then
+elif ! verify_profile_gpu_configuration; then
   :
 else
   preserve_cvd_home=0
@@ -1069,9 +1096,10 @@ fi
 
 copy_first_match cuttlefish_config.json
 if [ -s "$stage/cuttlefish_config.json" ]; then
-  if captured_gpu_mode=$(read_selected_gpu_mode \
+  if captured_gpu_settings=$(read_selected_gpu_settings \
     "$stage/cuttlefish_config.json" "$cvd_instance_num" 2>/dev/null); then
-    selected_gpu_mode=$captured_gpu_mode
+    selected_gpu_mode=${captured_gpu_settings%%:*}
+    selected_gpu_vhost_user_enabled=${captured_gpu_settings#*:}
     case "$profile" in
       target) expected_gpu_mode=$target_gpu_mode ;;
       swiftshader) expected_gpu_mode=guest_swiftshader ;;
@@ -1082,9 +1110,13 @@ if [ -s "$stage/cuttlefish_config.json" ]; then
       record_selected_gpu_mode_failure \
         "captured Cuttlefish config selected $selected_gpu_mode instead of requested $expected_gpu_mode; do not use this capture for GPU-profile comparison"
     fi
+    if [ "$selected_gpu_vhost_user_enabled" != false ]; then
+      record_selected_gpu_vhost_user_failure \
+        "captured Cuttlefish config selected enable_gpu_vhost_user=true instead of the requested off state; do not use this capture for GPU-profile comparison"
+    fi
   else
     record_selected_gpu_mode_failure \
-      "captured cuttlefish_config.json did not contain a valid GPU mode for the selected instance; do not use this capture for GPU-profile comparison"
+      "captured cuttlefish_config.json did not contain valid GPU settings for the selected instance; do not use this capture for GPU-profile comparison"
   fi
 else
   record_selected_gpu_mode_failure \
@@ -1141,6 +1173,7 @@ APKRUN_CAPTURE_CVD_VERSION=$cvd_package_version \
 APKRUN_CAPTURE_CVD_INSTANCE_NUM=$cvd_instance_num \
 APKRUN_CAPTURE_TARGET_GPU_MODE=$target_gpu_mode \
 APKRUN_CAPTURE_SELECTED_GPU_MODE=$selected_gpu_mode \
+APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED=$selected_gpu_vhost_user_enabled \
 APKRUN_CAPTURE_VIRGL_SOURCE_REVISION=$virgl_source_revision \
 APKRUN_CAPTURE_DURATION=$((capture_finished_at - capture_started_at)) \
 python3 - "$stage/host.json" <<'PY'
@@ -1166,6 +1199,9 @@ document = {
         else None
     ),
     "selectedGpuMode": os.environ["APKRUN_CAPTURE_SELECTED_GPU_MODE"] or None,
+    "gpuVhostUserEnabled": (
+        {"true": True, "false": False}.get(os.environ["APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED"])
+    ),
     "drmVirglSourceRevision": (
         os.environ["APKRUN_CAPTURE_VIRGL_SOURCE_REVISION"] or None
     ),

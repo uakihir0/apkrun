@@ -1,0 +1,58 @@
+# SwiftShader Android Boot Stall Summary
+
+## Scope and outcome
+
+This is a sanitized summary of bounded ADB and logcat probes made while the
+reference capture was running. The capture did not enable the optional boot
+observer, so these probes are separate samples rather than a complete
+time-series. This file is diagnostic evidence only; the capture remains
+incomplete and is not comparable with another profile.
+
+The 2400-second boot deadline expired. `host.json` records a total capture
+duration of 2403 seconds. Cuttlefish 1.57.0, build 16373615, ran the
+`guest_swiftshader` profile with four guest CPUs, 4096 MiB memory, 4915 MiB
+DDR, and vhost-user GPU disabled. Nested virtualization was enabled on the
+Ubuntu 24.04.4 aarch64 host. The Cuttlefish VCS revision was
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`.
+
+## Observations
+
+- ADB connected to the guest during the run, and bounded shell commands
+  returned, though individual queries took roughly 13–35 seconds.
+- One property query returned an empty `sys.boot_completed`, an empty
+  `init.svc.system_server`, and `running` for `init.svc.bootanim`.
+- A sampled process list contained `zygote64` (PID 608) and `bootanimation`
+  (PID 811); it did not contain `system_server` or `dex2oat`.
+- At guest logcat time `2026-10-03 23:01:46.350`, logcat recorded
+  `boot_progress_preload_start: 1152371`, followed by `Zygote: begin preload`.
+  Later bounded logcat queries still returned this start marker without a
+  preload-complete or SystemServer-start marker.
+- Android system logs repeatedly showed `audioserver` requesting the
+  `aidl/activity` service while servicemanager could not find it. The
+  normalized kernel log continued to show these lookup failures through guest
+  uptime 2017.375 seconds.
+- One guest `top` snapshot showed CPU activity in Zygote, boot animation,
+  graphics composer, and SurfaceFlinger. Later host samples showed Android
+  guest crosvm PID 1402437 using about 3.2–3.3 CPU equivalents. These are
+  individual samples, not a profile or a root-cause finding.
+- The launcher identifies a separate Cuttlefish crosvm sidecar by its
+  `crosvm_openwrt_*` serial logs. That sidecar recorded a system reset at
+  `2026-10-03T22:36:31Z`, exited with reset two seconds later, and was
+  restarted by `process_restarter` at `2026-10-03T22:36:33Z`. This does not
+  show that Android crosvm crashed or explain the later Android boot state.
+- `MISSING.txt` records that no crosvm command line matched at
+  artifact-collection time; this does not establish that crosvm had not run
+  earlier. The launcher and later host process samples identify the Android
+  guest crosvm separately from the OpenWrt sidecar.
+
+## Cleanup and limits
+
+At the deadline, `cvd start` reported the deadline signal and cleaned up the
+device group. Post-run checks found an empty Cuttlefish fleet, no crosvm, no
+listener on ADB port 6520, and an empty ADB device list after disconnecting
+the stale offline transport. The ADB server on port 5037 remained listening
+and was not stopped.
+
+No `sys.boot_completed=1` or completed Android boot was observed. The samples
+show that Android reached Zygote preloading while the activity service was
+unavailable, but they do not identify why startup remained at that stage.

@@ -5543,3 +5543,41 @@ wording, capture-cause attribution, and process correlation. Follow-up hostile
 reviews confirmed the Apport PID/PPID match and found no further actionable
 issues. Keep IR-158 in `Needs maintainer review` until the backtrace
 interpretation and raw-core exclusion are reviewed.
+
+## IR-159: Retain sanitized live Android boot-stall observations
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T081603-1401833/android-boot-stall-summary.txt`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep a sanitized summary of bounded ADB, process-list, and logcat
+observations from the 2400-second SwiftShader capture. State that the boot
+observer was disabled, distinguish the sampled observations from a complete
+time-series, and keep the capture incomplete and non-comparable.
+
+**Reason.** The capture reached Zygote preloading but expired before Android
+reported boot completion. Its normalized host files do not include the
+interactive ADB and logcat samples taken during the run. Retaining only the
+bounded observations preserves the state needed to guide another diagnostic
+run without copying raw guest memory or an unfiltered logcat dump. The sampled
+state does not establish a boot root cause.
+
+**Verification.** The summary was checked against `host.json`, `MISSING.txt`,
+the normalized kernel and launcher logs, and the bounded ADB/logcat results.
+All 10 files in the artifact directory were scanned: JSON and JSONL parse,
+no file exceeds 64 MiB, and the scan found no tested host paths, private-key
+markers, or MAC/EUI-64 patterns; no core dump or unfiltered logcat dump is
+present. `pytest Images/tools/tests/test_reference_capture.py
+Images/tools/tests/test_boot_observer.py -q` passed 155 tests with four
+Linux-only skips. All six checks in `scripts/ci/run-checks.sh` passed, as did
+`git diff --check`. The initial hostile review found three documentation
+issues: it did not distinguish the OpenWrt crosvm sidecar reset from the
+Android guest crosvm, it labeled a guest logcat timestamp UTC without
+evidence, and it referred to verification results that were not yet recorded.
+The summary now distinguishes the two crosvm processes, leaves the guest
+logcat timezone unspecified, and records the verification results here.
+Follow-up hostile review found no further actionable findings. Keep IR-159 in
+`Needs maintainer review` until the evidence summary and its interpretation
+are reviewed.

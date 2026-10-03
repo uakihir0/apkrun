@@ -5362,3 +5362,32 @@ Linux-only skip; Ruff lint, Ruff format, and `git diff --check` passed.
 Adversarial review found no actionable findings. The #064 test plan now
 describes the standalone shell probe and deferred property query used by the
 implementation.
+
+## IR-155: Compare the standalone shell probe across GPU profiles
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Run the next 2400-second diagnostic capture with the `target`
+profile and the same standalone shell probe, explicitly setting
+`APKRUN_TARGET_GPU_MODE=drm_virgl`. Compare it with the SwiftShader capture
+using the same build, reference host, guest CPU and memory settings, and
+insecure secure-HAL flags. Accept the comparison only if the captured
+`host.json` records `targetGpuMode=drm_virgl`. Do not use `default` for this
+comparison because that profile also changes the secure-HAL flags.
+
+**Reason.** The standalone probe timed out without returning a marker in the
+SwiftShader profile, while earlier `target` captures did not isolate a simple
+shell command from the property query. Comparing `target` with `swiftshader`
+holds the guest resources and secure-HAL settings constant while changing the
+GPU mode. The comparison can show whether the observation also occurs with
+`drm_virgl`; it cannot establish a boot cause.
+
+**Verification plan.** Record the `target` capture's shell-probe, property,
+kernel, and cleanup results in its normalized incomplete or complete capture
+and compare them with the SwiftShader record after checking the GPU mode in
+`host.json`. A successful shell probe alone does not satisfy #064 or validate
+Android boot.

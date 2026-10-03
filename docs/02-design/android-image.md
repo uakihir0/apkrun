@@ -645,6 +645,10 @@ run it (it needs host virglrenderer with EGL; Mesa llvmpipe may be enough),
 the operator must explicitly select the `guest_swiftshader` fallback using
 the environment variables in §8.3. The fallback records its source-derived
 `drm_virgl` properties separately.
+For the reference capture, `capture.sh` passes the profile's `--gpu_mode` to
+both group creation and named-group start. Cuttlefish may select its default
+again at start, so `targetGpuMode` in `host.json` is only the requested mode;
+profile comparisons use `selectedGpuMode` from the selected instance config.
 
 ### 8.3 What is captured
 
@@ -909,7 +913,15 @@ profile can be retried. If normalization fails, raw staging data is never
 published; failed stage deletion is reported for manual cleanup.
 `host.json` records the host OS, kernel,
 architecture, CVD package version and instance number, CPU count,
-nested-virtualization availability, and capture duration.
+nested-virtualization availability, and capture duration. It records
+`targetGpuMode` as the requested target-profile mode and `selectedGpuMode` as
+the actual mode from the selected instance in `cuttlefish_config.json`.
+Compare GPU profiles only when the actual selected mode matches the intended
+mode; a mismatch or missing/invalid mode keeps the capture incomplete, even
+when the boot observer collected data during `cvd start`. The selected
+instance config is read and copied with a 64 MiB limit.
+The JSON parser rejects duplicate keys so an ambiguous selected-instance
+configuration cannot validate a profile.
 
 When the host cannot run `drm_virgl`, the `target` fallback is explicit:
 `APKRUN_TARGET_GPU_MODE=guest_swiftshader`,

@@ -5376,8 +5376,11 @@ profile and the same standalone shell probe, explicitly setting
 `APKRUN_TARGET_GPU_MODE=drm_virgl`. Compare it with the SwiftShader capture
 using the same build, reference host, guest CPU and memory settings, and
 insecure secure-HAL flags. Accept the comparison only if the captured
-`host.json` records `targetGpuMode=drm_virgl`. Do not use `default` for this
-comparison because that profile also changes the secure-HAL flags.
+`host.json` records `targetGpuMode=drm_virgl` and `selectedGpuMode=drm_virgl`,
+the selected-instance config agrees, and `MISSING.txt` is empty. A mismatch
+capture may retain observer data for diagnosis but is not comparable. Do not
+use `default` for this comparison because that profile also changes the
+secure-HAL flags.
 
 **Reason.** The standalone probe timed out without returning a marker in the
 SwiftShader profile, while earlier `target` captures did not isolate a simple
@@ -5387,7 +5390,57 @@ GPU mode. The comparison can show whether the observation also occurs with
 `drm_virgl`; it cannot establish a boot cause.
 
 **Verification plan.** Record the `target` capture's shell-probe, property,
-kernel, and cleanup results in its normalized incomplete or complete capture
-and compare them with the SwiftShader record after checking the GPU mode in
-`host.json`. A successful shell probe alone does not satisfy #064 or validate
-Android boot.
+kernel, and cleanup results in its normalized incomplete or complete capture.
+Compare them with the SwiftShader record only after verifying that the actual
+selected GPU mode matches the requested mode. A successful shell probe alone
+does not satisfy #064 or validate Android boot.
+
+## IR-156: Verify the selected Cuttlefish GPU mode before comparing profiles
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Pass the requested GPU mode to both `cvd create` and `cvd start`
+for `target` and `swiftshader`. Read the actual mode from the selected
+instance's `cuttlefish_config.json`, bounded to 64 MiB, and record it as
+`selectedGpuMode` in `host.json`; retain `targetGpuMode` to mean the requested
+target-profile mode. Reject duplicate JSON keys so a last-value-wins parse
+cannot accept an ambiguous GPU mode. If the live mode is absent, invalid, or
+differs from the requested mode, write a reason to `MISSING.txt`, skip regular
+ADB boot polling and guest capture, and retain the result only as an
+incomplete diagnostic record. Revalidate the staged config before
+publication; if it became absent, invalid, or different after the live check,
+retain any ADB data already collected but mark the capture incomplete and
+non-comparable.
+Observer samples collected during `cvd start` do not make an incomplete
+capture comparable.
+
+**Reason.** The earlier `target` capture recorded the requested
+`targetGpuMode=drm_virgl`, but its selected-instance config recorded
+`gpu_mode=guest_swiftshader`. Cuttlefish 1.57.0 requires the GPU mode on both
+commands; passing it only to `cvd create` allowed `cvd start` to select its
+default. Comparing the request field alone could therefore attribute a
+SwiftShader observation to `drm_virgl`. Verifying the selected config and
+excluding mismatches keeps the diagnostic comparison tied to the runtime
+configuration. Duplicate keys are rejected because the JSON parser's
+last-value-wins behavior would otherwise allow an ambiguous config to appear
+valid. A 64 MiB bound also prevents the newly inspected config from being
+copied or parsed without a size limit.
+
+**Verification plan.** Test correct mode selection on `create` and `start`,
+matching mode metadata, mismatch with observer enabled, missing and malformed
+config, an oversized sparse config, skipped ADB commands for unusable live
+modes, non-standard JSON constants, conflicting duplicate mode keys even
+when the final value matches, staged mode mismatch/deletion/malformed config
+after ADB begins, exactly one mode-failure entry, bounded config copying, and
+private HOME removal after successful group cleanup. The observer test uses a
+handshake from the observer-triggered ADB process so `cvd start` stays alive
+until the launcher marker is recorded. Run the focused capture tests, full
+image-tools suite, shell syntax, Ruff checks, all repository checks, then
+hostile review. The 2026-10-03
+capture at `Images/reference/16373615/incomplete/target-20261003T233118-1257055/`
+is not `drm_virgl` evidence: its config records `guest_swiftshader` despite
+the requested `drm_virgl` field in `host.json`.

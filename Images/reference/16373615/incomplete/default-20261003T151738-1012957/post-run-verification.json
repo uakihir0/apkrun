@@ -1,0 +1,78 @@
+{
+  "captureIntegrity": {
+    "limaSha256Manifest": "LIMA-SHA256SUMS",
+    "normalizedFileCount": 9,
+    "verifiedOnHost": true
+  },
+  "cleanupChecks": {
+    "adbLoopbackListeners": [
+      "127.0.0.1:5037"
+    ],
+    "crosvmProcessCount": 0,
+    "cvdFleetGroups": [],
+    "loopbackAdb5037Preserved": true,
+    "observerLogcat": {
+      "androidLogcat": {
+        "capturedBytes": 0,
+        "cleanupComplete": true,
+        "exitCode": -15,
+        "timedOut": true,
+        "truncated": false
+      },
+      "eventsBuffer": {
+        "capturedBytes": 0,
+        "cleanupComplete": true,
+        "exitCode": -15,
+        "timedOut": true,
+        "truncated": false
+      },
+      "timestampUtc": "2026-10-03T06:16:58.964+00:00"
+    },
+    "observerPrivateServerStopped": {
+      "cleanupComplete": true,
+      "event": "private_adb_server_stopped",
+      "timestampUtc": "2026-10-03T06:16:58.999+00:00"
+    },
+    "observerStopped": {
+      "event": "observer_stopped",
+      "timestampUtc": "2026-10-03T06:17:35.447+00:00"
+    },
+    "postCaptureClientInventory": {
+      "onlyPreExistingLoopbackAdbServerObserved": true,
+      "privatePort6520Listening": false,
+      "privateSocketHomeRemoved": true
+    },
+    "processRestarterProcessCount": 0
+  },
+  "schemaVersion": 1,
+  "sourceCopyChecks": {
+    "Images/manifests/16373615/android-image.json": {
+      "limaSha256": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+      "localSha256": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+      "matches": true
+    },
+    "Images/tools/reference/boot_observer.py": {
+      "limaSha256": "5c6ca8126e6b74d4d982d27d7fa12dd58adc697ba2b7012a07c4071cfd9243b3",
+      "localSha256": "5c6ca8126e6b74d4d982d27d7fa12dd58adc697ba2b7012a07c4071cfd9243b3",
+      "matches": true
+    },
+    "Images/tools/reference/capture.sh": {
+      "limaSha256": "923ea9b41df642de9120f35319ae9672fdaa5156bf4dd311464588ef72622526",
+      "localSha256": "923ea9b41df642de9120f35319ae9672fdaa5156bf4dd311464588ef72622526",
+      "matches": true
+    },
+    "Images/tools/reference/capture_cvd_start.py": {
+      "limaSha256": "b23ef9d2d7cb28dfd7661ca7572fe641e2da331a1dd8f6e3a02c3b9377170f91",
+      "localSha256": "b23ef9d2d7cb28dfd7661ca7572fe641e2da331a1dd8f6e3a02c3b9377170f91",
+      "matches": true
+    },
+    "Images/tools/reference/normalize.yaml": {
+      "limaSha256": "a6f87edd74d2304af830b7c97c670b27e4b19555c2f300100ac5508578575dcd",
+      "localSha256": "a6f87edd74d2304af830b7c97c670b27e4b19555c2f300100ac5508578575dcd",
+      "matches": true
+    }
+  },
+  "sourceRevision": "af7f5d452ef25419f955037c8901011d5e79c294",
+  "verificationStage": "post-capture",
+  "verifiedAtUtc": "2026-10-03T06:28:11Z"
+}

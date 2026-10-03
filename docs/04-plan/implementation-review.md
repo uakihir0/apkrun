@@ -4737,8 +4737,8 @@ without storing it. The JSONL uses the explicit fields
 `systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`.
 
 **Reason.** The runtime boot design uses a non-empty
-`sys.system_server.start_count` as its `.systemServer` readiness signal. The
-latest reference capture reached Linux and zygote but did not report
+`sys.system_server.start_count` as its `.systemServer` readiness signal. Prior
+reference captures reached Linux and zygote but did not report
 `sys.boot_completed=1`. Recording this existing signal can distinguish a
 SystemServer milestone from later framework boot without another ADB client,
 extending the poll interval, or retaining guest logs.
@@ -4750,5 +4750,46 @@ boot-completion Boolean. ADB observer tests execute the fixed shell query
 with a fake `getprop` for success and independent property failures, verify
 the resulting JSONL status fields, cover missing and timed-out polls and
 partial timeout parsing, and confirm that neither property payload is
-written to JSONL. Live verification is pending a reference capture with this
-observer; record its result in the #064 notes.
+written to JSONL. The focused observer suite passed 66 tests with one
+platform-specific skip. The full Image tools suite passed 416 tests with
+four skips on macOS and 411 tests with nine skips on Lima Linux. Ruff lint
+and format, shell syntax, and `git diff --check` passed. Hostile review found
+no remaining findings.
+
+Live verification used an untraced, unpaused 2400-second `default` capture
+with four guest CPUs, 4096 MiB memory, 4915 MiB configured DDR,
+`guest_swiftshader`, and console off. `host.json` records a 2403-second
+capture. The normalized result and post-run evidence are in
+`Images/reference/16373615/incomplete/default-20261003T151738-1012957/`.
+Launcher timestamps place the U-Boot banner at 05:37:39Z and Linux 6.12.74
+at 05:41:18Z, 219 seconds later. The first five-second sample with both
+VmRSS and RssShmem at or above 4 GiB was 05:41:20.333Z (4,216,192 and
+4,194,532 KiB), two seconds after the Linux banner. This is consistent with
+substantial guest-memory residency around the transition, but does not prove
+a RAM-wide cache flush, a deterministic scan rate, or its cause.
+
+The kernel log records first-stage init at uptime 23.015 seconds, the
+`zygote-start` init action at 98.229 seconds, the zygote service start request
+at 98.384 seconds, the service process start at 98.473 seconds, and
+`bootanim` at 319.644 seconds. It contains 38 service-manager lookups
+attributed to the `system_server` SELinux domain between uptimes 994.970 and
+2077.182 seconds. These calls do not prove the
+`sys.system_server.start_count` readiness signal. Across 126 observer polls,
+124 reported `device`. Successful `getprop sys.system_server.start_count`
+commands were recorded in 81 polls and all returned an empty property;
+`getprop sys.boot_completed` exited 0 in 54 polls, but no poll produced a
+parsed value or reported `1`. Other commands timed out. Neither property
+payload was retained. Both final logcat queries timed out with zero captured
+bytes and completed client cleanup, so the run could not provide logcat
+marker counts. No `VIRTUAL_DEVICE_BOOT_COMPLETED` marker was found.
+
+The console log again reports invalid logical-partition geometry magic; its
+relevance remains unknown. The missing composite-disk specifications prevent
+profile publication but do not establish the boot cause. Post-run checks
+found an empty Cuttlefish fleet, no crosvm or `process_restarter`, no private
+ADB listener on port 6520, the removed private socket HOME, and only the
+pre-existing loopback ADB server on port 5037. All ten Lima manifest entries
+verified against the host capture, all five Lima source hashes matched the
+local sources, and privacy scans found no tested private host paths,
+MAC/EUI-64 addresses, or PEM key markers. The run does not establish Android
+boot completion or a root cause.

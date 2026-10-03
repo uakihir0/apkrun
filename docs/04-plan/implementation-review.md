@@ -4531,3 +4531,62 @@ reference-host run and its evidence are recorded in M01 after this
 implementation is committed; no boot or root-cause result is inferred from
 the unit tests. A close-time regression checks that observer shutdown waits
 through the full derived final-probe reservation.
+
+## IR-140: Run a 2400-second untraced U-Boot and Android observation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/reference/16373615/incomplete/default-20261003T115618-900776/` |
+
+**Choice.** Run one 2400-second `default` capture with normal U-Boot
+progression, no console commands, no vCPU tracing, and the established
+four-CPU, 4096-MiB, `guest_swiftshader` Cuttlefish configuration. Enable the
+existing boot observer to sample crosvm RSS every five seconds and begin ADB
+polling after launcher event 5. Use its new bounded final events-buffer
+summary; do not retain raw logcat output. Record the separate manual
+events-buffer query and its incomplete cleanup verification as a limitation.
+Keep this record diagnostic and incomplete unless Android reports
+`sys.boot_completed=1` or an equivalent documented completion marker.
+
+**Reason.** The attached diagnosis recommends an ordinary untraced capture
+that can correlate U-Boot/Linux marker timing, crosvm RSS, and later ADB and
+Android progress. This isolates those observations from the vCPU tracing and
+paused-console probes while keeping the guest configuration fixed. The
+result's 116-second U-Boot-to-Linux interval and RSS milestones are consistent
+with substantial guest memory becoming resident around the transition, but
+the configured `ddr_mem_mb=4915` means a 4-GiB RSS crossing does not show that
+all RAM was resident. Prior intervals vary substantially, so this run does
+not establish a deterministic scan rate or cache-maintenance cause. The
+`system_server` SELinux-domain calls and two untracked same-name process exits
+do not establish a causal relation. The zombie entries identify PIDs 2086 and
+4156; the later all-CPU snapshot shows PID 1700 for `system_server` on CPU 3,
+so the records do not link either exit to PID 1700. A task named `watchdog`
+issued SysRq blocked-state, memory, and all-CPU backtrace requests. No blocked
+task entry appears before the memory dump, which reports 620,318 free pages
+and 0 kB total/free swap. These are snapshot values and do not establish why
+the SysRq dump was triggered or rule out earlier or later memory pressure.
+`kernel.log` ends at that dump; RSS sampling continued to the capture
+deadline, while the private ADB server had already stopped after the final
+events query. A successful events query with zero allowlisted matches does
+not prove the events buffer was empty, and the separate timed-out manual
+query has no retained output or verified process-group cleanup. That query
+was capped at ten seconds and 64 KiB. Keep all of these inferences bounded to
+the recorded observations.
+
+**Verification.** `host.json` records the 2404-second capture duration and
+the selected build/profile; `post-run-verification.json` records the source
+revision and matching local/Lima source hashes. The ten-entry Lima-side
+manifest verifies on the host. The post-capture inventory found an empty
+Cuttlefish fleet, no crosvm or `process_restarter`, no private ADB listener,
+and the pre-existing loopback ADB server on 127.0.0.1:5037, which was left
+untouched. The observer's final events query and private server cleanup
+completed; the separate manual query cleanup remains unverified. Privacy
+scans found no tested host paths, MAC/EUI-64 addresses, or PEM key markers.
+The full Image tools suite passed 394 tests with four skips on macOS and 397
+tests with one skip on Lima Linux. After the final test-fixture-only ADB
+interval adjustment, the targeted regression passed on both systems and
+Ruff/format checks passed. All six `scripts/ci/run-checks.sh` checks passed
+before that final fixture-only adjustment. The capture did not record Android
+boot completion and does not resolve the U-Boot or Android failure cause.

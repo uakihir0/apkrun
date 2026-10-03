@@ -4723,7 +4723,7 @@ failure cause.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; `Images/tools/tests/test_reference_capture.py` |
 
 **Choice.** Extend each private-socket ADB poll to read
 `sys.system_server.start_count` and `sys.boot_completed` in one ten-second
@@ -4744,10 +4744,16 @@ property command's bounded exit status independently with a non-newline
 delimiter, so command substitution preserves trailing property newlines.
 Remove only the single output newline emitted by `getprop` before validating
 the value. This prevents a value ending in `1` plus a newline from becoming
-the accepted value `1`. The enclosing shell command's final status-printing
-command can succeed after an individual `getprop` fails. Parse partial
-timeout output in memory without storing it. The JSONL uses the explicit
-fields
+the accepted value `1`. Accept CRLF transport line endings by removing one
+carriage return only when it is immediately before a line feed. Preserve a
+terminal carriage return without a following line feed; shell-side value
+sanitization ensures the CRLF normalization cannot restore a raw property
+value. Pass successful and partial-timeout property output from `_run_adb`
+without trimming so this framing validation also applies to the real
+subprocess path; normalize whitespace only for the separate `get-state`
+response. The enclosing shell command's final status-printing command can
+succeed after an individual `getprop` fails. Parse partial timeout output in
+memory without storing it. The JSONL uses the explicit fields
 `systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`.
 
 **Reason.** The runtime boot design uses a non-empty
@@ -4759,19 +4765,36 @@ extending the poll interval, or retaining guest logs.
 
 **Verification.** Parser tests cover valid counts, empty and malformed
 values, non-ASCII digits, overflow, duplicate fields, independent command
-failures and their recorded exit statuses, carriage-return-containing
-values, valid partial prefixes, fixed field ordering, malformed output
-rejection, multiline property-value sanitization, and boot-completion
-presence and Boolean parsing. ADB
-observer tests execute the fixed shell query with a fake `getprop` for
+failures and their recorded exit statuses, CRLF transport line endings,
+unterminated trailing-carriage-return handling,
+carriage-return property-value sanitization, valid partial prefixes, fixed
+field ordering, malformed output rejection, multiline property-value
+sanitization, boot-completion presence and Boolean parsing, and preservation
+of a trailing carriage return or duplicate final line feed through `_run_adb`.
+ADB observer tests execute the fixed shell query with a fake `getprop` for
 success and independent property failures, verify the resulting JSONL
 status fields, cover missing and timed-out polls and partial timeout
 parsing, and confirm that neither property payload is written to JSONL.
-The focused observer suite passed 77 tests with one platform-specific skip.
-The full Image tools suite passed 427 tests with four skips on macOS and
-422 tests with nine skips on Lima Linux. Ruff lint and format, shell syntax,
-and `git diff --check` passed. Hostile review's protocol spoofing and
-trailing-newline findings were fixed and retested.
+The focused observer suite had 84 cases: 83 passed and one platform-specific
+case was skipped on macOS; all 84 passed on Lima Linux. The full Image tools
+suite passed 433
+tests with four skips on macOS and 428 tests with nine skips on Lima Linux.
+The shared-deadline integration test accepts the positive, integer-second
+remainder up to its configured 600-second ceiling and checks that subsequent
+command deadlines decrease.
+One full macOS run observed 599 seconds because the shared deadline is
+computed with second-resolution timestamps; the isolated case and the final
+full suite passed. Treating 599 as valid avoids a timing-sensitive assertion
+without allowing a command deadline to exceed the configured ceiling. Ruff
+lint and format, shell syntax, and `git diff --check` passed. The initial
+hostile review caught stale test counts (P3); they were refreshed from these
+final runs. A later review found that `_run_adb` stripped output before the
+parser could reject malformed framing (P2). Successful and partial-timeout
+property output now reaches the parser unchanged; whitespace normalization
+is limited to the separate `get-state` response. Regression cases exercise a
+bare terminal carriage return and duplicate final line feeds through
+`_run_adb`. The final hostile re-review of the corrected provenance and
+verification counts found no findings.
 
 Live verification used an untraced, unpaused 2400-second `default` capture
 with four guest CPUs, 4096 MiB memory, 4915 MiB configured DDR,
@@ -4815,3 +4838,75 @@ verified against the host capture, all five Lima source hashes matched the
 local sources, and privacy scans found no tested private host paths,
 MAC/EUI-64 addresses, or PEM key markers. The run does not establish Android
 boot completion or a root cause.
+
+## IR-144: Verify the unpaused U-Boot transition with a bounded retry
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/reference/16373615/incomplete/default-20261003T165948-1083660/` |
+
+**Choice.** Repeat the `default` profile with the existing four-CPU,
+4096-MiB guest, `guest_swiftshader`, console disabled, and normal unpaused
+U-Boot path. Extend the boot deadline to 2400 seconds while leaving the guest
+configuration unchanged. Keep vCPU tracing and console interaction disabled.
+Use the existing passive five-second crosvm RSS sampler and private-socket ADB
+observer during `cvd start`. Preserve the normalized run as incomplete because
+the deadline expired and required profile artifacts are missing.
+
+**Reason.** IR-127 identified a longer, untraced run as the next way to
+distinguish a slow U-Boot-to-Linux transition from later Android startup.
+Passive memory and ADB observations avoid the additional perturbation of vCPU
+tracing and allow transport readiness to be measured before `cvd start`
+returns. An incomplete run is still useful evidence, but it must not be
+promoted to a reference profile or treated as a root-cause diagnosis.
+
+**Verification.** The Ubuntu 24.04.4 arm64 Lima VM ran Cuttlefish 1.57.0 with
+nested virtualization enabled. `host.json` records a 2403-second duration
+and eight host CPUs. `cuttlefish_config.json` records four guest CPUs,
+4096 MiB configured memory, 4915 MiB configured DDR, `guest_swiftshader`,
+and console off. The source revision was
+`9695c947748d9e972a7b547fceaac17b43524121`; the sidecar records matching
+local and Lima SHA-256 values for the manifest, observer, capture script,
+start helper, and normalization rules. The captured observer predates the
+later CRLF parser and raw-output framing fixes.
+
+The U-Boot banner at 07:19:50Z was followed by Linux 6.12.74 at 07:21:31Z,
+an interval of 101 seconds. Of 481 five-second memory events, 479 were valid.
+VmRSS first reached 4 GiB at 07:21:31.168Z (4,212,728 KiB); RssShmem first
+reached 4 GiB at 07:21:36.168Z (4,194,532 KiB). These RSS values are
+residency observations and do not prove a RAM-wide cache flush, its execution
+path, or its cause. The 101-second interval also does not establish a
+deterministic scan rate; earlier captures recorded materially different
+U-Boot-to-Linux intervals.
+
+First-stage init appeared at guest uptime 26.998 seconds, zygote at
+111.284 seconds, and boot animation at 410.584 seconds. Init set
+`sys.bootstat.first_boot_completed` to `0` at uptime 262.373 seconds. A later
+zygote restart occurred at uptime 2147.331 seconds after init killed the
+earlier process. Neither this event nor the two `system_server` text
+mentions in the final diagnostic logcat establish a cause. The events-buffer
+summary recognized zero process events; the other diagnostic counts for ANR,
+fatal exception, fatal signal, Watchdog, and zygote were zero. No
+`VIRTUAL_DEVICE_BOOT_COMPLETED`, `VIRTUAL_DEVICE_BOOT_FAILED`, or parsed
+`sys.boot_completed` signal was recorded.
+
+Launcher event 5 occurred at 07:25:42.881Z, and the private ADB server was
+ready at 07:25:46.220Z. Of 132 private-socket polls, 130 reported `device`.
+Among 130 attempted property commands, 113 timed out and 17 outer shell
+commands exited 0; neither per-property exit status parsed in any poll, and
+both property values remained null. Raw property output was intentionally
+not retained, so the exact reason is unknown. The capture therefore measures
+ADB transport availability but does not prove that CRLF caused the parser
+failure or establish SystemServer readiness.
+
+`MISSING.txt` records the 2400-second deadline, no crosvm command line at
+artifact-collection time, and missing composite-disk specifications. The
+sidecar records complete capture-client cleanup, an empty Cuttlefish fleet,
+no crosvm or `process_restarter`, no private ADB listener on port 6520, and
+preservation of the pre-existing loopback server on port 5037. One offline
+ADB entry was explicitly disconnected and the device list was then empty.
+The ten Lima manifest entries verified on the host, and privacy scans found
+no tested private host paths, MAC/EUI-64 addresses, or PEM key markers. This
+run does not satisfy #064's boot-completion or reference-profile criteria.

@@ -5192,23 +5192,29 @@ platform-specific skips. All six checks in `scripts/ci/run-checks.sh` passed;
 Ruff lint and format, `sh -n Images/tools/reference/capture.sh`, and
 `git diff --check` passed. The 19 collector tests also passed on the Linux
 reference VM, in addition to the macOS run. A follow-up hostile review found
-no actionable findings. Fresh 2403-second `default` and 2405-second
-`target` (`drm_virgl`) captures completed with all three selected-instance
-files in each composite artifact. For each run, the 11-entry Lima manifest
-(ten normalized capture files plus `post-run-verification.json`) verified on
-the host. The sidecars retain source-copy hashes, privacy-scan counts, and
-post-capture cleanup observations; scans found no tested host paths,
-MAC/EUI-64 addresses, or PEM private-key markers. The `target` observer's
-final events-buffer query recorded 23,987 bytes and zero recognized process
-events. Its separate 20,611-byte Android diagnostic logcat query counted two
-SystemServer and ten Watchdog mention lines, with zero ANR, fatal-exception,
-fatal-signal, or zygote mention lines. The `default` run's final logcat
-queries timed out with zero captured bytes. These bounded observations do
-not establish a boot cause. Post-run checks for both runs found an empty
-Cuttlefish fleet, no crosvm or `process_restarter`, no private ADB listener,
-removed private HOMEs, and no leftover composite-spec temporary files. Both
+no actionable findings. Fresh 2403-second `default`, 2405-second `target`
+(`drm_virgl`), and 2405-second `swiftshader` captures completed with all
+three selected-instance files in each composite artifact. For each run, the
+11-entry Lima manifest (ten normalized capture files plus
+`post-run-verification.json`) verified on the host. The sidecars retain
+source-copy hashes, privacy-scan counts, and post-capture cleanup
+observations; scans found no tested host paths, MAC/EUI-64 addresses, or PEM
+private-key markers. The `target` observer's final events-buffer query
+recorded 23,987 bytes and zero recognized process events. Its separate
+20,611-byte Android diagnostic logcat query counted two SystemServer and ten
+Watchdog mention lines, with zero ANR, fatal-exception, fatal-signal, or
+zygote mention lines. The `default` and `swiftshader` runs' final logcat
+queries timed out with zero captured bytes. The `swiftshader` run reached
+Linux, first-stage init, and zygote; init successfully set
+`sys.bootstat.first_boot_completed` to `0` at guest uptime 475.263 seconds.
+This is separate from the observer's 82 property queries after ADB reported
+`device`, which all timed out. These bounded observations do not establish a
+boot cause. Post-run checks for all three runs found an empty Cuttlefish
+fleet, no crosvm or `process_restarter`, no private ADB listener, removed
+private HOMEs, and no leftover composite-spec temporary files. All three
 captures remain under `incomplete/` because no boot-completion property or
-marker was observed; neither satisfies the reference-profile or boot
-acceptance criteria. A hostile review of the updated capture records, logcat
-provenance, Lima manifests, and post-run sidecars found no actionable
+marker was observed; none satisfies the reference-profile or boot
+acceptance criteria. Hostile review of the SwiftShader record found two
+wording inaccuracies about its bootstat property and zygote start timing;
+both were corrected, and follow-up review found no remaining actionable
 findings.

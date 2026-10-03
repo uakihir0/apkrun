@@ -4995,3 +4995,47 @@ JSONL record. The focused stage tests passed 14 cases;
 Linux-only skip. Ruff lint and format checks passed. Hostile review found no
 actionable issues. A subsequent reference run will verify the live record
 shape.
+
+## IR-148: Preserve the incomplete unpaused default capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8; `Images/reference/16373615/incomplete/default-20261003T183619-1148306/` |
+
+**Choice.** Keep the 2400-second unpaused `default` run under `incomplete/`.
+Do not publish it as a profile because the boot deadline expired and the
+Cuttlefish configuration lacks composite-disk specifications. Record the
+observations and cleanup checks without assigning a root cause.
+
+**Reason.** The run supplies another long observation of the U-Boot-to-Linux
+transition, guest memory residency, ADB transport, and bounded Android
+logcat while preserving the existing guest configuration. Missing required
+profile artifacts and boot-completion evidence make it unsuitable as a
+reference profile. In particular, the absence of a crosvm command line at
+artifact collection does not mean crosvm never ran; the observer recorded
+480 valid memory samples.
+
+**Verification.** The Ubuntu 24.04.4 aarch64 Lima VM used Cuttlefish 1.57.0,
+nested virtualization, four guest CPUs, 4096 MiB memory, 4915 MiB DDR,
+`guest_swiftshader`, console off, and a 2400-second guest boot deadline.
+`host.json` records a 3002-second total capture duration. The U-Boot banner
+at 17:46:21 Lima local time was followed by Linux 6.12.74 at 17:52:00, 339
+seconds later. Of 481 crosvm memory events, 480 had valid RSS data. VmRSS
+first reached 4 GiB at 08:51:57.755Z; RssShmem did so at 08:52:02.755Z.
+Launcher event 5 occurred at 08:59:30.761Z, with the private ADB server
+ready 2.046 seconds later. Of 103 polls, 99 reported `device`; all property
+values and statuses remained unparsed. The final logcat queries completed,
+with zero recognized process events and five Watchdog mentions in the
+diagnostic buffers. No boot-completion marker or parsed boot property was
+recorded.
+
+The Cuttlefish fleet was empty after cleanup, the private server and socket
+HOME were removed, and the pre-existing loopback ADB server on port 5037 was
+preserved. All nine entries in `LIMA-SHA256SUMS` verified on the host; all
+five copied sources matched revision
+`736374602c7c64b67dbade2b78450758316e48e9`. Privacy scans found no tested
+private host paths, MAC/EUI-64 addresses, or PEM key markers. This source
+revision predates IR-145–147, so this capture does not live-verify those
+observer changes and does not establish Android boot completion or a cause.

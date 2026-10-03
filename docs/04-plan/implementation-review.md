@@ -2058,10 +2058,16 @@ regular-expression backtracking on long records.
 | Task | #064 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8; `Images/reference/16373615/incomplete/default-20261001T001530Z-48053/cuttlefish_config.json`; `Images/tools/reference/capture.sh` |
 
-**Choice.** Keep the normalized `cuttlefish_config.json` and record
-`composite-disk-specs.json` as missing when the config does not expose a
-composite-disk section. Do not synthesize a composite specification from the
-instance's individual image paths.
+**Choice.** Do not synthesize a composite specification from an instance's
+individual image paths. The initial capture retained `cuttlefish_config.json`
+and marked `composite-disk-specs.json` missing when that JSON had no
+composite-disk section. **The missing-item rule is superseded by IR-151,**
+which collects the dedicated config files emitted in the selected instance
+runtime when available.
+
+**Supersession.** IR-151 replaces only the initial rule for marking the
+composite-spec artifact missing. The rule against inferring disk topology
+from unrelated image paths remains in effect.
 
 **Reason.** The real pinned Cuttlefish 1.57.0 capture has an `instances` map
 and no top-level `disks` object, while the existing synthetic fixture used an
@@ -4693,10 +4699,13 @@ kernel log nor the ADB probe establishes `sys.boot_completed=1` or a
 `VIRTUAL_DEVICE_BOOT_COMPLETED` marker. The 2402-second capture ended at its
 deadline. `cvd-create-console.log` also records two `liblp` errors reporting
 invalid logical-partition geometry magic at 12:36:02.231 Lima local time.
-Their relevance to the incomplete guest boot is unknown. Cuttlefish reported
-no composite-disk specifications, which prevents profile publication and is
-recorded in `MISSING.txt`; that capture limitation alone does not determine
-the cause of the guest state. Update R-06 to say that #064 cannot provide a
+Their relevance to the incomplete guest boot is unknown. The JSON-only
+collector found no composite-named keys in `cuttlefish_config.json` and
+recorded `composite-disk-specs.json` as missing. That capture did not
+inventory the dedicated files later found in the selected instance runtime,
+so their presence in that run cannot be determined. The unavailable
+normalized artifact prevents profile publication but does not determine the
+cause of the guest state. Update R-06 to say that #064 cannot provide a
 known-good Cuttlefish boot baseline until Android boot completion is recorded;
 this result must not be projected onto the separate VZ topology.
 
@@ -4829,8 +4838,10 @@ bytes and completed client cleanup, so the run could not provide logcat
 marker counts. No `VIRTUAL_DEVICE_BOOT_COMPLETED` marker was found.
 
 The console log again reports invalid logical-partition geometry magic; its
-relevance remains unknown. The missing composite-disk specifications prevent
-profile publication but do not establish the boot cause. Post-run checks
+relevance remains unknown. The missing normalized composite-spec artifact
+prevents profile publication but does not establish the boot cause. The JSON-only collector found no
+composite-named keys; this run did not inventory the dedicated instance files
+later identified by IR-151, so their presence is unknown. Post-run checks
 found an empty Cuttlefish fleet, no crosvm or `process_restarter`, no private
 ADB listener on port 6520, the removed private socket HOME, and only the
 pre-existing loopback ADB server on port 5037. All ten Lima manifest entries
@@ -4902,10 +4913,13 @@ ADB transport availability but does not prove that CRLF caused the parser
 failure or establish SystemServer readiness.
 
 `MISSING.txt` records the 2400-second deadline, no crosvm command line at
-artifact-collection time, and missing composite-disk specifications. The
-sidecar records complete capture-client cleanup, an empty Cuttlefish fleet,
-no crosvm or `process_restarter`, no private ADB listener on port 6520, and
-preservation of the pre-existing loopback server on port 5037. One offline
+artifact-collection time, and a missing normalized composite-spec artifact.
+The JSON-only collector found no composite-named keys; this run did not
+inventory the dedicated instance files later identified by IR-151, so their
+presence is unknown. The sidecar records complete capture-client cleanup, an
+empty Cuttlefish fleet, no crosvm or `process_restarter`, no private ADB
+listener on port 6520, and preservation of the pre-existing loopback server
+on port 5037. One offline
 ADB entry was explicitly disconnected and the device list was then empty.
 The ten Lima manifest entries verified on the host, and privacy scans found
 no tested private host paths, MAC/EUI-64 addresses, or PEM key markers. This
@@ -5006,8 +5020,10 @@ shape.
 
 **Choice.** Keep the 2400-second unpaused `default` run under `incomplete/`.
 Do not publish it as a profile because the boot deadline expired and the
-Cuttlefish configuration lacks composite-disk specifications. Record the
-observations and cleanup checks without assigning a root cause.
+normalized composite-spec artifact was missing after the JSON-only collector
+found no composite-named keys. The run did not inventory the dedicated
+instance files later identified by IR-151, so their presence is unknown.
+Record the observations and cleanup checks without assigning a root cause.
 
 **Reason.** The run supplies another long observation of the U-Boot-to-Linux
 transition, guest memory residency, ADB transport, and bounded Android
@@ -5057,9 +5073,11 @@ completion signal. Do not attribute the guest state to the untracked
 `system_server` process exit, the `aidl/activity` lookups, the liblp warnings,
 or the missing composite-disk specs.
 
-**Reason.** The guest boot deadline expired, `sys.boot_completed=1` was never
-observed, and the saved Cuttlefish config contains no composite-disk
-specifications required by the reference profile. The captures preserve the
+**Reason.** The guest boot deadline expired and `sys.boot_completed=1` was
+never observed. The JSON-only collector found no composite-named keys in the
+saved Cuttlefish config and recorded the normalized spec artifact as missing;
+the run did not inventory the dedicated instance files later identified by
+IR-151, so their historical presence is unknown. The captures preserve the
 ADB stage outcomes and bounded logs, but the distinct `system_server` PIDs
 and mention counts do not establish process causality or a failure cause.
 The missing crosvm command line describes only post-timeout artifact
@@ -5123,3 +5141,57 @@ occurred; the follow-up review found no further actionable issue. The
 2026-10-03 live capture used source revision
 `fa9c0ee1f7e4ab6a07e594e93264f371fbd96286`, before this change, so it does
 not live-verify this process cleanup path.
+
+## IR-151: Collect composite-disk config files from the selected instance
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/reference/collect_composite_specs.py`; `Images/tools/tests/test_collect_composite_specs.py`; `Images/tools/tests/test_reference_capture.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Build `composite-disk-specs.json` from every
+`*_composite_disk_config.txt` file beneath the selected Cuttlefish instance
+runtime beneath the per-run private Cuttlefish HOME. Store the UTF-8 contents
+in a `files` object keyed by relative path. Walk and open descendants relative
+to directory descriptors with no-follow flags. Reject matching config paths
+that are symlinks or non-regular files (including FIFOs), as well as empty
+files, invalid UTF-8, more than 32 matching files, files over 256 KiB,
+aggregate content over 1 MiB, inventories over 100,000 entries or 4096
+directories, and directory depth over 128. Skip unrelated symlinks without
+following them. Resolve `/tmp` to its physical path, require it to match a
+normalizer-supported temporary root, and use that same path for the private
+Cuttlefish HOME and `TMPDIR`, regardless of the caller's `TMPDIR`. This keeps
+host-generated paths under roots covered by normalization, keeps temporary
+socket paths short, and makes startup and removal use the same HOME when
+`/tmp` is a symlink. Keep missing or rejected input in `MISSING.txt`; do not
+infer disk topology from image names or unrelated configuration.
+Remove interrupted temporary JSON before normalization. If cleanup fails,
+attempt to discard the staging tree; when removal also fails, report the path
+for manual cleanup.
+
+**Reason.** The live Cuttlefish 1.57.0 instance had dedicated composite-disk
+config files in `instances/cvd-1`, while its `cuttlefish_config.json` had no
+composite-named keys. The old collector searched only the JSON object and
+reported those real files as missing. Reading the selected instance's emitted
+config files supplies the serialized data without synthesizing topology.
+Descriptor-relative traversal closes the parent-symlink race; nonblocking
+opens and bounded incremental inventory prevent special-file hangs and
+unbounded directory fan-out. A hostile review found that a caller-selected
+`TMPDIR` could be outside the normalizer's known roots, so the capture now
+resolves `/tmp`, verifies its physical path is supported for normalization,
+and uses that path for Cuttlefish HOME and temporary files. This preserves the
+privacy guarantee, keeps socket paths short, and avoids alias mismatches
+between startup and cleanup. Cleanup before interrupted normalization
+prevents raw temporary JSON from entering a retained incomplete capture.
+JSON path normalization prevents private host paths from surviving in the
+capture.
+
+**Verification.** The full image-tools suite passed 465 tests with four
+platform-specific skips. All six checks in `scripts/ci/run-checks.sh` passed;
+Ruff lint and format, `sh -n Images/tools/reference/capture.sh`, and
+`git diff --check` passed. The 19 collector tests also passed on the Linux
+reference VM, in addition to the macOS run. A follow-up hostile review found
+no actionable findings. A new 2400-second `default` capture using this
+collector is in progress; artifact contents, privacy scanning, and post-run
+cleanup verification remain pending.

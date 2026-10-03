@@ -654,7 +654,7 @@ the environment variables in §8.3. The fallback records its source-derived
 |---|---|
 | crosvm command line (from `launcher.log` / `ps -ww`) | `/proc/cmdline`, `/proc/bootconfig` |
 | `cuttlefish_runtime/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
-| composite disk specs (`os_composite`, persistent composite) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
+| composite disk specs (`ap`, `os`, and persistent composite config files) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
 | `assemble_cvd.log`, `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
 | | `ls -l /dev/hvc*` and which process holds each (`/proc/*/fd`) |
@@ -911,6 +911,25 @@ replace the snapshots when available; if Cuttlefish removes them during a
 failed startup, the snapshots remain in the normalized incomplete capture.
 The runtime paths are discovered below
 `$HOME/cuttlefish_runtime`, and stale files from previous runs are excluded.
+`collect_composite_specs.py` reads `*_composite_disk_config.txt` files from
+the selected instance runtime and writes `composite-disk-specs.json` as a
+`files` object keyed by each source file's relative path. It preserves the
+UTF-8 file contents and rejects matching config paths that are symlinks or
+non-regular files (including FIFOs), as well as empty or invalid files, more
+than 32 files, files above 256 KiB, aggregate content above 1 MiB,
+inventories above 100,000 entries or 4096 directories, and directory depth
+above 128. Unrelated symlinks are skipped without being followed. The
+collector walks and opens descendants relative to directory descriptors with
+no-follow flags, anchored to the per-run private Cuttlefish HOME. The capture
+resolves `/tmp` to its physical path, requires that path to be covered by the
+normalizer, and uses it for both HOME and `TMPDIR`. Caller-specific temporary
+roots therefore cannot leak into Cuttlefish logs or configuration. Resolving
+the path once also keeps Cuttlefish startup and removal on the same HOME when
+`/tmp` is a symlink. This keeps temporary socket paths short. Host paths in
+the JSON are normalized before the capture is retained. Interrupted
+collection removes its temporary JSON before normalization. If that cleanup
+fails, capture attempts to discard the staging tree; if removal also fails,
+it reports the path for manual cleanup.
 
 `guest-capture.txt` is a tab-separated list of output filename and shell
 command. Each command uses plain `sh` syntax and runs through `adb exec-out`;

@@ -323,6 +323,7 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
         "guest_path=/mnt/android-data\n"
         "root_path=/root/guest-state\n"
         "tmp_path=/tmp/guest-cache\n"
+        "physical_tmp_path=/private/tmp/private-user/cuttlefish.sock\n"
         "token=private-value\n"
         "password='correct horse battery staple'\n"
         "[ro.debug.token]: [private-property-value]\n"
@@ -334,6 +335,7 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
                 "image": "/mnt/cuttlefish/build/boot.img",
                 "runtime": "/var/lib/cuttlefish/runtime",
                 "socket": "/run/cuttlefish/control.sock",
+                "physical_tmp": "/private/tmp/apkrun-cvd-home",
                 "build": "/srv/android/build",
                 "checkout": "/usr/local/google/home/builder/aosp",
                 "runtime_with_spaces": "-u/tmp/private workspace/cvd",
@@ -431,11 +433,14 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
     assert "/home/alice" not in normalized
     assert "/root/guest-state" not in normalized
     assert "/tmp/guest-cache" not in normalized
+    assert "/private/tmp/private-user" not in normalized
     assert "/mnt/android-data" in normalized
     assert "/mnt/cuttlefish" not in (capture / "cuttlefish_config.json").read_text(encoding="utf-8")
     host_config = (capture / "cuttlefish_config.json").read_text(encoding="utf-8")
     assert "/var/lib/cuttlefish" not in host_config
     assert "/run/cuttlefish" not in host_config
+    assert "/private/tmp/apkrun-cvd-home" not in host_config
+    assert json.loads(host_config)["physical_tmp"] == "<HOST_PATH>"
     assert "/srv/android" not in host_config
     assert "/usr/local/google/home" not in host_config
     assert "workspace/cvd" not in host_config

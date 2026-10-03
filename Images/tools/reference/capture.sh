@@ -329,6 +329,31 @@ remove_raw_logcat() {
   return 1
 }
 
+remove_composite_specs_temporary_files() {
+  [ -n "${stage:-}" ] || return 0
+  for temporary in "$stage"/.composite-disk-specs.json.*; do
+    if [ ! -e "$temporary" ] && [ ! -L "$temporary" ]; then
+      continue
+    fi
+    if ! rm -f "$temporary" >/dev/null 2>&1 \
+      || [ -e "$temporary" ] || [ -L "$temporary" ]; then
+      return 1
+    fi
+  done
+}
+
+discard_stage_with_composite_specs_temporary() {
+  raw_stage=$stage
+  if discard_staging_path "$raw_stage"; then
+    stage=
+    printf 'capture staging data was discarded after temporary composite-spec cleanup failed.\n' >&2
+  else
+    stage=
+    printf 'unpublished staging data may remain at %s; remove it manually.\n' \
+      "$raw_stage" >&2
+  fi
+}
+
 on_exit() {
   exit_status=${1:-$?}
   exec 2>&3
@@ -362,6 +387,9 @@ on_exit() {
       exit_status=1
     fi
     remove_raw_logcat || true
+    if [ -n "${stage:-}" ] && ! remove_composite_specs_temporary_files; then
+      discard_stage_with_composite_specs_temporary
+    fi
     if [ -n "${stage:-}" ] && [ -d "$stage" ]; then
       missing_file="$stage/MISSING.txt"
       if [ ! -f "$missing_file" ]; then
@@ -460,7 +488,23 @@ if [ -n "$pending_signal_status" ]; then
 fi
 
 stage=$(mktemp -d "$reference_root/.${profile}.capture.XXXXXX")
-cvd_home=$(mktemp -d "${TMPDIR:-/tmp}/apkrun-cvd-home.${profile}.XXXXXX")
+# Keep Cuttlefish HOME and temporary files under roots the capture normalizer knows.
+if ! cvd_tmp_root=$(CDPATH= cd /tmp 2>/dev/null && pwd -P); then
+  printf 'cannot resolve the physical /tmp directory for Cuttlefish.\n' >&2
+  exit 1
+fi
+case "$cvd_tmp_root" in
+  /tmp|/private/tmp|/var/tmp|/var/tmp/*|/run|/run/*)
+    ;;
+  *)
+    printf 'physical /tmp path is outside the capture normalizer roots: %s\n' \
+      "$cvd_tmp_root" >&2
+    exit 1
+    ;;
+esac
+TMPDIR=$cvd_tmp_root
+export TMPDIR
+cvd_home=$(mktemp -d "$TMPDIR/apkrun-cvd-home.${profile}.XXXXXX")
 cvd_group_suffix=$(printf '%s' "${cvd_home##*.}" | tr '[:upper:]' '[:lower:]')
 cvd_group_name="apkrun_${profile}_${cvd_group_suffix}"
 runtime_root="$cvd_home"
@@ -864,40 +908,15 @@ copy_first_match kernel.log
 copy_first_match launcher.log
 copy_first_match assemble_cvd.log
 
-if [ -s "$stage/cuttlefish_config.json" ]; then
-  if ! python3 - "$stage/cuttlefish_config.json" "$stage/composite-disk-specs.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-from typing import Any
-
-source = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-matches: dict[str, Any] = {}
-
-def visit(value: Any, prefix: str = "") -> None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            name = f"{prefix}.{key}" if prefix else str(key)
-            if "composite" in str(key).lower():
-                matches[name] = child
-            visit(child, name)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            visit(child, f"{prefix}[{index}]")
-
-visit(source)
-if not matches:
-    raise SystemExit("no composite disk specifications found in Cuttlefish config")
-Path(sys.argv[2]).write_text(
-    json.dumps(matches, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-    encoding="utf-8",
-)
-PY
-  then
-    record_missing "composite-disk-specs.json" "no composite disk specifications in cuttlefish_config.json"
-  fi
-else
-  record_missing "composite-disk-specs.json" "cannot inspect missing cuttlefish_config.json"
+if ! python3 "$script_dir/collect_composite_specs.py" \
+  "$cvd_home" "$instance_runtime" "$stage/composite-disk-specs.json"; then
+  rm -f "$stage/composite-disk-specs.json"
+  record_missing "composite-disk-specs.json" \
+    "no safely readable composite-disk config files in the selected Cuttlefish instance runtime"
+fi
+if ! remove_composite_specs_temporary_files; then
+  discard_stage_with_composite_specs_temporary
+  exit 1
 fi
 
 host_os=$(sed -n 's/^PRETTY_NAME="\(.*\)"$/\1/p' /etc/os-release 2>/dev/null | head -n 1)

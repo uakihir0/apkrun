@@ -154,6 +154,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
@@ -196,6 +197,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
                   --base_instance_num=*) instance_num=${argument#*=} ;;
                 esac
               done
+              printf '%s\\n' "$TMPDIR" > "$APKRUN_PROFILE_TMPDIR_LOG"
+              printf '%s\\n' "$base_directory" > "$APKRUN_PROFILE_BASE_DIRECTORY_LOG"
               instance="$base_directory/501/123456789/home/cuttlefish/instances/cvd-$instance_num"
               mkdir -p "$instance/internal"
               ln -s "$instance" "$base_directory/cuttlefish_runtime"
@@ -209,8 +212,14 @@ def test_capture_script_uses_each_profile_launch_configuration(
             footer = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(body), len(body), 0)
             Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
             PY
-              printf '%s\\n' '{"disks":{"os_composite":{"partitions":["boot_a"]}}}' \\
+              printf '%s\\n' '{"instances":[]}' \\
                 > "$instance/cuttlefish_config.json"
+              printf '%s\\n' 'path=/var/tmp/cvd/host-501/os_composite.img' \\
+                > "$instance/os_composite_disk_config.txt"
+              printf '%s\\n' 'path=/var/tmp/cvd/host-501/persistent_composite.img' \\
+                > "$instance/persistent_composite_disk_config.txt"
+              printf '%s\\n' 'path=/var/tmp/cvd/host-501/ap_composite.img' \\
+                > "$instance/ap_composite_disk_config.txt"
               printf 'synthetic kernel log\\n' > "$instance/kernel.log"
               printf 'synthetic launcher log\\n' > "$instance/launcher.log"
               printf 'synthetic assemble log\\n' > "$instance/assemble_cvd.log"
@@ -330,6 +339,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
     (host_bin / "crosvm").chmod(0o755)
     launch_log = tmp_path / "launch-args.txt"
     start_log = tmp_path / "start-args.txt"
+    tmpdir_log = tmp_path / "capture-tmpdir.txt"
+    base_directory_log = tmp_path / "capture-base-directory.txt"
     timeout_log = tmp_path / "timeout-commands.txt"
     instance_file = tmp_path / "instance-path.txt"
     home = tmp_path / "home"
@@ -344,6 +355,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
             "APKRUN_PROFILE_INITIAL_HOME": str(home),
             "APKRUN_PROFILE_LAUNCH_LOG": str(launch_log),
             "APKRUN_PROFILE_START_LOG": str(start_log),
+            "APKRUN_PROFILE_TMPDIR_LOG": str(tmpdir_log),
+            "APKRUN_PROFILE_BASE_DIRECTORY_LOG": str(base_directory_log),
             "TIMEOUT_LOG": str(timeout_log),
             "CVD_HOST_DIR": str(cvd_host),
             "ANDROID_PRODUCT_OUT": str(product_out),
@@ -372,7 +385,11 @@ def test_capture_script_uses_each_profile_launch_configuration(
         "start",
         "--boot_timeout_secs=321",
     ]
-    assert f"--base_directory={tmp_path}/apkrun-cvd-home.{profile}." in " ".join(launch_arguments)
+    expected_tmp_root = Path("/tmp").resolve()
+    assert tmpdir_log.read_text(encoding="utf-8") == f"{expected_tmp_root}\n"
+    base_directory = Path(base_directory_log.read_text(encoding="utf-8").strip())
+    assert base_directory.parent == expected_tmp_root
+    assert str(tmp_path) not in str(base_directory)
     if expected_gpu_mode is None:
         assert not any(argument.startswith("--gpu_mode=") for argument in launch_arguments)
     else:
@@ -432,6 +449,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
@@ -990,6 +1008,22 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "cvd-create-124",
             id="cvd-create-exit-124-is-not-a-deadline",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "composite-specs-interrupted",
+            id="interrupted-composite-spec-collection-cleans-raw-temp",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -1014,6 +1048,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     for name in (
         "capture.sh",
         "capture_cvd_start.py",
+        "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
         "normalize.yaml",
@@ -1034,6 +1069,26 @@ def test_capture_script_collects_a_synthetic_linux_capture(
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            if [ "${FAKE_INTERRUPT_COMPOSITE_COLLECTOR:-0}" = 1 ] \
+              && [ "${1##*/}" = collect_composite_specs.py ]; then
+              destination="$4"
+              stage="${destination%/*}"
+              printf 'private=/var/tmp/cvd/interrupted-raw-config\\n' \
+                > "$stage/.composite-disk-specs.json.interrupted"
+              kill -TERM "$PPID"
+              exit 0
+            fi
+            exec "$APKRUN_REAL_PYTHON" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
     (fake_bin / "uname").write_text(
         textwrap.dedent(
             """\
@@ -1120,8 +1175,14 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
             PY
               cat > "$instance/cuttlefish_config.json" <<'JSON'
-            {"disks":{"os_composite":{"partitions":["boot_a","system_a"]}}}
+            {"instances":[]}
             JSON
+              printf 'image=/var/tmp/cvd/host-501/os_composite.img\\n' \\
+                > "$instance/os_composite_disk_config.txt"
+              printf 'image=/var/tmp/cvd/host-501/persistent_composite.img\\n' \\
+                > "$instance/persistent_composite_disk_config.txt"
+              printf 'image=/var/tmp/cvd/host-501/ap_composite.img\\n' \\
+                > "$instance/ap_composite_disk_config.txt"
               printf 'VIRTUAL_DEVICE_BOOT_COMPLETED\\n' > "$instance/kernel.log"
               printf 'launcher synthetic log\\n' > "$instance/launcher.log"
               printf 'assemble synthetic log\\n' > "$instance/assemble_cvd.log"
@@ -1480,6 +1541,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_CP_FAIL_NAME": "cuttlefish_config.json" if copy_fails else "",
             "FAKE_ABORT_CAPTURE": "1" if abort_command else "0",
             "FAKE_ABORT_CAPTURE_COMMAND": abort_command or "",
+            "FAKE_INTERRUPT_COMPOSITE_COLLECTOR": (
+                "1" if boot_timeout_case == "composite-specs-interrupted" else "0"
+            ),
             "FAKE_RM_FAIL_LOGCAT_RAW": "1" if raw_cleanup_fails else "0",
             "FAKE_RM_FAIL_STAGE": "1" if raw_cleanup_fails == "stage-fails" else "0",
             "FAKE_STOP_TIMEOUT": "1" if stop_timeout is True else "0",
@@ -1496,6 +1560,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "LAUNCH_LOG": str(launch_log),
             "APKRUN_PROFILE_START_LOG": str(start_log),
             "HOME": str(home),
+            "APKRUN_REAL_PYTHON": sys.executable,
             "PATH": (f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}"),
             "TMPDIR": str(tmp_path),
         }
@@ -1559,7 +1624,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             2
             if build_id != "16373615" or capture_lock_held
             else 143
-            if abort_command or lock_signal_during_acquire
+            if abort_command
+            or lock_signal_during_acquire
+            or boot_timeout_case == "composite-specs-interrupted"
             else 1
         )
         assert result.returncode == expected_status
@@ -1663,6 +1730,21 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             )
             assert_adb_disconnect_precedes_group_removal()
             assert_scoped_group_removal()
+        elif boot_timeout_case == "composite-specs-interrupted":
+            assert "normalized incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            partial = partials[0]
+            missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+            assert "process exited before normal capture completion" in missing
+            assert not list(partial.glob(".composite-disk-specs.json.*"))
+            captured = b"".join(path.read_bytes() for path in partial.rglob("*") if path.is_file())
+            assert b"interrupted-raw-config" not in captured
+            assert b"/var/tmp/cvd/" not in captured
+            assert_adb_disconnect_precedes_group_removal()
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
         elif boot_timeout_case == "adb-wait-for-device":
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -1872,7 +1954,19 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert metadata["targetGpuMode"] == gpu_mode
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     assert (capture / "internal-bootconfig.txt").read_bytes() == b"androidboot.synthetic=1\n"
-    assert json.loads((capture / "composite-disk-specs.json").read_text(encoding="utf-8"))
+    composite_specs = json.loads(
+        (capture / "composite-disk-specs.json").read_text(encoding="utf-8")
+    )
+    assert set(composite_specs["files"]) == {
+        "ap_composite_disk_config.txt",
+        "os_composite_disk_config.txt",
+        "persistent_composite_disk_config.txt",
+    }
+    assert all(
+        "/var/tmp/cvd/" not in contents and str(cvd_home) not in contents
+        for contents in composite_specs["files"].values()
+    )
+    assert all("<HOST_PATH>" in contents for contents in composite_specs["files"].values())
     crosvm_command = (capture / "crosvm-command-line.txt").read_text(encoding="utf-8")
     assert f"--instance_num={expected_instance}" in crosvm_command
     assert f"--instance_num={expected_instance + 4}" not in crosvm_command

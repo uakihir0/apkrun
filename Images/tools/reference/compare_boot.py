@@ -84,6 +84,7 @@ HOST_PATH_ROOTS = (
     "/var/log",
     "/var/run",
     "/var/tmp",
+    "/private/tmp",
     "/workspaces",
     "/workspace",
     "/Users",

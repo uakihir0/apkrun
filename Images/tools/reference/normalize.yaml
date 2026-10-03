@@ -54,7 +54,7 @@
       "replacement": "<MAC>"
     },
     {
-      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?([\\\"'])/(?:home|Users|root|tmp|var/tmp|mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/(?:(?:\\\\[^\\r\\n])|(?!\\2)[^\\\\\\r\\n])*\\2",
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?([\\\"'])/(?:home|Users|root|tmp|private/tmp|var/tmp|mnt|workspace|workspaces|opt|run|srv|usr/local/google/home|var/(?:cache|lib|log|run|tmp))/(?:(?:\\\\[^\\r\\n])|(?!\\2)[^\\\\\\r\\n])*\\2",
       "replacement": "\\1<HOST_PATH>",
       "files": [
         "crosvm-command-line.txt",
@@ -69,7 +69,7 @@
       "replacement": "\\1<HOST_HOME_PATH>"
     },
     {
-      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?/(?:root|tmp|var/tmp)/[^\\s,;\\\"'<>\\]\\)]+",
+      "pattern": "(?<![A-Za-z0-9_])(-[A-Za-z])?/(?:root|tmp|private/tmp|var/tmp)/[^\\s,;\\\"'<>\\]\\)]+",
       "replacement": "\\1<HOST_TEMP_PATH>"
     },
     {

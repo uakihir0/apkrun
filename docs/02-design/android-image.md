@@ -810,27 +810,29 @@ not accepted as a device state, and a truncated property reply is not parsed.
 If process-group cleanup cannot be verified, the observer records the
 incomplete status, starts no later stage or poll, and fails capture shutdown.
 Missed ADB schedule points are skipped rather than replayed.
-The first property command that is actually attempted after `get-state`
-reports `device` prepends the fixed line `APKRun shell ready` before running
-the existing property queries in the same shell and ADB client. This is a
-one-shot marker inside the existing ten-second property-query budget; it does
-not add a subprocess or extend the deadline reserve. `shellProbeMarkerMatched`
-records only whether captured stdout began with that marker using LF or CRLF
-line framing. The observer strips the marker from in-memory output before
-property parsing and retains no raw output. A marker captured before a
-property-query timeout confirms that the shell reached the marker command; a
-missing marker does not by itself identify why the shell command failed to
-respond. `shellProbeAttempted`,
-`shellProbeExitCode`, `shellProbeTimedOut`, `shellProbeTruncated`,
-`shellProbeCleanupComplete`, and `shellProbeProbeError` describe the same
-bounded client, and should be read with the corresponding `getprop` fields.
-Subsequent polls run the ordinary property command without the marker.
+On the first poll where `get-state` reports `device`, the observer runs a
+separate fixed `adb shell sh -c "printf '%s\n' 'APKRun shell ready'"` command
+in place of that poll's property query. This one-shot probe uses the existing
+ten-second guest-command timeout, 4 KiB stdout cap, and process-group cleanup
+bounds, so it does not add to the regular-poll deadline reserve. The property
+query resumes on the next scheduled poll. If the shell-probe process cannot
+be launched, the one-shot remains pending for the next eligible poll; after
+a launched attempt, it is not retried. `shellProbeMarkerMatched` records only
+whether the command output began with the marker using LF or CRLF line
+framing. The observer retains no raw output. A matched marker confirms that
+this standalone shell command returned its marker; an absent marker does not
+identify why the command failed to respond.
+`shellProbeAttempted`, `shellProbeExitCode`, `shellProbeTimedOut`,
+`shellProbeTruncated`, `shellProbeCleanupComplete`, and
+`shellProbeProbeError` describe the standalone client. The first marker poll
+does not issue a property query, so read these fields separately from the
+`getprop` fields; subsequent polls run the ordinary property command.
 The host-side `connect` and `get-state` commands have a two-second cap; the
-guest-side boot-property query has a ten-second cap because starting an
-Android shell can take longer. Their command caps total fourteen seconds.
-Allow up to 2.5 seconds to terminate and verify each of the three process
-groups, plus a four-second scheduling margin, so do not start an ordinary poll
-during the last 25.5 seconds before the final probe.
+guest-side shell probe or boot-property query has a ten-second cap. Their
+command caps total fourteen seconds. Allow up to 2.5 seconds to terminate and
+verify each of the three process groups, plus a four-second scheduling
+margin, so do not start an ordinary poll during the last 25.5 seconds before
+the final probe.
 For a finite capture deadline, leave 40.5 seconds before the ADB polling
 cutoff for the final Android logcat probe. Its minimum 39-second budget
 covers two two-second host commands, two ten-second logcat queries,

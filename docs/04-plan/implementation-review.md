@@ -5227,7 +5227,7 @@ findings.
 | Task | #064 |
 | Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
 
-**Choice.** On the first boot-property command that is actually launched after
+**Initial choice (superseded by IR-153).** On the first boot-property command that is actually launched after
 ADB reports `device`, prefix the existing shell command with the fixed
 `APKRun shell ready` marker. Run it in the same ADB client, timeout, 4 KiB
 output cap, and process group as the property queries. Record only bounded
@@ -5278,3 +5278,44 @@ establishing whether the shell reached the marker or identifying a boot cause.
 All 11 Lima-side manifest entries verified on both hosts; source-copy hashes,
 normalization idempotence, privacy scans, and post-run cleanup checks passed.
 The capture remains incomplete and is not a reference profile.
+
+## IR-153: Probe Android shell independently of boot properties
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** On the first poll where ADB reports `device`, run the fixed
+`APKRun shell ready` `printf` command as a separate bounded `adb shell`
+request. Use that guest-command slot in place of the poll's property query;
+resume property queries on the next scheduled poll. Keep the probe one-shot:
+if the process was not launched, retry on the next eligible poll; after a
+launched attempt, do not retry. Persist only exit, timeout, truncation,
+cleanup, probe-error, and marker-match fields. Retain no command output.
+
+**Reason.** The IR-152 live capture timed out before returning its marker while
+the marker and both `getprop` calls shared one shell command. That result does
+not separate failure to return a simple shell command from a stall in a
+property query. Running `printf` alone makes the shell response independently
+observable. Replacing the first poll's property query with this probe keeps
+the same number and maximum duration of guest ADB clients, preserves the
+25.5-second polling reserve, and leaves only the first property sample
+deferred until the next scheduled poll (15 seconds later). This is an
+opt-in diagnostic probe and does not change guest state.
+
+**Verification.** Focused observer tests cover the standalone command,
+marker success with LF and CRLF, missing-marker and timeout results,
+one-shot retry only when the process did not launch, deferred property
+sampling, cleanup failure, output privacy, and the unchanged polling reserve.
+The boot-observer file passed 103 tests with one Linux-only skip after adding
+multi-poll timeout and missing-marker cases; Ruff lint and format passed. The
+full `Images/tools/tests` suite passed 473 tests with four platform-specific
+skips. All six checks in `scripts/ci/run-checks.sh`, Ruff lint and format,
+shell syntax, and `git diff --check` passed.
+Adversarial review requested explicit no-retry coverage after a launched
+timeout or missing marker; the multi-poll test now verifies both outcomes
+resume at the property query without repeating the one-shot. Follow-up
+hostile review found no actionable findings. A fresh live capture remains
+pending.

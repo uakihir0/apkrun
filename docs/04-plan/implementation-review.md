@@ -5192,12 +5192,23 @@ platform-specific skips. All six checks in `scripts/ci/run-checks.sh` passed;
 Ruff lint and format, `sh -n Images/tools/reference/capture.sh`, and
 `git diff --check` passed. The 19 collector tests also passed on the Linux
 reference VM, in addition to the macOS run. A follow-up hostile review found
-no actionable findings. A fresh 2403-second `default` capture completed
-with the composite artifact containing all three selected-instance files.
-All ten normalized files matched their Lima-side SHA-256 hashes. A scan found
-no tested host paths, MAC/EUI-64 addresses, or PEM private-key markers.
-Post-run checks found an empty Cuttlefish fleet, no crosvm or
-`process_restarter`, no private ADB listener, a removed private HOME, and no
-leftover composite-spec temporary files. The capture remains under
-`incomplete/` because no boot-completion property or marker was observed;
-it does not satisfy the reference-profile or boot acceptance criteria.
+no actionable findings. Fresh 2403-second `default` and 2405-second
+`target` (`drm_virgl`) captures completed with all three selected-instance
+files in each composite artifact. For each run, the 11-entry Lima manifest
+(ten normalized capture files plus `post-run-verification.json`) verified on
+the host. The sidecars retain source-copy hashes, privacy-scan counts, and
+post-capture cleanup observations; scans found no tested host paths,
+MAC/EUI-64 addresses, or PEM private-key markers. The `target` observer's
+final events-buffer query recorded 23,987 bytes and zero recognized process
+events. Its separate 20,611-byte Android diagnostic logcat query counted two
+SystemServer and ten Watchdog mention lines, with zero ANR, fatal-exception,
+fatal-signal, or zygote mention lines. The `default` run's final logcat
+queries timed out with zero captured bytes. These bounded observations do
+not establish a boot cause. Post-run checks for both runs found an empty
+Cuttlefish fleet, no crosvm or `process_restarter`, no private ADB listener,
+removed private HOMEs, and no leftover composite-spec temporary files. Both
+captures remain under `incomplete/` because no boot-completion property or
+marker was observed; neither satisfies the reference-profile or boot
+acceptance criteria. A hostile review of the updated capture records, logcat
+provenance, Lima manifests, and post-run sidecars found no actionable
+findings.

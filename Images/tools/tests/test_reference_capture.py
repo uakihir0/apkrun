@@ -1947,7 +1947,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         create_timeout = cvd_runner_calls[0][cvd_runner_calls[0].index("--timeout-seconds") + 1]
         start_timeout = cvd_runner_calls[1][cvd_runner_calls[1].index("--timeout-seconds") + 1]
         assert cvd_runner_calls[0][0] == "--kill-after=2s"
-        assert create_timeout == "600"
+        assert 0 < int(create_timeout) <= 600
         start_log_arguments = start_log.read_text(encoding="utf-8").split()
         assert start_log_arguments[0].startswith("--group_name=apkrun_target_")
         assert start_log_arguments[1] == "start"

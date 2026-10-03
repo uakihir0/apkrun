@@ -747,12 +747,20 @@ values other than empty, `0`, or `1` with a fixed marker, preventing property
 contents from injecting protocol lines. It appends each getprop exit status
 with a non-newline delimiter before command substitution, preserving trailing
 property newlines; it removes only the single newline emitted by getprop
-before validation. The parser accepts only the fixed output order emitted by
-the shell command; a valid prefix is retained when a timeout truncates the
-reply. Unexpected, duplicate, empty interior, or out-of-order lines
-invalidate the entire parsed reply, including exit statuses. Both properties
-are read by one shell command capped at ten seconds, and each property's
-bounded exit status is recorded separately as
+before validation. The parser accepts LF and CRLF transport line endings,
+removing one carriage return only when it is immediately before a line feed,
+then requires the fixed output order emitted by the shell command; a valid
+prefix is retained when a timeout truncates the reply. An unterminated final
+carriage return is preserved. Because the shell has already reduced property
+values to ASCII digits or a fixed marker, removing one carriage return before
+each line feed cannot turn a raw property value into an accepted value.
+The ADB subprocess wrapper passes the property reply and any partial timeout
+output to this parser without trimming; only the separate `get-state` response
+is whitespace-normalized.
+Unexpected, duplicate, empty interior, or
+out-of-order lines invalidate the entire parsed reply, including exit
+statuses. Both properties are read by one shell command capped at ten
+seconds, and each property's bounded exit status is recorded separately as
 `systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`, so a
 successful query remains distinguishable from a failed query even though the
 enclosing shell command ends with a status-printing command. A partial result

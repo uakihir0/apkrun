@@ -1795,6 +1795,67 @@ def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
     assert observed_timeouts == [expected_timeout]
 
 
+@pytest.mark.parametrize(
+    ("suffix", "timed_out", "expected_properties"),
+    (
+        ("\r", False, (2, True, None, None, 0, None)),
+        ("\n\n", False, (None, None, None, None, None, None)),
+        ("\r", True, (2, True, None, None, 0, None)),
+        ("\n\n", True, (None, None, None, None, None, None)),
+    ),
+)
+def test_boot_observer_preserves_adb_property_reply_framing(
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+    timed_out: bool,
+    expected_properties: tuple[
+        int | None, bool | None, bool | None, bool | None, int | None, int | None
+    ],
+) -> None:
+    class FakeClock:
+        @staticmethod
+        def monotonic() -> float:
+            return 0.0
+
+    raw_output = (
+        "system_server=2\nsystem_server_status=0\n"
+        "boot_completed=1\nboot_completed_status=0" + suffix
+    )
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        del kwargs
+        if timed_out:
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout=10,
+                output=raw_output.encode(),
+            )
+        return subprocess.CompletedProcess(command, 0, stdout=raw_output.encode())
+
+    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
+    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
+    result = BootObserver._run_adb(
+        [
+            "adb",
+            "shell",
+            "sh",
+            "-c",
+            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+        ],
+        {},
+        20,
+        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
+    )
+
+    assert result == (
+        None if timed_out else 0,
+        raw_output,
+        timed_out,
+        True,
+    )
+    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == expected_properties
+
+
 def test_boot_observer_preserves_partial_boot_properties_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1855,7 +1916,7 @@ def test_boot_property_shell_query_sanitizes_multiline_property_values(
         "    print('2\\nsystem_server_status=0\\nboot_completed=1\\n"
         "boot_completed_status=0')\n"
         "elif sys.argv[-1] == 'sys.boot_completed':\n"
-        "    print('0')\n"
+        "    sys.stdout.write('0\\r\\n')\n"
         "else:\n"
         "    raise SystemExit(64)\n",
         encoding="utf-8",
@@ -1876,12 +1937,15 @@ def test_boot_property_shell_query_sanitizes_multiline_property_values(
 
     assert result.returncode == 0
     assert result.stdout == (
-        "system_server=invalid\nsystem_server_status=0\nboot_completed=0\nboot_completed_status=0\n"
+        "system_server=invalid\n"
+        "system_server_status=0\n"
+        "boot_completed=invalid\n"
+        "boot_completed_status=0\n"
     )
     assert OBSERVER_MODULE.parse_boot_properties(result.stdout) == (
         None,
         True,
-        False,
+        None,
         True,
         0,
         0,
@@ -2020,14 +2084,33 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             0,
         ),
         (
-            "system_server=2\r\nsystem_server_status=0\n"
-            "boot_completed=1\r\nboot_completed_status=0",
+            "system_server=invalid\r\nsystem_server_status=0\n"
+            "boot_completed=invalid\r\nboot_completed_status=0",
             None,
             True,
             None,
             True,
             0,
             0,
+        ),
+        (
+            "system_server=2\r\nsystem_server_status=0\r\n"
+            "boot_completed=1\r\nboot_completed_status=0\r\n",
+            2,
+            True,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0\r",
+            2,
+            True,
+            None,
+            None,
+            0,
+            None,
         ),
         (
             "system_server_status=0\nboot_completed=unexpected\nboot_completed_status=0",

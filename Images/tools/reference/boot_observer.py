@@ -241,12 +241,15 @@ def parse_boot_properties(
         "boot_completed_status",
     )
     lines = output.split("\n")
-    if lines and not lines[-1]:
+    line_feed_terminated = output.endswith("\n")
+    if line_feed_terminated:
         lines.pop()
 
     fields: dict[str, str] = {}
     malformed_output = False
     for index, line in enumerate(lines):
+        if line.endswith("\r") and (index < len(lines) - 1 or line_feed_terminated):
+            line = line[:-1]
         if not line or index >= len(expected_fields):
             malformed_output = True
             continue
@@ -1132,9 +1135,10 @@ class BootObserver:
             environment,
             adb_deadline,
         )
+        state_text = state_output.strip()
         state = (
-            state_output
-            if state_code == 0 and state_output in {"device", "offline", "unauthorized"}
+            state_text
+            if state_code == 0 and state_text in {"device", "offline", "unauthorized"}
             else None
         )
         property_code: int | None = None
@@ -1590,15 +1594,15 @@ class BootObserver:
         except subprocess.TimeoutExpired as error:
             partial_output = error.stdout
             if isinstance(partial_output, bytes):
-                output = partial_output.decode("utf-8", errors="replace").strip()
+                output = partial_output.decode("utf-8", errors="replace")
             elif isinstance(partial_output, str):
-                output = partial_output.strip()
+                output = partial_output
             else:
                 output = ""
             return None, output, True, True
         except OSError:
             return None, "", False, False
-        output = completed.stdout.decode("utf-8", errors="replace").strip()
+        output = completed.stdout.decode("utf-8", errors="replace")
         return completed.returncode, output, False, True
 
     @staticmethod

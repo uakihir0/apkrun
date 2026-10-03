@@ -4532,8 +4532,8 @@ implementation is committed; no boot or root-cause result is inferred from
 the unit tests. A close-time regression checks that observer shutdown waits
 through the full derived final-probe reservation.
 IR-141 adds a separate main/system/crash query while retaining the
-events-only query for process-event counts; the live capture documented above
-used only the events buffer.
+events-only query for process-event counts. The expanded-query live capture is
+recorded in IR-142 below.
 
 ## IR-140: Run a 2400-second untraced U-Boot and Android observation
 
@@ -4638,6 +4638,81 @@ that event payloads, app names, PIDs, guest timestamps, and marker text are
 not written to JSONL. The full Image tools suite passed 396 tests with four
 skips on macOS and 399 tests with one skip on Lima Linux. The dedicated
 timestamp-privacy regression passed on both systems. Ruff, formatting,
-whitespace, and final hostile-review checks passed. Live reference-host
-verification with both buffer-scoped queries remains pending; the M01 capture
-above predates this change and queried only the events buffer.
+whitespace, and final hostile-review checks passed. The live reference-host
+verification with both buffer-scoped queries is recorded in IR-142.
+
+## IR-142: Live verify bounded Android boot log summaries
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; [risks.md](risks.md) R-06; `Images/reference/16373615/incomplete/default-20261003T131605-949526/` |
+
+**Choice.** Repeat the untraced `default` capture for 2400 seconds with the
+established four guest CPUs, 4096 MiB memory, 4915 MiB configured DDR,
+`guest_swiftshader`, console off, and normal U-Boot progression. Enable the
+five-second RSS observer and the private ADB probe after launcher event 5.
+Keep the result incomplete because Android did not report
+`sys.boot_completed=1`; retain the normalized capture, bounded summaries, and
+post-run cleanup evidence. Do not treat the absence of composite-disk
+specifications in the Cuttlefish config as a boot failure.
+
+**Reason.** The supplied diagnosis predicts a slow U-Boot-to-Linux transition
+followed by a separate Android startup problem. In this run, the U-Boot banner
+was logged at 12:36:05 and Linux 6.12.74 at 12:42:09 in Lima's Asia/Tokyo
+local time, an interval of 364 seconds (03:36:05Z to 03:42:09Z). The
+first five-second sample with both VmRSS and RssShmem at or above 4 GiB was
+03:42:12.208Z (4,216,200 and 4,194,532 KiB), three seconds after the Linux
+banner. This supports slow guest-memory residency around the transition but
+does not establish a RAM-wide cache flush or its cause.
+
+Launcher event 5 occurred at 03:51:01.248Z and the private ADB server was
+ready at 03:51:02.259Z. The first `device` state arrived at 03:51:57.272Z.
+Across 96 polls, three had no device state; the remaining 93 reported
+`device`. Their property commands timed out 56 times and exited successfully
+37 times without an accepted property value. No poll returned a value for
+`sys.boot_completed`.
+
+The terminal events-buffer query succeeded with 23,984 bytes and zero
+recognized process events. The separate main/system/crash query succeeded
+with 18,338 bytes and was neither truncated nor timed out. Its fixed marker
+counts were zero for fatal-exception lines, fatal-signal lines, ANR text, and
+`system_server` mentions; it recorded ten Watchdog mentions and eight zygote
+mentions. These are line mentions, not proof that a Watchdog action or zygote
+activity caused the incomplete boot. A separate manual bounded logcat query
+timed out after ten seconds with zero captured bytes and completed client
+cleanup. Its timestamp was not recorded, so its order relative to the
+terminal query is unknown.
+
+`kernel.log` records zygote startup at guest uptime 234.916 seconds and
+`sys.bootstat.first_boot_completed=0` at 557.083 seconds; the latter is not
+Android boot completion. The log continues with repeated audioserver
+`aidl/activity` lookups through guest uptime 2029.731 seconds. Neither the
+kernel log nor the ADB probe establishes `sys.boot_completed=1` or a
+`VIRTUAL_DEVICE_BOOT_COMPLETED` marker. The 2402-second capture ended at its
+deadline. `cvd-create-console.log` also records two `liblp` errors reporting
+invalid logical-partition geometry magic at 12:36:02.231 Lima local time.
+Their relevance to the incomplete guest boot is unknown. Cuttlefish reported
+no composite-disk specifications, which prevents profile publication and is
+recorded in `MISSING.txt`; that capture limitation alone does not determine
+the cause of the guest state. Update R-06 to say that #064 cannot provide a
+known-good Cuttlefish boot baseline until Android boot completion is recorded;
+this result must not be projected onto the separate VZ topology.
+
+**Verification.** The observer recorded 481 crosvm-memory events, of which
+479 contained valid RSS values. The first valid sample was 90,904 / 69,088
+KiB VmRSS/RssShmem at 03:36:07.208Z. The last was 4,233,192 / 4,205,908 KiB
+at 04:15:57.209Z. The Lima SHA-256 manifest covers the nine normalized
+capture files and `post-run-verification.json`; all ten entries verified on
+the host. Local and Lima source hashes match for the image manifest, observer,
+capture script, start helper, and normalization rules. Post-run checks found
+an empty Cuttlefish fleet, no crosvm or `process_restarter`, no private ADB
+socket or listener on port 6520, and only the loopback ADB server on port
+5037, whose process predates this capture and was left untouched. Privacy
+scans found no tested private host paths, MAC/EUI-64 addresses, or PEM key
+markers. The macOS Image tools suite passed 396 tests with four skips; the
+Lima Linux suite passed 399 tests with one skip. The hostile review of IR-141
+found no actionable findings. This capture still does not satisfy #064's
+boot-completion acceptance criterion or establish the U-Boot or Android
+failure cause.

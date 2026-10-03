@@ -98,10 +98,10 @@ A risk is something that could make a planned design fail or cost much more than
 ### R-06 Stock Cuttlefish image on the VZ topology
 
 - **Risk.** The Cuttlefish arm64 image expects crosvm's machine: its device set, interrupt layout, and console count. VZ gives one PCI ECAM host, GICv3, PSCI hvc, a PL031 RTC, a PL061 power button, no PL011, and RAM at 0x70000000 ([../02-design/vm.md](../02-design/vm.md) §5). Android could fail in the kernel, in first-stage init (block devices, `boot_devices`), or later in HALs.
-- **Mitigation.** The reference boot capture on crosvm (#064) gives a known-good boot to diff against; direct kernel boot with a generated bootconfig ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)); topology discovery with the Linux test guest (#011).
+- **Mitigation.** Use the crosvm reference capture (#064) as a known-good boot only after it records Android boot completion; current incomplete captures cannot serve as that baseline. Continue direct kernel boot with a generated bootconfig ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) and topology discovery with the Linux test guest (#011).
 - **Fallback.** Adapt the custom image (#035): kernel config, fstab, init scripts. That moves the fix to M5 and delays G2 with the stock image.
 - **Settled by.** #012, #013, #014 (gate G2), #064.
-- **Result.** Not yet run.
+- **Result.** Not yet run on VZ. As of 2026-10-03, the #064 `default` reference capture reaches Linux but has not reported `sys.boot_completed=1`; it therefore does not yet provide a known-good Android boot for comparison.
 
 ### R-07 No VM save/restore while VirGL is active
 

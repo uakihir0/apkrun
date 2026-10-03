@@ -228,6 +228,17 @@ def test_capture_script_uses_each_profile_launch_configuration(
             for argument in "$@"; do
               if [ "$argument" = start ]; then
                 printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
+                instance=$(cat "$APKRUN_PROFILE_INSTANCE_FILE")
+                instance_num=${instance##*/cvd-}
+                selected_gpu_mode=guest_swiftshader
+                for start_argument in "$@"; do
+                  case "$start_argument" in
+                    --gpu_mode=*) selected_gpu_mode=${start_argument#*=} ;;
+                  esac
+                done
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\"}}}\\n' \
+                  "$instance_num" "$selected_gpu_mode" \
+                  > "$instance/cuttlefish_config.json"
                 exit 0
               fi
             done
@@ -380,11 +391,14 @@ def test_capture_script_uses_each_profile_launch_configuration(
     group_argument = next(
         argument for argument in launch_arguments if argument.startswith("--group_name=")
     )
-    assert start_log.read_text(encoding="utf-8").split() == [
+    expected_start_arguments = [
         group_argument,
         "start",
         "--boot_timeout_secs=321",
     ]
+    if expected_gpu_mode is not None:
+        expected_start_arguments.append(f"--gpu_mode={expected_gpu_mode}")
+    assert start_log.read_text(encoding="utf-8").split() == expected_start_arguments
     expected_tmp_root = Path("/tmp").resolve()
     assert tmpdir_log.read_text(encoding="utf-8") == f"{expected_tmp_root}\n"
     base_directory = Path(base_directory_log.read_text(encoding="utf-8").strip())
@@ -413,6 +427,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
+    assert metadata["selectedGpuMode"] == (expected_gpu_mode or "guest_swiftshader")
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     if observer_enabled:
         observer_records = [
@@ -584,7 +599,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
         "launch_succeeds",
         "normalization_succeeds",
         "should_capture",
-        "copy_fails",
+        "config_oversized",
         "requested_instance",
         "abort_command",
         "raw_cleanup_fails",
@@ -623,6 +638,166 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             False,
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-mismatch",
+            id="selected-gpu-mode-mismatch-is-incomplete",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-mismatch-observed",
+            id="observer-data-does-not-make-a-mode-mismatch-comparable",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-missing",
+            id="missing-selected-mode-skips-adb-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-invalid",
+            id="invalid-selected-mode-skips-adb-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-oversized",
+            id="oversized-selected-mode-skips-adb-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-nonstandard-json",
+            id="nonstandard-json-constant-does-not-validate-mode",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-duplicate-key",
+            id="duplicate-gpu-mode-key-is-rejected-even-when-last-matches",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-staged-mismatch",
+            id="staged-config-is-revalidated-before-publish",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-staged-invalid",
+            id="staged-invalid-config-invalidates-capture",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            True,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "gpu-mode-staged-missing",
+            id="staged-missing-config-invalidates-capture",
         ),
         (
             "drm_virgl",
@@ -1033,7 +1208,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     launch_succeeds: bool,
     normalization_succeeds: bool,
     should_capture: bool,
-    copy_fails: bool,
+    config_oversized: bool,
     requested_instance: int | None,
     abort_command: str | None,
     raw_cleanup_fails: bool | str,
@@ -1174,9 +1349,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             footer = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(body), len(body), 0)
             Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
             PY
-              cat > "$instance/cuttlefish_config.json" <<'JSON'
-            {"instances":[]}
-            JSON
+              printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"guest_swiftshader\"}}}\\n' \
+                "$instance_num" > "$instance/cuttlefish_config.json"
               printf 'image=/var/tmp/cvd/host-501/os_composite.img\\n' \\
                 > "$instance/os_composite_disk_config.txt"
               printf 'image=/var/tmp/cvd/host-501/persistent_composite.img\\n' \\
@@ -1200,6 +1374,59 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             for argument in "$@"; do
               if [ "$argument" = start ]; then
                 printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
+                instance=$(cat "$HOME/instance-runtime.txt")
+                instance_num=$(cat "$HOME/instance-num.txt")
+                selected_gpu_mode=guest_swiftshader
+                for start_argument in "$@"; do
+                  case "$start_argument" in
+                    --gpu_mode=*) selected_gpu_mode=${start_argument#*=} ;;
+                  esac
+                done
+                if [ "${FAKE_CVD_CONFIG_GPU_MODE_MISMATCH:-0}" = 1 ]; then
+                  selected_gpu_mode=guest_swiftshader
+                fi
+                if [ "${FAKE_CVD_CONFIG_DUPLICATE_KEY:-0}" = 1 ]; then
+                  duplicate_gpu_config='{"instances":{"'
+                  duplicate_gpu_config="${duplicate_gpu_config}${instance_num}"
+                  duplicate_gpu_config="${duplicate_gpu_config}"'":{"gpu_mode":"guest_swiftshader","gpu_mode":"'
+                  duplicate_gpu_config="${duplicate_gpu_config}${selected_gpu_mode}"
+                  duplicate_gpu_config="${duplicate_gpu_config}"'"}}}'
+                  printf '%s\\n' "$duplicate_gpu_config" \
+                    > "$instance/cuttlefish_config.json"
+                else
+                  printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\"}}}\\n' \
+                    "$instance_num" "$selected_gpu_mode" \
+                    > "$instance/cuttlefish_config.json"
+                fi
+                if [ "${APKRUN_CAPTURE_BOOT_OBSERVER:-0}" = 1 ]; then
+                  printf 'Start event (5) received.\\n' >> "$instance/launcher.log"
+                  attempt=0
+                  while [ ! -f "$HOME/cuttlefish-start-event-observed.txt" ] \
+                    && [ "$attempt" -lt 100 ]; do
+                    sleep 0.05
+                    attempt=$((attempt + 1))
+                  done
+                  if [ ! -f "$HOME/cuttlefish-start-event-observed.txt" ]; then
+                    printf 'boot observer did not acknowledge launcher event\\n' >&2
+                    exit 1
+                  fi
+                fi
+                if [ "${FAKE_CVD_CONFIG_MISSING:-0}" = 1 ]; then
+                  rm -f "$instance/cuttlefish_config.json"
+                elif [ "${FAKE_CVD_CONFIG_INVALID:-0}" = 1 ]; then
+                  printf '{' > "$instance/cuttlefish_config.json"
+                elif [ "${FAKE_CVD_CONFIG_NONSTANDARD_JSON:-0}" = 1 ]; then
+                  printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"%s\",\"invalid\":NaN}}}\\n' \
+                    "$instance_num" "$selected_gpu_mode" \
+                    > "$instance/cuttlefish_config.json"
+                elif [ "${FAKE_CVD_CONFIG_OVERSIZED:-0}" = 1 ]; then
+                  python3 - "$instance/cuttlefish_config.json" <<'PY'
+            import sys
+            from pathlib import Path
+            with Path(sys.argv[1]).open("wb") as stream:
+                stream.truncate(64 * 1024 * 1024 + 1)
+            PY
+                fi
                 if [ "${FAKE_CVD_START_FAILURE:-0}" = 1 ]; then
                   exit 1
                 fi
@@ -1230,6 +1457,28 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             """\
             #!/bin/sh
             printf '%s\\t%s\\n' "$HOME" "$*" >> "$ADB_COMMAND_LOG"
+            if [ "${APKRUN_CAPTURE_BOOT_OBSERVER:-0}" = 1 ] \
+              && [ "$1" = -L ] && [ "${3:-}" = nodaemon ] && [ "${4:-}" = server ]; then
+              : > "$HOME/cuttlefish-start-event-observed.txt"
+              exit 0
+            fi
+            if [ "$1" = connect ] \
+              && { [ "${FAKE_CVD_CONFIG_STAGED_MISMATCH:-0}" = 1 ] \
+                || [ "${FAKE_CVD_CONFIG_STAGED_INVALID:-0}" = 1 ] \
+                || [ "${FAKE_CVD_CONFIG_STAGED_MISSING:-0}" = 1 ]; } \
+              && [ ! -f "$HOME/cuttlefish-config-changed.txt" ]; then
+              instance=$(cat "$HOME/instance-runtime.txt")
+              instance_num=$(cat "$HOME/instance-num.txt")
+              if [ "${FAKE_CVD_CONFIG_STAGED_MISMATCH:-0}" = 1 ]; then
+                printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"guest_swiftshader\"}}}\\n' \
+                  "$instance_num" > "$instance/cuttlefish_config.json"
+              elif [ "${FAKE_CVD_CONFIG_STAGED_INVALID:-0}" = 1 ]; then
+                printf '{' > "$instance/cuttlefish_config.json"
+              elif [ "${FAKE_CVD_CONFIG_STAGED_MISSING:-0}" = 1 ]; then
+                rm -f "$instance/cuttlefish_config.json"
+              fi
+              : > "$HOME/cuttlefish-config-changed.txt"
+            fi
             if [ "$1" = disconnect ]; then
               printf 'adb disconnect %s\\n' "$2" >> "$CAPTURE_EVENT_LOG"
             fi
@@ -1452,6 +1701,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         ),
         encoding="utf-8",
     )
+    (fake_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     for executable in fake_bin.iterdir():
         executable.chmod(0o755)
 
@@ -1461,7 +1711,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     cvd_host_dir.mkdir()
     host_bin = cvd_host_dir / "bin"
     host_bin.mkdir()
-    for executable in ("launch_cvd", "cvd", "adb"):
+    for executable in ("launch_cvd", "cvd", "adb", "crosvm"):
         (host_bin / executable).symlink_to(fake_bin / executable)
     boot_image = b"pinned synthetic boot image\n"
     (product_out / "boot.img").write_bytes(boot_image)
@@ -1507,6 +1757,34 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 "1" if boot_timeout_case in {"cvd-start", "real-cvd-start"} else "0"
             ),
             "FAKE_CVD_START_FAILURE": ("1" if boot_timeout_case == "cvd-start-no-crosvm" else "0"),
+            "FAKE_CVD_CONFIG_GPU_MODE_MISMATCH": (
+                "1"
+                if boot_timeout_case in {"gpu-mode-mismatch", "gpu-mode-mismatch-observed"}
+                else "0"
+            ),
+            "FAKE_CVD_CONFIG_MISSING": ("1" if boot_timeout_case == "gpu-mode-missing" else "0"),
+            "FAKE_CVD_CONFIG_INVALID": ("1" if boot_timeout_case == "gpu-mode-invalid" else "0"),
+            "FAKE_CVD_CONFIG_NONSTANDARD_JSON": (
+                "1" if boot_timeout_case == "gpu-mode-nonstandard-json" else "0"
+            ),
+            "FAKE_CVD_CONFIG_DUPLICATE_KEY": (
+                "1" if boot_timeout_case == "gpu-mode-duplicate-key" else "0"
+            ),
+            "FAKE_CVD_CONFIG_STAGED_MISMATCH": (
+                "1" if boot_timeout_case == "gpu-mode-staged-mismatch" else "0"
+            ),
+            "FAKE_CVD_CONFIG_STAGED_INVALID": (
+                "1" if boot_timeout_case == "gpu-mode-staged-invalid" else "0"
+            ),
+            "FAKE_CVD_CONFIG_STAGED_MISSING": (
+                "1" if boot_timeout_case == "gpu-mode-staged-missing" else "0"
+            ),
+            "FAKE_CVD_CONFIG_OVERSIZED": (
+                "1" if config_oversized or boot_timeout_case == "gpu-mode-oversized" else "0"
+            ),
+            "APKRUN_CAPTURE_BOOT_OBSERVER": (
+                "1" if boot_timeout_case == "gpu-mode-mismatch-observed" else "0"
+            ),
             "FAKE_CVD_CREATE_FAIL_AFTER_LOGS": "1" if not launch_succeeds else "0",
             "FAKE_CVD_LOGS_EMPTY_FIRST": "1" if not launch_succeeds else "0",
             "FAKE_CVD_CREATE_EXIT_STATUS": (
@@ -1538,7 +1816,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 or boot_timeout_case in {"real-cvd-start", "real-adb-getprop"}
                 else "0"
             ),
-            "FAKE_CP_FAIL_NAME": "cuttlefish_config.json" if copy_fails else "",
+            "FAKE_CP_FAIL_NAME": "",
             "FAKE_ABORT_CAPTURE": "1" if abort_command else "0",
             "FAKE_ABORT_CAPTURE_COMMAND": abort_command or "",
             "FAKE_INTERRUPT_COMPOSITE_COLLECTOR": (
@@ -1689,14 +1967,94 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 assert timeout_command.endswith(expected_remove_timeout)
             else:
                 assert expected_remove_timeout in timeout_command
-        elif copy_fails:
+        elif config_oversized:
             assert "Incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
             assert len(partials) == 1
             missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
-            assert "cuttlefish_config.json\tcould not copy" in missing
-            assert cvd_home_log.read_text(encoding="utf-8").strip() not in missing
+            assert (
+                "cuttlefish_config.json\tnot a regular Cuttlefish config or exceeds 64 MiB"
+            ) in missing
+            assert "selected-gpu-mode\t" in missing
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert not any(call.startswith("connect ") for call in adb_calls)
+            assert not any(" getprop " in f" {call} " for call in adb_calls)
             assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
+        elif boot_timeout_case in {
+            "gpu-mode-mismatch",
+            "gpu-mode-mismatch-observed",
+            "gpu-mode-missing",
+            "gpu-mode-invalid",
+            "gpu-mode-oversized",
+            "gpu-mode-nonstandard-json",
+            "gpu-mode-duplicate-key",
+        }:
+            assert result.returncode == 1
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            partial = partials[0]
+            missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+            metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
+            assert metadata["targetGpuMode"] == "drm_virgl"
+            assert missing.count("selected-gpu-mode\t") == 1
+            if boot_timeout_case in {
+                "gpu-mode-mismatch",
+                "gpu-mode-mismatch-observed",
+            }:
+                assert (
+                    "selected-gpu-mode\tCuttlefish selected guest_swiftshader instead of "
+                    "requested drm_virgl; do not use this capture for GPU-profile comparison"
+                ) in missing
+                assert metadata["selectedGpuMode"] == "guest_swiftshader"
+                config = json.loads(
+                    (partial / "cuttlefish_config.json").read_text(encoding="utf-8")
+                )
+                assert (
+                    config["instances"][str(expected_instance)]["gpu_mode"] == "guest_swiftshader"
+                )
+            else:
+                assert "do not use this capture for GPU-profile comparison" in missing
+                assert metadata["selectedGpuMode"] is None
+                if boot_timeout_case == "gpu-mode-missing":
+                    assert "cuttlefish_config.json\tnot found" in missing
+                elif boot_timeout_case == "gpu-mode-invalid":
+                    assert (partial / "cuttlefish_config.json").read_text(encoding="utf-8") == "{"
+                elif boot_timeout_case == "gpu-mode-nonstandard-json":
+                    assert "NaN" in (partial / "cuttlefish_config.json").read_text(encoding="utf-8")
+                elif boot_timeout_case == "gpu-mode-duplicate-key":
+                    assert '"gpu_mode":"guest_swiftshader","gpu_mode":"drm_virgl"' in (
+                        partial / "cuttlefish_config.json"
+                    ).read_text(encoding="utf-8")
+                else:
+                    assert (
+                        "cuttlefish_config.json\tnot a regular Cuttlefish config or exceeds 64 MiB"
+                    ) in missing
+                    assert not (partial / "cuttlefish_config.json").exists()
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert not any(call.startswith("connect ") for call in adb_calls)
+            assert not any(" getprop " in f" {call} " for call in adb_calls)
+            if boot_timeout_case == "gpu-mode-mismatch-observed":
+                observer_records = [
+                    json.loads(line)
+                    for line in (partial / "boot-observer.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ]
+                assert any(
+                    record["event"] == "cuttlefish_start_event_5_observed"
+                    for record in observer_records
+                )
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
         elif abort_command:
             assert "normalized incomplete capture retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -1943,6 +2301,54 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert not (host_lock_root / "apkrun-cvd-capture.lock").exists()
         return
 
+    if boot_timeout_case in {
+        "gpu-mode-staged-mismatch",
+        "gpu-mode-staged-invalid",
+        "gpu-mode-staged-missing",
+    }:
+        assert result.returncode == 1, result.stderr
+        partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+        assert len(partials) == 1
+        partial = partials[0]
+        missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+        metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
+        assert metadata["targetGpuMode"] == "drm_virgl"
+        assert missing.count("selected-gpu-mode\t") == 1
+        if boot_timeout_case == "gpu-mode-staged-mismatch":
+            assert (
+                "selected-gpu-mode\tcaptured Cuttlefish config selected guest_swiftshader "
+                "instead of requested drm_virgl; do not use this capture for GPU-profile comparison"
+            ) in missing
+            assert metadata["selectedGpuMode"] == "guest_swiftshader"
+            config = json.loads((partial / "cuttlefish_config.json").read_text(encoding="utf-8"))
+            assert config["instances"][str(expected_instance)]["gpu_mode"] == "guest_swiftshader"
+        elif boot_timeout_case == "gpu-mode-staged-invalid":
+            assert (
+                "selected-gpu-mode\tcaptured cuttlefish_config.json did not contain a valid "
+                "GPU mode for the selected instance; do not use this capture for "
+                "GPU-profile comparison"
+            ) in missing
+            assert metadata["selectedGpuMode"] == "drm_virgl"
+            assert (partial / "cuttlefish_config.json").read_text(encoding="utf-8") == "{"
+        else:
+            assert (
+                "selected-gpu-mode\tcaptured cuttlefish_config.json is unavailable for the "
+                "selected instance; do not use this capture for GPU-profile comparison"
+            ) in missing
+            assert metadata["selectedGpuMode"] == "drm_virgl"
+            assert not (partial / "cuttlefish_config.json").exists()
+        adb_calls = [
+            line.split("\t", maxsplit=1)[1]
+            for line in adb_log.read_text(encoding="utf-8").splitlines()
+        ]
+        assert any(" shell getprop sys.boot_completed" in f" {call}" for call in adb_calls)
+        assert not (repo / "Images/reference/16373615/target").exists()
+        assert_scoped_group_removal()
+        assert_adb_disconnect_precedes_group_removal()
+        cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+        assert not cvd_home.exists()
+        return
+
     assert result.returncode == 0, result.stderr
     capture = repo / "Images/reference/16373615/target"
     cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
@@ -1952,6 +2358,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     assert metadata["cpuCount"] >= 1
     assert metadata["cvdInstanceNumber"] == expected_instance
     assert metadata["targetGpuMode"] == gpu_mode
+    assert metadata["selectedGpuMode"] == gpu_mode
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     assert (capture / "internal-bootconfig.txt").read_bytes() == b"androidboot.synthetic=1\n"
     composite_specs = json.loads(

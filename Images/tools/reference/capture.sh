@@ -238,6 +238,8 @@ started=0
 cvd_group_name=
 capture_failed=0
 boot_deadline_expired=0
+selected_gpu_mode=
+selected_gpu_mode_failure_recorded=0
 capture_lock_owned=0
 lock_initializing=0
 pending_signal_status=
@@ -520,6 +522,13 @@ record_missing() {
   capture_failed=1
 }
 
+record_selected_gpu_mode_failure() {
+  if [ "$selected_gpu_mode_failure_recorded" -eq 0 ]; then
+    record_missing "selected-gpu-mode" "$1"
+    selected_gpu_mode_failure_recorded=1
+  fi
+}
+
 private_product_out="$cvd_home/product"
 if ! mkdir -p "$private_product_out" \
   || ! cp -a "$ANDROID_PRODUCT_OUT/." "$private_product_out/" \
@@ -586,6 +595,106 @@ launch_profile() {
   esac
 }
 
+start_profile() {
+  case "$profile" in
+    default)
+      run_cvd_command_with_live_logs 1 cvd \
+        "--group_name=$cvd_group_name" start \
+        "--boot_timeout_secs=$timeout_seconds"
+      ;;
+    target)
+      run_cvd_command_with_live_logs 1 cvd \
+        "--group_name=$cvd_group_name" start \
+        "--boot_timeout_secs=$timeout_seconds" \
+        "--gpu_mode=$target_gpu_mode"
+      ;;
+    swiftshader)
+      run_cvd_command_with_live_logs 1 cvd \
+        "--group_name=$cvd_group_name" start \
+        "--boot_timeout_secs=$timeout_seconds" \
+        --gpu_mode=guest_swiftshader
+      ;;
+  esac
+}
+
+read_selected_gpu_mode() {
+python3 - "$1" "$2" <<'PY'
+import json
+import os
+import stat
+import sys
+
+def reject_nonstandard_constant(value):
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+try:
+    descriptor = os.open(
+        sys.argv[1],
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64 * 1024 * 1024:
+        raise SystemExit(1)
+    with os.fdopen(descriptor, "rb", closefd=False) as stream:
+        contents = stream.read(64 * 1024 * 1024 + 1)
+    if len(contents) > 64 * 1024 * 1024:
+        raise SystemExit(1)
+    document = json.loads(
+        contents.decode("utf-8"),
+        parse_constant=reject_nonstandard_constant,
+        object_pairs_hook=reject_duplicate_keys,
+    )
+    if not isinstance(document, dict):
+        raise SystemExit(1)
+    instances = document.get("instances")
+    instance = instances.get(sys.argv[2]) if isinstance(instances, dict) else None
+    gpu_mode = instance.get("gpu_mode") if isinstance(instance, dict) else None
+except (OSError, UnicodeDecodeError, ValueError):
+    raise SystemExit(1)
+finally:
+    if "descriptor" in locals():
+        os.close(descriptor)
+
+if not isinstance(gpu_mode, str) or not gpu_mode or any(
+    ord(character) < 0x20 or ord(character) == 0x7F for character in gpu_mode
+):
+    raise SystemExit(1)
+print(gpu_mode)
+PY
+}
+
+verify_profile_gpu_mode() {
+  case "$profile" in
+    target) expected_gpu_mode=$target_gpu_mode ;;
+    swiftshader) expected_gpu_mode=guest_swiftshader ;;
+    *) return 0 ;;
+  esac
+  selected_config=$(find "$runtime_root" -newer "$capture_marker" \
+    -type f -path "*/instances/cvd-$cvd_instance_num/cuttlefish_config.json" \
+    -print -quit 2>/dev/null || true)
+  if [ -z "$selected_config" ] \
+    || ! selected_gpu_mode=$(read_selected_gpu_mode \
+      "$selected_config" "$cvd_instance_num" 2>/dev/null); then
+    record_selected_gpu_mode_failure \
+      "Cuttlefish did not record a valid GPU mode for the selected instance; do not use this capture for GPU-profile comparison"
+    return 1
+  fi
+  if [ "$selected_gpu_mode" != "$expected_gpu_mode" ]; then
+    record_selected_gpu_mode_failure \
+      "Cuttlefish selected $selected_gpu_mode instead of requested $expected_gpu_mode; do not use this capture for GPU-profile comparison"
+    return 1
+  fi
+  return 0
+}
+
 run_cvd_command_with_live_logs() {
   observe_boot=$1
   shift
@@ -641,9 +750,7 @@ boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
 preserve_cvd_home=1
 started=1
 if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
-  || ! run_cvd_command_with_live_logs 1 cvd "--group_name=$cvd_group_name" start \
-    "--boot_timeout_secs=$timeout_seconds" \
-    >> "$stage/cvd-create-console.log" 2>&1; then
+  || ! start_profile >> "$stage/cvd-create-console.log" 2>&1; then
   if [ "$boot_deadline_expired" -eq 1 ]; then
     record_missing "guest" \
       "Cuttlefish create or start exceeded the ${timeout_seconds}-second boot deadline; see cvd-create-console.log"
@@ -651,6 +758,8 @@ if ! launch_profile > "$stage/cvd-create-console.log" 2>&1 \
     record_missing "guest" \
       "Cuttlefish group create or start failed; see cvd-create-console.log"
   fi
+elif ! verify_profile_gpu_mode; then
+  :
 else
   preserve_cvd_home=0
   booted=0
@@ -807,6 +916,61 @@ copy_first_match() {
           fi
         fi
         ;;
+      cuttlefish_config.json)
+        if ! python3 - "$source_path" "$stage/$destination_name" <<'PY'
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+maximum_bytes = 64 * 1024 * 1024
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+descriptor = None
+temporary_path = None
+try:
+    descriptor = os.open(
+        source,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum_bytes:
+        raise ValueError
+    with os.fdopen(descriptor, "rb", closefd=False) as stream:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as output:
+            temporary_path = Path(output.name)
+            remaining = maximum_bytes + 1
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                if remaining < 0:
+                    raise ValueError
+                output.write(chunk)
+    if remaining == 0:
+        raise ValueError
+    os.replace(temporary_path, destination)
+except (OSError, ValueError):
+    raise SystemExit(1)
+finally:
+    if descriptor is not None:
+        os.close(descriptor)
+    if temporary_path is not None:
+        temporary_path.unlink(missing_ok=True)
+PY
+        then
+          rm -f "$stage/$destination_name" >/dev/null 2>&1 || true
+          record_missing "$destination_name" \
+            "not a regular Cuttlefish config or exceeds 64 MiB"
+        fi
+        ;;
       *)
         temporary_copy="$stage/.${destination_name}.$$"
         if cp "$source_path" "$temporary_copy" \
@@ -904,6 +1068,28 @@ else
 fi
 
 copy_first_match cuttlefish_config.json
+if [ -s "$stage/cuttlefish_config.json" ]; then
+  if captured_gpu_mode=$(read_selected_gpu_mode \
+    "$stage/cuttlefish_config.json" "$cvd_instance_num" 2>/dev/null); then
+    selected_gpu_mode=$captured_gpu_mode
+    case "$profile" in
+      target) expected_gpu_mode=$target_gpu_mode ;;
+      swiftshader) expected_gpu_mode=guest_swiftshader ;;
+      *) expected_gpu_mode= ;;
+    esac
+    if [ -n "$expected_gpu_mode" ] \
+      && [ "$selected_gpu_mode" != "$expected_gpu_mode" ]; then
+      record_selected_gpu_mode_failure \
+        "captured Cuttlefish config selected $selected_gpu_mode instead of requested $expected_gpu_mode; do not use this capture for GPU-profile comparison"
+    fi
+  else
+    record_selected_gpu_mode_failure \
+      "captured cuttlefish_config.json did not contain a valid GPU mode for the selected instance; do not use this capture for GPU-profile comparison"
+  fi
+else
+  record_selected_gpu_mode_failure \
+    "captured cuttlefish_config.json is unavailable for the selected instance; do not use this capture for GPU-profile comparison"
+fi
 copy_first_match kernel.log
 copy_first_match launcher.log
 copy_first_match assemble_cvd.log
@@ -954,6 +1140,7 @@ APKRUN_CAPTURE_NESTED_VIRTUALIZATION=$nested_virtualization \
 APKRUN_CAPTURE_CVD_VERSION=$cvd_package_version \
 APKRUN_CAPTURE_CVD_INSTANCE_NUM=$cvd_instance_num \
 APKRUN_CAPTURE_TARGET_GPU_MODE=$target_gpu_mode \
+APKRUN_CAPTURE_SELECTED_GPU_MODE=$selected_gpu_mode \
 APKRUN_CAPTURE_VIRGL_SOURCE_REVISION=$virgl_source_revision \
 APKRUN_CAPTURE_DURATION=$((capture_finished_at - capture_started_at)) \
 python3 - "$stage/host.json" <<'PY'
@@ -978,6 +1165,7 @@ document = {
         if os.environ["APKRUN_CAPTURE_PROFILE"] == "target"
         else None
     ),
+    "selectedGpuMode": os.environ["APKRUN_CAPTURE_SELECTED_GPU_MODE"] or None,
     "drmVirglSourceRevision": (
         os.environ["APKRUN_CAPTURE_VIRGL_SOURCE_REVISION"] or None
     ),

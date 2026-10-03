@@ -4400,19 +4400,21 @@ and the instruction words at the candidate addresses, not Android boot.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/{README.md,capture-gpu-none.sh,experiment_support.py}` and tests |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; `Experiments/cuttlefish-boot-diagnosis/{README.md,capture-gpu-none.sh,experiment_support.py,run_cvd_with_console.py}` and tests; the two normalized memory-comparison records in M01 |
 
 **Choice.** Keep 4096 MiB as the default and add an explicit
 `APKRUN_DIAGNOSTIC_MEMORY_MB=2048` comparison option. Accept only 2048 or 4096
 MiB. Pass the selected value to both `cvd create --memory_mb` and
 `cvd start --memory_mb`; the latter otherwise restores its 4096 MiB default.
 Keep the pinned build, four CPUs, `guest_swiftshader`, console disabled, and
-other explicit Cuttlefish arguments fixed. Record the 4096 MiB baseline,
-selected value, and slug in verified host and experiment
-metadata, include the selection in workspace and result names, and reject
-publication if saved configuration does not match. Preserve compatibility
-with older records that lack memory fields and with the previous schema that
-contains only `memoryMb=4096`.
+other explicit Cuttlefish arguments fixed. Use the existing 600-second
+diagnostic deadline for both memory settings; do not expand the runner's
+supported deadline as part of this comparison. Record the 4096 MiB baseline,
+selected value, and slug in verified host and experiment metadata, include the
+selection in workspace and result names, and reject publication if saved
+configuration does not match. Preserve compatibility with older records that
+lack memory fields and with the previous schema that contains only
+`memoryMb=4096`.
 
 **Reason.** The supplied U-Boot diagnosis proposes an optional 2 GiB run to
 check whether the long U-Boot-to-Linux interval changes with guest-memory
@@ -4423,7 +4425,11 @@ single changed timing is diagnostic evidence only. If the U-Boot start marker
 is observed but Linux is not observed before the configured deadline, report
 the U-Boot-to-Linux interval as right-censored. If the U-Boot marker is absent,
 report that interval as unmeasured. Neither outcome confirms or rejects the
-cache-flush hypothesis.
+cache-flush hypothesis. The historical 4 GiB/600-second record matches the
+guest settings but does not identify its capture-tool revision, so this
+comparison also includes a 4 GiB run on the current tool commit. Keep the
+interpretation limited to the U-Boot-to-Linux marker interval; the optional
+2 GiB run does not diagnose later Android or ADB progress.
 
 **Verification.** Unit and publication coverage checks the 2048 and 4096 MiB
 selections, generated `create` and `start` arguments, recorded metadata,
@@ -4433,5 +4439,26 @@ attempt was rejected before publication: the requested value appeared in
 `cvd create`, but Cuttlefish 1.57.0's `cvd start` default rewrote the saved
 configuration to 4096 MiB. The pinned CLI help confirms that `cvd start`
 accepts `--memory_mb`; the launch path now passes and checks the selected
-value in both commands. The rejected attempt is not comparison evidence. A
-valid live 2048 MiB capture is pending.
+value in both commands. The rejected attempt is not comparison evidence.
+
+The valid 2048 MiB capture saved `memory_mb=2048` and
+`ddr_mem_mb=2457`; its U-Boot-to-Linux interval was 281 seconds. A 4096 MiB
+control on the same current capture-tool commit saved `memory_mb=4096` and
+`ddr_mem_mb=4915`, but did not record Linux before the 600-second deadline, so
+its interval is right-censored. The older 4096 MiB baseline reached Linux in
+190 seconds but does not identify its capture-tool revision; other 4096 MiB
+captures range up to 780 seconds. The pair therefore shows run-to-run
+variability and does not establish a memory-size effect or a cache-maintenance
+cause. The ten normalized files in each record match its Lima-side SHA-256
+manifest, and privacy scans found no tested host paths, MAC/EUI-64 addresses,
+or PEM key markers. Both `experiment.json` files record
+`captureRun.cleanupComplete=true`. The records do not preserve post-run fleet,
+process, or shared-ADB checks; `MISSING.txt` only records that no crosvm
+matched the private Cuttlefish HOME at artifact-collection time and does not
+establish whether it ran earlier. The full diagnosis suite passes 404 tests;
+Bash syntax and Python compilation pass. `git diff --check` passes for the
+documentation changes; it flags a trailing blank line in the preserved 4 GiB
+`kernel.log`, which remains byte-for-byte intact to retain its Lima SHA-256.
+Ruff reports the same 52 lint diagnostics on the parent and current revisions
+and marks the same four files as unformatted, with no increase from this
+change.

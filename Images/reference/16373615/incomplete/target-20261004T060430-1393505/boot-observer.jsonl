@@ -1,0 +1,5 @@
+{"event":"observer_started","timestampUtc":"2026-10-03T21:04:26.767+00:00"}
+{"event":"instance_path_discovery_pending","reason":"runtime_link_not_ready","timestampUtc":"2026-10-03T21:04:26.767+00:00"}
+{"candidateCount":0,"event":"crosvm_memory","identity":"unavailable","timestampUtc":"2026-10-03T21:04:26.767+00:00"}
+{"event":"instance_path_discovered","timestampUtc":"2026-10-03T21:04:27.332+00:00"}
+{"event":"observer_stopped","timestampUtc":"2026-10-03T21:04:30.187+00:00"}

@@ -981,6 +981,9 @@ JSON host paths are replaced inside escaped JSON string tokens so normalization
 keeps the file valid. Escaped quotes in plain-text paths are handled by
 non-overlapping alternatives to keep matching linear. The capture is taken
 from a fresh development guest and must not contain secrets or user app data.
+An incomplete capture may include a separate sanitized summary when a Cuttlefish
+host process crashes. Raw core dumps are excluded because they can contain
+guest RAM; a crash summary does not make an incomplete capture comparable.
 
 ### 8.4 Diff against the VZ boot
 

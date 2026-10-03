@@ -1,0 +1,126 @@
+{
+  "captureIntegrity": {
+    "limaSha256Manifest": "LIMA-SHA256SUMS",
+    "normalizedFileCount": 10,
+    "verifiedOnHost": true
+  },
+  "cleanupChecks": {
+    "crosvmProcessCount": 0,
+    "cvdFleetGroups": [],
+    "cvdServerProcessCount": 0,
+    "observerLogcat": {
+      "androidLogcat": {
+        "attempted": true,
+        "capturedBytes": 18477,
+        "cleanupComplete": true,
+        "exitCode": 0,
+        "probeError": false,
+        "reason": null,
+        "summary": {
+          "anrTextLines": 0,
+          "fatalExceptionLines": 0,
+          "fatalSignalLines": 0,
+          "systemServerMentionLines": 1,
+          "watchdogMentionLines": 10,
+          "zygoteMentionLines": 0
+        },
+        "timedOut": false,
+        "truncated": false
+      },
+      "eventsBuffer": {
+        "capturedBytes": 23398,
+        "cleanupComplete": true,
+        "exitCode": 0,
+        "recognizedEvents": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "timestampUtc": "2026-10-03T20:15:01.251+00:00"
+    },
+    "observerPollSummary": {
+      "acceptedBootCompletedCount": 0,
+      "acceptedSystemServerStartCount": 0,
+      "devicePollCount": 94,
+      "getStateFailureCount": 3,
+      "getpropAttemptCount": 93,
+      "getpropExitCodeCounts": {
+        "-15": 91,
+        "0": 2,
+        "None": 4
+      },
+      "getpropTimeoutCount": 91,
+      "pollCount": 97,
+      "shellProbeAttemptCount": 1,
+      "shellProbeMarkerMatchCount": 0,
+      "shellProbeTimeoutCount": 1,
+      "startedAtUtc": "2026-10-03T19:35:40.636+00:00",
+      "stoppedAtUtc": "2026-10-03T20:15:41.747+00:00"
+    },
+    "observerPrivateServerStopped": {
+      "cleanupComplete": true,
+      "event": "private_adb_server_stopped",
+      "timestampUtc": "2026-10-03T20:15:01.255+00:00"
+    },
+    "observerStopped": {
+      "event": "observer_stopped",
+      "timestampUtc": "2026-10-03T20:15:41.747+00:00"
+    },
+    "postCaptureClientInventory": {
+      "captureStagingDirectoryCount": 0,
+      "compositeSpecTemporaryFileCount": 0,
+      "privatePort6520Listening": false,
+      "privateSocketHomeRemoved": true
+    },
+    "processRestarterProcessCount": 0,
+    "runCvdProcessCount": 0
+  },
+  "privacyScan": {
+    "eui64AddressMatches": 0,
+    "hostPathMatches": 0,
+    "macAddressMatches": 0,
+    "oversizeFileCount": 0,
+    "pemPrivateKeyMarkerCount": 0,
+    "scannedFileCount": 10
+  },
+  "schemaVersion": 1,
+  "sourceCopyChecks": {
+    "Images/tools/reference/boot_observer.py": {
+      "limaSha256": "769889cfa8fdeada4f1126652bbe4aa2b0fb305b2e1aa4943a89e0dbfcab881a",
+      "localSha256": "769889cfa8fdeada4f1126652bbe4aa2b0fb305b2e1aa4943a89e0dbfcab881a",
+      "matches": true
+    },
+    "Images/tools/reference/capture.sh": {
+      "limaSha256": "03632da7f327b221f75e1c64f937464a1b9bc0096d8ef8f97cf4ef186bad25b9",
+      "localSha256": "03632da7f327b221f75e1c64f937464a1b9bc0096d8ef8f97cf4ef186bad25b9",
+      "matches": true
+    },
+    "Images/tools/reference/capture_cvd_start.py": {
+      "limaSha256": "b23ef9d2d7cb28dfd7661ca7572fe641e2da331a1dd8f6e3a02c3b9377170f91",
+      "localSha256": "b23ef9d2d7cb28dfd7661ca7572fe641e2da331a1dd8f6e3a02c3b9377170f91",
+      "matches": true
+    },
+    "Images/tools/reference/collect_composite_specs.py": {
+      "limaSha256": "b8fb490c38aa82f889a1b144c394f3972e0117a5337339a85a03fc8d86aed621",
+      "localSha256": "b8fb490c38aa82f889a1b144c394f3972e0117a5337339a85a03fc8d86aed621",
+      "matches": true
+    },
+    "Images/tools/reference/compare_boot.py": {
+      "limaSha256": "4f02b67cd61276bbc1f96702ed0820e6aa3b067e7a3d5247b77df2222b1e9e76",
+      "localSha256": "4f02b67cd61276bbc1f96702ed0820e6aa3b067e7a3d5247b77df2222b1e9e76",
+      "matches": true
+    },
+    "Images/tools/reference/guest-capture.txt": {
+      "limaSha256": "70999b1cc01be471f6edde169a49151c66f976924e55a92b8e058ef062ba1c72",
+      "localSha256": "70999b1cc01be471f6edde169a49151c66f976924e55a92b8e058ef062ba1c72",
+      "matches": true
+    },
+    "Images/tools/reference/normalize.yaml": {
+      "limaSha256": "bbba630ae9e24ba70184222f94aca97ce189c5d39bfb545cbd793977936bd900",
+      "localSha256": "bbba630ae9e24ba70184222f94aca97ce189c5d39bfb545cbd793977936bd900",
+      "matches": true
+    }
+  },
+  "sourceRevision": "61e5529ecac8545e81d3d9b3ecf1b57d8e67954c",
+  "verificationStage": "post-capture",
+  "verifiedAtUtc": "2026-10-03T20:26:12Z"
+}

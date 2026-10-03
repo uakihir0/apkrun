@@ -5418,11 +5418,16 @@ non-comparable.
 Observer samples collected during `cvd start` do not make an incomplete
 capture comparable.
 
-**Reason.** The earlier `target` capture recorded the requested
-`targetGpuMode=drm_virgl`, but its selected-instance config recorded
-`gpu_mode=guest_swiftshader`. Cuttlefish 1.57.0 requires the GPU mode on both
-commands; passing it only to `cvd create` allowed `cvd start` to select its
-default. Comparing the request field alone could therefore attribute a
+**Reason.** Earlier `target` captures
+`target-20261004T043330-1364484`, `target-20261004T051544-1366201`, and
+`target-20261003T233118-1257055` recorded a requested
+`targetGpuMode=drm_virgl`, but their selected-instance configs recorded
+`gpu_mode=guest_swiftshader`. The captures establish that requested/selected
+mismatch, but do not retain the exact capture-tool revision and command
+arguments for each run. The repository's pre-IR-156 helper passed the GPU
+mode to `cvd create` but omitted it from `cvd start`; this is a plausible
+explanation for Cuttlefish selecting its default, not proof of the cause for
+each capture. Comparing the request field alone could therefore attribute a
 SwiftShader observation to `drm_virgl`. Verifying the selected config and
 excluding mismatches keeps the diagnostic comparison tied to the runtime
 configuration. Duplicate keys are rejected because the JSON parser's
@@ -5430,20 +5435,19 @@ last-value-wins behavior would otherwise allow an ambiguous config to appear
 valid. A 64 MiB bound also prevents the newly inspected config from being
 copied or parsed without a size limit.
 
-**Verification plan.** Test correct mode selection on `create` and `start`,
-matching mode metadata, mismatch with observer enabled, missing and malformed
-config, an oversized sparse config, skipped ADB commands for unusable live
-modes, non-standard JSON constants, conflicting duplicate mode keys even
-when the final value matches, staged mode mismatch/deletion/malformed config
-after ADB begins, exactly one mode-failure entry, bounded config copying, and
-private HOME removal after successful group cleanup. The observer test uses a
-handshake from the observer-triggered ADB process so `cvd start` stays alive
-until the launcher marker is recorded. Run the focused capture tests, full
-image-tools suite, shell syntax, Ruff checks, all repository checks, then
-hostile review. The 2026-10-03
-capture at `Images/reference/16373615/incomplete/target-20261003T233118-1257055/`
-is not `drm_virgl` evidence: its config records `guest_swiftshader` despite
-the requested `drm_virgl` field in `host.json`.
+**Verification.** The reference-capture suite passed 48 tests with three
+Linux GNU `timeout` cases skipped on macOS. Coverage includes the correct
+flags on both commands, matching mode metadata, live and staged mismatch,
+missing and malformed config, an oversized sparse config, skipped ADB
+commands for unusable live modes, non-standard JSON constants, conflicting
+duplicate mode keys, staged config mutation after ADB begins, exactly one
+mode-failure entry, bounded config copying, and private HOME removal. The
+observer test uses a handshake from the observer-triggered ADB process so
+`cvd start` stays alive until the launcher marker is recorded. Shell syntax,
+Ruff lint and format, all six repository checks, and hostile review of the
+capture implementation passed. The corrected real `drm_virgl` run and the
+earlier mismatch captures remain incomplete; they are not successful
+reference profiles.
 
 ## IR-157: Disable vhost-user GPU for arm64 reference captures
 
@@ -5476,11 +5480,63 @@ variable controlled in profile comparisons. A string such as `"false"` is
 not equivalent to the Boolean `false`; accepting it could allow a malformed
 or ambiguous configuration to pass the comparison gate.
 
-**Verification plan.** Test the exact flag on both commands for every
-profile. Confirm live true and wrong-type values skip ADB, and staged true and
-wrong-type values prevent publication after ADB work. Retain coverage for
-duplicate keys, missing settings, actual-mode mismatch, and strict Boolean
-metadata. Run the focused capture tests, full image-tools suite, shell syntax,
-Ruff, repository checks, hostile review, and a real `drm_virgl` capture with
-the setting applied. The three listed captures remain incomplete and do not
-verify that `drm_virgl` boots with vhost-user GPU disabled.
+The corrected capture `target-20261004T064521-1396609` selected
+`drm_virgl`, recorded `enable_gpu_vhost_user=false`, and passed the host
+GLES checks. The launcher records `process_restarter` starting the Android
+crosvm child with the Virgl backend and observing its unexpected exit.
+Apport records a SIGSEGV for the crosvm executable at the matching time, but
+does not include a PID field; the sanitized summary documents this
+executable-and-timestamp correlation. This run no longer shows the earlier
+vhost-user GPU rejection, but it does not establish that Virgl caused the
+crash or that `drm_virgl` boots.
+
+**Verification.** `Images/tools/.venv/bin/pytest
+Images/tools/tests/test_reference_capture.py -q` passed 48 tests with three
+Linux GNU `timeout` cases skipped on macOS. `sh -n
+Images/tools/reference/capture.sh`, Ruff lint and format checks, and all six
+checks in `scripts/ci/run-checks.sh` passed. Hostile review of the capture
+implementation found no actionable findings. The corrected real capture
+verifies the selected mode and disabled vhost-user setting, but remains
+incomplete and does not verify that `drm_virgl` boots.
+
+## IR-158: Retain sanitized crosvm crash evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T064521-1396609/crosvm-crash-summary.txt`; [android-image.md](../02-design/android-image.md) §8.3; [environment-setup.md](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep the capture incomplete and add only a sanitized textual
+summary of the host crosvm crash. Do not commit the raw Apport report or core
+dump. Record the signal, fault address, faulting symbol and instruction,
+available stack frames, executable and library build IDs, and the unresolved
+caller frames. A crash summary is diagnostic context only; it cannot make a
+capture complete or comparable.
+
+**Reason.** The corrected target run verified `drm_virgl` with
+vhost-user GPU disabled. The Apport report records SIGSEGV for the crosvm
+executable. GDB 15.1 places the program counter at `unw_get_reg+68` in
+`libgfxstream_backend.so` and reports `si_addr=0x10`. The launcher records
+`process_restarter` starting crosvm PID 1397163 with the Virgl backend at
+21:45:18Z and reports the unexpected exit at 21:45:20Z. The Apport report
+names the crosvm executable and has a matching 21:45:18Z date, but has no PID
+field; the association is timestamp and executable correlation, not direct
+PID metadata. This narrows the immediate failure but the stripped caller
+frames do not identify the trigger. A raw core dump can contain guest RAM
+and private runtime state; the summary preserves the useful evidence without
+publishing that memory. The capture provides no Linux kernel, stable
+ADB-ready transport, or Android boot-completion evidence.
+
+**Verification.** The sanitized summary agrees with the Apport report, GDB
+output, and launcher process record. It contains no raw core data or private
+host paths and does not attribute the crash to Virgl. The seven newly added
+capture directories contain 70 files; all JSON and JSONL files parse, no file
+exceeds 64 MiB, and the privacy scan found no tested host paths, private-key
+markers, or six- and eight-octet colon-form MAC/EUI-64 addresses. The raw
+report and core are absent from the repository. All six checks in
+`scripts/ci/run-checks.sh` passed after these documentation and evidence
+updates. The initial hostile review found and prompted corrections to the ADB
+wording, capture-cause attribution, and process correlation; a follow-up
+hostile review is pending. Keep IR-158 in `Needs maintainer review` until the
+backtrace interpretation and raw-core exclusion are reviewed.

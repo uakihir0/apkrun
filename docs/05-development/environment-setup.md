@@ -270,6 +270,12 @@ before removing its Cuttlefish group. The disconnect is bounded to 10 seconds
 with a 2-second forced-stop grace period, so a stuck ADB command cannot block
 group cleanup. The downloaded product files remain unchanged.
 
+`gdb` is optional for diagnosing a crashed Cuttlefish host process. Analyze a
+core dump with the exact executable and matching debug symbols; similarly
+named files from another host package may have different build IDs. Keep raw
+core dumps on the reference host because they can contain guest RAM. Only a
+sanitized backtrace summary belongs in an incomplete repository capture.
+
 `APKRUN_CVD_PACKAGE_VERSION` is optional when `dpkg-query` can report the
 installed `cuttlefish-base` version. The script checks every guest artifact
 against the checked-in build 16373615 manifest before launch. Each run creates

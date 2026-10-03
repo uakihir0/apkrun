@@ -1,0 +1,41 @@
+Sanitized crash diagnosis for this incomplete capture
+
+Capture: target-20261004T064521-1396609
+Apport report date: 2026-10-03T21:45:18Z
+Cuttlefish host package: 1.57.0, VCS 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+Executable package: cuttlefish-base 1.57.0
+Executable Build ID: d724bf54f045b0ec7dbe14049b0fed9a16e52a23
+Loaded library: libgfxstream_backend.so
+Library Build ID: 6b8f3105442da5c66988881a1fa76e812b13c3e8
+
+At 21:45:18Z, the launcher records process_restarter PID 1397147
+starting crosvm PID 1397163 with backend=virglrenderer. At 21:45:20Z,
+the launcher records that restarter's unexpected child exit. The Apport
+report names the same crosvm executable and is dated 21:45:18Z, but contains
+no ProcPid field; the association is based on the executable and timestamps,
+not direct PID metadata.
+
+Apport reported SIGSEGV (signal 11). GDB 15.1 reported si_code=SEGV_MAPERR
+(1), fault address 0x10, and a program counter at unw_get_reg+68 in
+libgfxstream_backend.so. The faulting AArch64 instruction was
+`ldr x8, [x8, #16]` with x8 equal to zero.
+
+The available backtrace begins:
+
+  #0 unw_get_reg+68 (libgfxstream_backend.so)
+  #1 _Unwind_GetIP (libgfxstream_backend.so)
+  #2-3 crosvm (stripped; symbols unavailable)
+  #4 _Unwind_Backtrace (libgcc_s.so.1)
+  #5-21 crosvm (stripped; symbols unavailable)
+  #22 start_thread (libc.so.6)
+  #23 thread_start (libc.so.6)
+
+This identifies the immediate invalid read and correlates the crash report
+with the crosvm process started for this capture. The stripped caller frames
+leave the trigger unresolved; this does not establish that Virgl caused the
+crash. The guest kernel log is empty and the capture contains no Android boot
+or stable ADB-ready transport evidence.
+
+Only this sanitized summary is retained in the repository. The raw Apport
+report and core dump remain on the Lima reference host and are not part of the
+capture.

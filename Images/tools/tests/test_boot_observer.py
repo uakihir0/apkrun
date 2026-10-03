@@ -1422,8 +1422,13 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         ("getprop_times_out_after_boot_query", "device", True, True, True, False, 3),
         ("system_server_query_failed", "device", True, False, False, False, 3),
         ("boot_completed_query_failed", "device", True, False, False, False, 3),
+        ("connect_not_attempted", "offline", False, None, False, False, 2),
+        ("connect_times_out", "device", True, True, True, False, 3),
         ("offline", "offline", False, None, False, False, 2),
         ("getstate_times_out", None, False, None, True, False, 2),
+        ("getstate_failed", None, False, None, False, False, 2),
+        ("getstate_empty", None, False, None, False, False, 2),
+        ("getstate_other", None, False, None, False, False, 2),
     ),
 )
 def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
@@ -1478,6 +1483,10 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         calls.append(command)
         timeouts.append(timeout_seconds)
         if "connect" in command:
+            if scenario == "connect_not_attempted":
+                return None, "", False, False
+            if scenario == "connect_times_out":
+                return None, "", True, True
             launched_commands.append(command)
             if scenario == "deadline_after_connect":
                 clock.current = deadline
@@ -1485,12 +1494,21 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         if command[-1:] == ["get-state"]:
             if scenario == "deadline_before_getprop":
                 clock.current = deadline
-            if scenario == "offline":
+            if scenario in {"connect_not_attempted", "offline"}:
                 launched_commands.append(command)
                 return 0, "offline", False, True
             if scenario == "getstate_times_out":
                 launched_commands.append(command)
                 return None, "", True, True
+            if scenario == "getstate_failed":
+                launched_commands.append(command)
+                return 19, "private-device-name", False, True
+            if scenario == "getstate_empty":
+                launched_commands.append(command)
+                return 0, "", False, True
+            if scenario == "getstate_other":
+                launched_commands.append(command)
+                return 0, "private-device-name", False, True
             launched_commands.append(command)
             return 0, "device", False, True
         if command[-3:] == [
@@ -1545,8 +1563,48 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     poll_records = [record for record in _read_records(output) if record["event"] == "adb_poll"]
     assert len(poll_records) == 1
     poll = poll_records[0]
-    assert poll["connectExitCode"] == 0
+    assert poll["connectExitCode"] is (
+        None if scenario in {"connect_not_attempted", "connect_times_out"} else 0
+    )
     assert poll["deviceState"] == expected_state
+    assert poll["connectAttempted"] is (scenario != "connect_not_attempted")
+    assert poll["connectTimedOut"] is (
+        True
+        if scenario == "connect_times_out"
+        else None
+        if scenario == "connect_not_attempted"
+        else False
+    )
+    assert poll["getStateAttempted"] is (scenario != "deadline_after_connect")
+    assert poll["getStateExitCode"] is (
+        None
+        if scenario in {"deadline_after_connect", "getstate_times_out"}
+        else 19
+        if scenario == "getstate_failed"
+        else 0
+    )
+    assert poll["getStateTimedOut"] is (
+        None if scenario == "deadline_after_connect" else scenario == "getstate_times_out"
+    )
+    assert (
+        poll["getStateResult"]
+        == {
+            "deadline_after_connect": "notAttempted",
+            "deadline_before_getprop": "device",
+            "deadline_before_spawn": "device",
+            "getprop_times_out": "device",
+            "getprop_times_out_after_boot_query": "device",
+            "system_server_query_failed": "device",
+            "boot_completed_query_failed": "device",
+            "connect_not_attempted": "offline",
+            "connect_times_out": "device",
+            "offline": "offline",
+            "getstate_times_out": "timedOut",
+            "getstate_failed": "commandFailed",
+            "getstate_empty": "empty",
+            "getstate_other": "other",
+        }[scenario]
+    )
     assert poll["getpropAttempted"] is expected_attempted
     assert poll["getpropTimedOut"] is expected_timed_out
     if scenario == "system_server_query_failed":
@@ -1583,6 +1641,8 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         assert poll["sysBootCompletedPresent"] is None
     assert poll["commandTimedOut"] is expected_command_timed_out
     assert poll["pollDeadlineReached"] is expected_deadline_reached
+    if scenario in {"getstate_failed", "getstate_other"}:
+        assert "private-device-name" not in output.read_text(encoding="ascii")
     assert len(calls) == expected_call_count
     assert timeouts[:2] == [OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS] * min(
         expected_call_count,

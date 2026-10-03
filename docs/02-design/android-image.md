@@ -780,7 +780,13 @@ output from a timed-out command, is parsed in memory and never stored. Each
 `adb_poll` record includes
 `getpropAttempted` and nullable `getpropTimedOut` fields, so a deadline
 reached before the property query is distinguishable from a query that ran
-and timed out. The aggregate `commandTimedOut` field reports whether an ADB
+and timed out. It records `connectAttempted`, `connectExitCode`, and nullable
+`connectTimedOut` separately from `getStateAttempted`, `getStateExitCode`,
+and nullable `getStateTimedOut`. A stage that did not start has a null exit
+code and timeout field. `getStateResult` contains only an allowlisted
+classification: `notAttempted`, `timedOut`, `commandFailed`, `device`,
+`offline`, `unauthorized`, `empty`, or `other`; raw command output is never
+stored. The aggregate `commandTimedOut` field reports whether an ADB
 subprocess timed out;
 `pollDeadlineReached` reports whether the poll reached its shared deadline,
 including when that prevented a subprocess from starting. It removes

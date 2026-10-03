@@ -1118,17 +1118,26 @@ class BootObserver:
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
         environment = self._adb_environment()
-        connect_code, _, connect_timed_out, _ = self._run_adb(
+        connect_code, _, connect_timed_out, connect_attempted = self._run_adb(
             [str(self.adb_path), "-L", adb_socket, "connect", serial],
             environment,
             adb_deadline,
         )
+        adb_stage_fields: dict[str, Any] = {
+            "connectExitCode": connect_code,
+            "connectAttempted": connect_attempted,
+            "connectTimedOut": connect_timed_out if connect_attempted else None,
+            "getStateAttempted": False,
+            "getStateExitCode": None,
+            "getStateTimedOut": None,
+            "getStateResult": "notAttempted",
+            "deviceState": None,
+        }
         if time.monotonic() >= adb_deadline:
             self._record(
                 {
                     "event": "adb_poll",
-                    "connectExitCode": connect_code,
-                    "deviceState": None,
+                    **adb_stage_fields,
                     "getpropExitCode": None,
                     "getpropAttempted": False,
                     "getpropTimedOut": None,
@@ -1138,14 +1147,14 @@ class BootObserver:
                     "bootCompletedGetpropExitCode": None,
                     "sysBootCompleted": None,
                     "sysBootCompletedPresent": None,
-                    "commandTimedOut": connect_timed_out,
+                    "commandTimedOut": connect_timed_out if connect_attempted else False,
                     "pollDeadlineReached": True,
                 }
             )
             return True
         if server.poll() is not None or not self._is_socket(socket_path):
             return False
-        state_code, state_output, state_timed_out, _ = self._run_adb(
+        state_code, state_output, state_timed_out, state_attempted = self._run_adb(
             [str(self.adb_path), "-L", adb_socket, "-s", serial, "get-state"],
             environment,
             adb_deadline,
@@ -1155,6 +1164,27 @@ class BootObserver:
             state_text
             if state_code == 0 and state_text in {"device", "offline", "unauthorized"}
             else None
+        )
+        if not state_attempted:
+            state_result = "notAttempted"
+        elif state_timed_out:
+            state_result = "timedOut"
+        elif state_code != 0:
+            state_result = "commandFailed"
+        elif state in {"device", "offline", "unauthorized"}:
+            state_result = state
+        elif not state_text:
+            state_result = "empty"
+        else:
+            state_result = "other"
+        adb_stage_fields.update(
+            {
+                "getStateAttempted": state_attempted,
+                "getStateExitCode": state_code,
+                "getStateTimedOut": state_timed_out if state_attempted else None,
+                "getStateResult": state_result,
+                "deviceState": state,
+            }
         )
         property_code: int | None = None
         boot_completed: bool | None = None
@@ -1172,8 +1202,7 @@ class BootObserver:
             self._record(
                 {
                     "event": "adb_poll",
-                    "connectExitCode": connect_code,
-                    "deviceState": state,
+                    **adb_stage_fields,
                     "getpropExitCode": None,
                     "getpropAttempted": False,
                     "getpropTimedOut": None,
@@ -1226,8 +1255,7 @@ class BootObserver:
         self._record(
             {
                 "event": "adb_poll",
-                "connectExitCode": connect_code,
-                "deviceState": state,
+                **adb_stage_fields,
                 "getpropExitCode": property_code,
                 "getpropAttempted": property_attempted,
                 "getpropTimedOut": property_timed_out,

@@ -4966,3 +4966,32 @@ enabled only for a timed-out shell command. The focused property tests passed
 Ruff lint and format checks passed. Hostile review found and prompted a fix
 for the incomplete-label boundary; follow-up review found no remaining
 issues.
+
+## IR-147: Preserve per-stage ADB transport diagnostics
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Add `connectAttempted`, `connectTimedOut`, `getStateAttempted`,
+`getStateExitCode`, and `getStateTimedOut` to each `adb_poll` record. Keep
+timeouts null when a stage did not start. Add the fixed `getStateResult`
+classification `notAttempted`, `timedOut`, `commandFailed`, `device`,
+`offline`, `unauthorized`, `empty`, or `other`; do not persist raw output.
+
+**Reason.** The aggregate `commandTimedOut` field cannot show which command
+timed out or distinguish an unstarted command from a successful command with
+an unrecognized response. Per-stage status makes the host ADB transport
+diagnosable while the allowlist avoids retaining guest or host command text.
+
+**Verification.** Parameterized tests cover connect launch failure and
+timeout, get-state timeout and nonzero exit, empty and unrecognized output,
+recognized states, and a deadline that prevents the later command from
+starting. They also assert that unrecognized raw output is absent from the
+JSONL record. The focused stage tests passed 14 cases;
+`Images/tools/tests/test_boot_observer.py` passed 91 tests with one
+Linux-only skip. Ruff lint and format checks passed. Hostile review found no
+actionable issues. A subsequent reference run will verify the live record
+shape.

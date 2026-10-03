@@ -1126,6 +1126,10 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
         "if args[-1:] == ['get-state']:\n"
         "    print('device')\n"
         "    raise SystemExit(0)\n"
+        "if args[-3:-1] == ['sh', '-c'] and 'APKRun shell ready' in args[-1] "
+        "and 'system_server=' not in args[-1]:\n"
+        "    print('APKRun shell ready')\n"
+        "    raise SystemExit(0)\n"
         "if args[-3:-1] == ['sh', '-c'] and 'system_server=' in args[-1]:\n"
         "    environment = os.environ.copy()\n"
         "    environment['PATH'] = os.environ['FAKE_GETPROP_DIR'] + "
@@ -1161,14 +1165,20 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     while time.monotonic() < deadline:
         records = _read_records(output)
         polls = [record for record in records if record["event"] == "adb_poll"]
-        if len(polls) >= 2:
+        if any(record["shellProbeAttempted"] for record in polls) and any(
+            record["getpropAttempted"] for record in polls
+        ):
             break
         time.sleep(0.02)
     observer.close()
 
     records = _read_records(output)
     assert any(record["event"] == "cuttlefish_start_event_5_observed" for record in records)
-    poll = next(record for record in records if record["event"] == "adb_poll")
+    polls = [record for record in records if record["event"] == "adb_poll"]
+    shell_poll = next(record for record in polls if record["shellProbeAttempted"])
+    assert shell_poll["shellProbeMarkerMatched"] is True
+    assert shell_poll["getpropAttempted"] is False
+    poll = next(record for record in polls if record["getpropAttempted"])
     assert poll["deviceState"] == "device"
     assert poll["getpropExitCode"] == 0
     assert poll["systemServerGetpropExitCode"] == system_server_exit_code
@@ -1408,40 +1418,85 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     (
         "scenario",
         "expected_state",
-        "expected_attempted",
-        "expected_timed_out",
+        "expected_getprop_attempted",
+        "expected_getprop_timed_out",
+        "expected_shell_probe_attempted",
+        "expected_shell_probe_exit_code",
+        "expected_shell_probe_timed_out",
+        "expected_shell_probe_marker_matched",
         "expected_command_timed_out",
         "expected_deadline_reached",
         "expected_call_count",
     ),
     (
-        ("deadline_after_connect", None, False, None, False, True, 1),
-        ("deadline_before_getprop", "device", False, None, False, True, 2),
-        ("deadline_before_spawn", "device", False, None, False, True, 3),
-        ("getprop_times_out", "device", True, True, True, False, 3),
-        ("shell_marker_missing", "device", True, True, True, False, 3),
-        ("shell_marker_crlf", "device", True, False, False, False, 3),
-        ("getprop_times_out_after_boot_query", "device", True, True, True, False, 3),
-        ("system_server_query_failed", "device", True, False, False, False, 3),
-        ("boot_completed_query_failed", "device", True, False, False, False, 3),
-        ("connect_not_attempted", "offline", False, None, False, False, 2),
-        ("connect_times_out", "device", True, True, True, False, 3),
-        ("offline", "offline", False, None, False, False, 2),
-        ("getstate_times_out", None, False, None, True, False, 2),
-        ("getstate_failed", None, False, None, False, False, 2),
-        ("getstate_empty", None, False, None, False, False, 2),
-        ("getstate_other", None, False, None, False, False, 2),
-        ("getstate_probe_error", None, False, None, False, False, 2),
+        ("deadline_after_connect", None, False, None, False, None, None, None, False, True, 1),
+        ("deadline_before_getprop", "device", False, None, False, None, None, None, False, True, 2),
+        ("deadline_before_spawn", "device", False, None, False, None, None, None, False, True, 3),
+        ("shell_probe_times_out", "device", False, None, True, None, True, True, True, False, 3),
+        ("shell_marker_missing", "device", False, None, True, None, True, False, True, False, 3),
+        ("shell_marker_crlf", "device", False, None, True, 0, False, True, False, False, 3),
+        ("shell_probe_succeeds", "device", False, None, True, 0, False, True, False, False, 3),
+        (
+            "getprop_times_out_after_boot_query",
+            "device",
+            True,
+            True,
+            False,
+            None,
+            None,
+            None,
+            True,
+            False,
+            3,
+        ),
+        (
+            "system_server_query_failed",
+            "device",
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+            False,
+            3,
+        ),
+        (
+            "boot_completed_query_failed",
+            "device",
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+            False,
+            3,
+        ),
+        ("connect_not_attempted", "offline", False, None, False, None, None, None, False, False, 2),
+        ("connect_times_out", "device", False, None, True, None, True, True, True, False, 3),
+        ("offline", "offline", False, None, False, None, None, None, False, False, 2),
+        ("getstate_times_out", None, False, None, False, None, None, None, True, False, 2),
+        ("getstate_failed", None, False, None, False, None, None, None, False, False, 2),
+        ("getstate_empty", None, False, None, False, None, None, None, False, False, 2),
+        ("getstate_other", None, False, None, False, None, None, None, False, False, 2),
+        ("getstate_probe_error", None, False, None, False, None, None, None, False, False, 2),
     ),
 )
-def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
+def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     tmp_path: Path,
     short_private_home: Path,
     monkeypatch: pytest.MonkeyPatch,
     scenario: str,
     expected_state: str | None,
-    expected_attempted: bool,
-    expected_timed_out: bool | None,
+    expected_getprop_attempted: bool,
+    expected_getprop_timed_out: bool | None,
+    expected_shell_probe_attempted: bool,
+    expected_shell_probe_exit_code: int | None,
+    expected_shell_probe_timed_out: bool | None,
+    expected_shell_probe_marker_matched: bool | None,
     expected_command_timed_out: bool,
     expected_deadline_reached: bool,
     expected_call_count: int,
@@ -1453,6 +1508,8 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         proc_root=proc_root,
         home_path=short_private_home,
     )
+    if expected_getprop_attempted:
+        observer._shell_probe_attempted = True
     observer.start()
     socket_path = short_private_home.parent / "adb.sock"
     adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1530,66 +1587,60 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
                 return bounded_result(0, "private-device-name")
             launched_commands.append(command)
             return bounded_result(0, "device")
-        if command[-3:] in (
-            ["sh", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND],
-            ["sh", "-c", OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND],
-        ):
-            shell_probe_command = command[-3:] == [
-                "sh",
-                "-c",
-                OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND,
-            ]
+        if command[-3:] == [
+            "sh",
+            "-c",
+            OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND,
+        ]:
             if scenario == "deadline_before_spawn":
                 clock.current = deadline
                 return bounded_result(None, attempted=False)
             launched_commands.append(command)
+            if scenario == "shell_marker_crlf":
+                return bounded_result(
+                    0,
+                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\r\n",
+                )
+            if scenario == "shell_probe_succeeds":
+                return bounded_result(
+                    0,
+                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\n",
+                )
+            if scenario == "shell_marker_missing":
+                return bounded_result(None, timed_out=True)
+            if scenario in {"shell_probe_times_out", "connect_times_out"}:
+                return bounded_result(
+                    None,
+                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\n",
+                    timed_out=True,
+                )
+            raise AssertionError(f"unexpected shell probe scenario: {scenario}")
+        if command[-3:] == [
+            "sh",
+            "-c",
+            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+        ]:
+            launched_commands.append(command)
             if scenario == "system_server_query_failed":
-                result = bounded_result(
+                return bounded_result(
                     0,
                     "boot_completed=0\nboot_completed_status=0\n"
                     "system_server=2\nsystem_server_status=7",
                 )
-            elif scenario == "boot_completed_query_failed":
-                result = bounded_result(
+            if scenario == "boot_completed_query_failed":
+                return bounded_result(
                     0,
                     "boot_completed=1\nboot_completed_status=7\n"
                     "system_server=2\nsystem_server_status=0",
                 )
-            elif scenario == "getprop_times_out_after_boot_query":
-                result = bounded_result(
+            if scenario == "getprop_times_out_after_boot_query":
+                return bounded_result(
                     None,
                     "boot_completed=1\nboot_completed_status=0\n"
                     "system_server=2\nsystem_server_stat",
                     timed_out=True,
                 )
-            elif scenario == "shell_marker_crlf":
-                result = bounded_result(
-                    0,
-                    "boot_completed=1\nboot_completed_status=0\n"
-                    "system_server=2\nsystem_server_status=0",
-                )
-            elif scenario == "shell_marker_missing":
-                result = bounded_result(None, timed_out=True)
-            elif scenario in {"getprop_times_out", "connect_times_out"}:
-                result = bounded_result(
-                    None,
-                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode(),
-                    timed_out=True,
-                )
-            else:
-                result = bounded_result(None, timed_out=True)
-            if shell_probe_command and scenario != "shell_marker_missing":
-                marker_line_ending = b"\r\n" if scenario == "shell_marker_crlf" else b"\n"
-                return (
-                    result[0],
-                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER + marker_line_ending + result[1],
-                    result[2],
-                    result[3],
-                    result[4],
-                    result[5],
-                    result[6],
-                )
-            return result
+            raise AssertionError(f"unexpected property query scenario: {scenario}")
         raise AssertionError(f"unexpected adb command: {command!r}")
 
     monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_adb)
@@ -1637,9 +1688,10 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
             "deadline_after_connect": "notAttempted",
             "deadline_before_getprop": "device",
             "deadline_before_spawn": "device",
-            "getprop_times_out": "device",
+            "shell_probe_times_out": "device",
             "shell_marker_missing": "device",
             "shell_marker_crlf": "device",
+            "shell_probe_succeeds": "device",
             "getprop_times_out_after_boot_query": "device",
             "system_server_query_failed": "device",
             "boot_completed_query_failed": "device",
@@ -1653,15 +1705,12 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
             "getstate_probe_error": "probeError",
         }[scenario]
     )
-    assert poll["getpropAttempted"] is expected_attempted
-    assert poll["getpropTimedOut"] is expected_timed_out
-    shell_probe_expected = expected_attempted
-    assert poll["shellProbeAttempted"] is shell_probe_expected
-    assert poll["shellProbeExitCode"] == poll["getpropExitCode"]
-    assert poll["shellProbeTimedOut"] is expected_timed_out
-    assert poll["shellProbeMarkerMatched"] is (
-        None if not shell_probe_expected else scenario != "shell_marker_missing"
-    )
+    assert poll["getpropAttempted"] is expected_getprop_attempted
+    assert poll["getpropTimedOut"] is expected_getprop_timed_out
+    assert poll["shellProbeAttempted"] is expected_shell_probe_attempted
+    assert poll["shellProbeExitCode"] == expected_shell_probe_exit_code
+    assert poll["shellProbeTimedOut"] is expected_shell_probe_timed_out
+    assert poll["shellProbeMarkerMatched"] is expected_shell_probe_marker_matched
     if scenario == "system_server_query_failed":
         assert poll["getpropExitCode"] == 0
         assert poll["systemServerGetpropExitCode"] == 7
@@ -1684,14 +1733,6 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         assert poll["bootCompletedGetpropExitCode"] == 0
         assert poll["systemServerStartCount"] is None
         assert poll["systemServerStartCountPresent"] is None
-        assert poll["sysBootCompleted"] is True
-        assert poll["sysBootCompletedPresent"] is True
-    elif scenario == "shell_marker_crlf":
-        assert poll["getpropExitCode"] == 0
-        assert poll["systemServerGetpropExitCode"] == 0
-        assert poll["bootCompletedGetpropExitCode"] == 0
-        assert poll["systemServerStartCount"] == 2
-        assert poll["systemServerStartCountPresent"] is True
         assert poll["sysBootCompleted"] is True
         assert poll["sysBootCompletedPresent"] is True
     else:
@@ -1717,26 +1758,38 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     )
     if expected_call_count >= 3:
         assert timeouts[2] == OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS
+    expected_shell_command = (
+        OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND
+        if expected_shell_probe_attempted
+        else OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND
+        if expected_getprop_attempted
+        else None
+    )
+    shell_commands = [command[-3:] for command in launched_commands if command[-3:-2] == ["sh"]]
     assert (
-        any(
-            command[-3:]
-            == [
-                "sh",
-                "-c",
-                OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND
-                if shell_probe_expected
-                else OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
-            ]
-            for command in launched_commands
-        )
-        is shell_probe_expected
+        any(command == ["sh", "-c", expected_shell_command] for command in shell_commands)
+        if expected_shell_command is not None
+        else not shell_commands
     )
 
 
+@pytest.mark.parametrize(
+    ("probe_outcome", "expected_marker_match", "expected_exit_code", "expected_timed_out"),
+    (
+        ("success", True, 0, False),
+        ("timeout_with_marker", True, None, True),
+        ("timeout_without_marker", False, None, True),
+        ("exit_without_marker", False, 0, False),
+    ),
+)
 def test_regular_adb_shell_marker_probe_runs_only_once(
     tmp_path: Path,
     short_private_home: Path,
     monkeypatch: pytest.MonkeyPatch,
+    probe_outcome: str,
+    expected_marker_match: bool,
+    expected_exit_code: int | None,
+    expected_timed_out: bool,
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
@@ -1750,6 +1803,8 @@ def test_regular_adb_shell_marker_probe_runs_only_once(
     adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     adb_socket.bind(str(socket_path))
     calls: list[list[str]] = []
+    shell_probe_client_calls = 0
+    shell_probe_launches = 0
 
     class LiveServer:
         @staticmethod
@@ -1771,10 +1826,25 @@ def test_regular_adb_shell_marker_probe_runs_only_once(
         if command[-1:] == ["get-state"]:
             return 0, b"device\n", False, True, False, True, False
         if command[-3:] == ["sh", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND]:
+            nonlocal shell_probe_client_calls, shell_probe_launches
+            shell_probe_client_calls += 1
+            if shell_probe_client_calls == 1:
+                return None, b"", False, False, False, True, False
+            shell_probe_launches += 1
+            if probe_outcome in {"success", "timeout_with_marker"}:
+                return (
+                    0 if probe_outcome == "success" else None,
+                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER + b"\n",
+                    probe_outcome == "timeout_with_marker",
+                    True,
+                    False,
+                    True,
+                    False,
+                )
             return (
-                None,
-                OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER + b"\n",
-                True,
+                0 if probe_outcome == "exit_without_marker" else None,
+                b"" if probe_outcome == "exit_without_marker" else b" ",
+                probe_outcome == "timeout_without_marker",
                 True,
                 False,
                 True,
@@ -1799,7 +1869,7 @@ def test_regular_adb_shell_marker_probe_runs_only_once(
 
     monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
     try:
-        for _ in range(2):
+        for _ in range(3):
             assert observer._record_adb_poll(
                 "localfilesystem:/tmp/adb.sock",
                 "127.0.0.1:6520",
@@ -1812,21 +1882,37 @@ def test_regular_adb_shell_marker_probe_runs_only_once(
         adb_socket.close()
 
     polls = [record for record in _read_records(output) if record["event"] == "adb_poll"]
-    assert [poll["shellProbeAttempted"] for poll in polls] == [True, False]
-    assert polls[0]["shellProbeMarkerMatched"] is True
-    assert polls[1]["shellProbeMarkerMatched"] is None
+    assert [poll["shellProbeAttempted"] for poll in polls] == [False, True, False]
+    assert [poll["shellProbeMarkerMatched"] for poll in polls] == [
+        None,
+        expected_marker_match,
+        None,
+    ]
+    assert [poll["getpropAttempted"] for poll in polls] == [False, False, True]
+    assert polls[0]["getpropExitCode"] is None
+    assert polls[1]["getpropExitCode"] is None
+    assert polls[1]["shellProbeExitCode"] == expected_exit_code
+    assert polls[1]["shellProbeTimedOut"] is expected_timed_out
+    assert polls[2]["sysBootCompleted"] is True
+    assert shell_probe_client_calls == 2
+    assert shell_probe_launches == 1
     assert (
         sum(
             command[-3:] == ["sh", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND]
             for command in calls
         )
-        == 1
+        == 2
     )
 
 
 @pytest.mark.parametrize(
     ("failed_stage", "expected_call_count"),
-    (("connect", 1), ("get-state", 2), ("getprop", 3)),
+    (
+        ("connect", 1),
+        ("get-state", 2),
+        ("shellProbe", 3),
+        ("getprop", 3),
+    ),
 )
 def test_regular_adb_poll_fails_closed_when_client_cleanup_is_unverified(
     tmp_path: Path,
@@ -1842,6 +1928,8 @@ def test_regular_adb_poll_fails_closed_when_client_cleanup_is_unverified(
         proc_root=proc_root,
         home_path=short_private_home,
     )
+    if failed_stage == "getprop":
+        observer._shell_probe_attempted = True
     observer.start()
     socket_path = short_private_home.parent / "adb.sock"
     adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1868,21 +1956,19 @@ def test_regular_adb_poll_fails_closed_when_client_cleanup_is_unverified(
             if "connect" in command
             else "get-state"
             if command[-1:] == ["get-state"]
+            else "shellProbe"
+            if command[-3:] == ["sh", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND]
             else "getprop"
         )
         output_bytes = (
             b"boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=0"
             if stage == "getprop"
+            else OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER + b"\n"
+            if stage == "shellProbe"
             else b"device\n"
             if stage == "get-state"
             else b""
         )
-        if stage == "getprop" and command[-3:] == [
-            "sh",
-            "-c",
-            OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND,
-        ]:
-            output_bytes = OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER + output_bytes
         return 0, output_bytes, False, True, False, stage != failed_stage, False
 
     monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
@@ -1905,6 +1991,7 @@ def test_regular_adb_poll_fails_closed_when_client_cleanup_is_unverified(
     cleanup_fields = {
         "connect": "connectCleanupComplete",
         "get-state": "getStateCleanupComplete",
+        "shellProbe": "shellProbeCleanupComplete",
         "getprop": "getpropCleanupComplete",
     }
     assert len(calls) == expected_call_count
@@ -1925,6 +2012,7 @@ def test_regular_adb_poll_does_not_parse_truncated_property_output(
         proc_root=proc_root,
         home_path=short_private_home,
     )
+    observer._shell_probe_attempted = True
     observer.start()
     socket_path = short_private_home.parent / "adb.sock"
     adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

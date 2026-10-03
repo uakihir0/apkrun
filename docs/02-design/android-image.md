@@ -649,6 +649,11 @@ For the reference capture, `capture.sh` passes the profile's `--gpu_mode` to
 both group creation and named-group start. Cuttlefish may select its default
 again at start, so `targetGpuMode` in `host.json` is only the requested mode;
 profile comparisons use `selectedGpuMode` from the selected instance config.
+For all three profiles, `capture.sh` also passes
+`--gpu_vhost_user_mode=off` to both commands and requires the selected config
+to record `enable_gpu_vhost_user=false`. Cuttlefish 1.57.0 auto-enables its
+vhost-user GPU backend on arm64, where `drm_virgl` is not supported by that
+backend. `host.json` records the observed value as `gpuVhostUserEnabled`.
 
 ### 8.3 What is captured
 
@@ -915,11 +920,13 @@ published; failed stage deletion is reported for manual cleanup.
 architecture, CVD package version and instance number, CPU count,
 nested-virtualization availability, and capture duration. It records
 `targetGpuMode` as the requested target-profile mode and `selectedGpuMode` as
-the actual mode from the selected instance in `cuttlefish_config.json`.
+the actual mode from the selected instance in `cuttlefish_config.json`, along
+with `gpuVhostUserEnabled` from that same instance configuration.
 Compare GPU profiles only when the actual selected mode matches the intended
-mode; a mismatch or missing/invalid mode keeps the capture incomplete, even
-when the boot observer collected data during `cvd start`. The selected
-instance config is read and copied with a 64 MiB limit.
+mode and vhost-user GPU is disabled; a mismatch or missing/invalid setting
+keeps the capture incomplete, even when the boot observer collected data
+during `cvd start`. The selected instance config is read and copied with a
+64 MiB limit.
 The JSON parser rejects duplicate keys so an ambiguous selected-instance
 configuration cannot validate a profile.
 

@@ -220,6 +220,14 @@ The reference boot capture ([../02-design/android-image.md](../02-design/android
 | Capture | `Images/tools/reference/capture.sh <profile>` for `default`, `target`, `swiftshader` ([../02-design/android-image.md](../02-design/android-image.md) §8.2) |
 | Output | copy the capture to `Images/reference/<buildId>/<profile>/` on the Mac and commit it |
 
+On the tested Ubuntu 24.04.4 arm64 Lima VM, the host has no `/dev/dri`.
+Install `libgles2-mesa-dev` and set `EGL_PLATFORM=surfaceless` when running a
+`drm_virgl` capture so Cuttlefish 1.57.0 can initialize Mesa's off-screen EGL
+and load `libGLESv2.so`. This allowed the host GLES capability check to pass
+with Mesa llvmpipe; it does not by itself establish that the guest boots or
+that the `drm_virgl` backend starts. `capture.sh` disables the arm64
+vhost-user GPU backend for each profile and verifies the selected config.
+
 Extract the guest image archive and matching host package into separate
 directories. Activate the tools' Python environment and put the host package's
 `bin/` directory on `PATH`. Stop any running Cuttlefish guests and disconnect

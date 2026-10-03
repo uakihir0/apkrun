@@ -5444,3 +5444,43 @@ hostile review. The 2026-10-03
 capture at `Images/reference/16373615/incomplete/target-20261003T233118-1257055/`
 is not `drm_virgl` evidence: its config records `guest_swiftshader` despite
 the requested `drm_virgl` field in `host.json`.
+
+## IR-157: Disable vhost-user GPU for arm64 reference captures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; [android-image.md](../02-design/android-image.md) §8.2; [environment-setup.md](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Pass Cuttlefish's `--gpu_vhost_user_mode=off` flag to both
+`cvd create` and `cvd start` for all three reference profiles. Read
+`gpu_mode` and `enable_gpu_vhost_user` from the selected instance's
+`cuttlefish_config.json`; reject missing, invalid, duplicate, or oversized
+settings, and require `enable_gpu_vhost_user` to be the JSON Boolean `false`.
+Record the selected mode and the Boolean as `selectedGpuMode` and
+`gpuVhostUserEnabled` in `host.json`. If the live config fails either check,
+skip regular ADB polling and retain only an incomplete capture. Revalidate
+both settings in the staged config before publication.
+
+**Reason.** The 2026-10-03 target captures
+`target-20261004T060430-1393505`,
+`target-20261004T061407-1394457`, and
+`target-20261004T061552-1395715` selected `drm_virgl`, but Cuttlefish 1.57.0
+auto-enabled its vhost-user GPU backend on the arm64 host and `run_cvd`
+failed with `GPU mode drm_virgl not yet supported with vhost user gpu`.
+Installing Mesa's development package and using `EGL_PLATFORM=surfaceless`
+made Cuttlefish's host GLES check pass, but did not address that backend
+failure. Applying the same explicit host setting to every profile keeps this
+variable controlled in profile comparisons. A string such as `"false"` is
+not equivalent to the Boolean `false`; accepting it could allow a malformed
+or ambiguous configuration to pass the comparison gate.
+
+**Verification plan.** Test the exact flag on both commands for every
+profile. Confirm live true and wrong-type values skip ADB, and staged true and
+wrong-type values prevent publication after ADB work. Retain coverage for
+duplicate keys, missing settings, actual-mode mismatch, and strict Boolean
+metadata. Run the focused capture tests, full image-tools suite, shell syntax,
+Ruff, repository checks, hostile review, and a real `drm_virgl` capture with
+the setting applied. The three listed captures remain incomplete and do not
+verify that `drm_virgl` boots with vhost-user GPU disabled.

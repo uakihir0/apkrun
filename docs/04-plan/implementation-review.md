@@ -5258,4 +5258,23 @@ image-tools suite passed 468 tests with four platform-specific skips. All six
 checks in `scripts/ci/run-checks.sh`, Ruff lint and format, shell syntax, and
 `git diff --check` passed. Hostile review found a CRLF marker false negative;
 the parser and regression test now cover both LF and CRLF, and follow-up
-review found no actionable findings. A fresh live capture is pending.
+review found no actionable findings.
+
+A fresh `swiftshader` run at
+`Images/reference/16373615/incomplete/swiftshader-20261004T021050-1310893/`
+used source revision `1f204c5e30a3017e234b0167b1ead99e2e43bfdc`. `host.json`
+records `captureDurationSeconds=2406`; this field excludes the later ADB and
+Cuttlefish teardown. The observer start-to-stop interval was 2400.118 seconds.
+The first launched property query followed `get-state=device` at
+16:44:36.085Z and timed out with exit -15 before a matching one-shot marker
+was received. Across 103 polls, 100 reported `device` and three `get-state`
+commands exited 1. The 100 property queries yielded no parsed values: 96
+timed out with exit -15 and four exited 0. The final bounded logcat queries
+did return data, but that does not locate the stalled shell/property
+operation. `kernel.log` contains Linux and zygote traces; the separate Android
+logcat summary counted zero zygote mentions. No `sys.boot_completed=1` signal
+was recorded. The run therefore confirms the marker timeout behavior without
+establishing whether the shell reached the marker or identifying a boot cause.
+All 11 Lima-side manifest entries verified on both hosts; source-copy hashes,
+normalization idempotence, privacy scans, and post-run cleanup checks passed.
+The capture remains incomplete and is not a reference profile.

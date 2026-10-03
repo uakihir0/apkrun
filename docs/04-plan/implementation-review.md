@@ -5039,3 +5039,87 @@ five copied sources matched revision
 private host paths, MAC/EUI-64 addresses, or PEM key markers. This source
 revision predates IR-145–147, so this capture does not live-verify those
 observer changes and does not establish Android boot completion or a cause.
+
+## IR-149: Record the live observer follow-up
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §7.7, §8; `Images/reference/16373615/incomplete/default-20261003T195146-1175735/` |
+
+**Choice.** Keep this 2400-second unpaused `default` run under `incomplete/`.
+Treat it as live verification of the event-5 observer trigger and per-stage
+ADB transport records from IR-145 and IR-147. Do not mark the live property
+parser behavior from IR-146 as verified: no property field was parsed. Record
+the observed display-state marker without treating it as a boot-phase
+completion signal. Do not attribute the guest state to the untracked
+`system_server` process exit, the `aidl/activity` lookups, the liblp warnings,
+or the missing composite-disk specs.
+
+**Reason.** The guest boot deadline expired, `sys.boot_completed=1` was never
+observed, and the saved Cuttlefish config contains no composite-disk
+specifications required by the reference profile. The captures preserve the
+ADB stage outcomes and bounded logs, but the distinct `system_server` PIDs
+and mention counts do not establish process causality or a failure cause.
+The missing crosvm command line describes only post-timeout artifact
+collection; 480 valid memory samples prove that crosvm was observed earlier.
+
+**Verification.** On the Ubuntu 24.04.4 aarch64 Lima VM with Cuttlefish 1.57.0
+and nested virtualization, U-Boot was logged at 10:11:46Z and Linux 6.12.74
+at 10:15:07Z. The observer recorded 481 memory events (480 valid), event 5
+at 10:20:55.277Z, and private ADB server readiness at 10:20:55.328Z. Of 119
+ADB polls, 116 reported `device`, three `get-state` commands failed, one
+`connect` timed out, and the other 118 `connect` commands exited 0. Of 116
+property attempts, 113 timed out and three outer shell commands exited 0
+without parsed property fields. The final events query captured 20,620 bytes
+with zero recognized process events; the diagnostic buffers captured 17,148
+bytes with 10 `system_server` mentions and five Watchdog mentions. The kernel
+log records `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON` at
+guest uptimes 485.849 and 547.700 seconds, but no
+`VIRTUAL_DEVICE_BOOT_COMPLETED` marker.
+
+The Cuttlefish fleet was empty after cleanup; no crosvm or
+`process_restarter` remained, private port 6520 had no listener, the private
+socket HOME was removed, and only the ADB server already bound to
+`127.0.0.1:5037` remained. All ten `LIMA-SHA256SUMS` entries verified on the
+host, all five source-copy hashes matched revision
+`fa9c0ee1f7e4ab6a07e594e93264f371fbd96286`, and privacy scans found no tested
+private host paths, MAC/EUI-64 addresses, or PEM key markers. The run is not
+a reference profile and does not establish a boot failure cause.
+
+## IR-150: Bound regular ADB poll subprocesses
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Run ordinary `connect`, `get-state`, and boot-property ADB
+commands through the process-group runner already used by the final probe.
+Cap their stdout at 4 KiB and record per-stage truncation, probe-error, and
+cleanup status. Do not accept truncated or probe-error `get-state` replies
+as device states, and do not parse truncated or probe-error property replies.
+If process-group cleanup is unverified, record the poll, stop later ADB work,
+and fail capture shutdown. Increase the regular-poll reservation to 25.5
+seconds.
+
+**Reason.** The previous `subprocess.run(timeout=...)` path killed only its
+direct ADB client and did not bound its output or verify descendants. A
+descendant could therefore remain after a poll timeout, while the final
+capture status looked clean. The reservation covers three maximum command
+timeouts (14 seconds), three process-group cleanup bounds (7.5 seconds), and
+a four-second scheduling margin. A probe can also yield a valid-looking
+`device` prefix before a later read error; treating that partial observation
+as a valid state would make the recorded result misleading.
+
+**Verification.** A focused regression supplies `device` output together
+with `probeError` and confirms that no `deviceState` is accepted and no
+property query starts. `pytest Images/tools/tests -q` passed 445 tests with
+four platform skips. Ruff format and lint checks passed. Hostile review found
+and fixed the misleading `device` classification when a later read error
+occurred; the follow-up review found no further actionable issue. The
+2026-10-03 live capture used source revision
+`fa9c0ee1f7e4ab6a07e594e93264f371fbd96286`, before this change, so it does
+not live-verify this process cleanup path.

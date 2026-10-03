@@ -610,6 +610,12 @@ Checks (T2): `ip addr`, a default route, DNS resolution, `generate_204` from ins
 
 The Cuttlefish guest writes status lines to the kernel log, which reaches hvc0: `VIRTUAL_DEVICE_BOOT_STARTED`, `VIRTUAL_DEVICE_BOOT_COMPLETED`, `VIRTUAL_DEVICE_BOOT_FAILED`, and others. RuntimeCore's `BootPhaseDetector` uses them as boot-phase signals alongside `sys.boot_completed` read over ADB (M1) or reported by the Guest Agent (M3+) ([runtime-daemon.md](runtime-daemon.md)). #064 confirms the exact strings and their timing.
 
+An incomplete `default` capture on 2026-10-03 recorded
+`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON` at guest
+uptimes 485.849 and 547.700 seconds. This is a display-state event, not a
+boot-completion signal. A complete reference boot is still required to
+confirm the boot-phase strings and their timing.
+
 ---
 
 ## 8. Reference boot capture (#064)
@@ -765,9 +771,11 @@ the reply. An unterminated final carriage return is preserved. Because the
 shell has already reduced property values to ASCII digits or a fixed marker,
 removing one carriage return before each line feed cannot turn a raw property
 value into an accepted value.
-The ADB subprocess wrapper passes the property reply and any partial timeout
-output to this parser without trimming; only the separate `get-state` response
-is whitespace-normalized.
+The bounded ADB subprocess runner passes the property reply and any partial
+timeout output to this parser without trimming; only the separate `get-state`
+response is whitespace-normalized. A property reply is not parsed when its
+output was truncated, its probe failed, or its process-group cleanup could not
+be verified.
 Unexpected, duplicate, empty interior, or
 out-of-order lines invalidate the entire parsed reply, including exit
 statuses. Both properties are read by one shell command capped at ten
@@ -785,25 +793,36 @@ and timed out. It records `connectAttempted`, `connectExitCode`, and nullable
 and nullable `getStateTimedOut`. A stage that did not start has a null exit
 code and timeout field. `getStateResult` contains only an allowlisted
 classification: `notAttempted`, `timedOut`, `commandFailed`, `device`,
-`offline`, `unauthorized`, `empty`, or `other`; raw command output is never
-stored. The aggregate `commandTimedOut` field reports whether an ADB
+`offline`, `unauthorized`, `empty`, `other`, or `probeError`; a probe error
+never yields an accepted `deviceState`. Raw command output is never stored.
+The aggregate `commandTimedOut` field reports whether an ADB
 subprocess timed out;
 `pollDeadlineReached` reports whether the poll reached its shared deadline,
 including when that prevented a subprocess from starting. It removes
 inherited ADB socket, serial, and vendor-key overrides from the observer
-environment. Missed ADB schedule points are skipped rather than replayed.
+environment. Each stage also records its output-truncation, process-group
+cleanup, and probe-error status (`connectTruncated`, `connectCleanupComplete`,
+`connectProbeError`, with corresponding `getState` and `getprop` fields).
+Aggregate `cleanupComplete` and `probeError` fields summarize those stage
+outcomes. Each client runs in its own process group with a 4 KiB stdout cap.
+A truncated `connect` reply ends that poll; truncated `get-state` output is
+not accepted as a device state, and a truncated property reply is not parsed.
+If process-group cleanup cannot be verified, the observer records the
+incomplete status, starts no later stage or poll, and fails capture shutdown.
+Missed ADB schedule points are skipped rather than replayed.
 The host-side `connect` and `get-state` commands have a two-second cap; the
 guest-side boot-property query has a ten-second cap because starting an
-Android shell can take longer. All three commands remain bounded by the
-shared capture deadline and cleanup reserve; their caps total fourteen
-seconds, with missed 15-second schedule points skipped.
+Android shell can take longer. Their command caps total fourteen seconds.
+Allow up to 2.5 seconds to terminate and verify each of the three process
+groups, plus a four-second scheduling margin, so do not start an ordinary poll
+during the last 25.5 seconds before the final probe.
 For a finite capture deadline, leave 40.5 seconds before the ADB polling
 cutoff for the final Android logcat probe. Its minimum 39-second budget
 covers two two-second host commands, two ten-second logcat queries,
 termination and reaping for four ADB client process groups, up to four
 seconds for private ADB server shutdown, and a one-second safety margin; the
 remaining 1.5 seconds absorb scheduler delay. Do not start an ordinary poll
-during the last 18 seconds before that probe. The probe reconnects and checks
+during the last 25.5 seconds before that probe. The probe reconnects and checks
 `get-state`; only a fresh `device` state permits two bounded queries:
 `adb logcat -d -b events -v descriptive -t 128`, followed by
 `adb logcat -d -b main -b system -b crash -v brief -t 128`. Each logcat

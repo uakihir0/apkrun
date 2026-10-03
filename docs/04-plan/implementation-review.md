@@ -5484,11 +5484,12 @@ The corrected capture `target-20261004T064521-1396609` selected
 `drm_virgl`, recorded `enable_gpu_vhost_user=false`, and passed the host
 GLES checks. The launcher records `process_restarter` starting the Android
 crosvm child with the Virgl backend and observing its unexpected exit.
-Apport records a SIGSEGV for the crosvm executable at the matching time, but
-does not include a PID field; the sanitized summary documents this
-executable-and-timestamp correlation. This run no longer shows the earlier
-vhost-user GPU rejection, but it does not establish that Virgl caused the
-crash or that `drm_virgl` boots.
+The unpacked Apport `ProcStatus` identifies the child as crosvm PID 1397163
+with parent PID 1397147, matching the launcher record. Apport records a
+SIGSEGV for that executable; the sanitized summary documents the process
+correlation. This run no longer shows the earlier vhost-user GPU rejection,
+but it does not establish that Virgl caused the crash or that `drm_virgl`
+boots.
 
 **Verification.** `Images/tools/.venv/bin/pytest
 Images/tools/tests/test_reference_capture.py -q` passed 48 tests with three
@@ -5515,28 +5516,30 @@ caller frames. A crash summary is diagnostic context only; it cannot make a
 capture complete or comparable.
 
 **Reason.** The corrected target run verified `drm_virgl` with
-vhost-user GPU disabled. The Apport report records SIGSEGV for the crosvm
-executable. GDB 15.1 places the program counter at `unw_get_reg+68` in
-`libgfxstream_backend.so` and reports `si_addr=0x10`. The launcher records
-`process_restarter` starting crosvm PID 1397163 with the Virgl backend at
-21:45:18Z and reports the unexpected exit at 21:45:20Z. The Apport report
-names the crosvm executable and has a matching 21:45:18Z date, but has no PID
-field; the association is timestamp and executable correlation, not direct
-PID metadata. This narrows the immediate failure but the stripped caller
-frames do not identify the trigger. A raw core dump can contain guest RAM
-and private runtime state; the summary preserves the useful evidence without
-publishing that memory. The capture provides no Linux kernel, stable
-ADB-ready transport, or Android boot-completion evidence.
+vhost-user GPU disabled. The Apport report records SIGSEGV for crosvm. GDB
+15.1 places the program counter at `unw_get_reg+68` in
+`libgfxstream_backend.so` and reports `si_addr=0x10`. The unpacked Apport
+`ProcStatus` lists `Name=crosvm`, `Pid=1397163`, and `PPid=1397147`. The
+launcher records `process_restarter` PID 1397147 starting crosvm PID 1397163
+with the Virgl backend at 21:45:18Z and reports the unexpected exit at
+21:45:20Z, directly matching the report to the launched child. This narrows
+the immediate failure but the stripped caller frames do not identify the
+trigger. A raw core dump can contain guest RAM and private runtime state; the
+summary preserves the useful evidence without publishing that memory. The
+capture provides no Linux kernel, stable ADB-ready transport, or Android
+boot-completion evidence.
 
 **Verification.** The sanitized summary agrees with the Apport report, GDB
-output, and launcher process record. It contains no raw core data or private
-host paths and does not attribute the crash to Virgl. The seven newly added
+output, and launcher process record. Its PID and PPID match the launcher
+record. It contains no raw core data or private host paths and does not
+attribute the crash to Virgl. The seven newly added
 capture directories contain 70 files; all JSON and JSONL files parse, no file
 exceeds 64 MiB, and the privacy scan found no tested host paths, private-key
 markers, or six- and eight-octet colon-form MAC/EUI-64 addresses. The raw
 report and core are absent from the repository. All six checks in
 `scripts/ci/run-checks.sh` passed after these documentation and evidence
 updates. The initial hostile review found and prompted corrections to the ADB
-wording, capture-cause attribution, and process correlation; a follow-up
-hostile review is pending. Keep IR-158 in `Needs maintainer review` until the
-backtrace interpretation and raw-core exclusion are reviewed.
+wording, capture-cause attribution, and process correlation. Follow-up hostile
+reviews confirmed the Apport PID/PPID match and found no further actionable
+issues. Keep IR-158 in `Needs maintainer review` until the backtrace
+interpretation and raw-core exclusion are reviewed.

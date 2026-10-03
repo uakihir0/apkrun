@@ -5192,6 +5192,12 @@ platform-specific skips. All six checks in `scripts/ci/run-checks.sh` passed;
 Ruff lint and format, `sh -n Images/tools/reference/capture.sh`, and
 `git diff --check` passed. The 19 collector tests also passed on the Linux
 reference VM, in addition to the macOS run. A follow-up hostile review found
-no actionable findings. A new 2400-second `default` capture using this
-collector is in progress; artifact contents, privacy scanning, and post-run
-cleanup verification remain pending.
+no actionable findings. A fresh 2403-second `default` capture completed
+with the composite artifact containing all three selected-instance files.
+All ten normalized files matched their Lima-side SHA-256 hashes. A scan found
+no tested host paths, MAC/EUI-64 addresses, or PEM private-key markers.
+Post-run checks found an empty Cuttlefish fleet, no crosvm or
+`process_restarter`, no private ADB listener, a removed private HOME, and no
+leftover composite-spec temporary files. The capture remains under
+`incomplete/` because no boot-completion property or marker was observed;
+it does not satisfy the reference-profile or boot acceptance criteria.

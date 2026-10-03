@@ -748,6 +748,40 @@ guest-side `getprop sys.boot_completed` command has a ten-second cap because
 starting an Android shell can take longer. Both remain bounded by the shared
 capture deadline and cleanup reserve; the three command caps total fourteen
 seconds, with missed 15-second schedule points skipped.
+For a finite capture deadline, leave 28 seconds before the ADB polling cutoff
+for one final Android events-buffer probe. Its minimum 26.5-second budget
+covers two two-second host commands, the ten-second logcat cap, termination
+and reaping for three ADB client process groups, up to four seconds for
+private ADB server shutdown, and a one-second safety margin; the remaining
+1.5 seconds absorb scheduler delay. Do not start an ordinary poll during the
+last 18 seconds before that probe. The probe reconnects and checks
+`get-state`; only a fresh `device` state permits
+`adb logcat -d -b events -v descriptive -t 128`. The logcat client has a
+ten-second timeout and a 64 KiB stdout cap. The `connect` and `get-state`
+clients each have a two-second timeout and a 4 KiB stdout cap. Keep all
+command output in memory and persist an `adb_logcat_summary` JSONL event
+containing only fixed aggregate counts and bounded status fields:
+`attempted`, `reason`, `connectExitCode`, `connectTimedOut`,
+`connectTruncated`, `connectCleanupComplete`, `connectProbeError`,
+`getStateExitCode`, `getStateAttempted`, `getStateTimedOut`,
+`getStateTruncated`, `getStateCleanupComplete`, `getStateProbeError`,
+`deviceState`, `exitCode`, `timedOut`, `truncated`, `probeError`,
+`cleanupComplete`, and `capturedBytes`. Its `summary` contains
+integer counts for `recognizedEvents`, `processStartEvents`,
+`processExitEvents`, `processCrashEvents`, and `anrEvents`, plus
+`systemServerMentionEvents` and `zygoteMentionEvents` and their
+`MentionStartEvents`, `MentionExitEvents`, `MentionCrashEvents`,
+`MentionAnrEvents`, and `MentionKillEvents` subtotals. These counters count
+selected event lines that mention the process name anywhere in the line; they
+do not identify the process targeted by an event or establish causation.
+Counts contain no guest-event timestamps or identities. Do not store event
+payloads, PIDs, UIDs, or process/package names.
+Run each ADB client in its own process group; on a time or output limit,
+terminate the group, reap the client, and verify that the group is gone. If
+cleanup cannot be confirmed, fail the capture. Observer shutdown allows the
+full 28-second probe reservation for in-flight clients to finish before
+reporting cleanup failure. Captures whose `cvd start` returns before this
+final window do not run the probe.
 Each ADB command is capped by the remaining time before the 15-second cleanup
 reserve, and no following command starts once that boundary is reached. The
 mode-0700 socket directory is beneath the run's private HOME.

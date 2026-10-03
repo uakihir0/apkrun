@@ -4462,3 +4462,72 @@ documentation changes; it flags a trailing blank line in the preserved 4 GiB
 Ruff reports the same 52 lint diagnostics on the parent and current revisions
 and marks the same four files as unformatted, with no increase from this
 change.
+
+## IR-139: Summarize final-window Android process events during boot observation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** On captures with a finite deadline, reserve 28 seconds before the
+existing ADB polling cutoff for a final diagnostic window. Its 26.5-second
+minimum covers two two-second host commands, the ten-second logcat limit,
+termination and reaping for all three ADB client process groups, up to four
+seconds for private ADB server shutdown, and a one-second safety margin; the
+remaining 1.5 seconds absorb scheduler delay. Stop starting ordinary polls
+18 seconds before this window, then reconnect through the
+private ADB server and require a fresh `get-state=device` before querying
+`logcat -d -b events -v descriptive -t 128`. Cap the command at ten seconds
+and 64 KiB of stdout. Cap each two-second `connect` and `get-state` command
+at 4 KiB of stdout. Keep all output in memory and persist an
+`adb_logcat_summary` JSONL event with a fixed schema: overall event,
+process-start, process-exit, process-crash and ANR counts, plus bounded
+per-command status fields and per-event-type counts for selected lines
+mentioning `system_server` and `zygote`. These are mention/event-type
+co-occurrence counts; they do not identify the event's target process or
+establish causation. Guest-event timestamps and identities are not stored.
+A timed-out or truncated query may contribute counts from its captured
+prefix. Run each ADB client in its own process group; at the bound, terminate
+the entire group, reap its client leader, and verify that the group is gone.
+Observer shutdown waits through the full 28-second probe reservation before
+reporting cleanup failure, allowing in-flight clients to finish their bounded
+cleanup. Record a bounded summary event when the guest is unavailable,
+without running logcat. Do not run this final-window probe when `cvd start`
+returns early or when no finite deadline is configured.
+
+**Reason.** The 3000-second capture
+(`default-20261003T014646-643687`) reached ADB state `device`, but its legacy
+observer records do not distinguish a skipped `getprop` command from one
+that timed out; a separate eight-second `logcat -d -t 1` request also timed
+out. A distinct 2400-second capture (`default-20261003T024733-676851`)
+recorded calls from the
+`system_server` SELinux domain followed much later by an untracked zombie
+named `system_server`; 112 of 113 property requests timed out at that time's
+two-second cap. Neither the relationship between those kernel records nor
+the reason for the exit is established. A separate 1200-second capture
+(`default-20261003T031842-703886`) recorded 12-second `getprop` and
+`logcat -d -t 1` requests both timing out; its kernel log ended at guest
+uptime 924 seconds and does not connect those timeouts with the separately
+documented `system_server` observations. A small events-buffer
+summary may establish whether Android recorded a process start, death, crash,
+or ANR near the end of a follow-up run, and whether such an event line
+mentions `system_server` or `zygote`. A fixed tag allowlist, output cap,
+in-memory parsing, and aggregate counts preserve that diagnostic value
+without retaining event payloads, guest-event timestamps, or identities. The schema
+labels process-name counters as mentions because the parser does not infer
+event-field roles from descriptive logcat payloads.
+The reserved window protects the existing cleanup allowance and does not
+change the Cuttlefish launch configuration.
+
+**Verification.** T0 covers descriptive logcat line parsing, counts for the
+allowlisted event tags and process-name mention/event-type counts, payload/identity
+exclusion from JSONL, one-shot behavior, offline-state skip, output
+truncation, timeout, descendants that inherit stdout for each final-probe
+client, process-group reaping, per-command cleanup failure reporting, private
+ADB routing, and the final-window schedule with a fake ADB server. The live
+reference-host run and its evidence are recorded in M01 after this
+implementation is committed; no boot or root-cause result is inferred from
+the unit tests. A close-time regression checks that observer shutdown waits
+through the full derived final-probe reservation.

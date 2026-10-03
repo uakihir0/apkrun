@@ -5218,3 +5218,44 @@ acceptance criteria. Hostile review of the SwiftShader record found two
 wording inaccuracies about its bootstat property and zygote start timing;
 both were corrected, and follow-up review found no remaining actionable
 findings.
+
+## IR-152: Distinguish shell startup from a stalled boot-property query
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** On the first boot-property command that is actually launched after
+ADB reports `device`, prefix the existing shell command with the fixed
+`APKRun shell ready` marker. Run it in the same ADB client, timeout, 4 KiB
+output cap, and process group as the property queries. Record only bounded
+status fields and whether stdout began with the marker. Remove the marker
+from in-memory output before property parsing, and never retain the command
+output. If the command could not launch, leave the one-shot marker pending
+for the next property attempt; after a launched attempt, do not retry it.
+Recognize and strip the marker with either LF or CRLF line framing.
+
+**Reason.** In the three incomplete reference captures, ADB often reported
+`device` while the property query returned no parsed values. The existing
+combined shell command prints no property status until after `getprop`
+returns, so its timeout does not show whether the shell reached the command
+or stalled while querying a property. A leading fixed `printf` records shell
+progress before the property calls with no guest-state changes. A matched
+marker proves that the shell reached that statement; a missing marker alone
+does not prove why the command failed. Using the existing bounded ADB client
+avoids a second shell request and leaves the 25.5-second regular-poll reserve
+and 40.5-second final-logcat window unchanged. Hostile review caught a false
+negative when the marker used CRLF; the marker parser and regression coverage
+now accept both supported line endings and preserve subsequent property
+fields.
+
+**Verification.** The focused boot-observer regressions passed 22 tests,
+including CRLF preservation, one-shot behavior, marker privacy, timeout
+handling, cleanup failure, and the unchanged deadline reserve. The full
+image-tools suite passed 468 tests with four platform-specific skips. All six
+checks in `scripts/ci/run-checks.sh`, Ruff lint and format, shell syntax, and
+`git diff --check` passed. Hostile review found a CRLF marker false negative;
+the parser and regression test now cover both LF and CRLF, and follow-up
+review found no actionable findings. A fresh live capture is pending.

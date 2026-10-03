@@ -54,6 +54,8 @@ BOOT_PROPERTIES_SHELL_COMMAND = (
     "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
     '"$system_server_value" "$system_server_status"'
 )
+ADB_SHELL_PROBE_MARKER = b"APKRun shell ready"
+ADB_SHELL_PROBE_COMMAND = "printf '%s\\n' 'APKRun shell ready'; " + BOOT_PROPERTIES_SHELL_COMMAND
 ADB_POLL_FINAL_RESERVE_SECONDS = (
     ADB_COMMAND_TIMEOUT_SECONDS * 2
     + ADB_GETPROP_TIMEOUT_SECONDS
@@ -236,6 +238,15 @@ def summarize_android_logcat(output: bytes) -> dict[str, int]:
     return counts
 
 
+def strip_adb_shell_probe_marker(output: bytes) -> tuple[bool, bytes]:
+    """Remove the fixed initial marker using the supported LF or CRLF framing."""
+    for line_ending in (b"\n", b"\r\n"):
+        marker = ADB_SHELL_PROBE_MARKER + line_ending
+        if output.startswith(marker):
+            return True, output[len(marker) :]
+    return False, b""
+
+
 def parse_boot_properties(
     output: str,
     *,
@@ -377,6 +388,7 @@ class BootObserver:
         self._crosvm_restarter_start_times: dict[int, bytes] = {}
         self._crosvm_start_times: dict[int, bytes] = {}
         self._start_event_observed = False
+        self._shell_probe_attempted = False
         self._logcat_probe_attempted = False
         self._adb_probe_cleanup_failed = False
         self._next_sample = 0.0
@@ -1158,6 +1170,13 @@ class BootObserver:
             "bootCompletedGetpropExitCode": None,
             "sysBootCompleted": None,
             "sysBootCompletedPresent": None,
+            "shellProbeAttempted": False,
+            "shellProbeExitCode": None,
+            "shellProbeTimedOut": None,
+            "shellProbeTruncated": False,
+            "shellProbeCleanupComplete": True,
+            "shellProbeProbeError": False,
+            "shellProbeMarkerMatched": None,
             "cleanupComplete": True,
             "probeError": False,
         }
@@ -1173,6 +1192,7 @@ class BootObserver:
                             "connectTimedOut",
                             "getStateTimedOut",
                             "getpropTimedOut",
+                            "shellProbeTimedOut",
                         )
                     ),
                     "pollDeadlineReached": time.monotonic() >= adb_deadline,
@@ -1282,6 +1302,10 @@ class BootObserver:
             record_poll()
             return True
         if state == "device" and not state_truncated and not state_probe_error:
+            shell_probe_for_poll = not self._shell_probe_attempted
+            property_shell_command = (
+                ADB_SHELL_PROBE_COMMAND if shell_probe_for_poll else BOOT_PROPERTIES_SHELL_COMMAND
+            )
             (
                 property_code,
                 property_output,
@@ -1300,13 +1324,23 @@ class BootObserver:
                     "shell",
                     "sh",
                     "-c",
-                    BOOT_PROPERTIES_SHELL_COMMAND,
+                    property_shell_command,
                 ],
                 environment,
                 adb_deadline,
                 timeout_seconds=ADB_GETPROP_TIMEOUT_SECONDS,
                 max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
             )
+            shell_probe_marker_matched: bool | None = None
+            property_parse_output = property_output
+            if shell_probe_for_poll and property_attempted:
+                (
+                    shell_probe_marker_matched,
+                    property_parse_output,
+                ) = strip_adb_shell_probe_marker(property_output)
+                self._shell_probe_attempted = True
+                if not shell_probe_marker_matched:
+                    property_parse_output = b""
             poll_fields.update(
                 {
                     "getpropExitCode": property_code,
@@ -1321,6 +1355,20 @@ class BootObserver:
                     "probeError": poll_fields["probeError"] or property_probe_error,
                 }
             )
+            if shell_probe_for_poll:
+                poll_fields.update(
+                    {
+                        "shellProbeAttempted": property_attempted,
+                        "shellProbeExitCode": property_code,
+                        "shellProbeTimedOut": (
+                            property_command_timed_out if property_attempted else None
+                        ),
+                        "shellProbeTruncated": property_truncated,
+                        "shellProbeCleanupComplete": property_cleanup_complete,
+                        "shellProbeProbeError": property_probe_error,
+                        "shellProbeMarkerMatched": shell_probe_marker_matched,
+                    }
+                )
             if not property_cleanup_complete:
                 self._adb_probe_cleanup_failed = True
             elif not property_truncated and not property_probe_error:
@@ -1332,7 +1380,7 @@ class BootObserver:
                     poll_fields["systemServerGetpropExitCode"],
                     poll_fields["bootCompletedGetpropExitCode"],
                 ) = parse_boot_properties(
-                    property_output.decode("utf-8", errors="replace"),
+                    property_parse_output.decode("utf-8", errors="replace"),
                     allow_truncated_tail=property_command_timed_out,
                 )
         record_poll()

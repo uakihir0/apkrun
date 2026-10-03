@@ -5319,3 +5319,29 @@ timeout or missing marker; the multi-poll test now verifies both outcomes
 resume at the property query without repeating the one-shot. Follow-up
 hostile review found no actionable findings. A fresh live capture remains
 pending.
+
+## IR-154: Preserve the ADB observer's monotonic poll schedule
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Advance each ADB poll from its scheduled monotonic time, then skip
+every elapsed 15-second slot until the next future slot. Do not calculate the
+next poll from the previous poll's completion time.
+
+**Reason.** A bounded poll can still take longer than one 15-second interval
+when several ADB stages and process-group cleanup run near their limits.
+Scheduling from its completion would shift all later polls, contrary to the
+fixed monotonic schedule and the existing rule to skip missed slots rather
+than replay them.
+
+**Verification.** Regression cases cover a poll finishing before its next
+slot, a 17-second overrun, multiple missed slots, and a poll ending exactly
+on a scheduled boundary. The boot-observer suite passed 107 tests with one
+Linux-only skip; Ruff lint, Ruff format, and `git diff --check` passed.
+Adversarial review found no actionable findings. The #064 test plan now
+describes the standalone shell probe and deferred property query used by the
+implementation.

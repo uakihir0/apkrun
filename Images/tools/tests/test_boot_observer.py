@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -944,6 +945,34 @@ def test_boot_observer_discovers_delayed_external_runtime_target(
     assert len(memory) == 1
     assert memory[0]["pid"] == 513
     assert memory[0]["vmRssKiB"] == 987654
+
+
+def test_boot_observer_starts_adb_observer_before_next_memory_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    adb_started = threading.Event()
+
+    def fake_poll_adb() -> None:
+        adb_started.set()
+
+    monkeypatch.setattr(observer, "_poll_adb", fake_poll_adb)
+    observer.start()
+    observer.sample(now=0)
+    assert observer._next_sample == observer.sample_interval
+
+    launcher_log.write_bytes(b"Start event (5) received.\n")
+    observer.sample(now=1)
+    assert adb_started.wait(timeout=1)
+    assert observer._next_sample == observer.sample_interval
+
+    observer.close()
+    records = _read_records(output)
+    assert sum(record["event"] == "crosvm_memory" for record in records) == 1
+    assert sum(record["event"] == "cuttlefish_start_event_5_observed" for record in records) == 1
 
 
 @pytest.mark.parametrize("replace_target", (False, True))

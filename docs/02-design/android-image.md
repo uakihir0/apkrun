@@ -704,15 +704,19 @@ next poll as soon as listing returns, and a malformed log listing does not
 prevent it from terminating the CVD process group.
 For a long `cvd start`, setting `APKRUN_CAPTURE_BOOT_OBSERVER=1` also writes
 `boot-observer.jsonl` while the command is running. An independent sampler
-checks the Android crosvm every five seconds. Launcher lines identify their
-emitting process by name and PID. The observer collects `process_restarter`
-PIDs directly from those prefixes, then accepts only a process whose
-executable and command line identify the private instance, include Android's
-`kernel-log-pipe` serial, and exclude the OpenWrt serial. This avoids pairing
-interleaved `Started` lines with arguments. The sampler reads the selected
-restarter's direct child, confirms the child's procfs parent PID is that
-restarter, and rechecks both processes' pinned start times before recording
-`VmRSS` and `RssShmem`. It requires the staged crosvm path and verifies that
+checks the Android crosvm every five seconds. It wakes on a one-second
+schedule to rescan the launcher log for event 5. RSS measurements retain their
+five-second interval. Once event 5 is observed, the ADB observer
+starts on that scan instead of waiting for the next RSS sample. Launcher
+lines identify their emitting process by name and PID. The observer collects
+`process_restarter` PIDs directly from those prefixes, then accepts only a
+process whose executable and command line identify the private instance,
+include Android's `kernel-log-pipe` serial, and exclude the OpenWrt serial.
+This avoids pairing interleaved `Started` lines with arguments. The sampler
+reads the selected restarter's direct child, confirms the child's procfs
+parent PID is that restarter, and rechecks both processes' pinned start times
+before recording `VmRSS` and `RssShmem`. It requires the staged crosvm path
+and verifies that
 `/proc/<pid>/exe` refers to the same file, even when the staged path is a
 symlink. Ambiguous or mismatched process identities are not sampled. Resolve
 the private HOME's `cuttlefish_runtime` link during sampling because Cuttlefish

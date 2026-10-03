@@ -4910,3 +4910,29 @@ ADB entry was explicitly disconnected and the device list was then empty.
 The ten Lima manifest entries verified on the host, and privacy scans found
 no tested private host paths, MAC/EUI-64 addresses, or PEM key markers. This
 run does not satisfy #064's boot-completion or reference-profile criteria.
+
+## IR-145: Trigger ADB observation independently of RSS sampling
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Rescan the launcher log on a one-second schedule while keeping
+RSS sampling on its existing configured interval. Start the ADB observer as
+soon as the scan detects launcher event 5, even when the next RSS sample is
+not due.
+
+**Reason.** The previous scheduler only noticed event 5 during a five-second
+memory sample. The ADB observer could therefore start several seconds after
+the launcher event, and the same coupling delayed the first poll. Separating
+the launcher scan schedule reduces that avoidable diagnostic delay without
+increasing the default RSS sampling rate.
+
+**Verification.** A regression test places event 5 between RSS deadlines and
+confirms that the ADB observer starts before the next memory sample, with no
+additional RSS record. `Images/tools/tests/test_boot_observer.py` passed 84
+tests with one Linux-only skip. Ruff lint and format checks passed. Hostile
+review found no actionable issues. The live effect remains to be verified in
+a subsequent reference capture.

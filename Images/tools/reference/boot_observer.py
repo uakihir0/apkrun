@@ -24,6 +24,7 @@ SNAPSHOT_TRUNCATION_MARKER = (
 )
 MAX_LOG_BYTES = 64 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 5.0
+LAUNCHER_POLL_INTERVAL_SECONDS = 1.0
 ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
@@ -404,6 +405,7 @@ class BootObserver:
             raise RuntimeError("boot observer is not running")
         self._refresh_launcher_log()
         self._refresh_instance_path()
+        self._start_adb_observer_if_needed()
         observed_at = time.monotonic() if now is None else now
         if observed_at < self._next_sample:
             return
@@ -459,6 +461,8 @@ class BootObserver:
                     "candidateCount": len(candidates),
                 }
             )
+
+    def _start_adb_observer_if_needed(self) -> None:
         if (
             self._start_event_observed
             and self._adb_thread is None
@@ -473,6 +477,7 @@ class BootObserver:
 
     def _sample_loop(self) -> None:
         next_sample = time.monotonic()
+        poll_interval = min(self.sample_interval, LAUNCHER_POLL_INTERVAL_SECONDS)
         while not self._stop_event.is_set():
             now = time.monotonic()
             if now < next_sample:
@@ -480,10 +485,10 @@ class BootObserver:
                     return
                 now = time.monotonic()
             self.sample(now)
-            next_sample += self.sample_interval
+            next_sample += poll_interval
             now = time.monotonic()
             while next_sample <= now:
-                next_sample += self.sample_interval
+                next_sample += poll_interval
 
     def close(self) -> None:
         if self._closed:

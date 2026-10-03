@@ -751,13 +751,20 @@ values other than empty, `0`, or `1` with a fixed marker, preventing property
 contents from injecting protocol lines. It appends each getprop exit status
 with a non-newline delimiter before command substitution, preserving trailing
 property newlines; it removes only the single newline emitted by getprop
-before validation. The parser accepts LF and CRLF transport line endings,
+before validation. The shell reads `sys.boot_completed` first and emits its
+sanitized value and exit status before querying `sys.system_server.start_count`.
+A later timeout therefore preserves an already completed boot-property query.
+The parser accepts LF and CRLF transport line endings,
 removing one carriage return only when it is immediately before a line feed,
-then requires the fixed output order emitted by the shell command; a valid
-prefix is retained when a timeout truncates the reply. An unterminated final
-carriage return is preserved. Because the shell has already reduced property
-values to ASCII digits or a fixed marker, removing one carriage return before
-each line feed cannot turn a raw property value into an accepted value.
+then requires the fixed order `boot_completed`,
+`boot_completed_status`, `system_server`, `system_server_status`. During a
+command timeout only, the parser ignores a final unterminated fragment when
+it is a prefix of the next expected field label, retaining earlier complete
+property pairs. Complete malformed or out-of-order lines still invalidate
+the reply. An unterminated final carriage return is preserved. Because the
+shell has already reduced property values to ASCII digits or a fixed marker,
+removing one carriage return before each line feed cannot turn a raw property
+value into an accepted value.
 The ADB subprocess wrapper passes the property reply and any partial timeout
 output to this parser without trimming; only the separate `get-state` response
 is whitespace-normalized.

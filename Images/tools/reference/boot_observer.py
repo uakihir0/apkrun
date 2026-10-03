@@ -31,16 +31,6 @@ ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
 BOOT_PROPERTIES_SHELL_COMMAND = (
     "newline=$(printf '\\n_'); newline=${newline%_}; "
-    "system_server_reply=$(getprop sys.system_server.start_count; "
-    "system_server_status=$?; printf '|%s' \"$system_server_status\"); "
-    "system_server_status=${system_server_reply##*|}; "
-    "system_server_value=${system_server_reply%|*}; "
-    'case "$system_server_value" in *"$newline") '
-    'system_server_value=${system_server_value%"$newline"} ;; esac; '
-    'case "$system_server_value" in *[!0123456789]*) '
-    "system_server_value=invalid ;; esac; "
-    "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
-    '"$system_server_value" "$system_server_status"; '
     "boot_completed_reply=$(getprop sys.boot_completed; "
     "boot_completed_status=$?; printf '|%s' \"$boot_completed_status\"); "
     "boot_completed_status=${boot_completed_reply##*|}; "
@@ -50,7 +40,17 @@ BOOT_PROPERTIES_SHELL_COMMAND = (
     'case "$boot_completed_value" in ""|0|1) ;; '
     "*) boot_completed_value=invalid ;; esac; "
     "printf 'boot_completed=%s\\nboot_completed_status=%s\\n' "
-    '"$boot_completed_value" "$boot_completed_status"'
+    '"$boot_completed_value" "$boot_completed_status"; '
+    "system_server_reply=$(getprop sys.system_server.start_count; "
+    "system_server_status=$?; printf '|%s' \"$system_server_status\"); "
+    "system_server_status=${system_server_reply##*|}; "
+    "system_server_value=${system_server_reply%|*}; "
+    'case "$system_server_value" in *"$newline") '
+    'system_server_value=${system_server_value%"$newline"} ;; esac; '
+    'case "$system_server_value" in *[!0123456789]*) '
+    "system_server_value=invalid ;; esac; "
+    "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
+    '"$system_server_value" "$system_server_status"'
 )
 ADB_POLL_FINAL_RESERVE_SECONDS = ADB_COMMAND_TIMEOUT_SECONDS * 2 + ADB_GETPROP_TIMEOUT_SECONDS + 4.0
 ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
@@ -233,13 +233,15 @@ def summarize_android_logcat(output: bytes) -> dict[str, int]:
 
 def parse_boot_properties(
     output: str,
+    *,
+    allow_truncated_tail: bool = False,
 ) -> tuple[int | None, bool | None, bool | None, bool | None, int | None, int | None]:
-    """Parse bounded values only from successful, well-framed property replies."""
+    """Parse bounded values, optionally retaining a prefix before a truncated tail."""
     expected_fields = (
-        "system_server",
-        "system_server_status",
         "boot_completed",
         "boot_completed_status",
+        "system_server",
+        "system_server_status",
     )
     lines = output.split("\n")
     line_feed_terminated = output.endswith("\n")
@@ -255,6 +257,14 @@ def parse_boot_properties(
             malformed_output = True
             continue
         name, separator, value = line.partition("=")
+        if (
+            allow_truncated_tail
+            and not line_feed_terminated
+            and index == len(lines) - 1
+            and not separator
+            and expected_fields[index].startswith(line)
+        ):
+            continue
         if not separator or name != expected_fields[index]:
             malformed_output = True
             continue
@@ -1209,7 +1219,10 @@ class BootObserver:
                 boot_completed_present,
                 system_server_getprop_exit_code,
                 boot_completed_getprop_exit_code,
-            ) = parse_boot_properties(property_output)
+            ) = parse_boot_properties(
+                property_output,
+                allow_truncated_tail=property_command_timed_out,
+            )
         self._record(
             {
                 "event": "adb_poll",

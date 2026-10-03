@@ -4936,3 +4936,33 @@ additional RSS record. `Images/tools/tests/test_boot_observer.py` passed 84
 tests with one Linux-only skip. Ruff lint and format checks passed. Hostile
 review found no actionable issues. The live effect remains to be verified in
 a subsequent reference capture.
+
+## IR-146: Prioritize and preserve the boot-completion query
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Query `sys.boot_completed` first and emit its sanitized value and
+exit status before querying `sys.system_server.start_count`. When the combined
+shell command times out, permit the parser to ignore only a final
+unterminated fragment that is a prefix of the next expected field label.
+Retain the complete earlier property pair in that case; continue to reject
+complete malformed or out-of-order lines.
+
+**Reason.** The boot-completion property is the primary signal required by
+#064. A later SystemServer query must not hide a result already obtained.
+Timeout output can end in the middle of a shell protocol field, so parsing
+needs a narrowly bounded way to preserve the preceding complete pair without
+weakening validation for normal or fully malformed replies.
+
+**Verification.** Shell integration tests confirm the boot property is
+emitted before the SystemServer query and remains parseable when that later
+query is interrupted. ADB-poll tests confirm truncated-label retention is
+enabled only for a timed-out shell command. The focused property tests passed
+41 cases; `test_boot_observer.py` passed 86 tests with one Linux-only skip.
+Ruff lint and format checks passed. Hostile review found and prompted a fix
+for the incomplete-label boundary; follow-up review found no remaining
+issues.

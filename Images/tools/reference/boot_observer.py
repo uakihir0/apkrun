@@ -1,4 +1,4 @@
-"""Record bounded Cuttlefish guest memory, ADB, and process-event observations."""
+"""Record bounded Cuttlefish guest memory, ADB, and Android log observations."""
 
 from __future__ import annotations
 
@@ -33,15 +33,16 @@ ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
 ADB_LOGCAT_TIMEOUT_SECONDS = 10.0
 ADB_LOGCAT_TAIL_LINES = 128
 ADB_LOGCAT_MAX_BYTES = 64 * 1024
+ADB_LOGCAT_QUERY_COUNT = 2
 ADB_CLIENT_TERMINATE_SECONDS = 0.5
 ADB_CLIENT_KILL_SECONDS = 1.0
 ADB_PROBE_WINDOW_MARGIN_SECONDS = 1.0
 ADB_SERVER_TERMINATE_SECONDS = 2.0
 ADB_SERVER_KILL_SECONDS = 2.0
-ADB_FINAL_PROBE_COMMAND_COUNT = 3
+ADB_FINAL_PROBE_COMMAND_COUNT = 2 + ADB_LOGCAT_QUERY_COUNT
 ADB_LOGCAT_MINIMUM_WINDOW_SECONDS = (
     ADB_COMMAND_TIMEOUT_SECONDS * 2
-    + ADB_LOGCAT_TIMEOUT_SECONDS
+    + ADB_LOGCAT_TIMEOUT_SECONDS * ADB_LOGCAT_QUERY_COUNT
     + (ADB_CLIENT_TERMINATE_SECONDS + ADB_CLIENT_KILL_SECONDS * 2) * ADB_FINAL_PROBE_COMMAND_COUNT
     + ADB_SERVER_TERMINATE_SECONDS
     + ADB_SERVER_KILL_SECONDS
@@ -66,6 +67,14 @@ LOGCAT_EVENT_LINE = re.compile(
 )
 LOGCAT_SYSTEM_SERVER = re.compile(r"(?<![A-Za-z0-9_])system_server(?![A-Za-z0-9_])")
 LOGCAT_ZYGOTE = re.compile(r"(?<![A-Za-z0-9_])zygote(?:64)?(?![A-Za-z0-9_])")
+LOGCAT_DIAGNOSTIC_PATTERNS = (
+    ("fatalExceptionLines", re.compile(r"\bFATAL EXCEPTION\b", re.IGNORECASE)),
+    ("fatalSignalLines", re.compile(r"\bFatal signal\b", re.IGNORECASE)),
+    ("anrTextLines", re.compile(r"\b(?:ANR in|Application Not Responding)\b", re.IGNORECASE)),
+    ("watchdogMentionLines", re.compile(r"\bWatchdog\b", re.IGNORECASE)),
+    ("systemServerMentionLines", LOGCAT_SYSTEM_SERVER),
+    ("zygoteMentionLines", LOGCAT_ZYGOTE),
+)
 ADB_SERVER_EXEC_SCRIPT = """
 import ctypes
 import os
@@ -184,6 +193,17 @@ def summarize_logcat_events(output: bytes) -> dict[str, int]:
                 counts[f"{process_name}MentionEvents"] += 1
                 if event_kind is not None:
                     counts[f"{process_name}Mention{event_kind}Events"] += 1
+    return counts
+
+
+def summarize_android_logcat(output: bytes) -> dict[str, int]:
+    """Keep only fixed Android log marker counts; never persist log text."""
+    counts = {name: 0 for name, _ in LOGCAT_DIAGNOSTIC_PATTERNS}
+    text = output.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        for name, pattern in LOGCAT_DIAGNOSTIC_PATTERNS:
+            if pattern.search(line):
+                counts[name] += 1
     return counts
 
 
@@ -1121,6 +1141,7 @@ class BootObserver:
             "cleanupComplete": True,
             "capturedBytes": 0,
             "summary": None,
+            "androidLogcat": None,
         }
         if adb_deadline - time.monotonic() < ADB_LOGCAT_MINIMUM_WINDOW_SECONDS:
             fields["reason"] = "insufficient_probe_window"
@@ -1300,7 +1321,133 @@ class BootObserver:
             fields["reason"] = "logcat_probe_error"
         elif not attempted:
             fields["reason"] = "logcat_not_started"
+        android_logcat: dict[str, Any] | None = None
+        if not cleanup_complete:
+            android_logcat = {
+                "attempted": False,
+                "reason": "events_cleanup_failed",
+                "exitCode": None,
+                "timedOut": None,
+                "truncated": False,
+                "probeError": False,
+                "cleanupComplete": True,
+                "capturedBytes": 0,
+                "summary": None,
+            }
+        elif probe_error or not attempted:
+            android_logcat = {
+                "attempted": False,
+                "reason": "events_probe_incomplete",
+                "exitCode": None,
+                "timedOut": None,
+                "truncated": False,
+                "probeError": False,
+                "cleanupComplete": True,
+                "capturedBytes": 0,
+                "summary": None,
+            }
+        else:
+            android_logcat = self._probe_android_logcat(
+                adb_socket,
+                serial,
+                environment,
+                server,
+                socket_path,
+                adb_deadline,
+            )
+        fields["androidLogcat"] = android_logcat
+        if android_logcat is not None:
+            fields["cleanupComplete"] = (
+                fields["cleanupComplete"] and android_logcat["cleanupComplete"]
+            )
+            fields["probeError"] = fields["probeError"] or android_logcat["probeError"]
+            if not android_logcat["cleanupComplete"]:
+                self._adb_probe_cleanup_failed = True
+                fields["reason"] = "android_logcat_cleanup_failed"
+            elif android_logcat["probeError"]:
+                fields["reason"] = "android_logcat_probe_error"
+            elif not android_logcat["attempted"] and android_logcat["reason"] is not None:
+                fields["reason"] = android_logcat["reason"]
         self._record(fields)
+
+    def _probe_android_logcat(
+        self,
+        adb_socket: str,
+        serial: str,
+        environment: dict[str, str],
+        server: subprocess.Popen[bytes],
+        socket_path: Path,
+        adb_deadline: float,
+    ) -> dict[str, Any]:
+        fields: dict[str, Any] = {
+            "attempted": False,
+            "reason": None,
+            "exitCode": None,
+            "timedOut": None,
+            "truncated": False,
+            "probeError": False,
+            "cleanupComplete": True,
+            "capturedBytes": 0,
+            "summary": None,
+        }
+        if server.poll() is not None or not self._is_socket(socket_path):
+            fields["reason"] = "server_lost"
+            return fields
+        command = [
+            str(self.adb_path),
+            "-L",
+            adb_socket,
+            "-s",
+            serial,
+            "logcat",
+            "-d",
+            "-b",
+            "main",
+            "-b",
+            "system",
+            "-b",
+            "crash",
+            "-v",
+            "brief",
+            "-t",
+            str(ADB_LOGCAT_TAIL_LINES),
+        ]
+        (
+            exit_code,
+            output,
+            timed_out,
+            attempted,
+            truncated,
+            cleanup_complete,
+            probe_error,
+        ) = self._run_adb_bounded(
+            command,
+            environment,
+            adb_deadline,
+            timeout_seconds=ADB_LOGCAT_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_LOGCAT_MAX_BYTES,
+        )
+        fields.update(
+            {
+                "attempted": attempted,
+                "exitCode": exit_code,
+                "timedOut": timed_out if attempted else None,
+                "truncated": truncated,
+                "probeError": probe_error,
+                "cleanupComplete": cleanup_complete,
+                "capturedBytes": len(output),
+                "summary": (
+                    summarize_android_logcat(output)
+                    if attempted and (output or exit_code == 0)
+                    else None
+                ),
+            }
+        )
+        if probe_error:
+            fields["reason"] = "logcat_probe_error"
+        elif not attempted:
+            fields["reason"] = "logcat_not_started"
+        return fields
 
     @staticmethod
     def _run_adb(

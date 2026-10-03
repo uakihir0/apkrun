@@ -1141,7 +1141,7 @@ def test_close_waits_for_the_full_final_probe_and_server_cleanup_bound(
 ) -> None:
     required_cleanup_timeout = (
         OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS * 2
-        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS * OBSERVER_MODULE.ADB_LOGCAT_QUERY_COUNT
         + (
             OBSERVER_MODULE.ADB_CLIENT_TERMINATE_SECONDS
             + OBSERVER_MODULE.ADB_CLIENT_KILL_SECONDS * 2
@@ -1193,7 +1193,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     monkeypatch.setattr(OBSERVER_MODULE, "ADB_PROBE_WINDOW_MARGIN_SECONDS", 0.05)
     minimum_probe_window = (
         OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS * 2
-        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS * OBSERVER_MODULE.ADB_LOGCAT_QUERY_COUNT
         + (
             OBSERVER_MODULE.ADB_CLIENT_TERMINATE_SECONDS
             + OBSERVER_MODULE.ADB_CLIENT_KILL_SECONDS * 2
@@ -1273,8 +1273,12 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         "    print('0')\n"
         "    raise SystemExit(0)\n"
         "if 'logcat' in args:\n"
-        "    print('06-15 12:00:00.000  1000  1000 I am_proc_start: "
+        "    if args[args.index('-b') + 1] == 'events':\n"
+        "        print('06-15 12:00:00.000  1000  1000 I am_proc_start: "
         "[987654, 12345, system_server]')\n"
+        "    else:\n"
+        "        print('06-15 12:00:01.000  1000  1000 W Watchdog: "
+        "subject=private-value')\n"
         "    raise SystemExit(0)\n"
         "raise SystemExit(19)\n",
         encoding="utf-8",
@@ -1303,15 +1307,24 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     assert summaries[0]["attempted"]
     assert summaries[0]["summary"]["processStartEvents"] == 1
     assert summaries[0]["summary"]["systemServerMentionEvents"] == 1
+    assert summaries[0]["androidLogcat"]["summary"]["watchdogMentionLines"] == 1
     assert server_ready.read_text(encoding="ascii") == "ready"
     assert server_stopped.read_text(encoding="ascii") == "stopped"
     assert not Path(server_socket_file.read_text(encoding="ascii")).exists()
     logged_calls = [json.loads(line) for line in calls.read_text().splitlines()]
     logcat_calls = [call for call in logged_calls if "logcat" in call["args"]]
-    assert len(logcat_calls) == 1
+    assert len(logcat_calls) == 2
     assert logcat_calls[0]["args"][logcat_calls[0]["args"].index("-b") + 1] == "events"
-    assert logcat_calls[0]["args"][-2:] == ["-t", "128"]
+    assert logcat_calls[0]["args"][-4:] == ["-v", "descriptive", "-t", "128"]
+    assert [
+        call["args"][index + 1]
+        for call in (logcat_calls[1],)
+        for index, argument in enumerate(call["args"][:-1])
+        if argument == "-b"
+    ] == ["main", "system", "crash"]
+    assert logcat_calls[1]["args"][-2:] == ["-t", "128"]
     assert "system_server" not in output.read_text(encoding="utf-8")
+    assert "private-value" not in output.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -1698,6 +1711,29 @@ def test_summarize_logcat_events_counts_only_selected_event_tags() -> None:
     }
 
 
+def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() -> None:
+    output = (
+        b"06-15 12:00:00.000  1000  1000 E AndroidRuntime: "
+        b"FATAL EXCEPTION: main package=com.private.app system_server\n"
+        b"06-15 12:00:01.000  1000  1000 F libc: Fatal signal 11 (SIGSEGV)\n"
+        b"06-15 12:00:02.000  1000  1000 E ActivityManager: ANR in com.private.app\n"
+        b"06-15 12:00:03.000  1000  1000 W Watchdog: subject=private-value\n"
+        b"06-15 12:00:04.000  1000  1000 I ActivityManager: zygote64 is ready\n"
+    )
+
+    summary = OBSERVER_MODULE.summarize_android_logcat(output)
+
+    assert summary == {
+        "fatalExceptionLines": 1,
+        "fatalSignalLines": 1,
+        "anrTextLines": 1,
+        "watchdogMentionLines": 1,
+        "systemServerMentionLines": 1,
+        "zygoteMentionLines": 1,
+    }
+    assert all(isinstance(value, int) for value in summary.values())
+
+
 def test_bounded_adb_logcat_caps_stdout_and_reaps_the_client(tmp_path: Path) -> None:
     fake_adb = tmp_path / "fake-adb"
     fake_adb.write_text(
@@ -1832,6 +1868,13 @@ def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
         b"06-15 12:00:02.000  1000  1000 I am_proc_start: "
         b"[4321, zygote64]\n"
     )
+    android_output = (
+        b"06-15 12:00:03.000  1000  1000 I am_proc_start: "
+        b"[4321, 987654, com.private.app]\n"
+        b"06-15 12:00:04.000  1000  1000 E AndroidRuntime: "
+        b"FATAL EXCEPTION: main package=com.private.app\n"
+        b"06-15 12:00:05.000  1000  1000 W Watchdog: subject=private-value\n"
+    )
 
     class LiveServer:
         @staticmethod
@@ -1856,10 +1899,14 @@ def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
             assert timeout_seconds == OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS
             assert max_output_bytes == OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES
             return 0, b"device\n", False, True, False, True, False
-        if "logcat" in command:
+        if "logcat" in command and "events" in command:
             assert timeout_seconds == OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
             assert max_output_bytes == OBSERVER_MODULE.ADB_LOGCAT_MAX_BYTES
             return 0, event_output, False, True, False, True, False
+        if "logcat" in command and "main" in command:
+            assert timeout_seconds == OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+            assert max_output_bytes == OBSERVER_MODULE.ADB_LOGCAT_MAX_BYTES
+            return 0, android_output, False, True, False, True, False
         raise AssertionError(f"unexpected ADB command: {command!r}")
 
     monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
@@ -1880,10 +1927,11 @@ def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
     records = [
         record for record in _read_records(output_path) if record["event"] == "adb_logcat_summary"
     ]
-    assert len(bounded_calls) == 3
+    assert len(bounded_calls) == 4
     assert "connect" in bounded_calls[0]
     assert bounded_calls[1][-1:] == ["get-state"]
-    assert "logcat" in bounded_calls[2]
+    assert "events" in bounded_calls[2]
+    assert "main" in bounded_calls[3]
     assert len(records) == 1
     record = records[0]
     assert record["attempted"]
@@ -1892,6 +1940,16 @@ def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
     assert record["getStateCleanupComplete"] is True
     assert record["cleanupComplete"] is True
     assert record["capturedBytes"] == len(event_output)
+    assert record["androidLogcat"]["attempted"]
+    assert record["androidLogcat"]["capturedBytes"] == len(android_output)
+    assert record["androidLogcat"]["summary"] == {
+        "fatalExceptionLines": 1,
+        "fatalSignalLines": 0,
+        "anrTextLines": 0,
+        "watchdogMentionLines": 1,
+        "systemServerMentionLines": 0,
+        "zygoteMentionLines": 0,
+    }
     assert record["summary"] == {
         "recognizedEvents": 3,
         "processStartEvents": 1,
@@ -1918,6 +1976,9 @@ def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
     assert "connected" not in saved_output
     assert "987654" not in saved_output
     assert "12345" not in saved_output
+    assert "FATAL EXCEPTION" not in saved_output
+    assert "private-value" not in saved_output
+    assert "06-15 12:00" not in saved_output
 
 
 def test_final_logcat_summary_skips_guest_when_adb_is_offline(
@@ -1985,7 +2046,10 @@ def test_final_logcat_summary_skips_guest_when_adb_is_offline(
     assert records[0]["reason"] == "device_unavailable"
 
 
-@pytest.mark.parametrize("failed_command", ["connect", "get-state", "logcat"])
+@pytest.mark.parametrize(
+    "failed_command",
+    ["connect", "get-state", "logcat", "android_logcat"],
+)
 def test_final_probe_fails_close_when_client_cleanup_is_unverified(
     tmp_path: Path,
     short_private_home: Path,
@@ -2023,8 +2087,10 @@ def test_final_probe_fails_close_when_client_cleanup_is_unverified(
             return 0, b"", False, True, False, failed_command != "connect", False
         if command[-1:] == ["get-state"]:
             return 0, b"device\n", False, True, False, failed_command != "get-state", False
-        if "logcat" in command:
+        if "logcat" in command and "events" in command:
             return 0, b"", False, True, False, failed_command != "logcat", False
+        if "logcat" in command and "main" in command:
+            return 0, b"", False, True, False, failed_command != "android_logcat", False
         raise AssertionError(f"unexpected ADB command: {command!r}")
 
     monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)

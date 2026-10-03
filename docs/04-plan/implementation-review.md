@@ -4531,6 +4531,9 @@ reference-host run and its evidence are recorded in M01 after this
 implementation is committed; no boot or root-cause result is inferred from
 the unit tests. A close-time regression checks that observer shutdown waits
 through the full derived final-probe reservation.
+IR-141 adds a separate main/system/crash query while retaining the
+events-only query for process-event counts; the live capture documented above
+used only the events buffer.
 
 ## IR-140: Run a 2400-second untraced U-Boot and Android observation
 
@@ -4590,3 +4593,51 @@ interval adjustment, the targeted regression passed on both systems and
 Ruff/format checks passed. All six `scripts/ci/run-checks.sh` checks passed
 before that final fixture-only adjustment. The capture did not record Android
 boot completion and does not resolve the U-Boot or Android failure cause.
+
+## IR-141: Summarize bounded Android logcat markers after incomplete boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Keep the finite-deadline one-shot ADB probe and run two sequential
+logcat queries after a fresh `device` state: the existing 128-line,
+ten-second, 64 KiB `events` query, followed by a 128-line, ten-second, 64 KiB
+query for the `main`, `system`, and `crash` buffers. Raise the final probe
+reservation from 28 seconds to 40.5 seconds; its computed minimum is 39
+seconds. Keep process-event counts only from `events`. Put the second query's
+bounded command status and fixed counts for lines mentioning `FATAL
+EXCEPTION`, `Fatal signal`, ANR text, `Watchdog`, `system_server`, and
+`zygote` in a nested `androidLogcat` object. Keep both command outputs in
+memory and persist only counts and bounded statuses. Do not write log lines,
+guest-log timestamps, tags, PIDs, package names, or other guest identities;
+the JSONL record retains its ordinary host-side `timestampUtc`.
+
+**Reason.** The 2400-second capture in M01 reached Linux, first-stage init,
+zygote, and servicemanager calls attributed to `system_server`, but did not
+record `sys.boot_completed=1`. Its final `events`-buffer query succeeded
+with zero recognized process events. The kernel log also records a watchdog
+task issuing SysRq dumps and a later all-CPU snapshot of PID 1700 for
+`system_server`. The events buffer alone could not reveal AndroidRuntime,
+ANR, native-fatal-signal, or Watchdog text from the main, system, or crash
+buffers. The attached diagnosis recommends inspecting ADB logcat when Linux
+progresses but Android does not complete. A single `all`-buffer query would
+mix process-event tags with regular log text and could inflate event counts
+without proving each line's buffer. Separate bounded queries preserve that
+provenance and add only 12.5 seconds to the reserved window. The second
+query's line counts are mentions, not proof that an exception, crash, ANR,
+or watchdog caused the incomplete boot. A truncated or timed-out query may
+contribute counts from its captured prefix.
+
+**Verification.** Focused tests cover separate buffer selections, marker
+counts, event-source provenance, one-shot private ADB routing, the derived
+39-second minimum and 40.5-second reservation, command bounds, and assertions
+that event payloads, app names, PIDs, guest timestamps, and marker text are
+not written to JSONL. The full Image tools suite passed 396 tests with four
+skips on macOS and 399 tests with one skip on Lima Linux. The dedicated
+timestamp-privacy regression passed on both systems. Ruff, formatting,
+whitespace, and final hostile-review checks passed. Live reference-host
+verification with both buffer-scoped queries remains pending; the M01 capture
+above predates this change and queried only the events buffer.

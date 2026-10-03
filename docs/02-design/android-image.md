@@ -734,19 +734,31 @@ snapshot is truncated or those bytes change, it clears prior process
 identities and records an observation gap.
 After launcher log event 5, it probes the selected localhost ADB serial on a
 monotonic 15-second schedule through a private ADB server socket and records
-only bounded state fields, including `sys.boot_completed`; raw ADB output is
-not stored. Each `adb_poll` record includes `getpropAttempted` and nullable
-`getpropTimedOut` fields, so a deadline reached before the property query is
-distinguishable from a query that ran and timed out. The aggregate
-`commandTimedOut` field reports whether an ADB subprocess timed out;
+only bounded state fields, including the numeric `systemServerStartCount`,
+the nullable Boolean `systemServerStartCountPresent`, and the Boolean
+`sys.boot_completed` signal. A successful, non-empty
+`sys.system_server.start_count` sets the presence field even if its value is
+not a bounded integer; failed or unobserved queries leave it null. Both
+properties are read by one shell command capped at ten seconds, and each
+property's bounded exit status is recorded separately as
+`systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`, so a
+successful query remains distinguishable from a failed query even though the
+enclosing shell command ends with a status-printing command. A partial result
+remains usable if the other query fails. Raw ADB output, including partial
+output from a timed-out command, is parsed in memory and never stored. Each
+`adb_poll` record includes
+`getpropAttempted` and nullable `getpropTimedOut` fields, so a deadline
+reached before the property query is distinguishable from a query that ran
+and timed out. The aggregate `commandTimedOut` field reports whether an ADB
+subprocess timed out;
 `pollDeadlineReached` reports whether the poll reached its shared deadline,
 including when that prevented a subprocess from starting. It removes
 inherited ADB socket, serial, and vendor-key overrides from the observer
 environment. Missed ADB schedule points are skipped rather than replayed.
 The host-side `connect` and `get-state` commands have a two-second cap; the
-guest-side `getprop sys.boot_completed` command has a ten-second cap because
-starting an Android shell can take longer. Both remain bounded by the shared
-capture deadline and cleanup reserve; the three command caps total fourteen
+guest-side boot-property query has a ten-second cap because starting an
+Android shell can take longer. All three commands remain bounded by the
+shared capture deadline and cleanup reserve; their caps total fourteen
 seconds, with missed 15-second schedule points skipped.
 For a finite capture deadline, leave 40.5 seconds before the ADB polling
 cutoff for the final Android logcat probe. Its minimum 39-second budget

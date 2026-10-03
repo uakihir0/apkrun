@@ -4716,3 +4716,39 @@ Lima Linux suite passed 399 tests with one skip. The hostile review of IR-141
 found no actionable findings. This capture still does not satisfy #064's
 boot-completion acceptance criterion or establish the U-Boot or Android
 failure cause.
+
+## IR-143: Record the SystemServer boot milestone during reference capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064; [android-image.md](../02-design/android-image.md) §8.3; `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Extend each private-socket ADB poll to read
+`sys.system_server.start_count` and `sys.boot_completed` in one ten-second
+shell command. Store a bounded integer count when available and a nullable
+Boolean indicating whether a successful query returned a non-empty
+start-count value; preserve the existing Boolean boot-completion signal.
+Record each property command's bounded exit status independently, because
+the enclosing shell command's final status-printing command can succeed
+after an individual `getprop` fails. Parse partial timeout output in memory
+without storing it. The JSONL uses the explicit fields
+`systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`.
+
+**Reason.** The runtime boot design uses a non-empty
+`sys.system_server.start_count` as its `.systemServer` readiness signal. The
+latest reference capture reached Linux and zygote but did not report
+`sys.boot_completed=1`. Recording this existing signal can distinguish a
+SystemServer milestone from later framework boot without another ADB client,
+extending the poll interval, or retaining guest logs.
+
+**Verification.** Parser tests cover valid counts, empty and malformed
+values, non-ASCII digits, overflow, duplicate fields, independent command
+failures and their recorded exit statuses, partial results, and the
+boot-completion Boolean. ADB observer tests execute the fixed shell query
+with a fake `getprop` for success and independent property failures, verify
+the resulting JSONL status fields, cover missing and timed-out polls and
+partial timeout parsing, and confirm that neither property payload is
+written to JSONL. Live verification is pending a reference capture with this
+observer; record its result in the #064 notes.

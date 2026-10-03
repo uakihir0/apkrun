@@ -28,6 +28,16 @@ ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
+BOOT_PROPERTIES_SHELL_COMMAND = (
+    "system_server_value=$(getprop sys.system_server.start_count); "
+    "system_server_status=$?; "
+    "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
+    '"$system_server_value" "$system_server_status"; '
+    "boot_completed_value=$(getprop sys.boot_completed); "
+    "boot_completed_status=$?; "
+    "printf 'boot_completed=%s\\nboot_completed_status=%s\\n' "
+    '"$boot_completed_value" "$boot_completed_status"'
+)
 ADB_POLL_FINAL_RESERVE_SECONDS = ADB_COMMAND_TIMEOUT_SECONDS * 2 + ADB_GETPROP_TIMEOUT_SECONDS + 4.0
 ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
 ADB_LOGCAT_TIMEOUT_SECONDS = 10.0
@@ -205,6 +215,65 @@ def summarize_android_logcat(output: bytes) -> dict[str, int]:
             if pattern.search(line):
                 counts[name] += 1
     return counts
+
+
+def parse_boot_properties(
+    output: str,
+) -> tuple[int | None, bool | None, bool | None, int | None, int | None]:
+    """Return only bounded values for properties whose commands succeeded."""
+    allowed_fields = {
+        "system_server",
+        "system_server_status",
+        "boot_completed",
+        "boot_completed_status",
+    }
+    fields: dict[str, str] = {}
+    duplicate_fields: set[str] = set()
+    for line in output.splitlines():
+        name, separator, value = line.partition("=")
+        if not separator or name not in allowed_fields:
+            continue
+        if name in fields:
+            duplicate_fields.add(name)
+        else:
+            fields[name] = value
+    for name in duplicate_fields:
+        fields.pop(name, None)
+
+    def parse_exit_code(name: str) -> int | None:
+        value = fields.get(name)
+        if value is None or not value.isascii() or not value.isdigit() or len(value) > 3:
+            return None
+        exit_code = int(value)
+        return exit_code if exit_code <= 255 else None
+
+    system_server_exit_code = parse_exit_code("system_server_status")
+    boot_completed_exit_code = parse_exit_code("boot_completed_status")
+    system_server_start_count: int | None = None
+    system_server_start_count_present: bool | None = None
+    if system_server_exit_code == 0 and "system_server" in fields:
+        system_server_value = fields["system_server"]
+        system_server_start_count_present = bool(system_server_value)
+        if (
+            system_server_value.isascii()
+            and system_server_value.isdigit()
+            and len(system_server_value) <= 10
+        ):
+            parsed_count = int(system_server_value)
+            if parsed_count <= 2_147_483_647:
+                system_server_start_count = parsed_count
+    boot_completed: bool | None = None
+    if boot_completed_exit_code == 0:
+        boot_completed_value = fields.get("boot_completed")
+        if boot_completed_value in {"0", "1"}:
+            boot_completed = boot_completed_value == "1"
+    return (
+        system_server_start_count,
+        system_server_start_count_present,
+        boot_completed,
+        system_server_exit_code,
+        boot_completed_exit_code,
+    )
 
 
 class BootObserver:
@@ -1024,6 +1093,10 @@ class BootObserver:
                     "getpropExitCode": None,
                     "getpropAttempted": False,
                     "getpropTimedOut": None,
+                    "systemServerStartCount": None,
+                    "systemServerStartCountPresent": None,
+                    "systemServerGetpropExitCode": None,
+                    "bootCompletedGetpropExitCode": None,
                     "sysBootCompleted": None,
                     "commandTimedOut": connect_timed_out,
                     "pollDeadlineReached": True,
@@ -1047,6 +1120,10 @@ class BootObserver:
         property_attempted = False
         property_timed_out: bool | None = None
         property_command_timed_out = False
+        system_server_start_count: int | None = None
+        system_server_start_count_present: bool | None = None
+        system_server_getprop_exit_code: int | None = None
+        boot_completed_getprop_exit_code: int | None = None
         if state == "device" and (server.poll() is not None or not self._is_socket(socket_path)):
             return False
         if time.monotonic() >= adb_deadline:
@@ -1058,6 +1135,10 @@ class BootObserver:
                     "getpropExitCode": None,
                     "getpropAttempted": False,
                     "getpropTimedOut": None,
+                    "systemServerStartCount": None,
+                    "systemServerStartCountPresent": None,
+                    "systemServerGetpropExitCode": None,
+                    "bootCompletedGetpropExitCode": None,
                     "sysBootCompleted": None,
                     "commandTimedOut": (connect_timed_out or state_timed_out),
                     "pollDeadlineReached": True,
@@ -1078,8 +1159,9 @@ class BootObserver:
                     "-s",
                     serial,
                     "shell",
-                    "getprop",
-                    "sys.boot_completed",
+                    "sh",
+                    "-c",
+                    BOOT_PROPERTIES_SHELL_COMMAND,
                 ],
                 environment,
                 adb_deadline,
@@ -1087,8 +1169,13 @@ class BootObserver:
             )
             if property_attempted:
                 property_timed_out = property_command_timed_out
-            if property_code == 0 and property_output in {"0", "1"}:
-                boot_completed = property_output == "1"
+            (
+                system_server_start_count,
+                system_server_start_count_present,
+                boot_completed,
+                system_server_getprop_exit_code,
+                boot_completed_getprop_exit_code,
+            ) = parse_boot_properties(property_output)
         self._record(
             {
                 "event": "adb_poll",
@@ -1097,6 +1184,10 @@ class BootObserver:
                 "getpropExitCode": property_code,
                 "getpropAttempted": property_attempted,
                 "getpropTimedOut": property_timed_out,
+                "systemServerStartCount": system_server_start_count,
+                "systemServerStartCountPresent": system_server_start_count_present,
+                "systemServerGetpropExitCode": system_server_getprop_exit_code,
+                "bootCompletedGetpropExitCode": boot_completed_getprop_exit_code,
                 "sysBootCompleted": boot_completed,
                 "commandTimedOut": (
                     connect_timed_out or state_timed_out or property_command_timed_out
@@ -1470,8 +1561,15 @@ class BootObserver:
                 timeout=min(timeout_seconds, remaining),
                 check=False,
             )
-        except subprocess.TimeoutExpired:
-            return None, "", True, True
+        except subprocess.TimeoutExpired as error:
+            partial_output = error.stdout
+            if isinstance(partial_output, bytes):
+                output = partial_output.decode("utf-8", errors="replace").strip()
+            elif isinstance(partial_output, str):
+                output = partial_output.strip()
+            else:
+                output = ""
+            return None, output, True, True
         except OSError:
             return None, "", False, False
         output = completed.stdout.decode("utf-8", errors="replace").strip()

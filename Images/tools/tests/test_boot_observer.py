@@ -1005,11 +1005,17 @@ def test_boot_observer_stops_sampling_if_runtime_link_changes(
 
 
 @pytest.mark.parametrize("ignore_server_terminate", (False, True))
+@pytest.mark.parametrize(
+    ("system_server_exit_code", "boot_completed_exit_code"),
+    ((0, 0), (7, 0), (0, 7)),
+)
 def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     tmp_path: Path,
     short_private_home: Path,
     monkeypatch: pytest.MonkeyPatch,
     ignore_server_terminate: bool,
+    system_server_exit_code: int,
+    boot_completed_exit_code: int,
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
@@ -1026,10 +1032,29 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     server_socket_file = tmp_path / "adb-server-socket"
     calls = tmp_path / "adb-calls.jsonl"
     fake_adb = tmp_path / "fake-adb"
+    fake_getprop_directory = tmp_path / "fake-android-bin"
+    fake_getprop_directory.mkdir()
+    fake_getprop = fake_getprop_directory / "getprop"
+    fake_getprop.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "property_name = sys.argv[-1]\n"
+        "if property_name == 'sys.system_server.start_count':\n"
+        "    status = int(os.environ['FAKE_SYSTEM_SERVER_EXIT_CODE'])\n"
+        "elif property_name == 'sys.boot_completed':\n"
+        "    status = int(os.environ['FAKE_BOOT_COMPLETED_EXIT_CODE'])\n"
+        "else:\n"
+        "    raise SystemExit(64)\n"
+        "if status == 0:\n"
+        "    print('1')\n"
+        "raise SystemExit(status)\n",
+        encoding="utf-8",
+    )
+    fake_getprop.chmod(0o700)
     termination_handler = "signal.SIG_IGN" if ignore_server_terminate else "stop"
     fake_adb.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, signal, socket, sys, time\n"
+        "import json, os, signal, socket, subprocess, sys, time\n"
         "from pathlib import Path\n"
         "args = sys.argv[1:]\n"
         "call_log = Path(os.environ['FAKE_ADB_CALLS'])\n"
@@ -1072,15 +1097,29 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
         "if args[-1:] == ['get-state']:\n"
         "    print('device')\n"
         "    raise SystemExit(0)\n"
-        "if args[-2:] == ['getprop', 'sys.boot_completed']:\n"
-        "    print('1')\n"
-        "    raise SystemExit(0)\n"
+        "if args[-3:-1] == ['sh', '-c'] and 'system_server=' in args[-1]:\n"
+        "    environment = os.environ.copy()\n"
+        "    environment['PATH'] = os.environ['FAKE_GETPROP_DIR'] + "
+        "os.pathsep + environment.get('PATH', '')\n"
+        "    result = subprocess.run(\n"
+        "        ['/bin/sh', '-c', args[-1]],\n"
+        "        stdin=subprocess.DEVNULL,\n"
+        "        stdout=subprocess.PIPE,\n"
+        "        stderr=subprocess.DEVNULL,\n"
+        "        env=environment,\n"
+        "        check=False,\n"
+        "    )\n"
+        "    sys.stdout.buffer.write(result.stdout)\n"
+        "    raise SystemExit(result.returncode)\n"
         "raise SystemExit(19)\n",
         encoding="utf-8",
     )
     fake_adb.chmod(0o700)
     observer.adb_path = fake_adb.resolve(strict=True)
     monkeypatch.setenv("FAKE_ADB_CALLS", str(calls))
+    monkeypatch.setenv("FAKE_GETPROP_DIR", str(fake_getprop_directory))
+    monkeypatch.setenv("FAKE_SYSTEM_SERVER_EXIT_CODE", str(system_server_exit_code))
+    monkeypatch.setenv("FAKE_BOOT_COMPLETED_EXIT_CODE", str(boot_completed_exit_code))
     monkeypatch.setenv("FAKE_ADB_IGNORE_TERMINATE", "1" if ignore_server_terminate else "0")
     monkeypatch.setenv("FAKE_ADB_CLIENT_DELAY", "0.2")
     monkeypatch.setenv("ADB_SERVER_SOCKET", "tcp:localhost:5037")
@@ -1093,23 +1132,25 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     while time.monotonic() < deadline:
         records = _read_records(output)
         polls = [record for record in records if record["event"] == "adb_poll"]
-        if len(polls) >= 2 and polls[-1]["sysBootCompleted"] is True:
+        if len(polls) >= 2:
             break
         time.sleep(0.02)
     observer.close()
 
     records = _read_records(output)
     assert any(record["event"] == "cuttlefish_start_event_5_observed" for record in records)
-    assert any(
-        record["event"] == "adb_poll"
-        and record["deviceState"] == "device"
-        and record["sysBootCompleted"] is True
-        and record["getpropAttempted"] is True
-        and record["getpropTimedOut"] is False
-        and record["commandTimedOut"] is False
-        and record["pollDeadlineReached"] is False
-        for record in records
-    )
+    poll = next(record for record in records if record["event"] == "adb_poll")
+    assert poll["deviceState"] == "device"
+    assert poll["getpropExitCode"] == 0
+    assert poll["systemServerGetpropExitCode"] == system_server_exit_code
+    assert poll["bootCompletedGetpropExitCode"] == boot_completed_exit_code
+    assert poll["systemServerStartCount"] == (1 if system_server_exit_code == 0 else None)
+    assert poll["systemServerStartCountPresent"] is (True if system_server_exit_code == 0 else None)
+    assert poll["sysBootCompleted"] is (True if boot_completed_exit_code == 0 else None)
+    assert poll["getpropAttempted"] is True
+    assert poll["getpropTimedOut"] is False
+    assert poll["commandTimedOut"] is False
+    assert poll["pollDeadlineReached"] is False
     assert any(record["event"] == "private_adb_server_ready" for record in records)
     assert any(
         record["event"] == "private_adb_server_stopped" and record["cleanupComplete"] is True
@@ -1133,7 +1174,12 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     )
     assert all(call["ambientSocket"] is None for call in logged_calls)
     assert all(call["ambientVendorKeys"] is None for call in logged_calls)
-    assert str(home) not in output.read_text(encoding="ascii")
+    saved_output = output.read_text(encoding="ascii")
+    assert str(home) not in saved_output
+    assert "system_server=1" not in saved_output
+    assert "system_server_status=0" not in saved_output
+    assert "boot_completed=1" not in saved_output
+    assert "boot_completed_status=0" not in saved_output
 
 
 def test_close_waits_for_the_full_final_probe_and_server_cleanup_bound(
@@ -1269,8 +1315,9 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         "if args[-1:] == ['get-state']:\n"
         "    print('device')\n"
         "    raise SystemExit(0)\n"
-        "if args[-2:] == ['getprop', 'sys.boot_completed']:\n"
-        "    print('0')\n"
+        "if args[-3:-1] == ['sh', '-c'] and 'system_server=' in args[-1]:\n"
+        "    print('system_server=2\\nsystem_server_status=0\\n"
+        "boot_completed=0\\nboot_completed_status=0')\n"
         "    raise SystemExit(0)\n"
         "if 'logcat' in args:\n"
         "    if args[args.index('-b') + 1] == 'events':\n"
@@ -1342,6 +1389,8 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         ("deadline_before_getprop", "device", False, None, False, True, 2),
         ("deadline_before_spawn", "device", False, None, False, True, 3),
         ("getprop_times_out", "device", True, True, True, False, 3),
+        ("system_server_query_failed", "device", True, False, False, False, 3),
+        ("boot_completed_query_failed", "device", True, False, False, False, 3),
         ("offline", "offline", False, None, False, False, 2),
         ("getstate_times_out", None, False, None, True, False, 2),
     ),
@@ -1413,11 +1462,31 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
                 return None, "", True, True
             launched_commands.append(command)
             return 0, "device", False, True
-        if command[-2:] == ["getprop", "sys.boot_completed"]:
+        if command[-3:] == [
+            "sh",
+            "-c",
+            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+        ]:
             if scenario == "deadline_before_spawn":
                 clock.current = deadline
                 return None, "", False, False
             launched_commands.append(command)
+            if scenario == "system_server_query_failed":
+                return (
+                    0,
+                    "system_server=2\nsystem_server_status=7\n"
+                    "boot_completed=0\nboot_completed_status=0",
+                    False,
+                    True,
+                )
+            if scenario == "boot_completed_query_failed":
+                return (
+                    0,
+                    "system_server=2\nsystem_server_status=0\n"
+                    "boot_completed=1\nboot_completed_status=7",
+                    False,
+                    True,
+                )
             return None, "", True, True
         raise AssertionError(f"unexpected adb command: {command!r}")
 
@@ -1441,8 +1510,27 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     assert poll["deviceState"] == expected_state
     assert poll["getpropAttempted"] is expected_attempted
     assert poll["getpropTimedOut"] is expected_timed_out
-    assert poll["getpropExitCode"] is None
-    assert poll["sysBootCompleted"] is None
+    if scenario == "system_server_query_failed":
+        assert poll["getpropExitCode"] == 0
+        assert poll["systemServerGetpropExitCode"] == 7
+        assert poll["bootCompletedGetpropExitCode"] == 0
+        assert poll["systemServerStartCount"] is None
+        assert poll["systemServerStartCountPresent"] is None
+        assert poll["sysBootCompleted"] is False
+    elif scenario == "boot_completed_query_failed":
+        assert poll["getpropExitCode"] == 0
+        assert poll["systemServerGetpropExitCode"] == 0
+        assert poll["bootCompletedGetpropExitCode"] == 7
+        assert poll["systemServerStartCount"] == 2
+        assert poll["systemServerStartCountPresent"] is True
+        assert poll["sysBootCompleted"] is None
+    else:
+        assert poll["getpropExitCode"] is None
+        assert poll["systemServerGetpropExitCode"] is None
+        assert poll["bootCompletedGetpropExitCode"] is None
+        assert poll["systemServerStartCount"] is None
+        assert poll["systemServerStartCountPresent"] is None
+        assert poll["sysBootCompleted"] is None
     assert poll["commandTimedOut"] is expected_command_timed_out
     assert poll["pollDeadlineReached"] is expected_deadline_reached
     assert len(calls) == expected_call_count
@@ -1453,7 +1541,15 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
     if expected_call_count == 3:
         assert timeouts[2] == OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS
     assert (
-        any(command[-2:] == ["getprop", "sys.boot_completed"] for command in launched_commands)
+        any(
+            command[-3:]
+            == [
+                "sh",
+                "-c",
+                OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+            ]
+            for command in launched_commands
+        )
         is expected_attempted
     )
 
@@ -1662,19 +1758,77 @@ def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
         timeout = kwargs.get("timeout")
         assert isinstance(timeout, (int, float))
         observed_timeouts.append(float(timeout))
-        return subprocess.CompletedProcess(command, 0, stdout=b"1")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                b"system_server=2\nsystem_server_status=0\n"
+                b"boot_completed=1\nboot_completed_status=0"
+            ),
+        )
 
     monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
     monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
     result = BootObserver._run_adb(
-        ["adb", "shell", "getprop", "sys.boot_completed"],
+        [
+            "adb",
+            "shell",
+            "sh",
+            "-c",
+            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+        ],
         {},
         remaining,
         timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
     )
 
-    assert result == (0, "1", False, True)
+    assert result == (
+        0,
+        "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0",
+        False,
+        True,
+    )
     assert observed_timeouts == [expected_timeout]
+
+
+def test_boot_observer_preserves_partial_boot_properties_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClock:
+        @staticmethod
+        def monotonic() -> float:
+            return 0.0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        del kwargs
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout=10,
+            output=(b"system_server=2\nsystem_server_status=0\nboot_completed="),
+        )
+
+    monkeypatch.setattr(OBSERVER_MODULE, "time", FakeClock())
+    monkeypatch.setattr(OBSERVER_MODULE.subprocess, "run", fake_run)
+    result = BootObserver._run_adb(
+        [
+            "adb",
+            "shell",
+            "sh",
+            "-c",
+            OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
+        ],
+        {},
+        20,
+        timeout_seconds=OBSERVER_MODULE.ADB_GETPROP_TIMEOUT_SECONDS,
+    )
+
+    assert result == (
+        None,
+        "system_server=2\nsystem_server_status=0\nboot_completed=",
+        True,
+        True,
+    )
+    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == (2, True, None, 0, None)
 
 
 def test_summarize_logcat_events_counts_only_selected_event_tags() -> None:
@@ -1732,6 +1886,142 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
         "zygoteMentionLines": 1,
     }
     assert all(isinstance(value, int) for value in summary.values())
+
+
+@pytest.mark.parametrize(
+    (
+        "output",
+        "expected_count",
+        "expected_start_count_present",
+        "expected_boot_completed",
+        "expected_system_server_exit_code",
+        "expected_boot_completed_exit_code",
+    ),
+    (
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=0\nboot_completed_status=0",
+            2,
+            True,
+            False,
+            0,
+            0,
+        ),
+        (
+            "system_server=\nsystem_server_status=0\nboot_completed=\nboot_completed_status=0",
+            None,
+            False,
+            None,
+            0,
+            0,
+        ),
+        (
+            "system_server=2147483648\nsystem_server_status=0\n"
+            "boot_completed=1\nboot_completed_status=0",
+            None,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=１\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0",
+            None,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=abc\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0",
+            None,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=1",
+            2,
+            True,
+            None,
+            0,
+            1,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0",
+            2,
+            True,
+            None,
+            0,
+            None,
+        ),
+        (
+            "boot_completed=1\nboot_completed_status=0\nsystem_server=1\nsystem_server_status=0",
+            1,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=1\nsystem_server=2\nsystem_server_status=0\n"
+            "boot_completed=1\nboot_completed_status=0",
+            None,
+            None,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=7\nboot_completed=0\nboot_completed_status=0",
+            None,
+            None,
+            False,
+            7,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=7",
+            2,
+            True,
+            None,
+            0,
+            7,
+        ),
+        (
+            "system_server=2\nsystem_server_status=256\nboot_completed=1\nboot_completed_status=0",
+            None,
+            None,
+            True,
+            None,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\n"
+            "system_server_status=7\nboot_completed=1\nboot_completed_status=0",
+            None,
+            None,
+            True,
+            None,
+            0,
+        ),
+    ),
+)
+def test_parse_boot_properties_keeps_only_bounded_allowlisted_values(
+    output: str,
+    expected_count: int | None,
+    expected_start_count_present: bool | None,
+    expected_boot_completed: bool | None,
+    expected_system_server_exit_code: int | None,
+    expected_boot_completed_exit_code: int | None,
+) -> None:
+    assert OBSERVER_MODULE.parse_boot_properties(output) == (
+        expected_count,
+        expected_start_count_present,
+        expected_boot_completed,
+        expected_system_server_exit_code,
+        expected_boot_completed_exit_code,
+    )
 
 
 def test_bounded_adb_logcat_caps_stdout_and_reaps_the_client(tmp_path: Path) -> None:

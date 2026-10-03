@@ -1147,6 +1147,7 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     assert poll["systemServerStartCount"] == (1 if system_server_exit_code == 0 else None)
     assert poll["systemServerStartCountPresent"] is (True if system_server_exit_code == 0 else None)
     assert poll["sysBootCompleted"] is (True if boot_completed_exit_code == 0 else None)
+    assert poll["sysBootCompletedPresent"] is (True if boot_completed_exit_code == 0 else None)
     assert poll["getpropAttempted"] is True
     assert poll["getpropTimedOut"] is False
     assert poll["commandTimedOut"] is False
@@ -1517,6 +1518,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         assert poll["systemServerStartCount"] is None
         assert poll["systemServerStartCountPresent"] is None
         assert poll["sysBootCompleted"] is False
+        assert poll["sysBootCompletedPresent"] is True
     elif scenario == "boot_completed_query_failed":
         assert poll["getpropExitCode"] == 0
         assert poll["systemServerGetpropExitCode"] == 0
@@ -1524,6 +1526,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         assert poll["systemServerStartCount"] == 2
         assert poll["systemServerStartCountPresent"] is True
         assert poll["sysBootCompleted"] is None
+        assert poll["sysBootCompletedPresent"] is None
     else:
         assert poll["getpropExitCode"] is None
         assert poll["systemServerGetpropExitCode"] is None
@@ -1531,6 +1534,7 @@ def test_boot_observer_distinguishes_unstarted_and_timed_out_getprop(
         assert poll["systemServerStartCount"] is None
         assert poll["systemServerStartCountPresent"] is None
         assert poll["sysBootCompleted"] is None
+        assert poll["sysBootCompletedPresent"] is None
     assert poll["commandTimedOut"] is expected_command_timed_out
     assert poll["pollDeadlineReached"] is expected_deadline_reached
     assert len(calls) == expected_call_count
@@ -1828,7 +1832,105 @@ def test_boot_observer_preserves_partial_boot_properties_on_timeout(
         True,
         True,
     )
-    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == (2, True, None, 0, None)
+    assert OBSERVER_MODULE.parse_boot_properties(result[1]) == (
+        2,
+        True,
+        None,
+        None,
+        0,
+        None,
+    )
+
+
+def test_boot_property_shell_query_sanitizes_multiline_property_values(
+    tmp_path: Path,
+) -> None:
+    fake_getprop_directory = tmp_path / "fake-android-bin"
+    fake_getprop_directory.mkdir()
+    fake_getprop = fake_getprop_directory / "getprop"
+    fake_getprop.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "if sys.argv[-1] == 'sys.system_server.start_count':\n"
+        "    print('2\\nsystem_server_status=0\\nboot_completed=1\\n"
+        "boot_completed_status=0')\n"
+        "elif sys.argv[-1] == 'sys.boot_completed':\n"
+        "    print('0')\n"
+        "else:\n"
+        "    raise SystemExit(64)\n",
+        encoding="utf-8",
+    )
+    fake_getprop.chmod(0o700)
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_getprop_directory) + os.pathsep + environment.get("PATH", "")
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "system_server=invalid\nsystem_server_status=0\nboot_completed=0\nboot_completed_status=0\n"
+    )
+    assert OBSERVER_MODULE.parse_boot_properties(result.stdout) == (
+        None,
+        True,
+        False,
+        True,
+        0,
+        0,
+    )
+
+
+def test_boot_property_shell_query_rejects_property_value_ending_in_newline(
+    tmp_path: Path,
+) -> None:
+    fake_getprop_directory = tmp_path / "fake-android-bin"
+    fake_getprop_directory.mkdir()
+    fake_getprop = fake_getprop_directory / "getprop"
+    fake_getprop.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "if sys.argv[-1] == 'sys.system_server.start_count':\n"
+        "    sys.stdout.write('2\\n')\n"
+        "elif sys.argv[-1] == 'sys.boot_completed':\n"
+        "    sys.stdout.write('1\\n\\n')\n"
+        "else:\n"
+        "    raise SystemExit(64)\n",
+        encoding="utf-8",
+    )
+    fake_getprop.chmod(0o700)
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_getprop_directory) + os.pathsep + environment.get("PATH", "")
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "system_server=2\nsystem_server_status=0\nboot_completed=invalid\nboot_completed_status=0\n"
+    )
+    assert OBSERVER_MODULE.parse_boot_properties(result.stdout) == (
+        2,
+        True,
+        None,
+        True,
+        0,
+        0,
+    )
 
 
 def test_summarize_logcat_events_counts_only_selected_event_tags() -> None:
@@ -1894,6 +1996,7 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
         "expected_count",
         "expected_start_count_present",
         "expected_boot_completed",
+        "expected_boot_completed_present",
         "expected_system_server_exit_code",
         "expected_boot_completed_exit_code",
     ),
@@ -1903,6 +2006,7 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             2,
             True,
             False,
+            True,
             0,
             0,
         ),
@@ -1911,13 +2015,71 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             None,
             False,
             None,
+            False,
             0,
             0,
+        ),
+        (
+            "system_server=2\r\nsystem_server_status=0\n"
+            "boot_completed=1\r\nboot_completed_status=0",
+            None,
+            True,
+            None,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server_status=0\nboot_completed=unexpected\nboot_completed_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=1\n"
+            "unexpected output\nboot_completed_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "system_server_status=0\nboot_completed_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0\n",
+            2,
+            True,
+            True,
+            True,
+            0,
+            0,
+        ),
+        (
+            "system_server=2\nsystem_server_status=0\nboot_completed=",
+            2,
+            True,
+            None,
+            None,
+            0,
+            None,
         ),
         (
             "system_server=2147483648\nsystem_server_status=0\n"
             "boot_completed=1\nboot_completed_status=0",
             None,
+            True,
             True,
             True,
             0,
@@ -1928,12 +2090,14 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             None,
             True,
             True,
+            True,
             0,
             0,
         ),
         (
             "system_server=abc\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=0",
             None,
+            True,
             True,
             True,
             0,
@@ -1944,6 +2108,7 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             2,
             True,
             None,
+            None,
             0,
             1,
         ),
@@ -1952,31 +2117,35 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             2,
             True,
             None,
+            None,
             0,
             None,
         ),
         (
             "boot_completed=1\nboot_completed_status=0\nsystem_server=1\nsystem_server_status=0",
-            1,
-            True,
-            True,
-            0,
-            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ),
         (
             "system_server=1\nsystem_server=2\nsystem_server_status=0\n"
             "boot_completed=1\nboot_completed_status=0",
             None,
             None,
-            True,
-            0,
-            0,
+            None,
+            None,
+            None,
+            None,
         ),
         (
             "system_server=2\nsystem_server_status=7\nboot_completed=0\nboot_completed_status=0",
             None,
             None,
             False,
+            True,
             7,
             0,
         ),
@@ -1984,6 +2153,7 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             "system_server=2\nsystem_server_status=0\nboot_completed=1\nboot_completed_status=7",
             2,
             True,
+            None,
             None,
             0,
             7,
@@ -1993,6 +2163,7 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             None,
             None,
             True,
+            True,
             None,
             0,
         ),
@@ -2001,9 +2172,38 @@ def test_summarize_android_logcat_counts_fixed_markers_without_retaining_text() 
             "system_server_status=7\nboot_completed=1\nboot_completed_status=0",
             None,
             None,
-            True,
             None,
-            0,
+            None,
+            None,
+            None,
+        ),
+        (
+            "boot_completed=1\nsystem_server_status=0\nboot_completed_status=0\n"
+            "system_server_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "system_server_status=0\nboot_completed=0\nboot_completed=1\nboot_completed_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "system_server=2\nboot_completed=1\nboot_completed_status=0\nsystem_server_status=0",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ),
     ),
 )
@@ -2012,6 +2212,7 @@ def test_parse_boot_properties_keeps_only_bounded_allowlisted_values(
     expected_count: int | None,
     expected_start_count_present: bool | None,
     expected_boot_completed: bool | None,
+    expected_boot_completed_present: bool | None,
     expected_system_server_exit_code: int | None,
     expected_boot_completed_exit_code: int | None,
 ) -> None:
@@ -2019,6 +2220,7 @@ def test_parse_boot_properties_keeps_only_bounded_allowlisted_values(
         expected_count,
         expected_start_count_present,
         expected_boot_completed,
+        expected_boot_completed_present,
         expected_system_server_exit_code,
         expected_boot_completed_exit_code,
     )

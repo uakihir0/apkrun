@@ -4729,11 +4729,25 @@ failure cause.
 `sys.system_server.start_count` and `sys.boot_completed` in one ten-second
 shell command. Store a bounded integer count when available and a nullable
 Boolean indicating whether a successful query returned a non-empty
-start-count value; preserve the existing Boolean boot-completion signal.
-Record each property command's bounded exit status independently, because
-the enclosing shell command's final status-printing command can succeed
-after an individual `getprop` fails. Parse partial timeout output in memory
-without storing it. The JSONL uses the explicit fields
+start-count value. For `sys.boot_completed`, store a nullable Boolean
+`sysBootCompletedPresent` for a successful non-empty value and parse only
+`0` or `1` into the nullable Boolean readiness signal. This distinguishes an
+empty value from an unexpected non-empty value without retaining property
+text.
+The shell query replaces non-digit `start_count` values and `boot_completed`
+values other than empty, `0`, or `1` with a fixed marker so property contents
+cannot inject protocol lines. Accept only the fixed output order emitted by
+the shell command; retain a valid prefix when a timeout truncates the reply.
+Reject unexpected, duplicate, empty interior, or out-of-order lines by
+invalidating the entire reply, including its exit statuses. Record each
+property command's bounded exit status independently with a non-newline
+delimiter, so command substitution preserves trailing property newlines.
+Remove only the single output newline emitted by `getprop` before validating
+the value. This prevents a value ending in `1` plus a newline from becoming
+the accepted value `1`. The enclosing shell command's final status-printing
+command can succeed after an individual `getprop` fails. Parse partial
+timeout output in memory without storing it. The JSONL uses the explicit
+fields
 `systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`.
 
 **Reason.** The runtime boot design uses a non-empty
@@ -4745,22 +4759,30 @@ extending the poll interval, or retaining guest logs.
 
 **Verification.** Parser tests cover valid counts, empty and malformed
 values, non-ASCII digits, overflow, duplicate fields, independent command
-failures and their recorded exit statuses, partial results, and the
-boot-completion Boolean. ADB observer tests execute the fixed shell query
-with a fake `getprop` for success and independent property failures, verify
-the resulting JSONL status fields, cover missing and timed-out polls and
-partial timeout parsing, and confirm that neither property payload is
-written to JSONL. The focused observer suite passed 66 tests with one
-platform-specific skip. The full Image tools suite passed 416 tests with
-four skips on macOS and 411 tests with nine skips on Lima Linux. Ruff lint
-and format, shell syntax, and `git diff --check` passed. Hostile review found
-no remaining findings.
+failures and their recorded exit statuses, carriage-return-containing
+values, valid partial prefixes, fixed field ordering, malformed output
+rejection, multiline property-value sanitization, and boot-completion
+presence and Boolean parsing. ADB
+observer tests execute the fixed shell query with a fake `getprop` for
+success and independent property failures, verify the resulting JSONL
+status fields, cover missing and timed-out polls and partial timeout
+parsing, and confirm that neither property payload is written to JSONL.
+The focused observer suite passed 77 tests with one platform-specific skip.
+The full Image tools suite passed 427 tests with four skips on macOS and
+422 tests with nine skips on Lima Linux. Ruff lint and format, shell syntax,
+and `git diff --check` passed. Hostile review's protocol spoofing and
+trailing-newline findings were fixed and retested.
 
 Live verification used an untraced, unpaused 2400-second `default` capture
 with four guest CPUs, 4096 MiB memory, 4915 MiB configured DDR,
 `guest_swiftshader`, and console off. `host.json` records a 2403-second
 capture. The normalized result and post-run evidence are in
 `Images/reference/16373615/incomplete/default-20261003T151738-1012957/`.
+This capture predates `sysBootCompletedPresent`: its
+`post-run-verification.json` records source revision `af7f5d4`, so the 54
+successful boot-completion queries cannot distinguish empty from unexpected
+non-empty output. Raw property output was not retained and cannot be
+recovered for this record.
 Launcher timestamps place the U-Boot banner at 05:37:39Z and Linux 6.12.74
 at 05:41:18Z, 219 seconds later. The first five-second sample with both
 VmRSS and RssShmem at or above 4 GiB was 05:41:20.333Z (4,216,192 and

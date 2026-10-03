@@ -735,12 +735,24 @@ identities and records an observation gap.
 After launcher log event 5, it probes the selected localhost ADB serial on a
 monotonic 15-second schedule through a private ADB server socket and records
 only bounded state fields, including the numeric `systemServerStartCount`,
-the nullable Boolean `systemServerStartCountPresent`, and the Boolean
-`sys.boot_completed` signal. A successful, non-empty
-`sys.system_server.start_count` sets the presence field even if its value is
-not a bounded integer; failed or unobserved queries leave it null. Both
-properties are read by one shell command capped at ten seconds, and each
-property's bounded exit status is recorded separately as
+the nullable Boolean `systemServerStartCountPresent`, the nullable Boolean
+`sysBootCompletedPresent`, and the nullable Boolean `sysBootCompleted`
+signal. A successful, non-empty `sys.system_server.start_count` sets its
+presence field even if its value is not a bounded integer. A successful,
+non-empty `sys.boot_completed` sets its presence field even if its value is
+not `0` or `1`; only `0` and `1` produce a Boolean signal. Failed or
+unobserved queries leave the corresponding presence and value fields null.
+The shell query replaces non-digit `start_count` values and `boot_completed`
+values other than empty, `0`, or `1` with a fixed marker, preventing property
+contents from injecting protocol lines. It appends each getprop exit status
+with a non-newline delimiter before command substitution, preserving trailing
+property newlines; it removes only the single newline emitted by getprop
+before validation. The parser accepts only the fixed output order emitted by
+the shell command; a valid prefix is retained when a timeout truncates the
+reply. Unexpected, duplicate, empty interior, or out-of-order lines
+invalidate the entire parsed reply, including exit statuses. Both properties
+are read by one shell command capped at ten seconds, and each property's
+bounded exit status is recorded separately as
 `systemServerGetpropExitCode` and `bootCompletedGetpropExitCode`, so a
 successful query remains distinguishable from a failed query even though the
 enclosing shell command ends with a status-printing command. A partial result

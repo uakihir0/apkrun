@@ -29,12 +29,25 @@ ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
 BOOT_PROPERTIES_SHELL_COMMAND = (
-    "system_server_value=$(getprop sys.system_server.start_count); "
-    "system_server_status=$?; "
+    "newline=$(printf '\\n_'); newline=${newline%_}; "
+    "system_server_reply=$(getprop sys.system_server.start_count; "
+    "system_server_status=$?; printf '|%s' \"$system_server_status\"); "
+    "system_server_status=${system_server_reply##*|}; "
+    "system_server_value=${system_server_reply%|*}; "
+    'case "$system_server_value" in *"$newline") '
+    'system_server_value=${system_server_value%"$newline"} ;; esac; '
+    'case "$system_server_value" in *[!0123456789]*) '
+    "system_server_value=invalid ;; esac; "
     "printf 'system_server=%s\\nsystem_server_status=%s\\n' "
     '"$system_server_value" "$system_server_status"; '
-    "boot_completed_value=$(getprop sys.boot_completed); "
-    "boot_completed_status=$?; "
+    "boot_completed_reply=$(getprop sys.boot_completed; "
+    "boot_completed_status=$?; printf '|%s' \"$boot_completed_status\"); "
+    "boot_completed_status=${boot_completed_reply##*|}; "
+    "boot_completed_value=${boot_completed_reply%|*}; "
+    'case "$boot_completed_value" in *"$newline") '
+    'boot_completed_value=${boot_completed_value%"$newline"} ;; esac; '
+    'case "$boot_completed_value" in ""|0|1) ;; '
+    "*) boot_completed_value=invalid ;; esac; "
     "printf 'boot_completed=%s\\nboot_completed_status=%s\\n' "
     '"$boot_completed_value" "$boot_completed_status"'
 )
@@ -219,26 +232,31 @@ def summarize_android_logcat(output: bytes) -> dict[str, int]:
 
 def parse_boot_properties(
     output: str,
-) -> tuple[int | None, bool | None, bool | None, int | None, int | None]:
-    """Return only bounded values for properties whose commands succeeded."""
-    allowed_fields = {
+) -> tuple[int | None, bool | None, bool | None, bool | None, int | None, int | None]:
+    """Parse bounded values only from successful, well-framed property replies."""
+    expected_fields = (
         "system_server",
         "system_server_status",
         "boot_completed",
         "boot_completed_status",
-    }
+    )
+    lines = output.split("\n")
+    if lines and not lines[-1]:
+        lines.pop()
+
     fields: dict[str, str] = {}
-    duplicate_fields: set[str] = set()
-    for line in output.splitlines():
-        name, separator, value = line.partition("=")
-        if not separator or name not in allowed_fields:
+    malformed_output = False
+    for index, line in enumerate(lines):
+        if not line or index >= len(expected_fields):
+            malformed_output = True
             continue
-        if name in fields:
-            duplicate_fields.add(name)
-        else:
-            fields[name] = value
-    for name in duplicate_fields:
-        fields.pop(name, None)
+        name, separator, value = line.partition("=")
+        if not separator or name != expected_fields[index]:
+            malformed_output = True
+            continue
+        fields[name] = value
+    if malformed_output:
+        fields.clear()
 
     def parse_exit_code(name: str) -> int | None:
         value = fields.get(name)
@@ -263,14 +281,17 @@ def parse_boot_properties(
             if parsed_count <= 2_147_483_647:
                 system_server_start_count = parsed_count
     boot_completed: bool | None = None
-    if boot_completed_exit_code == 0:
-        boot_completed_value = fields.get("boot_completed")
+    boot_completed_present: bool | None = None
+    if boot_completed_exit_code == 0 and "boot_completed" in fields:
+        boot_completed_value = fields["boot_completed"]
+        boot_completed_present = bool(boot_completed_value)
         if boot_completed_value in {"0", "1"}:
             boot_completed = boot_completed_value == "1"
     return (
         system_server_start_count,
         system_server_start_count_present,
         boot_completed,
+        boot_completed_present,
         system_server_exit_code,
         boot_completed_exit_code,
     )
@@ -1098,6 +1119,7 @@ class BootObserver:
                     "systemServerGetpropExitCode": None,
                     "bootCompletedGetpropExitCode": None,
                     "sysBootCompleted": None,
+                    "sysBootCompletedPresent": None,
                     "commandTimedOut": connect_timed_out,
                     "pollDeadlineReached": True,
                 }
@@ -1122,6 +1144,7 @@ class BootObserver:
         property_command_timed_out = False
         system_server_start_count: int | None = None
         system_server_start_count_present: bool | None = None
+        boot_completed_present: bool | None = None
         system_server_getprop_exit_code: int | None = None
         boot_completed_getprop_exit_code: int | None = None
         if state == "device" and (server.poll() is not None or not self._is_socket(socket_path)):
@@ -1140,6 +1163,7 @@ class BootObserver:
                     "systemServerGetpropExitCode": None,
                     "bootCompletedGetpropExitCode": None,
                     "sysBootCompleted": None,
+                    "sysBootCompletedPresent": None,
                     "commandTimedOut": (connect_timed_out or state_timed_out),
                     "pollDeadlineReached": True,
                 }
@@ -1173,6 +1197,7 @@ class BootObserver:
                 system_server_start_count,
                 system_server_start_count_present,
                 boot_completed,
+                boot_completed_present,
                 system_server_getprop_exit_code,
                 boot_completed_getprop_exit_code,
             ) = parse_boot_properties(property_output)
@@ -1189,6 +1214,7 @@ class BootObserver:
                 "systemServerGetpropExitCode": system_server_getprop_exit_code,
                 "bootCompletedGetpropExitCode": boot_completed_getprop_exit_code,
                 "sysBootCompleted": boot_completed,
+                "sysBootCompletedPresent": boot_completed_present,
                 "commandTimedOut": (
                     connect_timed_out or state_timed_out or property_command_timed_out
                 ),

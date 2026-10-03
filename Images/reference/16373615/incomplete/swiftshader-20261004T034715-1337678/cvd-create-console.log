@@ -1,0 +1,11 @@
+cvd(1337720)  I 10-04 03:07:11 1337720 1337720 main.cc:137] version: 1.57.0 | VCS: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+cvd(1337740)  I 10-04 03:07:11 1337740 1337740 main.cc:137] version: 1.57.0 | VCS: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+10-04 03:07:11.668 1337765 1337765 E assemble_cvd: reader.cpp:81 [liblp] Logical partition metadata has invalid geometry magic signature.
+10-04 03:07:11.668 1337765 1337765 E assemble_cvd: reader.cpp:81 [liblp] Logical partition metadata has invalid geometry magic signature.
+SetFlagDefaultsFromConfig: No flag defaults to override.
+  Run `cvd logs` to report paths to device logs.
+  Point your browser to https://localhost:8443 to interact with the device.
+  Serial console is disabled; use -console=true to enable it.
+  Launcher Build ID: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+cvd(1337740)  W 10-04 03:47:11 1337740 1337744 start.cpp:437] Terminated signal received, cleanning up
+capture_cvd_start: could not inspect the Cuttlefish process group after SIGKILL was denied

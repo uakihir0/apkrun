@@ -3206,3 +3206,22 @@ def test_boot_observer_samples_on_a_background_monotonic_schedule(
 
     memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
     assert len(memory) >= 3
+
+
+@pytest.mark.parametrize(
+    ("scheduled_poll", "after_poll", "expected_next_poll"),
+    [
+        (100.0, 102.0, 115.0),
+        (100.0, 117.0, 130.0),
+        (100.0, 132.0, 145.0),
+        (100.0, 130.0, 145.0),
+    ],
+)
+def test_adb_poll_schedule_skips_missed_slots_without_drifting(
+    scheduled_poll: float,
+    after_poll: float,
+    expected_next_poll: float,
+) -> None:
+    assert (
+        OBSERVER_MODULE._next_adb_poll_time(scheduled_poll, after_poll, 15.0) == expected_next_poll
+    )

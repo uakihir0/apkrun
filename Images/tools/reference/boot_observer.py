@@ -137,6 +137,14 @@ def _timestamp_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
+def _next_adb_poll_time(scheduled_poll: float, after_poll: float, interval: float) -> float:
+    next_poll = scheduled_poll + interval
+    if next_poll <= after_poll:
+        skipped_intervals = int((after_poll - next_poll) // interval) + 1
+        next_poll += skipped_intervals * interval
+    return next_poll
+
+
 def _proc_identity(path: Path) -> tuple[int, bytes] | None:
     try:
         raw = path.read_bytes()
@@ -1052,7 +1060,6 @@ class BootObserver:
                         }
                     )
                     break
-                poll_started = time.monotonic()
                 if not self._record_adb_poll(
                     adb_socket,
                     serial,
@@ -1075,10 +1082,8 @@ class BootObserver:
                         }
                     )
                     break
-                next_poll = poll_started + self.adb_interval
                 after_poll = time.monotonic()
-                if next_poll <= after_poll:
-                    next_poll = after_poll + self.adb_interval
+                next_poll = _next_adb_poll_time(next_poll, after_poll, self.adb_interval)
             if cleanup_reserve_reached:
                 self._record(
                     {

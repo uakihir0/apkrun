@@ -1136,6 +1136,184 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     assert str(home) not in output.read_text(encoding="ascii")
 
 
+def test_close_waits_for_the_full_final_probe_and_server_cleanup_bound(
+    tmp_path: Path,
+) -> None:
+    required_cleanup_timeout = (
+        OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS * 2
+        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+        + (
+            OBSERVER_MODULE.ADB_CLIENT_TERMINATE_SECONDS
+            + OBSERVER_MODULE.ADB_CLIENT_KILL_SECONDS * 2
+        )
+        * OBSERVER_MODULE.ADB_FINAL_PROBE_COMMAND_COUNT
+        + OBSERVER_MODULE.ADB_PROBE_WINDOW_MARGIN_SECONDS
+        + OBSERVER_MODULE.ADB_SERVER_TERMINATE_SECONDS
+        + OBSERVER_MODULE.ADB_SERVER_KILL_SECONDS
+    )
+    assert OBSERVER_MODULE.ADB_LOGCAT_MINIMUM_WINDOW_SECONDS == required_cleanup_timeout
+    assert OBSERVER_MODULE.ADB_LOGCAT_PROBE_RESERVE_SECONDS >= required_cleanup_timeout
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, _, _ = _observer(tmp_path, proc_root=proc_root)
+
+    class ActiveProbeThread:
+        def __init__(self) -> None:
+            self.wait_timeout: float | None = None
+            self.alive = True
+
+        def join(self, timeout: float | None = None) -> None:
+            self.wait_timeout = timeout
+            self.alive = timeout is None or timeout < required_cleanup_timeout
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+    probe_thread = ActiveProbeThread()
+    observer._adb_thread = probe_thread  # type: ignore[assignment]
+
+    observer.close()
+
+    assert probe_thread.wait_timeout == OBSERVER_MODULE.ADB_LOGCAT_PROBE_RESERVE_SECONDS
+    assert not probe_thread.is_alive()
+
+
+def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_COMMAND_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_GETPROP_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_LOGCAT_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_CLIENT_TERMINATE_SECONDS", 0.05)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_CLIENT_KILL_SECONDS", 0.1)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_SERVER_TERMINATE_SECONDS", 0.5)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_SERVER_KILL_SECONDS", 0.5)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_PROBE_WINDOW_MARGIN_SECONDS", 0.05)
+    minimum_probe_window = (
+        OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS * 2
+        + OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+        + (
+            OBSERVER_MODULE.ADB_CLIENT_TERMINATE_SECONDS
+            + OBSERVER_MODULE.ADB_CLIENT_KILL_SECONDS * 2
+        )
+        * OBSERVER_MODULE.ADB_FINAL_PROBE_COMMAND_COUNT
+        + OBSERVER_MODULE.ADB_SERVER_TERMINATE_SECONDS
+        + OBSERVER_MODULE.ADB_SERVER_KILL_SECONDS
+        + OBSERVER_MODULE.ADB_PROBE_WINDOW_MARGIN_SECONDS
+    )
+    monkeypatch.setattr(
+        OBSERVER_MODULE,
+        "ADB_LOGCAT_MINIMUM_WINDOW_SECONDS",
+        minimum_probe_window,
+    )
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_CLEANUP_RESERVE_SECONDS", 0.2)
+    monkeypatch.setattr(
+        OBSERVER_MODULE,
+        "ADB_LOGCAT_PROBE_RESERVE_SECONDS",
+        minimum_probe_window + 1.0,
+    )
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_POLL_FINAL_RESERVE_SECONDS", 0.5)
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+        adb_interval=10.0,
+    )
+    observer.deadline = time.monotonic() + 7
+    server_ready = tmp_path / "adb-server-ready"
+    server_stopped = tmp_path / "adb-server-stopped"
+    server_socket_file = tmp_path / "adb-server-socket"
+    calls = tmp_path / "adb-calls.jsonl"
+    fake_adb = tmp_path / "fake-adb"
+    fake_adb.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, signal, socket, sys, time\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "if args[-2:] == ['nodaemon', 'server']:\n"
+        "    endpoint = args[args.index('-L') + 1]\n"
+        "    socket_path = endpoint.removeprefix('localfilesystem:')\n"
+        "    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "    listener.bind(socket_path)\n"
+        "    listener.listen(8)\n"
+        "    listener.settimeout(0.05)\n"
+        f"    Path({str(server_ready)!r}).write_text('ready', encoding='ascii')\n"
+        f"    Path({str(server_socket_file)!r}).write_text(socket_path, encoding='ascii')\n"
+        "    running = True\n"
+        "    def stop(_signum, _frame):\n"
+        "        global running\n"
+        "        running = False\n"
+        "    signal.signal(signal.SIGTERM, stop)\n"
+        "    while running:\n"
+        "        try:\n"
+        "            connection, _ = listener.accept()\n"
+        "        except socket.timeout:\n"
+        "            continue\n"
+        "        connection.close()\n"
+        "    listener.close()\n"
+        "    Path(socket_path).unlink(missing_ok=True)\n"
+        f"    Path({str(server_stopped)!r}).write_text('stopped', encoding='ascii')\n"
+        "    raise SystemExit(0)\n"
+        "with Path(os.environ['FAKE_ADB_CALLS']).open('a', encoding='utf-8') as stream:\n"
+        "    stream.write(json.dumps({'args': args, 'time': time.monotonic()}) + '\\n')\n"
+        "endpoint = args[args.index('-L') + 1].removeprefix('localfilesystem:')\n"
+        "probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "probe.connect(endpoint)\n"
+        "probe.close()\n"
+        "if 'connect' in args:\n"
+        "    raise SystemExit(0)\n"
+        "if args[-1:] == ['get-state']:\n"
+        "    print('device')\n"
+        "    raise SystemExit(0)\n"
+        "if args[-2:] == ['getprop', 'sys.boot_completed']:\n"
+        "    print('0')\n"
+        "    raise SystemExit(0)\n"
+        "if 'logcat' in args:\n"
+        "    print('06-15 12:00:00.000  1000  1000 I am_proc_start: "
+        "[987654, 12345, system_server]')\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(19)\n",
+        encoding="utf-8",
+    )
+    fake_adb.chmod(0o700)
+    observer.adb_path = fake_adb.resolve(strict=True)
+    monkeypatch.setenv("FAKE_ADB_CALLS", str(calls))
+    launcher_log.write_bytes(b"Start event (5) received.\n")
+
+    observer.start()
+    observer.sample(now=0)
+    deadline = time.monotonic() + 8
+    try:
+        while time.monotonic() < deadline:
+            if any(record["event"] == "adb_logcat_summary" for record in _read_records(output)):
+                break
+            time.sleep(0.02)
+    finally:
+        observer.close()
+
+    records = _read_records(output)
+    summaries = [record for record in records if record["event"] == "adb_logcat_summary"]
+    polls = [record for record in records if record["event"] == "adb_poll"]
+    assert len(summaries) == 1
+    assert len(polls) == 1
+    assert summaries[0]["attempted"]
+    assert summaries[0]["summary"]["processStartEvents"] == 1
+    assert summaries[0]["summary"]["systemServerMentionEvents"] == 1
+    assert server_ready.read_text(encoding="ascii") == "ready"
+    assert server_stopped.read_text(encoding="ascii") == "stopped"
+    assert not Path(server_socket_file.read_text(encoding="ascii")).exists()
+    logged_calls = [json.loads(line) for line in calls.read_text().splitlines()]
+    logcat_calls = [call for call in logged_calls if "logcat" in call["args"]]
+    assert len(logcat_calls) == 1
+    assert logcat_calls[0]["args"][logcat_calls[0]["args"].index("-b") + 1] == "events"
+    assert logcat_calls[0]["args"][-2:] == ["-t", "128"]
+    assert "system_server" not in output.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     (
         "scenario",
@@ -1484,6 +1662,393 @@ def test_boot_observer_uses_getprop_timeout_capped_by_deadline(
 
     assert result == (0, "1", False, True)
     assert observed_timeouts == [expected_timeout]
+
+
+def test_summarize_logcat_events_counts_only_selected_event_tags() -> None:
+    output = (
+        b"06-15 12:00:00.000  1000  1000 I am_proc_start: "
+        b"[987654, 12345, 12345, 1000, system_server]\n"
+        b"06-15 12:00:01.000  1000  1000 I am_proc_died: "
+        b"[987654, 12345, system_server]\n"
+        b"06-15 12:00:02.000  1000  1000 I am_proc_crashed: "
+        b"[765432, com.private.app]\n"
+        b"06-15 12:00:03.000  1000  1000 I am_anr: [765432, com.private.app]\n"
+        b"06-15 12:00:04.000  1000  1000 I am_kill: [4321, zygote64]\n"
+        b"06-15 12:00:05.000  1000  1000 I unrelated_event: [system_server]\n"
+    )
+
+    assert OBSERVER_MODULE.summarize_logcat_events(output) == {
+        "recognizedEvents": 5,
+        "processStartEvents": 1,
+        "processExitEvents": 2,
+        "processCrashEvents": 1,
+        "anrEvents": 1,
+        "systemServerMentionEvents": 2,
+        "systemServerMentionStartEvents": 1,
+        "systemServerMentionExitEvents": 1,
+        "systemServerMentionCrashEvents": 0,
+        "systemServerMentionAnrEvents": 0,
+        "systemServerMentionKillEvents": 0,
+        "zygoteMentionEvents": 1,
+        "zygoteMentionStartEvents": 0,
+        "zygoteMentionExitEvents": 0,
+        "zygoteMentionCrashEvents": 0,
+        "zygoteMentionAnrEvents": 0,
+        "zygoteMentionKillEvents": 1,
+    }
+
+
+def test_bounded_adb_logcat_caps_stdout_and_reaps_the_client(tmp_path: Path) -> None:
+    fake_adb = tmp_path / "fake-adb"
+    fake_adb.write_text(
+        f"#!{sys.executable}\nimport os\nwhile True:\n    os.write(1, b'x' * 4096)\n",
+        encoding="utf-8",
+    )
+    fake_adb.chmod(0o700)
+
+    exit_code, output, timed_out, attempted, truncated, cleanup_complete, probe_error = (
+        BootObserver._run_adb_bounded(
+            [str(fake_adb)],
+            {},
+            time.monotonic() + 5,
+            timeout_seconds=2,
+            max_output_bytes=1024,
+        )
+    )
+
+    assert exit_code is not None
+    assert output == b"x" * 1024
+    assert not timed_out
+    assert attempted
+    assert truncated
+    assert cleanup_complete
+    assert not probe_error
+
+
+def test_bounded_adb_logcat_terminates_a_timed_out_client(tmp_path: Path) -> None:
+    fake_adb = tmp_path / "fake-adb"
+    fake_adb.write_text(
+        f"#!{sys.executable}\n"
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    fake_adb.chmod(0o700)
+
+    started = time.monotonic()
+    exit_code, output, timed_out, attempted, truncated, cleanup_complete, probe_error = (
+        BootObserver._run_adb_bounded(
+            [str(fake_adb)],
+            {},
+            started + 5,
+            timeout_seconds=0.1,
+            max_output_bytes=1024,
+        )
+    )
+
+    assert exit_code is not None
+    assert output == b""
+    assert timed_out
+    assert attempted
+    assert not truncated
+    assert cleanup_complete
+    assert not probe_error
+    assert time.monotonic() - started < 3
+
+
+def test_bounded_adb_logcat_reaps_descendant_holding_stdout_open(tmp_path: Path) -> None:
+    child_pid_file = tmp_path / "child.pid"
+    fake_adb = tmp_path / "fake-adb"
+    fake_adb.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([\n"
+        "    sys.executable, '-c',\n"
+        "    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(30)',\n"
+        "])\n"
+        f"Path({str(child_pid_file)!r}).write_text(str(child.pid), encoding='ascii')\n",
+        encoding="utf-8",
+    )
+    fake_adb.chmod(0o700)
+
+    exit_code, output, timed_out, attempted, truncated, cleanup_complete, probe_error = (
+        BootObserver._run_adb_bounded(
+            [str(fake_adb)],
+            {},
+            time.monotonic() + 5,
+            timeout_seconds=0.75,
+            max_output_bytes=1024,
+        )
+    )
+
+    assert exit_code == 0
+    assert output == b""
+    assert timed_out
+    assert attempted
+    assert not truncated
+    assert cleanup_complete
+    assert not probe_error
+    child_pid = int(child_pid_file.read_text(encoding="ascii"))
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        pytest.fail("logcat descendant survived bounded ADB cleanup")
+
+
+def test_final_logcat_summary_is_one_shot_and_does_not_store_event_payloads(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output_path, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+    bounded_calls: list[list[str]] = []
+    event_output = (
+        b"06-15 12:00:00.000  1000  1000 I am_proc_died: "
+        b"[987654, 12345, system_server]\n"
+        b"06-15 12:00:01.000  1000  1000 I am_proc_crashed: "
+        b"[765432, com.private.app]\n"
+        b"06-15 12:00:02.000  1000  1000 I am_proc_start: "
+        b"[4321, zygote64]\n"
+    )
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    def fake_run_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline
+        bounded_calls.append(command)
+        if "connect" in command:
+            assert timeout_seconds == OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS
+            assert max_output_bytes == OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES
+            return 0, b"connected", False, True, False, True, False
+        if command[-1:] == ["get-state"]:
+            assert timeout_seconds == OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS
+            assert max_output_bytes == OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES
+            return 0, b"device\n", False, True, False, True, False
+        if "logcat" in command:
+            assert timeout_seconds == OBSERVER_MODULE.ADB_LOGCAT_TIMEOUT_SECONDS
+            assert max_output_bytes == OBSERVER_MODULE.ADB_LOGCAT_MAX_BYTES
+            return 0, event_output, False, True, False, True, False
+        raise AssertionError(f"unexpected ADB command: {command!r}")
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
+    try:
+        for _ in range(2):
+            observer._record_final_logcat_summary(
+                "localfilesystem:/tmp/adb.sock",
+                "127.0.0.1:6520",
+                {},
+                LiveServer(),  # type: ignore[arg-type]
+                socket_path,
+                time.monotonic() + 60,
+            )
+    finally:
+        observer.close()
+        adb_socket.close()
+
+    records = [
+        record for record in _read_records(output_path) if record["event"] == "adb_logcat_summary"
+    ]
+    assert len(bounded_calls) == 3
+    assert "connect" in bounded_calls[0]
+    assert bounded_calls[1][-1:] == ["get-state"]
+    assert "logcat" in bounded_calls[2]
+    assert len(records) == 1
+    record = records[0]
+    assert record["attempted"]
+    assert record["deviceState"] == "device"
+    assert record["connectCleanupComplete"] is True
+    assert record["getStateCleanupComplete"] is True
+    assert record["cleanupComplete"] is True
+    assert record["capturedBytes"] == len(event_output)
+    assert record["summary"] == {
+        "recognizedEvents": 3,
+        "processStartEvents": 1,
+        "processExitEvents": 1,
+        "processCrashEvents": 1,
+        "anrEvents": 0,
+        "systemServerMentionEvents": 1,
+        "systemServerMentionStartEvents": 0,
+        "systemServerMentionExitEvents": 1,
+        "systemServerMentionCrashEvents": 0,
+        "systemServerMentionAnrEvents": 0,
+        "systemServerMentionKillEvents": 0,
+        "zygoteMentionEvents": 1,
+        "zygoteMentionStartEvents": 1,
+        "zygoteMentionExitEvents": 0,
+        "zygoteMentionCrashEvents": 0,
+        "zygoteMentionAnrEvents": 0,
+        "zygoteMentionKillEvents": 0,
+    }
+    saved_output = output_path.read_text(encoding="utf-8")
+    assert "system_server" not in saved_output
+    assert "zygote64" not in saved_output
+    assert "com.private.app" not in saved_output
+    assert "connected" not in saved_output
+    assert "987654" not in saved_output
+    assert "12345" not in saved_output
+
+
+def test_final_logcat_summary_skips_guest_when_adb_is_offline(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output_path, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+    bounded_calls: list[list[str]] = []
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    def fake_run_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline
+        bounded_calls.append(command)
+        if "connect" in command:
+            return 0, b"", False, True, False, True, False
+        if command[-1:] == ["get-state"]:
+            return 0, b"offline\n", False, True, False, True, False
+        raise AssertionError("logcat must not run when the guest is offline")
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
+    try:
+        observer._record_final_logcat_summary(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            {},
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            time.monotonic() + 60,
+        )
+    finally:
+        observer.close()
+        adb_socket.close()
+
+    records = [
+        record for record in _read_records(output_path) if record["event"] == "adb_logcat_summary"
+    ]
+    assert len(bounded_calls) == 2
+    assert "connect" in bounded_calls[0]
+    assert bounded_calls[1][-1:] == ["get-state"]
+    assert len(records) == 1
+    assert not records[0]["attempted"]
+    assert records[0]["deviceState"] == "offline"
+    assert records[0]["reason"] == "device_unavailable"
+
+
+@pytest.mark.parametrize("failed_command", ["connect", "get-state", "logcat"])
+def test_final_probe_fails_close_when_client_cleanup_is_unverified(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_command: str,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output_path, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    def fake_run_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline, timeout_seconds
+        del max_output_bytes
+        if "connect" in command:
+            return 0, b"", False, True, False, failed_command != "connect", False
+        if command[-1:] == ["get-state"]:
+            return 0, b"device\n", False, True, False, failed_command != "get-state", False
+        if "logcat" in command:
+            return 0, b"", False, True, False, failed_command != "logcat", False
+        raise AssertionError(f"unexpected ADB command: {command!r}")
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_bounded)
+    try:
+        observer._record_final_logcat_summary(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            {},
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            time.monotonic() + 60,
+        )
+        with pytest.raises(OSError, match="did not complete child cleanup"):
+            observer.close()
+    finally:
+        if not observer._closed:
+            observer.close()
+        adb_socket.close()
+
+    records = [
+        record for record in _read_records(output_path) if record["event"] == "adb_logcat_summary"
+    ]
+    assert len(records) == 1
+    assert records[0]["cleanupComplete"] is False
 
 
 def test_boot_observer_records_private_socket_directory_failure(

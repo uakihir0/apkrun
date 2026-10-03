@@ -1,10 +1,12 @@
-"""Record bounded Cuttlefish Android-guest memory and ADB boot observations."""
+"""Record bounded Cuttlefish guest memory, ADB, and process-event observations."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
@@ -26,9 +28,44 @@ ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
+ADB_POLL_FINAL_RESERVE_SECONDS = ADB_COMMAND_TIMEOUT_SECONDS * 2 + ADB_GETPROP_TIMEOUT_SECONDS + 4.0
+ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
+ADB_LOGCAT_TIMEOUT_SECONDS = 10.0
+ADB_LOGCAT_TAIL_LINES = 128
+ADB_LOGCAT_MAX_BYTES = 64 * 1024
+ADB_CLIENT_TERMINATE_SECONDS = 0.5
+ADB_CLIENT_KILL_SECONDS = 1.0
+ADB_PROBE_WINDOW_MARGIN_SECONDS = 1.0
+ADB_SERVER_TERMINATE_SECONDS = 2.0
+ADB_SERVER_KILL_SECONDS = 2.0
+ADB_FINAL_PROBE_COMMAND_COUNT = 3
+ADB_LOGCAT_MINIMUM_WINDOW_SECONDS = (
+    ADB_COMMAND_TIMEOUT_SECONDS * 2
+    + ADB_LOGCAT_TIMEOUT_SECONDS
+    + (ADB_CLIENT_TERMINATE_SECONDS + ADB_CLIENT_KILL_SECONDS * 2) * ADB_FINAL_PROBE_COMMAND_COUNT
+    + ADB_SERVER_TERMINATE_SECONDS
+    + ADB_SERVER_KILL_SECONDS
+    + ADB_PROBE_WINDOW_MARGIN_SECONDS
+)
+ADB_LOGCAT_PROBE_RESERVE_SECONDS = ADB_LOGCAT_MINIMUM_WINDOW_SECONDS + 1.5
 ADB_SERVER_START_TIMEOUT_SECONDS = 3.0
 ADB_CLEANUP_RESERVE_SECONDS = 15.0
 ADB_SERVER_SOCKET_LIMIT = 107
+LOGCAT_EVENT_TAGS = (
+    "am_proc_start",
+    "am_proc_died",
+    "am_proc_crashed",
+    "am_crash",
+    "am_anr",
+    "am_kill",
+)
+LOGCAT_EVENT_LINE = re.compile(
+    r"^(?:(?:\S+\s+\S+\s+\d+\s+\d+\s+[VDIWEF]\s+)|[VDIWEF]/|[VDIWEF]\s+)("
+    + "|".join(LOGCAT_EVENT_TAGS)
+    + r")\s*:"
+)
+LOGCAT_SYSTEM_SERVER = re.compile(r"(?<![A-Za-z0-9_])system_server(?![A-Za-z0-9_])")
+LOGCAT_ZYGOTE = re.compile(r"(?<![A-Za-z0-9_])zygote(?:64)?(?![A-Za-z0-9_])")
 ADB_SERVER_EXEC_SCRIPT = """
 import ctypes
 import os
@@ -98,6 +135,58 @@ def _proc_memory_status(path: Path) -> tuple[int, int | None] | None:
     return values[b"VmRSS"], values.get(b"RssShmem")
 
 
+def summarize_logcat_events(output: bytes) -> dict[str, int]:
+    """Keep only fixed event counts; never persist logcat payloads or identities."""
+    counts = {
+        "recognizedEvents": 0,
+        "processStartEvents": 0,
+        "processExitEvents": 0,
+        "processCrashEvents": 0,
+        "anrEvents": 0,
+        "systemServerMentionEvents": 0,
+        "systemServerMentionStartEvents": 0,
+        "systemServerMentionExitEvents": 0,
+        "systemServerMentionCrashEvents": 0,
+        "systemServerMentionAnrEvents": 0,
+        "systemServerMentionKillEvents": 0,
+        "zygoteMentionEvents": 0,
+        "zygoteMentionStartEvents": 0,
+        "zygoteMentionExitEvents": 0,
+        "zygoteMentionCrashEvents": 0,
+        "zygoteMentionAnrEvents": 0,
+        "zygoteMentionKillEvents": 0,
+    }
+    text = output.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        match = LOGCAT_EVENT_LINE.match(line)
+        if match is None:
+            continue
+        tag = match.group(1)
+        event_kind: str | None = None
+        counts["recognizedEvents"] += 1
+        if tag == "am_proc_start":
+            counts["processStartEvents"] += 1
+            event_kind = "Start"
+        elif tag in {"am_proc_died", "am_kill"}:
+            counts["processExitEvents"] += 1
+            event_kind = "Kill" if tag == "am_kill" else "Exit"
+        elif tag in {"am_proc_crashed", "am_crash"}:
+            counts["processCrashEvents"] += 1
+            event_kind = "Crash"
+        elif tag == "am_anr":
+            counts["anrEvents"] += 1
+            event_kind = "Anr"
+        for process_name, pattern in (
+            ("systemServer", LOGCAT_SYSTEM_SERVER),
+            ("zygote", LOGCAT_ZYGOTE),
+        ):
+            if pattern.search(line):
+                counts[f"{process_name}MentionEvents"] += 1
+                if event_kind is not None:
+                    counts[f"{process_name}Mention{event_kind}Events"] += 1
+    return counts
+
+
 class BootObserver:
     """Observe the Android crosvm process and probe ADB through a private socket."""
 
@@ -159,6 +248,8 @@ class BootObserver:
         self._crosvm_restarter_start_times: dict[int, bytes] = {}
         self._crosvm_start_times: dict[int, bytes] = {}
         self._start_event_observed = False
+        self._logcat_probe_attempted = False
+        self._adb_probe_cleanup_failed = False
         self._next_sample = 0.0
         self._closed = False
         self._refresh_instance_path(emit_event=False)
@@ -288,7 +379,7 @@ class BootObserver:
         if self._sample_thread is not None:
             self._sample_thread.join(timeout=2)
         if self._adb_thread is not None:
-            self._adb_thread.join(timeout=12)
+            self._adb_thread.join(timeout=ADB_LOGCAT_PROBE_RESERVE_SECONDS)
             if self._adb_thread.is_alive():
                 server = self._adb_server_process
                 if server is not None and server.poll() is None:
@@ -318,6 +409,8 @@ class BootObserver:
             os.close(self._output_fd)
             self._output_fd = None
         self._closed = True
+        if self._adb_probe_cleanup_failed:
+            raise OSError("bounded ADB logcat probe did not complete child cleanup")
 
     def _record(self, fields: dict[str, Any]) -> None:
         with self._output_lock:
@@ -692,6 +785,9 @@ class BootObserver:
             if self.deadline is not None
             else float("inf")
         )
+        logcat_probe_deadline = (
+            adb_deadline - ADB_LOGCAT_PROBE_RESERVE_SECONDS if self.deadline is not None else None
+        )
         try:
             if time.monotonic() >= adb_deadline:
                 self._record(
@@ -775,6 +871,7 @@ class BootObserver:
 
             self._record({"event": "private_adb_server_ready"})
             serial = f"127.0.0.1:{self.adb_port}"
+            environment = self._adb_environment()
             next_poll = time.monotonic()
             cleanup_reserve_reached = False
             while not self._stop_event.is_set():
@@ -782,8 +879,25 @@ class BootObserver:
                 if now >= adb_deadline:
                     cleanup_reserve_reached = True
                     break
-                if now < next_poll:
-                    self._stop_event.wait(min(next_poll - now, adb_deadline - now))
+                if logcat_probe_deadline is not None and now >= logcat_probe_deadline:
+                    self._record_final_logcat_summary(
+                        adb_socket,
+                        serial,
+                        environment,
+                        server,
+                        socket_path,
+                        adb_deadline,
+                    )
+                    break
+                next_wakeup = min(next_poll, adb_deadline)
+                if logcat_probe_deadline is not None:
+                    last_poll_start = logcat_probe_deadline - ADB_POLL_FINAL_RESERVE_SECONDS
+                    if now >= last_poll_start:
+                        self._stop_event.wait(logcat_probe_deadline - now)
+                        continue
+                    next_wakeup = min(next_wakeup, last_poll_start)
+                if now < next_wakeup:
+                    self._stop_event.wait(next_wakeup - now)
                     continue
                 if server.poll() is not None or not self._is_socket(socket_path):
                     self._record(
@@ -823,11 +937,11 @@ class BootObserver:
             if server is not None and server.poll() is None:
                 try:
                     server.terminate()
-                    server.wait(timeout=2)
+                    server.wait(timeout=ADB_SERVER_TERMINATE_SECONDS)
                 except subprocess.TimeoutExpired:
                     try:
                         server.kill()
-                        server.wait(timeout=2)
+                        server.wait(timeout=ADB_SERVER_KILL_SECONDS)
                     except (OSError, subprocess.TimeoutExpired):
                         if server.poll() is None:
                             cleanup_complete = False
@@ -972,6 +1086,222 @@ class BootObserver:
         )
         return True
 
+    def _record_final_logcat_summary(
+        self,
+        adb_socket: str,
+        serial: str,
+        environment: dict[str, str],
+        server: subprocess.Popen[bytes],
+        socket_path: Path,
+        adb_deadline: float,
+    ) -> None:
+        if self._logcat_probe_attempted:
+            return
+        self._logcat_probe_attempted = True
+        fields: dict[str, Any] = {
+            "event": "adb_logcat_summary",
+            "attempted": False,
+            "reason": None,
+            "connectExitCode": None,
+            "connectTimedOut": None,
+            "connectTruncated": False,
+            "connectCleanupComplete": True,
+            "connectProbeError": False,
+            "getStateExitCode": None,
+            "getStateAttempted": False,
+            "getStateTimedOut": None,
+            "getStateTruncated": False,
+            "getStateCleanupComplete": True,
+            "getStateProbeError": False,
+            "deviceState": None,
+            "exitCode": None,
+            "timedOut": None,
+            "truncated": False,
+            "probeError": False,
+            "cleanupComplete": True,
+            "capturedBytes": 0,
+            "summary": None,
+        }
+        if adb_deadline - time.monotonic() < ADB_LOGCAT_MINIMUM_WINDOW_SECONDS:
+            fields["reason"] = "insufficient_probe_window"
+            self._record(fields)
+            return
+        if server.poll() is not None or not self._is_socket(socket_path):
+            fields["reason"] = "server_lost"
+            self._record(fields)
+            return
+        (
+            connect_code,
+            _,
+            connect_timed_out,
+            connect_attempted,
+            connect_truncated,
+            connect_cleanup_complete,
+            connect_probe_error,
+        ) = self._run_adb_bounded(
+            [str(self.adb_path), "-L", adb_socket, "connect", serial],
+            environment,
+            adb_deadline,
+            timeout_seconds=ADB_COMMAND_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
+        )
+        fields.update(
+            {
+                "connectExitCode": connect_code,
+                "connectTimedOut": connect_timed_out if connect_attempted else None,
+                "connectTruncated": connect_truncated,
+                "connectCleanupComplete": connect_cleanup_complete,
+                "connectProbeError": connect_probe_error,
+                "cleanupComplete": connect_cleanup_complete,
+                "probeError": connect_probe_error,
+            }
+        )
+        if not connect_cleanup_complete:
+            self._adb_probe_cleanup_failed = True
+            fields["reason"] = "connect_cleanup_failed"
+            self._record(fields)
+            return
+        if connect_probe_error:
+            fields["reason"] = "connect_probe_error"
+            self._record(fields)
+            return
+        if not connect_attempted:
+            fields["reason"] = "connect_not_started"
+            self._record(fields)
+            return
+        if connect_timed_out:
+            fields["reason"] = "connect_timed_out"
+            self._record(fields)
+            return
+        if connect_truncated:
+            fields["reason"] = "connect_output_truncated"
+            self._record(fields)
+            return
+        if connect_code != 0:
+            fields["reason"] = "connect_failed"
+            self._record(fields)
+            return
+        if server.poll() is not None or not self._is_socket(socket_path):
+            fields["reason"] = "server_lost"
+            self._record(fields)
+            return
+        (
+            state_code,
+            state_output,
+            state_timed_out,
+            state_attempted,
+            state_truncated,
+            state_cleanup_complete,
+            state_probe_error,
+        ) = self._run_adb_bounded(
+            [str(self.adb_path), "-L", adb_socket, "-s", serial, "get-state"],
+            environment,
+            adb_deadline,
+            timeout_seconds=ADB_COMMAND_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
+        )
+        fields.update(
+            {
+                "getStateExitCode": state_code,
+                "getStateAttempted": state_attempted,
+                "getStateTimedOut": state_timed_out if state_attempted else None,
+                "getStateTruncated": state_truncated,
+                "getStateCleanupComplete": state_cleanup_complete,
+                "getStateProbeError": state_probe_error,
+                "cleanupComplete": fields["cleanupComplete"] and state_cleanup_complete,
+                "probeError": fields["probeError"] or state_probe_error,
+            }
+        )
+        if not state_cleanup_complete:
+            self._adb_probe_cleanup_failed = True
+            fields["reason"] = "get_state_cleanup_failed"
+            self._record(fields)
+            return
+        if state_probe_error:
+            fields["reason"] = "get_state_probe_error"
+            self._record(fields)
+            return
+        if not state_attempted:
+            fields["reason"] = "get_state_not_started"
+            self._record(fields)
+            return
+        if state_timed_out:
+            fields["reason"] = "get_state_timed_out"
+            self._record(fields)
+            return
+        if state_truncated:
+            fields["reason"] = "get_state_output_truncated"
+            self._record(fields)
+            return
+        state_text = state_output.decode("utf-8", errors="replace").strip()
+        state = (
+            state_text
+            if state_code == 0 and state_text in {"device", "offline", "unauthorized"}
+            else None
+        )
+        fields["deviceState"] = state
+        if state != "device":
+            fields["reason"] = "device_unavailable"
+            self._record(fields)
+            return
+        if server.poll() is not None or not self._is_socket(socket_path):
+            fields["reason"] = "server_lost"
+            self._record(fields)
+            return
+        command = [
+            str(self.adb_path),
+            "-L",
+            adb_socket,
+            "-s",
+            serial,
+            "logcat",
+            "-d",
+            "-b",
+            "events",
+            "-v",
+            "descriptive",
+            "-t",
+            str(ADB_LOGCAT_TAIL_LINES),
+        ]
+        (
+            exit_code,
+            output,
+            timed_out,
+            attempted,
+            truncated,
+            cleanup_complete,
+            probe_error,
+        ) = self._run_adb_bounded(
+            command,
+            environment,
+            adb_deadline,
+            timeout_seconds=ADB_LOGCAT_TIMEOUT_SECONDS,
+            max_output_bytes=ADB_LOGCAT_MAX_BYTES,
+        )
+        fields.update(
+            {
+                "attempted": attempted,
+                "exitCode": exit_code,
+                "timedOut": timed_out if attempted else None,
+                "truncated": truncated,
+                "probeError": fields["probeError"] or probe_error,
+                "cleanupComplete": fields["cleanupComplete"] and cleanup_complete,
+                "capturedBytes": len(output),
+                "summary": (
+                    summarize_logcat_events(output)
+                    if attempted and (output or exit_code == 0)
+                    else None
+                ),
+            }
+        )
+        if not cleanup_complete:
+            self._adb_probe_cleanup_failed = True
+        if probe_error:
+            fields["reason"] = "logcat_probe_error"
+        elif not attempted:
+            fields["reason"] = "logcat_not_started"
+        self._record(fields)
+
     @staticmethod
     def _run_adb(
         command: list[str],
@@ -999,3 +1329,170 @@ class BootObserver:
             return None, "", False, False
         output = completed.stdout.decode("utf-8", errors="replace").strip()
         return completed.returncode, output, False, True
+
+    @staticmethod
+    def _process_group_exists(process_group_id: int) -> bool:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
+        return True
+
+    @staticmethod
+    def _signal_bounded_adb_group(
+        process: subprocess.Popen[bytes],
+        signal_number: int,
+    ) -> bool:
+        try:
+            os.killpg(process.pid, signal_number)
+        except ProcessLookupError:
+            return process.poll() is not None
+        except OSError:
+            if process.poll() is None:
+                try:
+                    process.send_signal(signal_number)
+                except OSError:
+                    return False
+            return process.poll() is not None
+        return True
+
+    @staticmethod
+    def _stop_bounded_adb_client(process: subprocess.Popen[bytes]) -> bool:
+        process_group_id = process.pid
+        BootObserver._signal_bounded_adb_group(process, signal.SIGTERM)
+        terminate_deadline = time.monotonic() + ADB_CLIENT_TERMINATE_SECONDS
+        while time.monotonic() < terminate_deadline:
+            process.poll()
+            if process.returncode is not None and not BootObserver._process_group_exists(
+                process_group_id
+            ):
+                return True
+            time.sleep(min(0.02, max(0.0, terminate_deadline - time.monotonic())))
+
+        if BootObserver._process_group_exists(process_group_id):
+            BootObserver._signal_bounded_adb_group(process, signal.SIGKILL)
+        try:
+            if process.poll() is None:
+                process.wait(timeout=ADB_CLIENT_KILL_SECONDS)
+            else:
+                process.wait()
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+        kill_deadline = time.monotonic() + ADB_CLIENT_KILL_SECONDS
+        while time.monotonic() < kill_deadline:
+            if not BootObserver._process_group_exists(process_group_id):
+                return True
+            time.sleep(min(0.02, max(0.0, kill_deadline - time.monotonic())))
+        return not BootObserver._process_group_exists(process_group_id)
+
+    @staticmethod
+    def _run_adb_bounded(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        if timeout_seconds <= 0 or max_output_bytes <= 0:
+            raise ValueError("bounded ADB limits must be positive")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, b"", False, False, False, True, False
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except OSError:
+            return None, b"", False, False, False, True, True
+
+        output = bytearray()
+        timed_out = False
+        truncated = False
+        probe_error = False
+        cleanup_complete = True
+        selector: selectors.BaseSelector | None = None
+        stdout = process.stdout
+        eof = False
+        child_deadline = min(deadline, time.monotonic() + timeout_seconds)
+        try:
+            if stdout is None:
+                probe_error = True
+            else:
+                os.set_blocking(stdout.fileno(), False)
+                selector = selectors.DefaultSelector()
+                selector.register(stdout, selectors.EVENT_READ)
+                while True:
+                    now = time.monotonic()
+                    if now >= child_deadline and (process.poll() is None or not eof):
+                        timed_out = True
+                        break
+                    if process.poll() is not None and eof:
+                        break
+                    remaining = max(0.0, child_deadline - now)
+                    if eof:
+                        if process.poll() is None:
+                            if remaining <= 0:
+                                timed_out = True
+                                break
+                            time.sleep(min(0.05, remaining))
+                        continue
+                    for key, _ in selector.select(min(remaining, 0.1)):
+                        room = max_output_bytes - len(output)
+                        try:
+                            chunk = os.read(key.fd, min(64 * 1024, room + 1))
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            eof = True
+                            continue
+                        if len(chunk) > room:
+                            output.extend(chunk[:room])
+                            truncated = True
+                            break
+                        output.extend(chunk)
+                    if truncated:
+                        break
+        except (OSError, ValueError):
+            probe_error = True
+        finally:
+            process.poll()
+            if (
+                process.returncode is None
+                or not eof
+                or timed_out
+                or truncated
+                or probe_error
+                or BootObserver._process_group_exists(process.pid)
+            ):
+                cleanup_complete = BootObserver._stop_bounded_adb_client(process)
+            if selector is not None:
+                try:
+                    selector.close()
+                except OSError:
+                    cleanup_complete = False
+            if stdout is not None:
+                try:
+                    stdout.close()
+                except OSError:
+                    cleanup_complete = False
+
+        return (
+            process.poll(),
+            bytes(output),
+            timed_out,
+            True,
+            truncated,
+            cleanup_complete,
+            probe_error,
+        )

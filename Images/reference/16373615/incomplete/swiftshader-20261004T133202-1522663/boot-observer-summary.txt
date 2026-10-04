@@ -55,9 +55,13 @@ dump at 3247.400 shows system_server in D state; its stack waits in
 rwsem_down_write_slowpath, down_write_killable, and do_mprotect_pkey. The
 dump does not identify the semaphore owner. A concurrent memory snapshot
 records 232,172 kB free in Normal and 1,989,308 kB free in DMA32; it does
-not show low free memory at that instant. Zygote received SIGKILL again at
-3271.995. During cleanup, untracked system_server PID 5070 received SIGKILL
-at 3277.543, before zygote restarted at 3277.772. No
+not show low free memory at that instant. In the later all-CPU NMI snapshot
+at 3248.822, the same PID 4364 is the current CPU 1 task with a user-space
+program counter. The log therefore does not show that this D-state persisted;
+it does not identify the lock owner. Zygote received SIGKILL again at
+3271.995. During cleanup, libprocessgroup removed PID 4364's cgroup at
+3274.415; untracked system_server PID 5070 received SIGKILL at 3277.543,
+before zygote restarted at 3277.772. No
 VIRTUAL_DEVICE_BOOT_COMPLETED marker appears. This run progressed past
 U-Boot into Linux and Android startup; it does not reproduce a halt in
 U-Boot or establish a causal link between U-Boot and the later stall.

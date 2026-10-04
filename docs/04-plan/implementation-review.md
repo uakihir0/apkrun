@@ -5864,14 +5864,20 @@ at 2497.959. Init recorded another untracked `system_server` exit with status
 0 at 2886.400. A later watchdog SysRq at 3245.973 produced a blocked-state
 dump at 3247.400, showing `system_server` waiting in
 `rwsem_down_write_slowpath` and `down_write_killable` before
-`do_mprotect_pkey`. The dump does not name the semaphore owner. A concurrent
-memory snapshot does not show low free memory at that instant. Zygote
-received SIGKILL again at 3271.995; untracked `system_server` PID 5070
-received SIGKILL during cleanup at 3277.543, before zygote restarted at
-3277.772. These observations do not explain the failure to complete boot.
-This capture reached Linux and Android startup and does not reproduce a halt
-in U-Boot; it does not establish a causal link between U-Boot and the later
-stall.
+`do_mprotect_pkey`. At the captured kernel revision,
+[`do_mprotect_pkey`](https://android.googlesource.com/kernel/common/+/3ec022196c4e9d5c1434599cdda63f622dd6f586/mm/mprotect.c#744)
+calls `mmap_write_lock_killable(current->mm)`, so the operation was waiting
+for that address space's mmap write lock. The dump does not identify its
+holder. A concurrent memory snapshot does not show low free memory at that
+instant. An all-CPU NMI snapshot at 3248.822 records the same PID 4364 as the
+current CPU 1 task with a user-space program counter, so this capture does
+not show that the D-state persisted. Zygote received SIGKILL again at
+3271.995; libprocessgroup removed PID 4364's cgroup at 3274.415, and
+untracked `system_server` PID 5070 received SIGKILL during cleanup at
+3277.543, before zygote restarted at 3277.772. These observations do not
+explain the failure to complete boot. This capture reached Linux and Android
+startup and does not reproduce a halt in U-Boot; it does not establish a
+causal link between U-Boot and the later stall.
 
 The Lima mount was read-only, so the pinned reference tools and manifest were
 staged under a VM-local writable directory for the capture. The seven
@@ -5883,7 +5889,7 @@ Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4 LTS/aarch64 with nested
 virtualization, four guest CPUs, 4096 MiB memory, `guest_swiftshader`, and
 vhost-user GPU disabled.
 
-**Verification.** The artifact contains 14 regular files totaling 2,552,452
+**Verification.** The artifact contains 14 regular files totaling 2,552,731
 bytes; the largest is 1,471,808 bytes. All three JSON documents and all 926
 JSONL records parse with duplicate-key and non-standard-constant rejection.
 The 197 ADB polls contain 54 attempted and 143 polls without a getprop

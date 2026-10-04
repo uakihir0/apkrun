@@ -860,17 +860,28 @@ If process-group cleanup cannot be verified, the observer records the
 incomplete status, starts no later stage or poll, and fails capture shutdown.
 Missed ADB schedule points are skipped rather than replayed.
 On the first poll where `get-state` reports `device`, the observer runs a
-separate fixed `adb shell sh -c "printf '%s\n' 'APKRun shell ready'"` command
-in place of that poll's property query. This one-shot probe uses the existing
-ten-second guest-command timeout, 4 KiB stdout cap, and process-group cleanup
-bounds, so it does not add to the regular-poll deadline reserve. The property
-query resumes on the next scheduled poll. If the shell-probe process cannot
-be launched, the one-shot remains pending for the next eligible poll; after
-a launched attempt, it is not retried. `shellProbeMarkerMatched` records only
-whether the command output began with the marker using LF or CRLF line
-framing. The observer retains no raw output. A matched marker confirms that
-this standalone shell command returned its marker; an absent marker does not
-identify why the command failed to respond.
+separate bounded `adb shell sh -c` command in place of that poll's property
+query. After its fixed `APKRun shell ready` marker, the command checks
+`service check activity`, searches `service list` for the exact `activity`
+service entry, and checks `pidof system_server`. It prints only the fixed
+classifications `found`, `notFound`, `present`, `notPresent`, or `unknown`;
+the raw service output and process ID never leave the guest shell. This
+one-shot probe uses the existing ten-second guest-command timeout, 4 KiB
+stdout cap, and process-group cleanup bounds, so it does not add to the
+regular-poll deadline reserve. The property query resumes on the next
+scheduled poll. If the shell-probe process cannot be launched, the one-shot
+remains pending for the next eligible poll; after a launched attempt, it is
+not retried. `shellProbeMarkerMatched` records whether the command output
+began with the marker using LF or CRLF line framing. The strict parser accepts
+only complete, ordered, allowlisted result lines and can preserve a valid
+prefix when the command times out; it discards an incomplete final line,
+malformed replies, truncated output, and output from an unverified process.
+The observer retains no raw output. A matched marker confirms that this
+standalone shell command returned its marker; an absent marker does not
+identify why the command failed to respond. `shellProbeDiagnosticsParsed`
+indicates whether at least one complete result line was accepted, and the
+`activityServiceCheck`, `activityServiceListed`, and `systemServerProcess`
+fields remain null when their results were not captured.
 `shellProbeAttempted`, `shellProbeExitCode`, `shellProbeTimedOut`,
 `shellProbeTruncated`, `shellProbeCleanupComplete`, and
 `shellProbeProbeError` describe the standalone client. The first marker poll

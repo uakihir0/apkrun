@@ -6819,3 +6819,38 @@ zero matches for both declaration forms.
 `fsck.erofs` was unpacked under Lima `/tmp` without installation; its package
 digest matched Ubuntu package metadata. No guest or host ADB commands were
 issued during this inventory. The shared ADB server PID 2704 was not touched.
+
+## IR-178: Capture bounded Android service readiness in the boot observer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Extend the observer's existing one-shot shell probe to run
+`service check activity`, search `service list` for the `activity` entry, and
+check `pidof system_server`. Emit only the fixed classifications
+`found`/`notFound`/`unknown` and `present`/`notPresent`/`unknown`; never retain
+the service-list output or process ID. Parse only complete, ordered,
+allowlisted lines. Accept `service list` results only when its header, row
+numbering, service-name field, non-empty bracketed descriptor, and declared
+row count are consistent. An empty or malformed listing is `unknown`. If the
+bounded command times out after emitting complete fields, retain that valid
+prefix and discard any incomplete final line.
+
+**Reason.** IR-177 calls for a runtime snapshot as soon as shell commands
+succeed. Reusing the existing private-socket, ten-second shell probe adds no
+ADB client or deadline reservation. The classifications distinguish service
+lookup, registration-list, and SystemServer process observations while
+keeping guest output out of the host record. The result is diagnostic only:
+an absent service lookup does not establish why the service was unavailable,
+and a one-shot that times out before emitting fields leaves their state
+unknown.
+
+**Verification.** The focused observer selection passed 40 tests. The complete
+`Images/tools/tests` suite passed 551 tests with four platform-specific skips
+(Linux parent-death signals and GNU `timeout`). `scripts/ci/run-checks.sh`,
+Ruff lint and format checks, and `git diff --check` passed. The final
+adversarial review found no actionable issues. No live guest or ADB command
+was run for this tooling change.

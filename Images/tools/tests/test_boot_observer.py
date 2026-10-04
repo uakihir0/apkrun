@@ -294,6 +294,219 @@ def test_system_server_thread_shell_script_is_valid_shell() -> None:
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
 
 
+def test_adb_shell_probe_command_is_valid_shell() -> None:
+    result = subprocess.run(
+        ["sh", "-n", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND],
+        capture_output=True,
+        check=False,
+        timeout=3,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+@pytest.mark.parametrize(
+    (
+        "check_output",
+        "check_status",
+        "list_output",
+        "list_status",
+        "pidof_output",
+        "pidof_status",
+        "expected",
+    ),
+    (
+        (
+            "Service activity: found\n",
+            0,
+            "Found 2 services:\n"
+            "0 activity: [android.app.IActivityManager]\n"
+            "1 package: [android.content.pm.IPackageManager]\n",
+            0,
+            "593\n",
+            0,
+            ("found", "found", "present"),
+        ),
+        (
+            "Service activity: not found\n",
+            0,
+            "Found 1 services:\n0 package: [android.content.pm.IPackageManager]\n",
+            0,
+            "",
+            1,
+            ("notFound", "notFound", "notPresent"),
+        ),
+        (
+            "Malformed activity was found somewhere\n",
+            0,
+            "malformed service listing\n",
+            0,
+            "",
+            127,
+            ("unknown", "unknown", "unknown"),
+        ),
+        (
+            "Service activity: not found\n",
+            0,
+            "Found 1 services:\n0 package: garbage\n",
+            0,
+            "",
+            1,
+            ("notFound", "unknown", "notPresent"),
+        ),
+        (
+            "Service activity: not found\n",
+            0,
+            "Found 1 services:\n0 activity: garbage\n",
+            0,
+            "",
+            1,
+            ("notFound", "unknown", "notPresent"),
+        ),
+        (
+            "Service activity: not found\n",
+            0,
+            "Found 1 services:\n0 activity: []\n",
+            0,
+            "",
+            1,
+            ("notFound", "unknown", "notPresent"),
+        ),
+        (
+            "Service activity: not found\n",
+            0,
+            "",
+            0,
+            "",
+            1,
+            ("notFound", "unknown", "notPresent"),
+        ),
+        (
+            "Service activity: found\n",
+            0,
+            "Found 2 services:\n0 activity: [android.app.IActivityManager]\n",
+            0,
+            "",
+            1,
+            ("found", "unknown", "notPresent"),
+        ),
+    ),
+)
+def test_adb_shell_probe_command_keeps_only_allowlisted_diagnostics(
+    tmp_path: Path,
+    check_output: str,
+    check_status: int,
+    list_output: str,
+    list_status: int,
+    pidof_output: str,
+    pidof_status: int,
+    expected: tuple[str, str, str],
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    service = fake_bin / "service"
+    service.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "if sys.argv[1:3] == ['check', 'activity']:\n"
+        "    key = 'FAKE_CHECK'\n"
+        "    status_key = 'FAKE_CHECK_STATUS'\n"
+        "elif sys.argv[1:] == ['list']:\n"
+        "    key = 'FAKE_LIST'\n"
+        "    status_key = 'FAKE_LIST_STATUS'\n"
+        "else:\n"
+        "    raise SystemExit(64)\n"
+        "sys.stdout.write(os.environ[key])\n"
+        "raise SystemExit(int(os.environ[status_key]))\n",
+        encoding="ascii",
+    )
+    service.chmod(0o700)
+    pidof = fake_bin / "pidof"
+    pidof.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "sys.stdout.write(os.environ['FAKE_PIDOF'])\n"
+        "raise SystemExit(int(os.environ['FAKE_PIDOF_STATUS']))\n",
+        encoding="ascii",
+    )
+    pidof.chmod(0o700)
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_bin) + os.pathsep + os.defpath
+    environment["FAKE_CHECK"] = check_output
+    environment["FAKE_CHECK_STATUS"] = str(check_status)
+    environment["FAKE_LIST"] = list_output
+    environment["FAKE_LIST_STATUS"] = str(list_status)
+    environment["FAKE_PIDOF"] = pidof_output
+    environment["FAKE_PIDOF_STATUS"] = str(pidof_status)
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", OBSERVER_MODULE.ADB_SHELL_PROBE_COMMAND],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+        check=False,
+        timeout=3,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "APKRun shell ready\n"
+        f"activity_service_check={expected[0]}\n"
+        f"activity_service_listed={expected[1]}\n"
+        f"system_server_process={expected[2]}\n"
+    ).encode("ascii")
+    assert "593" not in result.stdout.decode("ascii")
+    assert "android.app.IActivityManager" not in result.stdout.decode("ascii")
+    assert "package:" not in result.stdout.decode("ascii")
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    (
+        (
+            b"activity_service_check=found\n"
+            b"activity_service_listed=notFound\n"
+            b"system_server_process=present\n",
+            ("found", "notFound", "present"),
+        ),
+        (
+            b"activity_service_check=notFound\r\n"
+            b"activity_service_listed=unknown\r\n"
+            b"system_server_process=notPresent\r\n",
+            ("notFound", "unknown", "notPresent"),
+        ),
+        (
+            b"activity_service_check=found\nactivity_service_listed=notF",
+            None,
+        ),
+        (b"activity_service_listed=found\n", None),
+        (b"activity_service_check=found\nunexpected=593\n", None),
+        (
+            b"activity_service_check=found\n"
+            b"activity_service_listed=found\n"
+            b"system_server_process=present\npid=593\n",
+            None,
+        ),
+        (b"activity_service_check=found\xff\n", None),
+    ),
+)
+def test_parse_adb_shell_probe_diagnostics_is_strict_and_pid_free(
+    output: bytes,
+    expected: tuple[str | None, str | None, str | None] | None,
+) -> None:
+    assert OBSERVER_MODULE.parse_adb_shell_probe_diagnostics(output) == expected
+
+
+def test_parse_adb_shell_probe_requires_timeout_for_partial_reply() -> None:
+    partial_output = b"activity_service_check=found\nactivity_service_listed=notF"
+
+    assert OBSERVER_MODULE.parse_adb_shell_probe_diagnostics(partial_output) is None
+    assert OBSERVER_MODULE.parse_adb_shell_probe_diagnostics(
+        partial_output,
+        allow_partial_output=True,
+    ) == ("found", None, None)
+
+
 @pytest.mark.parametrize("missing_file", (None, "status", "wchan", "stack"))
 def test_system_server_thread_shell_script_rejects_partial_proc_reads(
     tmp_path: Path,
@@ -2283,19 +2496,33 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
             if scenario == "shell_marker_crlf":
                 return bounded_result(
                     0,
-                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\r\n",
+                    (
+                        OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode()
+                        + "\r\n"
+                        + "activity_service_check=notFound\r\n"
+                        + "activity_service_listed=found\r\n"
+                        + "system_server_process=present\r\n"
+                    ),
                 )
             if scenario == "shell_probe_succeeds":
                 return bounded_result(
                     0,
-                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\n",
+                    (
+                        OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode()
+                        + "\n"
+                        + "activity_service_check=found\n"
+                        + "activity_service_listed=found\n"
+                        + "system_server_process=present\n"
+                    ),
                 )
             if scenario == "shell_marker_missing":
                 return bounded_result(None, timed_out=True)
             if scenario in {"shell_probe_times_out", "connect_times_out"}:
                 return bounded_result(
                     None,
-                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode() + "\n",
+                    OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode()
+                    + "\nactivity_service_check=notFound\n"
+                    + "activity_service_listed=notF",
                     timed_out=True,
                 )
             raise AssertionError(f"unexpected shell probe scenario: {scenario}")
@@ -2395,6 +2622,29 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     assert poll["shellProbeExitCode"] == expected_shell_probe_exit_code
     assert poll["shellProbeTimedOut"] is expected_shell_probe_timed_out
     assert poll["shellProbeMarkerMatched"] is expected_shell_probe_marker_matched
+    expected_shell_diagnostics = {
+        "shell_marker_crlf": ("notFound", "found", "present"),
+        "shell_probe_succeeds": ("found", "found", "present"),
+        "shell_probe_times_out": ("notFound", None, None),
+        "connect_times_out": ("notFound", None, None),
+    }.get(scenario, (None, None, None))
+    expected_shell_diagnostics_parsed = (
+        True
+        if scenario
+        in {
+            "shell_marker_crlf",
+            "shell_probe_succeeds",
+            "shell_probe_times_out",
+            "connect_times_out",
+        }
+        else False
+        if expected_shell_probe_attempted
+        else None
+    )
+    assert poll["shellProbeDiagnosticsParsed"] is expected_shell_diagnostics_parsed
+    assert poll["activityServiceCheck"] == expected_shell_diagnostics[0]
+    assert poll["activityServiceListed"] == expected_shell_diagnostics[1]
+    assert poll["systemServerProcess"] == expected_shell_diagnostics[2]
     if scenario in property_outputs:
         expected_output = property_outputs[scenario].encode()
         assert poll["getpropOutputBytes"] == len(expected_output)
@@ -2478,6 +2728,7 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     assert OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode("ascii") not in output.read_text(
         encoding="ascii"
     )
+    assert "593" not in output.read_text(encoding="ascii")
     assert len(calls) == expected_call_count
     assert output_limits == [OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES] * expected_call_count
     assert timeouts[:2] == [OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS] * min(

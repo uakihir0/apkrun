@@ -58,7 +58,79 @@ BOOT_PROPERTIES_SHELL_COMMAND = (
     '"$system_server_value" "$system_server_status"'
 )
 ADB_SHELL_PROBE_MARKER = b"APKRun shell ready"
-ADB_SHELL_PROBE_COMMAND = "printf '%s\\n' 'APKRun shell ready'"
+ADB_SHELL_PROBE_COMMAND = """printf '%s\\n' 'APKRun shell ready'
+activity_check=$(service check activity 2>/dev/null)
+activity_check_status=$?
+if [ "$activity_check_status" -ne 0 ]; then
+  activity_check_result=unknown
+else
+  case "$activity_check" in
+    "Service activity: not found") activity_check_result=notFound ;;
+    "Service activity: found") activity_check_result=found ;;
+    *) activity_check_result=unknown ;;
+  esac
+fi
+printf 'activity_service_check=%s\\n' "$activity_check_result"
+activity_list=$(service list 2>/dev/null)
+activity_list_status=$?
+if [ "$activity_list_status" -ne 0 ]; then
+  activity_list_result=unknown
+else
+  activity_list_result=$(
+    printf '%s\\n' "$activity_list" |
+      awk '
+        NR == 1 {
+          if (NF != 3 || $1 != "Found" || $2 !~ /^[0-9]+$/ || $3 != "services:") {
+            invalid = 1
+            exit
+          }
+          expected = $2 + 0
+          next
+        }
+        {
+          if (NF != 3 || $1 !~ /^[0-9]+$/ || ($1 + 0) != count) {
+            invalid = 1
+            exit
+          }
+          if ($2 !~ /^[^[:space:]]+:$/) {
+            invalid = 1
+            exit
+          }
+          if (length($3) <= 2 || substr($3, 1, 1) != "[") {
+            invalid = 1
+            exit
+          }
+          if (substr($3, length($3), 1) != "]") {
+            invalid = 1
+            exit
+          }
+          count++
+          if ($2 == "activity:") found = 1
+        }
+        END {
+          if (invalid || NR == 0 || count != expected) exit 2
+          if (found) print "found"
+          else print "notFound"
+        }
+      '
+  )
+  activity_list_parse_status=$?
+  if [ "$activity_list_parse_status" -ne 0 ]; then
+    activity_list_result=unknown
+  fi
+fi
+printf 'activity_service_listed=%s\\n' "$activity_list_result"
+system_server_pids=$(pidof system_server 2>/dev/null)
+system_server_pidof_status=$?
+if [ "$system_server_pidof_status" -eq 0 ] && [ -n "$system_server_pids" ]; then
+  system_server_result=present
+elif [ "$system_server_pidof_status" -eq 1 ] && [ -z "$system_server_pids" ]; then
+  system_server_result=notPresent
+else
+  system_server_result=unknown
+fi
+printf 'system_server_process=%s\\n' "$system_server_result"
+"""
 SYSTEM_SERVER_THREAD_SHELL_SCRIPT = """found=0
 fail_snapshot() {
   printf 'X\\n'
@@ -327,6 +399,48 @@ def strip_adb_shell_probe_marker(output: bytes) -> tuple[bool, bytes]:
         if output.startswith(marker):
             return True, output[len(marker) :]
     return False, b""
+
+
+def parse_adb_shell_probe_diagnostics(
+    output: bytes,
+    *,
+    allow_partial_output: bool = False,
+) -> tuple[str | None, str | None, str | None] | None:
+    """Keep only complete, ordered, allowlisted shell-probe classifications."""
+    if not output:
+        return None
+    try:
+        text = output.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    lines = text.split("\n")
+    if text.endswith("\n"):
+        lines.pop()
+    elif allow_partial_output:
+        # A timed-out shell may leave a partial final field; never interpret it.
+        lines.pop()
+    else:
+        return None
+    if not lines or len(lines) > 3:
+        return None
+    if not allow_partial_output and len(lines) != 3:
+        return None
+
+    expected_fields = (
+        ("activity_service_check", {"found", "notFound", "unknown"}),
+        ("activity_service_listed", {"found", "notFound", "unknown"}),
+        ("system_server_process", {"present", "notPresent", "unknown"}),
+    )
+    parsed: list[str | None] = [None, None, None]
+    for index, line in enumerate(lines):
+        if line.endswith("\r"):
+            line = line[:-1]
+        name, separator, value = line.partition("=")
+        expected_name, allowed_values = expected_fields[index]
+        if not separator or name != expected_name or value not in allowed_values:
+            return None
+        parsed[index] = value
+    return parsed[0], parsed[1], parsed[2]
 
 
 def parse_boot_properties(
@@ -1581,6 +1695,10 @@ class BootObserver:
             "shellProbeCleanupComplete": True,
             "shellProbeProbeError": False,
             "shellProbeMarkerMatched": None,
+            "shellProbeDiagnosticsParsed": None,
+            "activityServiceCheck": None,
+            "activityServiceListed": None,
+            "systemServerProcess": None,
             "systemServerThreadSnapshotAttempted": False,
             "systemServerThreadSnapshotExitCode": None,
             "systemServerThreadSnapshotTimedOut": None,
@@ -1828,9 +1946,23 @@ class BootObserver:
                     max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
                 )
                 shell_probe_marker_matched: bool | None = None
+                parsed_shell_diagnostics: tuple[str | None, str | None, str | None] | None = None
                 if probe_attempted:
-                    shell_probe_marker_matched, _ = strip_adb_shell_probe_marker(probe_output)
+                    shell_probe_marker_matched, shell_probe_output = strip_adb_shell_probe_marker(
+                        probe_output
+                    )
                     self._shell_probe_attempted = True
+                    if (
+                        shell_probe_marker_matched
+                        and (probe_code == 0 or probe_timed_out)
+                        and not probe_truncated
+                        and not probe_error
+                        and probe_cleanup_complete
+                    ):
+                        parsed_shell_diagnostics = parse_adb_shell_probe_diagnostics(
+                            shell_probe_output,
+                            allow_partial_output=probe_timed_out,
+                        )
                 poll_fields.update(
                     {
                         "shellProbeAttempted": probe_attempted,
@@ -1840,12 +1972,21 @@ class BootObserver:
                         "shellProbeCleanupComplete": probe_cleanup_complete,
                         "shellProbeProbeError": probe_error,
                         "shellProbeMarkerMatched": shell_probe_marker_matched,
+                        "shellProbeDiagnosticsParsed": (
+                            parsed_shell_diagnostics is not None if probe_attempted else None
+                        ),
                         "cleanupComplete": (
                             poll_fields["cleanupComplete"] and probe_cleanup_complete
                         ),
                         "probeError": poll_fields["probeError"] or probe_error,
                     }
                 )
+                if parsed_shell_diagnostics is not None:
+                    (
+                        poll_fields["activityServiceCheck"],
+                        poll_fields["activityServiceListed"],
+                        poll_fields["systemServerProcess"],
+                    ) = parsed_shell_diagnostics
                 if not probe_cleanup_complete:
                     self._adb_probe_cleanup_failed = True
             else:

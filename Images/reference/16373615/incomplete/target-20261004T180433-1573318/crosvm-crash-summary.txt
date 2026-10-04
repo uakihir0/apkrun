@@ -1,0 +1,38 @@
+Sanitized crash diagnosis for this incomplete capture
+
+Capture: target-20261004T180433-1573318
+Apport report date: 2026-10-04T18:04:30+09:00
+Cuttlefish host package: 1.57.0, VCS 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+Executable package: cuttlefish-base 1.57.0
+Executable Build ID: d724bf54f045b0ec7dbe14049b0fed9a16e52a23
+Loaded library: libgfxstream_backend.so
+Library Build ID: 6b8f3105442da5c66988881a1fa76e812b13c3e8
+
+The Apport ProcStatus identifies crosvm PID 1573779 with parent PID 1573761.
+At 18:04:30, the launcher records process_restarter PID 1573761 starting
+crosvm PID 1573779 with backend=virglrenderer. At 18:04:32, it records the
+restarter's unexpected child exit. The Apport PID, parent PID, executable,
+and timestamp match that launcher sequence.
+
+Apport reported SIGSEGV (signal 11). GDB reported si_code=SEGV_MAPERR (1),
+fault address 0x10, and a program counter at unw_get_reg+68 in
+libgfxstream_backend.so. The faulting AArch64 instruction was
+`ldr x8, [x8, #16]` with x8 equal to zero. The available backtrace begins:
+
+  #0 unw_get_reg+68 (libgfxstream_backend.so)
+  #1 _Unwind_GetIP (libgfxstream_backend.so)
+  #2-3 unknown (crosvm; symbols unavailable)
+  #4 _Unwind_Backtrace (libgcc_s.so.1)
+  #5-7 unknown (crosvm; symbols unavailable)
+
+This identifies an invalid low-address read while stack-unwinding code in
+libgfxstream_backend.so was running. It does not show what triggered that
+unwinding or prove that Virgl caused the original failure. The loaded library
+is stripped. A same-named debug-info library available from the host package
+has a different Build ID and was not used; matching debug symbols for Build
+ID 6b8f3105442da5c66988881a1fa76e812b13c3e8 remain unavailable.
+
+The raw Apport report, including its core-dump payload, remains on the Lima
+reference host. The temporary extraction used for GDB analysis was deleted.
+No core bytes, private temporary paths, process maps, or raw Apport report
+were copied into the repository.

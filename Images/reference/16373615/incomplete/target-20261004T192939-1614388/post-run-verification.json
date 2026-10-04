@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "captureSourceRevision": "ef70045",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "captureDurationSeconds": 9,
+  "selectedGpuMode": "drm_virgl",
+  "gpuVhostUserEnabled": false,
+  "hostGraphicsPrerequisites": {
+    "eglPlatform": "surfaceless",
+    "eglInitializationFailureObserved": false,
+    "glesPrerequisiteWarningObserved": false,
+    "libEGLVisibleToLdconfig": true,
+    "libGLESv2VisibleToLdconfig": true,
+    "libvirglrendererVisibleToLdconfig": true,
+    "devDriPresent": false
+  },
+  "capture": {
+    "kernelLogBytes": 0,
+    "observerStartEvent5Observed": false,
+    "observerAdbPollCount": 0,
+    "androidBootCompleted": null,
+    "observerCrosvmMemorySampleCount": 1,
+    "observerCrosvmPid": 1614918,
+    "observerCrosvmVmRssKiB": 19780,
+    "virtualDeviceBootFailed": true,
+    "runCvdExitStatus": 255,
+    "processRestarterPid": 1614891,
+    "processRestarterLoggedSiCode": 3,
+    "linuxChildTerminationCodeName": "CLD_DUMPED",
+    "processRestarterExitCode": 1,
+    "childSignalNumber": null,
+    "apportReportForThisAttemptFound": false
+  },
+  "cleanup": {
+    "cvdFleetEmpty": true,
+    "checkedCuttlefishProcessesRemaining": [],
+    "temporaryCvdHomeRemoved": true,
+    "port6520ListenerPresentAfterCleanup": false,
+    "port5037ListenerPid": 2704,
+    "port5037ListenerPresentAfterCleanup": true,
+    "port5037KillServerIssued": false
+  },
+  "privacyScan": {
+    "fileCount": 12,
+    "knownHostPathMatches": 0,
+    "pemHeaderMatches": 0,
+    "eui48Addresses": 0,
+    "eui64Ipv6Candidates": 0,
+    "oversizeFiles": 0
+  }
+}

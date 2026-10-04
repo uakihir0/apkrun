@@ -24,7 +24,7 @@
     "exitStatus": 255
   },
   "privacyScan": {
-    "fileCount": 12,
+    "fileCount": 13,
     "knownHostPathMatches": 0,
     "pemHeaderMatches": 0,
     "eui48Addresses": 0,

@@ -1,0 +1,6 @@
+{"event":"observer_started","timestampUtc":"2026-10-04T10:29:33.474+00:00"}
+{"event":"instance_path_discovery_pending","reason":"runtime_link_not_ready","timestampUtc":"2026-10-04T10:29:33.474+00:00"}
+{"candidateCount":0,"event":"crosvm_memory","identity":"unavailable","timestampUtc":"2026-10-04T10:29:33.474+00:00"}
+{"event":"instance_path_discovered","timestampUtc":"2026-10-04T10:29:34.033+00:00"}
+{"event":"crosvm_memory","pid":1614918,"rssShmemKiB":700,"timestampUtc":"2026-10-04T10:29:38.475+00:00","vmRssKiB":19780}
+{"event":"observer_stopped","timestampUtc":"2026-10-04T10:29:38.872+00:00"}

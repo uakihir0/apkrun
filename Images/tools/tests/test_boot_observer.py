@@ -75,6 +75,7 @@ def _fake_proc_process(
     instance_path: Path | None = None,
     staged_crosvm_target: Path | None = None,
     staged_crosvm_name: str = "crosvm",
+    stage_runtime_executable: bool = True,
     command_line_executable: Path | None = None,
 ) -> None:
     process = proc_root / str(pid)
@@ -84,9 +85,12 @@ def _fake_proc_process(
         runtime_executable = (
             instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / staged_crosvm_name
         )
-        runtime_executable.parent.mkdir(parents=True, exist_ok=True)
-        if not runtime_executable.exists():
-            runtime_executable.symlink_to((staged_crosvm_target or executable).resolve(strict=True))
+        if stage_runtime_executable:
+            runtime_executable.parent.mkdir(parents=True, exist_ok=True)
+            if not runtime_executable.exists():
+                runtime_executable.symlink_to(
+                    (staged_crosvm_target or executable).resolve(strict=True)
+                )
     (process / "exe").symlink_to(executable.resolve(strict=True))
     command_line = [os.fsencode(command_line_executable or runtime_executable)]
     if process_name is not None:
@@ -111,11 +115,12 @@ def _fake_proc_restarter(
     instance_path: Path,
     android: bool = True,
     requested_crosvm_name: str = "crosvm",
+    requested_crosvm_path: Path | None = None,
 ) -> None:
     process = proc_root / str(pid)
     process.mkdir(parents=True)
     (process / "exe").symlink_to(executable)
-    crosvm_executable = (
+    crosvm_executable = requested_crosvm_path or (
         instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / requested_crosvm_name
     )
     serial = (
@@ -1162,6 +1167,65 @@ def test_boot_observer_tracks_launcher_command_and_fexecve_executable_separately
     )
     assert staged_launcher.is_symlink()
     assert staged_launcher.resolve() == launcher.resolve()
+
+
+def test_boot_observer_tracks_external_launcher_command_without_runtime_staging(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    diagnostic_dir = tmp_path / "diagnostic"
+    diagnostic_dir.mkdir()
+    launcher = diagnostic_dir / "crosvm-built-virgl-launcher"
+    launcher.write_bytes(b"diagnostic static launcher")
+    launcher.chmod(0o700)
+    executable = diagnostic_dir / "crosvm"
+    executable.write_bytes(b"feature-enabled crosvm executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+        crosvm_path=launcher,
+        crosvm_executable_path=executable,
+    )
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        process_name="crosvm",
+        parent_pid=410,
+        instance_path=observer.instance_path,
+        staged_crosvm_name=launcher.name,
+        stage_runtime_executable=False,
+        command_line_executable=executable,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        410,
+        restarter_executable,
+        children=(413,),
+        instance_path=observer.instance_path,
+        requested_crosvm_path=launcher,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 410)
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+    assert len(memory) == 1
+    assert memory[0]["pid"] == 413
+    assert memory[0]["vmRssKiB"] == 987654
+    assert memory[0]["rssShmemKiB"] == 1234
+    staged_launcher = (
+        observer.instance_path.parents[3] / "artifacts" / "host_tools" / "bin" / launcher.name
+    )
+    assert not staged_launcher.exists()
 
 
 def test_boot_observer_preserves_staged_basename_for_symlinked_crosvm_override(

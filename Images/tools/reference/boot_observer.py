@@ -1306,11 +1306,18 @@ class BootObserver:
             separator = command_line.index(b"--")
             requested_crosvm = Path(os.fsdecode(command_line[separator + 1]))
             expected_crosvm = self._runtime_crosvm_path()
+            expected_commands = {
+                self.crosvm_command_path,
+                self.crosvm_command_resolved_path,
+            }
+            if expected_crosvm is not None:
+                expected_commands.add(expected_crosvm)
             if (
                 expected_crosvm is None
                 or not requested_crosvm.is_absolute()
                 or ".." in requested_crosvm.parts
-                or not expected_crosvm.is_file()
+                or requested_crosvm not in expected_commands
+                or not requested_crosvm.is_file()
             ):
                 return None
         except (OSError, ValueError, IndexError):
@@ -1328,7 +1335,7 @@ class BootObserver:
         if (
             before != after
             or Path(executable).name != "process_restarter"
-            or requested_crosvm != expected_crosvm
+            or requested_crosvm not in expected_commands
             or not any(self._argument_matches_instance(argument) for argument in command_line)
             or not any(b"kernel-log-pipe" in value for value in serial_values)
             or any(b"crosvm_openwrt" in argument for argument in command_line)

@@ -60,6 +60,7 @@ def test_snapshot_log_is_bounded_and_atomic(
     source_directory.mkdir(parents=True)
     source = source_directory / "kernel.log"
     source.write_bytes(b"0123456789" * 20)
+    source_stat = source.stat()
     stage = tmp_path / "stage"
     stage.mkdir()
     destination = stage / "kernel.log"
@@ -67,7 +68,12 @@ def test_snapshot_log_is_bounded_and_atomic(
 
     marker = capture_cvd_start.snapshot_log(source, destination, home.resolve())
 
-    assert marker is not None
+    assert marker == (
+        source_stat.st_dev,
+        source_stat.st_ino,
+        source_stat.st_size,
+        source_stat.st_mtime_ns,
+    )
     assert destination.read_bytes().startswith(b"[APKRun snapshot truncated;")
     assert destination.read_bytes().endswith(b"0123456789" * 5)
     assert len(destination.read_bytes()) <= 128
@@ -144,6 +150,8 @@ def test_snapshot_log_rejects_early_eof_and_keeps_the_last_complete_copy(
     destination.write_bytes(b"last complete snapshot")
     fake_stat = SimpleNamespace(
         st_mode=capture_cvd_start.stat.S_IFREG,
+        st_dev=source.stat().st_dev,
+        st_ino=source.stat().st_ino,
         st_size=10,
         st_mtime_ns=1,
     )
@@ -243,9 +251,28 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
     fake_cvd.chmod(0o755)
     monkeypatch.setenv("APKRUN_TEST_LOG_SOURCE", str(source))
     monkeypatch.setenv("APKRUN_TEST_OUTSIDE_LOG_SOURCE", str(outside))
-    observed: dict[tuple[str, str], tuple[int, int]] = {}
+    source_stat = source.stat()
+    observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
     original_snapshot_log = capture_cvd_start.snapshot_log
     snapshot_calls = 0
+
+    class CapturingObserver:
+        marker: tuple[int, int, int, int] | None = None
+
+        @staticmethod
+        def note_kernel_log_source(_marker: tuple[int, int, int, int]) -> None:
+            raise AssertionError("the copied source must be promoted with its snapshot")
+
+        def promote_kernel_log_snapshot(
+            self,
+            source_path: Path,
+            destination_path: Path,
+            marker: tuple[int, int, int, int],
+        ) -> None:
+            os.replace(source_path, destination_path)
+            self.marker = marker
+
+    observer = CapturingObserver()
 
     def count_snapshot_calls(
         source_path: Path,
@@ -253,7 +280,7 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
         home_path: Path,
         *,
         budget_root: Path | None = None,
-    ) -> tuple[int, int] | None:
+    ) -> tuple[int, int, int, int] | None:
         nonlocal snapshot_calls
         snapshot_calls += 1
         return original_snapshot_log(
@@ -271,12 +298,19 @@ def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(
         snapshots,
         observed,
         timeout_seconds=3.0,
+        observer=observer,
     )
 
     assert not source.exists()
     assert snapshot_calls == 1
     assert (snapshots / "kernel.log").read_text(encoding="utf-8") == ("captured before deletion\n")
     assert ("kernel.log", str(source)) in observed
+    assert observer.marker == (
+        source_stat.st_dev,
+        source_stat.st_ino,
+        source_stat.st_size,
+        source_stat.st_mtime_ns,
+    )
 
 
 def test_collect_logs_keeps_snapshot_when_listing_times_out_after_source_deletion(
@@ -303,7 +337,7 @@ def test_collect_logs_keeps_snapshot_when_listing_times_out_after_source_deletio
     )
     fake_cvd.chmod(0o755)
     monkeypatch.setenv("APKRUN_TEST_LOG_SOURCE", str(source))
-    observed: dict[tuple[str, str], tuple[int, int]] = {}
+    observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
 
     capture_cvd_start.collect_logs(
         str(fake_cvd),
@@ -339,7 +373,7 @@ def test_collect_logs_bounds_listing_output_and_terminates_the_process_group(
     )
     fake_cvd.chmod(0o755)
     monkeypatch.setattr(capture_cvd_start, "MAX_LOG_LISTING_BYTES", 16)
-    observed: dict[tuple[str, str], tuple[int, int]] = {}
+    observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
 
     capture_cvd_start.collect_logs(
         str(fake_cvd),

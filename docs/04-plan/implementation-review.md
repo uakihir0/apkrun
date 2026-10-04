@@ -5912,3 +5912,62 @@ listener at PID 2704, which was left running; without a pre-capture process
 inventory, its relationship to this run is unknown.
 Keep IR-165 in `Needs maintainer review` until the evidence and its
 interpretation are reviewed.
+
+## IR-166: Capture SystemServer thread state after a blocked mprotect trace
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/reference/capture_cvd_start.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** When the optional observer sees a `system_server` D-state record
+whose bounded kernel-log call trace contains `do_mprotect_pkey`, record its
+guest uptime and wake the private ADB poller. On the next device-state result,
+run one bounded `su 0` command over ADB to read every current SystemServer
+thread's state, wait channel, and kernel stack. Read the proc entries in one
+command, but document that they are sequential rather than atomic. Retain
+only thread states, allowlisted wait-channel strings, and kernel function
+symbols; discard PIDs, TIDs, thread names, addresses, and raw command output.
+Use a 10-second command timeout and 64 KiB output limit. Do not retry a
+launched command, even if it times out. Increase the ordinary-poll reserve
+from 25.5 to 38 seconds to cover the possible fourth command and its process
+group cleanup before the final logcat probe. A required status, wait-channel,
+or stack read failure emits an invalid-snapshot marker and rejects the whole
+response while the task still exists; a task that exits during the sequential
+read may be skipped.
+For kernel-log continuity, pass the original source's device, inode, size, and
+modification time with each copied snapshot. Reset and record a gap on inode
+replacement, truncation, same-size modification, or a prefix/overlap mismatch.
+Treat growth on a stable inode as append-only to avoid repeatedly scanning the
+whole log. The upstream `KernelLogServer` uses `O_APPEND`; verify the pinned
+host package when its version changes. Search every byte read in a bounded
+scan before trimming the retained excerpt. Check the stop event after
+consuming an ADB wake so shutdown cannot turn its wake signal into a new poll.
+
+**Reason.** IR-165 recorded `system_server` blocked in the
+`do_mprotect_pkey` mmap-lock path, but the all-CPU snapshot 1.4 seconds later
+showed the same process in user space. This does not establish a persistent
+lockup or identify the lock owner. Triggering on the specific trace should
+collect relevant thread state promptly if it recurs, while keeping the
+diagnostic opt-in, bounded, and free of process identifiers and raw stacks.
+The sequential read may still miss a transient lock owner, so its absence is
+not evidence that no owner existed.
+
+**Verification.** Initial focused and full image-tool runs passed before the
+hostile review. The review then found four issues: partial proc reads could be
+accepted, new kernel-log bytes beyond the retained excerpt could be skipped,
+log replacement continuity lacked coverage, and shutdown could race with an
+ADB wake. These findings are addressed with fail-closed proc framing,
+pre-trim scanning, source markers and bounded boundary checks, replacement
+and truncate/regrowth tests, and a stop-aware wake consumer. A second hostile
+review identified quadratic I/O from hashing the full prefix on ordinary
+growth and noted that a disappearing task can be omitted by the sequential
+read. The hash was removed in favor of source metadata and boundary checks;
+the stable-inode append-only assumption is called out for maintainer review.
+The design now documents that tasks which exit during collection may be
+omitted. Final verification: the full image-tool suite passed 531 tests with
+four platform-only skips; after the final skipped-byte accounting change, both
+catch-up regression cases passed. Ruff, format, repository CI, and
+`git diff --check` passed. The final hostile review found no remaining
+actionable issues.

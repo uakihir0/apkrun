@@ -861,11 +861,43 @@ identify why the command failed to respond.
 `shellProbeProbeError` describe the standalone client. The first marker poll
 does not issue a property query, so read these fields separately from the
 `getprop` fields; subsequent polls run the ordinary property command.
+The optional observer also scans atomically replaced `kernel.log` snapshots
+for a blocked-state record of `system_server` whose call trace contains
+`do_mprotect_pkey`. It reads at most 1 MiB of new log data per scan and
+searches all of those bytes together with the retained 256 KiB excerpt before
+trimming that excerpt. If it must catch up across more than 1 MiB, it scans
+the final 256 KiB and records an observation gap. The log copier passes the
+source device, inode, size, and modification time together with each atomic
+snapshot. The observer detects inode replacement, truncation, and same-size
+modification, and checks the saved prefix and overlap at the previous offset
+when the source grows. Growth on a stable inode is treated as append-only;
+the upstream [KernelLogServer](https://android.googlesource.com/device/google/cuttlefish/+/refs/heads/main/host/commands/kernel_log_monitor/kernel_log_server.cc)
+opens its log with `O_APPEND` and writes each received pipe chunk. Confirm
+this behavior against the selected Cuttlefish host package when changing its
+version. This avoids rereading the full log on every update. A detected
+discontinuity resets the scan and records an observation gap. On a match, it
+records the guest uptime and wakes the private ADB observer for an immediate
+bounded transport check.
+When `get-state` reports `device`, it runs one `su 0 sh -c` command that reads
+the state, wait channel, and kernel stack of each current
+`/proc/<system_server>/task/*` entry. The thread files are read sequentially,
+so this is a bounded best-effort snapshot rather than an atomic capture. A
+failed required proc-file read for a task that still exists invalidates the
+whole response. A task that exits during collection is skipped, so the
+sequential scan can omit threads that disappear while it runs. The command
+has a ten-second timeout and a 64 KiB output cap; only a complete, successful
+response is parsed. Its
+`system_server_thread_snapshot` event keeps thread states, allowlisted
+wait-channel text, and kernel function names, while discarding PIDs, TIDs,
+thread names, addresses, and raw output. If the guest is unavailable or the
+observer reaches its final-probe window first, the event records that the
+stack command was not attempted.
 The host-side `connect` and `get-state` commands have a two-second cap; the
-guest-side shell probe or boot-property query has a ten-second cap. Their
-command caps total fourteen seconds. Allow up to 2.5 seconds to terminate and
-verify each of the three process groups, plus a four-second scheduling
-margin, so do not start an ordinary poll during the last 25.5 seconds before
+guest-side shell probe, boot-property query, or thread snapshot has a
+ten-second cap. A poll that includes the optional thread snapshot can use
+four command caps totaling 24 seconds. Allow up to 2.5 seconds to terminate
+and verify each of the four process groups, plus a four-second scheduling
+margin, so do not start an ordinary poll during the last 38 seconds before
 the final probe.
 For a finite capture deadline, leave 40.5 seconds before the ADB polling
 cutoff for the final Android logcat probe. Its minimum 39-second budget
@@ -873,7 +905,7 @@ covers two two-second host commands, two ten-second logcat queries,
 termination and reaping for four ADB client process groups, up to four
 seconds for private ADB server shutdown, and a one-second safety margin; the
 remaining 1.5 seconds absorb scheduler delay. Do not start an ordinary poll
-during the last 25.5 seconds before that probe. The probe reconnects and checks
+during the last 38 seconds before that probe. The probe reconnects and checks
 `get-state`; only a fresh `device` state permits two bounded queries:
 `adb logcat -d -b events -v descriptive -t 128`, followed by
 `adb logcat -d -b main -b system -b crash -v brief -t 128`. Each logcat

@@ -59,10 +59,70 @@ BOOT_PROPERTIES_SHELL_COMMAND = (
 )
 ADB_SHELL_PROBE_MARKER = b"APKRun shell ready"
 ADB_SHELL_PROBE_COMMAND = "printf '%s\\n' 'APKRun shell ready'"
+SYSTEM_SERVER_THREAD_SHELL_SCRIPT = """found=0
+fail_snapshot() {
+  printf 'X\\n'
+  exit 1
+}
+for process in /proc/[0-9]*; do
+  [ -d "$process" ] || continue
+  if ! process_name=$(cat "$process/comm" 2>/dev/null); then
+    [ -d "$process" ] && fail_snapshot
+    continue
+  fi
+  [ "$process_name" = system_server ] || continue
+  found=1
+  printf 'P\\n'
+  task_count=0
+  for task in "$process"/task/[0-9]*; do
+    [ -d "$task" ] || continue
+    if ! state=$(sed -n 's/^State:[[:space:]]*\\([A-Z]\\).*/\\1/p' "$task/status" 2>/dev/null); then
+      [ -d "$task" ] && fail_snapshot
+      continue
+    fi
+    case "$state" in
+      R|S|D|T|t|Z|X|I) ;;
+      *) [ -d "$task" ] && fail_snapshot; continue ;;
+    esac
+    if ! wait_channel=$(cat "$task/wchan" 2>/dev/null); then
+      [ -d "$task" ] && fail_snapshot
+      continue
+    fi
+    case "$wait_channel" in
+      ''|*[!A-Za-z0-9_.$+-]*) [ -d "$task" ] && fail_snapshot; continue ;;
+    esac
+    if ! stack=$(cat "$task/stack" 2>/dev/null); then
+      [ -d "$task" ] && fail_snapshot
+      continue
+    fi
+    task_count=$((task_count + 1))
+    printf 'T\\t%s\\t%s\\n' "$state" "$wait_channel"
+    printf '%s\\n' "$stack" |
+      while IFS= read -r frame; do
+        [ -n "$frame" ] && printf 'F\\t%s\\n' "$frame"
+      done
+    printf 'E\\n'
+  done
+  [ "$task_count" -gt 0 ] || fail_snapshot
+done
+[ "$found" -eq 1 ] || printf 'N\\n'
+"""
+SYSTEM_SERVER_THREAD_TIMEOUT_SECONDS = 10.0
+SYSTEM_SERVER_THREAD_MAX_OUTPUT_BYTES = 64 * 1024
+SYSTEM_SERVER_THREAD_MAX_PROCESSES = 4
+SYSTEM_SERVER_THREAD_MAX_COUNT = 512
+SYSTEM_SERVER_THREAD_MAX_FRAMES = 32
+SYSTEM_SERVER_BLOCKED_LOG_TAIL_BYTES = 256 * 1024
+SYSTEM_SERVER_BLOCKED_LOG_SCAN_LIMIT_BYTES = 1024 * 1024
+SYSTEM_SERVER_BLOCKED_LOG_LINE = re.compile(
+    r"^\[\s*(?P<uptime>[0-9]+\.[0-9]+)\]\s*\[[^\]]+\]\s+"
+    r"task:system_server\s+state:D(?:\s|$)"
+)
 ADB_POLL_FINAL_RESERVE_SECONDS = (
     ADB_COMMAND_TIMEOUT_SECONDS * 2
     + ADB_GETPROP_TIMEOUT_SECONDS
-    + (ADB_CLIENT_TERMINATE_SECONDS + ADB_CLIENT_KILL_SECONDS * 2) * 3
+    + SYSTEM_SERVER_THREAD_TIMEOUT_SECONDS
+    + (ADB_CLIENT_TERMINATE_SECONDS + ADB_CLIENT_KILL_SECONDS * 2) * 4
     + 4.0
 )
 ADB_COMMAND_MAX_OUTPUT_BYTES = 4 * 1024
@@ -349,6 +409,108 @@ def parse_boot_properties(
     )
 
 
+def find_blocked_system_server_mprotect_uptime(log_tail: bytes) -> float | None:
+    """Find a blocked-state trace of system_server waiting in mprotect."""
+    lines = log_tail.decode("ascii", errors="replace").splitlines()
+    for index, line in enumerate(lines):
+        match = SYSTEM_SERVER_BLOCKED_LOG_LINE.match(line)
+        if match is None:
+            continue
+        for following in lines[index + 1 : index + 33]:
+            if "task:" in following or "sysrq: Show Blocked State" in following:
+                break
+            if "do_mprotect_pkey" in following:
+                return float(match.group("uptime"))
+    return None
+
+
+def parse_system_server_thread_snapshot(
+    output: bytes,
+) -> dict[str, Any] | None:
+    """Keep bounded thread states and kernel symbols; discard all process IDs."""
+    try:
+        text = output.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if not text.endswith("\n"):
+        return None
+
+    process_count = 0
+    current_process_thread_count = 0
+    threads: list[dict[str, Any]] = []
+    current_thread: dict[str, Any] | None = None
+    no_process_marker = False
+    for line in text.splitlines():
+        if line == "P":
+            if current_thread is not None or no_process_marker:
+                return None
+            if process_count and current_process_thread_count == 0:
+                return None
+            process_count += 1
+            if process_count > SYSTEM_SERVER_THREAD_MAX_PROCESSES:
+                return None
+            current_process_thread_count = 0
+        elif line == "N":
+            if process_count or threads or current_thread is not None or no_process_marker:
+                return None
+            no_process_marker = True
+        elif line.startswith("T\t"):
+            if process_count == 0 or current_thread is not None or no_process_marker:
+                return None
+            fields = line.split("\t")
+            if len(fields) != 3:
+                return None
+            state, wait_channel = fields[1:]
+            if state not in {"R", "S", "D", "T", "t", "Z", "X", "I"}:
+                return None
+            if not re.fullmatch(r"[A-Za-z0-9_.$+-]{1,64}", wait_channel):
+                return None
+            current_thread = {
+                "state": state,
+                "waitChannel": wait_channel,
+                "kernelFrames": [],
+            }
+        elif line.startswith("F\t"):
+            if current_thread is None:
+                return None
+            raw_frame = line[2:].strip()
+            if raw_frame.startswith("[<") and "]" in raw_frame:
+                raw_frame = raw_frame.split("]", 1)[1].strip()
+            if raw_frame.startswith("?"):
+                raw_frame = raw_frame[1:].strip()
+            symbol = re.match(r"[A-Za-z_][A-Za-z0-9_.$]{0,127}", raw_frame)
+            if symbol is not None:
+                frames = current_thread["kernelFrames"]
+                if len(frames) >= SYSTEM_SERVER_THREAD_MAX_FRAMES:
+                    return None
+                frames.append(symbol.group(0))
+        elif line == "E":
+            if current_thread is None or len(threads) >= SYSTEM_SERVER_THREAD_MAX_COUNT:
+                return None
+            threads.append(current_thread)
+            current_thread = None
+            current_process_thread_count += 1
+        else:
+            return None
+
+    if current_thread is not None:
+        return None
+    if no_process_marker:
+        return {"processCount": 0, "threadCount": 0, "stateCounts": {}, "threads": []}
+    if process_count == 0 or current_process_thread_count == 0:
+        return None
+    state_counts: dict[str, int] = {}
+    for thread in threads:
+        state = thread["state"]
+        state_counts[state] = state_counts.get(state, 0) + 1
+    return {
+        "processCount": process_count,
+        "threadCount": len(threads),
+        "stateCounts": dict(sorted(state_counts.items())),
+        "threads": threads,
+    }
+
+
 class BootObserver:
     """Observe the Android crosvm process and probe ADB through a private socket."""
 
@@ -358,6 +520,7 @@ class BootObserver:
         home: Path,
         instance_path: Path,
         launcher_log: Path,
+        kernel_log: Path | None = None,
         output_path: Path,
         adb_path: Path,
         adb_port: int,
@@ -385,6 +548,7 @@ class BootObserver:
         self._instance_path_event_recorded = False
         self._instance_path_conflicted = False
         self.launcher_log = launcher_log
+        self.kernel_log = kernel_log
         self.output_path = output_path
         self.adb_path = adb_path.resolve(strict=True)
         self.adb_port = adb_port
@@ -406,10 +570,22 @@ class BootObserver:
         self._launcher_tail = b""
         self._launcher_truncated = False
         self._launcher_fragment = bytearray()
+        self._kernel_log_offset = 0
+        self._kernel_log_prefix: bytes | None = None
+        self._kernel_log_tail = b""
+        self._kernel_log_excerpt = bytearray()
+        self._kernel_log_file_marker: tuple[int, int, int, int] | None = None
+        self._kernel_log_source_marker: tuple[int, int, int, int] | None = None
+        self._kernel_log_observed_source_marker: tuple[int, int, int, int] | None = None
+        self._kernel_log_gap_recorded = False
         self._crosvm_restarter_pids: set[int] = set()
         self._crosvm_restarter_start_times: dict[int, bytes] = {}
         self._crosvm_start_times: dict[int, bytes] = {}
         self._start_event_observed = False
+        self._system_server_mprotect_guest_uptime: float | None = None
+        self._system_server_snapshot_attempted = False
+        self._kernel_log_problem_recorded = False
+        self._adb_wakeup = threading.Event()
         self._shell_probe_attempted = False
         self._getprop_timeout_streak = 0
         self._getprop_retry_at: float | None = None
@@ -451,10 +627,27 @@ class BootObserver:
         with self._sample_lock:
             self._sample(now)
 
+    def note_kernel_log_source(self, marker: tuple[int, int, int, int]) -> None:
+        """Associate the copied kernel log with its original source identity."""
+        with self._sample_lock:
+            self._kernel_log_source_marker = marker
+
+    def promote_kernel_log_snapshot(
+        self,
+        source: Path,
+        destination: Path,
+        marker: tuple[int, int, int, int],
+    ) -> None:
+        """Replace the observed snapshot and source marker under the sample lock."""
+        with self._sample_lock:
+            os.replace(source, destination)
+            self._kernel_log_source_marker = marker
+
     def _sample(self, now: float | None) -> None:
         if self._output_fd is None or self._closed:
             raise RuntimeError("boot observer is not running")
         self._refresh_launcher_log()
+        self._refresh_kernel_log()
         self._refresh_instance_path()
         self._start_adb_observer_if_needed()
         observed_at = time.monotonic() if now is None else now
@@ -526,6 +719,12 @@ class BootObserver:
             )
             self._adb_thread.start()
 
+    def _consume_adb_wakeup(self) -> bool:
+        if not self._adb_wakeup.is_set():
+            return False
+        self._adb_wakeup.clear()
+        return not self._stop_event.is_set()
+
     def _sample_loop(self) -> None:
         next_sample = time.monotonic()
         poll_interval = min(self.sample_interval, LAUNCHER_POLL_INTERVAL_SECONDS)
@@ -545,6 +744,7 @@ class BootObserver:
         if self._closed:
             return
         self._stop_event.set()
+        self._adb_wakeup.set()
         if self._sample_thread is not None:
             self._sample_thread.join(timeout=2)
         if self._adb_thread is not None:
@@ -574,12 +774,28 @@ class BootObserver:
                         ),
                     }
                 )
+            self._record_unattempted_system_server_snapshot()
             self._record({"event": "observer_stopped"})
             os.close(self._output_fd)
             self._output_fd = None
         self._closed = True
         if self._adb_probe_cleanup_failed:
             raise OSError("bounded ADB client did not complete child cleanup")
+
+    def _record_unattempted_system_server_snapshot(self) -> None:
+        if (
+            self._output_fd is not None
+            and self._system_server_mprotect_guest_uptime is not None
+            and not self._system_server_snapshot_attempted
+        ):
+            self._record(
+                {
+                    "event": "system_server_thread_snapshot",
+                    "triggerGuestUptimeSeconds": self._system_server_mprotect_guest_uptime,
+                    "attempted": False,
+                    "reason": "observer_stopped_before_device_probe",
+                }
+            )
 
     def _record(self, fields: dict[str, Any]) -> None:
         with self._output_lock:
@@ -788,6 +1004,163 @@ class BootObserver:
             )
             self._launcher_fragment.clear()
             self._clear_launcher_identity()
+
+    def _refresh_kernel_log(self) -> None:
+        if self.kernel_log is None or self._system_server_mprotect_guest_uptime is not None:
+            return
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        try:
+            descriptor = os.open(self.kernel_log, flags)
+        except FileNotFoundError:
+            return
+        except OSError:
+            if not self._kernel_log_problem_recorded:
+                self._record(
+                    {
+                        "event": "kernel_log_observation_unavailable",
+                        "reason": "open_failed",
+                    }
+                )
+                self._kernel_log_problem_recorded = True
+            return
+        guest_uptime: float | None = None
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_LOG_BYTES:
+                if not self._kernel_log_problem_recorded:
+                    self._record(
+                        {
+                            "event": "kernel_log_observation_unavailable",
+                            "reason": "invalid_file",
+                        }
+                    )
+                    self._kernel_log_problem_recorded = True
+                return
+            file_marker = (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+            )
+            current_prefix = os.pread(descriptor, min(metadata.st_size, 4096), 0)
+            tail_matches = True
+            if self._kernel_log_offset and self._kernel_log_tail:
+                current_tail = os.pread(
+                    descriptor,
+                    len(self._kernel_log_tail),
+                    self._kernel_log_offset - len(self._kernel_log_tail),
+                )
+                tail_matches = current_tail == self._kernel_log_tail
+            source_marker = self._kernel_log_source_marker
+            previous_source_marker = self._kernel_log_observed_source_marker
+            source_replaced = False
+            if source_marker is not None and previous_source_marker is not None:
+                source_replaced = (
+                    source_marker[:2] != previous_source_marker[:2]
+                    or source_marker[2] < previous_source_marker[2]
+                    or (
+                        source_marker[2] == previous_source_marker[2]
+                        and source_marker[3] != previous_source_marker[3]
+                    )
+                )
+            elif source_marker is not None and self._kernel_log_offset:
+                source_replaced = True
+            if source_marker is None and self._kernel_log_file_marker is not None:
+                previous_file_marker = self._kernel_log_file_marker
+                source_replaced = (
+                    file_marker[:2] != previous_file_marker[:2]
+                    or file_marker[2] < previous_file_marker[2]
+                    or (
+                        file_marker[2] == previous_file_marker[2]
+                        and file_marker[3] != previous_file_marker[3]
+                    )
+                )
+            replaced = (
+                metadata.st_size < self._kernel_log_offset
+                or (
+                    self._kernel_log_prefix is not None
+                    and not current_prefix.startswith(self._kernel_log_prefix)
+                )
+                or not tail_matches
+                or source_replaced
+            )
+            if replaced:
+                self._kernel_log_offset = 0
+                self._kernel_log_prefix = None
+                self._kernel_log_tail = b""
+                self._kernel_log_excerpt.clear()
+                if not self._kernel_log_gap_recorded:
+                    self._record(
+                        {
+                            "event": "kernel_log_replaced_observation_gap",
+                            "discardedBytes": min(metadata.st_size, MAX_LOG_BYTES),
+                        }
+                    )
+                    self._kernel_log_gap_recorded = True
+            if self._kernel_log_prefix in {None, b""} and current_prefix:
+                self._kernel_log_prefix = current_prefix
+            read_start = self._kernel_log_offset
+            if metadata.st_size - read_start > SYSTEM_SERVER_BLOCKED_LOG_SCAN_LIMIT_BYTES:
+                read_start = max(0, metadata.st_size - SYSTEM_SERVER_BLOCKED_LOG_TAIL_BYTES)
+                self._kernel_log_excerpt.clear()
+                if not self._kernel_log_gap_recorded:
+                    self._record(
+                        {
+                            "event": "kernel_log_scan_gap",
+                            "skippedBytes": max(0, read_start - self._kernel_log_offset),
+                        }
+                    )
+                    self._kernel_log_gap_recorded = True
+            read_length = metadata.st_size - read_start
+            chunks = bytearray()
+            while len(chunks) < read_length:
+                chunk = os.pread(
+                    descriptor,
+                    min(64 * 1024, read_length - len(chunks)),
+                    read_start + len(chunks),
+                )
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            data = bytes(chunks)
+            if data:
+                self._kernel_log_offset = read_start + len(data)
+                self._kernel_log_tail = (self._kernel_log_tail + data)[-4096:]
+                search_data = bytes(self._kernel_log_excerpt) + data
+                guest_uptime = find_blocked_system_server_mprotect_uptime(search_data)
+                self._kernel_log_excerpt.extend(data)
+                if len(self._kernel_log_excerpt) > SYSTEM_SERVER_BLOCKED_LOG_TAIL_BYTES:
+                    del self._kernel_log_excerpt[:-SYSTEM_SERVER_BLOCKED_LOG_TAIL_BYTES]
+            self._kernel_log_file_marker = file_marker
+            if source_marker is not None:
+                self._kernel_log_observed_source_marker = source_marker
+        except OSError:
+            if not self._kernel_log_problem_recorded:
+                self._record(
+                    {
+                        "event": "kernel_log_observation_unavailable",
+                        "reason": "read_failed",
+                    }
+                )
+                self._kernel_log_problem_recorded = True
+            return
+        finally:
+            os.close(descriptor)
+        if guest_uptime is None:
+            return
+        self._system_server_mprotect_guest_uptime = guest_uptime
+        self._record(
+            {
+                "event": "system_server_mprotect_blocked_state_observed",
+                "guestUptimeSeconds": guest_uptime,
+            }
+        )
+        self._adb_wakeup.set()
 
     def _read_restarter_children(
         self,
@@ -1044,7 +1417,12 @@ class BootObserver:
             next_poll = time.monotonic()
             cleanup_reserve_reached = False
             while not self._stop_event.is_set():
+                wake_requested = self._consume_adb_wakeup()
+                if self._stop_event.is_set():
+                    break
                 now = time.monotonic()
+                if wake_requested:
+                    next_poll = min(next_poll, now)
                 if now >= adb_deadline:
                     cleanup_reserve_reached = True
                     break
@@ -1066,8 +1444,10 @@ class BootObserver:
                         continue
                     next_wakeup = min(next_wakeup, last_poll_start)
                 if now < next_wakeup:
-                    self._stop_event.wait(next_wakeup - now)
+                    self._adb_wakeup.wait(next_wakeup - now)
                     continue
+                if self._stop_event.is_set():
+                    break
                 if server.poll() is not None or not self._is_socket(socket_path):
                     self._record(
                         {
@@ -1201,6 +1581,13 @@ class BootObserver:
             "shellProbeCleanupComplete": True,
             "shellProbeProbeError": False,
             "shellProbeMarkerMatched": None,
+            "systemServerThreadSnapshotAttempted": False,
+            "systemServerThreadSnapshotExitCode": None,
+            "systemServerThreadSnapshotTimedOut": None,
+            "systemServerThreadSnapshotTruncated": False,
+            "systemServerThreadSnapshotCleanupComplete": True,
+            "systemServerThreadSnapshotProbeError": False,
+            "systemServerThreadSnapshotParsed": None,
             "cleanupComplete": True,
             "probeError": False,
         }
@@ -1217,6 +1604,7 @@ class BootObserver:
                             "getStateTimedOut",
                             "getpropTimedOut",
                             "shellProbeTimedOut",
+                            "systemServerThreadSnapshotTimedOut",
                         )
                     ),
                     "pollDeadlineReached": time.monotonic() >= adb_deadline,
@@ -1326,6 +1714,93 @@ class BootObserver:
             record_poll()
             return True
         if state == "device" and not state_truncated and not state_probe_error:
+            if (
+                self._system_server_mprotect_guest_uptime is not None
+                and not self._system_server_snapshot_attempted
+            ):
+                self._adb_wakeup.clear()
+                (
+                    snapshot_code,
+                    snapshot_output,
+                    snapshot_timed_out,
+                    snapshot_attempted,
+                    snapshot_truncated,
+                    snapshot_cleanup_complete,
+                    snapshot_probe_error,
+                ) = self._run_adb_bounded(
+                    [
+                        str(self.adb_path),
+                        "-L",
+                        adb_socket,
+                        "-s",
+                        serial,
+                        "shell",
+                        "su",
+                        "0",
+                        "sh",
+                        "-c",
+                        SYSTEM_SERVER_THREAD_SHELL_SCRIPT,
+                    ],
+                    environment,
+                    adb_deadline,
+                    timeout_seconds=SYSTEM_SERVER_THREAD_TIMEOUT_SECONDS,
+                    max_output_bytes=SYSTEM_SERVER_THREAD_MAX_OUTPUT_BYTES,
+                )
+                parsed_snapshot = (
+                    parse_system_server_thread_snapshot(snapshot_output)
+                    if (
+                        snapshot_attempted
+                        and snapshot_code == 0
+                        and not snapshot_timed_out
+                        and not snapshot_truncated
+                        and not snapshot_probe_error
+                        and snapshot_cleanup_complete
+                    )
+                    else None
+                )
+                if snapshot_attempted:
+                    self._system_server_snapshot_attempted = True
+                poll_fields.update(
+                    {
+                        "systemServerThreadSnapshotAttempted": snapshot_attempted,
+                        "systemServerThreadSnapshotExitCode": snapshot_code,
+                        "systemServerThreadSnapshotTimedOut": (
+                            snapshot_timed_out if snapshot_attempted else None
+                        ),
+                        "systemServerThreadSnapshotTruncated": snapshot_truncated,
+                        "systemServerThreadSnapshotCleanupComplete": (snapshot_cleanup_complete),
+                        "systemServerThreadSnapshotProbeError": snapshot_probe_error,
+                        "systemServerThreadSnapshotParsed": parsed_snapshot is not None,
+                        "cleanupComplete": (
+                            poll_fields["cleanupComplete"] and snapshot_cleanup_complete
+                        ),
+                        "probeError": poll_fields["probeError"] or snapshot_probe_error,
+                    }
+                )
+                snapshot_event: dict[str, Any] = {
+                    "event": "system_server_thread_snapshot",
+                    "triggerGuestUptimeSeconds": self._system_server_mprotect_guest_uptime,
+                    "attempted": snapshot_attempted,
+                    "exitCode": snapshot_code,
+                    "timedOut": snapshot_timed_out if snapshot_attempted else None,
+                    "truncated": snapshot_truncated,
+                    "cleanupComplete": snapshot_cleanup_complete,
+                    "probeError": snapshot_probe_error,
+                    "capturedBytes": len(snapshot_output) if snapshot_attempted else None,
+                    "parsed": parsed_snapshot is not None,
+                }
+                if parsed_snapshot is not None:
+                    snapshot_event.update(parsed_snapshot)
+                self._record(snapshot_event)
+                if not snapshot_cleanup_complete:
+                    self._adb_probe_cleanup_failed = True
+                    record_poll()
+                    return True
+                if time.monotonic() >= adb_deadline:
+                    record_poll()
+                    return True
+                if server.poll() is not None or not self._is_socket(socket_path):
+                    return False
             if not self._shell_probe_attempted:
                 (
                     probe_code,

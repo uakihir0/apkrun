@@ -18,7 +18,7 @@ import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
 LOG_NAMES = {"assemble_cvd.log", "kernel.log", "launcher.log"}
 MAX_LOG_BYTES = 64 * 1024 * 1024
@@ -31,6 +31,17 @@ CHILD_POST_KILL_GRACE_SECONDS = 1.0
 LOG_COMMAND_STOP_GRACE_SECONDS = 0.05
 requested_signal: int | None = None
 DARWIN_SIGINFO_PID_OFFSET = 12
+
+
+class KernelLogSnapshotObserver(Protocol):
+    def note_kernel_log_source(self, marker: tuple[int, int, int, int]) -> None: ...
+
+    def promote_kernel_log_snapshot(
+        self,
+        source: Path,
+        destination: Path,
+        marker: tuple[int, int, int, int],
+    ) -> None: ...
 
 
 def parse_log_listing(listing: str) -> dict[str, Path]:
@@ -83,7 +94,7 @@ def snapshot_log(
     home: Path,
     *,
     budget_root: Path | None = None,
-) -> tuple[int, int] | None:
+) -> tuple[int, int, int, int] | None:
     """Atomically copy a bounded regular log file located under the private HOME."""
     try:
         if source.is_symlink() or not source.resolve(strict=True).is_relative_to(home):
@@ -138,7 +149,12 @@ def snapshot_log(
         if not complete:
             return None
         os.replace(temporary_path, destination)
-        return source_stat.st_size, source_stat.st_mtime_ns
+        return (
+            source_stat.st_dev,
+            source_stat.st_ino,
+            source_stat.st_size,
+            source_stat.st_mtime_ns,
+        )
     except (OSError, ValueError):
         return None
     finally:
@@ -152,8 +168,10 @@ def _snapshot_listed_log(
     home: Path,
     destination: Path,
     budget_root: Path,
-    observed: dict[tuple[str, str], tuple[int, int]],
-    pending_observed: dict[tuple[str, str], tuple[int, int]],
+    observed: dict[tuple[str, str], tuple[int, int, int, int]],
+    pending_observed: dict[tuple[str, str], tuple[int, int, int, int]],
+    pending_source_markers: dict[str, tuple[int, int, int, int]],
+    pending_copied: set[str],
     pending_attempted: set[str],
 ) -> None:
     label, separator, filename = line.partition(" ")
@@ -169,12 +187,18 @@ def _snapshot_listed_log(
         source_stat = source.stat(follow_symlinks=False)
         if not stat.S_ISREG(source_stat.st_mode):
             return
-        marker = source_stat.st_size, source_stat.st_mtime_ns
+        marker = (
+            source_stat.st_dev,
+            source_stat.st_ino,
+            source_stat.st_size,
+            source_stat.st_mtime_ns,
+        )
     except (OSError, ValueError):
         return
     pending_attempted.add(name)
     key = name, str(source)
     if observed.get(key) == marker:
+        pending_source_markers[name] = marker
         return
     copied_marker = snapshot_log(
         source,
@@ -184,6 +208,8 @@ def _snapshot_listed_log(
     )
     if copied_marker is not None:
         pending_observed[key] = copied_marker
+        pending_source_markers[name] = copied_marker
+        pending_copied.add(name)
 
 
 def _terminate_log_command(process: subprocess.Popen[bytes]) -> None:
@@ -197,8 +223,9 @@ def collect_logs(
     cvd: str,
     home: Path,
     snapshot_directory: Path,
-    observed: dict[tuple[str, str], tuple[int, int]],
+    observed: dict[tuple[str, str], tuple[int, int, int, int]],
     timeout_seconds: float = LOG_COMMAND_TIMEOUT_SECONDS,
+    observer: KernelLogSnapshotObserver | None = None,
 ) -> None:
     environment = os.environ.copy()
     environment["HOME"] = str(home)
@@ -209,7 +236,9 @@ def collect_logs(
 
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
-    pending_observed: dict[tuple[str, str], tuple[int, int]] = {}
+    pending_observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
+    pending_source_markers: dict[str, tuple[int, int, int, int]] = {}
+    pending_copied: set[str] = set()
     pending_attempted: set[str] = set()
     completed = False
     listing_valid = True
@@ -272,6 +301,8 @@ def collect_logs(
                             snapshot_directory.parent,
                             observed,
                             pending_observed,
+                            pending_source_markers,
+                            pending_copied,
                             pending_attempted,
                         )
                 continue
@@ -299,6 +330,8 @@ def collect_logs(
                     snapshot_directory.parent,
                     observed,
                     pending_observed,
+                    pending_source_markers,
+                    pending_copied,
                     pending_attempted,
                 )
     except (OSError, ValueError):
@@ -313,18 +346,40 @@ def collect_logs(
             if process.poll() is None:
                 process.wait()
 
+        promoted_kernel_snapshot = False
         for name in LOG_NAMES:
             snapshot = poll_directory / name
             if not snapshot.is_file() or snapshot.is_symlink():
                 continue
             try:
-                os.replace(snapshot, snapshot_directory / name)
+                if (
+                    name == "kernel.log"
+                    and observer is not None
+                    and name in pending_source_markers
+                    and name in pending_copied
+                ):
+                    observer.promote_kernel_log_snapshot(
+                        snapshot,
+                        snapshot_directory / name,
+                        pending_source_markers[name],
+                    )
+                else:
+                    os.replace(snapshot, snapshot_directory / name)
             except OSError:
                 continue
+            if name == "kernel.log":
+                promoted_kernel_snapshot = True
             if completed:
                 observed.update(
                     {key: marker for key, marker in pending_observed.items() if key[0] == name}
                 )
+        if (
+            observer is not None
+            and "kernel.log" in pending_source_markers
+            and "kernel.log" not in pending_copied
+            and not promoted_kernel_snapshot
+        ):
+            observer.note_kernel_log_source(pending_source_markers["kernel.log"])
         shutil.rmtree(poll_directory, ignore_errors=True)
 
 
@@ -494,7 +549,7 @@ def run(args: argparse.Namespace) -> int:
     if cvd is None:
         raise FileNotFoundError("cvd was not found on PATH")
     deadline = time.monotonic() + args.timeout_seconds
-    observer: Any | None = None
+    observer: KernelLogSnapshotObserver | None = None
     if args.boot_observer_output is not None:
         from boot_observer import BootObserver
 
@@ -502,6 +557,7 @@ def run(args: argparse.Namespace) -> int:
             home=home,
             instance_path=Path(args.boot_observer_instance_path),
             launcher_log=snapshot_directory / "launcher.log",
+            kernel_log=snapshot_directory / "kernel.log",
             output_path=Path(args.boot_observer_output),
             adb_path=Path(args.boot_observer_adb),
             adb_port=args.boot_observer_adb_port,
@@ -512,7 +568,7 @@ def run(args: argparse.Namespace) -> int:
 
     environment = os.environ.copy()
     environment["HOME"] = str(home)
-    observed: dict[tuple[str, str], tuple[int, int]] = {}
+    observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
     next_poll = 0.0
     process: subprocess.Popen[bytes] | None = None
     timed_out = False
@@ -531,7 +587,14 @@ def run(args: argparse.Namespace) -> int:
             if requested_signal is not None:
                 termination_started = True
                 try:
-                    collect_logs(cvd, home, snapshot_directory, observed, timeout_seconds=0.2)
+                    collect_logs(
+                        cvd,
+                        home,
+                        snapshot_directory,
+                        observed,
+                        timeout_seconds=0.2,
+                        observer=observer,
+                    )
                 finally:
                     _terminate_child(process)
                 terminated = True
@@ -540,14 +603,21 @@ def run(args: argparse.Namespace) -> int:
                 timed_out = True
                 termination_started = True
                 try:
-                    collect_logs(cvd, home, snapshot_directory, observed, timeout_seconds=0.2)
+                    collect_logs(
+                        cvd,
+                        home,
+                        snapshot_directory,
+                        observed,
+                        timeout_seconds=0.2,
+                        observer=observer,
+                    )
                 finally:
                     _terminate_child(process)
                 terminated = True
                 break
             if now >= next_poll:
                 poll_started = now
-                collect_logs(cvd, home, snapshot_directory, observed)
+                collect_logs(cvd, home, snapshot_directory, observed, observer=observer)
                 if observer is not None:
                     observer.sample()
                 next_poll = poll_started + LOG_POLL_SECONDS
@@ -556,7 +626,7 @@ def run(args: argparse.Namespace) -> int:
             if wait_seconds > 0:
                 time.sleep(min(0.25, wait_seconds))
         if not terminated:
-            collect_logs(cvd, home, snapshot_directory, observed)
+            collect_logs(cvd, home, snapshot_directory, observed, observer=observer)
             _terminate_child(process)
         return_code = process.returncode
         if return_code is None:
@@ -565,7 +635,14 @@ def run(args: argparse.Namespace) -> int:
         if process is not None and process.returncode is None and not termination_started:
             termination_started = True
             try:
-                collect_logs(cvd, home, snapshot_directory, observed, timeout_seconds=0.2)
+                collect_logs(
+                    cvd,
+                    home,
+                    snapshot_directory,
+                    observed,
+                    timeout_seconds=0.2,
+                    observer=observer,
+                )
             finally:
                 _terminate_child(process)
         raise

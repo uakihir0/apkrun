@@ -5626,8 +5626,10 @@ and formatting, `git diff --check`, and all six checks in
 poll assertion, an interim-snapshot cutoff omission, and overbroad retry
 latency wording; these were corrected. Final follow-up hostile review found
 no further actionable findings. The active 3600-second capture started before
-this change and therefore uses the old property-query cadence; post-change
-live behavior remains to be verified with a bounded capture.
+this change and therefore uses the old property-query cadence. The 1200-second
+post-change capture recorded the configured 30/60-second delays and continued
+transport checks; see IR-162. A longer post-change run is still needed to
+compare later boot progress and guest shell events.
 
 ## IR-161: Preserve the full incomplete SwiftShader observer capture
 
@@ -5675,3 +5677,60 @@ further actionable findings. `git diff --check` and all six checks in
 `scripts/ci/run-checks.sh` passed after the evidence corrections. Keep IR-161 in
 `Needs maintainer review` until the incomplete-capture evidence and its
 interpretation are reviewed.
+
+## IR-162: Verify property-query backoff on the Linux reference host
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T102250-1468492/`; `Images/tools/reference/boot_observer.py`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Run a bounded 1200-second SwiftShader capture with the updated
+observer and retain its normalized host evidence and a sanitized summary.
+Treat it as incomplete and non-comparable because the observer recorded no
+successful observation of `sys.boot_completed=1`, the captured kernel and
+launcher logs contain no `VIRTUAL_DEVICE_BOOT_COMPLETED` marker, and the
+guest capture command list was not run. All eight property queries timed
+out, so this does not establish whether the guest property ever reached 1.
+Use it to verify live retry scheduling and transport polling, not to claim a
+boot root cause or a reduction in guest shell activity.
+
+**Reason.** Unit tests verified the retry state machine, but only a live
+reference-host capture could show whether real ADB command timeouts recorded
+the configured delay while transport checks continued. A bounded run yields
+that check without treating the still-incomplete Android boot as a reference
+profile.
+
+**Verification.** `host.json` records a 1205-second `guest_swiftshader`
+capture on Cuttlefish 1.57.0/build 16373615, with vhost-user GPU disabled.
+The observer recorded 40 transport polls: 37 `device`, three
+`commandFailed`; 39 `connect` commands returned 0 and one timed out. Eight
+property queries all timed out with exit status -15. The first timeout
+recorded `getpropRetryInSeconds=30`; each of the next seven recorded 60.
+Twenty-eight scheduled polls deferred property queries while transport
+checks continued. Property-query-attempt poll records were about 45 seconds apart after
+the first timeout and about 75 seconds apart thereafter. These timestamps
+are emitted after bounded commands return, so they do not establish
+query-start intervals. The guest kernel recorded two untracked
+`sh` SIGHUP events, which do not establish their source or a reduction in
+guest shell activity. No successful observation of `sys.boot_completed=1` was recorded,
+and the captured logs contain no boot-complete marker. Since all property queries
+timed out, the guest property state at the deadline is unknown. The bounded
+final Android logcat query also timed out, so its summary does not establish
+the absence of a boot error.
+
+The ten source files matched their Lima copies by SHA-256 on 2026-10-04;
+`source-sha256.txt` records the digests and each passes `shasum -a 256 -c`.
+Normalization changed zero files. The post-capture audit at
+2026-10-04T01:24:52Z found an empty Cuttlefish fleet, no `crosvm`, `run_cvd`,
+`process_restarter`, or `cvd_server` process, no listener on port 6520, and
+at audit time, loopback port 5037 had an ADB listener at PID 2704; no stop command was issued for it. No pre-capture identity check was retained, so the audit does not establish continuity during the capture. The artifact has 13 files (1,246,632 bytes; largest 550,914 bytes);
+all four JSON/JSONL files parse, and the size and tested privacy scans pass.
+`test_boot_observer.py` passed 108 tests with one Linux-only parent-death
+test skipped on macOS. `git diff --check` and all six checks in
+`scripts/ci/run-checks.sh` passed. Hostile review prompted clarification of
+the unobserved property state, poll-record timestamp semantics, audit-time
+listener state, and exact artifact byte count. Final hostile review found no
+further actionable findings. Keep IR-162 in `Needs maintainer review` until
+the live verification and its limits are reviewed.

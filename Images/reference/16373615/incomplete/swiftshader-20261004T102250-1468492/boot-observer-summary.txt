@@ -1,0 +1,54 @@
+APKRun 1200-second post-change SwiftShader observer capture
+
+Status: incomplete and non-comparable. The 1200-second Cuttlefish deadline
+expired; host.json records 1205 seconds including cleanup. No successful
+observation of sys.boot_completed=1 was recorded, and no
+VIRTUAL_DEVICE_BOOT_COMPLETED marker appears in the captured kernel or
+launcher logs. The guest-side capture command list was not run. All eight
+property queries timed out, so the guest property state at the deadline is
+unknown. This is not a reference profile.
+
+Host and guest: Cuttlefish 1.57.0 ran build 16373615 on Ubuntu 24.04.4 LTS,
+aarch64, with nested virtualization. The selected mode was guest_swiftshader,
+vhost-user GPU was disabled, and the guest had four CPUs, 4096 MiB memory,
+and 4915 MiB DDR. Kernel logs record first-stage init at guest uptime
+51.195 seconds and zygote startup at 199.255 seconds. They contain no
+system_server entry or boot-complete marker.
+
+Live observer verification: observer_started was recorded at
+2026-10-04T01:02:47.679Z. Cuttlefish start event 5 appeared at
+01:11:38.543Z; the private ADB server became ready 51 ms later. The observer
+recorded 40 transport polls: 37 get-state results were device and three were
+commandFailed. All 40 polls attempted connect; 39 returned successfully and
+one timed out. Eight Android property queries ran; all timed out with exit
+status -15. The first timeout recorded getpropRetryInSeconds=30; each of the
+next seven recorded 60. Twenty-eight scheduled polls deferred another
+property query while retaining the retry countdown. Property-query-attempt
+poll records were about 45 seconds apart after the first timeout and about
+75 seconds apart thereafter. Their timestamps are emitted after each
+bounded command returns, so these are poll-record intervals; query-start
+times are not recorded. The connect and get-state checks continued during
+those deferred polls. The one-shot shell-ready probe timed out before
+property polling began.
+
+The guest kernel recorded six untracked-process lines, including two SIGHUP
+events for sh at guest uptimes 458.934 and 810.116 seconds. Their origin is
+not established. The final events summary recognized zero process events.
+Its separate Android logcat query timed out after capturing 14,868 bytes;
+the bounded summary counted ten Watchdog mentions and zero ANR,
+fatal-exception, or fatal-signal lines. These counts do not establish a
+boot cause.
+
+Cleanup: the observer records its private ADB server stopped with
+cleanupComplete=true. A read-only host audit at 2026-10-04T01:24:52Z found
+no Cuttlefish groups, crosvm, run_cvd, process_restarter, or cvd_server
+processes and no listener on port 6520. At audit time, loopback port 5037 had
+an ADB listener at PID 2704; no stop command was issued for it. The audit has
+no pre-capture identity observation and does not establish continuity through
+the capture. MISSING.txt separately records that no crosvm command line
+matched the private Cuttlefish HOME at artifact-collection time.
+
+The live observer confirms the configured property-query backoff and
+continued transport polling. The two guest SIGHUP events do not prove that
+backoff reduced guest shell activity, and this run does not establish why
+Android failed to reach boot completion.

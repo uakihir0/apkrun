@@ -1,0 +1,68 @@
+{
+  "capture": {
+    "adbGetStateResultCounts": {
+      "commandFailed": 2,
+      "device": 183
+    },
+    "adbPollCount": 185,
+    "androidLogcatAnrLines": 0,
+    "androidLogcatBytes": 17754,
+    "androidLogcatFatalExceptionLines": 0,
+    "androidLogcatFatalSignalLines": 0,
+    "androidLogcatSystemServerMentionLines": 2,
+    "bootCompletedMarkerObserved": false,
+    "bootDeadlineSeconds": 3600,
+    "bootFailedMarkerObserved": false,
+    "captureExitStatus": 1,
+    "crashDump64KernelLogMentions": 36,
+    "doMprotectPkeyMentions": 0,
+    "getpropAttemptCount": 44,
+    "getpropExitCodeCounts": {
+      "-15": 36,
+      "0": 8
+    },
+    "getpropOutputByteCounts": {
+      "0": 35,
+      "46": 1,
+      "90": 8
+    },
+    "getpropParsedResponseCount": 0,
+    "kernelLogBytes": 1430534,
+    "kernelMaxGuestUptimeSeconds": 3309.09414,
+    "kernelPanicMentions": 0,
+    "logicalPartitionGeometryWarningCount": 2,
+    "outOfMemoryMentions": 0,
+    "privateAdbServerReadyDelayMilliseconds": 51,
+    "shellReadyProbeMarkerMatched": false,
+    "shellReadyProbeTimedOut": true,
+    "startEvent5Observed": true,
+    "sysBootCompleted": null,
+    "systemServerKernelLogMentions": 55,
+    "systemServerStartCountPresent": false,
+    "systemServerThreadSnapshotAttemptCount": 0
+  },
+  "captureDurationSeconds": 3604,
+  "captureSourceRevision": "ef70045",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "capturedArtifactTransferCheck": "all_passed",
+  "cleanup": {
+    "checkedCuttlefishProcessNames": [
+      "crosvm",
+      "run_cvd",
+      "process_restarter",
+      "cvd_server"
+    ],
+    "checkedCuttlefishProcessesRemaining": [],
+    "cvdFleetEmpty": true,
+    "observerPrivateAdbServerCleanupComplete": true,
+    "port5037KillServerIssued": false,
+    "port5037ListenerPid": 2704,
+    "port5037ListenerPresentAfterCleanup": true,
+    "port6520ListenerPresentAfterCleanup": false,
+    "temporaryCvdHomeRemoved": true
+  },
+  "gpuVhostUserEnabled": false,
+  "schemaVersion": 1,
+  "selectedGpuMode": "guest_swiftshader"
+}

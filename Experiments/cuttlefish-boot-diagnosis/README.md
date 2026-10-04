@@ -390,3 +390,86 @@ protection boundary.
 
 Workspace deletion removes the ownership marker last. If deleting another
 entry fails, the marker remains available for a later cleanup retry.
+
+## Pinned Virgl crosvm diagnostic rebuild
+
+The pinned Cuttlefish 1.57.0 crosvm specification disables default Cargo
+features and enables `gfxstream` and `gpu`, but omits `virgl_renderer`.
+Selecting `backend=virglrenderer` with that build panics with
+`invalid rutabaga build parameters`. The first crosvm SIGSEGV occurred while
+the panic hook collected a backtrace; preloading the matching system
+`libgcc_s.so.1` let the hook print the original panic. This supports the
+secondary-crash diagnosis and identifies the missing build feature as the
+immediate target-profile failure.
+
+`patches/enable-pinned-crosvm-virgl.patch` adds the omitted feature to the
+pinned Cuttlefish Bazel specification. The diagnostic crosvm was built from
+Cuttlefish commit `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` and crosvm commit
+`fd4df63707aee57092a28db63bc1ff8945c76058`. The Bazel target was
+`//build_external/crosvm:crosvm_bin_opt`, built in the pinned Debian 13
+container with:
+
+```sh
+bazelisk build -c opt --jobs=4 --features=-layering_check \
+  --spawn_strategy=local //build_external/crosvm:crosvm_bin_opt
+```
+
+This build is diagnostic-only. The Cuttlefish container recipe runs an
+unpinned `apt upgrade`, so matching the installed binary's Build ID is not
+guaranteed. The Cuttlefish build-dependency list also omitted
+`libvirglrenderer-dev`, which had to be installed in the temporary build
+container. Clang module-layering diagnostics in generated Abseil external
+repositories required removing their positive `layering_check` package
+features in the temporary Bazel cache; `--features=-layering_check` then
+allowed the target to build. Those cache edits are not project source changes
+and make this result unsuitable as a canonical Cuttlefish package.
+
+The crosvm and gfxstream outputs were ARM64 ELF files with Build IDs
+`1f6c03321061aa58e1d1ec0d0a1ff54f` and
+`257833fa4c8e65fc5294f3fa2ea311c4`, respectively. Their SHA-256 values were
+`48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7` and
+`c8e1f380e2ebfbe5814c57ba1f81d94659be0d6771edac421493cac02575f503`.
+The first static launcher used by a patched-Virgl capture had Build ID
+`01d7480ecd9f6ccf0e4613caa3f2ba85831cbcea` and SHA-256
+`28a84deba33a97bbbf9002c1b31e4c83a8bd3c97283233b21c37b0cab16e9494`.
+The hardened launcher built from the current source had Build ID
+`faf3eaf415ce2d1fc6c90f5090a9e82ba8abccab` and SHA-256
+`d09e4a87ac8d174d9925bcedd0ff2d77f138f63f00c6eff9bbc1c7865e33c819`.
+
+Build the static launcher on ARM64 Linux with a static AArch64 C compiler and
+`readelf`. First place the diagnostic `crosvm` and
+`libgfxstream_backend.so` in the directory that will contain the launcher:
+
+```sh
+CC=aarch64-linux-gnu-gcc \
+  Experiments/cuttlefish-boot-diagnosis/build-crosvm-built-virgl-launcher.sh \
+  "$HOME/.local/share/apkrun/diagnostics/crosvm-virgl/crosvm-built-virgl-launcher"
+```
+
+The build script rejects a launcher with `PT_INTERP` and verifies its AArch64
+ELF machine type. It checks the adjacent files against the pinned diagnostic
+SHA-256 values above and embeds those values in the launcher; a different
+build requires an intentional source and documentation update. It also
+requires a new, unused output path, so it never overwrites an existing file
+or follows an output symlink. At runtime,
+the launcher hashes the already-open staged files before execution, rejects a
+mismatch, and prints both staged-file hashes to stderr. The launcher clears
+inherited `LD_*` variables and
+`GLIBC_TUNABLES`, sets `LD_LIBRARY_PATH` to its directory, preloads
+`/lib/aarch64-linux-gnu/libgcc_s.so.1`, and executes the adjacent crosvm from
+an already-open file descriptor. It rejects symlinked binaries and checks
+directory permissions up to the filesystem root; a root-owned sticky
+directory such as `/tmp` is allowed. Keep all three files in a user-owned
+directory. Same-UID processes are trusted; the launcher is not a security
+boundary. The hashes attest to the staged files before exec; because the ELF
+loader later opens gfxstream by pathname, they do not prove the mapped library
+bytes if a same-UID process changes the directory between verification and
+loading. The capture command itself must also be started from a clean parent
+environment so the shell and Cuttlefish host tools can start.
+
+On the tested Lima host, which has no `/dev/dri`, `capture.sh` sets
+`EGL_PLATFORM=surfaceless` automatically for the `target`/`drm_virgl` profile
+and records `eglPlatform` in `host.json`; it clears any inherited
+`EGL_PLATFORM` for other profile and GPU-mode combinations.
+Captures made with the modified crosvm remain under `incomplete/`, regardless
+of whether Android boots, and cannot replace a canonical reference profile.

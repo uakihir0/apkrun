@@ -5971,3 +5971,65 @@ four platform-only skips; after the final skipped-byte accounting change, both
 catch-up regression cases passed. Ruff, format, repository CI, and
 `git diff --check` passed. The final hostile review found no remaining
 actionable issues.
+
+## IR-167: Record a SwiftShader boot failure before the SystemServer thread probe
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T174319-1563170/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the 447-second SwiftShader run as incomplete and
+non-comparable. Cuttlefish 1.57.0 reported `VIRTUAL_DEVICE_BOOT_FAILED`,
+`run_cvd returned 10`, and exit status 255. Keep the captured U-Boot, Linux,
+init, launcher, and observer records as diagnostics; do not claim that the
+known logical-partition geometry warning caused the failure. The kernel log
+ends at guest uptime 317.057 seconds during init service startup. No
+`system_server`, `do_mprotect_pkey` blocked trace, kernel panic, or OOM
+marker was recorded. The observer matched the `Start event (5) received.`
+marker emitted by `socket_vsock_proxy`; all three ADB `get-state` probes
+returned `commandFailed`, so it captured no Android properties or
+SystemServer thread state. The launcher log records the proxy failing to
+start a TCP server on port 6520 after ten attempts, then aborting with
+`SIGABRT`. The critical-process monitor stopped the remaining monitored
+processes, after which `run_cvd` exited and Cuttlefish reported
+`VIRTUAL_DEVICE_BOOT_FAILED`. The bind error is logged as `0`, so the reason
+for the bind failure is not explicit. The post-run audit identified an ADB
+fork-server listener on the same port, with a process start time of 17:41:29
+JST, before the proxy's ten attempts from 17:42:41 through 17:42:52. The
+launcher also records ADB connections to `127.0.0.1:6520` during those
+attempts. This timing makes a port collision likely, but does not prove the
+listener's provenance or the exact bind error. This is the observed CVD
+failure sequence, not an established Android boot root cause. The run does
+not exercise IR-166's thread-state probe and is not evidence that the earlier
+transient blocked trace recurred or was fixed.
+
+After CVD cleanup, the ADB fork-server listener on port 6520 remained. The
+process kind and command are recorded, but the pre-run port state was not
+recorded, so its provenance and parent are unknown. After verifying that the
+Cuttlefish fleet and listed Cuttlefish processes were empty, issue
+`adb -P 6520 kill-server`; a follow-up audit found no listener on 6520.
+Leave the separate port 5037 listener running. The observer's own private
+Unix-socket ADB server reported successful cleanup.
+
+**Reason.** Preserve useful boot-progress evidence without overstating what
+it proves. The launcher logs provide a direct failure chain for the CVD
+startup, and the concurrently present listener makes a port collision
+probable, but neither the exact bind errno nor an Android-side cause is
+identified. Event 5 is the marker emitted by `socket_vsock_proxy`, not
+Android boot completion. The failed ADB state probes and missing
+`system_server` marker leave the guest's later state unknown. Keep the run
+out of profile comparisons until a complete capture exists.
+
+**Verification.** The capture was produced from source commit `ef70045`.
+`LIMA-SHA256SUMS` stores the reference-VM digests for all ten captured
+artifact files, and `shasum -a 256 -c` passed for each file after transfer.
+A second `compare_boot.py normalize` pass changed zero files. The
+`post-run-verification.json` records the CVD process and port audit,
+including the 6520 listener command and start time, its unverified
+provenance, the likely collision assessment, and the scoped kill-server
+action. The audit found an empty Cuttlefish fleet, no listed Cuttlefish
+processes, the temporary CVD HOME removed, and no port 6520 listener after
+cleanup; the separate port 5037 listener remained. The diagnostic
+interpretation and record are pending hostile review.

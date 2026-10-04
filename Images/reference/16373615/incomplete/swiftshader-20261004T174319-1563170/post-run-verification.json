@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "captureSourceRevision": "ef70045",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "capturedArtifactTransferCheck": "all_passed",
+  "failureChain": {
+    "socketVsockProxyStartMarkerObserved": true,
+    "tcpPort": 6520,
+    "bindAttempts": 10,
+    "lastBindError": 0,
+    "socketVsockProxyExit": "SIGABRT",
+    "criticalProcessMonitorStoppedRun": true,
+    "virtualDeviceBootFailed": true,
+    "androidBootCompleted": null
+  },
+  "cleanup": {
+    "cvdFleetEmpty": true,
+    "checkedCuttlefishProcessNames": [
+      "crosvm",
+      "run_cvd",
+      "process_restarter",
+      "cvd_server"
+    ],
+    "checkedCuttlefishProcessesRemaining": [],
+    "temporaryCvdHomeRemoved": true,
+    "observerPrivateAdbServerCleanupComplete": true,
+    "port6520ListenerObservedAfterCvdCleanup": true,
+    "port6520ListenerCommand": "adb -L tcp:6520 fork-server server --reply-fd 4",
+    "port6520ListenerProcessKind": "adb fork-server",
+    "port6520ListenerProcessStartTimeLocal": "2026-10-04T17:41:29+09:00",
+    "cvdCreateStartTimeLocal": "2026-10-04T17:35:53+09:00",
+    "port6520BindRetryStartTimeLocal": "2026-10-04T17:42:41+09:00",
+    "port6520BindRetryEndTimeLocal": "2026-10-04T17:42:52+09:00",
+    "adbConnectorConnectedDuringBindRetries": true,
+    "cvdFailureTimeLocal": "2026-10-04T17:43:17+09:00",
+    "port6520ListenerProvenance": "unknown",
+    "port6520BindFailureAssessment": "port collision likely",
+    "port6520BindFailureErrno": "launcher log printed 0",
+    "port6520KillServerIssued": true,
+    "port6520ListenerObservedAfterKill": false,
+    "port5037ListenerObservedAfterCleanup": true,
+    "port5037KillServerIssued": false
+  }
+}

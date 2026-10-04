@@ -1,0 +1,68 @@
+APKRun 3600-second post-change SwiftShader observer capture
+
+Status: incomplete and non-comparable. host.json records a 3603-second
+capture including cleanup. The shared 3600-second deadline expired while
+Cuttlefish create/start was still running; MISSING.txt records the deadline
+expiration, and cvd-create-console.log records Cuttlefish handling the
+termination signal. No guest-capture command list was run and no reference
+profile was published. No accepted observation of sys.boot_completed=1 or
+VIRTUAL_DEVICE_BOOT_COMPLETED was recorded.
+
+Host and guest: Cuttlefish 1.57.0 ran build 16373615 on Ubuntu 24.04.4 LTS,
+aarch64, with nested virtualization. The selected mode was guest_swiftshader
+and vhost-user GPU was disabled. The capture requested four guest CPUs and
+4096 MiB of guest memory. The Android kernel log identifies Linux 6.12.74.
+
+Live observer: observer_started was recorded at 2026-10-04T01:47:31.365Z.
+Cuttlefish start event 5 appeared at 01:57:37.270Z; its private ADB server
+became ready 51 ms later. The observer ran 195 transport polls: 192
+get-state results were device and three were commandFailed. All polls
+attempted connect; 194 returned 0 and one timed out. Forty-eight property
+queries ran: 40 timed out with exit status -15 and eight returned exit
+status 0. None of the eight returned responses yielded accepted parsed
+property fields, so the guest's sys.boot_completed value remains unknown.
+On property timeouts, getpropRetryInSeconds recorded 30 seconds for the
+first timeout in each consecutive-timeout streak and 60 seconds for later
+timeouts. Across all polls, 147 records had getpropAttempted=false while
+transport polling continued. Poll timestamps are recorded after bounded
+commands return and do not establish property-query start times.
+
+The one-shot shell-ready probe timed out with exit status -15 before its
+marker was observed. The final bounded events-buffer query returned 17,948
+bytes but recognized no process events. The separate Android logcat query
+timed out with zero captured bytes. Neither result identifies a boot cause.
+
+Kernel progress: first-stage init started at guest uptime 47.496 seconds and
+zygote started at 209.251 seconds. The kernel records system_server callers
+in servicemanager activity from uptime 1737.851 through 3345.618 seconds.
+Init recorded untracked system_server exits with status 0 at 1940.390,
+2759.823, and 3186.678 seconds. Zygote received SIGKILL at 2767.776 and
+started again at 2775.947 seconds. These records do not establish why the
+processes exited or why zygote was killed. No
+VIRTUAL_DEVICE_BOOT_COMPLETED marker appears in the captured kernel or
+launcher logs.
+
+The kernel records five untracked-process SIGHUP events: four for sh and
+one for printf, at guest uptimes 939.071, 2049.115, 2273.782, 2633.587, and
+3278.964 seconds. Their source is unconfirmed. Through guest uptime 800
+seconds, the pre-change 3600-second capture recorded five SIGHUP events,
+the 1200-second post-change capture recorded one, and this post-change
+3600-second capture recorded zero. This pattern is consistent with reduced
+guest shell activity after property-query backoff, but the separate runs
+do not establish causation.
+
+The observer recorded 721 crosvm memory samples, 719 with valid VmRSS; the
+maximum recorded VmRSS was 4,234,432 KiB. It stopped its private ADB server
+with cleanupComplete=true. A read-only host audit at
+2026-10-04T02:52:12Z found no Cuttlefish groups, crosvm, run_cvd,
+process_restarter, or cvd_server processes and no listener on port 6520.
+Loopback port 5037 had an ADB listener at PID 2704; no stop command was
+issued for it. This audit is point-in-time and does not establish its
+pre-capture identity or continuity. MISSING.txt separately notes that no
+crosvm command line matched the private Cuttlefish HOME at artifact-
+collection time.
+
+The record supports the live 30/60-second property-query backoff while
+transport polling continued. It does not prove boot completion, explain
+the repeated system_server exits or zygote restart, or establish a boot
+root cause.

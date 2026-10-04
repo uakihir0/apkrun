@@ -1,0 +1,16 @@
+Read-only post-capture audit: 2026-10-04T02:52:12Z
+
+cvd fleet returned an empty groups array.
+Exact /proc argv[0] basename scan:
+  crosvm=absent
+  run_cvd=absent
+  process_restarter=absent
+  cvd_server=absent
+
+Listener state from ss:
+  port 6520: absent
+  port 5037: 127.0.0.1, adb PID 2704
+
+No stop command was issued for the port 5037 listener. This is a
+point-in-time audit and has no pre-capture PID observation. MISSING.txt
+separately records the crosvm lookup at artifact-collection time.

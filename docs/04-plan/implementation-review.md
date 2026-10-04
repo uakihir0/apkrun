@@ -5734,3 +5734,69 @@ the unobserved property state, poll-record timestamp semantics, audit-time
 listener state, and exact artifact byte count. Final hostile review found no
 further actionable findings. Keep IR-162 in `Needs maintainer review` until
 the live verification and its limits are reviewed.
+
+## IR-163: Record a long post-change SwiftShader observer capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T114734-1483038/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the normalized 3600-second post-change SwiftShader capture
+as incomplete and non-comparable. The capture did not record an accepted
+`sys.boot_completed=1` value or `VIRTUAL_DEVICE_BOOT_COMPLETED`, and it did
+not run the guest capture command list. Treat the eight getprop commands
+that exited 0 as unparsed responses: none yielded accepted property fields,
+so the guest's `sys.boot_completed` value is unknown. Record the `system_server`
+exits, zygote SIGKILL/restart, and guest SIGHUP events without assigning a
+root cause. Keep the 5037 ADB listener running.
+
+**Reason.** Cuttlefish start event 5 and a private ADB server became
+available about ten minutes after observer start, and 192 transport polls
+reported `device`. However, the shared deadline expired while the Cuttlefish
+create/start command was still running. The installed Cuttlefish 1.57.0
+`cvd start --help` describes `boot_timeout_secs` as waiting for completed
+boot before failing. Kernel logs show first-stage init, zygote startup,
+servicemanager calls attributed to `system_server`, three untracked
+`system_server` exits, and a zygote SIGKILL followed by restart. Those
+observations do not explain why the boot-completion condition was not
+reported. Compared with the pre-change capture, fewer guest SIGHUP events
+were observed through uptime 800 seconds; the independent runs make this
+consistent with the backoff but do not establish causation.
+
+**Verification.** The ten captured source files match their Lima copies by
+SHA-256; `source-sha256.txt` retains the digests and all entries pass
+`shasum -a 256 -c`. The capture normalizer changed zero files. The artifact
+contains 13 files totaling 2,467,557 bytes, with a largest file of 1,336,545
+bytes; every file is below the 64 MiB limit. Three JSON documents and all
+924 JSONL records parse with duplicate-key and non-standard-constant
+rejection. Scans for the tested user and temporary host paths, private-key
+markers, and MAC/EUI-48/EUI-64 patterns pass.
+
+The observer recorded 195 transport polls (192 `device`, three
+`commandFailed`), 48 property queries (40 timeouts with exit status -15 and
+eight exit status 0 with no accepted parsed fields), and 147 polls without a
+property query. The timed-out queries recorded the 30/60-second delays:
+seven first timeouts in consecutive-timeout streaks recorded 30, and 33
+later timeouts recorded 60. The shell-ready probe timed out. The bounded
+events-buffer query returned 17,948 bytes with zero recognized process
+events; the separate Android logcat query timed out with zero bytes.
+
+Kernel logs record first-stage init at uptime 47.496 seconds, zygote startup
+at 209.251 seconds, system_server callers from 1737.851 through 3345.618
+seconds, untracked `system_server` exits at 1940.390, 2759.823, and
+3186.678 seconds, and a zygote SIGKILL at 2767.776 followed by a start at
+2775.947. They contain five untracked-process SIGHUP events, at uptimes
+939.071, 2049.115, 2273.782, 2633.587, and 3278.964 seconds. Through
+uptime 800 seconds, the pre-change run recorded five SIGHUP events, the
+1200-second post-change run recorded one, and this run recorded zero. Do
+not interpret these independent-run counts as causal proof.
+
+A read-only audit at 2026-10-04T02:52:12Z found an empty Cuttlefish fleet,
+no `crosvm`, `run_cvd`, `process_restarter`, or `cvd_server` processes, and
+no port 6520 listener. Loopback port 5037 had an ADB listener at PID 2704;
+no stop command was issued for it. The audit is point-in-time and has no
+pre-capture PID observation. `MISSING.txt` separately records the crosvm
+lookup at artifact-collection time. Keep IR-163 in `Needs maintainer review`
+until the evidence and its interpretation are reviewed.

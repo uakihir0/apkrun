@@ -1,0 +1,1070 @@
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:616] received flags: --gpu_vhost_user_mode=off --webrtc_device_id=apkrun_swiftshader_kdxbr0-1-1 --num_instances=1 --daemon=true --gpu_mode=guest_swiftshader
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 config_flag.cpp:206] Reading --config option from: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 config_flag.cpp:151] Launching CVD using --config='phone'
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:697] AndroidBuilds(1 builds, 1 distinct)
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:323] Started (pid: 1483128): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] Ran <HOST_TEMP_PATH> with stdout:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Automatically generated file; DO NOT EDIT.
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Linux/arm64 6.12.74 Kernel Configuration
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_VERSION_TEXT="Android (14043575, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GCC_VERSION=0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_IS_CLANG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CLANG_VERSION=190001
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_IS_LLVM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_VERSION=190001
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LD_VERSION=0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LD_IS_LLD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LLD_VERSION=190001
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_VERSION=108200
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUST_IS_AVAILABLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_LLVM_VERSION=190001
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_LLVM_MAJOR_VERSION=19
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_CLANG_LLVM_COMPATIBLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_CAN_LINK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_CAN_LINK_STATIC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_ASM_GOTO_OUTPUT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TOOLS_SUPPORT_RELR=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_ASM_INLINE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_NO_PROFILE_FN_ATTR=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PAHOLE_VERSION=125
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_WORK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BUILDTIME_TABLE_SORT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_THREAD_INFO_IN_TASK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # General setup
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_INIT_ENV_ARG_LIMIT=32
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_COMPILE_TEST is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_WERROR=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_UAPI_HEADER_TEST is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LOCALVERSION="-4k"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LOCALVERSION_AUTO=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BUILD_SALT=""
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_DEFAULT_INIT=""
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_DEFAULT_HOSTNAME="(none)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SYSVIPC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_POSIX_MQUEUE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_WATCH_QUEUE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CROSS_MEMORY_ATTACH=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_USELIB is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AUDIT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_ARCH_AUDITSYSCALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AUDITSYSCALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # IRQ subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_PROBE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_SHOW=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_SHOW_LEVEL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_MIGRATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HARDIRQS_SW_RESEND=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_CHIP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_DOMAIN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_DOMAIN_HIERARCHY=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_FASTEOI_HIERARCHY_HANDLERS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_IPI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_MSI_IRQ=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_MSI_IOMMU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_IRQ_STAT_SNAPSHOT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_FORCED_THREADING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SPARSE_IRQ=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_GENERIC_IRQ_DEBUGFS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of IRQ subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_TIME_VSYSCALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_CLOCKEVENTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_HAS_TICK_BROADCAST=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_CLOCKEVENTS_BROADCAST=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_POSIX_CPU_TIMERS_TASK_WORK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_POSIX_CPU_TIMERS_TASK_WORK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TIME_KUNIT_TEST=m
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CONTEXT_TRACKING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CONTEXT_TRACKING_IDLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Timers subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TICK_ONESHOT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NO_HZ_COMMON=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_HZ_PERIODIC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NO_HZ_IDLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_NO_HZ_FULL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NO_HZ=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HIGH_RES_TIMERS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of Timers subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_EBPF_JIT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_WANT_DEFAULT_BPF_JIT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # BPF subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF_SYSCALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF_JIT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF_JIT_ALWAYS_ON=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF_JIT_DEFAULT_ON=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BPF_UNPRIV_DEFAULT_OFF is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BPF_PRELOAD is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BPF_LSM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of BPF subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PREEMPT_BUILD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PREEMPT_NONE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PREEMPT_VOLUNTARY is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PREEMPT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PREEMPT_RT is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PREEMPT_COUNT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PREEMPTION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PREEMPT_DYNAMIC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SCHED_CLASS_EXT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CPU/Task time and stats accounting
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TICK_CPU_ACCOUNTING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_VIRT_CPU_ACCOUNTING_GEN is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IRQ_TIME_ACCOUNTING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_SCHED_AVG_IRQ=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SCHED_HW_PRESSURE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BSD_PROCESS_ACCT is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASKSTATS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASK_DELAY_ACCT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASK_XACCT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASK_IO_ACCOUNTING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PSI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PSI_DEFAULT_DISABLED is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of CPU/Task time and stats accounting
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CPU_ISOLATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # RCU Subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TREE_RCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PREEMPT_RCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_EXPERT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TREE_SRCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASKS_RCU_GENERIC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_FORCE_TASKS_RCU is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NEED_TASKS_RCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASKS_RCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_FORCE_TASKS_RUDE_RCU is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_FORCE_TASKS_TRACE_RCU is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TASKS_TRACE_RCU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_STALL_COMMON=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_NEED_SEGCBLIST=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_FANOUT=64
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_FANOUT_LEAF=16
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_BOOST=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_BOOST_DELAY=500
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_EXP_KTHREAD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_NOCB_CPU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RCU_NOCB_CPU_CB_BOOST is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_TASKS_TRACE_RCU_READ_MB is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_LAZY=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RCU_LAZY_DEFAULT_OFF is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RCU_DOUBLE_CHECK_CB_TIME is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RCU_BOOT_END_DELAY=20000
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of RCU Subsystem
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IKCONFIG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IKCONFIG_PROC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IKHEADERS=m
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LOG_BUF_SHIFT=17
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LOG_CPU_MAX_BUF_SHIFT=12
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PRINTK_INDEX is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_SCHED_CLOCK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Scheduler features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UCLAMP_TASK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UCLAMP_BUCKETS_COUNT=20
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SCHED_PROXY_EXEC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of Scheduler features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_NUMA_BALANCING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_INT128=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GCC10_NO_ARRAY_BOUNDS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GCC_NO_STRINGOP_OVERFLOW=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_INT128=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SLAB_OBJ_EXT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUPS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PAGE_COUNTER=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_FAVOR_DYNMODS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MEMCG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MEMCG_V1=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BLK_CGROUP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUP_WRITEBACK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUP_SCHED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GROUP_SCHED_WEIGHT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_FAIR_GROUP_SCHED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CFS_BANDWIDTH=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RT_GROUP_SCHED is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_EXT_GROUP_SCHED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UCLAMP_TASK_GROUP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_PIDS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_RDMA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUP_FREEZER=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CPUSETS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CPUSETS_V1=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PROC_PID_CPUSET=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_DEVICE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUP_CPUACCT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_PERF is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CGROUP_BPF=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_MISC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CGROUP_DEBUG is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SOCK_CGROUP_DATA=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NAMESPACES=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UTS_NS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TIME_NS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_USER_NS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PID_NS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NET_NS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CHECKPOINT_RESTORE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SCHED_AUTOGROUP is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RT_SOFTIRQ_AWARE_SCHED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RELAY is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BLK_DEV_INITRD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_INITRAMFS_SOURCE=""
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_INITRAMFS_FORCE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RD_GZIP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RD_BZIP2 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RD_LZMA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RD_XZ is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RD_LZO is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RD_LZ4=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RD_ZSTD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BOOT_CONFIG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BOOT_CONFIG_FORCE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BOOT_CONFIG_EMBED is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CMDLINE_LOG_WRAP_IDEAL_LEN=1021
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_INITRAMFS_PRESERVE_MTIME=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LD_ORPHAN_WARN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LD_ORPHAN_WARN_LEVEL="error"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SYSCTL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_UID16=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SYSCTL_EXCEPTION_TRACE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_EXPERT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UID16=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MULTIUSER=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SGETMASK_SYSCALL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SYSFS_SYSCALL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_FHANDLE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_POSIX_TIMERS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PRINTK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BUG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ELF_CORE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_BASE_SMALL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_FUTEX=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_FUTEX_PI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_EPOLL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SIGNALFD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TIMERFD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_EVENTFD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SHMEM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AIO=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_IO_URING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ADVISE_SYSCALLS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MEMBARRIER=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_KCMP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RSEQ is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CACHESTAT_SYSCALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_PC104 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_KALLSYMS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_KALLSYMS_SELFTEST is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_KALLSYMS_ALL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_HAS_MEMBARRIER_SYNC_CORE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HAVE_PERF_EVENTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GUEST_PERF_EVENTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Kernel Performance Events And Counters
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PERF_EVENTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_DEBUG_PERF_USE_VMALLOC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of Kernel Performance Events And Counters
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SYSTEM_DATA_VERIFICATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PROFILING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUST=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_VERSION_TEXT="rustc 1.82.0-dev (f6e511eec 2024-10-15) (Android Rust Toolchain version linux-12909517)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BINDGEN_VERSION_TEXT="bindgen 0.69.5"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TRACEPOINTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Kexec and crash features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_KEXEC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_KEXEC_FILE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of Kexec and crash features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of General setup
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RUSTC_SUPPORTS_ARM64=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CLANG_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_64BIT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MMU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_CONT_PTE_SHIFT=4
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_CONT_PMD_SHIFT=4
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_MMAP_RND_BITS_MIN=18
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_MMAP_RND_BITS_MAX=24
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MIN=11
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MAX=16
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_STACKTRACE_SUPPORT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ILLEGAL_POINTER_VALUE=0xdead000000000000
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_LOCKDEP_SUPPORT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_BUG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_BUG_RELATIVE_POINTERS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_HWEIGHT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_CSUM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_GENERIC_CALIBRATE_DELAY=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SMP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_KERNEL_MODE_NEON=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_FIX_EARLYCON_MEM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PGTABLE_LEVELS=3
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_UPROBES=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_PROC_KCORE_TEXT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_BUILTIN_RETURN_ADDRESS_STRIPS_PAC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UNWIND_TABLES=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Platform selection
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_ACTIONS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_AIROHA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUNXI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_ALPINE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_APPLE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_BCM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_BCM2835 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_BCM_IPROC is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_BCMBCA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_BRCMSTB=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_BERLIN is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_BITMAIN is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_EXYNOS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_SPARX5 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_K3 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_LG1K is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_HISI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_KEEMBAY is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_MEDIATEK is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_MESON is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_MVEBU is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_NXP is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_MA35 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_NPCM is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_PENSANDO is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_QCOM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_REALTEK is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_RENESAS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_ROCKCHIP is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_SEATTLE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_INTEL_SOCFPGA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_STM32 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_SYNQUACER is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_TEGRA=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_SPRD is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_THUNDER is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_THUNDER2 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_UNIPHIER is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_VEXPRESS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_VISCONTI is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_XGENE is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARCH_ZYNQMP is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of Platform selection
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # Kernel Features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARM errata workarounds via the alternatives framework
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AMPERE_ERRATUM_AC03_CPU_38=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_WORKAROUND_CLEAN_CACHE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_826319=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_827319=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_824069=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_819472=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_832075=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_ERRATUM_834220 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1742098=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_845719=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_843419=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_LD_HAS_FIX_ERRATUM_843419=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1024718=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1418040=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_WORKAROUND_SPECULATIVE_AT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1165522=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1319367=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1530923=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_WORKAROUND_REPEAT_TLBI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_ERRATUM_2441007 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_ERRATUM_1286807 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1463225=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_ERRATUM_1542419 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_1508412=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2051678=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2077057=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2658417=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_WORKAROUND_TSB_FLUSH_FAILURE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2054223=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2067961=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_ERRATUM_2441009 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2457168=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2645198=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_WORKAROUND_SPECULATIVE_UNPRIV_LOAD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_2966298=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_3117295=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_3194386=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_ERRATUM_4311569=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CAVIUM_ERRATUM_22375=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CAVIUM_ERRATUM_23154=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CAVIUM_ERRATUM_27456=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CAVIUM_ERRATUM_30115=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CAVIUM_TX2_ERRATUM_219=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_FUJITSU_ERRATUM_010001=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HISILICON_ERRATUM_161600802=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HISILICON_ERRATUM_162100801=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_QCOM_FALKOR_ERRATUM_1003=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_QCOM_FALKOR_ERRATUM_1009=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_QCOM_QDF2400_ERRATUM_0065=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_QCOM_FALKOR_ERRATUM_E1041=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NVIDIA_CARMEL_CNP_ERRATUM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ROCKCHIP_ERRATUM_3588001=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SOCIONEXT_SYNQUACER_PREITS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARM errata workarounds via the alternatives framework
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_4K_PAGES=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_16K_PAGES is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_64K_PAGES is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_VA_BITS_39=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_VA_BITS_48 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_VA_BITS_52 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_VA_BITS=39
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PA_BITS_48=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PA_BITS=48
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_CPU_BIG_ENDIAN is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CPU_LITTLE_ENDIAN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SCHED_MC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SCHED_CLUSTER is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_SCHED_SMT is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_NR_CPUS=32
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HOTPLUG_CPU=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_NUMA is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_HZ_100 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HZ_250=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_HZ_300 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_HZ_1000 is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HZ=250
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SCHED_HRTICK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SPARSEMEM_ENABLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_HW_PERF_EVENTS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAVE_SHADOW_CALL_STACK=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PARAVIRT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_PARAVIRT_TIME_ACCOUNTING=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_KEXEC=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_KEXEC_FILE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_KEXEC_SIG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_KEXEC_IMAGE_VERIFY_SIG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_DEFAULT_KEXEC_IMAGE_VERIFY_SIG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_SUPPORTS_CRASH_DUMP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_DEFAULT_CRASH_DUMP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_TRANS_TABLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_XEN is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_FORCE_MAX_ORDER=10
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_UNMAP_KERNEL_AT_EL0=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RODATA_FULL_DEFAULT_ENABLED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_SW_TTBR0_PAN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_TAGGED_ADDR_ABI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_COMPAT=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_KUSER_HELPERS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_COMPAT_VDSO=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_THUMB2_COMPAT_VDSO=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_COMPAT_ALIGNMENT_FIXUPS is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARMV8_DEPRECATED=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SWP_EMULATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CP15_BARRIER_EMULATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_SETEND_EMULATION=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.1 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_HW_AFDBM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PAN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_LSE_ATOMICS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_LSE_ATOMICS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_USE_LSE_ATOMICS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.1 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.2 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_ARMV8_2=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_SHA3=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PMEM=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_RAS_EXTN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_CNP=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.2 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.3 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PTR_AUTH=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PTR_AUTH_KERNEL=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_BRANCH_PROT_PAC_RET=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_SIGN_RETURN_ADDRESS=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_ARMV8_3=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_CFI_NEGATE_RA_STATE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_LDAPR=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.3 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.4 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_AMU_EXTN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_ARMV8_4=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_TLB_RANGE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.4 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.5 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_AS_HAS_ARMV8_5=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_BTI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_BTI_KERNEL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAS_BRANCH_PROT_PAC_RET_BTI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_E0PD=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_AS_HAS_MTE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_MTE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.5 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.7 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_EPAN=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.7 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # ARMv8.9 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] #
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_POE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARCH_PKEY_BITS=3
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # end of ARMv8.9 architectural features
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_SVE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_SME=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_ARM64_PSEUDO_NMI=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_ARM64_DEBUG_PRIORITY_MASKING is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RELOCATABLE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_RANDOMIZE_BASE=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] # CONFIG_RANDOMIZE_MODULE_REGION_FULL is not set
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_CC_HAVE_STACKPROTECTOR_SYSREG=y
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] CONFIG_STACKPROTECTOR_
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:154] Ran <HOST_TEMP_PATH> with stderr:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:154] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717] Guest configs: {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]   GuestConfig {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     target_arch: arm64,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     device_type: phone,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     bootconfig_supported: 1,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     hctr2_supported: 1,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     android_version_number: "17",
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     gfxstream_supported: 1,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     gfxstream_gl_program_binary_link_status_supported: 1,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     vhost_user_vsock: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     supports_bgra_framebuffers: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     prefer_drm_virgl_when_supported: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     mouse_supported: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     gamepad_supported: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     ti50_emulator: "",
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     custom_keyboard_config: (absent),
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     domkey_mapping_config: (absent),
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     output_audio_streams_count: 1,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     audio_settings: (absent),
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     enforce_mac80211_hwsim: (absent),
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     blank_data_image_mb: 0,
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]     lights_server_enabled: 1
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:717] }
+assemble_cvd(1483125)  I 10-04 10:47:31 1483125 1483125 flags.cc:1527] SetFlagDefaultsFromConfig: No flag defaults to override.
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:323] Started (pid: 1483138): /usr/lib/cuttlefish-common/bin/capability_query.py
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] qemu_cli
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:684] rootcanal_instance_num: 0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:685] launch rootcanal: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:694] casimir_instance_num: 0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:695] launch casimir: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:699] netsim_instance_num: 0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 flags.cc:721] launch pica: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:323] Started (pid: 1483141): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] Ran <HOST_TEMP_PATH> with stdout:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:154] Ran <HOST_TEMP_PATH> with stderr:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 managed_stdio.cc:154] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:872] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:900] Host Graphics Availability:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] egl {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   vendor: "Mesa Project"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   version: "1.5"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   extensions: "EGL_ANDROID_blob_cache EGL_ANDROID_native_fence_sync EGL_EXT_config_select_group EGL_EXT_create_context_robustness EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_EXT_query_reset_notification_strategy EGL_EXT_surface_compression EGL_KHR_cl_event2 EGL_KHR_config_attribs EGL_KHR_context_flush_control EGL_KHR_create_context EGL_KHR_create_context_no_error EGL_KHR_fence_sync EGL_KHR_get_all_proc_addresses EGL_KHR_gl_colorspace EGL_KHR_gl_renderbuffer_image EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_image_base EGL_KHR_no_config_context EGL_KHR_reusable_sync EGL_KHR_surfaceless_context EGL_EXT_pixel_format_float EGL_KHR_wait_sync EGL_MESA_configless_context EGL_MESA_gl_interop EGL_MESA_image_dma_buf_export EGL_MESA_query_driver EGL_MESA_x11_native_visual_id "
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   gles2_availability {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     vendor: "Mesa"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     version: "OpenGL ES 3.2 Mesa 25.2.8-0ubuntu0.24.04.4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     renderer: "llvmpipe (LLVM 20.1.2, 128 bits)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "GL_EXT_blend_minmax GL_EXT_multi_draw_arrays GL_EXT_texture_filter_anisotropic GL_EXT_texture_compression_s3tc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_format_BGRA8888 GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_mapbuffer GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_stencil8 GL_OES_texture_3D GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_vertex_half_float GL_EXT_draw_instanced GL_EXT_texture_sRGB_decode GL_OES_EGL_image GL_OES_depth_texture GL_OES_packed_depth_stencil GL_EXT_texture_type_2_10_10_10_REV GL_NV_conditional_render GL_OES_get_program_binary GL_APPLE_texture_max_level GL_EXT_discard_framebuffer GL_EXT_read_format_bgra GL_EXT_texture_storage GL_NV_pack_subimage GL_NV_texture_barrier GL_EXT_frag_depth GL_NV_fbo_color_attachments GL_OES_EGL_image_external GL_OES_EGL_sync GL_OES_vertex_array_object GL_OES_viewport_array GL_ANGLE_pack_reverse_row_order GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_EXT_occlusion_query_boolean GL_EXT_robustness GL_EXT_texture_rg GL_EXT_unpack_subimage GL_NV_draw_buffers GL_NV_read_buffer GL_NV_read_depth GL_NV_read_depth_stencil GL_NV_read_stencil GL_APPLE_sync GL_EXT_draw_buffers GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_shadow_samplers GL_KHR_debug GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_NV_generate_mipmap_sRGB GL_NV_pixel_buffer_object GL_OES_depth_texture_cube_map GL_OES_required_internalformat GL_OES_surfaceless_context GL_EXT_color_buffer_float GL_EXT_debug_label GL_EXT_sRGB_write_control GL_EXT_separate_shader_objects GL_EXT_shader_framebuffer_fetch GL_EXT_shader_group_vote GL_EXT_shader_implicit_conversions GL_EXT_shader_integer_mix GL_EXT_tessellation_point_size GL_EXT_tessellation_shader GL_ANDROID_extension_pack_es31a GL_ARM_shader_framebuffer_fetch_depth_stencil GL_EXT_base_instance GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_copy_image GL_EXT_draw_buffers_indexed GL_EXT_draw_elements_base_vertex GL_EXT_gpu_shader5 GL_EXT_multi_draw_indirect GL_EXT_polygon_offset_clamp GL_EXT_primitive_bounding_box GL_EXT_render_snorm GL_EXT_shader_io_blocks GL_EXT_texture_border_clamp GL_EXT_texture_buffer GL_EXT_texture_cube_map_array GL_EXT_texture_norm16 GL_EXT_texture_view GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_context_flush_control GL_KHR_robust_buffer_access_behavior GL_NV_image_formats GL_NV_shader_noperspective_interpolation GL_OES_copy_image GL_OES_draw_buffers_indexed GL_OES_draw_elements_base_vertex GL_OES_gpu_shader5 GL_OES_primitive_bounding_box GL_OES_sample_shading GL_OES_sample_variables GL_OES_shader_io_blocks GL_OES_shader_multisample_interpolation GL_OES_tessellation_point_size GL_OES_tessellation_shader GL_OES_texture_border_clamp GL_OES_texture_buffer GL_OES_texture_cube_map_array GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_texture_view GL_EXT_blend_func_extended GL_EXT_buffer_storage GL_EXT_float_blend GL_EXT_geometry_point_size GL_EXT_geometry_shader GL_EXT_texture_filter_minmax GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_KHR_no_error GL_KHR_texture_compression_astc_sliced_3d GL_OES_EGL_image_external_essl3 GL_OES_geometry_point_size GL_OES_geometry_shader GL_OES_shader_image_atomic GL_EXT_clear_texture GL_EXT_clip_cull_distance GL_EXT_conservative_depth GL_EXT_disjoint_timer_query GL_EXT_texture_compression_s3tc_srgb GL_MESA_shader_integer_functions GL_EXT_clip_control GL_EXT_color_buffer_half_float GL_EXT_memory_object GL_EXT_memory_object_fd GL_EXT_texture_compression_bptc GL_EXT_texture_mirror_clamp_to_edge GL_KHR_parallel_shader_compile GL_NV_alpha_to_coverage_dither_control GL_EXT_EGL_image_storage GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_texture_shadow_lod GL_MESA_framebuffer_flip_y GL_OVR_multiview GL_OVR_multiview2 GL_EXT_depth_clamp GL_EXT_texture_query_lod GL_MESA_sampler_objects GL_EXT_EGL_image_storage_compression GL_EXT_texture_storage_compression GL_MESA_bgra GL_EXT_shader_clock "
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   gles3_availability {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     vendor: "Mesa"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     version: "OpenGL ES 3.2 Mesa 25.2.8-0ubuntu0.24.04.4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     renderer: "llvmpipe (LLVM 20.1.2, 128 bits)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "GL_EXT_blend_minmax GL_EXT_multi_draw_arrays GL_EXT_texture_filter_anisotropic GL_EXT_texture_compression_s3tc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_format_BGRA8888 GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_mapbuffer GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_stencil8 GL_OES_texture_3D GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_vertex_half_float GL_EXT_draw_instanced GL_EXT_texture_sRGB_decode GL_OES_EGL_image GL_OES_depth_texture GL_OES_packed_depth_stencil GL_EXT_texture_type_2_10_10_10_REV GL_NV_conditional_render GL_OES_get_program_binary GL_APPLE_texture_max_level GL_EXT_discard_framebuffer GL_EXT_read_format_bgra GL_EXT_texture_storage GL_NV_pack_subimage GL_NV_texture_barrier GL_EXT_frag_depth GL_NV_fbo_color_attachments GL_OES_EGL_image_external GL_OES_EGL_sync GL_OES_vertex_array_object GL_OES_viewport_array GL_ANGLE_pack_reverse_row_order GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_EXT_occlusion_query_boolean GL_EXT_robustness GL_EXT_texture_rg GL_EXT_unpack_subimage GL_NV_draw_buffers GL_NV_read_buffer GL_NV_read_depth GL_NV_read_depth_stencil GL_NV_read_stencil GL_APPLE_sync GL_EXT_draw_buffers GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_shadow_samplers GL_KHR_debug GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_NV_generate_mipmap_sRGB GL_NV_pixel_buffer_object GL_OES_depth_texture_cube_map GL_OES_required_internalformat GL_OES_surfaceless_context GL_EXT_color_buffer_float GL_EXT_debug_label GL_EXT_sRGB_write_control GL_EXT_separate_shader_objects GL_EXT_shader_framebuffer_fetch GL_EXT_shader_group_vote GL_EXT_shader_implicit_conversions GL_EXT_shader_integer_mix GL_EXT_tessellation_point_size GL_EXT_tessellation_shader GL_ANDROID_extension_pack_es31a GL_ARM_shader_framebuffer_fetch_depth_stencil GL_EXT_base_instance GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_copy_image GL_EXT_draw_buffers_indexed GL_EXT_draw_elements_base_vertex GL_EXT_gpu_shader5 GL_EXT_multi_draw_indirect GL_EXT_polygon_offset_clamp GL_EXT_primitive_bounding_box GL_EXT_render_snorm GL_EXT_shader_io_blocks GL_EXT_texture_border_clamp GL_EXT_texture_buffer GL_EXT_texture_cube_map_array GL_EXT_texture_norm16 GL_EXT_texture_view GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_context_flush_control GL_KHR_robust_buffer_access_behavior GL_NV_image_formats GL_NV_shader_noperspective_interpolation GL_OES_copy_image GL_OES_draw_buffers_indexed GL_OES_draw_elements_base_vertex GL_OES_gpu_shader5 GL_OES_primitive_bounding_box GL_OES_sample_shading GL_OES_sample_variables GL_OES_shader_io_blocks GL_OES_shader_multisample_interpolation GL_OES_tessellation_point_size GL_OES_tessellation_shader GL_OES_texture_border_clamp GL_OES_texture_buffer GL_OES_texture_cube_map_array GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_texture_view GL_EXT_blend_func_extended GL_EXT_buffer_storage GL_EXT_float_blend GL_EXT_geometry_point_size GL_EXT_geometry_shader GL_EXT_texture_filter_minmax GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_KHR_no_error GL_KHR_texture_compression_astc_sliced_3d GL_OES_EGL_image_external_essl3 GL_OES_geometry_point_size GL_OES_geometry_shader GL_OES_shader_image_atomic GL_EXT_clear_texture GL_EXT_clip_cull_distance GL_EXT_conservative_depth GL_EXT_disjoint_timer_query GL_EXT_texture_compression_s3tc_srgb GL_MESA_shader_integer_functions GL_EXT_clip_control GL_EXT_color_buffer_half_float GL_EXT_memory_object GL_EXT_memory_object_fd GL_EXT_texture_compression_bptc GL_EXT_texture_mirror_clamp_to_edge GL_KHR_parallel_shader_compile GL_NV_alpha_to_coverage_dither_control GL_EXT_EGL_image_storage GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_texture_shadow_lod GL_MESA_framebuffer_flip_y GL_OVR_multiview GL_OVR_multiview2 GL_EXT_depth_clamp GL_EXT_texture_query_lod GL_MESA_sampler_objects GL_EXT_EGL_image_storage_compression GL_EXT_texture_storage_compression GL_MESA_bgra GL_EXT_shader_clock "
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   gles2_direct_availability {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     vendor: "Mesa"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     version: "OpenGL ES 3.2 Mesa 25.2.8-0ubuntu0.24.04.4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     renderer: "llvmpipe (LLVM 20.1.2, 128 bits)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "GL_EXT_blend_minmax GL_EXT_multi_draw_arrays GL_EXT_texture_filter_anisotropic GL_EXT_texture_compression_s3tc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_format_BGRA8888 GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_mapbuffer GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_stencil8 GL_OES_texture_3D GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_vertex_half_float GL_EXT_draw_instanced GL_EXT_texture_sRGB_decode GL_OES_EGL_image GL_OES_depth_texture GL_OES_packed_depth_stencil GL_EXT_texture_type_2_10_10_10_REV GL_NV_conditional_render GL_OES_get_program_binary GL_APPLE_texture_max_level GL_EXT_discard_framebuffer GL_EXT_read_format_bgra GL_EXT_texture_storage GL_NV_pack_subimage GL_NV_texture_barrier GL_EXT_frag_depth GL_NV_fbo_color_attachments GL_OES_EGL_image_external GL_OES_EGL_sync GL_OES_vertex_array_object GL_OES_viewport_array GL_ANGLE_pack_reverse_row_order GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_EXT_occlusion_query_boolean GL_EXT_robustness GL_EXT_texture_rg GL_EXT_unpack_subimage GL_NV_draw_buffers GL_NV_read_buffer GL_NV_read_depth GL_NV_read_depth_stencil GL_NV_read_stencil GL_APPLE_sync GL_EXT_draw_buffers GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_shadow_samplers GL_KHR_debug GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_NV_generate_mipmap_sRGB GL_NV_pixel_buffer_object GL_OES_depth_texture_cube_map GL_OES_required_internalformat GL_OES_surfaceless_context GL_EXT_color_buffer_float GL_EXT_debug_label GL_EXT_sRGB_write_control GL_EXT_separate_shader_objects GL_EXT_shader_framebuffer_fetch GL_EXT_shader_group_vote GL_EXT_shader_implicit_conversions GL_EXT_shader_integer_mix GL_EXT_tessellation_point_size GL_EXT_tessellation_shader GL_ANDROID_extension_pack_es31a GL_ARM_shader_framebuffer_fetch_depth_stencil GL_EXT_base_instance GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_copy_image GL_EXT_draw_buffers_indexed GL_EXT_draw_elements_base_vertex GL_EXT_gpu_shader5 GL_EXT_multi_draw_indirect GL_EXT_polygon_offset_clamp GL_EXT_primitive_bounding_box GL_EXT_render_snorm GL_EXT_shader_io_blocks GL_EXT_texture_border_clamp GL_EXT_texture_buffer GL_EXT_texture_cube_map_array GL_EXT_texture_norm16 GL_EXT_texture_view GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_context_flush_control GL_KHR_robust_buffer_access_behavior GL_NV_image_formats GL_NV_shader_noperspective_interpolation GL_OES_copy_image GL_OES_draw_buffers_indexed GL_OES_draw_elements_base_vertex GL_OES_gpu_shader5 GL_OES_primitive_bounding_box GL_OES_sample_shading GL_OES_sample_variables GL_OES_shader_io_blocks GL_OES_shader_multisample_interpolation GL_OES_tessellation_point_size GL_OES_tessellation_shader GL_OES_texture_border_clamp GL_OES_texture_buffer GL_OES_texture_cube_map_array GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_texture_view GL_EXT_blend_func_extended GL_EXT_buffer_storage GL_EXT_float_blend GL_EXT_geometry_point_size GL_EXT_geometry_shader GL_EXT_texture_filter_minmax GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_KHR_no_error GL_KHR_texture_compression_astc_sliced_3d GL_OES_EGL_image_external_essl3 GL_OES_geometry_point_size GL_OES_geometry_shader GL_OES_shader_image_atomic GL_EXT_clear_texture GL_EXT_clip_cull_distance GL_EXT_conservative_depth GL_EXT_disjoint_timer_query GL_EXT_texture_compression_s3tc_srgb GL_MESA_shader_integer_functions GL_EXT_clip_control GL_EXT_color_buffer_half_float GL_EXT_memory_object GL_EXT_memory_object_fd GL_EXT_texture_compression_bptc GL_EXT_texture_mirror_clamp_to_edge GL_KHR_parallel_shader_compile GL_NV_alpha_to_coverage_dither_control GL_EXT_EGL_image_storage GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_texture_shadow_lod GL_MESA_framebuffer_flip_y GL_OVR_multiview GL_OVR_multiview2 GL_EXT_depth_clamp GL_EXT_texture_query_lod GL_MESA_sampler_objects GL_EXT_EGL_image_storage_compression GL_EXT_texture_storage_compression GL_MESA_bgra GL_EXT_shader_clock "
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   gles3_direct_availability {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     vendor: "Mesa"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     version: "OpenGL ES 3.2 Mesa 25.2.8-0ubuntu0.24.04.4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     renderer: "llvmpipe (LLVM 20.1.2, 128 bits)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "GL_EXT_blend_minmax GL_EXT_multi_draw_arrays GL_EXT_texture_filter_anisotropic GL_EXT_texture_compression_s3tc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_format_BGRA8888 GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_mapbuffer GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_stencil8 GL_OES_texture_3D GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_vertex_half_float GL_EXT_draw_instanced GL_EXT_texture_sRGB_decode GL_OES_EGL_image GL_OES_depth_texture GL_OES_packed_depth_stencil GL_EXT_texture_type_2_10_10_10_REV GL_NV_conditional_render GL_OES_get_program_binary GL_APPLE_texture_max_level GL_EXT_discard_framebuffer GL_EXT_read_format_bgra GL_EXT_texture_storage GL_NV_pack_subimage GL_NV_texture_barrier GL_EXT_frag_depth GL_NV_fbo_color_attachments GL_OES_EGL_image_external GL_OES_EGL_sync GL_OES_vertex_array_object GL_OES_viewport_array GL_ANGLE_pack_reverse_row_order GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_EXT_occlusion_query_boolean GL_EXT_robustness GL_EXT_texture_rg GL_EXT_unpack_subimage GL_NV_draw_buffers GL_NV_read_buffer GL_NV_read_depth GL_NV_read_depth_stencil GL_NV_read_stencil GL_APPLE_sync GL_EXT_draw_buffers GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_shadow_samplers GL_KHR_debug GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_NV_generate_mipmap_sRGB GL_NV_pixel_buffer_object GL_OES_depth_texture_cube_map GL_OES_required_internalformat GL_OES_surfaceless_context GL_EXT_color_buffer_float GL_EXT_debug_label GL_EXT_sRGB_write_control GL_EXT_separate_shader_objects GL_EXT_shader_framebuffer_fetch GL_EXT_shader_group_vote GL_EXT_shader_implicit_conversions GL_EXT_shader_integer_mix GL_EXT_tessellation_point_size GL_EXT_tessellation_shader GL_ANDROID_extension_pack_es31a GL_ARM_shader_framebuffer_fetch_depth_stencil GL_EXT_base_instance GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_copy_image GL_EXT_draw_buffers_indexed GL_EXT_draw_elements_base_vertex GL_EXT_gpu_shader5 GL_EXT_multi_draw_indirect GL_EXT_polygon_offset_clamp GL_EXT_primitive_bounding_box GL_EXT_render_snorm GL_EXT_shader_io_blocks GL_EXT_texture_border_clamp GL_EXT_texture_buffer GL_EXT_texture_cube_map_array GL_EXT_texture_norm16 GL_EXT_texture_view GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_context_flush_control GL_KHR_robust_buffer_access_behavior GL_NV_image_formats GL_NV_shader_noperspective_interpolation GL_OES_copy_image GL_OES_draw_buffers_indexed GL_OES_draw_elements_base_vertex GL_OES_gpu_shader5 GL_OES_primitive_bounding_box GL_OES_sample_shading GL_OES_sample_variables GL_OES_shader_io_blocks GL_OES_shader_multisample_interpolation GL_OES_tessellation_point_size GL_OES_tessellation_shader GL_OES_texture_border_clamp GL_OES_texture_buffer GL_OES_texture_cube_map_array GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_texture_view GL_EXT_blend_func_extended GL_EXT_buffer_storage GL_EXT_float_blend GL_EXT_geometry_point_size GL_EXT_geometry_shader GL_EXT_texture_filter_minmax GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_KHR_no_error GL_KHR_texture_compression_astc_sliced_3d GL_OES_EGL_image_external_essl3 GL_OES_geometry_point_size GL_OES_geometry_shader GL_OES_shader_image_atomic GL_EXT_clear_texture GL_EXT_clip_cull_distance GL_EXT_conservative_depth GL_EXT_disjoint_timer_query GL_EXT_texture_compression_s3tc_srgb GL_MESA_shader_integer_functions GL_EXT_clip_control GL_EXT_color_buffer_half_float GL_EXT_memory_object GL_EXT_memory_object_fd GL_EXT_texture_compression_bptc GL_EXT_texture_mirror_clamp_to_edge GL_KHR_parallel_shader_compile GL_NV_alpha_to_coverage_dither_control GL_EXT_EGL_image_storage GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_texture_shadow_lod GL_MESA_framebuffer_flip_y GL_OVR_multiview GL_OVR_multiview2 GL_EXT_depth_clamp GL_EXT_texture_query_lod GL_MESA_sampler_objects GL_EXT_EGL_image_storage_compression GL_EXT_texture_storage_compression GL_MESA_bgra GL_EXT_shader_clock "
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] vulkan {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   physical_devices {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     name: "llvmpipe (LLVM 20.1.2, 128 bits)"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_8bit_storage"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_16bit_storage"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_acceleration_structure"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_bind_memory2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_buffer_device_address"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_compute_shader_derivatives"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_copy_commands2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_create_renderpass2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_dedicated_allocation"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_deferred_host_operations"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_depth_stencil_resolve"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_descriptor_update_template"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_device_group"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_draw_indirect_count"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_driver_properties"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_dynamic_rendering"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_dynamic_rendering_local_read"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_fence"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_fence_fd"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_memory"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_memory_fd"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_semaphore"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_external_semaphore_fd"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_format_feature_flags2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_get_memory_requirements2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_global_priority"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_image_format_list"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_imageless_framebuffer"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_incremental_present"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_index_type_uint8"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_line_rasterization"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_load_store_op_none"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance1"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance3"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance5"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance6"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance7"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_maintenance8"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_map_memory2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_multiview"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_pipeline_library"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_push_descriptor"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_ray_query"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_ray_tracing_maintenance1"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_ray_tracing_pipeline"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_ray_tracing_position_fetch"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_relaxed_block_layout"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_sampler_mirror_clamp_to_edge"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_sampler_ycbcr_conversion"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_separate_depth_stencil_layouts"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_atomic_int64"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_clock"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_draw_parameters"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_expect_assume"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_float16_int8"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_float_controls"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_float_controls2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_integer_dot_product"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_maximal_reconvergence"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_non_semantic_info"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_quad_control"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_relaxed_extended_instruction"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_subgroup_extended_types"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_subgroup_rotate"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_shader_terminate_invocation"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_spirv_1_4"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_storage_buffer_storage_class"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_swapchain"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_swapchain_mutable_format"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_synchronization2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_timeline_semaphore"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_uniform_buffer_standard_layout"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_variable_pointers"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_vertex_attribute_divisor"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_vulkan_memory_model"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_workgroup_memory_explicit_layout"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_KHR_zero_initialize_workgroup_memory"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_4444_formats"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_attachment_feedback_loop_dynamic_state"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_attachment_feedback_loop_layout"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_border_color_swizzle"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_calibrated_timestamps"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_color_write_enable"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_conditional_rendering"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_custom_border_color"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_depth_bias_control"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_depth_clip_control"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_depth_clip_enable"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_depth_range_unrestricted"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_descriptor_buffer"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_descriptor_indexing"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_device_generated_commands"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_dynamic_rendering_unused_attachments"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_extended_dynamic_state"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_extended_dynamic_state2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_extended_dynamic_state3"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_external_memory_dma_buf"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_external_memory_host"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_fragment_shader_interlock"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_graphics_pipeline_library"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_hdr_metadata"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_host_image_copy"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_host_query_reset"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_image_2d_view_of_3d"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_image_drm_format_modifier"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_image_robustness"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_image_sliced_view_of_3d"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_index_type_uint8"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_inline_uniform_block"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_legacy_vertex_attributes"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_line_rasterization"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_load_store_op_none"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_memory_budget"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_memory_priority"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_mesh_shader"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_multi_draw"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_multisampled_render_to_single_sampled"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_mutable_descriptor_type"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_nested_command_buffer"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_non_seamless_cube_map"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pageable_device_local_memory"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pipeline_creation_cache_control"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pipeline_creation_feedback"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pipeline_library_group_handles"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pipeline_protected_access"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_pipeline_robustness"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_post_depth_coverage"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_primitive_topology_list_restart"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_primitives_generated_query"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_private_data"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_provoking_vertex"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_queue_family_foreign"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_rasterization_order_attachment_access"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_robustness2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_sampler_filter_minmax"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_scalar_block_layout"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_separate_stencil_usage"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_atomic_float"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_atomic_float2"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_demote_to_helper_invocation"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_image_atomic_int64"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_object"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_replicated_composites"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_stencil_export"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_subgroup_ballot"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_subgroup_vote"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_shader_viewport_index_layer"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_subgroup_size_control"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_swapchain_maintenance1"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_texel_buffer_alignment"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_tooling_info"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_transform_feedback"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_vertex_attribute_divisor"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_vertex_input_dynamic_state"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_ycbcr_2plane_444_formats"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_ycbcr_image_arrays"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_EXT_zero_initialize_device_memory"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_AMDX_shader_enqueue"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_ANDROID_external_memory_android_hardware_buffer"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_ARM_rasterization_order_attachment_access"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_GOOGLE_decorate_string"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     extensions: "VK_GOOGLE_hlsl_functionality1"
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     type: TYPE_OTHER
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     quirks {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       has_issue_with_precision_qualifiers_on_yuv_samplers: false
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       external_memory_host_quirks {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]         can_import_shm: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     queue_families {
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       supports_compute: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       supports_graphics: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       supports_transfer: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]       queue_count: 1
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]     }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903]   }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] }
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] vulkan_loader_available: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:903] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:60] Network config:
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:61] ipaddr = 192.168.97.2
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:62] gateway = 192.168.97.1
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:63] dns = 8.8.8.8
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:64] broadcast = 192.168.97.3
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 network_flags.cpp:65] prefix length = 30
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:546] Checking requirements for --gpu_mode=guest_swiftshader
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:415] ANGLE features: 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:415]  - prefer_linear_filtering_for_yuv: false
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:415]  - map_unspecified_color_space_to_pass_through: true
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:415]  - ignore_precision_qualifiers: false
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 graphics_flags.cc:415] 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 disk_builder.cpp:176] Composite disk text config mismatch
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:228] Trying to resume previous session, but base images have changed.  Wiping overlay files.
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:162] Prior dirs: <HOST_TEMP_PATH>, <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:163] Prior files: 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:100] Checking if prior dirs or files are in use: 
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:102] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:102] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 clean.cc:62] Deleting: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 assemble_cvd.cc:460] Path for instance UDS: <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:121] Error accessing '-img-*.zip', expected for a local build.
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:122]  | cuttlefish/host/commands/assemble_cvd/create_dynamic_disk_files.cc:99
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:122]  v Result<BuildArchive> cuttlefish::(anonymous namespace)::FindImgZip(const FetcherConfig &, std::string_view)
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:122] No img zip found
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:323] Started (pid: 1483402): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -F
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 32
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -M
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 0xf8
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -h
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 0
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -s
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 8
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -g
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 255/63
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] -S
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] 512
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] --offset=1048576
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:207] <HOST_TEMP_PATH> exists. Not creating it.
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:164] Available space: 109579669504
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:165] Sparse size of <HOST_PATH>: 2249012
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 create_dynamic_disk_files.cc:167] Disk size of <HOST_PATH>: 2249012
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 disk_builder.cpp:176] Composite disk text config mismatch
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:323] Started (pid: 1483404): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:31 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:323] Started (pid: 1483416): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:323] Started (pid: 1483417): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] add_hash_footer
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --algorithm
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] SHA256_RSA4096
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --key
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --image
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --partition_name
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] uboot_env
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --partition_size
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] 73728
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 boot_config.cc:199] Updated bootloader environment image.
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 bootconfig_args.cpp:428] Parsing extra_bootconfig_args of size:0; Contents: 
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:99] bootconfig size is 1895
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] Bootconfig parameters from vendor boot image and config are androidboot.vendor.apex.com.google.emulated.camera.provider.hal=com.google.emulated.camera.provider.hal
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.wifi_impl=mac80211_hwsim_virtio
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.auto_eth_guest_addr=192.168.98.3
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vhal_proxy_server_port=9300
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.weaver=none
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.strongbox=none
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.secure_element=com.android.hardware.secure_element
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.gatekeeper=com.android.hardware.gatekeeper.nonsecure
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.keymint=com.android.hardware.keymint.rust_nonsecure
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hw_timeout_multiplier=3
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.ranchu
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.fstab_suffix=cf.f2fs.hctr2
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.modem_simulator_ports=9600
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vsock_lights_port=6900
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.lcd_density=280
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.audiocontrol.server.port=9410
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.enable_confirmationui=1
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vendor.audiocontrol.server.cid=3
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.openthread_node_id=1
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.setupwizard_mode=DISABLED
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.serialno=<SERIAL>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.ddr_size=4915MB
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.cpuvulkan.version=4206592
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.enable_bootanimation=1
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.hwcomposer.display_finder_mode=drm
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vsock_lights_cid=3
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.gralloc=minigbm
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.vulkan=pastel
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.angle_feature_overrides_enabled=mapUnspecifiedColorSpaceToPassThrough
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.egl=angle
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.boot_devices=10000.pci
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.opengles.version=196609
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.wifi_mac_prefix=5554
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.vsock_tombstone_port=6600
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.hwcomposer=ranchu
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.hwcomposer.display_framebuffer_format=rgba
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.hardware.angle_feature_overrides_disabled=exposeES32ForTesting
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] androidboot.serialconsole=0
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 generate_persistent_bootconfig.cpp:103] 
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:323] Started (pid: 1483421): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] add_hash_footer
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --algorithm
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] SHA256_RSA4096
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --key
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --image
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --partition_name
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] bootconfig
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --partition_size
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] 73728
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:323] Started (pid: 1483425): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] make_vbmeta_image
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --algorithm
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] SHA256_RSA4096
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --key
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --output
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --chain_partition
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] uboot_env:1:<HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] --chain_partition
+assemble_cvd(1483125)  D 10-04 10:47:33 1483125 1483125 command.cc:325] bootconfig:2:<HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 disk_builder.cpp:176] Composite disk text config mismatch
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 disk_builder.cpp:176] Composite disk text config mismatch
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 data_image.cpp:162] Creating <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 disk_builder.cpp:249] No prior overlay
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:323] Started (pid: 1483446): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] create_qcow2
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] --backing-file
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:153] Ran <HOST_TEMP_PATH> with stdout:
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] Ran <HOST_TEMP_PATH> with stderr:
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827113640+00:00 INFO  disk] disk size 1594
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827210100+00:00 INFO  disk] disk size 20480
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827229934+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827238226+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827245059+00:00 INFO  disk] disk size 1048576
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827256851+00:00 INFO  disk] disk size 8388608
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827268435+00:00 INFO  disk] disk size 8388608
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827277018+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827283727+00:00 INFO  disk] disk size 1048576
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827294352+00:00 INFO  disk] disk size 8589934592
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827303227+00:00 INFO  disk] disk size 8589934592
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827310644+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827317102+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827328019+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827336311+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827343895+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827351020+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827359895+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827366937+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827379395+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827386062+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827391729+00:00 INFO  disk] disk size 45056
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827469314+00:00 INFO  disk] disk size 20480
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827480814+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827486231+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827491647+00:00 INFO  disk] disk size 1048576
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827497981+00:00 INFO  disk] disk size 8388608
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827504731+00:00 INFO  disk] disk size 8388608
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827510356+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827521398+00:00 INFO  disk] disk size 1048576
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827528356+00:00 INFO  disk] disk size 8589934592
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827540398+00:00 INFO  disk] disk size 8589934592
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827549732+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827557565+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827565399+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827575774+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827583108+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827592608+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827597816+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827606066+00:00 INFO  disk] disk size 65536
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827611066+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827619025+00:00 INFO  disk] disk size 67108864
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.827624442+00:00 INFO  disk] disk size 45056
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.836563282+00:00 INFO  crosvm__bin] exiting with success
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] 
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 disk_builder.cpp:249] No prior overlay
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:323] Started (pid: 1483449): <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] create_qcow2
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] --backing-file
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 command.cc:325] <HOST_TEMP_PATH>
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:153] Ran <HOST_TEMP_PATH> with stdout:
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:153] 
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] Ran <HOST_TEMP_PATH> with stderr:
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843009366+00:00 INFO  disk] disk size 325
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843089118+00:00 INFO  disk] disk size 20480
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843107285+00:00 INFO  disk] disk size 137625600
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843118493+00:00 INFO  disk] disk size 45056
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843159661+00:00 INFO  disk] disk size 20480
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843173286+00:00 INFO  disk] disk size 137625600
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.843179661+00:00 INFO  disk] disk size 45056
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] [2026-10-04T01:47:34.852073501+00:00 INFO  crosvm__bin] exiting with success
+assemble_cvd(1483125)  D 10-04 10:47:34 1483125 1483125 managed_stdio.cc:154] 

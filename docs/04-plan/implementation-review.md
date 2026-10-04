@@ -6237,3 +6237,62 @@ fleet, no checked Cuttlefish processes or temporary CVD HOME, and no listener
 on port 6520. The first audit records a port 5037 listener as present; the
 retry audit identifies the listener as PID 2704. Neither audit issued a stop
 command for it. Final hostile review found no remaining actionable findings.
+
+## IR-171: Diagnose crosvm panic output
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh`; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; `Images/reference/16373615/incomplete/target-20261004T180433-1573318/crosvm-crash-summary.txt`; `Images/reference/16373615/incomplete/target-20261004T192939-1614388/post-run-verification.json` |
+
+**Choice.** Investigate the missing crosvm panic message before treating
+matching debug symbols as a prerequisite. Cuttlefish tag
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` pins crosvm source commit
+`fd4df63707aee57092a28db63bc1ff8945c76058` and gfxstream commit
+`6e68776cefbe1f1a662bb7321aa98e5348e8c062`. The installed crosvm Build ID
+`d724bf54f045b0ec7dbe14049b0fed9a16e52a23` matches the Apport report, and the
+loaded `libgfxstream_backend.so` Build ID is
+`6b8f3105442da5c66988881a1fa76e812b13c3e8`. `readelf` shows crosvm needs both
+`libgfxstream_backend.so` and `libgcc_s.so.1`; the gfxstream library exports
+`unw_get_reg` and `_Unwind_GetIP`. This is consistent with a possible
+libunwind symbol-interposition problem, but does not prove one occurred or
+identify the original failure.
+
+The pinned crosvm panic hook at
+[`src/sys/linux/panic_hook.rs`](https://chromium.googlesource.com/crosvm/crosvm/+/fd4df63707aee57092a28db63bc1ff8945c76058/src/sys/linux/panic_hook.rs)
+sets `RUST_BACKTRACE=1`, redirects stderr to a pipe, invokes Rust's default
+panic hook, then reads and logs the captured output. A fault during that
+backtrace could prevent the original panic text from being read. This remains
+a hypothesis until the diagnostic run produces evidence.
+
+The retry audit confirms that Apport suppressed a new crosvm report because
+the first report remained in `/var/crash` unseen. Preserve that report in
+private Lima storage outside `/var/crash` before retrying; its recorded
+SHA-256 is `597d1d1e755929a813087c619792ebfb6e6c41dc51031b72635fdebf458aea64`.
+The diagnostic wrapper preloads `/lib/aarch64-linux-gnu/libgcc_s.so.1` and
+execs `/usr/lib/cuttlefish-common/bin/crosvm`. `cvd create --help` on the
+pinned 1.57.0 host package exposes `--crosvm_binary`; `capture.sh` now accepts
+the opt-in `APKRUN_CROSVM_BINARY`, validates it as an absolute executable,
+and passes it only to `cvd create`. A normalized run using this override is
+marked diagnostic-only and retained under `incomplete/` even if it reaches
+`sys.boot_completed=1`. As with other captures, the standard privacy path
+discards staging data if normalization fails.
+
+**Reason.** The observed SIGSEGV is in stack-unwinding code, and the original
+panic text may be lost in the hook's pipe. Recovering panic text after the
+preload would support this explanation. A run with no recovered text would
+leave it unresolved because the preload may not change the relevant symbol
+binding or the original failure may not have produced a panic message. Its
+runtime differs from the reference profile, so the capture cannot be promoted
+to a canonical profile.
+
+**Verification.** Exact Cuttlefish, crosvm, and gfxstream revisions were
+checked from their pinned source files. The reported executable path, package
+version, Build IDs, dynamic dependencies, and exported symbols were read from
+the Lima host. Apport's log contains the retry suppression reason. The
+focused override tests passed (2 passed); the complete reference-capture test
+module passed (50 passed, 3 skipped because those cases require GNU `timeout`
+on Linux). Ruff check, Ruff format check, shell syntax checks, and the
+Lima-host wrapper `crosvm version` smoke check passed. Final hostile review
+found no remaining actionable findings. The diagnostic retry is pending.

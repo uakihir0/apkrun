@@ -282,6 +282,44 @@ named files from another host package may have different build IDs. Keep raw
 core dumps on the reference host because they can contain guest RAM. Only a
 sanitized backtrace summary belongs in an incomplete repository capture.
 
+For the 2026-10-04 crosvm crash, the pinned Cuttlefish 1.57.0 panic hook
+temporarily redirects stderr to a pipe, sets `RUST_BACKTRACE=1`, and calls
+Rust's default panic hook before logging the captured text. If stack unwinding
+faults inside that hook, the original panic message may remain unread in the
+pipe. This is a diagnostic hypothesis, not a confirmed cause. The captured
+crosvm also links `libgcc_s.so.1`, while its loaded gfxstream library exports
+LLVM libunwind symbols; that makes symbol interposition worth checking but
+does not show that gfxstream or Virgl caused the original failure. See
+[IR-171](../04-plan/implementation-review.md#ir-171-diagnose-crosvm-panic-output)
+for the observed Build IDs and source revisions.
+
+When the crosvm report is absent on a retry, check `/var/log/apport.log`.
+Apport can suppress a new report while the matching report in `/var/crash`
+still exists unseen. Preserve the old report in a private archive outside
+`/var/crash` before retrying; do not delete the raw report or copy it into the
+repository.
+
+The crosvm panic-output experiment is opt-in and diagnostic-only. Install the
+wrapper from the checkout into writable VM storage, then set
+`APKRUN_CROSVM_BINARY` for one target capture:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+install -m 0755 Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh \
+  "$HOME/.local/bin/apkrun-crosvm-libgcc-preload"
+APKRUN_CROSVM_BINARY="$HOME/.local/bin/apkrun-crosvm-libgcc-preload" \
+  Images/tools/reference/capture.sh target
+```
+
+The wrapper preloads the host's `libgcc_s.so.1` and then execs the packaged
+crosvm. The pinned `cvd create` accepts `--crosvm_binary`; `capture.sh` passes
+the override only when this environment variable is set. A normalized run
+using the override is retained under `incomplete/` with a diagnostic-only
+reason, even if Android boots, because the host runtime has changed. The
+reason is written when staging begins, so interrupted runs retain it when
+normalization succeeds. The standard capture path discards staging data if
+normalization fails. Do not compare these runs with canonical profiles.
+
 `APKRUN_CVD_PACKAGE_VERSION` is optional when `dpkg-query` can report the
 installed `cuttlefish-base` version. The script checks every guest artifact
 against the checked-in build 16373615 manifest before launch. Each run creates

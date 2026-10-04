@@ -38,6 +38,21 @@ fi
 PATH="$CVD_HOST_DIR/bin:$PATH"
 export PATH
 
+crosvm_binary_override=${APKRUN_CROSVM_BINARY:-}
+if [ -n "$crosvm_binary_override" ]; then
+  case "$crosvm_binary_override" in
+    /*) ;;
+    *)
+      printf 'APKRUN_CROSVM_BINARY must be an absolute path to an executable file.\n' >&2
+      exit 2
+      ;;
+  esac
+  if [ ! -f "$crosvm_binary_override" ] || [ ! -x "$crosvm_binary_override" ]; then
+    printf 'APKRUN_CROSVM_BINARY must be an absolute path to an executable file.\n' >&2
+    exit 2
+  fi
+fi
+
 for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required host tool not found on PATH: %s\n' "$tool" >&2
@@ -524,6 +539,12 @@ record_missing() {
   capture_failed=1
 }
 
+if [ -n "$crosvm_binary_override" ]; then
+  printf '%s\t%s\n' "diagnostic-only" \
+    "crosvm binary override changes the host runtime; this capture is never a reference profile" \
+    >> "$missing_file"
+fi
+
 record_selected_gpu_mode_failure() {
   if [ "$selected_gpu_mode_failure_recorded" -eq 0 ]; then
     record_missing "selected-gpu-mode" "$1"
@@ -571,6 +592,9 @@ if [ "$profile" = target ] && [ "$target_gpu_mode" = guest_swiftshader ]; then
 fi
 
 create_cvd_group_with_common_options() {
+  if [ -n "$crosvm_binary_override" ]; then
+    set -- "$@" "--crosvm_binary=$crosvm_binary_override"
+  fi
   run_cvd_command_with_live_logs 0 cvd create \
     --host_path="$CVD_HOST_DIR" \
     --product_path="$private_product_out" \
@@ -1161,6 +1185,9 @@ if [ -z "$cvd_package_version" ]; then
   cvd_package_version=unknown
   record_missing "host.json" \
     "set APKRUN_CVD_PACKAGE_VERSION or install dpkg-query to record the CVD package version"
+fi
+if [ -n "$crosvm_binary_override" ]; then
+  capture_failed=1
 fi
 capture_finished_at=$(date +%s)
 APKRUN_CAPTURE_PROFILE=$profile \

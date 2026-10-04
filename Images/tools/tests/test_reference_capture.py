@@ -1271,6 +1271,38 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "composite-specs-interrupted",
             id="interrupted-composite-spec-collection-cleans-raw-temp",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "crosvm-binary-override",
+            id="diagnostic-crosvm-binary-override-is-passed-to-create",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "crosvm-binary-override-relative",
+            id="crosvm-binary-override-must-be-absolute",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -1803,6 +1835,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         encoding="utf-8",
     )
     (fake_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_crosvm_override = fake_bin / "crosvm-preload-wrapper"
+    fake_crosvm_override.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     for executable in fake_bin.iterdir():
         executable.chmod(0o755)
 
@@ -1897,6 +1931,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             ),
             "APKRUN_CAPTURE_BOOT_OBSERVER": (
                 "1" if boot_timeout_case == "gpu-mode-mismatch-observed" else "0"
+            ),
+            "APKRUN_CROSVM_BINARY": (
+                str(fake_crosvm_override)
+                if boot_timeout_case == "crosvm-binary-override"
+                else "relative/crosvm"
+                if boot_timeout_case == "crosvm-binary-override-relative"
+                else ""
             ),
             "FAKE_CVD_CREATE_FAIL_AFTER_LOGS": "1" if not launch_succeeds else "0",
             "FAKE_CVD_LOGS_EMPTY_FIRST": "1" if not launch_succeeds else "0",
@@ -2013,7 +2054,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     if not should_capture:
         expected_status = (
             2
-            if build_id != "16373615" or capture_lock_held
+            if build_id != "16373615"
+            or capture_lock_held
+            or boot_timeout_case == "crosvm-binary-override-relative"
             else 143
             if abort_command
             or lock_signal_during_acquire
@@ -2028,6 +2071,39 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             assert not (repo / "Images/reference/16373615/incomplete").exists()
             timeout_calls = timeout_log.read_text(encoding="utf-8").splitlines()
             assert any(line.endswith("\t--kill-after=2s 10 adb devices") for line in timeout_calls)
+        elif boot_timeout_case == "crosvm-binary-override-relative":
+            assert (
+                "APKRUN_CROSVM_BINARY must be an absolute path to an executable file."
+                in result.stderr
+            )
+            assert not launch_log.exists()
+            assert not (repo / "Images/reference/16373615/incomplete").exists()
+        elif boot_timeout_case == "crosvm-binary-override":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            assert (
+                "diagnostic-only\tcrosvm binary override changes the host runtime; "
+                "this capture is never a reference profile"
+            ) in missing
+            launch_arguments = launch_log.read_text(encoding="utf-8").split()
+            assert f"--crosvm_binary={fake_crosvm_override}" in launch_arguments
+            assert start_log.is_file()
+            start_arguments = start_log.read_text(encoding="utf-8").split()
+            assert any(argument == "start" for argument in start_arguments)
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(
+                call.startswith("-s 127.0.0.1:6522 shell getprop sys.boot_completed")
+                for call in adb_calls
+            )
+            assert any(call.startswith("-s 127.0.0.1:6522 exec-out") for call in adb_calls)
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
         elif build_id != "16373615":
             assert "pinned build 16373615" in result.stderr
             assert not launch_log.exists()

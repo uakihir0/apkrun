@@ -1,0 +1,18 @@
+{
+  "adbDevicesAfterCleanup": [],
+  "adbPort6520ListenerPresent": false,
+  "androidCrosvmPresent": false,
+  "captureStagingPresent": false,
+  "checkedAtUtc": "2026-10-04T18:39:56Z",
+  "cvdFleetGroups": 0,
+  "cvdServerPresent": false,
+  "privateCvdHomePresent": false,
+  "processRestarterPresent": false,
+  "runCvdPresent": false,
+  "schemaVersion": 1,
+  "sharedAdbServer": {
+    "listen": "127.0.0.1:5037",
+    "pid": 2704,
+    "running": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "captureArtifactManifest": "LIMA-SHA256SUMS",
+  "captureSourceFileCount": 8,
+  "captureSourceManifest": "capture-source-sha256.txt",
+  "captureSourceManifestSha256": "989dd1757780d9c3b6f43237f4880efba44f32b9d4ea04e3fa8527280f3b365d",
+  "captureSourceHashesVerifiedAgainstCommit": "1b7dfb28c9a5e7c15400006a8514104bd25efaa7",
+  "limaCaptureDirectoryLocalName": "target-20261005T032603-1688586",
+  "limaCaptureDirectoryTimeZone": "Asia/Tokyo",
+  "limaCaptureNormalizationReportedChangedFileCount": 6,
+  "limaSha256ManifestVerifiedBeforeImport": true,
+  "postImportNormalizationChangedFiles": [],
+  "postImportNormalizationIdempotent": true,
+  "postImportNormalizationRule": "Images/tools/reference/normalize.yaml",
+  "postImportNormalizationRuleSha256": "0d25af7386a0aefe23766cf0a3fc030a886ebacd6ccbfb2fd6d81f2ab14d2514",
+  "schemaVersion": 1
+}

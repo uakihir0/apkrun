@@ -1,0 +1,59 @@
+APKRun 2400-second observer-enabled SwiftShader target capture
+
+Status: incomplete and diagnostic-only. Cuttlefish create/start exceeded the
+2400-second boot deadline; host.json records 2404 seconds including cleanup.
+MISSING.txt records the deadline. No guest-capture command list was run, no
+complete reference profile was published, and this run does not establish
+Android boot completion or guest rendering.
+
+Host and guest: Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4 LTS on
+aarch64 with nested virtualization. The selected GPU mode was
+guest_swiftshader, with vhost-user GPU disabled. The separate
+drm_virgl-properties file is provenance only; it was not applied to this
+SwiftShader guest.
+
+Live observer: observer_started was recorded at
+2026-10-04T17:46:01.185Z. Cuttlefish start event 5 appeared at
+17:59:11.593Z, and the private ADB server became ready 53 ms later. The
+observer recorded 591 events, including 481 crosvm memory samples; 478 had
+valid VmRSS. Peak VmRSS was 4,233,752 KiB and peak RssShmem was 4,205,908 KiB.
+
+The observer recorded 102 ADB polls: 99 reported device state and three had
+no device-state value. Twenty-three property queries ran; 21 timed out with
+exit status -15 (20 captured zero bytes, one captured 46 bytes), and two
+exited with status 0 after capturing 90 bytes each. None yielded a parsed
+property. Raw property output was not retained. The one-shot shell-readiness
+probe timed out with exit status -15 and did not match its marker. The final
+bounded Android logcat query also timed out with exit status -15 and captured
+zero bytes.
+The observer's private ADB server stopped with cleanupComplete=true. These
+results show that ADB's device state did not establish that guest shell
+commands could complete.
+
+Kernel progress: Linux was logged at guest uptime 0.000 seconds; first-stage
+init began at 61.569 seconds and virtio_gpu initialization appeared from
+61.954 to 63.564 seconds. Init logged a request to start zygote at 212.081
+seconds; later start requests at 578.507 and 1972.653 seconds reported that
+zygote was already running. The kernel log contains two
+VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED markers at
+571.626 and 609.641 seconds, but no VIRTUAL_DEVICE_BOOT_COMPLETED or
+VIRTUAL_DEVICE_BOOT_FAILED marker.
+
+The kernel log contains 751 servicemanager interface-not-found requests for
+aidl/activity from guest uptime 856.826 through 2048.362 seconds. It also
+contains eight system_server mentions from 1678.093 through 1906.001
+seconds, including one exit-related line. These messages do not establish
+system_server readiness or the cause of the missing activity interface.
+The observer did not obtain sys.boot_completed or
+sys.system_server.start_count, so their values remain unknown.
+
+The post-run audit at 2026-10-04T18:39:56Z found an empty Cuttlefish fleet,
+no crosvm, run_cvd, process_restarter, or cvd_server process, no private
+CVD HOME or capture staging directory, and no listener on port 6520. A
+read-only ADB host:devices query found no devices. The shared ADB server
+PID 2704 remained running on 127.0.0.1:5037 and was not stopped.
+
+This 2400-second run was already in progress before review found that
+similar SwiftShader captures had low expected diagnostic yield. Do not
+repeat this configuration without a material host or guest code/configuration
+change. This record remains incomplete and non-comparable.

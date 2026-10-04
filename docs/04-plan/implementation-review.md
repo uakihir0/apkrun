@@ -6673,3 +6673,77 @@ Cuttlefish fleet, no crosvm, `run_cvd`, `process_restarter`, or `cvd_server`,
 no private CVD HOME or capture staging directory, and no listener on port
 6520. It found shared ADB PID 2704 listening on port 5037 and no ADB device
 rows. The record remains incomplete and diagnostic-only.
+
+## IR-176: Complete the in-progress SwiftShader target observation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T182603Z-1688586/`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Let the already-running 2400-second observer-enabled
+`guest_swiftshader` target capture finish after the prior review found that
+additional time at the same configuration had low expected diagnostic yield.
+Keep its output incomplete and non-comparable. Do not repeat the configuration
+without a material host or guest code/configuration change.
+
+The run used Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4 LTS/aarch64
+with nested virtualization, `guest_swiftshader`, and vhost-user GPU disabled.
+`host.json` records a 2404-second duration. The capture source's eight
+reference-tool and manifest hashes match checkout
+`1b7dfb28c9a5e7c15400006a8514104bd25efaa7`; the remote checkout did not
+retain Git metadata, so this is a file-hash match, not a remote `HEAD`
+assertion. The normalized Cuttlefish config does not retain the crosvm
+executable path, and this run did not save the selected crosvm's Build ID or
+hash. Attribute no result here to a particular crosvm binary.
+
+The kernel log records Linux at guest uptime 0, first-stage init at 61.569
+seconds, and `virtio_gpu` initialization from 61.954 through 63.564 seconds.
+Init logged a request to start zygote at 212.081 seconds; later start requests
+at 578.507 and 1972.653 seconds reported that zygote was already running. Two
+`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` markers appear at 571.626 and
+609.641 seconds. No `VIRTUAL_DEVICE_BOOT_COMPLETED` or
+`VIRTUAL_DEVICE_BOOT_FAILED` marker appears. The log contains 751
+servicemanager interface-not-found requests for `aidl/activity` from guest
+uptime 856.826 through 2048.362 seconds. It also contains eight
+`system_server` mentions from 1678.093 through 1906.001 seconds, including
+one exit-related line. These messages neither prove SystemServer readiness
+nor establish that the missing AIDL interface caused a delay.
+
+The observer recorded 591 events, including 481 crosvm memory samples, 478
+with valid VmRSS; peak VmRSS/RssShmem was 4,233,752/4,205,908 KiB. It
+recorded 102 ADB polls: 99 reported `device` and three had no device-state
+value. Of 23 property queries, 21 timed out with exit status -15 (20 captured
+zero bytes and one captured 46 bytes); two exited with status 0 after
+capturing 90 bytes each. None yielded a parsed property, and raw property
+output was not retained. The one-shot shell-readiness probe timed out with
+exit status -15 without matching its marker. The final Android logcat query
+timed out with zero captured bytes. The observer stopped its private ADB
+server with
+`cleanupComplete=true`. The property values remain unknown; ADB `device`
+state is not evidence that guest shell commands succeeded.
+
+The read-only post-run audit found an empty Cuttlefish fleet, no crosvm,
+`run_cvd`, `process_restarter`, or `cvd_server` process, no private CVD HOME
+or capture staging directory, no listener on port 6520, and no ADB device
+rows. The shared ADB server PID 2704 remained running on port 5037. The Lima
+artifact manifest verifies all 12 capture files. A second normalization pass
+changed zero files; scans for tested host paths, private-key markers,
+EUI-48/EUI-64 addresses, and numeric ADB endpoint contexts found no matches.
+The record remains incomplete and diagnostic-only.
+
+**Reason.** This capture had already started before the adversarial review
+compared it with earlier long SwiftShader runs. Completing it preserves the
+authorized experiment without spending additional time on a new run. It
+extends the observed `aidl/activity` requests and SystemServer mentions but
+does not resolve their relationship or recover a usable boot property.
+Repeating the same configuration would not address the missing runtime
+identity or the guest-side AIDL question.
+
+**Verification.** All 12 files in `LIMA-SHA256SUMS` verify locally; the
+eight source-file digests match the stated checkout. JSON and JSONL parsing
+passed, the local normalization re-run changed zero files, and the tested
+privacy and file-size scans passed. The post-run audit JSON records the
+read-only ADB inventory and confirms that shared ADB PID 2704 was left
+running.

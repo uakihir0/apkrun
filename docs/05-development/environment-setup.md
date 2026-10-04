@@ -221,12 +221,18 @@ The reference boot capture ([../02-design/android-image.md](../02-design/android
 | Output | copy the capture to `Images/reference/<buildId>/<profile>/` on the Mac and commit it |
 
 On the tested Ubuntu 24.04.4 arm64 Lima VM, the host has no `/dev/dri`.
-Install `libgles2-mesa-dev` and set `EGL_PLATFORM=surfaceless` when running a
-`drm_virgl` capture so Cuttlefish 1.57.0 can initialize Mesa's off-screen EGL
-and load `libGLESv2.so`. This allowed the host GLES capability check to pass
-with Mesa llvmpipe; it does not by itself establish that the guest boots or
-that the `drm_virgl` backend starts. `capture.sh` disables the arm64
-vhost-user GPU backend for each profile and verifies the selected config.
+Install `libgles2-mesa-dev` and `libvirglrenderer1`, and set
+`EGL_PLATFORM=surfaceless` when running a `drm_virgl` capture. With these
+packages installed and that variable set, Cuttlefish 1.57.0 initialized
+Mesa's off-screen EGL; `ldconfig` reported `libEGL.so`, `libGLESv2.so`, and
+`libvirglrenderer.so.1` visible. Cuttlefish passed its host GLES prerequisite
+check with Mesa llvmpipe. `launcher.log` records the requested virglrenderer
+backend; runtime loading of the library is not confirmed. On this VM the
+`target` retry failed before producing
+guest kernel output; see [M01](../04-plan/issues/M01-android-bring-up.md) #064
+and IR-170 in the implementation review. Passing the host prerequisite check
+does not establish that the backend or guest boots. `capture.sh` disables the
+arm64 vhost-user GPU backend for each profile and verifies the selected config.
 
 Extract the guest image archive and matching host package into separate
 directories. Activate the tools' Python environment and put the host package's

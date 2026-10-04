@@ -6042,8 +6042,9 @@ interpretation and record are pending hostile review.
 | Task | #064 |
 | Affected files | `.gitattributes`; `Images/reference/16373615/incomplete/target-20261004T180433-1573318/`; [M01](issues/M01-android-bring-up.md) #064 |
 
-**Choice.** Retain the 8-second `target` attempt as incomplete and
-non-comparable. It used source commit `ef70045`, build 16373615, Cuttlefish
+**Choice.** Retain the `target` attempt as incomplete and non-comparable;
+`host.json` records an 8-second capture duration. It used source commit
+`ef70045`, build 16373615, Cuttlefish
 1.57.0 on Ubuntu 24.04.4 arm64 with nested virtualization, requested
 `drm_virgl`, and disabled vhost-user GPU. `assemble_cvd.log` records
 `PopulateEglAndGlesAvailability: Failed to initialize display`, followed by
@@ -6054,23 +6055,26 @@ no `/dev/dri`, which [environment setup](../05-development/environment-setup.md)
 §3.3 documents as expected; its absence alone does not show VirGL is
 unavailable. A follow-up read-only check before changing the VM confirmed
 `libgles2-mesa-dev` was installed, but `libvirglrenderer1` was not installed;
-the capture invocation also did not set `EGL_PLATFORM=surfaceless`. Section
-3.3 prescribes the Mesa development package and this EGL setting to enable
+no virglrenderer library was visible to `ldconfig`, and the capture invocation
+did not set `EGL_PLATFORM=surfaceless`. These observations establish the
+package and linker-cache state, not that no compatible library existed
+elsewhere on the host. Section 3.3 prescribes the Mesa development package
+and this EGL setting to enable
 off-screen EGL and the host GLES check, while noting that this does not
 guarantee the guest or backend will start. This attempt preceded the
-documented EGL setting and ran without the virglrenderer runtime library, so
-it does not establish whether the VM can run `target` after those host
-prerequisites are completed.
+documented EGL setting, had no installed `libvirglrenderer1` package, and had
+no virglrenderer library visible to `ldconfig`; it does not establish whether
+the VM can run `target` after those host prerequisites are completed.
 
 The launcher identifies the monitored process role as `process_restarter`,
 configured to launch Android `crosvm run` with `backend=virglrenderer`. It
 logs `Process exited with unexpected si_code: 3`, then exits with code 1;
 the process monitor logs that unexpected exit and stops the other monitored
 processes. Normalization redacts the `crosvm` executable path. The launcher records
-`si_code: 3` and the `process_restarter` exit code 1, but gives no more
-specific termination status or cause for the crosvm child; the process role
-is known, while the immediate cause remains unknown. The
-launcher then reports `run_cvd returned 10` and
+`si_code: 3` and the `process_restarter` exit code 1, but do not identify the
+child's signal. The sanitized Apport/GDB summary records SIGSEGV and the fault
+site for this first attempt (IR-170), while the original trigger remains
+unknown. The launcher then reports `run_cvd returned 10` and
 `VIRTUAL_DEVICE_BOOT_FAILED`. `kernel.log` is empty,
 the observer did not see start event 5, and no ADB polls ran; this attempt
 therefore supplies no guest boot evidence. Do not attribute the failure to a
@@ -6086,10 +6090,12 @@ was not stopped.
 
 **Reason.** Preserve the failed host-side graphics setup as evidence while
 keeping profile selection and source-derived fallback properties
-reproducible. The EGL display error, absent virglrenderer runtime library, and
-missing `EGL_PLATFORM=surfaceless` setting are consistent with an incomplete
-host graphics setup, but do not identify the crosvm child's specific
-termination status or cause, or prove a single root cause. An incomplete target attempt cannot serve as the reference profile or
+reproducible. The EGL display error, missing `libvirglrenderer1` package,
+absence of a virglrenderer library from `ldconfig`, and missing
+`EGL_PLATFORM=surfaceless` setting are consistent with incomplete host
+graphics setup. They do not prove which prerequisite caused the EGL check to
+fail or identify the original trigger for the crosvm SIGSEGV recorded under
+IR-170. An incomplete target attempt cannot serve as the reference profile or
 establish guest behavior.
 
 **Verification.** `host.json` confirms the requested and selected mode was
@@ -6106,3 +6112,126 @@ The raw `cvd-create-console.log` is preserved byte-for-byte, and
 `.gitattributes` exempts captured logs' source trailing whitespace from Git's
 whitespace check; `git diff --check` passes without changing the verified
 capture bytes.
+
+## IR-169: Record the 3600-second default observer capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/default-20261004T192056-1574666/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep the 3600-second `default` capture incomplete and
+non-comparable. It used source commit `ef70045`, build 16373615, Cuttlefish
+1.57.0 on Ubuntu 24.04.4 arm64 with nested virtualization. `host.json`
+records selected `guest_swiftshader` and vhost-user GPU disabled. The
+create/start deadline expired at 3600 seconds; `host.json` records a
+3604-second duration at `capture_finished_at`, before the script's explicit
+ADB disconnect and Cuttlefish group removal. `MISSING.txt` records the
+deadline, and
+`cvd-create-console.log` says Cuttlefish received a termination signal
+during cleanup. It contains two logical-partition geometry warnings at
+startup; their relationship to the later guest state is unknown.
+
+The observer detected `socket_vsock_proxy`'s `Start event (5)` marker at
+2026-10-04T09:33:09.044Z for the TCP 6520 to vsock 3:5555 proxy. Later
+launcher lines record failures connecting to vsock 3:5555, so this marker is
+not Android boot readiness. The private ADB server was ready 51 ms after the
+marker. Of 185 ADB polls, 183 returned `device` and two returned
+`commandFailed`. There were 44 property queries: 36 timed out with exit
+status -15 and eight exited 0, but none produced an accepted field. Output
+sizes were 0 bytes 35 times, 46 bytes once, and 90 bytes eight times.
+`sys.boot_completed` and `sys.system_server.start_count` remain unknown. The
+one-shot shell marker timed out. No SystemServer thread snapshot was
+attempted.
+
+The kernel log reaches guest uptime 3309.094 seconds and contains no
+`VIRTUAL_DEVICE_BOOT_COMPLETED`, `VIRTUAL_DEVICE_BOOT_FAILED`,
+`do_mprotect_pkey`, kernel-panic, or OOM marker. It records untracked
+`system_server` exits with status 0 at uptimes 1761.684 and 2842.050 seconds
+and 36 `crash_dump64` mentions; later service lookups do not establish the
+cause of either exit. The observer collected 721 crosvm memory samples,
+720 with valid VmRSS and a peak of 4,234,488 KiB. Its bounded logcat summary captured
+17,754 bytes with two SystemServer mentions and no ANR, fatal-exception, or
+fatal-signal lines. The separate events query captured 23,067 bytes and
+recognized no process events. These observations do not establish why boot
+completion remained unobserved.
+
+**Reason.** Preserve a long-run timeline and its ADB/property behavior
+without treating transport readiness or SystemServer service lookups as
+Android boot completion. The property values are unknown, no completion
+marker was captured, and the bounded logcat/event summaries identify no
+cause. Keep the record out of profile comparisons until a complete default
+capture exists.
+
+**Verification.** `LIMA-SHA256SUMS` contains hashes for all ten captured
+artifacts and the post-run audit; all eleven entries verified after
+transfer. A second `compare_boot.py normalize` pass changed zero files.
+Strict JSON/JSONL parsing passed, and scans across all 12 files found no
+tested host paths, PEM headers, EUI-48 addresses, or EUI-64 IPv6 candidates.
+The post-run audit found an empty Cuttlefish fleet, no checked Cuttlefish
+processes or temporary CVD HOME, no listener on port 6520, and the existing
+port 5037 ADB listener still running. The focused normalizer tests passed
+(17 passed, 23 deselected). The initial hostile review identified four
+evidence-wording corrections. A follow-up review confirmed those corrections
+and found two further wording/status issues, which were corrected. Final
+hostile review found no remaining actionable findings.
+
+## IR-170: Diagnose the first Virgl crosvm crash and record the retry
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T180433-1573318/`; `Images/reference/16373615/incomplete/target-20261004T192939-1614388/`; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep both `drm_virgl` attempts incomplete and non-comparable. Add
+only a sanitized crash summary for the first attempt at
+`target-20261004T180433-1573318/crosvm-crash-summary.txt`. The Apport report
+identifies crosvm PID 1573779, whose parent and launch time match the
+`process_restarter` entry in `launcher.log`. It reports SIGSEGV in
+`libgfxstream_backend.so` at `unw_get_reg+68`, with `SEGV_MAPERR` and fault
+address `0x10`; the recorded instruction loads from `[x8, #16]` while `x8` is
+zero. The backtrace's crosvm caller frames are unavailable. The summary
+records both executable and loaded-library Build IDs. The same-named debug
+library available in the host package has a different Build ID, so it was not
+used to infer the missing callers. The original trigger remains unknown; this
+stack does not establish that Virgl caused it.
+
+The raw Apport report and embedded core remain on the Lima reference host
+because the core may contain guest memory. The temporary GDB extraction was
+deleted, and no raw core or report was copied into the repository. After
+installing `libvirglrenderer1` and setting `EGL_PLATFORM=surfaceless`, the
+retry made `libEGL.so`, `libGLESv2.so`, and `libvirglrenderer.so.1` visible to
+`ldconfig`, and Cuttlefish passed its host graphics-prerequisite check.
+`launcher.log` records crosvm configured with the virglrenderer backend;
+runtime loading of the library is not confirmed. `host.json` records a
+9-second capture duration. The retry failed before guest kernel output,
+start event 5, or ADB polling. `process_restarter` logged
+`si_code: 3` (`CLD_DUMPED`) and exited 1, but the record has no child signal
+number and no Apport report was found for this retry. Do not infer that the
+retry failed with the same signal or at the same stack location as the first
+attempt.
+
+**Reason.** Preserve the confirmed first-attempt crash location while
+separating it from the unknown original trigger and from the second attempt's
+less-specific termination evidence. The host-side setup instructions now
+include the dependencies and EGL platform that made Cuttlefish's prerequisite
+check pass on the tested Ubuntu 24.04.4 arm64 Lima VM; they do not claim that
+this setup is sufficient to boot the guest.
+
+**Verification.** The first record contains ten captured artifacts, the
+post-run audit, the sanitized summary, and its manifest; all 12 manifest
+entries verify on the Mac and Lima. Its strict JSON/JSONL parsing passed,
+scans of all 13 files found no tested user or temporary host paths, PEM
+headers, EUI-48 addresses, EUI-64-style IPv6 addresses, or oversized files,
+and two normalization passes changed zero files. The retry record contains
+ten captured artifacts and the post-run audit; all 11 manifest entries verify
+on the Mac and Lima. Strict JSON/JSONL parsing passed, scans of all 12 files
+found no tested user or temporary host paths, PEM headers, EUI-48 addresses,
+EUI-64-style IPv6 addresses, or oversized files, and two normalization
+passes changed zero files. Both post-run audits found an empty Cuttlefish
+fleet, no checked Cuttlefish processes or temporary CVD HOME, and no listener
+on port 6520. The first audit records a port 5037 listener as present; the
+retry audit identifies the listener as PID 2704. Neither audit issued a stop
+command for it. Final hostile review found no remaining actionable findings.

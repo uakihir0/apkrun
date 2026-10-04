@@ -1,0 +1,8 @@
+diff --git a/base/cvd/build_external/crosvm/crosvm.MODULE.bazel b/base/cvd/build_external/crosvm/crosvm.MODULE.bazel
+--- a/base/cvd/build_external/crosvm/crosvm.MODULE.bazel
++++ b/base/cvd/build_external/crosvm/crosvm.MODULE.bazel
+@@ -37,3 +37,4 @@
+         "qcow",
+         "usb",
++        "virgl_renderer",
+     ],

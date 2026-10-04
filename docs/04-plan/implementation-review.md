@@ -5800,3 +5800,34 @@ no stop command was issued for it. The audit is point-in-time and has no
 pre-capture PID observation. `MISSING.txt` separately records the crosvm
 lookup at artifact-collection time. Keep IR-163 in `Needs maintainer review`
 until the evidence and its interpretation are reviewed.
+
+## IR-164: Record bounded property-response parsing status
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Add `getpropOutputBytes` and nullable `getpropOutputParsed` to
+observer poll records. The byte count is limited by the existing 4 KiB
+response cap. `getpropOutputParsed=true` means at least one expected response
+field parsed, `false` means none parsed, and `null` means the parser did not
+run or the query was not attempted. Continue to discard all raw property
+output.
+
+**Reason.** IR-163 recorded eight property commands that exited 0 but no
+accepted property fields. The existing record could not distinguish a
+zero-byte response from a non-empty response that did not match the expected
+format. These bounded metadata fields clarify future captures without
+retaining guest output; per-property fields still determine whether each
+value was present and valid.
+
+**Verification.** `test_boot_observer.py` passed 113 tests with one
+Linux-only parent-death test skipped on macOS. The full Image tools suite
+passed 497 tests with four platform-specific skips. Coverage distinguishes
+parsed complete and partial timeout responses, empty and malformed
+responses, and truncated output; it also verifies that response contents
+are not persisted. Ruff lint and formatting, `git diff --check`, and all six
+checks in `scripts/ci/run-checks.sh` passed. The hostile follow-up review
+reported no actionable findings.

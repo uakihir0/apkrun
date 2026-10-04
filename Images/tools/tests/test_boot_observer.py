@@ -1432,6 +1432,19 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         ("deadline_after_connect", None, False, None, False, None, None, None, False, True, 1),
         ("deadline_before_getprop", "device", False, None, False, None, None, None, False, True, 2),
         ("deadline_before_spawn", "device", False, None, False, None, None, None, False, True, 3),
+        (
+            "getprop_not_attempted_at_deadline",
+            "device",
+            False,
+            None,
+            False,
+            None,
+            None,
+            None,
+            False,
+            True,
+            3,
+        ),
         ("shell_probe_times_out", "device", False, None, True, None, True, True, True, False, 3),
         ("shell_marker_missing", "device", False, None, True, None, True, False, True, False, 3),
         ("shell_marker_crlf", "device", False, None, True, 0, False, True, False, False, 3),
@@ -1464,6 +1477,46 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         ),
         (
             "boot_completed_query_failed",
+            "device",
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+            False,
+            3,
+        ),
+        ("getprop_empty_output", "device", True, False, False, None, None, None, False, False, 3),
+        (
+            "getprop_empty_property_values",
+            "device",
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+            False,
+            3,
+        ),
+        (
+            "getprop_output_truncated",
+            "device",
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+            False,
+            3,
+        ),
+        (
+            "getprop_malformed_output",
             "device",
             True,
             False,
@@ -1508,7 +1561,7 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
         proc_root=proc_root,
         home_path=short_private_home,
     )
-    if expected_getprop_attempted:
+    if expected_getprop_attempted or scenario == "getprop_not_attempted_at_deadline":
         observer._shell_probe_attempted = True
     observer.start()
     socket_path = short_private_home.parent / "adb.sock"
@@ -1518,6 +1571,22 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     timeouts: list[float] = []
     output_limits: list[int] = []
     launched_commands: list[list[str]] = []
+    property_outputs = {
+        "system_server_query_failed": (
+            "boot_completed=0\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=7"
+        ),
+        "boot_completed_query_failed": (
+            "boot_completed=1\nboot_completed_status=7\nsystem_server=2\nsystem_server_status=0"
+        ),
+        "getprop_empty_output": "",
+        "getprop_empty_property_values": (
+            "boot_completed=\nboot_completed_status=0\nsystem_server=\nsystem_server_status=0"
+        ),
+        "getprop_malformed_output": "unexpected property response\n",
+    }
+    timeout_property_output = (
+        "boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_stat"
+    )
 
     class FakeClock:
         current = 0.0
@@ -1539,9 +1608,10 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
         *,
         timed_out: bool = False,
         attempted: bool = True,
+        truncated: bool = False,
         probe_error: bool = False,
     ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
-        return exit_code, output.encode(), timed_out, attempted, False, True, probe_error
+        return exit_code, output.encode(), timed_out, attempted, truncated, True, probe_error
 
     def fake_run_adb(
         command: list[str],
@@ -1620,26 +1690,21 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
             "-c",
             OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND,
         ]:
+            if scenario == "getprop_not_attempted_at_deadline":
+                clock.current = deadline
+                return bounded_result(None, attempted=False)
             launched_commands.append(command)
-            if scenario == "system_server_query_failed":
-                return bounded_result(
-                    0,
-                    "boot_completed=0\nboot_completed_status=0\n"
-                    "system_server=2\nsystem_server_status=7",
-                )
-            if scenario == "boot_completed_query_failed":
-                return bounded_result(
-                    0,
-                    "boot_completed=1\nboot_completed_status=7\n"
-                    "system_server=2\nsystem_server_status=0",
-                )
             if scenario == "getprop_times_out_after_boot_query":
+                return bounded_result(None, timeout_property_output, timed_out=True)
+            if scenario == "getprop_output_truncated":
                 return bounded_result(
-                    None,
+                    0,
                     "boot_completed=1\nboot_completed_status=0\n"
-                    "system_server=2\nsystem_server_stat",
-                    timed_out=True,
+                    "system_server=2\nsystem_server_status=0\n",
+                    truncated=True,
                 )
+            if scenario in property_outputs:
+                return bounded_result(0, property_outputs[scenario])
             raise AssertionError(f"unexpected property query scenario: {scenario}")
         raise AssertionError(f"unexpected adb command: {command!r}")
 
@@ -1688,6 +1753,7 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
             "deadline_after_connect": "notAttempted",
             "deadline_before_getprop": "device",
             "deadline_before_spawn": "device",
+            "getprop_not_attempted_at_deadline": "device",
             "shell_probe_times_out": "device",
             "shell_marker_missing": "device",
             "shell_marker_crlf": "device",
@@ -1695,6 +1761,10 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
             "getprop_times_out_after_boot_query": "device",
             "system_server_query_failed": "device",
             "boot_completed_query_failed": "device",
+            "getprop_empty_output": "device",
+            "getprop_empty_property_values": "device",
+            "getprop_output_truncated": "device",
+            "getprop_malformed_output": "device",
             "connect_not_attempted": "offline",
             "connect_times_out": "device",
             "offline": "offline",
@@ -1711,6 +1781,30 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     assert poll["shellProbeExitCode"] == expected_shell_probe_exit_code
     assert poll["shellProbeTimedOut"] is expected_shell_probe_timed_out
     assert poll["shellProbeMarkerMatched"] is expected_shell_probe_marker_matched
+    if scenario in property_outputs:
+        expected_output = property_outputs[scenario].encode()
+        assert poll["getpropOutputBytes"] == len(expected_output)
+        assert poll["getpropOutputParsed"] is (
+            scenario not in {"getprop_empty_output", "getprop_malformed_output"}
+        )
+        logged_output = output.read_text(encoding="utf-8")
+        assert "unexpected property response" not in logged_output
+        assert "boot_completed=" not in logged_output
+    elif scenario == "getprop_output_truncated":
+        expected_output = (
+            b"boot_completed=1\nboot_completed_status=0\nsystem_server=2\nsystem_server_status=0\n"
+        )
+        assert poll["getpropOutputBytes"] == len(expected_output)
+        assert poll["getpropOutputParsed"] is None
+        assert poll["getpropTruncated"] is True
+        assert "boot_completed=" not in output.read_text(encoding="utf-8")
+    elif scenario == "getprop_times_out_after_boot_query":
+        assert poll["getpropOutputBytes"] == len(timeout_property_output.encode())
+        assert poll["getpropOutputParsed"] is True
+        assert "boot_completed=" not in output.read_text(encoding="utf-8")
+    else:
+        assert poll["getpropOutputBytes"] is None
+        assert poll["getpropOutputParsed"] is None
     if scenario == "system_server_query_failed":
         assert poll["getpropExitCode"] == 0
         assert poll["systemServerGetpropExitCode"] == 7
@@ -1735,6 +1829,26 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
         assert poll["systemServerStartCountPresent"] is None
         assert poll["sysBootCompleted"] is True
         assert poll["sysBootCompletedPresent"] is True
+    elif scenario == "getprop_empty_property_values":
+        assert poll["getpropExitCode"] == 0
+        assert poll["systemServerGetpropExitCode"] == 0
+        assert poll["bootCompletedGetpropExitCode"] == 0
+        assert poll["systemServerStartCount"] is None
+        assert poll["systemServerStartCountPresent"] is False
+        assert poll["sysBootCompleted"] is None
+        assert poll["sysBootCompletedPresent"] is False
+    elif scenario in {
+        "getprop_empty_output",
+        "getprop_output_truncated",
+        "getprop_malformed_output",
+    }:
+        assert poll["getpropExitCode"] == 0
+        assert poll["systemServerGetpropExitCode"] is None
+        assert poll["bootCompletedGetpropExitCode"] is None
+        assert poll["systemServerStartCount"] is None
+        assert poll["systemServerStartCountPresent"] is None
+        assert poll["sysBootCompleted"] is None
+        assert poll["sysBootCompletedPresent"] is None
     else:
         assert poll["getpropExitCode"] is None
         assert poll["systemServerGetpropExitCode"] is None

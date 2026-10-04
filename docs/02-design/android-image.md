@@ -804,6 +804,15 @@ code and timeout field. `getStateResult` contains only an allowlisted
 classification: `notAttempted`, `timedOut`, `commandFailed`, `device`,
 `offline`, `unauthorized`, `empty`, `other`, or `probeError`; a probe error
 never yields an accepted `deviceState`. Raw command output is never stored.
+The observer also records `getpropOutputBytes`, the bounded response byte
+count, and nullable `getpropOutputParsed`. The latter is true when the parser
+recognizes at least one expected response field, false when it recognizes
+none, and null when parsing is skipped or the query did not run. Interpret it
+with `getpropAttempted`, `getpropTruncated`, `getpropProbeError`, and the
+per-property fields: the byte count distinguishes an empty response from a
+non-empty unrecognized response, while a parsed response with a false
+`sysBootCompletedPresent` or `systemServerStartCountPresent` indicates an
+empty property value. These diagnostics retain no raw response content.
 If a property query times out, keep the 15-second ADB transport polling
 schedule but defer the next property shell query for 30 seconds; after a
 second consecutive timeout, defer it for 60 seconds, capped at 60 seconds

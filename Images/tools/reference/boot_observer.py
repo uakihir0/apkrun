@@ -1184,6 +1184,8 @@ class BootObserver:
             "getpropTimedOut": None,
             "getpropRetryInSeconds": None,
             "getpropTruncated": False,
+            "getpropOutputBytes": None,
+            "getpropOutputParsed": None,
             "getpropCleanupComplete": True,
             "getpropProbeError": False,
             "systemServerStartCount": None,
@@ -1420,6 +1422,9 @@ class BootObserver:
                             property_command_timed_out if property_attempted else None
                         ),
                         "getpropTruncated": property_truncated,
+                        "getpropOutputBytes": (
+                            len(property_output) if property_attempted else None
+                        ),
                         "getpropCleanupComplete": property_cleanup_complete,
                         "getpropProbeError": property_probe_error,
                         "cleanupComplete": (
@@ -1430,7 +1435,11 @@ class BootObserver:
                 )
                 if not property_cleanup_complete:
                     self._adb_probe_cleanup_failed = True
-                elif not property_truncated and not property_probe_error:
+                elif property_attempted and not property_truncated and not property_probe_error:
+                    parsed_properties = parse_boot_properties(
+                        property_output.decode("utf-8", errors="replace"),
+                        allow_truncated_tail=property_command_timed_out,
+                    )
                     (
                         poll_fields["systemServerStartCount"],
                         poll_fields["systemServerStartCountPresent"],
@@ -1438,9 +1447,9 @@ class BootObserver:
                         poll_fields["sysBootCompletedPresent"],
                         poll_fields["systemServerGetpropExitCode"],
                         poll_fields["bootCompletedGetpropExitCode"],
-                    ) = parse_boot_properties(
-                        property_output.decode("utf-8", errors="replace"),
-                        allow_truncated_tail=property_command_timed_out,
+                    ) = parsed_properties
+                    poll_fields["getpropOutputParsed"] = any(
+                        value is not None for value in parsed_properties
                     )
         record_poll()
         return True

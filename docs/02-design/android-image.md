@@ -655,6 +655,16 @@ to record `enable_gpu_vhost_user=false`. Cuttlefish 1.57.0 auto-enables its
 vhost-user GPU backend on arm64, where `drm_virgl` is not supported by that
 backend. `host.json` records the observed value as `gpuVhostUserEnabled`.
 
+The pinned Cuttlefish 1.57.0 crosvm build used by the tested host package
+disables default Cargo features and enables `gfxstream` and `gpu`, but omits
+`virgl_renderer`. That crosvm feature enables `devices/virgl_renderer`.
+Selecting `backend=virglrenderer` with the feature disabled makes Rutabaga
+return `invalid rutabaga build parameters` before guest kernel output.
+Installing the host `libvirglrenderer` library does not enable this crosvm
+build feature. A `drm_virgl` reference capture therefore requires a Cuttlefish
+host package whose pinned crosvm build enables `virgl_renderer`; see
+[IR-171](../04-plan/implementation-review.md#ir-171-diagnose-crosvm-panic-output).
+
 ### 8.3 What is captured
 
 `Images/tools/reference/capture.sh <profile>` writes `Images/reference/<buildId>/<profile>/`:

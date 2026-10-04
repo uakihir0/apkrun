@@ -101,7 +101,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** Use the crosvm reference capture (#064) as a known-good boot only after it records Android boot completion; current incomplete captures cannot serve as that baseline. Continue direct kernel boot with a generated bootconfig ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) and topology discovery with the Linux test guest (#011).
 - **Fallback.** Adapt the custom image (#035): kernel config, fstab, init scripts. That moves the fix to M5 and delays G2 with the stock image.
 - **Settled by.** #012, #013, #014 (gate G2), #064.
-- **Result.** Not yet run on VZ. As of 2026-10-03, the #064 `default` reference capture reaches Linux but has not reported `sys.boot_completed=1`; it therefore does not yet provide a known-good Android boot for comparison.
+- **Result.** Not yet run on VZ. As of 2026-10-04, the #064 `default` reference capture reaches Linux but has not reported `sys.boot_completed=1`; it therefore does not yet provide a known-good Android boot for comparison. The tested Cuttlefish 1.57.0 crosvm package also omits the `virgl_renderer` build feature, so the `drm_virgl` reference path panics before guest kernel output. This is a reference-host build limitation, not evidence about the VZ boot failure. The risk remains open until a valid Linux reference boot and the VZ comparison are available.
 
 ### R-07 No VM save/restore while VirGL is active
 

@@ -6244,55 +6244,99 @@ command for it. Final hostile review found no remaining actionable findings.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh`; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; `Images/reference/16373615/incomplete/target-20261004T180433-1573318/crosvm-crash-summary.txt`; `Images/reference/16373615/incomplete/target-20261004T192939-1614388/post-run-verification.json` |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh`; `Experiments/cuttlefish-boot-diagnosis/patches/enable-pinned-crosvm-virgl.patch`; [android-image.md](../02-design/android-image.md) §8.2; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; [R-06](risks.md#r-06-stock-cuttlefish-image-on-the-vz-topology); `Images/reference/16373615/incomplete/target-20261004T211540-1617589/`; `Images/reference/16373615/incomplete/target-20261004T212141-1619115/`; `Images/reference/16373615/incomplete/target-20261004T212512-1620453/` |
 
-**Choice.** Investigate the missing crosvm panic message before treating
-matching debug symbols as a prerequisite. Cuttlefish tag
+**Choice.** Recover crosvm's panic message before requiring matching debug
+symbols. Cuttlefish tag
 `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` pins crosvm source commit
 `fd4df63707aee57092a28db63bc1ff8945c76058` and gfxstream commit
 `6e68776cefbe1f1a662bb7321aa98e5348e8c062`. The installed crosvm Build ID
-`d724bf54f045b0ec7dbe14049b0fed9a16e52a23` matches the Apport report, and the
-loaded `libgfxstream_backend.so` Build ID is
+`d724bf54f045b0ec7dbe14049b0fed9a16e52a23` matches the Apport reports, and
+the loaded `libgfxstream_backend.so` Build ID is
 `6b8f3105442da5c66988881a1fa76e812b13c3e8`. `readelf` shows crosvm needs both
-`libgfxstream_backend.so` and `libgcc_s.so.1`; the gfxstream library exports
-`unw_get_reg` and `_Unwind_GetIP`. This is consistent with a possible
-libunwind symbol-interposition problem, but does not prove one occurred or
-identify the original failure.
+`libgfxstream_backend.so` and `libgcc_s.so.1`; gfxstream exports
+`unw_get_reg` and `_Unwind_GetIP`.
 
 The pinned crosvm panic hook at
 [`src/sys/linux/panic_hook.rs`](https://chromium.googlesource.com/crosvm/crosvm/+/fd4df63707aee57092a28db63bc1ff8945c76058/src/sys/linux/panic_hook.rs)
 sets `RUST_BACKTRACE=1`, redirects stderr to a pipe, invokes Rust's default
-panic hook, then reads and logs the captured output. A fault during that
-backtrace could prevent the original panic text from being read. This remains
-a hypothesis until the diagnostic run produces evidence.
+panic hook, then reads and logs the captured output. In the first new
+diagnostic capture, GDB placed the SIGSEGV at `unw_get_reg+68` in
+`libgfxstream_backend.so`; `x8` was zero at `ldr x8, [x8, #16]`. The frames
+above it included gfxstream's `_Unwind_GetIP` and libgcc's
+`_Unwind_Backtrace`. The stripped crosvm callers are recorded as offsets in
+`crosvm-crash-summary.txt` with Build ID
+`d724bf54f045b0ec7dbe14049b0fed9a16e52a23`.
 
-The retry audit confirms that Apport suppressed a new crosvm report because
-the first report remained in `/var/crash` unseen. Preserve that report in
-private Lima storage outside `/var/crash` before retrying; its recorded
-SHA-256 is `597d1d1e755929a813087c619792ebfb6e6c41dc51031b72635fdebf458aea64`.
-The diagnostic wrapper preloads `/lib/aarch64-linux-gnu/libgcc_s.so.1` and
-execs `/usr/lib/cuttlefish-common/bin/crosvm`. `cvd create --help` on the
-pinned 1.57.0 host package exposes `--crosvm_binary`; `capture.sh` now accepts
-the opt-in `APKRUN_CROSVM_BINARY`, validates it as an absolute executable,
-and passes it only to `cvd create`. A normalized run using this override is
-marked diagnostic-only and retained under `incomplete/` even if it reaches
-`sys.boot_completed=1`. As with other captures, the standard privacy path
-discards staging data if normalization fails.
+The first diagnostic wrapper was passed to `cvd create` only. A second
+instrumented attempt showed no wrapper marker, and its crosvm environment
+contained no `LD_PRELOAD`. The pinned `cvd start` also accepts
+`--crosvm_binary` and applies its own default, so `capture.sh` now passes the
+opt-in override to both `cvd create` and `cvd start`. The wrapper emits a
+diagnostic marker before setting `LD_PRELOAD` to
+`/lib/aarch64-linux-gnu/libgcc_s.so.1` and execing the packaged crosvm.
+`APKRUN_CROSVM_BINARY` is validated as an absolute executable. Any normalized
+capture using this override remains diagnostic-only under `incomplete/`,
+even if it reaches `sys.boot_completed=1`; the standard privacy path discards
+staging data if normalization fails.
 
-**Reason.** The observed SIGSEGV is in stack-unwinding code, and the original
-panic text may be lost in the hook's pipe. Recovering panic text after the
-preload would support this explanation. A run with no recovered text would
-leave it unresolved because the preload may not change the relevant symbol
-binding or the original failure may not have produced a panic message. Its
-runtime differs from the reference profile, so the capture cannot be promoted
-to a canonical profile.
+The corrected capture
+`target-20261004T212512-1620453` records the wrapper marker and an
+`LD_PRELOAD` entry in Apport's environment. The panic hook then logged:
 
-**Verification.** Exact Cuttlefish, crosvm, and gfxstream revisions were
-checked from their pinned source files. The reported executable path, package
-version, Build IDs, dynamic dependencies, and exported symbols were read from
-the Lima host. Apport's log contains the retry suppression reason. The
-focused override tests passed (2 passed); the complete reference-capture test
-module passed (50 passed, 3 skipped because those cases require GNU `timeout`
-on Linux). Ruff check, Ruff format check, shell syntax checks, and the
-Lima-host wrapper `crosvm version` smoke check passed. Final hostile review
-found no remaining actionable findings. The diagnostic retry is pending.
+```text
+thread 'v_gpu' panicked at .../src/virtio/gpu/mod.rs:1687:14:
+Failed to create virtio gpu worker thread: invalid rutabaga build parameters
+```
+
+The crosvm process ended with SIGABRT after logging the panic. The selected
+GPU mode was `drm_virgl`, vhost-user GPU was disabled, and the crosvm command
+line selected `backend=virglrenderer`. `kernel.log` is empty and there is no
+Android boot evidence.
+
+The panic is explained by the pinned build configuration. The
+[Cuttlefish crosvm Bazel spec](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/build_external/crosvm/crosvm.MODULE.bazel)
+sets `default_features = False` and enables `gfxstream` and `gpu`, but omits
+`virgl_renderer`. In the pinned
+[crosvm Cargo features](https://github.com/google/crosvm/blob/fd4df63707aee57092a28db63bc1ff8945c76058/Cargo.toml#L303-L315),
+`virgl_renderer` enables `devices/virgl_renderer`. The pinned
+[Rutabaga 0.1.80 source](https://docs.rs/crate/rutabaga_gfx/0.1.80/source/src/rutabaga_core.rs#L1492-L1496)
+returns `InvalidRutabagaBuild` when the selected default component is
+VirglRenderer but the build lacks that feature. This matches the panic text.
+Installing `libvirglrenderer1` and satisfying Cuttlefish's EGL/GLES check do
+not enable the missing crosvm build feature.
+
+**Reason.** The unpreloaded SIGSEGV occurred while the panic hook attempted
+to collect a backtrace and obscured the original error. With the wrapper
+actually applied, crosvm logged the panic and exited with SIGABRT instead.
+This supports the secondary-crash explanation and identifies the immediate
+failure: the tested Cuttlefish crosvm build cannot instantiate its requested
+Virgl component. The host graphics-library installation was not the
+remaining blocker. A target capture needs a Cuttlefish host package built
+from the pinned source with `virgl_renderer` enabled. The diagnostic override
+cannot be promoted to a canonical reference profile.
+
+**Verification.** Apport reports, the first core's GDB stack, runtime
+environment, selected Cuttlefish GPU config, and panic output were inspected
+on Lima. Pinned Cuttlefish, crosvm, and Rutabaga source were checked against
+the build configuration and error path. The raw Apport reports and core
+files remain in private Lima storage; only normalized logs and sanitized
+summaries are in the repository. Focused crosvm override tests pass (3
+passed); the
+complete reference-capture module passes (50 passed, 3 skipped because the
+skipped cases require GNU `timeout` on Linux). Ruff check and format check,
+shell syntax checks, and `git diff --check` pass. The diagnostic runs remain
+incomplete and non-comparable. Hostile review identified two P3 issues: M01
+described the SIGSEGV as occurring during Rust unwinding, and the test ID
+named `cvd create` but omitted `cvd start`. Both were corrected, and the
+follow-up review found no actionable issue. A read-only Lima inventory found
+no Bazel, Bazelisk, Cargo, Rust compiler, Clang, Docker, or Podman; the VM has
+16 GiB RAM and about 104 GiB free on its root filesystem.
+The pinned crosvm toolchain file selects Rust 1.88.0, and the Cuttlefish
+Bazel spec supplies its Rust host tools and downstream crate annotations.
+The Cuttlefish container recipe uses Debian 13 but runs unpinned `apt
+upgrade`; the Lima apt repository offers Rust/Cargo 1.75. A standalone
+`cargo build` would not reproduce the Cuttlefish package setup. The pinned
+Cuttlefish Debian 13 build image has been built on the Mac's Docker Desktop,
+and a build of `//build_external/crosvm:crosvm_bin_opt` with the diagnostic
+`virgl_renderer` patch is in progress; its result is not yet verified.

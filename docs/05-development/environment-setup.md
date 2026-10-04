@@ -227,12 +227,30 @@ packages installed and that variable set, Cuttlefish 1.57.0 initialized
 Mesa's off-screen EGL; `ldconfig` reported `libEGL.so`, `libGLESv2.so`, and
 `libvirglrenderer.so.1` visible. Cuttlefish passed its host GLES prerequisite
 check with Mesa llvmpipe. `launcher.log` records the requested virglrenderer
-backend; runtime loading of the library is not confirmed. On this VM the
-`target` retry failed before producing
-guest kernel output; see [M01](../04-plan/issues/M01-android-bring-up.md) #064
-and IR-170 in the implementation review. Passing the host prerequisite check
-does not establish that the backend or guest boots. `capture.sh` disables the
-arm64 vhost-user GPU backend for each profile and verifies the selected config.
+backend. A later capture recorded
+`Failed to create virtio gpu worker thread: invalid rutabaga build parameters`
+before guest kernel output. The pinned Cuttlefish crosvm build disables
+`default_features` and does not enable its `virgl_renderer` feature, so the
+host library and EGL/GLES prerequisite checks alone cannot make this package
+run `drm_virgl`. Use a Cuttlefish host package built from the pinned source
+with `virgl_renderer` enabled before expecting a target-profile boot; see
+[M01](../04-plan/issues/M01-android-bring-up.md) #064 and
+[IR-171](../04-plan/implementation-review.md#ir-171-diagnose-crosvm-panic-output).
+`capture.sh` disables the arm64 vhost-user GPU backend for each profile and
+verifies the selected config.
+
+For a diagnostic rebuild, use the pinned Cuttlefish build setup rather than
+an unmodified distro `cargo build`. Its Bazel crate specification applies
+Cuttlefish-specific annotations and patches, and manages Rust host tools;
+the pinned crosvm source declares Rust 1.88.0. The Cuttlefish container recipe
+uses Debian 13 and installs Bazel, but runs `apt upgrade` without package
+version pins, so a rebuild is not guaranteed to reproduce the installed
+binary's Build ID. Build from the pinned Cuttlefish and crosvm revisions with
+`virgl_renderer` enabled, and keep captures from that modified host runtime
+diagnostic-only. See the pinned
+[Cuttlefish crosvm specification](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/build_external/crosvm/crosvm.MODULE.bazel),
+[container recipe](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/tools/buildutils/cw/Containerfile),
+and [crosvm toolchain pin](https://github.com/google/crosvm/blob/fd4df63707aee57092a28db63bc1ff8945c76058/rust-toolchain).
 
 Extract the guest image archive and matching host package into separate
 directories. Activate the tools' Python environment and put the host package's
@@ -312,8 +330,9 @@ APKRUN_CROSVM_BINARY="$HOME/.local/bin/apkrun-crosvm-libgcc-preload" \
 ```
 
 The wrapper preloads the host's `libgcc_s.so.1` and then execs the packaged
-crosvm. The pinned `cvd create` accepts `--crosvm_binary`; `capture.sh` passes
-the override only when this environment variable is set. A normalized run
+crosvm. The pinned `cvd create` and `cvd start` accept `--crosvm_binary`;
+`capture.sh` passes the override to both commands only when this environment
+variable is set. A normalized run
 using the override is retained under `incomplete/` with a diagnostic-only
 reason, even if Android boots, because the host runtime has changed. The
 reason is written when staging begins, so interrupted runs retain it when

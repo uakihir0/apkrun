@@ -17,6 +17,28 @@
       "replacement": "\\1<SERIAL>"
     },
     {
+      "pattern": "(?i)(--addresses=|device with address |adb connect message for |adb connected to |Watching for disconnect on )[ \\t]*(127\\.0\\.0\\.1:[0-9]{1,5})(?![0-9])",
+      "replacement": "\\1<ADB_SERIAL>",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
+    },
+    {
+      "pattern": "(?i)(device ')[ \\t]*(127\\.0\\.0\\.1:[0-9]{1,5})(?![0-9])('[ \\t]+not found)",
+      "replacement": "\\1<ADB_SERIAL>\\3",
+      "files": [
+        "crosvm-command-line.txt",
+        "assemble_cvd.log",
+        "launcher.log",
+        "launch-cvd-console.log",
+        "cvd-create-console.log"
+      ]
+    },
+    {
       "pattern": "(?i)(,\\s*(?:path|input)=)/(?:[^/\\s,\\\"']*/)*([^/\\s,\\\"']+)",
       "replacement": "\\1<HOST_PATH>/\\2",
       "files": [

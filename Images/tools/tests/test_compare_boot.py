@@ -476,6 +476,48 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
     assert "aa:bb:cc:dd:ee:ff" not in compressed
 
 
+def test_normalize_redacts_loopback_adb_serial_in_cuttlefish_host_logs(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "launcher.log").write_text(
+        "--addresses=127.0.0.1:6520\n"
+        "Attempting to connect to device with address 127.0.0.1:6520\n"
+        "adb connect message for 127.0.0.1:6520 successfully sent\n"
+        "adb connected to 127.0.0.1:6520\n"
+        "Watching for disconnect on 127.0.0.1:6520\n"
+        "device '127.0.0.1:6520' not found\n"
+        "device '127.0.0.1:8443' is reachable\n"
+        "other service listening at 127.0.0.1:8443\n"
+        "other service connected to 127.0.0.1:8080\n",
+        encoding="utf-8",
+    )
+    (capture / "properties.txt").write_text(
+        "guest_loopback=127.0.0.1:6520\n",
+        encoding="utf-8",
+    )
+
+    result = _run("normalize", str(capture))
+
+    assert result.returncode == 0, result.stderr
+    launcher_log = (capture / "launcher.log").read_text(encoding="utf-8")
+    assert "127.0.0.1:6520" not in launcher_log
+    assert launcher_log.count("<ADB_SERIAL>") == 6
+    assert "--addresses=<ADB_SERIAL>" in launcher_log
+    assert "device with address <ADB_SERIAL>" in launcher_log
+    assert "adb connect message for <ADB_SERIAL>" in launcher_log
+    assert "adb connected to <ADB_SERIAL>" in launcher_log
+    assert "disconnect on <ADB_SERIAL>" in launcher_log
+    assert "device '<ADB_SERIAL>' not found" in launcher_log
+    assert "device '127.0.0.1:8443' is reachable" in launcher_log
+    assert "other service listening at 127.0.0.1:8443" in launcher_log
+    assert "other service connected to 127.0.0.1:8080" in launcher_log
+    assert (capture / "properties.txt").read_text(encoding="utf-8") == (
+        "guest_loopback=127.0.0.1:6520\n"
+    )
+
+
 def test_normalize_preserves_crosvm_serial_mapping_and_pipe_names(
     tmp_path: Path,
 ) -> None:

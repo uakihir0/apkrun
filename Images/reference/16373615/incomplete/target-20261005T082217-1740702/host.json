@@ -1,0 +1,19 @@
+{
+  "architecture": "aarch64",
+  "buildId": "16373615",
+  "captureDurationSeconds": 2403,
+  "cpuCount": 8,
+  "cvdInstanceNumber": 1,
+  "cvdPackageVersion": "1.57.0",
+  "drmVirglSourceRevision": null,
+  "eglPlatform": "surfaceless",
+  "gpuVhostUserEnabled": false,
+  "hostKind": "linux-apple",
+  "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+  "nestedVirtualization": "on",
+  "os": "Ubuntu 24.04.4 LTS",
+  "profile": "target",
+  "schemaVersion": 2,
+  "selectedGpuMode": "drm_virgl",
+  "targetGpuMode": "drm_virgl"
+}

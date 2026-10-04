@@ -1,0 +1,13 @@
+{
+  "sha256": {
+    "Images/manifests/16373615/android-image.json": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+    "Images/tools/reference/boot_observer.py": "195138a5365761f92646dcd8237d5169d5ef0d40aee0c7676d78fe44b56f0e0a",
+    "Images/tools/reference/capture.sh": "d8161ecda613a41a402d19ba020b0fe3345aaf27761f25663299c7690315249a",
+    "Images/tools/reference/capture_cvd_start.py": "a53f17045220d4f54ac9c31690f52b47a236e5552c985e87460eafef8bd2fe90",
+    "Images/tools/reference/collect_composite_specs.py": "b8fb490c38aa82f889a1b144c394f3972e0117a5337339a85a03fc8d86aed621",
+    "Images/tools/reference/compare_boot.py": "4f02b67cd61276bbc1f96702ed0820e6aa3b067e7a3d5247b77df2222b1e9e76",
+    "Images/tools/reference/guest-capture.txt": "70999b1cc01be471f6edde169a49151c66f976924e55a92b8e058ef062ba1c72",
+    "Images/tools/reference/normalize.yaml": "0d25af7386a0aefe23766cf0a3fc030a886ebacd6ccbfb2fd6d81f2ab14d2514"
+  },
+  "sourceCommit": "e5854d6"
+}

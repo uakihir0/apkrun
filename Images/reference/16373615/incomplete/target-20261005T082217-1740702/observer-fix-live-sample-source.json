@@ -1,0 +1,7 @@
+{
+  "sampleFile": "observer-fix-live-sample.jsonl",
+  "sampleSha256": "b9ffeff0d35b31d70a1443ddcf3f37ba4b82095427ba8189436304ae1b44e222",
+  "sourceCommit": "7a2f7ff",
+  "sourcePath": "Images/tools/reference/boot_observer.py",
+  "sourceSha256": "a5ff40215964268f7c6590f39803a986cf9a8be9f73d2af7e46a18d07a77e9e7"
+}

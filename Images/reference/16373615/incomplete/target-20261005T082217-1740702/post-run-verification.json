@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "captureSourceRevision": "e5854d6",
+  "captureSourceSha256Manifest": "capture-source-sha256.json",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "capture": {
+    "diagnosticOnly": true,
+    "referenceComparable": false,
+    "deadlineSeconds": 2400,
+    "durationSeconds": 2403,
+    "cuttlefishVcsRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d",
+    "selectedGpuMode": "drm_virgl",
+    "gpuVhostUserEnabled": false,
+    "eglPlatform": "surfaceless",
+    "observerStartedUtc": "2026-10-04T22:42:14.213Z",
+    "observerStoppedUtc": "2026-10-04T23:22:14.322Z",
+    "observerEventCount": 485,
+    "observerCrosvmMemorySampleCount": 481,
+    "observerIdentifiedCrosvmMemorySampleCount": 0,
+    "observerUnavailableIdentitySampleCount": 481,
+    "observerCandidateCountZeroSampleCount": 481,
+    "observerStartEvent5Observed": false,
+    "observerAdbPollCount": 0,
+    "kernelLogBytes": 390313,
+    "lastGuestUptimeSeconds": 1030.825,
+    "linuxVersionMarkerPresent": true,
+    "virtioGpuInitializedGuestUptimeSeconds": 94.226,
+    "zygoteStartedGuestUptimeSeconds": 487.232,
+    "surfaceFlingerStartedGuestUptimeSeconds": null,
+    "systemServerMarkerPresent": false,
+    "bootCompletedQueryAttempted": false,
+    "androidBootCompleted": null,
+    "virtualDeviceBootCompletedMarkerPresent": false,
+    "virtualDeviceBootFailedMarkerPresent": false,
+    "lastInitRecord": "[ 1027.830081][    T1] init: starting service 'misctrl'...",
+    "crosvmCommandLineCaptured": false,
+    "supplementalObserverSample": {
+      "file": "observer-fix-live-sample.jsonl",
+      "sourceMetadata": "observer-fix-live-sample-source.json",
+      "timestampUtc": "2026-10-04T23:11:56.607Z",
+      "pid": 1741301,
+      "vmRssKiB": 4320616,
+      "rssShmemKiB": 4194532
+    }
+  },
+  "cleanup": {
+    "checkedAtUtc": "2026-10-04T23:32:47Z",
+    "cvdFleetGroups": 0,
+    "checkedCuttlefishProcessesRemaining": [],
+    "privateCvdHomePresent": false,
+    "captureStagingPresent": false,
+    "adbPort6520ListenerPresent": false,
+    "sharedAdbServer": {
+      "address": "loopback",
+      "port": 5037,
+      "pid": 2704,
+      "running": true,
+      "mutated": false,
+      "stopCommandIssued": false
+    },
+    "privateAdbServer": {
+      "address": "loopback",
+      "port": 5038,
+      "pidBeforeStop": 1740549,
+      "stopCommandIssuedAfterPidVerification": true,
+      "listenerPresentAfterStop": false
+    },
+    "adbDeviceInventoryQueried": false
+  },
+  "artifactIntegrity": {
+    "manifestCreatedAfterCapture": true,
+    "capturedLimaSourceHashesMatchedLocalFiles": 10,
+    "capturedLimaSourceHashMismatches": 0,
+    "supplementalObserverSampleMatchedLimaSource": true,
+    "normalizationPassChangedFiles": 0
+  },
+  "captureSourceIntegrity": {
+    "trackedFilesCheckedAgainstRevision": 8,
+    "trackedFilesMatchedRevision": 8,
+    "sourceRevision": "e5854d6",
+    "supplementalObserverSourceRevision": "7a2f7ff"
+  },
+  "privacyScan": {
+    "fileCount": 14,
+    "knownHostPathMatches": 0,
+    "cuttlefishTemporaryPathMatches": 0,
+    "pemHeaderMatches": 0,
+    "eui48Addresses": 0,
+    "eui64Ipv6Candidates": 0,
+    "numericAdbTcpEndpoints": 0,
+    "oversizeFiles": 0
+  }
+}

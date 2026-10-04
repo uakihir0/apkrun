@@ -1,0 +1,4 @@
+{"event":"observer_started","timestampUtc":"2026-10-04T23:11:56.602+00:00"}
+{"event":"instance_path_discovered","timestampUtc":"2026-10-04T23:11:56.602+00:00"}
+{"event":"crosvm_memory","pid":1741301,"rssShmemKiB":4194532,"timestampUtc":"2026-10-04T23:11:56.607+00:00","vmRssKiB":4320616}
+{"event":"observer_stopped","timestampUtc":"2026-10-04T23:11:56.607+00:00"}

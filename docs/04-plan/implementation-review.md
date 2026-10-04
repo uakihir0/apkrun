@@ -6358,16 +6358,26 @@ mapped bytes if a same-UID process mutates the directory; same-UID processes
 remain trusted. The build script requires a fresh output path and refuses to
 overwrite any existing file or follow an output symlink.
 
-**Reason.** The original SIGSEGV happened while the panic hook attempted to
-collect a backtrace and obscured the triggering panic. Preloading the matching
-system `libgcc_s.so.1` let the hook finish and exposed the immediate failure:
-the stock pinned crosvm build cannot instantiate the requested Virgl
-component. The diagnostic feature-enabled crosvm passes that failure point
-and produces guest kernel logs, but the observed Android startup still does
-not reach a confirmed zygote service or `system_server`. This does not
-validate the target GPU profile or establish the remaining Android boot
-cause. Matching debug symbols were not needed to identify the missing
-feature.
+**Reason.** The original SIGSEGV is consistent with a secondary failure
+during panic-hook backtrace collection: the retained stack includes
+libgcc's `_Unwind_Backtrace` and gfxstream's exported `_Unwind_GetIP` and
+`unw_get_reg`. Preloading the system `libgcc_s.so.1` in a subsequent
+run let the hook finish and log the triggering panic: the stock pinned
+crosvm build cannot instantiate the requested Virgl component. This
+identifies the immediate Virgl failure without matching debug symbols.
+
+The precise unwinder failure remains unproven. The dynamic symbol table and
+dependency list establish that the symbols are exported and both libraries
+are dependencies; they do not establish which implementation handled each
+runtime call. The null-base load at offset `0x10` does not by itself identify
+a vtable slot or prove the proposed `validReg` interpretation. If exact
+symbolization becomes necessary, compare runtime mappings and section
+addresses as well as section bytes; a different Build ID alone neither
+proves nor disproves code-byte identity. The feature-enabled diagnostic
+crosvm passes the recovered panic and produces guest kernel logs, but the
+observed Android startup still does not reach a confirmed `system_server`.
+This does not validate the target GPU profile or establish the remaining
+Android boot cause.
 
 **Verification.** The raw Apport reports and core files remain private on
 Lima; only normalized logs and sanitized summaries are in the repository.
@@ -6980,7 +6990,7 @@ address scans found no matches. Keep this run out of reference comparisons.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; `Images/reference/16373615/incomplete/target-20261005T082217-1740702/`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
 
 **Choice.** Accept a `process_restarter` command only when its absolute path
 matches the validated Cuttlefish-staged command, the explicitly configured
@@ -6989,27 +6999,42 @@ exist. Continue checking the child's instance arguments and serial endpoint,
 then verify `/proc/<pid>/exe` with `samefile` against the separately
 configured post-`fexecve` executable.
 
-**Reason.** A live feature-enabled Virgl run showed that Cuttlefish preserves
-the external `crosvm-built-virgl-launcher` path in `process_restarter` rather
-than copying that file into the instance's `artifacts/host_tools/bin`
-directory. The observer previously required the derived staged path, so it
-reported no crosvm candidates even while the crosvm child was running. The
-explicit command path is already supplied by the capture configuration; a
-bare basename or arbitrary executable path remains rejected. A regression
-test models an external launcher with no runtime-staged copy. Applying the
-updated process checks directly to the live CVD process found exactly one
-child and read its RSS. The long-running capture had loaded the older observer
-before this fix, so its unavailable RSS records do not validate the new
-observer.
+**Reason.** A point-in-time, read-only process listing during a live
+feature-enabled Virgl run showed that Cuttlefish preserved the external
+`crosvm-built-virgl-launcher` path in `process_restarter` rather than copying
+that file into the instance's `artifacts/host_tools/bin` directory. That
+listing was not retained in the normalized artifacts. The separately saved
+observer sample records the matched process PID and RSS only; it cannot
+independently verify the requested command path. The observer previously
+required the derived staged path, so it reported no crosvm candidates even
+while the crosvm child was running. The explicit command path is already
+supplied by the capture configuration; a bare basename or arbitrary
+executable path remains rejected. A regression test models an external
+launcher with no runtime-staged copy. Applying the updated process checks
+directly to the live CVD process found exactly one child and read its RSS.
+The long-running capture had loaded the older observer before this fix, so
+its unavailable RSS records do not validate the new observer.
 
 **Verification.** The focused observer suite passed 167 tests with its
 Linux-only parent-death case skipped on macOS. The external-launcher
 regression also passed on Lima, and the live-process check matched one
-crosvm child. Ruff lint and format checks passed. The full image-tool suite
-reported 557 passes and four Linux-only skips, plus one unrelated
-`test_reference_capture` failure: its fake Linux preflight saw the concurrent
-Lima capture command in the host's real process list and correctly rejected
-the active crosvm. Rerun that suite after the live capture cleans up.
-Adversarial subagent review found no actionable issue. Keep #064 open until
-the end-to-end capture and the task's remaining acceptance criteria are
-verified.
+crosvm child. The separate record
+`Images/reference/16373615/incomplete/target-20261005T082217-1740702/observer-fix-live-sample.jsonl`
+preserves a later live sample from the patched observer: it matched PID
+1741301 and read VmRSS while the long capture was still running. The main
+capture had already imported the old observer, so its 481 unavailable samples
+remain uncorrected and are not presented as validation of this fix. Ruff lint
+and format checks passed.
+
+The first full image-tool run, while the Lima capture was active, reported
+557 passes and four skips plus one fixture failure: the fake-Linux
+`test_reference_capture` preflight correctly saw the real concurrent crosvm
+process and exited before the test's expected product-image hash failure.
+After the capture cleaned up, a fresh full run passed **558 tests with four
+skips**. `scripts/ci/run-checks.sh` also passed all checks. All 14 entries in
+the new Lima-side artifact manifest verify locally; the eight tracked capture
+source hashes match `e5854d6`, the supplemental observer source hash matches
+`7a2f7ff`, a second normalization pass changed zero files, and the privacy
+scans found no matches. The earlier hostile review of the observer fix found
+no actionable issue. Keep #064 open until the end-to-end capture and the
+task's remaining acceptance criteria are verified.

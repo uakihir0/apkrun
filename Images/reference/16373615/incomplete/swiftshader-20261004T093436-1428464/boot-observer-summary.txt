@@ -1,0 +1,51 @@
+APKRun 3600-second SwiftShader observer capture
+
+Status: incomplete and non-comparable. The 3600-second Cuttlefish deadline
+expired without an accepted sys.boot_completed=1 value or a
+VIRTUAL_DEVICE_BOOT_COMPLETED marker. The capture did not run the guest-side
+capture command list.
+
+Host: Ubuntu 24.04.4 LTS on aarch64, Linux 6.8.0-134-generic, nested
+virtualization enabled, Cuttlefish 1.57.0, build 16373615. The host had eight
+logical CPUs. The selected guest graphics mode was guest_swiftshader,
+enable_gpu_vhost_user was false, and the guest had four CPUs, 4096 MiB memory,
+and 4915 MiB DDR. host.json records a 3605-second capture duration.
+
+Boot progress: the Lima-local launcher log records U-Boot at 08:34:35 and
+Linux 6.12.74 at 08:39:30 (Asia/Tokyo local time). The guest kernel log
+records first-stage init at uptime 42.457 seconds, second-stage init at
+51.068 seconds, and the first zygote start at 163.192 seconds. Kernel records
+include a system_server SELinux caller in servicemanager activity at guest
+uptimes spanning 1500.448 to 3220.737 seconds. Init records untracked
+system_server processes exiting with status 0 at 1728.170, 3171.194, and
+3286.382 seconds; the first two exits fall within that observed span, and
+the third follows it. Zygote receives SIGKILL at 2657.735 and 3290.371
+seconds, then starts again at 2674.477 and 3295.952 seconds. Repeated
+lookups for aidl/activity continue through uptime 2875.698 seconds. These
+events do not establish why system_server or zygote stopped. No boot-complete
+marker appears in the captured kernel or launcher logs.
+
+ADB observer: Cuttlefish start event 5 was observed at 2026-10-03T23:45:14.204Z;
+the private ADB server was ready 50 ms later. Of 192 polls, 189 reported
+device and three returned commandFailed. There were 188 property queries:
+168 timed out with exit status -15 and 20 exited 0, but none produced an
+accepted system_server or boot-complete value. The one-shot shell-ready probe
+timed out. The final bounded logcat summary recorded zero recognized process
+events, 18 system_server mentions, ten Watchdog mentions, and zero ANR,
+fatal-exception, or fatal-signal lines. The summary counts do not identify a
+cause.
+
+Guest shell observations: kernel.log contains 174 Untracked process lines,
+including 41 SIGHUP events (22 sh and 19 printf). In the prefix through guest
+uptime 1388.713 seconds, all 17 SIGHUP events aligned with timed-out observer
+shell-query polls within 0.843 seconds after one guest-to-host time alignment.
+The later events do not all align within one second, so the full capture does
+not establish that every untracked process came from the observer.
+
+Memory and retained cleanup evidence: 720 of 721 crosvm memory samples had
+valid RSS. VmRSS first reached 4 GiB at 2026-10-03T23:39:31.797Z and peaked
+at 4,234,368 KiB. The observer records that its private ADB server stopped
+with cleanupComplete=true. MISSING.txt records that no crosvm command line
+matched the private Cuttlefish HOME at artifact-collection time. The artifact
+does not retain a complete host-wide fleet, process, or listener audit, so
+it does not establish those host states.

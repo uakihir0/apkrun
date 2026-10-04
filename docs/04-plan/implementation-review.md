@@ -5628,3 +5628,50 @@ latency wording; these were corrected. Final follow-up hostile review found
 no further actionable findings. The active 3600-second capture started before
 this change and therefore uses the old property-query cadence; post-change
 live behavior remains to be verified with a bounded capture.
+
+## IR-161: Preserve the full incomplete SwiftShader observer capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T093436-1428464/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the normalized host-side files and a bounded, sanitized
+summary for the 3600-second SwiftShader observer capture. Keep it marked
+incomplete and non-comparable because Cuttlefish did not produce
+`sys.boot_completed=1`, `VIRTUAL_DEVICE_BOOT_COMPLETED`, or the guest capture
+command output. Record the observed `system_server` exits, zygote restarts,
+timed-out ADB shell probes, guest untracked-process events, memory samples,
+and cleanup state without assigning a boot root cause.
+
+**Reason.** The long capture adds a later boot-progress window than the
+previous 2400-second observation, including `system_server` activity and
+subsequent process exits, while its ADB property probes still do not return
+accepted boot state. Preserving the normalized evidence makes the next
+bounded diagnostic run actionable. The captured timing correlations and
+logcat counts are insufficient to establish why Android failed to complete
+boot; the summary therefore distinguishes observations from causal claims.
+
+**Verification.** The summary was checked against `host.json`, `MISSING.txt`,
+the normalized kernel, launcher, and observer logs, and the bounded final
+logcat result. The ten original capture files matched their Lima source
+copies by SHA-256, with digests retained in the artifact's
+`source-sha256.txt`; each recorded digest passes `shasum -a 256 -c`. The
+source and local copies were compared on 2026-10-04. Normalization changed
+zero files. Cleanup claims are limited to the observer's recorded private
+ADB-server shutdown and `MISSING.txt`'s crosvm lookup at artifact-collection
+time; the bundle has no complete fleet, process, or listener audit. After
+adding the hash manifest and revised summary, all 12 artifact files
+(2,591,381 bytes total; largest file 1,433,649 bytes) passed the 64 MiB size
+limit and scans for the tested host paths, private-key markers, and
+MAC/EUI-64 patterns. The four JSON/JSONL files parsed successfully. The
+initial hostile review found chronology, cleanup-evidence, hash-auditability,
+and premature review-status issues. The chronology and cleanup wording were
+corrected, digests were retained, and review status is explicitly pending.
+A follow-up review then found that the JSON/JSONL parsing claim included
+non-JSON files; this wording was narrowed. Final hostile review found no
+further actionable findings. `git diff --check` and all six checks in
+`scripts/ci/run-checks.sh` passed after the evidence corrections. Keep IR-161 in
+`Needs maintainer review` until the incomplete-capture evidence and its
+interpretation are reviewed.

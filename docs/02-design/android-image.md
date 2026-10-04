@@ -645,6 +645,11 @@ run it (it needs host virglrenderer with EGL; Mesa llvmpipe may be enough),
 the operator must explicitly select the `guest_swiftshader` fallback using
 the environment variables in §8.3. The fallback records its source-derived
 `drm_virgl` properties separately.
+For `target` with `drm_virgl`, `capture.sh` sets the host
+`EGL_PLATFORM=surfaceless` before both CVD commands and records
+`eglPlatform=surfaceless` in `host.json`. For all other profile and GPU-mode
+combinations, `capture.sh` clears any inherited `EGL_PLATFORM` and records
+`eglPlatform=null`.
 For the reference capture, `capture.sh` passes the profile's `--gpu_mode` to
 both group creation and named-group start. Cuttlefish may select its default
 again at start, so `targetGpuMode` in `host.json` is only the requested mode;
@@ -989,6 +994,8 @@ nested-virtualization availability, and capture duration. It records
 `targetGpuMode` as the requested target-profile mode and `selectedGpuMode` as
 the actual mode from the selected instance in `cuttlefish_config.json`, along
 with `gpuVhostUserEnabled` from that same instance configuration.
+Schema version 2 adds `eglPlatform`, which records the host EGL platform
+selected for a VirGL target capture.
 Compare GPU profiles only when the actual selected mode matches the intended
 mode and vhost-user GPU is disabled; a mismatch or missing/invalid setting
 keeps the capture incomplete, even when the boot observer collected data

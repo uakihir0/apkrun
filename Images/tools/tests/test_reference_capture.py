@@ -188,6 +188,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
             """\
             #!/bin/sh
             if [ "${1:-}" = create ]; then
+              printf '%s\\n' "${EGL_PLATFORM:-unset}" \\
+                >> "$APKRUN_PROFILE_EGL_PLATFORM_LOG"
               shift
               base_directory="$HOME"
               instance_num=1
@@ -227,6 +229,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
             fi
             for argument in "$@"; do
               if [ "$argument" = start ]; then
+                printf '%s\\n' "${EGL_PLATFORM:-unset}" \\
+                  >> "$APKRUN_PROFILE_EGL_PLATFORM_LOG"
                 printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
                 instance=$(cat "$APKRUN_PROFILE_INSTANCE_FILE")
                 instance_num=${instance##*/cvd-}
@@ -357,6 +361,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     tmpdir_log = tmp_path / "capture-tmpdir.txt"
     base_directory_log = tmp_path / "capture-base-directory.txt"
     timeout_log = tmp_path / "timeout-commands.txt"
+    egl_platform_log = tmp_path / "egl-platform.txt"
     instance_file = tmp_path / "instance-path.txt"
     home = tmp_path / "home"
     home.mkdir()
@@ -372,6 +377,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
             "APKRUN_PROFILE_START_LOG": str(start_log),
             "APKRUN_PROFILE_TMPDIR_LOG": str(tmpdir_log),
             "APKRUN_PROFILE_BASE_DIRECTORY_LOG": str(base_directory_log),
+            "APKRUN_PROFILE_EGL_PLATFORM_LOG": str(egl_platform_log),
             "TIMEOUT_LOG": str(timeout_log),
             "CVD_HOST_DIR": str(cvd_host),
             "ANDROID_PRODUCT_OUT": str(product_out),
@@ -380,6 +386,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
             "TMPDIR": str(tmp_path),
         }
     )
+    environment["EGL_PLATFORM"] = "drm"
 
     result = subprocess.run(
         ["sh", str(capture_script), profile],
@@ -415,6 +422,11 @@ def test_capture_script_uses_each_profile_launch_configuration(
         assert f"--gpu_mode={expected_gpu_mode}" in launch_arguments
     assert "--gpu_vhost_user_mode=off" in launch_arguments
     assert "--gpu_vhost_user_mode=off" in expected_start_arguments
+    expected_egl_platform = "surfaceless" if profile == "target" else "unset"
+    assert egl_platform_log.read_text(encoding="utf-8").splitlines() == [
+        expected_egl_platform,
+        expected_egl_platform,
+    ]
     secure_hals = "--secure_hals=guest_keymint_insecure,guest_gatekeeper_insecure"
     assert (secure_hals in launch_arguments) is expected_secure_hals
 
@@ -434,8 +446,10 @@ def test_capture_script_uses_each_profile_launch_configuration(
     capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
+    assert metadata["schemaVersion"] == 2
     assert metadata["selectedGpuMode"] == (expected_gpu_mode or "guest_swiftshader")
     assert metadata["gpuVhostUserEnabled"] is False
+    assert metadata["eglPlatform"] == ("surfaceless" if profile == "target" else None)
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     if observer_enabled:
         observer_records = [

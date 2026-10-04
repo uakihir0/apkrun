@@ -160,6 +160,8 @@ fi
 target_gpu_mode=${APKRUN_TARGET_GPU_MODE:-drm_virgl}
 virgl_source_revision=${APKRUN_DRM_VIRGL_SOURCE_REVISION:-}
 virgl_properties_file=${APKRUN_DRM_VIRGL_PROPS_FILE:-}
+capture_egl_platform=
+unset EGL_PLATFORM
 if [ "$profile" = target ]; then
   case "$target_gpu_mode" in
     drm_virgl) ;;
@@ -177,6 +179,11 @@ if [ "$profile" = target ]; then
       exit 2
       ;;
   esac
+  if [ "$target_gpu_mode" = drm_virgl ]; then
+    capture_egl_platform=surfaceless
+    EGL_PLATFORM=$capture_egl_platform
+    export EGL_PLATFORM
+  fi
 fi
 
 timeout_seconds=${APKRUN_BOOT_TIMEOUT_SECONDS:-600}
@@ -1204,6 +1211,7 @@ APKRUN_CAPTURE_CVD_INSTANCE_NUM=$cvd_instance_num \
 APKRUN_CAPTURE_TARGET_GPU_MODE=$target_gpu_mode \
 APKRUN_CAPTURE_SELECTED_GPU_MODE=$selected_gpu_mode \
 APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED=$selected_gpu_vhost_user_enabled \
+APKRUN_CAPTURE_EGL_PLATFORM=$capture_egl_platform \
 APKRUN_CAPTURE_VIRGL_SOURCE_REVISION=$virgl_source_revision \
 APKRUN_CAPTURE_DURATION=$((capture_finished_at - capture_started_at)) \
 python3 - "$stage/host.json" <<'PY'
@@ -1214,7 +1222,7 @@ import sys
 from pathlib import Path
 
 document = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "buildId": "16373615",
     "profile": os.environ["APKRUN_CAPTURE_PROFILE"],
     "hostKind": os.environ["APKRUN_CAPTURE_HOST_KIND"],
@@ -1232,6 +1240,7 @@ document = {
     "gpuVhostUserEnabled": (
         {"true": True, "false": False}.get(os.environ["APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED"])
     ),
+    "eglPlatform": os.environ["APKRUN_CAPTURE_EGL_PLATFORM"] or None,
     "drmVirglSourceRevision": (
         os.environ["APKRUN_CAPTURE_VIRGL_SOURCE_REVISION"] or None
     ),

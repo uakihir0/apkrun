@@ -1,0 +1,2343 @@
+{
+  "buildId": "16373615",
+  "schemaVersion": 1,
+  "scope": {
+    "apexPayloads": {
+      "apexPayloads": 93,
+      "byPartition": {
+        "system_a": 38,
+        "system_ext_a": 7,
+        "vendor_a": 48
+      },
+      "filesystemFormats": {
+        "erofs": 1,
+        "ext4": 92
+      },
+      "initRcFiles": 66,
+      "matches": 0,
+      "payloads": [
+        {
+          "containerSha256": "d356fdffa8948c2299829fdf9da335708523dc1c39c9d2424109f7aa52e86bfe",
+          "containerSize": 9220096,
+          "extractedRegularFiles": 20,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.adbd.apex",
+          "payloadImageSha256": "787c57954476e142e0e2ed7cbec9ec1d8b35286664d404f5cc86c9892f817e88",
+          "payloadImageSize": 8888320
+        },
+        {
+          "containerSha256": "3619614d84363bd88f8647542e69cb861e8a47ada98019d1ea6456fa1e9b5aab",
+          "containerSize": 23638016,
+          "extractedRegularFiles": 20,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.adservices.apex",
+          "payloadImageSha256": "e5f4151d7f3afcfb23acee252c3b4d8efea20f8bd1708b896680a4e90d321ff2",
+          "payloadImageSize": 23441408
+        },
+        {
+          "containerSha256": "18451d0ac06a9532a0c75f2f89544a096ebb8b2a1b4ee7357b5747d972e60a42",
+          "containerSize": 360448,
+          "extractedRegularFiles": 5,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.apex.cts.shim.apex",
+          "payloadImageSha256": "fb08e966a5fca9c872961586172e51bdc341e7ed43fa09073c6a87d841dcb05d",
+          "payloadImageSize": 274432
+        },
+        {
+          "containerSha256": "6b1906358ca4d5649027d6715a36310dd6544462c4db758818dd2113e43ea90b",
+          "containerSize": 4747264,
+          "extractedRegularFiles": 16,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.appsearch.apex",
+          "payloadImageSha256": "605db7a42c4b5e0993a4bd98ae445c2c09d50adf300051690e9162a92bfb7095",
+          "payloadImageSize": 4550656
+        },
+        {
+          "containerSha256": "b283f5e774f8a4b2d11def1f9f1bdfc244affd0e06de2ab370a5b65f4779d652",
+          "containerSize": 32260096,
+          "extractedRegularFiles": 64,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.art.apex",
+          "payloadImageSha256": "6b1cc0eb8b191d0c12e7392a294e464b26e66b757abe69762e16900f1f021f7d",
+          "payloadImageSize": 32063488
+        },
+        {
+          "containerSha256": "9328b824f4b6eb02cc4d6ad09131063a7e8847433f3aad8749f34f6b82b690c9",
+          "containerSize": 27176960,
+          "extractedRegularFiles": 27,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.bt.apex",
+          "payloadImageSha256": "756bc45595f1290d72fa3c96a63cb1969ecc11c1ad0f86180c27117b7d929890",
+          "payloadImageSize": 26976256
+        },
+        {
+          "containerSha256": "8114b6ed736ec9d149a0b7d2afef4f7f909a3c0c4ec494a95880a19589cb728d",
+          "containerSize": 23220224,
+          "extractedRegularFiles": 12,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.cellbroadcast.apex",
+          "payloadImageSha256": "a7b3dcbd23bab8445161c23061e4ad81cf17d0943fe968de24f3ac2f3e878fba",
+          "payloadImageSize": 23064576
+        },
+        {
+          "containerSha256": "4d6f9741f29e749096b0ab49381fb9bdc03cefd55191f1af0b7dd7a43f5a0846",
+          "containerSize": 6234112,
+          "extractedRegularFiles": 20,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.configinfrastructure.apex",
+          "payloadImageSha256": "474d2c70e85b53a6acdbfcd09c3e864cb5ceb2a216e0202d57e675db1d9e0086",
+          "payloadImageSize": 6062080
+        },
+        {
+          "containerSha256": "0fc32d2e6e0b967fab2bd44220bc1d3efa1091ee835bb5033ea2d8d13f21625c",
+          "containerSize": 6217728,
+          "extractedRegularFiles": 163,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.conscrypt.apex",
+          "payloadImageSha256": "7be99bc0d1986d4896c2bed80177bc96955a989583c660ef1f84c2c544d12675",
+          "payloadImageSize": 6012928
+        },
+        {
+          "containerSha256": "31eb2255b98abb076af0a9d1b8353bf7c37a5b75bc27482625e76c977a093b8d",
+          "containerSize": 524288,
+          "extractedRegularFiles": 11,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.crashrecovery.apex",
+          "payloadImageSha256": "0976ec15b34e5368a82d0ca6cb0c169068e3e947ec80388188e41852bd39dc1d",
+          "payloadImageSize": 380928
+        },
+        {
+          "containerSha256": "2cff005ec4fbefb8718cb78be397a4aea4c054083205f18266a2fa3f992f5b6b",
+          "containerSize": 6205440,
+          "extractedRegularFiles": 14,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.devicelock.apex",
+          "payloadImageSha256": "a5955ae57de554594ce6b467eeabc50a9958b49618c822cae3a7b0fd3cc0952b",
+          "payloadImageSize": 6045696
+        },
+        {
+          "containerSha256": "2e8f1427473e85a8ddd2828baad1e0777afadc38d2bb29e33cbff59c4a5a71b3",
+          "containerSize": 26882048,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.extservices.apex",
+          "payloadImageSha256": "be012d24ca676cb18385d1ab4b712e1c6cc8b518740c81d8163b02025bde853e",
+          "payloadImageSize": 26689536
+        },
+        {
+          "containerSha256": "a4be803d5a8099a60f727bd28c58264e8385b5e5f777ac04db7e906c62592cb2",
+          "containerSize": 17559552,
+          "extractedRegularFiles": 16,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.healthfitness.apex",
+          "payloadImageSha256": "ee885b7b95ea66ee207de55fb2e59319da658a48314ba37533de0e1dd5428a36",
+          "payloadImageSize": 17399808
+        },
+        {
+          "containerSha256": "77b543391ba8b5b90b4f67ca0864a87b7630c8510a9823934f5e36ca9146a7be",
+          "containerSize": 39489536,
+          "extractedRegularFiles": 13,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.i18n.apex",
+          "payloadImageSha256": "59470fd7d4677256011e18d0c077285219c980b42a9ee5aaaa741933000ea822",
+          "payloadImageSize": 39342080
+        },
+        {
+          "containerSha256": "199509d0593d039288d61f499313a383137e97240c9bc9b13e17fa9989223ac7",
+          "containerSize": 1036288,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.ipsec.apex",
+          "payloadImageSha256": "55726a72f282723115d27b22681993302010e546f55bb2b607549442f159ed70",
+          "payloadImageSize": 901120
+        },
+        {
+          "containerSha256": "e397fb04c8c98472a81beb353ff8eb19a4b8ea38611e1e2907af225cc8b52ec8",
+          "containerSize": 7053312,
+          "extractedRegularFiles": 41,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.media.apex",
+          "payloadImageSha256": "62155174e907c0398c74c8eecb01d51f7ed310540b08850bd9b1997ed7fd740d",
+          "payloadImageSize": 6774784
+        },
+        {
+          "containerSha256": "abe65197b657e0f8145a4c160f0fe6c3cdfde5e36c2069be36aaeb67f9bc139f",
+          "containerSize": 39325696,
+          "extractedRegularFiles": 112,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.media.swcodec.apex",
+          "payloadImageSha256": "7ef775f1090897df5205c3e82073de5a55617c1f365a4324b3aaa07607eeb3b1",
+          "payloadImageSize": 39145472
+        },
+        {
+          "containerSha256": "02643213c0cb4c6247a50a69b0c26aa7fba044b3866a9f52af45a971d953231d",
+          "containerSize": 29171712,
+          "extractedRegularFiles": 25,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.mediaprovider.apex",
+          "payloadImageSha256": "ebfe8a8f9bf9b49155d8d6a17fc629f1a96b37a2d8fba856dc08866eebe025f3",
+          "payloadImageSize": 28909568
+        },
+        {
+          "containerSha256": "56e39e13fed0f40cc41a86a7667b40bd86e92c3e76a84e745f6029df139f8fad",
+          "containerSize": 5668864,
+          "extractedRegularFiles": 3,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.neuralnetworks.apex",
+          "payloadImageSha256": "578422a95cafee1ecb7571bf14d1921a747cbdb4f0ff58ac3d69f72bbb7d0b64",
+          "payloadImageSize": 5509120
+        },
+        {
+          "containerSha256": "a5878a39b1dae791f845670697aebb71a9796f265c498bb377ef7b9f9993408b",
+          "containerSize": 10604544,
+          "extractedRegularFiles": 23,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.nfcservices.apex",
+          "payloadImageSha256": "000029243fc9bb6c0eaf774b6421aa7d486835b62e9437d948c205ce7e5af509",
+          "payloadImageSize": 10412032
+        },
+        {
+          "containerSha256": "727ec1bf72749dc111df5abf47ef750f1449bac6b81534ca2a62e0d39e29fa03",
+          "containerSize": 6017024,
+          "extractedRegularFiles": 50,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.npumanager.apex",
+          "payloadImageSha256": "34300f0845fff377ee60afc9d289b4a8ba4f024d4d818471d72b62a33446898c",
+          "payloadImageSize": 5840896
+        },
+        {
+          "containerSha256": "ac48396d520ce0c44dab29abf676a368d541957d75a80ed248a42be9da4ff173",
+          "containerSize": 16449536,
+          "extractedRegularFiles": 16,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.ondevicepersonalization.apex",
+          "payloadImageSha256": "04b8a54830259a4d3a375a294f62a9a991888c85c3332cf6259e76b30448c79f",
+          "payloadImageSize": 16252928
+        },
+        {
+          "containerSha256": "e7ab072f2d4d3bf095df493a1cd1ae7256e6c2573b2966bafa443c804679c986",
+          "containerSize": 3706880,
+          "extractedRegularFiles": 17,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.os.statsd.apex",
+          "payloadImageSha256": "bd3878364e0f525a5ecfe40db0fe32d35770bb9edb3319f550008951f48fd870",
+          "payloadImageSize": 3506176
+        },
+        {
+          "containerSha256": "fc0859af1d73808caa14132be3effb88d5e5211aedae1b1c8bb6e8b0fc80deab",
+          "containerSize": 29679616,
+          "extractedRegularFiles": 18,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.permission.apex",
+          "payloadImageSha256": "4a8bd8c7a8bb7dec686bbad1426cc05a789fdb6fbafa14d0716a24b46c940676",
+          "payloadImageSize": 29515776
+        },
+        {
+          "containerSha256": "237d67076b28976938868f1543c21a69304d1c5009cbe98f149eeace2aa32c99",
+          "containerSize": 2678784,
+          "extractedRegularFiles": 14,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.profiling.apex",
+          "payloadImageSha256": "168e11453b70fb65ec1f0c411c774fd05f4be6057ace45013cb2e624dd11120d",
+          "payloadImageSize": 2490368
+        },
+        {
+          "containerSha256": "2e0927de692a2cd3aece0732a852e21c9139836d9bb80de516a3749688f605f5",
+          "containerSize": 376832,
+          "extractedRegularFiles": 1,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.resolv.apex",
+          "payloadImageSha256": "ca7a9dffce7e587c6c0b8456202b626919cf0047e2f0b93daa5b53f0a2978acc",
+          "payloadImageSize": 270336
+        },
+        {
+          "containerSha256": "4348060e06b321d09a0619a952673d81e509fbae832270a50533a773ce3f0686",
+          "containerSize": 1576960,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.rkpd.apex",
+          "payloadImageSha256": "6731b8b034e1cae89a35e290a9737314d2bc4027c1f2b95b83b9f3f3e7888196",
+          "payloadImageSize": 1413120
+        },
+        {
+          "containerSha256": "6e320d2a2537a66dfb24812b84d5ecd3be536df91e534a6a472cfbc20ba8a8f9",
+          "containerSize": 9109504,
+          "extractedRegularFiles": 15,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.runtime.apex",
+          "payloadImageSha256": "1c933d96602218926ce765fd9045c6ac0b4c694ffd577ce1f88d9839b1cc67d8",
+          "payloadImageSize": 8970240
+        },
+        {
+          "containerSha256": "8ea0953e4ea7bdd4b942f7ef136210ff9be60c3cffb1af53dc25d3edf1f5c2e3",
+          "containerSize": 409600,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.scheduling.apex",
+          "payloadImageSha256": "5964a204df3d21221b5ab947b0381c2e31a074f58104debcef27a234da559a21",
+          "payloadImageSize": 274432
+        },
+        {
+          "containerSha256": "9f1700a931631eb884daf602a5a6a190418af9ad21f0ccb850c020af1e98fa59",
+          "containerSize": 1409024,
+          "extractedRegularFiles": 9,
+          "filesystem": "ext4",
+          "initRcFiles": 2,
+          "partition": "system_a",
+          "path": "system/apex/com.android.sdkext.apex",
+          "payloadImageSha256": "d0672601cf225aaffa5745f1a2943714e1869432718727e18226f51c3810742d",
+          "payloadImageSize": 1241088
+        },
+        {
+          "containerSha256": "68b33a040be072f719a26b2efb084770cdee3b38998836f74282926cf03f3f29",
+          "containerSize": 5230592,
+          "extractedRegularFiles": 19,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.telephonycore.apex",
+          "payloadImageSha256": "9df1403ad7d8113ff15bcb2b5564507cb56069d398897ed8d4da7d2dafda9e8e",
+          "payloadImageSize": 5074944
+        },
+        {
+          "containerSha256": "697f7c916cd2284ffc42347affb360e26fc2b44eef5ccd8438f85f1dc538e58a",
+          "containerSize": 31277056,
+          "extractedRegularFiles": 60,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.tethering.apex",
+          "payloadImageSha256": "e64e2862468758638e0f13e4c8e638a187f83c2148db77551c0a2b84f26a80ac",
+          "payloadImageSize": 30994432
+        },
+        {
+          "containerSha256": "b4c30c2a40ddc2ca2ce495969002bab38c90b0e6b2c30b1d9b3dc85f29080442",
+          "containerSize": 978944,
+          "extractedRegularFiles": 27,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.tzdata.apex",
+          "payloadImageSha256": "16e6f23b28a606e72a62d43b7d86b57bd38ae286cce948d65f47f50c48f78558",
+          "payloadImageSize": 872448
+        },
+        {
+          "containerSha256": "e333493742aab7d2de0469f1eeec0bda1460191fae43153a1bd850f02ba0c282",
+          "containerSize": 4423680,
+          "extractedRegularFiles": 30,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.uprobestats.apex",
+          "payloadImageSha256": "62df3778852154874ae6cb93e7bb7b5a9bbd7f1757849f6e1623b297ab246608",
+          "payloadImageSize": 4165632
+        },
+        {
+          "containerSha256": "76baf47b12a281b3db1654c9ff9910a1a1d2b1b4ab9443ab5daac16820c918e7",
+          "containerSize": 7217152,
+          "extractedRegularFiles": 17,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.uwb.apex",
+          "payloadImageSha256": "4cd736a70eb3f44b651239d7ee184801ff9a0d76be1de0409800c1f8b8acf9d0",
+          "payloadImageSize": 7016448
+        },
+        {
+          "containerSha256": "8dcc952e1e4c783996aba3e61b29b76c555d0572661f8f73da1ad1a48d53d825",
+          "containerSize": 63950848,
+          "extractedRegularFiles": 42,
+          "filesystem": "erofs",
+          "initRcFiles": 3,
+          "partition": "system_a",
+          "path": "system/apex/com.android.virt.apex",
+          "payloadImageSha256": "fb3ba2174951736b3152eaad90501bb0782720f3955a536b17ef5714f1aa227b",
+          "payloadImageSize": 63688704
+        },
+        {
+          "containerSha256": "fc8ca27c6eecbde52f55176cd8857d64d63f696a6c13bad6b4d1bd6a33baaf0c",
+          "containerSize": 6418432,
+          "extractedRegularFiles": 14,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_a",
+          "path": "system/apex/com.android.webapp.apex",
+          "payloadImageSha256": "1729236e117bea1455cf856587bc2b271e83fcf9e9abc0c393c168998c9e9b7e",
+          "payloadImageSize": 6225920
+        },
+        {
+          "containerSha256": "7a26a6041e970d239d962e0f3a5eccfcaed6b4e77b77e4df913903be521d790e",
+          "containerSize": 19681280,
+          "extractedRegularFiles": 38,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_a",
+          "path": "system/apex/com.android.wifi.apex",
+          "payloadImageSha256": "be21b1d07272130e09ef1bc4f4704fd6614541a51554254ba2616733d7c2f00a",
+          "payloadImageSize": 19484672
+        },
+        {
+          "containerSha256": "daf6a86c9fe03dd88fd8bf1aec565a229cb1571190e6a022987e34241a7be4ef",
+          "containerSize": 4980736,
+          "extractedRegularFiles": 17,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.compos.apex",
+          "payloadImageSha256": "1d93f7451aef02eb2b05d6c41f7a2fe1c61a86b14b2182e5ba6b7e8f2bc57152",
+          "payloadImageSize": 4808704
+        },
+        {
+          "containerSha256": "e8e56eaca67feaf2bbf666ffcddc552b78ff58617c26658c842422bb37f65721",
+          "containerSize": 557056,
+          "extractedRegularFiles": 3,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.hardware.biometrics.face.virtual.apex",
+          "payloadImageSha256": "f8c9fd003e9ebfba9b4a69972a990ae2923f753b8af0693a716a6053cc388443",
+          "payloadImageSize": 413696
+        },
+        {
+          "containerSha256": "01ffcabbf449962bbc94ff66ac65788b936328cc32bb3db84af14b561014dfd3",
+          "containerSize": 835584,
+          "extractedRegularFiles": 3,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.hardware.biometrics.fingerprint.virtual.apex",
+          "payloadImageSha256": "e0db1feb4bc9a4686b0866a310cf4f8653e3266562160e5a24b0c5bd2ce6e85b",
+          "payloadImageSize": 692224
+        },
+        {
+          "containerSha256": "3916537a98c9922d1be5bdeceb0ca9ad248621aeef99580ade6d116ec24ec4b6",
+          "containerSize": 24473600,
+          "extractedRegularFiles": 140,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.vndk.v31.apex",
+          "payloadImageSha256": "48e187167d4981c653d50043d93a51de908cd1a3185d27881169ec78b7989fbd",
+          "payloadImageSize": 24313856
+        },
+        {
+          "containerSha256": "c0892c32e846e1ce754de1366724328de51b2ae8b6defa6838aea22f9cdd19ed",
+          "containerSize": 24539136,
+          "extractedRegularFiles": 140,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.vndk.v32.apex",
+          "payloadImageSha256": "7e0bcc32a1f4e0461d456020d49f7d1b9c04b8fc59a32f375264654b775f66e5",
+          "payloadImageSize": 24379392
+        },
+        {
+          "containerSha256": "8ea4235a561661c9fa2dfd4f070833eede9108504da292d6398c02ffa801a854",
+          "containerSize": 27971584,
+          "extractedRegularFiles": 169,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.vndk.v33.apex",
+          "payloadImageSha256": "14a37ea132ca1f34e0970f334b2905dc8260e5c1c5f6f268a62a88505d82e72d",
+          "payloadImageSize": 27811840
+        },
+        {
+          "containerSha256": "075fa8323e4d3b005e2aa7e4b34faa0e1bf8c0507a9b504f13c0ae55a9fccba6",
+          "containerSize": 25001984,
+          "extractedRegularFiles": 126,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "system_ext_a",
+          "path": "apex/com.android.vndk.v34.apex",
+          "payloadImageSha256": "0cb44e7a4519c6c7ee01490559e3151b87206ef976d9a27944fcfd621bf9db79",
+          "payloadImageSize": 24834048
+        },
+        {
+          "containerSha256": "736b207a7201e5797c0085e2e6cb5ddc7c74226e959975ae1f3b330f6fa48b8e",
+          "containerSize": 71118848,
+          "extractedRegularFiles": 69,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.audio.apex",
+          "payloadImageSha256": "3a7da3a61639aff1e824a38dd82ed50fce442222ce6943be7c18d93c9a5573b8",
+          "payloadImageSize": 70967296
+        },
+        {
+          "containerSha256": "6b72a1a9ee3520fec3302fa9c95295d0aa3f4ab70791c70844de968c2e5ccae1",
+          "containerSize": 507904,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.authsecret.apex",
+          "payloadImageSha256": "cbf9fbc8a41cf4977940a28be8019e41df1c56fcfb3d0e466c8570342ad67c54",
+          "payloadImageSize": 376832
+        },
+        {
+          "containerSha256": "f4a6c924d88ac55bfa04bafb9243eda14d0bffdb4d7ef4178702b63902a7f8c8",
+          "containerSize": 598016,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.boot.apex",
+          "payloadImageSha256": "8b5696d16ddc425e57d288036b4db2dfe96aa66b6ce067e0f3a2a68df9bbae13",
+          "payloadImageSize": 466944
+        },
+        {
+          "containerSha256": "069f05d2461cdabb286839f47d84e86e86e0adf10dc9c525862f7103844ddb1b",
+          "containerSize": 405504,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.cas.apex",
+          "payloadImageSha256": "9fc087a5f55de44f741f1b8bb151df512d98a8ba4c3daa008fd5d460b916fb56",
+          "payloadImageSize": 274432
+        },
+        {
+          "containerSha256": "088079d0a84882ef0551c46602df1ee4f3a202b94320251a69c44a3c0c4bbedd",
+          "containerSize": 2162688,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.contexthub.apex",
+          "payloadImageSha256": "e2a002db68c9ed97f8ec97b0c365bd7415907ca100f44db082e80b55131e1cae",
+          "payloadImageSize": 2031616
+        },
+        {
+          "containerSha256": "6d8cea964686b5b036bbe9b98981c5a4a58794e2a31667f83c8498bf4ef89bf9",
+          "containerSize": 4317184,
+          "extractedRegularFiles": 9,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.drm.clearkey.apex",
+          "payloadImageSha256": "bc33ec3a117507ea2d8c48acd232d21f79237072b62a8ef54a26f5d2ca961dfe",
+          "payloadImageSize": 4177920
+        },
+        {
+          "containerSha256": "7c4675f3cf52739ea591c7b851b940f38d9aa4dada298a37ddfd03daa0a9cb5c",
+          "containerSize": 1990656,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.dumpstate.apex",
+          "payloadImageSha256": "0c434e5934ee6f73b4ee298021553c8e4a340d37ddb87aa3d2ddcf4425bdd169",
+          "payloadImageSize": 1859584
+        },
+        {
+          "containerSha256": "fa0dae4647c8a92819967c80a52eae5435214d289e7ebbe6f5156689612d5015",
+          "containerSize": 3530752,
+          "extractedRegularFiles": 21,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.gatekeeper.cf_remote.apex",
+          "payloadImageSha256": "ebfdccb7761bce04af750047b151cc191c5e0731401e762d1a8000a7d6d3cae6",
+          "payloadImageSize": 3399680
+        },
+        {
+          "containerSha256": "6fda86cfa147bbe4e3cba37643b09e4015ec93d89bd110f696b140ed7ee05f80",
+          "containerSize": 5033984,
+          "extractedRegularFiles": 19,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.gatekeeper.nonsecure.apex",
+          "payloadImageSha256": "f1ee1204bdfb128b3e6b7b05ac02c0471f664229abcd31c46153644b3b5af2ff",
+          "payloadImageSize": 4902912
+        },
+        {
+          "containerSha256": "06d44b75d7e2469015021794ee4451792ff4b7a770d5d301a7c04d55efc666f4",
+          "containerSize": 6742016,
+          "extractedRegularFiles": 18,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.gnss.apex",
+          "payloadImageSha256": "3e767f5076cdd2afa535473f231592d429ccbdad558eb5e15ddf544cc5a579e5",
+          "payloadImageSize": 6610944
+        },
+        {
+          "containerSha256": "48881bb991c8eeb0473f2754c976375d3e43b146b050cb6d33a6b67ecfb85ce1",
+          "containerSize": 5087232,
+          "extractedRegularFiles": 30,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex",
+          "payloadImageSha256": "7df868a476796b7d3169ba3c803bf9b0ae8dcd0333a11a9799d8032f255ad47b",
+          "payloadImageSize": 4952064
+        },
+        {
+          "containerSha256": "a08b320b272b59c45a227f54a1322d5325f5798c7869c3846270130eb13c0d24",
+          "containerSize": 9900032,
+          "extractedRegularFiles": 39,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.graphics.composer.ranchu.apex",
+          "payloadImageSha256": "a9682791672295cc444569178a6baba02db30ae71fcbaff6e239a2bb30116bb8",
+          "payloadImageSize": 9756672
+        },
+        {
+          "containerSha256": "3c85699363442e947ebe35908b79dc8c965ab1577dd5e0beca0e67f93deaec2e",
+          "containerSize": 516096,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.input.processor.apex",
+          "payloadImageSha256": "65183f3a6d87427f33ac9d5b07d6009f8cca78fa69ea2973c343218a20117687",
+          "payloadImageSize": 385024
+        },
+        {
+          "containerSha256": "31579df3d320cbb1cd91e2d55dfce2bd85e05a7999e5ff9957e4c1f6a1128cc9",
+          "containerSize": 385024,
+          "extractedRegularFiles": 3,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.keymint.rust_cf_guest_trusty_nonsecure.apex",
+          "payloadImageSha256": "b4dc5430e7e036c637dde0f0644b5b890423dc4a98c1dbab8bcb2a981c4eb2a9",
+          "payloadImageSize": 274432
+        },
+        {
+          "containerSha256": "cdceb61fc296bccdd006654721dbc79e3e8be67da160ca0df548a48b44d5f6ce",
+          "containerSize": 3596288,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.keymint.rust_cf_remote.apex",
+          "payloadImageSha256": "dfbb3cc3dbedb508af85756e9c1a7ae70ff6eddf6f2e51e2e503a65dc7345bbf",
+          "payloadImageSize": 3461120
+        },
+        {
+          "containerSha256": "ef51ac0d48b3ee4125c4033a4e0fa81e0894c72680e82244fd5a17f32508c811",
+          "containerSize": 7282688,
+          "extractedRegularFiles": 12,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.keymint.rust_nonsecure.apex",
+          "payloadImageSha256": "dab5a206c0babd220942b3c7590818adef5ac7db78348d6aeb624b019f59d039",
+          "payloadImageSize": 7147520
+        },
+        {
+          "containerSha256": "92f1cc22d5ac9d7756aa09e8d28b71cb6c39adf3bab6c274b4f79e059feb2011",
+          "containerSize": 512000,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.memtrack.apex",
+          "payloadImageSha256": "61ca4d1371e3ebe70ce5ddcac70b54e51fb1eee043777e48cbd86941a364fb3a",
+          "payloadImageSize": 380928
+        },
+        {
+          "containerSha256": "5fb0c75c460177d308299960c6a22a5222e96e71566cc13717b8ea16b324daae",
+          "containerSize": 2928640,
+          "extractedRegularFiles": 10,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.net.nlinterceptor.apex",
+          "payloadImageSha256": "7d6be022ae0d62c53f32bbf1027f840d092b16a1a988e04f9921e196e8ea52fa",
+          "payloadImageSize": 2797568
+        },
+        {
+          "containerSha256": "b0faa07075c1cb8575b5d5e4936f7fbcfc5433e2810ef1642679d59493c76173",
+          "containerSize": 15355904,
+          "extractedRegularFiles": 27,
+          "filesystem": "ext4",
+          "initRcFiles": 3,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.neuralnetworks.apex",
+          "payloadImageSha256": "fab2b6c792726617cf4c15e651803bf29ff51122da531b4c1841583ed401edb8",
+          "payloadImageSize": 15208448
+        },
+        {
+          "containerSha256": "aa2b95b919c41d5e2bfc077c3718bd655e48928f246981f21dcb0c51db869010",
+          "containerSize": 2224128,
+          "extractedRegularFiles": 15,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.power.apex",
+          "payloadImageSha256": "9661e5af4059f411bb88be6f2b2269ddbb5948c591bbf9753d59ea2511624d4a",
+          "payloadImageSize": 2093056
+        },
+        {
+          "containerSha256": "71f314aa5226e993461cb4035129e4728745b07a0d637ce622c000f27bef2fab",
+          "containerSize": 528384,
+          "extractedRegularFiles": 5,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.rebootescrow.apex",
+          "payloadImageSha256": "a98ac5f357581ad3a3ad0060127847e5d19fcda79767493e092cf8201cc9228a",
+          "payloadImageSize": 397312
+        },
+        {
+          "containerSha256": "368b05c184a14130bb92cdd9811b942829b64fc97d988580ab619d4b475d8636",
+          "containerSize": 536576,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.secure_element.apex",
+          "payloadImageSha256": "539cf8e6ef751386324b79c6b2990681dcfeb0331b98506b6d147bc6dd33e426",
+          "payloadImageSize": 405504
+        },
+        {
+          "containerSha256": "e95369ce2c73fa05928c73612297053989a25dd70d0428abac8461da92535aae",
+          "containerSize": 3522560,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.security.authgraph.apex",
+          "payloadImageSha256": "d778eb2b65c545d60188f139caffa32727b47471f1227a4ad5ca110e90fa3484",
+          "payloadImageSize": 3387392
+        },
+        {
+          "containerSha256": "0b2317f2de37171e45174673c0ec82074e24c7f0ab16a44e26be071e9f6f5d70",
+          "containerSize": 3661824,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.security.secretkeeper.apex",
+          "payloadImageSha256": "6b3409fd5804b8b5407844936e0abef8678a21684581a3bde66f45fadc915a87",
+          "payloadImageSize": 3526656
+        },
+        {
+          "containerSha256": "338178f00214cd2abc3c917d8dda4fe86b6a9697d1bcd266f5bc8b9e64c7b6ec",
+          "containerSize": 532480,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.tetheroffload.apex",
+          "payloadImageSha256": "157fab834f64bf9bc71d36a9ece3da3cd237fc084bc1ffd7e3166cc5444664f5",
+          "payloadImageSize": 401408
+        },
+        {
+          "containerSha256": "fbcccf46f78885916770ac1fad9a45f67f4d6bf3b42fa082d6f7f3b4d12d8d8e",
+          "containerSize": 544768,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.thermal.apex",
+          "payloadImageSha256": "3371ce9e2c70034d8badd6511d4b5c86ca91e38545293f155ff9d101d2c91f0e",
+          "payloadImageSize": 413696
+        },
+        {
+          "containerSha256": "c1b6df107d4a03c20e38744d1c0f43248b63e11fa4f7c929d6fd82017af86fc6",
+          "containerSize": 712704,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.threadnetwork.apex",
+          "payloadImageSha256": "c4352cf09dd4b657712edda0e30342bb024ce184c4e0f02048874c24916d6e01",
+          "payloadImageSize": 581632
+        },
+        {
+          "containerSha256": "671996a6ae3d9a581b707b97a7b9b2f38135acefeaca113cd3f30bcdcebf0c52",
+          "containerSize": 3911680,
+          "extractedRegularFiles": 14,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.usb.apex",
+          "payloadImageSha256": "890b8241fadedfd5d98ab7d2e15039062243f06604193c9be38dd54c6b850371",
+          "payloadImageSize": 3780608
+        },
+        {
+          "containerSha256": "567180e119600dd1da92f41d10306b7306f78026cc1daaebdf845b777e61503f",
+          "containerSize": 2056192,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.uwb.apex",
+          "payloadImageSha256": "2170b71bfd59fa7c90caa8e6b8918234a04a17e99f08dc8aa931d4e1ca91b9e7",
+          "payloadImageSize": 1921024
+        },
+        {
+          "containerSha256": "1d6fecc0d7f060792e85849eb786b0b882fae53f8e6a4ddbe3d0035a40dd20b7",
+          "containerSize": 2367488,
+          "extractedRegularFiles": 13,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.vibrator.apex",
+          "payloadImageSha256": "bca48bfe4cca05c579a031296fef2666285818c0be3148dcafc09393295d1bfe",
+          "payloadImageSize": 2236416
+        },
+        {
+          "containerSha256": "0bdad75c0569dd729a3e241101f615dc0df87815bc8f5c9bbd04119ec7c6612d",
+          "containerSize": 4587520,
+          "extractedRegularFiles": 14,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.android.hardware.wifi.apex",
+          "payloadImageSha256": "a2637ac512f405b81cef539d540a0b1397115073671d7232b54b034a546a43b3",
+          "payloadImageSize": 4448256
+        },
+        {
+          "containerSha256": "e8a701dc00b45ba261ad0b3d6f53a42f07b8716e3a09fd471df16e0d1774cc21",
+          "containerSize": 7208960,
+          "extractedRegularFiles": 53,
+          "filesystem": "ext4",
+          "initRcFiles": 2,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.bt.apex",
+          "payloadImageSha256": "f8b7595b6db8505d716665637372f887476e91767311094e84c59de9f55fcd75",
+          "payloadImageSize": 7069696
+        },
+        {
+          "containerSha256": "d47ac24241d3f5d311dc4a2bd8a97505ffad26b149f4c168a46fe367b0380f92",
+          "containerSize": 647168,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.confirmationui.apex",
+          "payloadImageSha256": "d8387f5a6293bb7838ed1d090990779ac935bd2fa8c20f5946aeb2be04ce7b4e",
+          "payloadImageSize": 503808
+        },
+        {
+          "containerSha256": "d3d9c24f3db0172f08bfc8f3050e728775abd9d576bed30e740728d92f3850c0",
+          "containerSize": 380928,
+          "extractedRegularFiles": 1,
+          "filesystem": "ext4",
+          "initRcFiles": 0,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.disabled.apex",
+          "payloadImageSha256": "f2eb44353c658578b3110e99ca04291adb480678e5d7fe0a9bf57e1b081ea85b",
+          "payloadImageSize": 270336
+        },
+        {
+          "containerSha256": "c206ea22b8d335f47ec5efc14550843566a0b1b9728cda7a6fb691d1f23e9d0a",
+          "containerSize": 3424256,
+          "extractedRegularFiles": 21,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.gralloc.apex",
+          "payloadImageSha256": "3c9e498421949e93c8aa12ea19287bbf07d3f59b8b6199c19e6e95d1e747df2a",
+          "payloadImageSize": 3293184
+        },
+        {
+          "containerSha256": "9a68418ec6bc8949c50d5f0fb1e4d87164296a0a2166f8ad81209aeab9a043a8",
+          "containerSize": 638976,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.health.apex",
+          "payloadImageSha256": "e1b47318a8bc3261f9632bd2dd1f12bc74f44f86467f92665a726ddf070081ac",
+          "payloadImageSize": 507904
+        },
+        {
+          "containerSha256": "04f93f627157f2d8a3ab4e96aca5296398a8b8f1fe43d9ef043b5020446551ff",
+          "containerSize": 2977792,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.identity.apex",
+          "payloadImageSha256": "dd341fbf988a3cb2e53b3efbb80bd557536bf58baf1f5610165989b01fdefebe",
+          "payloadImageSize": 2846720
+        },
+        {
+          "containerSha256": "d52c85d695376d4afd2ad16eef99f24a0aa61368dd0aba7094c9ad0f1bffdba1",
+          "containerSize": 385024,
+          "extractedRegularFiles": 8,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.input.config.apex",
+          "payloadImageSha256": "1f73fbfcce7a3fd0fede944b6385d08478b6d8d2b0dfa75bb0646ac685e8d7b9",
+          "payloadImageSize": 274432
+        },
+        {
+          "containerSha256": "8553b862877285e30799ac8bd946b5f846168e1c485938e61386381a212e599c",
+          "containerSize": 1990656,
+          "extractedRegularFiles": 12,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.ir.apex",
+          "payloadImageSha256": "83d9deb254d8c087979cc6bdcb1a71345b259b1e16fcf30bd330e400d13dbaed",
+          "payloadImageSize": 1859584
+        },
+        {
+          "containerSha256": "bf29f5e80309b5fd0f7f3c2a043db006747317ad06ccf85dad844c3a5ffbd4c4",
+          "containerSize": 3289088,
+          "extractedRegularFiles": 6,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.light.apex",
+          "payloadImageSha256": "7e4273dde0e07457dbf567de635724790fdfcc3085b1422e231646ebee22337d",
+          "payloadImageSize": 3153920
+        },
+        {
+          "containerSha256": "7b2c2829dae3f2aeb62ef2376b9c9c591b6e0a1870aa42774fcbb8cb50f093b9",
+          "containerSize": 1032192,
+          "extractedRegularFiles": 7,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.nfc.apex",
+          "payloadImageSha256": "90a58af160a96d87e98a7d1995839459016429ab1b8661e8e65ba3288450c29d",
+          "payloadImageSize": 897024
+        },
+        {
+          "containerSha256": "908330ec5c0a0b6700e1de4b51e457b0396c47351c48971f50ea8c7c95e698b5",
+          "containerSize": 667648,
+          "extractedRegularFiles": 4,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.oemlock.apex",
+          "payloadImageSha256": "413945183efe5d032b9ad990c759132a9a1459d3d88ad4b6fff21c5220e8ef95",
+          "payloadImageSize": 536576
+        },
+        {
+          "containerSha256": "d1cc2fa996474b89e390ca6ec9dd164542e50910d0e3fb104a89b79c17e276dc",
+          "containerSize": 5988352,
+          "extractedRegularFiles": 25,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.rild.apex",
+          "payloadImageSha256": "4ad65373d7fb3909fdba33bbaf05d379039f30ee7f563df0198d55d98487ecb1",
+          "payloadImageSize": 5857280
+        },
+        {
+          "containerSha256": "192c92c370339282712ff4efaa93519f194166c9264626f8184964a55bb3b7a3",
+          "containerSize": 37404672,
+          "extractedRegularFiles": 18,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.vulkan.apex",
+          "payloadImageSha256": "38781b051548c697846fefd674ffbe1b577af069d8eac414f6416ed3918e6015",
+          "payloadImageSize": 37253120
+        },
+        {
+          "containerSha256": "7f4b59a352541b9da8c532b52b71d0ef1975c7930fd28b9644ce9c9c4b5de3ea",
+          "containerSize": 2482176,
+          "extractedRegularFiles": 17,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.wifi.apex",
+          "payloadImageSha256": "8898aa32084a75b2176225946275fe18a88a1e7610fa48f46c6d659689e55fe3",
+          "payloadImageSize": 2338816
+        },
+        {
+          "containerSha256": "1a03cae1329d1cabd40292dcfa73349f31ec20cf91db18b2212eb1ee75a02cff",
+          "containerSize": 11595776,
+          "extractedRegularFiles": 23,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.cf.wpa_supplicant.apex",
+          "payloadImageSha256": "8be8b9203a5fef57cc547f3f1463917c47ced5c2aa6087b2cd9b9ac24450a23e",
+          "payloadImageSize": 11456512
+        },
+        {
+          "containerSha256": "237755450c1c49cce45a5d666efab93b457aada05ee6a4097253ac9a40a25ceb",
+          "containerSize": 15257600,
+          "extractedRegularFiles": 81,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.emulated.camera.provider.hal.apex",
+          "payloadImageSha256": "144dd3ae8e7875856e6f25700499fc65e106c447282513fa78916d18ae869497",
+          "payloadImageSize": 15114240
+        },
+        {
+          "containerSha256": "41f2385491171eeefcb9287f6e47ac9878e5f63ab8090e355aacc5380cd13fc1",
+          "containerSize": 6893568,
+          "extractedRegularFiles": 42,
+          "filesystem": "ext4",
+          "initRcFiles": 1,
+          "partition": "vendor_a",
+          "path": "apex/com.google.emulated.camera.provider.hal.v4l2.apex",
+          "payloadImageSha256": "95d3ad122305e8ca46529d0852549342a188c86b2ecf60c7ee1da04d98b9ba3f",
+          "payloadImageSize": 6754304
+        }
+      ]
+    },
+    "bootImages": {
+      "bootRamdiskBytes": 0,
+      "combinedRamdiskSha256": "3abc7297d33964283261891ad429c814e1f238157cca056094b9adf4d2ba86c7",
+      "cpioEntries": 561,
+      "cpioTrailers": 2,
+      "decompressedCpioSha256": "a6b444df5775a3906053e3c0e165d59efacaa7c18cbb7e04ac9e2fc3a6dcbfad",
+      "initBootRamdiskBytes": 2992407,
+      "initRcFiles": 8,
+      "inputArtifacts": [
+        {
+          "file": "boot.img",
+          "sha256": "a8fb0875277c99d40154e03416010c496c22395bb4dd6b399ddeef69f5a833ac",
+          "size": 67108864
+        },
+        {
+          "file": "init_boot.img",
+          "sha256": "df1a2fc8aa21b5df13a2dcea50cdf90ac2ad222f19fb5a70877a16130e374e54",
+          "size": 8388608
+        },
+        {
+          "file": "vendor_boot.img",
+          "sha256": "02b2af631eb4868ea2163b9de0773ab3b17bf1f5ddca5ab4e2a0258777f46f3f",
+          "size": 67108864
+        }
+      ],
+      "vendorBootFragments": [
+        {
+          "included": true,
+          "name": "",
+          "offset": 0,
+          "size": 18816072,
+          "type": "PLATFORM"
+        }
+      ]
+    },
+    "exclusions": [
+      "userdata.img contents",
+      "runtime-added or activated APEX state"
+    ],
+    "nonEmptyLogicalPartitions": [
+      {
+        "name": "odm_a",
+        "size": 520192
+      },
+      {
+        "name": "odm_dlkm_a",
+        "size": 348160
+      },
+      {
+        "name": "product_a",
+        "size": 232157184
+      },
+      {
+        "name": "system_a",
+        "size": 959066112
+      },
+      {
+        "name": "system_b",
+        "size": 4747264
+      },
+      {
+        "name": "system_dlkm_a",
+        "size": 8568832
+      },
+      {
+        "name": "system_ext_a",
+        "size": 258179072
+      },
+      {
+        "name": "vendor_a",
+        "size": 291229696
+      },
+      {
+        "name": "vendor_dlkm_a",
+        "size": 1695744
+      }
+    ]
+  },
+  "search": {
+    "caseInsensitive": true,
+    "expressions": [
+      "interface\\s+aidl\\s+activity",
+      "aidl/activity"
+    ],
+    "files": [
+      {
+        "apex": "com.android.adbd.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/init.rc",
+        "sha256": "6e3178a7592af91f618207506777b470b7990a4ebae0ab9d241f676c5d40af1e"
+      },
+      {
+        "apex": "com.android.art.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/init.rc",
+        "sha256": "b31e47a2abb7421de9b63769113047888616231a915246ef8e17b83b7abefb68"
+      },
+      {
+        "apex": "com.android.configinfrastructure.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/com.android.configinfrastrcture.init.rc",
+        "sha256": "243b9703d4d7079cc8acbcd932c2868aaf2f28b18b016701f504aeb5b5d0ca38"
+      },
+      {
+        "apex": "com.android.media.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/mediatranscoding.rc",
+        "sha256": "99b682f368456b08d24683d394965c1266626f4cf749cd77bdfd8c101207cc1d"
+      },
+      {
+        "apex": "com.android.media.swcodec.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/mediaswcodec.rc",
+        "sha256": "b500bd76f6bfe179a62fd9e4988ea57dfe796227782694138318311b3d6dd32a"
+      },
+      {
+        "apex": "com.android.os.statsd.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/init.rc",
+        "sha256": "8001e87f8e1c6f6df7119f2262c1ba4eb96a66e2462d4e089d1ed09af3fefd1b"
+      },
+      {
+        "apex": "com.android.sdkext.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/derive_classpath.rc",
+        "sha256": "a9e65b0c114408e5cb8356bdb435a6b48d0a67cd7879915c52ffa094a267f607"
+      },
+      {
+        "apex": "com.android.sdkext.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/derive_sdk.rc",
+        "sha256": "fb920b4c90551f31c789b721774f25ffac9e4c7de2b31e3ae64ab4267362c660"
+      },
+      {
+        "apex": "com.android.tethering.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/netbpfload.rc",
+        "sha256": "6ef23dd6fbb4705238c47d2e0db253e05cb7a14348608c12ca863b79d8a0ae3f"
+      },
+      {
+        "apex": "com.android.uprobestats.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/init.rc",
+        "sha256": "d31bcb9d49019d5243757972ac60b2065f26518398e853733516f707641b4f53"
+      },
+      {
+        "apex": "com.android.virt.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/vfio_handler.rc",
+        "sha256": "02238cb1f764e80dbfd5124b3f2d8d30147dd72a951a6977b4dfddf5ee542999"
+      },
+      {
+        "apex": "com.android.virt.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/virtualizationservice.rc",
+        "sha256": "52c58c60bc643117de020539df4d72b8431ea91c099618308faa29a8ffc40688"
+      },
+      {
+        "apex": "com.android.virt.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/vmnic.rc",
+        "sha256": "5f163cf715b9760ca241f3fc50a5857b942e1bb4087c40daec697e6af116321f"
+      },
+      {
+        "apex": "com.android.wifi.apex",
+        "kind": "apex",
+        "partition": "system_a",
+        "path": "etc/mainline_supplicant.rc",
+        "sha256": "6a99ddd2291c51cd1d6ffa0ad0008e228c0c634e291e2132fa3daae8fe4d0aff"
+      },
+      {
+        "apex": "com.android.compos.apex",
+        "kind": "apex",
+        "partition": "system_ext_a",
+        "path": "etc/init.rc",
+        "sha256": "09bfcd997fc8eb8a01129ac61df40ebfd5be24ed8bb20a2d9e18be8085f03ac6"
+      },
+      {
+        "apex": "com.android.hardware.biometrics.face.virtual.apex",
+        "kind": "apex",
+        "partition": "system_ext_a",
+        "path": "etc/face-virtual-apex.rc",
+        "sha256": "0a0540b3dad305126d53f6e319600526cb5e257b18cb691f5b1fa14c4bfd3f24"
+      },
+      {
+        "apex": "com.android.hardware.biometrics.fingerprint.virtual.apex",
+        "kind": "apex",
+        "partition": "system_ext_a",
+        "path": "etc/fingerprint-virtual.rc",
+        "sha256": "db5c82d67911f2a742df0f0c188372339c642cd5904a1d950c5ab553d65f513c"
+      },
+      {
+        "apex": "com.android.hardware.audio.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.audio.service-aidl.example.rc",
+        "sha256": "5096f6cadf1bb27e4cfc54d31e34f743c4b64eae4f72a3f6115818a3b94868c5"
+      },
+      {
+        "apex": "com.android.hardware.authsecret.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.authsecret-service.example.rc",
+        "sha256": "9ef02b3fcd4be142f0fa493bcdaee623f4d0b6e7bc969c8b882227dcc3ce25d5"
+      },
+      {
+        "apex": "com.android.hardware.boot.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.boot-service.default.rc",
+        "sha256": "855c8a51f82a58e6ba3675d96cf7c208fbfbb7bf84284dbc8e8c458789dbb56c"
+      },
+      {
+        "apex": "com.android.hardware.cas.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/cas-default.rc",
+        "sha256": "870f1f8569918cf26c63f5a0688c7a415a07419720b04b922fe7d151819fa7f2"
+      },
+      {
+        "apex": "com.android.hardware.contexthub.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.contexthub-service.example.rc",
+        "sha256": "c8fcdd8797b2f07e753379df8f970c41edd4a71f1241d9dbe918804c9f408fa3"
+      },
+      {
+        "apex": "com.android.hardware.drm.clearkey.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.drm-service.clearkey.apex.rc",
+        "sha256": "b11a065ac75fcf45b6bbce4c3dc003c92715234884ddc603d62b3d70f9a42dfd"
+      },
+      {
+        "apex": "com.android.hardware.dumpstate.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/dumpstate-default.rc",
+        "sha256": "13ffe441351491f42e4a3654256eb00818b28e9f2dc56a3605975a4bd3a1914a"
+      },
+      {
+        "apex": "com.android.hardware.gatekeeper.cf_remote.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.gatekeeper-service.remote.rc",
+        "sha256": "95da39ee19bf10f3ec6e2978bf78b7d7fd5ed7a77353118a37ea850e9c34be55"
+      },
+      {
+        "apex": "com.android.hardware.gatekeeper.nonsecure.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.gatekeeper-service.nonsecure.rc",
+        "sha256": "e2320be041de9ed35fb01c7a0e7c4413a000d02a50e8ee45e82f60b21ed3338b"
+      },
+      {
+        "apex": "com.android.hardware.gnss.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/gnss-default.rc",
+        "sha256": "d4b830e9e76b76f37813b75c7aedde0be1f2e65520350ef2b0d6057498633df9"
+      },
+      {
+        "apex": "com.android.hardware.graphics.composer.drm_hwcomposer.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/hwc3-drm.apex.rc",
+        "sha256": "73bf8d2551a18d1618e04008ae4cfbcefcec8a2c8ab2863007ed7ce3fd87d9cc"
+      },
+      {
+        "apex": "com.android.hardware.graphics.composer.ranchu.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/hwc3-apex.rc",
+        "sha256": "9aa4c741819d8bef6170c4e150cfdf92cc1fd52962b93561cded85983e803fbd"
+      },
+      {
+        "apex": "com.android.hardware.input.processor.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/inputprocessor-default.rc",
+        "sha256": "8aec6f1bbb1b502b3a34a5ae6220a2dc83aeb24813008398fb837283a7384ade"
+      },
+      {
+        "apex": "com.android.hardware.keymint.rust_cf_remote.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.security.keymint-service.rust.rc",
+        "sha256": "f76366c2b434465f7b0765c1e7273f4038d3af4558c070227206878b0a055101"
+      },
+      {
+        "apex": "com.android.hardware.keymint.rust_nonsecure.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.security.keymint-service.nonsecure.apex.rc",
+        "sha256": "b76059c7d354c8065f8db82102da04795158b140b629dda6f84fffe9782d220b"
+      },
+      {
+        "apex": "com.android.hardware.memtrack.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/memtrack-default-apex.rc",
+        "sha256": "b9264d276fdaed277f531887d69e3c2f159741939adce8aa58e2006782bd5a02"
+      },
+      {
+        "apex": "com.android.hardware.net.nlinterceptor.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/nlinterceptor.rc",
+        "sha256": "1352b631543f8fc89d9df6e4913a205c64af135f8134a43d6f95e2886ff7c1b6"
+      },
+      {
+        "apex": "com.android.hardware.neuralnetworks.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.neuralnetworks-service-sample-all.rc",
+        "sha256": "9e00fc7bdc67caaf3d1025cf4c4ccb43575297c4aff99a00a6752fe1d8b41a14"
+      },
+      {
+        "apex": "com.android.hardware.neuralnetworks.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.neuralnetworks-service-sample-limited.rc",
+        "sha256": "bd545011b804ca27712981a4bcc0aef894f3836e32a5e102d97d162c7e328a4b"
+      },
+      {
+        "apex": "com.android.hardware.neuralnetworks.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.neuralnetworks-shim-service-sample.rc",
+        "sha256": "d12148336d63afd0cb6f2b1d56f37517a3288eef7bf7568fe25e9694bc5f1bcd"
+      },
+      {
+        "apex": "com.android.hardware.power.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.android.hardware.power.rc",
+        "sha256": "84480919ee664756b8263763604b78ccf98761ee8fb5ce5cb1fada61cd58590a"
+      },
+      {
+        "apex": "com.android.hardware.rebootescrow.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/rebootescrow-default.rc",
+        "sha256": "a30f3bd103efbe70c619f3ec1e7134f3af6f4e8887a1c671fd944e20a44f18a0"
+      },
+      {
+        "apex": "com.android.hardware.secure_element.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/secure_element.rc",
+        "sha256": "cb66cd7754948d7c4fd6ad8e18c7fdcde744021a32b49e880223d63e38b87615"
+      },
+      {
+        "apex": "com.android.hardware.security.authgraph.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/authgraph.rc",
+        "sha256": "f60d8b8cfc7bea1745acc99e48e9b2b45c0fd258fa92486090dddc84c01001f9"
+      },
+      {
+        "apex": "com.android.hardware.security.secretkeeper.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/secretkeeper.rc",
+        "sha256": "46f110b48b44793fffcc2a2ed80db8539635769e4229b3e8e6b2df8b8a510df7"
+      },
+      {
+        "apex": "com.android.hardware.tetheroffload.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/tetheroffload-example.rc",
+        "sha256": "00c918d80efe2ba8cc3aac78adde1bc6b14ce7c8b978a3f93dd612bbad23034f"
+      },
+      {
+        "apex": "com.android.hardware.thermal.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.thermal.example.rc",
+        "sha256": "f5de2d2a658085f4ae79db175ced49aa70239687d3cd2ce2288639e9bf37cada"
+      },
+      {
+        "apex": "com.android.hardware.threadnetwork.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/threadnetwork-service.rc",
+        "sha256": "bacc2c1d91663fcc343249bc0a096f53582bb359bbbe928f7ea316e5e1efad1b"
+      },
+      {
+        "apex": "com.android.hardware.usb.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.android.hardware.usb.rc",
+        "sha256": "0ab338c62e8d42c385240c990d311cfc196f2291ee5369f2f88683ed8447df8d"
+      },
+      {
+        "apex": "com.android.hardware.uwb.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/uwb-service.rc",
+        "sha256": "535904736ddc1ea30113fe99c6cf4d680864c72a6036f17d0b057718ed328aed"
+      },
+      {
+        "apex": "com.android.hardware.vibrator.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.android.hardware.vibrator.rc",
+        "sha256": "e814f3858cb24e38ebf815adb824b5a0da66cf8a68daf195889e55588eb1d97c"
+      },
+      {
+        "apex": "com.android.hardware.wifi.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.android.hardware.wifi.rc",
+        "sha256": "6a7df8256cb94da6cf1cc110ce6e56410cfd48985f76bd29e90a2881144de8d1"
+      },
+      {
+        "apex": "com.google.cf.bt.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.bt.default.rc",
+        "sha256": "fc78f1d0cfe43ddb54f728153f38dacb398a2ca484587732b6d9162cfe44b9e7"
+      },
+      {
+        "apex": "com.google.cf.bt.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.bt.lpp.rc",
+        "sha256": "2cae3310367c74d9eacec2119efbd711aef5fe3271177305ce0a3d3734281b6b"
+      },
+      {
+        "apex": "com.google.cf.confirmationui.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.confirmationui-service.cuttlefish.rc",
+        "sha256": "b51edcb1e65abb706cbff786499fd08fcd931db6997c250b9411d54e24b5f456"
+      },
+      {
+        "apex": "com.google.cf.gralloc.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.gralloc.rc",
+        "sha256": "14d8b47db2af07a30a07a651042882b1fce292ad53ff69d08c2eff4d863890d1"
+      },
+      {
+        "apex": "com.google.cf.health.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.health-service.cuttlefish.rc",
+        "sha256": "421d911c7e8bd305c30eee276385a5b160d8228152d6b62393d5955a727b6c42"
+      },
+      {
+        "apex": "com.google.cf.identity.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.identity-service.remote.rc",
+        "sha256": "ce38e07958bedf77941f6cc708736e46cbe6dfbc1a2ddebb2128c8f917659e83"
+      },
+      {
+        "apex": "com.google.cf.input.config.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.input.config.rc",
+        "sha256": "6e9b95690c7db027852cbadcabbc7f0ee245a7f37d2b821ebf8d745ff963972a"
+      },
+      {
+        "apex": "com.google.cf.ir.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.ir-service.example.rc",
+        "sha256": "d30799d2d037aa7a9950a5b8a82e9c3205a3e3098104a9b9bc2c4fa38afdd227"
+      },
+      {
+        "apex": "com.google.cf.light.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/lights-cuttlefish.rc",
+        "sha256": "bff1312824d46ef4cf4d9685e6ef2ecc2c66c951957bdce27ea74f467a9a4675"
+      },
+      {
+        "apex": "com.google.cf.nfc.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/nfc-service-cuttlefish.rc",
+        "sha256": "8d55781aeb48b40a349093a28045e204b82072ec5994cd7a47373f7b9332433c"
+      },
+      {
+        "apex": "com.google.cf.oemlock.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/android.hardware.oemlock-service.remote.rc",
+        "sha256": "f63f7c551c98d457a4d1c3f12c3293dea5e127f64692143aceb71a9ed3a98fba"
+      },
+      {
+        "apex": "com.google.cf.rild.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.rild.rc",
+        "sha256": "1b73a3ee555b50403441630a1ed0b59e3e6523dc40d6051f35c5df4749e7c4d0"
+      },
+      {
+        "apex": "com.google.cf.vulkan.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.vulkan.rc",
+        "sha256": "06d32a3d2ab464de5db795f7b9db23c313a8a2fb4ee1ddc7f7bcdea264a015e0"
+      },
+      {
+        "apex": "com.google.cf.wifi.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.wifi.rc",
+        "sha256": "3d14583b5ef13dd5ab9511bbc960523e0dc7896ff62448c453cea6e4001a7ced"
+      },
+      {
+        "apex": "com.google.cf.wpa_supplicant.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.cf.wpa_supplicant.rc",
+        "sha256": "d36537f623d5116f264393a57945ff7ed93c9bdb42834e7ca830e474f658b694"
+      },
+      {
+        "apex": "com.google.emulated.camera.provider.hal.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.emulated.camera.provider.hal.rc",
+        "sha256": "8f1f2def60dc7157c9bf5f1d38ab535fe802f66bdbaef9acf7f111bd7cfced0e"
+      },
+      {
+        "apex": "com.google.emulated.camera.provider.hal.v4l2.apex",
+        "kind": "apex",
+        "partition": "vendor_a",
+        "path": "etc/com.google.emulated.camera.provider.hal.v4l2.rc",
+        "sha256": "3b4d16c0c51ee11ce4755a1bd12e65b84001b69f013eeb7b11412d4eff7783ea"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "init.recovery.cutf_cvm.rc",
+        "sha256": "3ed490021bcab54d57ab838635cd20a29f756d567384b40a4cecd197dc57898a"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/init/android.hardware.boot-service.default_recovery.rc",
+        "sha256": "207c821e82c45a6b452b455034a4d9d1fb49d5947ef48d3bbc970f2cecad74f0"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/init/android.hardware.health-service.cuttlefish_recovery.rc",
+        "sha256": "e05ffb407f25d1994a149efdeca0f13a78d1bcc2eeaad30555788c2147d41ec5"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/init/hw/init.rc",
+        "sha256": "b837b7d3ec38433f2071710f187e7574a46a0116be8d64fd967221d161b3fba9"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/init/servicemanager.recovery.rc",
+        "sha256": "e957d6102b03909de2f9b91073911cedb16f28ed9df546038453abbe8de7d08b"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/init/snapuserd.rc",
+        "sha256": "3a6966f87823b2726a231e7244adf78ad91d581bf4e8b1580630ebb82cc6c498"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "system/etc/ueventd.rc",
+        "sha256": "7a26df7521ecba3b3fd66df438b4e5d1b5e8fa6fc5ea1a73c2c93eed803f985e"
+      },
+      {
+        "kind": "bootRamdisk",
+        "path": "ueventd.cutf_cvm.rc",
+        "sha256": "0fb64e3398ba7cb74b0d81fa8f2a1d41ae6987a6d627a6b126c121634efe6a8d"
+      },
+      {
+        "kind": "partition",
+        "partition": "product_a",
+        "path": "etc/init/init.rc",
+        "sha256": "92c2f66d97b00152db618665e2a53a4a9eb0b4fc4e419fce801b91ac6b6e9e66"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "init.environ.rc",
+        "sha256": "460eecf019489a02ad7be82a9cc2234784f561b644f8f2bf1741e43514593060"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/aconfigd.rc",
+        "sha256": "78d6bb311aa7126384da4b59780d4a87d9b321c4fd211d04e1339fbd8975447b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/aisealhostservice.rc",
+        "sha256": "94721f43565412a4f97f76c1e56224fd4ba98065148710b3c6a732b100984196"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/android.system.suspend-service.rc",
+        "sha256": "957c6d8bbce641fc3bf1c64fd38bd84e7ce223f9299646d84ff63402a595860b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/aoad.rc",
+        "sha256": "d466930689825255233dceed7d6e66d99304dd6cc965bc512ee1a2edef120695"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/apexd.rc",
+        "sha256": "4baae395daa83df7a35debff152cd8cdedb3bf7b9d87abb5c4ebb9fdde6fabe6"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/atrace.rc",
+        "sha256": "fe668a397715f63fe7e256a61132e1e406801b3549217be39c072a65ab24ad0e"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/atrace_userdebug.rc",
+        "sha256": "eea193467ec478fb461586e3e1114c6e9676e812bb4d9c8cca5c273c25d538a5"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/audioserver.rc",
+        "sha256": "0c770b5de01f2e9966296a0d6f8c73b10aa863a676c6e254f3aa3c8f79131f10"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/blank_screen.rc",
+        "sha256": "1e4d509471f2f88e46a15c1247bb0e5d8a4732b2dcc066eaa09aa70019e525be"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/bootanim.rc",
+        "sha256": "d7854acbd566ba7985fefa5aa87602c42814ed5a7ea5904d2628ac4f9444f77f"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/bootstat-debug.rc",
+        "sha256": "18ffe824e55a6caba58f72b7ad6cee05bd4bec5aebf4b6e030a3c24a7ea3f440"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/bootstat.rc",
+        "sha256": "fddcd823ddcde967e358a8412eb6ea8ce66a0051e608fc5939dd03075338a55d"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/cameraserver.rc",
+        "sha256": "2e447573575421f8531fef9f8c119c86429d64dd71cced7af3ca2c22f6851e28"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/casefolding_remover.rc",
+        "sha256": "d4d04423e275a13c77dfa70655e2ca93770a33bc3714c967357ce5409dd7bad4"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/clean_scratch_files.rc",
+        "sha256": "608a19e643c0da854b9de0de1e8ceb396a33be5567debbb1702a5218e29df7d2"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/cppreopts.rc",
+        "sha256": "0e236c52663a4126a2c1b1aec315d6cb52e4f117d585fb5b4a0be5274ec83476"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/credstore.rc",
+        "sha256": "438e38856cdf410379144d7dfacff0f37a961007b238a0acba1d442bc900faac"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/dmesgd.rc",
+        "sha256": "fb3c26e424a78839070c6fa79c6b35bc426b9218972ceed883308424d7b34301"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/drmserver.rc",
+        "sha256": "e35d0f49ea371744d2acfda7305112ed5d72d1f59401fb1518a99bbe4b3cb4de"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/dumpstate.rc",
+        "sha256": "3702ad3e5e0af660f67d6b48310d73921e55feb30826d51f72be3e72b309b3fe"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/flags_health_check.rc",
+        "sha256": "76c3bf64f41057bc9c9ce0ca433f71c5d6a0f42cd4bd17c0b696debb97763239"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/gatekeeperd.rc",
+        "sha256": "d03a1ca16e4db87a11d47d03433f5d31cce5c9251f3cf8f5bd52f74bf3a9ae64"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/gpuservice.rc",
+        "sha256": "a4f71d84d4c830c08aae58a434727691fa972a40a2b5cb8e2288d2d80d42f7de"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/gsid.rc",
+        "sha256": "891aa13d00c847784594e2f24ed25763a1778a3a57fae8fff5d25cd81759992f"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/heapprofd.rc",
+        "sha256": "325c7e57909523e3c617a4d28311f5f15c575b69c0ccbf96c99d6d657b0a6475"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hidservice.rc",
+        "sha256": "ea82c12388dc1f2b06e226ee582d0918bfe1a58211fabe616ac1d687e4b6479c"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.boringssl.no_zygote.rc",
+        "sha256": "afeaef2628f6ab1e7352f49274aa8e745ea2ceb4555f7216e732856b56b61c32"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.boringssl.zygote32.rc",
+        "sha256": "afeaef2628f6ab1e7352f49274aa8e745ea2ceb4555f7216e732856b56b61c32"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.boringssl.zygote64.rc",
+        "sha256": "dbad9c5c5b6dbb16615f893c03ccb3be700e1054ebd90ad92bac82c1e50a1284"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.boringssl.zygote64_32.rc",
+        "sha256": "afeaef2628f6ab1e7352f49274aa8e745ea2ceb4555f7216e732856b56b61c32"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.rc",
+        "sha256": "8b8d9d9c2c17fcb1f907b0a369aae03632976dff8f4cf603b1d5ef83cad78225"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.usb.configfs.rc",
+        "sha256": "1384154db54fe5a8b3fb62f9c8e9c6732c379066c941364c25d853ac55aa994b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.usb.rc",
+        "sha256": "0f08f29820a03ee5a145a2b91638f57f873c2cf87875e9429046a3a835ddce17"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.zygote32.rc",
+        "sha256": "136910f4fc5887f2af07190d34e034ba5c54c77e231b877bbb72bf0b910b4a45"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.zygote64.rc",
+        "sha256": "7be8fde03ec2cc4417aecf1a79163e0e4088fdff02ee6cd2426d02f91127e479"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/hw/init.zygote64_32.rc",
+        "sha256": "0efb8df56361be7c8d2f3bbc54f79ac22036a8233e07b9c7b1276a817c5c9c05"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/idmap2d.rc",
+        "sha256": "4dc195022f473d4b93770b441997d7086dfa07de82f73a713167bf6d62596779"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/incidentd.rc",
+        "sha256": "a989c870659f49b09f9fa618513cab952878326142331af9b7d2a2e59629c7ca"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/init-debug.rc",
+        "sha256": "765aa7ca0a86d80cf16b04c6e9daa6fae0a8f8abd6da23075c95db702046bf74"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/init-perfetto.rc",
+        "sha256": "a3de46ffbe93424655648d06f80d1a2664677bb2967906425a9fec02f0d496a5"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/installd.rc",
+        "sha256": "fcb59d1c3f8e49c5348d383805ca287b54c24d8f8fc3b70378078736676ed4a2"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/kcmdlinectrl.rc",
+        "sha256": "690982e3b0b3dd0153903b0e463d8c60f7855cc92d9926e9d9a5d921ef6a0730"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/kcmdlinemodprobe.rc",
+        "sha256": "dd90c0101e90a4e0f8508fd1a0d5c6863fdf43accab8f0314cfa87a4509ec9fd"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/keystore2.rc",
+        "sha256": "8e8688ddc5841d25436100e96cc564715438745623087391f4b4894fc15ce465"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/llkd-debuggable.rc",
+        "sha256": "dba4be8eb941e222f97bc441561c27f6edbd5c0dae9e154bf0ff2c4c5fe6b540"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/llkd.rc",
+        "sha256": "915ed69cf1cca279e4a0a8ce03d9b79fd4e274f688cd07d47bdb85e13e93a5c3"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/lmkd.rc",
+        "sha256": "85aa14d9d568e14025c38d7dbd905aaa247b186b56ce7bbbc54d34aad4c3af8b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/logcatd.rc",
+        "sha256": "bbc8cfbc09753346af822ccb99b9c5160f4235537043c593fd925052d47b0295"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/logd.rc",
+        "sha256": "26378c0ea5f8d424616760c16522d6c3f300daaca75929720dd6b8383cab6e56"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/logtagd.rc",
+        "sha256": "a510559d0c95d2f084389a15aa27138c7ec1eef458e8a60b06868f680436a737"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/lpdumpd.rc",
+        "sha256": "8bc75276337f68cbf977e1bb732e95cde28d5a928f4d3a96155c52c3f5b73b5a"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mdnsd.rc",
+        "sha256": "6dcc3f787ed0bb94abb3843504604625c62852072219d8bf15e8628baef2cb95"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/media.codeclist.generator.rc",
+        "sha256": "b09eda2b0866db6f70753e84299270dc644a648983514992b48f8c533cd015ca"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mediaextractor.rc",
+        "sha256": "679f6722ee487f9ea335754f74198ff5969e57b163830ccd8fb31ae4401321b4"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mediametrics.rc",
+        "sha256": "ba56048f8697b096cf1a9107e3018c20d304bced4d837906381ced804ea6eaaf"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mediaserver.rc",
+        "sha256": "73c95a8e8e10fcbb3d4d0c92ce87ec920c1c7f26096edf0320fab77a7ac00c39"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/misctrl.rc",
+        "sha256": "7cc878b32487f411a158cf1442bfbfaf9fdfe68f2cc1db1fa90c62bc5d1f7d6e"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mmd.rc",
+        "sha256": "be84e970758bf2bf9abedb4335a764fa77671cc3306961b175bfc33c7edeab7a"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/mtectrl.rc",
+        "sha256": "470c851b7a55b96002edba0affed0d9d1f560100b277f5a3a8e59b2abb09a2ec"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/netbpfload.rc",
+        "sha256": "14c576d0d33894504202743e0a1ea28d16f964a72c6ac1924f78ef371736b05d"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/netd.rc",
+        "sha256": "51039198c9ec69111b1f7f1c8257ae12ee0a677c14599a87416c5b24b112948b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/odsign.rc",
+        "sha256": "050034426570b9e084accefd20e69d636e3fe9cf4d043e75ca067b467d4e36e5"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/perfetto.rc",
+        "sha256": "13968b961cf0503df1e6666d33af8b6ffa9fe049851ada523812709435ce1a6c"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/pmgd.rc",
+        "sha256": "0caea6a9b6654541eb013981ec0c32564b230b722e323ef4cbfc6cf51800e3bd"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/prefetch.rc",
+        "sha256": "9829279930672894c739a8d2b0bc17e60b06d6030015a020a7d030816d8960ea"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/prng_seeder.rc",
+        "sha256": "6c4763c65ab372e459e5b1558e733fa08a85615198d2555a4112276b47cb71d4"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/profcollectd.rc",
+        "sha256": "eb4ddcd34ea0b81727f03e532cfd929228adc981caeb9c56dfd8e251374493bc"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/recovery-persist.rc",
+        "sha256": "0c5e3bee4329907791a861067722bbea0d56ad6639cd796fba2526c26bc975fa"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/recovery-refresh.rc",
+        "sha256": "0f6e0fb90d9d9d964fcc29b299f60c292b56882b06676136758e015e849839fa"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/rss_hwm_reset.rc",
+        "sha256": "22e991061614907864fc59838b0eea34037e6497ac356b4ba3c196af961eb4e5"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/servicemanager.rc",
+        "sha256": "36b87b60901affd28b0c500190fac30f1b7ebb9c8db63c0d14a08094ed756460"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/simpleperf.rc",
+        "sha256": "526982501006570fd3e39855e3d8265cf0094178c9d7cb1e0e1ee28ec97c15cd"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/snapuserd.rc",
+        "sha256": "3a6966f87823b2726a231e7244adf78ad91d581bf4e8b1580630ebb82cc6c498"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/storaged.rc",
+        "sha256": "91bbdb0a4b307a9edac822cc8503e6fafa10544eeca8f5d7a24c7dce964f801c"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/surfaceflinger.rc",
+        "sha256": "c6f8279f4fff66ff9add26a521a01dbd563a38576c0f85e2c7d88de78e2c167d"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/tombstoned.rc",
+        "sha256": "fc4a4486332af51be3fa98e77ab4cd6cb4e13d738c061e3e6ad47aafdf4490d4"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/traced_perf.rc",
+        "sha256": "757876dc3c2c849394c600b5b823d7a1cd45cb8ba63923c90020be45525341eb"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/tradeinmode.rc",
+        "sha256": "2d17e7087250a77ecdc31c9583210b83cb12b963a96e71c2d095c1f3c74d4c83"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/uncrypt.rc",
+        "sha256": "f81c7bd365484cc37a1dff173b0963782c4e1134a80feec07ef169bc2773477f"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/update_engine.rc",
+        "sha256": "ddd600b1c1a5bc8b683d959bbe38b1978ab327929b95241641ff44e98f06e098"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/update_verifier.rc",
+        "sha256": "adeed811f2d98f272cb95bfb378f5f27b85df28d942fb74d52c4bd32f56e9b07"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/usbd.rc",
+        "sha256": "772b27f3affb6e67d1a6bc83a2b201cbdc053854789326ac9833ab84277ff995"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/virtual_camera.hal.rc",
+        "sha256": "d7e11a4db117dc8e685676b53b3b38a49d9098fa4767c1f71b5c8edcb9becf54"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/vold.rc",
+        "sha256": "655dabdfc2899115be32ff7ca923070c76443caced6923996fb0a07d42e2097b"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/wifi.rc",
+        "sha256": "84754bf49cfa4bb660e4947995a72e77e75395a83512f57eb0a25717983652a4"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/init/zygote_next.rc",
+        "sha256": "8dc957f041e9c35afebd352ee0106a8d0be508dfb09ac24d9c9341c58448e649"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_a",
+        "path": "system/etc/ueventd.rc",
+        "sha256": "7a26df7521ecba3b3fd66df438b4e5d1b5e8fa6fc5ea1a73c2c93eed803f985e"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/aidl_lazy_cb_test_server.rc",
+        "sha256": "becf8187b1237277f258327e27c009b6f4abebd45dbda8ea33738a86c8586890"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/aidl_lazy_test_server.rc",
+        "sha256": "c20a15479e90c80fb200a22b7dbf799d17356fde3988c557df13da1ab50eaf66"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/android.hardware.audio.parameter_parser.example_service.rc",
+        "sha256": "9d801c5560da485f53df2c2cbbe3b880fccee0c38cc471c963bde967764ced0a"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/android.hidl.allocator@1.0-service.rc",
+        "sha256": "2daefa28c9013feb1d6b17e366bcb2dfbd5b904e239b644d93a16df01b15c29d"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/hwservicemanager.rc",
+        "sha256": "fec3f3312b7cb0f5c22438b62cca189964878874f8aabd47396ae1f4faf8c4f9"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/rpmb_dev.system.rc",
+        "sha256": "cfcc278c25064cbde2d8843bc2e7c40721521c71221b6d18e1fdc4f64d6fa6e3"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/rpmb_dev.test.system.rc",
+        "sha256": "ec4b41ea049251e272538e78cf692fdd5b0afa19d16ede1f12d1553487ff65be"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/set_adb.rc",
+        "sha256": "27756feab40623ab400c1ba78bc6489be73b7f2ad7dee7d42dcc57a19aeb615a"
+      },
+      {
+        "kind": "partition",
+        "partition": "system_ext_a",
+        "path": "etc/init/trusty_security_vm_launcher.rc",
+        "sha256": "dd16d42266f5741add108de88d54eb10531ea4b24bf0348e6bf159dca4b57db3"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/boringssl_self_test.no_zygote.rc",
+        "sha256": "ff2b2a6fbdb6856459bd56096eb27e1f30948d7d4097a91eac784aa1a8a89c53"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/boringssl_self_test.zygote32.rc",
+        "sha256": "ff2b2a6fbdb6856459bd56096eb27e1f30948d7d4097a91eac784aa1a8a89c53"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/boringssl_self_test.zygote64.rc",
+        "sha256": "be7ccd57fe6196abc6c0b9fe380f14ecab14016a062005ef3766348929b020ef"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/boringssl_self_test.zygote64_32.rc",
+        "sha256": "ff2b2a6fbdb6856459bd56096eb27e1f30948d7d4097a91eac784aa1a8a89c53"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/android.hardware.security.keymint-service.cf_trusty_system_vm.rc",
+        "sha256": "f5c55a8e1d8152542075bc2669308b3571aef732c91f6f537f80cf0a98365e89"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/android.hardware.security.keymint-service.trusty_tee.cpp.rc",
+        "sha256": "42c74709db98ed2cf03f14b8e846681e327910490c2cfd480c75b7df48cbc812"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/android.hardware.security.keymint-service.trusty_tee.nonsecure.rc",
+        "sha256": "8dc438abac552ac2f1e8240bd4f87acdb9cadd83ee2080a368dd91e507d064f7"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/android.hardware.sensors-service-multihal.rc",
+        "sha256": "447f8a3de3a5bea7632593458c52e69dbcdeb92a4ac78c955f03a1d98848d833"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/boringssl_self_test.rc",
+        "sha256": "a30ca035b49329cd72994ca3a75125990bca7fcfa9ef00c39632cc200d7caa48"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/face-default.rc",
+        "sha256": "f3740fab9cc8e321973f01e8a63e064a8dde5c135b3a865a6cea6db84df7cd4e"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/fingerprint-default.rc",
+        "sha256": "8a03ae3a1435d925a2f99a3c269010671b8236a61f0cf293b4f417d2ac1fc352"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/init.cutf_cvm.rc",
+        "sha256": "cef836b44936042d1c71561db0d9064f2613ec19da594ab68c1ceeb0fe181033"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/init_graphics.vendor.rc",
+        "sha256": "cf45c91516ac2c5ef54feb5853bbdf9c9acdacef99d69b9eadff9f9b23eedae5"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/motioncontext-service-default.rc",
+        "sha256": "1c4de0bd3bd8f12bac1f562b075a7226dbe9f5d951a69ca506782d1d02557dd3"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/init/seriallogging.rc",
+        "sha256": "fa300b8299b773458b28d77873ca9934335084469db8c0d0b70d145df8e3b937"
+      },
+      {
+        "kind": "partition",
+        "partition": "vendor_a",
+        "path": "etc/ueventd.rc",
+        "sha256": "0fb64e3398ba7cb74b0d81fa8f2a1d41ae6987a6d627a6b126c121634efe6a8d"
+      }
+    ],
+    "initRcFiles": 188,
+    "matches": []
+  },
+  "source": {
+    "archive": {
+      "name": "aosp_cf_arm64_only_phone-img-16373615.zip",
+      "sha256": "051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18",
+      "size": 1101175103
+    },
+    "branch": "aosp-android-latest-release",
+    "branchProvenance": "caller-asserted",
+    "manifestSha256": "bbc04f797d530ba200797e33b057c1058c341d150aa2f7bc460b205d5fdfcd8b",
+    "superImageSha256": "54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05"
+  },
+  "tooling": {
+    "apkrunImage": "0.1.0",
+    "bootUnpacker": {
+      "commit": "4a27dd13adf9846e12d585d6fe99a375ebb58396",
+      "version": "android-17.0.0_r1"
+    },
+    "debugfs": "1.47.0",
+    "erofsUtils": {
+      "packageSha256": "afc3f29f3c0ec4547c60985aa2373dc1dce3324cb3e8970f03b92c4789e74665",
+      "version": "1.7.1-1build2"
+    },
+    "lz4": "1.10.0"
+  }
+}

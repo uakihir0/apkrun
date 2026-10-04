@@ -6747,3 +6747,75 @@ passed, the local normalization re-run changed zero files, and the tested
 privacy and file-size scans passed. The post-run audit JSON records the
 read-only ADB inventory and confirms that shared ADB PID 2704 was left
 running.
+
+## IR-177: Inventory AIDL lazy-service init declarations in build 16373615
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [init inventory](../../Images/reference/16373615/aidl-init-inventory.json); `Images/work/16373615/download/fetch.json` (local provenance); `Images/reference/16373615/incomplete/target-20261004T182603Z-1688586/kernel.log`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Inspect the already-downloaded guest image before considering any
+further VM run. Its ZIP SHA-256,
+`051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`,
+matches the artifact entry in `fetch.json`. That file records the branch as
+caller-asserted, not as independently verified source provenance.
+
+The repository's read-only liblp parser found nine non-empty logical
+partitions in `super.img`: `odm_a`, `odm_dlkm_a`, `product_a`, `system_a`,
+`system_b`, `system_dlkm_a`, `system_ext_a`, `vendor_a`, and `vendor_dlkm_a`.
+The init `.rc` files in those partitions and in all 93 bundled APEX payloads
+were inspected: 114 partition `.rc` files and 66 APEX `.rc` files. The boot-image
+manifest records an empty `boot.img` ramdisk, a 2,992,407-byte `init_boot`
+ramdisk, and one 18,816,072-byte PLATFORM fragment in `vendor_boot`. The
+repository image extractor combined the latter two; its LZ4-decoded CPIO
+contains eight more init `.rc` files. Across all these sources, 188 init
+`.rc` files were searched. The 93 APEX payloads are distributed across
+`system_a` (38), `system_ext_a` (7), and `vendor_a` (48); 92 use ext4 and
+`com.android.virt.apex` uses EROFS. No file declares
+`interface aidl activity` or contains `aidl/activity`. The checked-in
+[`aidl-init-inventory.json`](../../Images/reference/16373615/aidl-init-inventory.json)
+records every scanned `.rc` path and content SHA-256, every APEX payload
+name, filesystem format and digest, source artifact hashes, tool versions,
+scope, and match count for reproduction.
+
+The [AOSP dynamic AIDL documentation](https://source.android.com/docs/core/architecture/aidl/dynamic-aidl)
+shows `interface aidl <name>` in an init service stanza so servicemanager can
+find a lazy AIDL service. The dynamic lifecycle also uses init's `disabled`
+and `oneshot` options and lazy registration by the service process. The
+captured log states that if `activity` is not configured as a lazy service,
+it may be stuck starting or still starting (`kernel.log` lines 3603–3605).
+The inventory establishes that the inspected partitions, bundled APEX
+payloads, and boot ramdisks do not declare `activity` as an init-managed lazy
+service. `userdata.img` contents and runtime-added or activated APEX state
+were not inspected. The inventory does not establish that the Binder
+service's component is missing, explain why it was not registered, or prove
+whether SystemServer was ready. The build's source revision was not
+established by `fetch.json`, and static image contents do not reveal runtime
+service state.
+
+**Reason.** This read-only inventory answers the planned question about
+whether the inspected build artifacts declare `aidl/activity` as a lazy init
+service without spending another long interval on the unchanged SwiftShader
+configuration. In a future eligible capture, start bounded guest logcat
+early enough to cover the first requests. As soon as shell commands succeed,
+collect `service check activity`, `service list`, `pidof system_server`, and
+boot properties. If shell readiness arrives after the first requests, those
+snapshots cannot establish the earlier service state. Keep any such run
+diagnostic-only and do not infer causality from the init lookup failure by
+itself.
+
+**Verification.** The ZIP digest matched `fetch.json`. The project parser
+successfully read the sparse `super.img`; `fsck.erofs` extracted all nine
+non-empty logical partitions; the extracted `super.img` digest also matches
+the image manifest. The repository `apkrun_image extract` command validated
+the boot-image artifact hashes and produced the combined ramdisk. The 92 ext4
+APEX payloads were extracted with `debugfs`, and the EROFS payload was
+extracted with `fsck.erofs`; all 93 extracted payload directories contained
+files. The 188 `.rc` file paths and content digests and the per-payload
+names, formats, and digests are in the checked-in inventory. Its scan reports
+zero matches for both declaration forms.
+`fsck.erofs` was unpacked under Lima `/tmp` without installation; its package
+digest matched Ubuntu package metadata. No guest or host ADB commands were
+issued during this inventory. The shared ADB server PID 2704 was not touched.

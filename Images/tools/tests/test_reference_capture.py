@@ -1427,6 +1427,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               if [ "${FAKE_CVD_CREATE_DELAY_SECONDS:-0}" != 0 ]; then
                 sleep "$FAKE_CVD_CREATE_DELAY_SECONDS"
               fi
+              if [ -n "${APKRUN_PROFILE_LAUNCH_ARGV_LOG:-}" ]; then
+                printf '%s\\n' "$@" > "$APKRUN_PROFILE_LAUNCH_ARGV_LOG"
+              fi
               printf '%s\\n' "$HOME" > "$CVD_HOME_LOG"
               printf '%s\\n' "--base_directory=$base_directory $*" > "$LAUNCH_LOG"
               product_directory=
@@ -1477,6 +1480,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
             for argument in "$@"; do
               if [ "$argument" = start ]; then
+                if [ -n "${APKRUN_PROFILE_START_ARGV_LOG:-}" ]; then
+                  printf '%s\\n' "$@" > "$APKRUN_PROFILE_START_ARGV_LOG"
+                fi
                 printf '%s\\n' "$*" >> "$APKRUN_PROFILE_START_LOG"
                 instance=$(cat "$HOME/instance-runtime.txt")
                 instance_num=$(cat "$HOME/instance-num.txt")
@@ -1835,7 +1841,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         encoding="utf-8",
     )
     (fake_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fake_crosvm_override = fake_bin / "crosvm-preload-wrapper"
+    fake_crosvm_override = fake_bin / "crosvm preload wrapper"
     fake_crosvm_override.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     for executable in fake_bin.iterdir():
         executable.chmod(0o755)
@@ -1876,6 +1882,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     cvd_home_log = tmp_path / "cvd-home.txt"
     launch_log = tmp_path / "launch-command.txt"
     start_log = tmp_path / "start-command.txt"
+    launch_argv_log = tmp_path / "launch-argv.txt"
+    start_argv_log = tmp_path / "start-argv.txt"
     cvd_remove_home_log = tmp_path / "cvd-remove-home.txt"
     expected_instance = requested_instance or 1
     props_file = tmp_path / "drm-virgl-props.txt"
@@ -1991,6 +1999,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "CVD_HOME_LOG": str(cvd_home_log),
             "LAUNCH_LOG": str(launch_log),
             "APKRUN_PROFILE_START_LOG": str(start_log),
+            "APKRUN_PROFILE_LAUNCH_ARGV_LOG": str(launch_argv_log),
+            "APKRUN_PROFILE_START_ARGV_LOG": str(start_argv_log),
             "HOME": str(home),
             "APKRUN_REAL_PYTHON": sys.executable,
             "PATH": (f"{fake_bin}:{TOOLS_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}"),
@@ -2087,11 +2097,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 "diagnostic-only\tcrosvm binary override changes the host runtime; "
                 "this capture is never a reference profile"
             ) in missing
-            launch_arguments = launch_log.read_text(encoding="utf-8").split()
+            launch_arguments = launch_argv_log.read_text(encoding="utf-8").splitlines()
             assert f"--crosvm_binary={fake_crosvm_override}" in launch_arguments
             assert start_log.is_file()
-            start_arguments = start_log.read_text(encoding="utf-8").split()
+            start_arguments = start_argv_log.read_text(encoding="utf-8").splitlines()
             assert any(argument == "start" for argument in start_arguments)
+            assert f"--crosvm_binary={fake_crosvm_override}" in start_arguments
             adb_calls = [
                 line.split("\t", maxsplit=1)[1]
                 for line in adb_log.read_text(encoding="utf-8").splitlines()

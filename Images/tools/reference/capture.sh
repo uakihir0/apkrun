@@ -629,25 +629,28 @@ launch_profile() {
   esac
 }
 
+start_cvd_group_with_common_options() {
+  if [ -n "$crosvm_binary_override" ]; then
+    set -- "$@" "--crosvm_binary=$crosvm_binary_override"
+  fi
+  run_cvd_command_with_live_logs 1 cvd \
+    "--group_name=$cvd_group_name" start \
+    "--boot_timeout_secs=$timeout_seconds" \
+    "$@"
+}
+
 start_profile() {
   case "$profile" in
     default)
-      run_cvd_command_with_live_logs 1 cvd \
-        "--group_name=$cvd_group_name" start \
-        "--boot_timeout_secs=$timeout_seconds" \
-        --gpu_vhost_user_mode=off
+      start_cvd_group_with_common_options --gpu_vhost_user_mode=off
       ;;
     target)
-      run_cvd_command_with_live_logs 1 cvd \
-        "--group_name=$cvd_group_name" start \
-        "--boot_timeout_secs=$timeout_seconds" \
+      start_cvd_group_with_common_options \
         "--gpu_mode=$target_gpu_mode" \
         --gpu_vhost_user_mode=off
       ;;
     swiftshader)
-      run_cvd_command_with_live_logs 1 cvd \
-        "--group_name=$cvd_group_name" start \
-        "--boot_timeout_secs=$timeout_seconds" \
+      start_cvd_group_with_common_options \
         --gpu_mode=guest_swiftshader \
         --gpu_vhost_user_mode=off
       ;;

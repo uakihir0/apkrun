@@ -6244,15 +6244,18 @@ command for it. Final hostile review found no remaining actionable findings.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh`; `Experiments/cuttlefish-boot-diagnosis/patches/enable-pinned-crosvm-virgl.patch`; [android-image.md](../02-design/android-image.md) §8.2; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; [R-06](risks.md#r-06-stock-cuttlefish-image-on-the-vz-topology); `Images/reference/16373615/incomplete/target-20261004T211540-1617589/`; `Images/reference/16373615/incomplete/target-20261004T212141-1619115/`; `Images/reference/16373615/incomplete/target-20261004T212512-1620453/` |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/tests/test_reference_capture.py`; `Experiments/cuttlefish-boot-diagnosis/{README.md,build-crosvm-built-virgl-launcher.sh,crosvm-built-virgl-launcher.c,crosvm-libgcc-preload.sh,patches/enable-pinned-crosvm-virgl.patch}`; [android-image.md](../02-design/android-image.md) §8.2; [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064; [R-06](risks.md#r-06-stock-cuttlefish-image-on-the-vz-topology); `Images/reference/16373615/incomplete/target-20261004T211540-1617589/`; `target-20261004T212141-1619115/`; `target-20261004T212512-1620453/`; `target-20261004T232534-1622675/`; `target-20261004T233833-1630294/`; `target-20261004T235047-1637967/` |
 
 **Choice.** Recover crosvm's panic message before requiring matching debug
 symbols. Cuttlefish tag
 `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` pins crosvm source commit
 `fd4df63707aee57092a28db63bc1ff8945c76058` and gfxstream commit
-`6e68776cefbe1f1a662bb7321aa98e5348e8c062`. The installed crosvm Build ID
-`d724bf54f045b0ec7dbe14049b0fed9a16e52a23` matches the Apport reports, and
-the loaded `libgfxstream_backend.so` Build ID is
+`6e68776cefbe1f1a662bb7321aa98e5348e8c062`. The `Launcher Build ID` in
+Cuttlefish logs is the Cuttlefish VCS revision; it is not the crosvm ELF Build
+ID. The sanitized Apport summary identifies executable package
+`cuttlefish-base 1.57.0` and crosvm Build ID
+`d724bf54f045b0ec7dbe14049b0fed9a16e52a23`; the loaded
+`libgfxstream_backend.so` Build ID is
 `6b8f3105442da5c66988881a1fa76e812b13c3e8`. `readelf` shows crosvm needs both
 `libgfxstream_backend.so` and `libgcc_s.so.1`; gfxstream exports
 `unw_get_reg` and `_Unwind_GetIP`.
@@ -6260,8 +6263,8 @@ the loaded `libgfxstream_backend.so` Build ID is
 The pinned crosvm panic hook at
 [`src/sys/linux/panic_hook.rs`](https://chromium.googlesource.com/crosvm/crosvm/+/fd4df63707aee57092a28db63bc1ff8945c76058/src/sys/linux/panic_hook.rs)
 sets `RUST_BACKTRACE=1`, redirects stderr to a pipe, invokes Rust's default
-panic hook, then reads and logs the captured output. In the first new
-diagnostic capture, GDB placed the SIGSEGV at `unw_get_reg+68` in
+panic hook, then reads and logs the captured output. In the first diagnostic
+capture, GDB placed the SIGSEGV at `unw_get_reg+68` in
 `libgfxstream_backend.so`; `x8` was zero at `ldr x8, [x8, #16]`. The frames
 above it included gfxstream's `_Unwind_GetIP` and libgcc's
 `_Unwind_Backtrace`. The stripped crosvm callers are recorded as offsets in
@@ -6272,15 +6275,7 @@ The first diagnostic wrapper was passed to `cvd create` only. A second
 instrumented attempt showed no wrapper marker, and its crosvm environment
 contained no `LD_PRELOAD`. The pinned `cvd start` also accepts
 `--crosvm_binary` and applies its own default, so `capture.sh` now passes the
-opt-in override to both `cvd create` and `cvd start`. The wrapper emits a
-diagnostic marker before setting `LD_PRELOAD` to
-`/lib/aarch64-linux-gnu/libgcc_s.so.1` and execing the packaged crosvm.
-`APKRUN_CROSVM_BINARY` is validated as an absolute executable. Any normalized
-capture using this override remains diagnostic-only under `incomplete/`,
-even if it reaches `sys.boot_completed=1`; the standard privacy path discards
-staging data if normalization fails.
-
-The corrected capture
+opt-in override to both `cvd create` and `cvd start`. The corrected capture
 `target-20261004T212512-1620453` records the wrapper marker and an
 `LD_PRELOAD` entry in Apport's environment. The panic hook then logged:
 
@@ -6294,7 +6289,7 @@ GPU mode was `drm_virgl`, vhost-user GPU was disabled, and the crosvm command
 line selected `backend=virglrenderer`. `kernel.log` is empty and there is no
 Android boot evidence.
 
-The panic is explained by the pinned build configuration. The
+The panic matches the pinned build configuration. The
 [Cuttlefish crosvm Bazel spec](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/build_external/crosvm/crosvm.MODULE.bazel)
 sets `default_features = False` and enables `gfxstream` and `gpu`, but omits
 `virgl_renderer`. In the pinned
@@ -6306,37 +6301,108 @@ VirglRenderer but the build lacks that feature. This matches the panic text.
 Installing `libvirglrenderer1` and satisfying Cuttlefish's EGL/GLES check do
 not enable the missing crosvm build feature.
 
-**Reason.** The unpreloaded SIGSEGV occurred while the panic hook attempted
-to collect a backtrace and obscured the original error. With the wrapper
-actually applied, crosvm logged the panic and exited with SIGABRT instead.
-This supports the secondary-crash explanation and identifies the immediate
-failure: the tested Cuttlefish crosvm build cannot instantiate its requested
-Virgl component. The host graphics-library installation was not the
-remaining blocker. A target capture needs a Cuttlefish host package built
-from the pinned source with `virgl_renderer` enabled. The diagnostic override
-cannot be promoted to a canonical reference profile.
+**Diagnostic rebuild.** A diagnostic-only build of
+`//build_external/crosvm:crosvm_bin_opt` was completed in the pinned Debian
+13 container from the source revisions above with the
+`virgl_renderer` feature patch. The Cuttlefish container recipe runs
+unversioned `apt upgrade`, omits `libvirglrenderer-dev` from its declared
+dependencies, and generated Abseil repositories needed temporary
+`layering_check` cache adjustments before the build passed. These
+environment changes are not repository source and make the result
+non-reproducible as a canonical host package. The ARM64 crosvm and gfxstream
+outputs have Build IDs `1f6c03321061aa58e1d1ec0d0a1ff54f` and
+`257833fa4c8e65fc5294f3fa2ea311c4`, with SHA-256 values
+`48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7` and
+`c8e1f380e2ebfbe5814c57ba1f81d94659be0d6771edac421493cac02575f503`.
 
-**Verification.** Apport reports, the first core's GDB stack, runtime
-environment, selected Cuttlefish GPU config, and panic output were inspected
-on Lima. Pinned Cuttlefish, crosvm, and Rutabaga source were checked against
-the build configuration and error path. The raw Apport reports and core
-files remain in private Lima storage; only normalized logs and sanitized
-summaries are in the repository. Focused crosvm override tests pass (3
-passed); the
-complete reference-capture module passes (50 passed, 3 skipped because the
-skipped cases require GNU `timeout` on Linux). Ruff check and format check,
-shell syntax checks, and `git diff --check` pass. The diagnostic runs remain
-incomplete and non-comparable. Hostile review identified two P3 issues: M01
-described the SIGSEGV as occurring during Rust unwinding, and the test ID
-named `cvd create` but omitted `cvd start`. Both were corrected, and the
-follow-up review found no actionable issue. A read-only Lima inventory found
-no Bazel, Bazelisk, Cargo, Rust compiler, Clang, Docker, or Podman; the VM has
-16 GiB RAM and about 104 GiB free on its root filesystem.
-The pinned crosvm toolchain file selects Rust 1.88.0, and the Cuttlefish
-Bazel spec supplies its Rust host tools and downstream crate annotations.
-The Cuttlefish container recipe uses Debian 13 but runs unpinned `apt
-upgrade`; the Lima apt repository offers Rust/Cargo 1.75. A standalone
-`cargo build` would not reproduce the Cuttlefish package setup. The pinned
-Cuttlefish Debian 13 build image has been built on the Mac's Docker Desktop,
-and a build of `//build_external/crosvm:crosvm_bin_opt` with the diagnostic
-`virgl_renderer` patch is in progress; its result is not yet verified.
+**Diagnostic captures.** The three later target attempts used this modified
+crosvm and remain incomplete and non-comparable:
+
+| Record | EGL setup | Observation |
+|---|---|---|
+| `target-20261004T232534-1622675` | `EGL_PLATFORM` was not set. | Cuttlefish logged that EGL/GLES prerequisites were not detected. Although the Virgl backend was configured and the kernel reached init, this does not establish a valid Virgl guest path. |
+| `target-20261004T233833-1630294` | Set explicitly in the invocation. | Host EGL/GLES checks passed and the guest reached Android init/APEX activity, but the 600-second deadline expired without ADB readiness, a confirmed zygote service start, `system_server`, or boot completion. |
+| `target-20261004T235047-1637967` | Set explicitly in the invocation. | The static launcher ran the patched crosvm and the guest reached Android init. The kernel log imports and parses zygote init configuration files, but does not confirm that zygote started. Its final retained init records show `odsign` starting at guest uptime 200.727 seconds, receiving PID 594 at 200.832 seconds, and the `start odsign` action succeeding after 116 ms at 200.836 seconds. No later kernel-log line establishes the service's eventual outcome. No `system_server`, boot-complete marker, or ADB state sample was observed before the 600-second deadline. |
+
+These captures were produced by the older Lima-local checkout at
+`e7cd1c0`, so their `host.json` files use schema version 1 and have no
+`eglPlatform` field, even though the latter two invocations explicitly set
+the environment. The current `capture.sh` sets `EGL_PLATFORM=surfaceless`
+automatically for `target`/`drm_virgl`, clears inherited `EGL_PLATFORM` for
+all other profile and GPU-mode combinations, records the effective value in
+schema version 2, and has profile-configuration regression coverage. The
+third capture's observer made 121 crosvm memory polls, all with no candidate
+and unavailable identity, so it recorded no crosvm memory measurements; it
+also recorded no ADB state events. Its post-run audit found an empty
+Cuttlefish fleet, no crosvm, `process_restarter`, or `run_cvd` process, no
+listener on port 6520, and no private capture HOME. The pre-existing ADB
+server PID 2704 remained running and was not stopped. The nine, nine, and ten
+normalized files in the three records match their Lima-side `LIMA-SHA256SUMS`
+manifests; a second normalization pass changed zero files. The tested
+host-path, PEM-header, and EUI-48 scans found no matches or oversized files.
+
+**Launcher hardening.** The first static launcher used by the third capture
+had Build ID `01d7480ecd9f6ccf0e4613caa3f2ba85831cbcea` and SHA-256
+`28a84deba33a97bbbf9002c1b31e4c83a8bd3c97283233b21c37b0cab16e9494`.
+The current static AArch64 launcher has Build ID
+`faf3eaf415ce2d1fc6c90f5090a9e82ba8abccab` and SHA-256
+`d09e4a87ac8d174d9925bcedd0ff2d77f138f63f00c6eff9bbc1c7865e33c819`.
+The build script compares adjacent binaries with the hashes pinned in the
+experiment README and embeds those exact values. At runtime the launcher
+checks the staged files through open descriptors, labels the emitted hashes
+as staged-file hashes, clears inherited loader variables, and executes
+crosvm from its open file descriptor. It rejects symlinked files and writable
+directory ancestors that another user could change. The dynamic loader later
+opens gfxstream by pathname, so the hash log does not independently prove the
+mapped bytes if a same-UID process mutates the directory; same-UID processes
+remain trusted. The build script requires a fresh output path and refuses to
+overwrite any existing file or follow an output symlink.
+
+**Reason.** The original SIGSEGV happened while the panic hook attempted to
+collect a backtrace and obscured the triggering panic. Preloading the matching
+system `libgcc_s.so.1` let the hook finish and exposed the immediate failure:
+the stock pinned crosvm build cannot instantiate the requested Virgl
+component. The diagnostic feature-enabled crosvm passes that failure point
+and produces guest kernel logs, but the observed Android startup still does
+not reach a confirmed zygote service or `system_server`. This does not
+validate the target GPU profile or establish the remaining Android boot
+cause. Matching debug symbols were not needed to identify the missing
+feature.
+
+**Verification.** The raw Apport reports and core files remain private on
+Lima; only normalized logs and sanitized summaries are in the repository.
+On the running Lima VM, `dpkg -L cuttlefish-base` lists
+`/usr/lib/cuttlefish-common/bin/crosvm` and
+`/usr/lib/cuttlefish-common/bin/libgfxstream_backend.so`. `readelf` confirms
+the installed files have Build IDs `d724bf54f045b0ec7dbe14049b0fed9a16e52a23`
+and `6b8f3105442da5c66988881a1fa76e812b13c3e8`; the library's dynamic symbol
+table exports `unw_get_reg`, `_Unwind_GetIP`, and the related unwind symbols,
+and crosvm needs both `libgfxstream_backend.so` and `libgcc_s.so.1`. This
+confirms the installed package contents, not the `ExecutablePath` of the
+earlier crashed process. A read-only scan found six readable `.crash` reports
+under `/var/crash` and no crosvm report; the readable `/var/log/apport.log`
+contains no crosvm entries. The exact crash executable path therefore remains
+unavailable from the current Lima evidence.
+The crosvm override is applied to both CVD commands. The current launcher
+build passed static-link and AArch64 ELF checks. An ARM64 container test ran
+crosvm `--help` with injected `LD_*` variables and `GLIBC_TUNABLES`, verified
+the staged-file hashes, and confirmed rejection of modified crosvm and
+gfxstream files, a symlinked crosvm, a group/world-writable ancestor, and a
+different-user-owned writable ancestor. It also exercised closed standard
+file descriptors without hanging. The build script rejects mismatched pinned
+inputs and all existing output paths, including direct, symlink, and hardlink
+aliases, without changing the inputs. The full reference-capture test module
+passed 50 tests; three Linux-only GNU `timeout` cases were skipped. The
+focused profile-configuration tests passed three cases. Ruff lint and format,
+shell syntax checks, and `git diff --check` passed. Final hostile subagent
+review found no actionable issues. The target capture and all its artifacts
+remain diagnostic-only.
+
+**Open provenance check for maintainer review.** The sanitized Apport summary
+contains the package and ELF Build IDs but does not retain the exact
+`ExecutablePath` field. The current Lima `.crash` inventory and Apport log
+also contain no crosvm report or entry. The `Launcher Build ID` is the
+Cuttlefish VCS revision, not a crosvm ELF identity. Keep the runtime path
+inferred from the package unconfirmed unless the original report becomes
+available; if it does, record only its `ExecutablePath` field and keep the raw
+report and core private.

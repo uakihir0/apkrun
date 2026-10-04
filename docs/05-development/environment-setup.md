@@ -221,10 +221,13 @@ The reference boot capture ([../02-design/android-image.md](../02-design/android
 | Output | copy the capture to `Images/reference/<buildId>/<profile>/` on the Mac and commit it |
 
 On the tested Ubuntu 24.04.4 arm64 Lima VM, the host has no `/dev/dri`.
-Install `libgles2-mesa-dev` and `libvirglrenderer1`, and set
-`EGL_PLATFORM=surfaceless` when running a `drm_virgl` capture. With these
-packages installed and that variable set, Cuttlefish 1.57.0 initialized
-Mesa's off-screen EGL; `ldconfig` reported `libEGL.so`, `libGLESv2.so`, and
+Install `libgles2-mesa-dev` and `libvirglrenderer1`. For the `target`
+`drm_virgl` profile, `capture.sh` sets `EGL_PLATFORM=surfaceless` for both CVD
+commands and records it in `host.json`; it clears inherited `EGL_PLATFORM`
+for all other profile and GPU-mode combinations. With these
+packages installed and the capture script selecting that variable,
+Cuttlefish 1.57.0 initialized Mesa's off-screen EGL; `ldconfig` reported
+`libEGL.so`, `libGLESv2.so`, and
 `libvirglrenderer.so.1` visible. Cuttlefish passed its host GLES prerequisite
 check with Mesa llvmpipe. `launcher.log` records the requested virglrenderer
 backend. A later capture recorded
@@ -317,27 +320,29 @@ still exists unseen. Preserve the old report in a private archive outside
 `/var/crash` before retrying; do not delete the raw report or copy it into the
 repository.
 
-The crosvm panic-output experiment is opt-in and diagnostic-only. Install the
-wrapper from the checkout into writable VM storage, then set
+The crosvm panic-output experiment is opt-in and diagnostic-only. Follow the
+build and staging steps in the
+[experiment README](../../Experiments/cuttlefish-boot-diagnosis/README.md#pinned-virgl-crosvm-diagnostic-rebuild)
+to place the static launcher beside the diagnostic `crosvm` and
+`libgfxstream_backend.so` in a user-owned directory. Start the capture from a
+shell without inherited `LD_*` or `GLIBC_TUNABLES` variables, then set
 `APKRUN_CROSVM_BINARY` for one target capture:
 
 ```bash
-mkdir -p "$HOME/.local/bin"
-install -m 0755 Experiments/cuttlefish-boot-diagnosis/crosvm-libgcc-preload.sh \
-  "$HOME/.local/bin/apkrun-crosvm-libgcc-preload"
-APKRUN_CROSVM_BINARY="$HOME/.local/bin/apkrun-crosvm-libgcc-preload" \
+APKRUN_CROSVM_BINARY="$HOME/.local/share/apkrun/diagnostics/crosvm-virgl/crosvm-built-virgl-launcher" \
   Images/tools/reference/capture.sh target
 ```
 
-The wrapper preloads the host's `libgcc_s.so.1` and then execs the packaged
-crosvm. The pinned `cvd create` and `cvd start` accept `--crosvm_binary`;
-`capture.sh` passes the override to both commands only when this environment
-variable is set. A normalized run
-using the override is retained under `incomplete/` with a diagnostic-only
-reason, even if Android boots, because the host runtime has changed. The
-reason is written when staging begins, so interrupted runs retain it when
-normalization succeeds. The standard capture path discards staging data if
-normalization fails. Do not compare these runs with canonical profiles.
+The static launcher clears inherited loader variables before it executes the
+diagnostic crosvm and preloads the host's `libgcc_s.so.1`. The pinned
+`cvd create` and `cvd start` accept `--crosvm_binary`; `capture.sh` passes the
+override to both commands only when this environment variable is set. A
+normalized run using the override is retained under `incomplete/` with a
+diagnostic-only reason, even if Android boots, because the host runtime has
+changed. The reason is written when staging begins, so interrupted runs
+retain it when normalization succeeds. The standard capture path discards
+staging data if normalization fails. Do not compare these runs with canonical
+profiles.
 
 `APKRUN_CVD_PACKAGE_VERSION` is optional when `dpkg-query` can report the
 installed `cuttlefish-base` version. The script checks every guest artifact

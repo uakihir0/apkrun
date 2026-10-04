@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import selectors
@@ -29,6 +30,8 @@ ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
+ADB_GETPROP_RETRY_BASE_SECONDS = 30.0
+ADB_GETPROP_RETRY_MAX_SECONDS = 60.0
 ADB_CLIENT_TERMINATE_SECONDS = 0.5
 ADB_CLIENT_KILL_SECONDS = 1.0
 BOOT_PROPERTIES_SHELL_COMMAND = (
@@ -143,6 +146,17 @@ def _next_adb_poll_time(scheduled_poll: float, after_poll: float, interval: floa
         skipped_intervals = int((after_poll - next_poll) // interval) + 1
         next_poll += skipped_intervals * interval
     return next_poll
+
+
+def _getprop_retry_delay(consecutive_timeouts: int) -> float:
+    if consecutive_timeouts < 1:
+        raise ValueError("getprop timeout count must be positive")
+    delay = ADB_GETPROP_RETRY_BASE_SECONDS
+    for _ in range(consecutive_timeouts - 1):
+        delay = min(delay * 2, ADB_GETPROP_RETRY_MAX_SECONDS)
+        if delay == ADB_GETPROP_RETRY_MAX_SECONDS:
+            break
+    return delay
 
 
 def _proc_identity(path: Path) -> tuple[int, bytes] | None:
@@ -397,6 +411,8 @@ class BootObserver:
         self._crosvm_start_times: dict[int, bytes] = {}
         self._start_event_observed = False
         self._shell_probe_attempted = False
+        self._getprop_timeout_streak = 0
+        self._getprop_retry_at: float | None = None
         self._logcat_probe_attempted = False
         self._adb_probe_cleanup_failed = False
         self._next_sample = 0.0
@@ -1166,6 +1182,7 @@ class BootObserver:
             "getpropExitCode": None,
             "getpropAttempted": False,
             "getpropTimedOut": None,
+            "getpropRetryInSeconds": None,
             "getpropTruncated": False,
             "getpropCleanupComplete": True,
             "getpropProbeError": False,
@@ -1355,6 +1372,12 @@ class BootObserver:
                 if not probe_cleanup_complete:
                     self._adb_probe_cleanup_failed = True
             else:
+                retry_at = self._getprop_retry_at
+                retry_in_seconds = None if retry_at is None else retry_at - time.monotonic()
+                if retry_in_seconds is not None and retry_in_seconds > 0:
+                    poll_fields["getpropRetryInSeconds"] = math.ceil(retry_in_seconds)
+                    record_poll()
+                    return True
                 (
                     property_code,
                     property_output,
@@ -1380,6 +1403,15 @@ class BootObserver:
                     timeout_seconds=ADB_GETPROP_TIMEOUT_SECONDS,
                     max_output_bytes=ADB_COMMAND_MAX_OUTPUT_BYTES,
                 )
+                if property_attempted:
+                    if property_command_timed_out:
+                        self._getprop_timeout_streak += 1
+                        retry_delay = _getprop_retry_delay(self._getprop_timeout_streak)
+                        self._getprop_retry_at = time.monotonic() + retry_delay
+                        poll_fields["getpropRetryInSeconds"] = math.ceil(retry_delay)
+                    else:
+                        self._getprop_timeout_streak = 0
+                        self._getprop_retry_at = None
                 poll_fields.update(
                     {
                         "getpropExitCode": property_code,

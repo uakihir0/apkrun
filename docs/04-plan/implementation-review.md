@@ -5581,3 +5581,50 @@ logcat timezone unspecified, and records the verification results here.
 Follow-up hostile review found no further actionable findings. Keep IR-159 in
 `Needs maintainer review` until the evidence summary and its interpretation
 are reviewed.
+
+## IR-160: Back off timed-out Android property probes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep ADB `connect` and `get-state` checks on their existing
+15-second schedule. After the first consecutive timed-out Android property
+query, defer the next property query for 30 seconds; after the second and
+later consecutive timeouts, defer it for 60 seconds. A property command that
+returns without timing out clears the backoff. Record the selected or
+remaining delay in `getpropRetryInSeconds`; keep skipped queries explicit
+with `getpropAttempted=false` and `getpropTimedOut=null`.
+
+**Reason.** In the interim live SwiftShader capture snapshot through guest
+uptime 1388.713 seconds, all 17 observed guest `SIGHUP` events for untracked
+`(sh)` and `(printf)` processes aligned with observer shell-query poll times
+within 0.85 seconds after anchoring guest uptime to the first shell-probe
+poll. This strongly associates repeated remote shell timeouts with the
+guest-side process entries, while timing alignment alone does not prove the
+origin of every process. The former 15-second property retry schedule could
+launch another remote shell after each timeout. Backoff lowers that repeated
+guest-side activity without reducing the ADB transport-state sampling
+cadence. The retry timer sets the earliest eligible property poll. While
+ordinary polling continues and `get-state` reports `device`, the query runs
+on the first scheduled poll at or after that delay, after that poll's
+`connect` and `get-state` commands complete. Their durations and scheduler
+delays add to the actual query time. Offline or unavailable transport states
+and the reserved final logcat-probe window defer ordinary property retries.
+
+**Verification.** The full `test_boot_observer.py` suite passed 108 tests with
+one Linux-only parent-death test skipped on macOS. The new test drives three
+consecutive property timeouts through the 30/60-second backoff, verifies
+transport polls continue while property commands are deferred, and confirms
+that a successful property command restores the regular schedule. The full
+Image tools suite passed 492 tests with four platform-specific skips; the
+focused observer suite passed 108 tests with one Linux-only skip. Ruff lint
+and formatting, `git diff --check`, and all six checks in
+`scripts/ci/run-checks.sh` passed. Hostile reviews found a missing transport
+poll assertion, an interim-snapshot cutoff omission, and overbroad retry
+latency wording; these were corrected. Final follow-up hostile review found
+no further actionable findings. The active 3600-second capture started before
+this change and therefore uses the old property-query cadence; post-change
+live behavior remains to be verified with a bounded capture.

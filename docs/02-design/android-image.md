@@ -804,6 +804,22 @@ code and timeout field. `getStateResult` contains only an allowlisted
 classification: `notAttempted`, `timedOut`, `commandFailed`, `device`,
 `offline`, `unauthorized`, `empty`, `other`, or `probeError`; a probe error
 never yields an accepted `deviceState`. Raw command output is never stored.
+If a property query times out, keep the 15-second ADB transport polling
+schedule but defer the next property shell query for 30 seconds; after a
+second consecutive timeout, defer it for 60 seconds, capped at 60 seconds
+until a property command returns without timing out. The `getpropRetryInSeconds`
+field records the selected delay on a timeout and the rounded-up remaining
+delay on polls skipped by this backoff. A returned property command clears the
+backoff and restores property queries to the regular poll schedule. This
+reduces repeated guest shell launches while preserving frequent ADB transport
+checks. The delay sets the earliest eligible property poll. When ordinary
+polling continues and `get-state` reports `device`, the query runs on the first
+scheduled poll at or after that delay, after that poll's `connect` and
+`get-state` commands complete; those command durations and scheduler delays
+add to the actual query time. Each property command remains subject to the
+existing ten-second cap. An offline or unavailable ADB state delays the query
+until a later eligible poll. The reserved final logcat-probe window also
+pauses ordinary property polls and may supersede a pending retry.
 The aggregate `commandTimedOut` field reports whether an ADB
 subprocess timed out;
 `pollDeadlineReached` reports whether the poll reached its shared deadline,

@@ -1773,6 +1773,124 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     )
 
 
+def test_boot_observer_backs_off_timed_out_guest_property_queries(
+    tmp_path: Path,
+    short_private_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        home_path=short_private_home,
+    )
+    observer._shell_probe_attempted = True
+    observer.start()
+    socket_path = short_private_home.parent / "adb.sock"
+    adb_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    adb_socket.bind(str(socket_path))
+    property_calls = 0
+
+    class FakeClock:
+        current = 0.0
+
+        def monotonic(self) -> float:
+            return self.current
+
+    class LiveServer:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    clock = FakeClock()
+    monkeypatch.setattr(OBSERVER_MODULE, "time", clock)
+
+    def bounded_result(
+        exit_code: int | None,
+        output_text: str = "",
+        *,
+        timed_out: bool = False,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        return exit_code, output_text.encode(), timed_out, True, False, True, False
+
+    def fake_run_adb(
+        command: list[str],
+        environment: dict[str, str],
+        deadline: float,
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> tuple[int | None, bytes, bool, bool, bool, bool, bool]:
+        del environment, deadline, timeout_seconds, max_output_bytes
+        nonlocal property_calls
+        if "connect" in command:
+            return bounded_result(0)
+        if command[-1:] == ["get-state"]:
+            return bounded_result(0, "device")
+        if command[-1:] == [OBSERVER_MODULE.BOOT_PROPERTIES_SHELL_COMMAND]:
+            property_calls += 1
+            if property_calls <= 3:
+                return bounded_result(None, timed_out=True)
+            return bounded_result(
+                0,
+                "boot_completed=0\nboot_completed_status=0\n"
+                "system_server=1\nsystem_server_status=0\n",
+            )
+        raise AssertionError(f"unexpected adb command: {command!r}")
+
+    monkeypatch.setattr(observer, "_run_adb_bounded", fake_run_adb)
+
+    def poll_at(timestamp: float) -> dict[str, object]:
+        clock.current = timestamp
+        assert observer._record_adb_poll(
+            "localfilesystem:/tmp/adb.sock",
+            "127.0.0.1:6520",
+            LiveServer(),  # type: ignore[arg-type]
+            socket_path,
+            1_000.0,
+        )
+        record = _read_records(output)[-1]
+        assert record["connectAttempted"] is True
+        assert record["getStateAttempted"] is True
+        return record
+
+    try:
+        first_timeout = poll_at(0.0)
+        first_deferred = poll_at(15.0)
+        second_timeout = poll_at(30.0)
+        second_deferred = poll_at(45.0)
+        third_deferred = poll_at(60.0)
+        fourth_deferred = poll_at(75.0)
+        third_timeout = poll_at(90.0)
+        fifth_deferred = poll_at(105.0)
+        recovered = poll_at(150.0)
+        regular_poll = poll_at(165.0)
+    finally:
+        observer.close()
+        adb_socket.close()
+
+    assert first_timeout["getpropAttempted"] is True
+    assert first_timeout["getpropTimedOut"] is True
+    assert first_timeout["getpropRetryInSeconds"] == 30
+    assert first_deferred["getpropAttempted"] is False
+    assert first_deferred["getpropTimedOut"] is None
+    assert first_deferred["getpropRetryInSeconds"] == 15
+    assert second_timeout["getpropTimedOut"] is True
+    assert second_timeout["getpropRetryInSeconds"] == 60
+    assert second_deferred["getpropRetryInSeconds"] == 45
+    assert third_deferred["getpropRetryInSeconds"] == 30
+    assert fourth_deferred["getpropRetryInSeconds"] == 15
+    assert third_timeout["getpropTimedOut"] is True
+    assert third_timeout["getpropRetryInSeconds"] == 60
+    assert fifth_deferred["getpropRetryInSeconds"] == 45
+    assert recovered["getpropAttempted"] is True
+    assert recovered["getpropTimedOut"] is False
+    assert recovered["getpropRetryInSeconds"] is None
+    assert regular_poll["getpropAttempted"] is True
+    assert property_calls == 5
+
+
 @pytest.mark.parametrize(
     ("probe_outcome", "expected_marker_match", "expected_exit_code", "expected_timed_out"),
     (

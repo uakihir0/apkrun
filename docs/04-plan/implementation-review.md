@@ -6033,3 +6033,76 @@ action. The audit found an empty Cuttlefish fleet, no listed Cuttlefish
 processes, the temporary CVD HOME removed, and no port 6520 listener after
 cleanup; the separate port 5037 listener remained. The diagnostic
 interpretation and record are pending hostile review.
+
+## IR-168: Record target drm_virgl prerequisite failure
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `.gitattributes`; `Images/reference/16373615/incomplete/target-20261004T180433-1573318/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the 8-second `target` attempt as incomplete and
+non-comparable. It used source commit `ef70045`, build 16373615, Cuttlefish
+1.57.0 on Ubuntu 24.04.4 arm64 with nested virtualization, requested
+`drm_virgl`, and disabled vhost-user GPU. `assemble_cvd.log` records
+`PopulateEglAndGlesAvailability: Failed to initialize display`, followed by
+Cuttlefish's warning that the `drm_virgl` prerequisites were not detected.
+The host inventory found no virglrenderer executable or library visible
+to `ldconfig`, and no virglrenderer pkg-config module. The tested Lima VM has
+no `/dev/dri`, which [environment setup](../05-development/environment-setup.md)
+§3.3 documents as expected; its absence alone does not show VirGL is
+unavailable. A follow-up read-only check before changing the VM confirmed
+`libgles2-mesa-dev` was installed, but `libvirglrenderer1` was not installed;
+the capture invocation also did not set `EGL_PLATFORM=surfaceless`. Section
+3.3 prescribes the Mesa development package and this EGL setting to enable
+off-screen EGL and the host GLES check, while noting that this does not
+guarantee the guest or backend will start. This attempt preceded the
+documented EGL setting and ran without the virglrenderer runtime library, so
+it does not establish whether the VM can run `target` after those host
+prerequisites are completed.
+
+The launcher identifies the monitored process role as `process_restarter`,
+configured to launch Android `crosvm run` with `backend=virglrenderer`. It
+logs `Process exited with unexpected si_code: 3`, then exits with code 1;
+the process monitor logs that unexpected exit and stops the other monitored
+processes. Normalization redacts the `crosvm` executable path. The launcher records
+`si_code: 3` and the `process_restarter` exit code 1, but gives no more
+specific termination status or cause for the crosvm child; the process role
+is known, while the immediate cause remains unknown. The
+launcher then reports `run_cvd returned 10` and
+`VIRTUAL_DEVICE_BOOT_FAILED`. `kernel.log` is empty,
+the observer did not see start event 5, and no ADB polls ran; this attempt
+therefore supplies no guest boot evidence. Do not attribute the failure to a
+specific GPU prerequisite or Android cause.
+
+Do not switch this capture to the documented `guest_swiftshader` fallback
+without the required pinned `bootconfig_args.cpp` revision and
+source-derived graphics-properties file. Neither was available in the
+checkout, so the fallback was not invoked. The post-run audit found an empty
+Cuttlefish fleet, no listed Cuttlefish processes or temporary CVD HOME, and
+no port 6520 listener. The separate port 5037 listener remained running and
+was not stopped.
+
+**Reason.** Preserve the failed host-side graphics setup as evidence while
+keeping profile selection and source-derived fallback properties
+reproducible. The EGL display error, absent virglrenderer runtime library, and
+missing `EGL_PLATFORM=surfaceless` setting are consistent with an incomplete
+host graphics setup, but do not identify the crosvm child's specific
+termination status or cause, or prove a single root cause. An incomplete target attempt cannot serve as the reference profile or
+establish guest behavior.
+
+**Verification.** `host.json` confirms the requested and selected mode was
+`drm_virgl`, with vhost-user GPU disabled. `LIMA-SHA256SUMS` contains hashes
+for all ten captured artifacts and the post-run audit; all entries verified
+after transfer. A second `compare_boot.py normalize` pass changed zero
+files. Strict JSON parsing succeeded, and the tested host-path, PEM-header,
+EUI-48, and EUI-64 scans found no matches across the record. The Cuttlefish
+fleet/process/temporary-home audit passed; port 6520 was absent after
+cleanup, while port 5037 was left running. Hostile review caught that the
+process role was identifiable from the launcher arguments; the wording was
+corrected, and the final hostile review found no further actionable issues.
+The raw `cvd-create-console.log` is preserved byte-for-byte, and
+`.gitattributes` exempts captured logs' source trailing whitespace from Git's
+whitespace check; `git diff --check` passes without changing the verified
+capture bytes.

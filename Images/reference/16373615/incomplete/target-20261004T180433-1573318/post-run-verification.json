@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "captureSourceRevision": "ef70045",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "capturedArtifactTransferCheck": "all_passed",
+  "captureDurationSeconds": 8,
+  "selectedGpuMode": "drm_virgl",
+  "gpuVhostUserEnabled": false,
+  "cvdGpuPrerequisiteWarning": true,
+  "hostPrerequisiteInventory": {
+    "devDriPresent": false,
+    "virglrendererExecutablePresent": false,
+    "virglrendererLibraryVisibleToLdconfig": false,
+    "virglrendererPkgConfigFound": false,
+    "specificMissingPrerequisiteProven": false
+  },
+  "capture": {
+    "kernelLogBytes": 0,
+    "observerEvent5Observed": false,
+    "adbPollCount": 0,
+    "androidBootCompleted": null,
+    "virtualDeviceBootFailed": true,
+    "exitStatus": 255
+  },
+  "privacyScan": {
+    "fileCount": 12,
+    "knownHostPathMatches": 0,
+    "pemHeaderMatches": 0,
+    "eui48Addresses": 0,
+    "eui64Ipv6Candidates": 0
+  },
+  "cleanup": {
+    "cvdFleetEmpty": true,
+    "checkedCuttlefishProcessesRemaining": [],
+    "temporaryCvdHomeRemoved": true,
+    "port6520ListenerPresentAfterCleanup": false,
+    "port5037ListenerPresentAfterCleanup": true,
+    "port5037KillServerIssued": false
+  }
+}

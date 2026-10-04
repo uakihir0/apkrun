@@ -6209,9 +6209,11 @@ runtime loading of the library is not confirmed. `host.json` records a
 9-second capture duration. The retry failed before guest kernel output,
 start event 5, or ADB polling. `process_restarter` logged
 `si_code: 3` (`CLD_DUMPED`) and exited 1, but the record has no child signal
-number and no Apport report was found for this retry. Do not infer that the
-retry failed with the same signal or at the same stack location as the first
-attempt.
+number. Apport did not write a report for this retry: `/var/log/apport.log`
+records that it skipped crosvm because the first attempt's report still
+existed and was unseen. The retry record therefore has no child signal number
+or crash report. Do not infer that the retry failed with the same signal or
+at the same stack location as the first attempt.
 
 **Reason.** Preserve the confirmed first-attempt crash location while
 separating it from the unknown original trigger and from the second attempt's

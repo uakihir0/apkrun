@@ -30,7 +30,8 @@
     "linuxChildTerminationCodeName": "CLD_DUMPED",
     "processRestarterExitCode": 1,
     "childSignalNumber": null,
-    "apportReportForThisAttemptFound": false
+    "apportReportForThisAttemptFound": false,
+    "apportReportSuppressedByExistingUnseenReport": true
   },
   "cleanup": {
     "cvdFleetEmpty": true,

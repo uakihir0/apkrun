@@ -1285,7 +1285,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             False,
             False,
             "crosvm-binary-override",
-            id="diagnostic-crosvm-binary-override-is-passed-to-create",
+            id="diagnostic-crosvm-binary-override-is-passed-to-create-and-start",
         ),
         pytest.param(
             "drm_virgl",

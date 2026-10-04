@@ -6854,3 +6854,122 @@ unknown.
 Ruff lint and format checks, and `git diff --check` passed. The final
 adversarial review found no actionable issues. No live guest or ADB command
 was run for this tooling change.
+
+## IR-179: Track the crosvm launcher and fexecve executable separately
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/capture.sh`; `Images/tools/reference/capture_cvd_start.py`; `Images/tools/reference/boot_observer.py`; image-tool tests; [android-image.md](../02-design/android-image.md) §8.3; [environment-setup.md](../05-development/environment-setup.md); [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Track the command requested by `process_restarter` and the
+resulting process executable as separate identities. Preserve the supplied
+command basename, even when its path is a symlink, when resolving the
+restarter's request under the validated private Cuttlefish instance. By
+default the process executable is the staged command's target. A diagnostic
+wrapper that calls `fexecve` can provide its actual executable through
+`APKRUN_CROSVM_OBSERVER_EXECUTABLE`. The observer accepts only known command
+or executable paths for the child's `argv[0]`, then verifies
+`/proc/<pid>/exe` with `samefile` against the expected executable.
+
+**Reason.** The retained target run's restarter requested the staged command
+basename `crosvm-built-virgl-launcher`, while the observer expected `crosvm`;
+all 241 memory records therefore had `candidateCount=0` and
+`identity=unavailable`. Reviewing the launcher implementation also showed
+that it sets `argv[0]` to the adjacent `crosvm` and calls `fexecve` on that
+binary. Passing only the wrapper path would still fail the observer's
+`argv[0]` and `/proc/<pid>/exe` checks. The run did not separately preserve
+the child executable path, so its runtime basename remains unverified.
+Separate path inputs let future diagnostic captures identify both processes
+without weakening private-instance or executable identity checks. ADB
+polling uses a separate path. A later hostile review also found that resolving
+a symlink override before reading its basename could reject the command name
+that Cuttlefish stages. The observer now preserves the supplied basename and
+resolves the executable target separately; a dedicated symlink fixture
+covers this case.
+
+**Verification.** The full `Images/tools/tests` suite passed 557 tests with
+four Linux-only skips on macOS. The parent-death test and all three GNU
+`timeout` cases passed separately on Lima. The focused observer suite passed
+166 tests with its Linux-only parent-death case skipped on macOS; focused
+capture tests passed 25 cases. `scripts/ci/run-checks.sh`, Ruff lint and
+format, shell syntax, JSON parsing, and `git diff --check` passed. Adversarial
+reviews found and drove fixes for the launcher/executable split, symlinked
+command basename, and a Linux test's stale attribute reference; the final
+review found no remaining actionable issue. The retained target capture used
+source `fe08df8`, before these path corrections, so it does not validate the
+corrected observer path at runtime.
+
+## IR-180: Preserve the late-start feature-enabled Virgl target capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261005T061754-1724643/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep the 1200-second feature-enabled `drm_virgl` run under
+`incomplete/`, marked diagnostic-only and non-comparable. Retain its kernel,
+launcher, observer, host, and Cuttlefish logs with `post-run-verification.json`
+and a ten-file Lima-side hash manifest. Do not treat start event 5, process
+launch messages, or display setup as Android boot completion or rendered
+frames.
+
+**Reason.** The kernel log establishes Linux startup, virtio-gpu
+initialization, and init requests that start zygote and SurfaceFlinger. It
+does not contain a `system_server`, `aidl/activity`, or
+`VIRTUAL_DEVICE_BOOT_COMPLETED` marker, and no boot-property query ran.
+Cuttlefish start event 5 arrived about 18 minutes 45 seconds after observer
+startup. The observer then made no regular ADB polls; its final ADB connect
+timed out, `get-state` was not attempted, and the activity-service probe did
+not run. This does not establish whether the guest had previously reached
+ADB's `device` state or identify why Cuttlefish exceeded the deadline.
+
+All 241 crosvm memory samples lacked a process identity. A read-only process
+sample during the run showed the restarter requesting basename
+`crosvm-built-virgl-launcher`, while the observer expected `crosvm`. The
+capture did not separately record the child process executable. Inspection
+of the diagnostic launcher source showed that it sets `argv[0]` to the
+adjacent `crosvm` binary before `fexecve`; IR-179 now lets the observer check
+the staged command and resulting executable separately. That fix was not in
+this run's `fe08df8` source snapshot, so runtime attribution remains
+unverified. The post-run audit found an empty CVD fleet, no checked
+Cuttlefish processes, no private CVD HOME or capture staging directory, and
+no listener on port 6520. It found the existing loopback ADB server PID 2704
+on port 5037; no ADB command was issued to that shared server.
+
+**Verification.** All ten artifact hashes computed from the retained Lima
+copy matched the local capture. Eight tracked source hashes match revision
+`fe08df8`, and the four generated bytecode hashes match the capture-source
+manifest. JSON and JSONL parse, a second normalization pass changed zero
+files, and the tested privacy scans found no matches or oversized files. The
+capture remains incomplete and does not validate G2 or G3.
+
+## IR-181: Preserve the short SwiftShader pre-kernel capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261005T055130-1716760/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the 600-second `guest_swiftshader` profile run under
+`incomplete/` as diagnostic-only and non-comparable. Its crosvm memory
+observations are useful, but they do not establish a guest boot or the reason
+the Cuttlefish start deadline expired.
+
+**Reason.** The capture used Cuttlefish 1.57.0 and source snapshot `fe08df8`.
+The observer discovered the private instance and recorded 119 identified
+crosvm samples over the run. `VmRSS` increased from 25,884 KiB to 3,073,168
+KiB. The observer did not see Cuttlefish start event 5; its private ADB
+poller did not start. The retained `kernel.log` has no Linux version marker,
+and `MISSING.txt` records that guest capture and a crosvm command-line
+snapshot were unavailable at artifact collection. This does not establish
+that the guest never ran or that crosvm crashed, ran out of memory, or caused
+the timeout.
+
+**Verification.** All eleven artifact hashes computed on Lima matched the
+local files. All eight tracked source hashes match `fe08df8`. The observer
+JSONL parses, and the tested host-path, private-key, ADB-endpoint, and MAC
+address scans found no matches. Keep this run out of reference comparisons.

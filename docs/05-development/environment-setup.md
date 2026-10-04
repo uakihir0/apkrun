@@ -243,8 +243,9 @@ with `virgl_renderer` enabled before expecting a target-profile boot; see
 verifies the selected config.
 
 The feature-enabled diagnostic crosvm gets past the missing-build-feature
-panic, but this alone does not establish guest rendering. In the latest
-1200-second `drm_virgl` target capture in [IR-172](../04-plan/implementation-review.md#ir-172-diagnose-guest-egl-selection),
+panic, but this alone does not establish guest rendering. In the
+1200-second `drm_virgl` target capture recorded in
+[IR-172](../04-plan/implementation-review.md#ir-172-diagnose-guest-egl-selection),
 the guest kernel initialized `virtio_gpu` with
 `+virgl`, and Android started init and requested zygote. The guest selected
 `ro.hardware.egl=mesa`. The pinned Cuttlefish revision sets
@@ -266,6 +267,12 @@ guest driver packaging and property source against build 16373615 before
 changing image properties. These observations do not prove that either GPU
 path rendered frames. See
 [IR-173](../04-plan/implementation-review.md#ir-173-swiftshader-target-fallback).
+A later 600-second observer-enabled SwiftShader profile run recorded 119
+identified crosvm memory samples, with `VmRSS` rising from 25,884 KiB to
+3,073,168 KiB. It did not observe Cuttlefish start event 5 or a Linux kernel
+version marker, so it does not establish guest boot or the reason startup
+timed out. See
+[IR-181](../04-plan/implementation-review.md#ir-181-preserve-the-short-swiftshader-pre-kernel-capture).
 The [AOSP GLES/EGL driver-loading guidance](https://source.android.com/docs/core/graphics/implement-opengl-es)
 states that the system image supplies the drivers, which are discovered using
 `ro.hardware.egl` or `ro.board.platform` and are preferably installed under
@@ -369,7 +376,9 @@ shell without inherited `LD_*` or `GLIBC_TUNABLES` variables, then set
 `APKRUN_CROSVM_BINARY` for one target capture:
 
 ```bash
+APKRUN_CAPTURE_BOOT_OBSERVER=1 \
 APKRUN_CROSVM_BINARY="$HOME/.local/share/apkrun/diagnostics/crosvm-virgl/crosvm-built-virgl-launcher" \
+APKRUN_CROSVM_OBSERVER_EXECUTABLE="$HOME/.local/share/apkrun/diagnostics/crosvm-virgl/crosvm" \
   Images/tools/reference/capture.sh target
 ```
 
@@ -377,6 +386,11 @@ The static launcher clears inherited loader variables before it executes the
 diagnostic crosvm and preloads the host's `libgcc_s.so.1`. The pinned
 `cvd create` and `cvd start` accept `--crosvm_binary`; `capture.sh` passes the
 override to both commands only when this environment variable is set. A
+launcher that executes a different binary must set
+`APKRUN_CROSVM_OBSERVER_EXECUTABLE` to the executable used after the launcher's
+`exec`; the observer checks the staged wrapper requested by Cuttlefish and
+the resulting process executable separately. Direct crosvm overrides leave
+this variable unset. A
 normalized run using the override is retained under `incomplete/` with a
 diagnostic-only reason, even if Android boots, because the host runtime has
 changed. The reason is written when staging begins, so interrupted runs

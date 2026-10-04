@@ -1,0 +1,7 @@
+{
+  "files": {
+    "ap_composite_disk_config.txt": "crosvm\n<HOST_PATH>",
+    "os_composite_disk_config.txt": "crosvm\n<HOST_PATH>",
+    "persistent_composite_disk_config.txt": "crosvm\n<HOST_PATH>"
+  }
+}

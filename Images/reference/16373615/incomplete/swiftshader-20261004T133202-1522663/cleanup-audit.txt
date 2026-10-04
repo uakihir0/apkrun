@@ -1,0 +1,14 @@
+Read-only post-capture audit: 2026-10-04T04:37:40Z
+
+cvd fleet returned an empty groups array.
+No crosvm, run_cvd, process_restarter, or cvd_server process was listed.
+No private CVD HOME matching the capture prefix remained in /tmp.
+
+Listener state:
+  port 6520: absent
+  port 5037: 127.0.0.1, adb PID 2704
+
+No stop command was issued for the port 5037 listener. This audit is
+point-in-time and does not establish whether that ADB process predated this
+capture. MISSING.txt separately records that no crosvm command line matched
+the private Cuttlefish HOME at artifact-collection time.

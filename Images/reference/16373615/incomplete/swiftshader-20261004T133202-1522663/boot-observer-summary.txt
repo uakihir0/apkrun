@@ -1,0 +1,68 @@
+APKRun 3600-second SwiftShader property-response capture
+
+Status: incomplete and non-comparable. The shared 3600-second deadline
+expired while Cuttlefish create/start was still running. host.json records
+3604 seconds including cleanup. MISSING.txt records the deadline expiration
+and that no guest-capture command list was run. No complete reference profile
+was published.
+
+Capture source: f73bb3a (getprop response-size and parse-recognition
+diagnostics). The Lima workspace mount was read-only, so the committed
+reference tools and pinned manifest were copied to a writable VM-local
+staging tree. SHA-256 checks for the seven reference-tool files and the
+manifest matched the checkout used for this capture. Their eight digests
+are retained in capture-source-sha256.txt; a fresh writable Lima staging
+copy also reproduced those digests.
+
+Host and guest: Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4 LTS on
+aarch64 with nested virtualization. The selected mode was guest_swiftshader;
+vhost-user GPU was disabled. The selected instance used four CPUs and
+4096 MiB of memory.
+
+Live observer: observer_started was recorded at 2026-10-04T03:31:57.703Z.
+Cuttlefish start event 5 appeared at 03:41:22.559Z, and the private ADB
+server became ready 51 ms later. Of 197 transport polls, 195 reported
+get-state=device and two reported commandFailed. Connect returned exit
+status 0 on 196 polls and timed out once.
+
+The one-shot shell-ready probe timed out with exit status -15 and did not
+match its marker. Fifty-four property queries ran: 39 timed out with exit
+status -15 and 15 returned exit status 0. The bounded output sizes were
+31 responses of 0 bytes, seven of 46 bytes, and 16 of 90 bytes. All 54
+responses had getpropOutputParsed=false. The 15 exit-status-0 responses
+were 90 bytes each; the remaining non-empty responses timed out. Neither
+property was accepted as present, so sys.boot_completed and
+sys.system_server.start_count remain unknown. The raw responses were not
+stored.
+
+The final bounded events query captured 22,862 bytes and recognized no
+process events. The separate Android logcat query returned exit status 0
+with 18,289 bytes; its bounded summary counted two system_server mentions,
+six Watchdog mentions, and no ANR, fatal-exception, or fatal-signal lines.
+These counts do not identify a boot cause.
+
+Kernel progress: U-Boot handed off to Linux; first-stage init started at
+guest uptime 57.672 seconds and zygote started at 206.374 seconds.
+Servicemanager records system_server callers from uptime 1597.582 through
+3454.868 seconds. Init recorded an untracked system_server exit with status 0
+at 1798.486 seconds. At uptime 2465.850, the watchdog task issued a SysRq
+requesting blocked-state and memory dumps. Zygote received SIGKILL at
+2487.490 and restarted at 2497.959. Init recorded another untracked
+system_server exit with status 0 at 2886.400 seconds.
+
+At uptime 3245.973, the watchdog task issued another SysRq. The blocked-state
+dump at 3247.400 shows system_server in D state; its stack waits in
+rwsem_down_write_slowpath, down_write_killable, and do_mprotect_pkey. The
+dump does not identify the semaphore owner. A concurrent memory snapshot
+records 232,172 kB free in Normal and 1,989,308 kB free in DMA32; it does
+not show low free memory at that instant. Zygote received SIGKILL again at
+3271.995. During cleanup, untracked system_server PID 5070 received SIGKILL
+at 3277.543, before zygote restarted at 3277.772. No
+VIRTUAL_DEVICE_BOOT_COMPLETED marker appears. This run progressed past
+U-Boot into Linux and Android startup; it does not reproduce a halt in
+U-Boot or establish a causal link between U-Boot and the later stall.
+
+The observer recorded 721 crosvm memory samples, 720 with valid VmRSS; the
+maximum was 4,234,536 KiB. It stopped its private ADB server with
+cleanupComplete=true. See cleanup-audit.txt for the point-in-time host
+audit. This record establishes neither boot completion nor a root cause.

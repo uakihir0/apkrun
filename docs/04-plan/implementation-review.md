@@ -5831,3 +5831,78 @@ responses, and truncated output; it also verifies that response contents
 are not persisted. Ruff lint and formatting, `git diff --check`, and all six
 checks in `scripts/ci/run-checks.sh` passed. The hostile follow-up review
 reported no actionable findings.
+
+## IR-165: Record a long SwiftShader capture with bounded property-response diagnostics
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/swiftshader-20261004T133202-1522663/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Retain the normalized 3600-second SwiftShader run as incomplete
+and non-comparable. The shared deadline expired while Cuttlefish create/start
+was still running, no guest capture command list ran, and neither an accepted
+`sys.boot_completed=1` property nor `VIRTUAL_DEVICE_BOOT_COMPLETED` was
+recorded. Keep the property values unknown and retain only bounded response
+metadata, not raw getprop output. Record the blocked `system_server` stack and
+process events without assigning a root cause. Keep the pre-existing status
+of the port 5037 ADB listener unresolved; do not stop it.
+
+**Reason.** The observer recorded 197 ADB polls, of which 195 reported
+`device`, and 54 property queries. Thirty-nine queries timed out and 15
+exited 0, but all 54 responses were unparsed: 31 contained zero bytes, seven
+contained 46 bytes, and 16 contained 90 bytes. The distinct sizes exercise
+the IR-164 metadata and show why an exit status alone is insufficient to
+infer that a property value was read. The raw responses were not retained.
+
+The kernel log shows successful progress through U-Boot, first-stage init,
+and zygote startup. Init records an untracked `system_server` exit with status
+0 at uptime 1798.486. A watchdog-issued SysRq requested blocked-state and
+memory dumps at 2465.850; zygote received SIGKILL at 2487.490 and restarted
+at 2497.959. Init recorded another untracked `system_server` exit with status
+0 at 2886.400. A later watchdog SysRq at 3245.973 produced a blocked-state
+dump at 3247.400, showing `system_server` waiting in
+`rwsem_down_write_slowpath` and `down_write_killable` before
+`do_mprotect_pkey`. The dump does not name the semaphore owner. A concurrent
+memory snapshot does not show low free memory at that instant. Zygote
+received SIGKILL again at 3271.995; untracked `system_server` PID 5070
+received SIGKILL during cleanup at 3277.543, before zygote restarted at
+3277.772. These observations do not explain the failure to complete boot.
+This capture reached Linux and Android startup and does not reproduce a halt
+in U-Boot; it does not establish a causal link between U-Boot and the later
+stall.
+
+The Lima mount was read-only, so the pinned reference tools and manifest were
+staged under a VM-local writable directory for the capture. The seven
+reference-tool hashes and manifest hash matched the checkout; the temporary
+staging directory was removed after capture. Their eight digests are retained
+in `capture-source-sha256.txt`, and a fresh writable Lima staging copy
+reproduced them. The capture used
+Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4 LTS/aarch64 with nested
+virtualization, four guest CPUs, 4096 MiB memory, `guest_swiftshader`, and
+vhost-user GPU disabled.
+
+**Verification.** The artifact contains 14 regular files totaling 2,552,452
+bytes; the largest is 1,471,808 bytes. All three JSON documents and all 926
+JSONL records parse with duplicate-key and non-standard-constant rejection.
+The 197 ADB polls contain 54 attempted and 143 polls without a getprop
+attempt: 140 skipped the query during backoff, two had
+`getStateResult=commandFailed`, and one ran the shell-ready probe. All
+attempted responses are at most 4096 bytes and marked unparsed; polls without
+a getprop attempt have null response metadata. The 39 timeout, 15
+successful-exit, and 0/46/90-byte histogram counts match the retained
+summary.
+
+All ten captured-artifact digests pass `shasum -a 256 -c`; the eight
+capture-source digests also match the source files in the checkout. The
+capture normalizer changed zero files. Scans of every artifact file for the
+tested host paths, PEM private-key markers, EUI-48 addresses, and
+EUI-64-style IPv6 addresses passed. The observer stopped its private ADB
+server; the point-in-time host audit found an empty Cuttlefish fleet, no
+listed Cuttlefish processes, no private CVD HOME matching the capture prefix
+under `/tmp`, and no port 6520 listener. Port 5037 had a loopback ADB
+listener at PID 2704, which was left running; without a pre-capture process
+inventory, its relationship to this run is unknown.
+Keep IR-165 in `Needs maintainer review` until the evidence and its
+interpretation are reviewed.

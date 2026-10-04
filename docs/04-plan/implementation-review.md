@@ -6973,3 +6973,43 @@ the timeout.
 local files. All eight tracked source hashes match `fe08df8`. The observer
 JSONL parses, and the tested host-path, private-key, ADB-endpoint, and MAC
 address scans found no matches. Keep this run out of reference comparisons.
+
+## IR-182: Match explicitly configured external crosvm launchers
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Accept a `process_restarter` command only when its absolute path
+matches the validated Cuttlefish-staged command, the explicitly configured
+crosvm command path, or that command's resolved path. The requested file must
+exist. Continue checking the child's instance arguments and serial endpoint,
+then verify `/proc/<pid>/exe` with `samefile` against the separately
+configured post-`fexecve` executable.
+
+**Reason.** A live feature-enabled Virgl run showed that Cuttlefish preserves
+the external `crosvm-built-virgl-launcher` path in `process_restarter` rather
+than copying that file into the instance's `artifacts/host_tools/bin`
+directory. The observer previously required the derived staged path, so it
+reported no crosvm candidates even while the crosvm child was running. The
+explicit command path is already supplied by the capture configuration; a
+bare basename or arbitrary executable path remains rejected. A regression
+test models an external launcher with no runtime-staged copy. Applying the
+updated process checks directly to the live CVD process found exactly one
+child and read its RSS. The long-running capture had loaded the older observer
+before this fix, so its unavailable RSS records do not validate the new
+observer.
+
+**Verification.** The focused observer suite passed 167 tests with its
+Linux-only parent-death case skipped on macOS. The external-launcher
+regression also passed on Lima, and the live-process check matched one
+crosvm child. Ruff lint and format checks passed. The full image-tool suite
+reported 557 passes and four Linux-only skips, plus one unrelated
+`test_reference_capture` failure: its fake Linux preflight saw the concurrent
+Lima capture command in the host's real process list and correctly rejected
+the active crosvm. Rerun that suite after the live capture cleans up.
+Adversarial subagent review found no actionable issue. Keep #064 open until
+the end-to-end capture and the task's remaining acceptance criteria are
+verified.

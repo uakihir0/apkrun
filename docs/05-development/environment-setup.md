@@ -304,8 +304,10 @@ and [crosvm toolchain pin](https://github.com/google/crosvm/blob/fd4df63707aee57
 
 Extract the guest image archive and matching host package into separate
 directories. Activate the tools' Python environment and put the host package's
-`bin/` directory on `PATH`. Stop any running Cuttlefish guests and disconnect
-all ADB devices before capturing:
+`bin/` directory on `PATH`. Stop any running Cuttlefish guests on the reference
+VM. Set `ANDROID_ADB_SERVER_PORT` to a dedicated, unused port so capture
+preflight cannot contact an existing default-port ADB server. Ensure this
+dedicated server has no connected devices before capturing:
 
 ```bash
 mkdir -p "$HOME/cuttlefish/16373615/host" "$HOME/cuttlefish/16373615/product"
@@ -319,10 +321,22 @@ source Images/tools/.venv/bin/activate
 export PATH="$CVD_HOST_DIR/bin:$PATH"
 export ANDROID_PRODUCT_OUT="$HOME/cuttlefish/16373615/product"
 export APKRUN_CVD_PACKAGE_VERSION='<matching host package version>'
+export ANDROID_ADB_SERVER_PORT=5038
 Images/tools/reference/capture.sh default
 Images/tools/reference/capture.sh target
 Images/tools/reference/capture.sh swiftshader
 ```
+
+The capture preflight uses the selected ADB port, while the boot observer uses
+its own private Unix socket. After capture, verify the listener on the
+dedicated port and stop only that server with
+`ANDROID_ADB_SERVER_PORT=5038 adb kill-server`; leave any default-port ADB
+server untouched. If the guest mounts the workspace read-only, keep that
+setting: copy `Images/tools/reference/` and the pinned image manifest into a
+writable guest-side scratch tree, run the capture from that copy, and use
+`limactl copy` to retrieve the normalized record. Preserve the copied
+directory layout and verify the capture-source hashes before importing the
+record into the working tree.
 
 Use `cvd-host_package.tar.gz` from the same build as the guest image archive.
 `cvd fetch` retrieves and extracts it into `CVD_HOST_DIR`. It provides the

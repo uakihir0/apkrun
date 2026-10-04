@@ -639,6 +639,7 @@ class BootObserver:
         adb_path: Path,
         adb_port: int,
         crosvm_path: Path,
+        crosvm_executable_path: Path | None = None,
         proc_root: Path = Path("/proc"),
         sample_interval: float = SAMPLE_INTERVAL_SECONDS,
         adb_interval: float = ADB_INTERVAL_SECONDS,
@@ -666,7 +667,11 @@ class BootObserver:
         self.output_path = output_path
         self.adb_path = adb_path.resolve(strict=True)
         self.adb_port = adb_port
-        self.crosvm_path = crosvm_path.resolve(strict=True)
+        self.crosvm_command_path = Path(os.path.abspath(crosvm_path))
+        self.crosvm_executable_path = (
+            None if crosvm_executable_path is None else crosvm_executable_path.resolve(strict=True)
+        )
+        self.crosvm_command_resolved_path = self.crosvm_command_path.resolve(strict=True)
         self.proc_root = proc_root
         self.sample_interval = sample_interval
         self.adb_interval = adb_interval
@@ -977,8 +982,13 @@ class BootObserver:
             / "artifacts"
             / "host_tools"
             / "bin"
-            / self.crosvm_path.name
+            / self.crosvm_command_path.name
         )
+
+    def _expected_crosvm_executable_path(self) -> Path | None:
+        if self.crosvm_executable_path is not None:
+            return self.crosvm_executable_path
+        return self._runtime_crosvm_path()
 
     def _refresh_instance_path(self, *, emit_event: bool = True) -> bool:
         if self._instance_path_conflicted:
@@ -1348,23 +1358,35 @@ class BootObserver:
             command_line = (process / "cmdline").read_bytes().split(b"\0")
         except OSError:
             return None
-        expected_crosvm = self._runtime_crosvm_path()
+        expected_command = self._runtime_crosvm_path()
+        expected_crosvm = self._expected_crosvm_executable_path()
         if (
-            expected_crosvm is None
+            expected_command is None
+            or expected_crosvm is None
             or not command_line
             or not any(self._argument_matches_instance(argument) for argument in command_line)
         ):
             return None
         executable_path = Path(executable)
         command_path = Path(os.fsdecode(command_line[0]))
+        try:
+            expected_executable_target = expected_crosvm.resolve(strict=True)
+        except OSError:
+            return None
         if (
             not expected_crosvm.is_file()
-            or Path(executable).name != self.crosvm_path.name
             or not executable_path.is_absolute()
             or ".." in executable_path.parts
             or not command_path.is_absolute()
             or ".." in command_path.parts
-            or command_path != expected_crosvm
+            or command_path
+            not in {
+                expected_command,
+                self.crosvm_command_path,
+                self.crosvm_command_resolved_path,
+                expected_executable_target,
+            }
+            or Path(executable).name != expected_executable_target.name
         ):
             return None
         try:

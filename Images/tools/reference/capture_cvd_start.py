@@ -562,6 +562,11 @@ def run(args: argparse.Namespace) -> int:
             adb_path=Path(args.boot_observer_adb),
             adb_port=args.boot_observer_adb_port,
             crosvm_path=Path(args.boot_observer_crosvm),
+            crosvm_executable_path=(
+                None
+                if args.boot_observer_crosvm_executable is None
+                else Path(args.boot_observer_crosvm_executable)
+            ),
             deadline=deadline,
             background_sampling=True,
         )
@@ -673,6 +678,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--boot-observer-adb")
     parser.add_argument("--boot-observer-adb-port", type=int)
     parser.add_argument("--boot-observer-crosvm")
+    parser.add_argument("--boot-observer-crosvm-executable")
     parser.add_argument("--boot-observer-instance-path")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
@@ -688,6 +694,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 args.boot_observer_adb,
                 args.boot_observer_adb_port,
                 args.boot_observer_crosvm,
+                args.boot_observer_crosvm_executable,
                 args.boot_observer_instance_path,
             )
         ):
@@ -712,6 +719,10 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "boot observer mode requires output, ADB, ADB port, crosvm, and instance paths"
         )
+    if args.boot_observer_crosvm_executable is not None and not all(
+        value is not None for value in observer_options
+    ):
+        parser.error("--boot-observer-crosvm-executable requires boot observer mode")
     return args
 
 

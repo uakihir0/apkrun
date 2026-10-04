@@ -52,6 +52,128 @@ def test_parse_log_listing_preserves_spaces_in_paths() -> None:
     }
 
 
+def test_parse_args_accepts_a_distinct_observed_crosvm_executable() -> None:
+    args = capture_cvd_start.parse_args(
+        [
+            "--home",
+            "/tmp/private-home",
+            "--stage",
+            "/tmp/stage",
+            "--timeout-seconds",
+            "10",
+            "--boot-observer-output",
+            "/tmp/stage/observer.jsonl",
+            "--boot-observer-adb",
+            "/opt/cvd/bin/adb",
+            "--boot-observer-adb-port",
+            "6520",
+            "--boot-observer-crosvm",
+            "/opt/diagnostic/crosvm-built-virgl-launcher",
+            "--boot-observer-crosvm-executable",
+            "/opt/diagnostic/crosvm",
+            "--boot-observer-instance-path",
+            "/tmp/private-home/cuttlefish_runtime",
+            "--",
+            "cvd",
+            "start",
+        ]
+    )
+
+    assert args.boot_observer_crosvm == "/opt/diagnostic/crosvm-built-virgl-launcher"
+    assert args.boot_observer_crosvm_executable == "/opt/diagnostic/crosvm"
+
+
+def test_parse_args_rejects_a_crosvm_executable_without_observer_mode() -> None:
+    with pytest.raises(SystemExit):
+        capture_cvd_start.parse_args(
+            [
+                "--home",
+                "/tmp/private-home",
+                "--stage",
+                "/tmp/stage",
+                "--timeout-seconds",
+                "10",
+                "--boot-observer-crosvm-executable",
+                "/opt/diagnostic/crosvm",
+                "--",
+                "cvd",
+                "start",
+            ]
+        )
+
+
+def test_run_passes_staged_command_and_process_executable_to_observer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "private-home"
+    home.mkdir()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    diagnostic_dir = tmp_path / "diagnostic"
+    diagnostic_dir.mkdir()
+    launcher = diagnostic_dir / "crosvm-built-virgl-launcher"
+    launcher.write_text("wrapper", encoding="utf-8")
+    executable = diagnostic_dir / "crosvm"
+    executable.write_text("crosvm", encoding="utf-8")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_cvd = fake_bin / "cvd"
+    fake_cvd.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_cvd.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setattr(capture_cvd_start.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(capture_cvd_start, "requested_signal", None)
+    observed_arguments: dict[str, object] = {}
+
+    class FakeBootObserver:
+        def __init__(self, **kwargs: object) -> None:
+            observed_arguments.update(kwargs)
+
+        def start(self) -> None:
+            return None
+
+        def sample(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    fake_observer_module = ModuleType("boot_observer")
+    fake_observer_module.BootObserver = FakeBootObserver
+    monkeypatch.setitem(sys.modules, "boot_observer", fake_observer_module)
+    args = capture_cvd_start.parse_args(
+        [
+            "--home",
+            str(home),
+            "--stage",
+            str(stage),
+            "--timeout-seconds",
+            "5",
+            "--boot-observer-output",
+            str(stage / "observer.jsonl"),
+            "--boot-observer-adb",
+            "/usr/bin/adb",
+            "--boot-observer-adb-port",
+            "6520",
+            "--boot-observer-crosvm",
+            str(launcher),
+            "--boot-observer-crosvm-executable",
+            str(executable),
+            "--boot-observer-instance-path",
+            str(home / "cuttlefish_runtime"),
+            "--",
+            sys.executable,
+            "-c",
+            "pass",
+        ]
+    )
+
+    assert capture_cvd_start.run(args) == 0
+    assert observed_arguments["crosvm_path"] == launcher
+    assert observed_arguments["crosvm_executable_path"] == executable
+
+
 def test_snapshot_log_is_bounded_and_atomic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -183,6 +305,7 @@ def test_snapshot_mode_keeps_existing_snapshot_when_source_is_rejected(
         boot_observer_adb=None,
         boot_observer_adb_port=None,
         boot_observer_crosvm=None,
+        boot_observer_crosvm_executable=None,
         boot_observer_instance_path=None,
     )
 
@@ -211,6 +334,7 @@ def test_snapshot_mode_applies_the_log_size_limit(
         boot_observer_adb=None,
         boot_observer_adb_port=None,
         boot_observer_crosvm=None,
+        boot_observer_crosvm_executable=None,
         boot_observer_instance_path=None,
     )
     monkeypatch.setattr(capture_cvd_start, "MAX_LOG_BYTES", 128)

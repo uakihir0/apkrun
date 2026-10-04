@@ -53,6 +53,23 @@ if [ -n "$crosvm_binary_override" ]; then
   fi
 fi
 
+crosvm_observer_executable_override=${APKRUN_CROSVM_OBSERVER_EXECUTABLE:-}
+if [ -n "$crosvm_observer_executable_override" ]; then
+  case "$crosvm_observer_executable_override" in
+    /*) ;;
+    *)
+      printf 'APKRUN_CROSVM_OBSERVER_EXECUTABLE must be an absolute path to an executable file.\n' >&2
+      exit 2
+      ;;
+  esac
+  if [ ! -f "$crosvm_observer_executable_override" ] \
+    || [ ! -x "$crosvm_observer_executable_override" ]; then
+    printf 'APKRUN_CROSVM_OBSERVER_EXECUTABLE must be an absolute path to an executable file.\n' >&2
+    exit 2
+  fi
+fi
+crosvm_observer_executable=${crosvm_observer_executable_override:-${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}}
+
 for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required host tool not found on PATH: %s\n' "$tool" >&2
@@ -777,7 +794,8 @@ run_cvd_command_with_live_logs() {
       --boot-observer-output "$stage/boot-observer.jsonl" \
       --boot-observer-adb "$CVD_HOST_DIR/bin/adb" \
       --boot-observer-adb-port "$adb_port" \
-      --boot-observer-crosvm "$CVD_HOST_DIR/bin/crosvm" \
+      --boot-observer-crosvm "${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}" \
+      --boot-observer-crosvm-executable "$crosvm_observer_executable" \
       --boot-observer-instance-path \
       "$observer_instance_path" \
       -- "$@"; then

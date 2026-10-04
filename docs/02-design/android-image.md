@@ -766,6 +766,17 @@ identity is not used to detect a new generation. The observer checks the
 initial prefix and bytes around the last consumed offset; if the bounded
 snapshot is truncated or those bytes change, it clears prior process
 identities and records an observation gap.
+When `APKRUN_CROSVM_BINARY` selects a diagnostic command, the capture passes
+that command path to the observer so it checks the basename requested by
+`process_restarter` under the validated private instance. It preserves the
+supplied command basename, including when the override is a symlink, and
+resolves the executable target separately. A launcher wrapper that executes
+a different crosvm binary can also set
+`APKRUN_CROSVM_OBSERVER_EXECUTABLE`; the observer then checks the child's
+`argv[0]` against the staged command or the known command/executable paths,
+and verifies `/proc/<pid>/exe` with `samefile` against the expected
+executable. It retains the private-instance check on the wrapper request.
+Both paths stay in memory and are not written to observer records.
 After launcher log event 5, it probes the selected localhost ADB serial on a
 monotonic 15-second schedule through a private ADB server socket and records
 only bounded state fields, including the numeric `systemServerStartCount`,

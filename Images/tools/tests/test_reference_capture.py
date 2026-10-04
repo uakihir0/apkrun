@@ -442,6 +442,10 @@ def test_capture_script_uses_each_profile_launch_configuration(
         observer_path = Path(observer_calls[0][observer_path_index + 1])
         assert observer_path.name == "cuttlefish_runtime"
         assert ".unresolved-cvd-instance-" not in str(observer_path)
+        observer_crosvm_index = observer_calls[0].index("--boot-observer-crosvm")
+        assert observer_calls[0][observer_crosvm_index + 1] == str(cvd_host / "bin/crosvm")
+        observer_executable_index = observer_calls[0].index("--boot-observer-crosvm-executable")
+        assert observer_calls[0][observer_executable_index + 1] == str(cvd_host / "bin/crosvm")
 
     capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
@@ -1317,6 +1321,22 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "crosvm-binary-override-relative",
             id="crosvm-binary-override-must-be-absolute",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "crosvm-observer-executable-relative",
+            id="crosvm-observer-executable-must-be-absolute",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -1367,6 +1387,14 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         textwrap.dedent(
             """\
             #!/bin/sh
+            if [ "${1##*/}" = capture_cvd_start.py ]; then
+              for argument in "$@"; do
+                if [ "$argument" = --boot-observer-crosvm ]; then
+                  printf '%s\\n' "$@" > "$OBSERVER_ARGV_LOG"
+                  break
+                fi
+              done
+            fi
             if [ "${FAKE_INTERRUPT_COMPOSITE_COLLECTOR:-0}" = 1 ] \
               && [ "${1##*/}" = collect_composite_specs.py ]; then
               destination="$4"
@@ -1892,6 +1920,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     adb_log = tmp_path / "adb-commands.txt"
     cvd_remove_log = tmp_path / "cvd-remove-command.txt"
     timeout_log = tmp_path / "timeout-command.txt"
+    observer_argv_log = tmp_path / "observer-command-argv.txt"
     capture_event_log = tmp_path / "capture-events.txt"
     cvd_home_log = tmp_path / "cvd-home.txt"
     launch_log = tmp_path / "launch-command.txt"
@@ -1956,9 +1985,16 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             ),
             "APKRUN_CROSVM_BINARY": (
                 str(fake_crosvm_override)
-                if boot_timeout_case == "crosvm-binary-override"
+                if boot_timeout_case in {"crosvm-binary-override", "gpu-mode-mismatch-observed"}
                 else "relative/crosvm"
                 if boot_timeout_case == "crosvm-binary-override-relative"
+                else ""
+            ),
+            "APKRUN_CROSVM_OBSERVER_EXECUTABLE": (
+                str(fake_bin / "crosvm")
+                if boot_timeout_case == "gpu-mode-mismatch-observed"
+                else "relative/crosvm"
+                if boot_timeout_case == "crosvm-observer-executable-relative"
                 else ""
             ),
             "FAKE_CVD_CREATE_FAIL_AFTER_LOGS": "1" if not launch_succeeds else "0",
@@ -2009,6 +2045,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "CVD_REMOVE_LOG": str(cvd_remove_log),
             "CAPTURE_EVENT_LOG": str(capture_event_log),
             "TIMEOUT_LOG": str(timeout_log),
+            "OBSERVER_ARGV_LOG": str(observer_argv_log),
             "CVD_REMOVE_HOME_LOG": str(cvd_remove_home_log),
             "CVD_HOME_LOG": str(cvd_home_log),
             "LAUNCH_LOG": str(launch_log),
@@ -2080,7 +2117,11 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             2
             if build_id != "16373615"
             or capture_lock_held
-            or boot_timeout_case == "crosvm-binary-override-relative"
+            or boot_timeout_case
+            in {
+                "crosvm-binary-override-relative",
+                "crosvm-observer-executable-relative",
+            }
             else 143
             if abort_command
             or lock_signal_during_acquire
@@ -2098,6 +2139,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         elif boot_timeout_case == "crosvm-binary-override-relative":
             assert (
                 "APKRUN_CROSVM_BINARY must be an absolute path to an executable file."
+                in result.stderr
+            )
+            assert not launch_log.exists()
+            assert not (repo / "Images/reference/16373615/incomplete").exists()
+        elif boot_timeout_case == "crosvm-observer-executable-relative":
+            assert (
+                "APKRUN_CROSVM_OBSERVER_EXECUTABLE must be an absolute path to an executable file."
                 in result.stderr
             )
             assert not launch_log.exists()
@@ -2317,6 +2365,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                     record["event"] == "cuttlefish_start_event_5_observed"
                     for record in observer_records
                 )
+                observer_arguments = observer_argv_log.read_text(encoding="utf-8").splitlines()
+                observer_crosvm_index = observer_arguments.index("--boot-observer-crosvm")
+                assert observer_arguments[observer_crosvm_index + 1] == str(fake_crosvm_override)
+                observer_executable_index = observer_arguments.index(
+                    "--boot-observer-crosvm-executable"
+                )
+                assert observer_arguments[observer_executable_index + 1] == str(fake_bin / "crosvm")
             assert_scoped_group_removal()
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
             assert not cvd_home.exists()

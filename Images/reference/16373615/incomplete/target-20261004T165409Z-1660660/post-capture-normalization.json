@@ -1,0 +1,16 @@
+{
+  "captureArtifactManifest": "LIMA-SHA256SUMS",
+  "captureSourceManifest": "capture-source-sha256.txt",
+  "captureSourceManifestSha256": "0926d5e39e630796afee5a823328264d0c23049dab1a7d1e912a920fb9dd1785",
+  "originalLimaFilesVerifiedBeforeRepair": true,
+  "postCaptureNormalizationInputLauncherLogSha256": "7c22e8f976cb58539d3d2ff6f5289cfe2b50c24294b49866b5b9d0c082d20cb4",
+  "postCaptureNormalizationChangedFiles": [
+    "launcher.log"
+  ],
+  "postCaptureNormalizationIdempotent": true,
+  "postCaptureNormalizationReproducedFromLimaInput": true,
+  "postCaptureNormalizationRule": "Images/tools/reference/normalize.yaml",
+  "postCaptureNormalizationRuleSha256": "0d25af7386a0aefe23766cf0a3fc030a886ebacd6ccbfb2fd6d81f2ab14d2514",
+  "postCaptureNormalizedLauncherLogSha256": "60a881d2ef15c04f0b4eb8fb08ebdca363e6dba673f11f482494f25c0a0ca701",
+  "schemaVersion": 1
+}

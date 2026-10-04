@@ -242,6 +242,46 @@ with `virgl_renderer` enabled before expecting a target-profile boot; see
 `capture.sh` disables the arm64 vhost-user GPU backend for each profile and
 verifies the selected config.
 
+The feature-enabled diagnostic crosvm gets past the missing-build-feature
+panic, but this alone does not establish guest rendering. In the latest
+1200-second `drm_virgl` target capture in [IR-172](../04-plan/implementation-review.md#ir-172-diagnose-guest-egl-selection),
+the guest kernel initialized `virtio_gpu` with
+`+virgl`, and Android started init and requested zygote. The guest selected
+`ro.hardware.egl=mesa`. The pinned Cuttlefish revision sets
+`androidboot.hardware.egl=mesa` in
+`CrosvmManager::ConfigureGraphics()` for `GpuMode::DrmVirgl`, and the
+captured internal bootconfig matches that source. The inspected
+`/vendor/lib64/egl` directory contained only emulator EGL/GLES libraries,
+and `/system/lib64/egl` was absent.
+`libEGL` reported that it could not load the Mesa driver and could not find an
+OpenGL ES implementation. SurfaceFlinger repeatedly aborted during EGL/Skia
+GL renderer creation. The sampled `sys.boot_completed` query returned an
+empty value, and no `sys.boot_completed=1` value was observed or accepted.
+Keep the capture incomplete and diagnostic-only. The documented
+`guest_swiftshader` target fallback was run while guest image-source
+investigation remained open; it also timed out before Android boot completed.
+Its `drm_virgl` properties file is provenance only, while the guest bootconfig
+records the selected SwiftShader mode's own graphics properties. Check the
+guest driver packaging and property source against build 16373615 before
+changing image properties. These observations do not prove that either GPU
+path rendered frames. See
+[IR-173](../04-plan/implementation-review.md#ir-173-swiftshader-target-fallback).
+The [AOSP GLES/EGL driver-loading guidance](https://source.android.com/docs/core/graphics/implement-opengl-es)
+states that the system image supplies the drivers, which are discovered using
+`ro.hardware.egl` or `ro.board.platform` and are preferably installed under
+`/vendor/lib64/egl` on 64-bit devices. For `mesa`, the documented module
+names include `libGLES_mesa.so`, or the set `libEGL_mesa.so`,
+`libGLESv1_CM_mesa.so`, and `libGLESv2_mesa.so`. The current guest inventory
+found none of those names in its inspected vendor EGL directory. This
+reinforces checking guest image packaging before changing image properties.
+
+The rebuild notes below document the feature-enabled Virgl diagnostic host
+used in IR-171 and IR-172. They do not make a reproducible host-package build
+a prerequisite for #064. The 1200-second observer-enabled
+`guest_swiftshader` target capture in [IR-175](../04-plan/implementation-review.md#ir-175-observe-the-swiftshader-target-fallback) did not obtain usable shell or boot-property results after ADB reported `device`. A 2400-second observer-enabled target run is already in progress; it was started before the latest adversarial review compared it with earlier long captures. Those captures also showed repeated probe timeouts under substantially similar SwiftShader settings, so let the current run finish and do not repeat the same configuration without a material host or guest code/configuration change. See [M01](../04-plan/issues/M01-android-bring-up.md) for the diagnostic history.
+If reproducible host-build work is still needed after that capture, file a
+separate task before expanding #064.
+
 For a diagnostic rebuild, use the pinned Cuttlefish build setup rather than
 an unmodified distro `cargo build`. Its Bazel crate specification applies
 Cuttlefish-specific annotations and patches, and manages Rust host tools;

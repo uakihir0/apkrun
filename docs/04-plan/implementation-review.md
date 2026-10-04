@@ -6406,3 +6406,270 @@ Cuttlefish VCS revision, not a crosvm ELF identity. Keep the runtime path
 inferred from the package unconfirmed unless the original report becomes
 available; if it does, record only its `ExecutablePath` field and keep the raw
 report and core private.
+
+## IR-172: Diagnose guest EGL selection
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T161206Z-1646389/`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Keep the 1200-second `target` capture incomplete and
+non-comparable. Retain its normalized host artifacts and a bounded manual
+guest EGL summary. Do not change the canonical GPU profile or guest graphics
+properties based on this run. The capture tools came from checkout
+`74de6953ede33f0bbad6e0a330609f4ee6603f1d`; the selected configuration
+records `gpu_mode=drm_virgl`, `enable_gpu_vhost_user=false`, and
+`EGL_PLATFORM=surfaceless`.
+
+The run used the diagnostic crosvm launcher with Build ID
+`faf3eaf415ce2d1fc6c90f5090a9e82ba8abccab` and SHA-256
+`d09e4a87ac8d174d9925bcedd0ff2d77f138f63f00c6eff9bbc1c7865e33c819`.
+Its crosvm had Build ID `1f6c03321061aa58e1d1ec0d0a1ff54f` and SHA-256
+`48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7`;
+gfxstream had Build ID `257833fa4c8e65fc5294f3fa2ea311c4` and SHA-256
+`c8e1f380e2ebfbe5814c57ba1f81d94659be0d6771edac421493cac02575f503`.
+These are diagnostic build outputs, not a reproducible or canonical host
+package. These identities were recorded from `readelf` and SHA-256
+inspection of the temporary Lima build outputs. The ELF files and raw
+`readelf` output are not retained in this record, so the identities cannot be
+independently recalculated from its committed artifacts. The Cuttlefish
+`Launcher Build ID` printed in logs is the source revision and is distinct
+from the crosvm and gfxstream ELF Build IDs above. The pinned crosvm panic
+and build-feature mismatch are documented in IR-171.
+
+The guest kernel initialized `virtio_gpu` with `+virgl`; the Cuttlefish
+configuration selected the virglrenderer backend. Android first-stage init
+ran and zygote was requested at approximately guest uptime 184.5 seconds.
+The guest reported `ro.hardware.egl=mesa`. Pinned Cuttlefish revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` intentionally sets
+`androidboot.hardware.egl=mesa` for `GpuMode::DrmVirgl` in
+`CrosvmManager::ConfigureGraphics()` in `crosvm_manager.cpp`; the saved
+`internal-bootconfig.txt` contains the matching graphics properties. The
+source file SHA-256 is
+`ec273ead56c32bc4c294d2072c6b379400620f9ac98dbba1242acd4442572f43`.
+The inspected `/vendor/lib64/egl` directory contained only emulator EGL/GLES
+libraries, and `/system/lib64/egl` was absent. `libEGL` reported that it
+could not load drivers for `mesa` and could not find an OpenGL ES
+implementation.
+
+Manual ADB logcat samples showed SurfaceFlinger repeatedly aborting through
+EGL initialization and `SkiaGLRenderEngine::create`, followed by zygote
+restarts, from approximately guest uptime 434 to 849 seconds. The saved
+`kernel.log` records a later SurfaceFlinger SIGABRT at uptime 983.431
+seconds, the `exited 4 times before boot completed` event at 983.714
+seconds, and a restart at 988.033 seconds. Those later kernel records do not
+retain the EGL error from the manual logcat samples. The sampled
+`sys.boot_completed` query returned an empty value; no
+`sys.boot_completed=1` value was observed or accepted. No successful
+`system_server` startup or `VIRTUAL_DEVICE_BOOT_COMPLETED` marker was
+established.
+
+**Reason.** The run gets past the previously recovered crosvm
+`virgl_renderer` feature panic and reaches Android userspace. The direct
+loader error shows that the guest could not load a usable Mesa EGL/GLES
+implementation for the selected `drm_virgl` mode. The property is expected
+from the pinned Cuttlefish source; this does not establish why build 16373615
+cannot satisfy that mode, rule out a Mesa implementation outside the
+inspected directories, prove that Virgl produced frames, or explain every
+remaining boot issue. The
+[AOSP GLES/EGL driver-loading guidance](https://source.android.com/docs/core/graphics/implement-opengl-es)
+states that the system image supplies drivers selected using
+`ro.hardware.egl` or `ro.board.platform`, preferably under
+`/vendor/lib64/egl` on 64-bit devices. Confirm the property and driver
+packaging against image build sources before changing the image. The
+documented `guest_swiftshader` target fallback was subsequently attempted;
+IR-173 records that it also remained incomplete and did not establish guest
+rendering.
+
+**Verification.** `host.json` and `cuttlefish_config.json` parse and record
+the requested target mode, disabled vhost-user GPU, and `surfaceless` host
+EGL setup. Before the later ADB-serial redaction, all nine copied capture
+artifacts matched their Lima-side hashes. The original
+`LIMA-SHA256SUMS` remains unchanged; after redaction the other eight
+artifacts still match it, the original launcher input hash is recorded in
+`post-capture-normalization.json`, and all 14 entries in
+`POST-NORMALIZATION-SHA256SUMS` verify; see IR-174. All 12 capture-tool,
+manifest, and launcher-source hashes matched the recorded checkout. A second
+`compare_boot.py normalize` pass changed zero files. The tested host-path,
+private-key, MAC-address, and ADB-serial scans found no matches. The post-run
+audit found an empty Cuttlefish fleet, no crosvm, `run_cvd`,
+`process_restarter`, or `cvd_server`, no private CVD HOME or capture staging
+directory, and no port 6520 listener. It found the shared ADB server PID
+2704 listening on port 5037; the final device inventory was empty. The
+focused reference-capture suite passed 50 tests with three Linux-only GNU
+`timeout` tests skipped on macOS before the capture. No scripted guest
+capture or successful boot marker was produced. Keep this record
+diagnostic-only and #064 open.
+
+## IR-173: SwiftShader target fallback
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T165409Z-1660660/`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3; [android image](../02-design/android-image.md) §8.2 |
+
+**Choice.** Use the documented `guest_swiftshader` target fallback after the
+`drm_virgl` attempt failed to reach Android boot completion. Keep the 1200
+second run incomplete and non-comparable, and preserve the canonical target
+profile unchanged. This capture used the stock Cuttlefish host runtime, not
+the feature-enabled diagnostic crosvm. It used Cuttlefish 1.57.0, build
+16373615, Ubuntu 24.04.4 arm64 with nested virtualization, selected
+`guest_swiftshader`, and disabled vhost-user GPU. The capture tools came from
+checkout `74de6953ede33f0bbad6e0a330609f4ee6603f1d`; their original hashes
+are in `capture-source-sha256.txt`. The exact Cuttlefish source revision for
+the separately recorded `drm_virgl` properties is
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`.
+
+The capture ran for 1203 seconds and `cvd start` exceeded its 1200-second
+deadline. The guest kernel records first-stage init at uptime 50.532 seconds,
+`virtio_gpu` initialization at 54.189 seconds, zygote starting at 170.018
+seconds, and SurfaceFlinger starting at 304.618 seconds. It records
+`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` at 418.578 and 454.875 seconds.
+From 622.463 through 1070.062 seconds, init and `servicemanager` repeatedly
+report that `aidl/activity` cannot be found after audioserver requests. The
+captured kernel and launcher logs do not establish `system_server` startup
+or its state, and these messages do not establish the cause of the boot
+delay. The launcher also contains Cuttlefish-managed ADB connector attempts,
+success messages, and transport errors; they are not evidence that an ADB
+shell query succeeded. Because `cvd start` did not return before the
+deadline, the regular ADB polling and guest-capture stages did not run.
+`sys.boot_completed` was not queried, and no
+`VIRTUAL_DEVICE_BOOT_COMPLETED` marker was captured.
+
+The selected SwiftShader guest bootconfig contains
+`androidboot.hardware.egl=angle` and `androidboot.opengles.version=196609`.
+The separately saved `drm_virgl` properties contain `mesa` and `196608`.
+That difference is expected: the source-derived file records the pinned
+Virgl configuration, while the running guest uses the selected SwiftShader
+mode. The file is provenance and was not injected as the guest's active
+SwiftShader graphics configuration.
+
+**Reason.** The fallback validates that the Cuttlefish configuration selected
+`guest_swiftshader` with vhost-user GPU disabled and records how far Android
+startup progressed. It still did not satisfy the #064 boot-completion or
+profile-capture criteria, and it does not prove guest rendering. The repeated
+`aidl/activity` messages were also present in the later observer-enabled
+capture in IR-175. That capture recorded the ADB transport and command
+timeouts but still did not diagnose these messages or their cause. Do not
+change the guest image properties or claim G2 or G3 from this run.
+
+**Verification.** `host.json`, `cuttlefish_config.json`,
+`composite-disk-specs.json`, and the post-run JSON records parse. The selected
+GPU mode is `guest_swiftshader` and `enable_gpu_vhost_user` is false. All 11
+copied capture artifacts matched their Lima-side SHA-256 values before the
+post-capture serial-normalization repair; the 12 capture-source hashes were
+verified against checkout `74de6953ede33f0bbad6e0a330609f4ee6603f1d` before
+this local normalization fix. A second normalizer pass changed zero files.
+The tested host-path, private-key, MAC-address, and loopback ADB-serial scans
+found no matches in the retained record. The post-run audit found an empty
+Cuttlefish fleet, no crosvm, `run_cvd`, `process_restarter`, or `cvd_server`,
+no private CVD HOME or capture staging path, and no port 6520 listener. It
+found the shared ADB server PID 2704 listening on 5037; `adb devices` listed
+no devices. IR-174 records the one post-capture file repair and its hashes.
+Keep this record incomplete and #064 open.
+
+## IR-174: Redact Cuttlefish loopback ADB serials
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/normalize.yaml`; `Images/tools/tests/test_compare_boot.py`; `Images/reference/16373615/incomplete/target-20261004T161206Z-1646389/`; `Images/reference/16373615/incomplete/target-20261004T165409Z-1660660/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Extend normalization to replace Cuttlefish ADB endpoints with
+`<ADB_SERIAL>` in host log files. Match the Cuttlefish `--addresses` field,
+ADB connector messages, and ADB device-not-found messages in
+`crosvm-command-line.txt`, `assemble_cvd.log`, `launcher.log`,
+`launch-cvd-console.log`, and `cvd-create-console.log`. Leave unrelated
+loopback endpoints in those logs and loopback addresses in guest network
+captures unchanged. Apply the rule to retained incomplete captures when an
+earlier normalization pass predates the rule.
+
+**Reason.** The SwiftShader fallback's `launcher.log` contained the selected
+ADB serial in Cuttlefish `adb_connector` lines. An adversarial review then
+found the same missed host-log form in the earlier Virgl diagnostic record.
+The existing normalization covered serial-number fields but not these
+contexts, violating #064's requirement to omit device serials. The scoped
+rule redacts Cuttlefish ADB endpoints while preserving unrelated loopback
+endpoints and guest network evidence.
+
+**Verification.** A regression test checks command-line, connection, and
+device-not-found forms, and confirms that unrelated loopback endpoints in a
+host log and a guest properties file are preserved. Before repair, all nine
+Virgl and 11 SwiftShader capture artifact hashes matched their Lima-side
+manifests. Normalizing each retained `launcher.log` changed one file; a
+second pass changed zero files. Each record has a
+`post-capture-normalization.json` with its original and normalized launcher
+hashes and the normalization-rule hash, plus a
+`POST-NORMALIZATION-SHA256SUMS` covering the sanitized record. The original
+`LIMA-SHA256SUMS` manifests remain unchanged. The SwiftShader record's
+normalization was reproduced from its original Lima log; the Virgl input
+matched its Lima manifest before the same repair. Post-repair scans found no
+selected ADB serial in either retained record.
+
+## IR-175: Observe the SwiftShader target fallback
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261004T173358Z-1674431/`; [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Repeat the documented `guest_swiftshader` target fallback with
+the optional boot observer enabled for a 1200-second deadline. Keep the
+capture incomplete and non-comparable and leave the canonical GPU profile
+unchanged. The host was Cuttlefish 1.57.0, build 16373615, Ubuntu 24.04.4
+arm64 with nested virtualization. `host.json` records
+`targetGpuMode=guest_swiftshader`, `selectedGpuMode=guest_swiftshader`, and
+`gpuVhostUserEnabled=false`. Cuttlefish revision
+`9bb9c72329cedcb436bb75afc05c24d73fbcdf5d` is recorded as the provenance
+for the separate `drm_virgl` graphics-properties file; the active
+SwiftShader bootconfig uses its own properties.
+
+The guest kernel records first-stage init at uptime 48.191 seconds,
+`virtio_gpu` initialization at 50.657 seconds, init starting zygote at
+178.792 seconds, SurfaceFlinger at 366.012 seconds, and boot animation at
+591.812 seconds. `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` appears at
+551.522 and 589.420 seconds. The kernel log contains 162
+`aidl/activity` interface-not-found requests from uptime 823.435 through
+1071.385 seconds. It contains no `system_server`,
+`VIRTUAL_DEVICE_BOOT_COMPLETED`, or `VIRTUAL_DEVICE_BOOT_FAILED` line.
+These logs do not establish the state of `system_server` or the cause of
+the missing interface.
+
+The observer recorded 288 events: 241 crosvm memory events (240 with a valid
+VmRSS value and one with `candidateCount=0` and `identity=unavailable`), 39
+ADB polls, one Cuttlefish start event 5 marker, one final logcat-summary
+event, and six lifecycle/path events. The peak valid VmRSS was 4,229,472
+KiB. Of the ADB polls, 36 returned device state and three returned
+`commandFailed`. The first device-state poll's standalone
+shell-readiness command timed out with exit status -15 without matching its
+marker. Eight property-query attempts also timed out with exit status -15;
+none produced parsed `sys.boot_completed` or
+`sys.system_server.start_count` values. The final logcat attempt timed out
+before capturing any bytes. The observer's private ADB server stopped with
+`cleanupComplete=true`. The run therefore shows that a reported ADB
+`device` state did not establish that an Android shell command could finish.
+It does not identify why the command timed out.
+
+`cvd start` exceeded the 1200-second deadline and the capture ran for 1204
+seconds. No guest capture was produced. `MISSING.txt` records that no crosvm
+process matched the private Cuttlefish HOME at artifact-collection time;
+this does not establish whether it ran earlier. Keep #064 open and do not
+claim boot completion or guest rendering.
+
+**Verification.** All 12 copied capture artifacts match
+`LIMA-SHA256SUMS`. Seven reference-tool and manifest hashes match checkout
+`74de6953ede33f0bbad6e0a330609f4ee6603f1d`; the eighth matches the scoped
+normalizer copied to Lima for this run. A second normalization pass changed
+zero files. The tested host-path, private-key, EUI-48, EUI-64, and numeric
+ADB-context scans found no matches. `host.json`,
+`cuttlefish_config.json`, `composite-disk-specs.json`, and
+`post-run-verification.json` parse. The post-run audit found an empty
+Cuttlefish fleet, no crosvm, `run_cvd`, `process_restarter`, or `cvd_server`,
+no private CVD HOME or capture staging directory, and no listener on port
+6520. It found shared ADB PID 2704 listening on port 5037 and no ADB device
+rows. The record remains incomplete and diagnostic-only.

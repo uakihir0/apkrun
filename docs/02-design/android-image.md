@@ -1010,6 +1010,17 @@ When the host cannot run `drm_virgl`, the `target` fallback is explicit:
 `APKRUN_DRM_VIRGL_PROPS_FILE=<file>` are required. The source-derived graphics
 properties are copied into `graphics-props-from-source.txt`; the mode and
 revision are recorded in `host.json`.
+For Cuttlefish 1.57.0, the GPU-mode properties are constructed by
+`CrosvmManager::ConfigureGraphics()` in
+[`crosvm_manager.cpp`](https://github.com/google/android-cuttlefish/blob/9bb9c72329cedcb436bb75afc05c24d73fbcdf5d/base/cvd/cuttlefish/host/libs/vm_manager/crosvm_manager.cpp);
+`bootconfig_args.cpp` merges those values into the final bootconfig. Record
+the exact Cuttlefish revision and derive the `drm_virgl` properties from that
+function when using the fallback.
+The saved source-derived properties are provenance for the `drm_virgl`
+profile. When the selected target mode is `guest_swiftshader`, the guest
+bootconfig contains that mode's own graphics properties; do not expect it to
+match the separately saved `drm_virgl` property file (see the #064 fallback
+record in [IR-173](../04-plan/implementation-review.md#ir-173-swiftshader-target-fallback)).
 
 The host capture also stores `assemble_cvd.log`, `crosvm-command-line.txt`,
 `internal-bootconfig.txt` (UTF-8 bootconfig with a valid AVB footer removed),

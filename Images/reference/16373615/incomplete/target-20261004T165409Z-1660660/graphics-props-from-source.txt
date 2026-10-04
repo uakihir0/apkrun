@@ -1,0 +1,17 @@
+# Source-derived properties for the drm_virgl target profile.
+# Cuttlefish revision: 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+# Source: cvd/cuttlefish/host/libs/vm_manager/crosvm_manager.cpp
+# Source SHA-256: ec273ead56c32bc4c294d2072c6b379400620f9ac98dbba1242acd4442572f43
+# Function: CrosvmManager::ConfigureGraphics(), GpuMode::DrmVirgl
+# This file preserves the drm_virgl properties while the target capture uses
+# the documented guest_swiftshader fallback. The framebuffer value below is
+# the value observed in internal-bootconfig.txt for this Cuttlefish instance;
+# the source selects "bgra" only when guest_uses_bgra_framebuffers is true.
+androidboot.cpuvulkan.version=0
+androidboot.hardware.gralloc=minigbm
+androidboot.hardware.hwcomposer=ranchu
+androidboot.hardware.hwcomposer.mode=client
+androidboot.hardware.hwcomposer.display_finder_mode=drm
+androidboot.hardware.hwcomposer.display_framebuffer_format=rgba
+androidboot.hardware.egl=mesa
+androidboot.opengles.version=196608

@@ -1,0 +1,57 @@
+Manual, bounded guest diagnostics collected during the target capture. This
+is not the scripted guest-capture.txt output and does not make the record
+complete.
+
+Capture window: 2026-10-04T15:52:01Z through 2026-10-04T16:12:06Z.
+Profile: target, selected GPU mode drm_virgl, EGL_PLATFORM=surfaceless.
+The host used the diagnostic crosvm override; see IR-172. The capture is
+diagnostic-only and non-comparable.
+
+Pinned-source cross-check:
+- Cuttlefish revision 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d.
+- In crosvm_manager.cpp, CrosvmManager::ConfigureGraphics() intentionally
+  sets androidboot.hardware.egl=mesa for GpuMode::DrmVirgl. The captured
+  internal-bootconfig.txt also contains the corresponding gralloc, HWC,
+  EGL, and GLES properties. The source file SHA-256 is
+  ec273ead56c32bc4c294d2072c6b379400620f9ac98dbba1242acd4442572f43.
+
+Observed guest state:
+- The Linux kernel initialized virtio_gpu and advertised
+  +virgl +edid +resource_blob +host_visible.
+- Android first-stage init ran, and zygote was requested at approximately
+  guest uptime 184.5 seconds.
+- getprop reported ro.hardware.egl=mesa, while
+  persist.graphics.egl was empty and ro.board.platform was vsoc_arm64.
+- /vendor/lib64/egl contained only libEGL_emulation.so,
+  libGLESv1_CM_emulation.so, and libGLESv2_emulation.so.
+  /system/lib64/egl was absent. A bounded search under /system/lib64 and
+  /vendor/lib64 found no Mesa-named files.
+- AOSP's GLES/EGL loader guidance lists libGLES_mesa.so or the three-file
+  set libEGL_mesa.so, libGLESv1_CM_mesa.so, and libGLESv2_mesa.so for this
+  property; those names were not present in the inspected vendor directory.
+- libEGL reported: "Failed to load drivers from property ro.hardware.egl
+  with value mesa". It also reported that it could not find an OpenGL ES
+  implementation; the original line was truncated in the diagnostic output.
+- Manual ADB logcat samples showed SurfaceFlinger repeatedly aborting while
+  creating its EGL/Skia GL render engine. The sampled backtrace passed
+  through Loader::open, egl_init_drivers, eglGetDisplay, and
+  SkiaGLRenderEngine::create. Init then restarted zygote. These manual
+  samples span approximately guest uptime 434 through 849 seconds.
+- The saved kernel.log later records another SurfaceFlinger SIGABRT at
+  guest uptime 983.431 seconds, the "exited 4 times before boot completed"
+  event at 983.714 seconds, and a SurfaceFlinger restart at 988.033 seconds.
+  This later kernel evidence does not retain the EGL error from the manual
+  logcat samples.
+- The sampled sys.boot_completed property query returned an empty value.
+  No sys.boot_completed=1 value was observed or accepted, and no successful
+  system_server startup or VIRTUAL_DEVICE_BOOT_COMPLETED marker was
+  established.
+
+Interpretation, pending image-side source and packaging confirmation: the
+Mesa EGL selection is intentional for drm_virgl in the pinned Cuttlefish
+source, but the EGL loader cannot find a usable implementation in this guest.
+This is the strongest current explanation for the observed SurfaceFlinger
+EGL initialization failure. The bounded inventory does not rule out a Mesa
+implementation outside the inspected directories, prove that Virgl produced
+frames, or explain every remaining Android boot issue. Do not change the
+canonical GPU profile based on this diagnostic capture alone.

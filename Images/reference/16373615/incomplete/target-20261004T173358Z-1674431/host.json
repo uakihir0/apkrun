@@ -1,0 +1,19 @@
+{
+  "architecture": "aarch64",
+  "buildId": "16373615",
+  "captureDurationSeconds": 1204,
+  "cpuCount": 8,
+  "cvdInstanceNumber": 1,
+  "cvdPackageVersion": "1.57.0",
+  "drmVirglSourceRevision": "9bb9c72329cedcb436bb75afc05c24d73fbcdf5d",
+  "eglPlatform": null,
+  "gpuVhostUserEnabled": false,
+  "hostKind": "linux-apple",
+  "kernel": "Linux 6.8.0-134-generic aarch64 GNU/Linux",
+  "nestedVirtualization": "on",
+  "os": "Ubuntu 24.04.4 LTS",
+  "profile": "target",
+  "schemaVersion": 2,
+  "selectedGpuMode": "guest_swiftshader",
+  "targetGpuMode": "guest_swiftshader"
+}

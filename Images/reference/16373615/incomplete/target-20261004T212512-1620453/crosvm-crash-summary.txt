@@ -1,0 +1,32 @@
+Sanitized crosvm panic diagnosis for this incomplete capture
+
+Capture: target-20261004T212512-1620453
+Apport report SHA-256: 87b1a9ae5eeda56dc6b8eec85c2bde521c1e8397b3a8d5946aee8d667f3159ed
+Cuttlefish host package: 1.57.0, VCS 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+crosvm Build ID: d724bf54f045b0ec7dbe14049b0fed9a16e52a23
+libgfxstream_backend.so Build ID: 6b8f3105442da5c66988881a1fa76e812b13c3e8
+
+The launcher records the diagnostic wrapper marker, and Apport's process
+environment records LD_PRELOAD as set (Apport redacts its value). The
+wrapper preloads /lib/aarch64-linux-gnu/libgcc_s.so.1. The recovered crosvm
+panic is:
+
+  thread 'v_gpu' panicked at .../src/virtio/gpu/mod.rs:1687:14:
+  Failed to create virtio gpu worker thread: invalid rutabaga build parameters
+
+crosvm selected `backend=virglrenderer` with GPU mode drm_virgl and
+vhost-user GPU disabled. It logged the panic and exited with SIGABRT instead
+of the prior backtrace-time SIGSEGV. kernel.log is empty; no guest boot
+evidence was recorded.
+
+The pinned Cuttlefish crosvm build disables Cargo default features and
+enables gfxstream and gpu, but omits virgl_renderer. That feature enables
+devices/virgl_renderer. Rutabaga therefore rejects the selected Virgl
+component as an invalid build configuration. Installing the host
+libvirglrenderer library cannot enable a feature omitted when crosvm was
+built. The evidence identifies the immediate package build limitation; it
+does not establish a failure in the guest or in the Virtualization.framework
+graphics path.
+
+The raw Apport report and core remain in private Lima storage. Neither was
+copied into the repository.

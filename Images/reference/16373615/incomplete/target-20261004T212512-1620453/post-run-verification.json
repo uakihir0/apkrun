@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "captureSourceRevision": "5d6905e+working-tree",
+  "captureSourceSha256Manifest": "capture-source-sha256.txt",
+  "capturedArtifactFileCount": 10,
+  "capturedArtifactSha256Manifest": "LIMA-SHA256SUMS",
+  "selectedGpuMode": "drm_virgl",
+  "gpuVhostUserEnabled": false,
+  "capture": {
+    "wrapperAppliedToCvdCreate": true,
+    "wrapperAppliedToCvdStart": true,
+    "apportRecordedLdPreload": true,
+    "crosvmPanic": "Failed to create virtio gpu worker thread: invalid rutabaga build parameters",
+    "crosvmExitSignal": "SIGABRT",
+    "kernelLogBytes": 0,
+    "androidBootCompleted": null
+  },
+  "cleanup": {
+    "auditTimestampUtc": "2026-10-04T12:43:14Z",
+    "cvdFleetEmpty": true,
+    "checkedCuttlefishProcessesRemaining": [],
+    "port6520ListenerPresent": false,
+    "port5037ListenerPid": 2704,
+    "port5037ListenerPresent": true,
+    "port5037KillServerIssued": false
+  },
+  "privacyScan": {
+    "fileCount": 12,
+    "knownHostPathMatches": 0,
+    "pemHeaderMatches": 0,
+    "eui48Addresses": 0,
+    "eui64Ipv6Candidates": 0,
+    "oversizeFiles": 0
+  }
+}

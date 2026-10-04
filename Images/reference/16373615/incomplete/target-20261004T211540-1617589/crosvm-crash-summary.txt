@@ -1,0 +1,32 @@
+Sanitized crosvm crash diagnosis for this incomplete capture
+
+Capture: target-20261004T211540-1617589
+Apport report SHA-256: 9efc736c1a248ae8cbbfbe7490e4a395f76ffb854485f3746d46f519d2260c8d
+Cuttlefish host package: 1.57.0, VCS 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+crosvm Build ID: d724bf54f045b0ec7dbe14049b0fed9a16e52a23
+libgfxstream_backend.so Build ID: 6b8f3105442da5c66988881a1fa76e812b13c3e8
+
+The unpreloaded crosvm process ended with SIGSEGV. GDB placed the fault at
+unw_get_reg+68 in libgfxstream_backend.so, at fault address 0x10. The
+faulting AArch64 instruction was `ldr x8, [x8, #16]` with x8 equal to zero.
+The visible frames included:
+
+  #0 unw_get_reg+68 (libgfxstream_backend.so)
+  #1 _Unwind_GetIP (libgfxstream_backend.so)
+  #4 _Unwind_Backtrace (libgcc_s.so.1)
+
+The crosvm frames were stripped. Subtracting the crosvm mapping base
+0xc95470fa0000 from the captured crosvm PCs produced these relative
+offsets, in GDB frame order:
+
+  +0xafd934 +0xb0580c +0xafd79c +0xb239cc +0xaf87ac +0xafd650
+  +0xafe820 +0xafe688 +0x52310c +0x523500 +0xaff324 +0xaff000
+  +0xafdca8 +0xafecc0 +0xb211d0 +0xb2151c +0x7b146c +0x5c6230
+  +0xb02bfc
+
+This is consistent with a secondary fault while the panic hook was collecting
+a backtrace. It does not identify the original panic or prove a Virgl failure.
+The panic text was not recovered in this run.
+
+The raw Apport report and core remain in private Lima storage. Neither was
+copied into the repository.

@@ -1,0 +1,308 @@
+{
+	"ap_kernel_image" : "<HOST_PATH>",
+	"ap_rootfs_image" : "<HOST_PATH>",
+	"ap_vm_manager" : "crosvm_openwrt",
+	"casimir_args" : [],
+	"casimir_nci_port" : 7800,
+	"casimir_rf_port" : 7900,
+	"crosvm_binary" : "<HOST_PATH>",
+	"enable_automotive_proxy" : false,
+	"enable_host_nfc" : true,
+	"enable_host_nfc_connector" : true,
+	"enable_host_uwb" : true,
+	"environments" : 
+	{
+		"env-1" : 
+		{
+			"enable_wifi" : true,
+			"group_uuid" : 1791116705,
+			"start_wmediumd" : true,
+			"vhost_user_mac80211_hwsim" : "<HOST_PATH>",
+			"wmediumd_api_server_socket" : "<HOST_PATH>",
+			"wmediumd_config" : "",
+			"wmediumd_mac_prefix" : 5554
+		}
+	},
+	"environments_uds_dir" : "<HOST_PATH>",
+	"extra_kernel_cmdline" : 
+	[
+		""
+	],
+	"fragments" : 
+	{
+		"AdbConfigFragmentImpl" : 
+		{
+			"connector_enabled" : true,
+			"mode" : 
+			[
+				"vsock_half_tunnel"
+			]
+		},
+		"CustomActionConfig" : 
+		[
+			{
+				"instance_id" : "0"
+			},
+			{
+				"button" : 
+				{
+					"command" : "web",
+					"icon_name" : "language",
+					"title" : "Web Page"
+				},
+				"shell_command" : "am start -a android.intent.action.VIEW -d https://www.android.com/"
+			},
+			{
+				"buttons" : 
+				[
+					{
+						"command" : "settings",
+						"icon_name" : "settings",
+						"title" : "Quick Settings"
+					},
+					{
+						"command" : "alert",
+						"icon_name" : "notifications_paused",
+						"title" : "Do Not Disturb"
+					}
+				],
+				"server" : "cuttlefish_example_action_server"
+			}
+		],
+		"DisplaysConfigsFragmentImpl" : [],
+		"FastbootConfigFragmentImpl" : 
+		{
+			"proxy_fastboot" : true
+		},
+		"MediaConfigsFragmentImpl" : []
+	},
+	"gem5_debug_flags" : "",
+	"instance_names" : 
+	[
+		"cvd-1"
+	],
+	"instances" : 
+	{
+		"1" : 
+		{
+			"adb_host_port" : 6520,
+			"adb_ip_and_port" : "0.0.0.0:6520",
+			"android_efi_loader" : "",
+			"ap_boot_flow" : 2,
+			"audio_output_streams_count" : 1,
+			"audiocontrol_server_port" : 9410,
+			"blank_data_image_mb" : 8192,
+			"blank_sdcard_image_mb" : 2048,
+			"bootconfig_supported" : true,
+			"bootloader" : "<HOST_PATH>",
+			"camera_server_port" : 0,
+			"chromeos_disk" : "",
+			"chromeos_kernel_path" : "",
+			"chromeos_root_image" : "",
+			"console" : false,
+			"cpus" : 4,
+			"crosvm_binary" : "<HOST_PATH>",
+			"crosvm_simple_media_device" : false,
+			"crosvm_use_balloon" : true,
+			"crosvm_use_rng" : true,
+			"crosvm_v4l2_proxy" : "",
+			"custom_partition_path" : "",
+			"data_image" : "<HOST_PATH>",
+			"data_policy" : "use_existing",
+			"ddr_mem_mb" : 4915,
+			"default_target_zip" : "",
+			"device_type" : 1,
+			"display_configs" : 
+			[
+				{
+					"dpi" : 280,
+					"overlays" : "",
+					"refresh_rate_hz" : 60,
+					"x_res" : 720,
+					"y_res" : 1348
+				}
+			],
+			"enable_audio" : true,
+			"enable_bootanimation" : true,
+			"enable_gamepad" : false,
+			"enable_gnss_grpc_proxy" : true,
+			"enable_gpu_external_blob" : false,
+			"enable_gpu_system_blob" : false,
+			"enable_gpu_udmabuf" : false,
+			"enable_gpu_vhost_user" : false,
+			"enable_host_bluetooth_connector" : false,
+			"enable_host_uwb_connector" : false,
+			"enable_jcard_simulator" : false,
+			"enable_kernel_log" : true,
+			"enable_minimal_mode" : false,
+			"enable_modem_netsim" : false,
+			"enable_modem_simulator" : true,
+			"enable_mouse" : false,
+			"enable_pkvm" : false,
+			"enable_sandbox" : false,
+			"enable_tap_devices" : true,
+			"enable_usb" : false,
+			"enable_vhal_proxy_server" : false,
+			"enable_virtiofs" : false,
+			"enable_webrtc" : true,
+			"environment_name" : "env-1",
+			"ethernet_bridge_name" : "cvd-ebr",
+			"ethernet_ipv6" : "<EUI64_STYLE_IPV6>",
+			"ethernet_mac" : "<MAC>",
+			"ethernet_tap_name" : "cvd-etap-01",
+			"external_network_mode" : "tap",
+			"extra_bootconfig_args" : "",
+			"fail_fast" : true,
+			"fastboot_host_port" : 6520,
+			"filename_encryption_mode" : "hctr2",
+			"fixed_location_file_path" : "",
+			"frame_sock_path" : "<HOST_PATH>",
+			"fuchsia_root_image" : "",
+			"fuchsia_zedboot_path" : "",
+			"gdb_port" : 0,
+			"gem5_binary_dir" : "<HOST_PATH>",
+			"gem5_checkpoint_dir" : "",
+			"gem5_debug_file" : "",
+			"gnss_file_path" : "",
+			"gnss_grpc_proxy_server_port" : 7200,
+			"gpu_angle_feature_overrides_disabled" : "",
+			"gpu_angle_feature_overrides_enabled" : "mapUnspecifiedColorSpaceToPassThrough",
+			"gpu_capture_binary" : "",
+			"gpu_context_types" : "gfxstream-vulkan:cross-domain:gfxstream-composer",
+			"gpu_mode" : "drm_virgl",
+			"grpc_config" : "<HOST_PATH>",
+			"guest_android_version" : "17",
+			"guest_enforce_security" : true,
+			"guest_hwui_renderer" : "unknown",
+			"guest_renderer_preload" : "auto",
+			"guest_uses_bgra_framebuffers" : false,
+			"guest_vulkan_driver" : "ranchu",
+			"has_bluetooth" : true,
+			"has_vulkan_gfxstream_apex" : false,
+			"has_vulkan_lavapipe_apex" : false,
+			"has_vulkan_swiftshader_apex" : false,
+			"has_wifi_card" : true,
+			"hwcomposer" : "drm_hwcomposer",
+			"images_dir" : "<HOST_PATH>",
+			"init_boot_image" : "<HOST_PATH>",
+			"initramfs_path" : "",
+			"instance_dir" : "<HOST_PATH>",
+			"kernel_path" : "",
+			"kgdb" : false,
+			"lights_server_port" : 6900,
+			"linux_initramfs_path" : "",
+			"linux_kernel_path" : "",
+			"linux_root_image" : "",
+			"mcu" : null,
+			"media_configs" : [],
+			"memory_mb" : 4096,
+			"mobile_bridge_name" : "cvd-mbr-01",
+			"mobile_mac" : "<MAC>",
+			"mobile_tap_name" : "cvd-mtap-01",
+			"modem_simulator_host_id" : 1001,
+			"modem_simulator_instance_number" : 1,
+			"modem_simulator_ports" : "9600",
+			"modem_simulator_sim_type" : 1,
+			"mte" : false,
+			"multiboot_bin_path" : "",
+			"new_data_image" : "<HOST_PATH>",
+			"new_vbmeta_system_dlkm_image" : "<HOST_PATH>",
+			"new_vbmeta_vendor_dlkm_image" : "<HOST_PATH>",
+			"new_vendor_boot_image" : "<HOST_PATH>",
+			"openthread_node_id" : 1,
+			"pause_in_bootloader" : false,
+			"qemu_binary_dir" : "<HOST_PATH>",
+			"qemu_vnc_server_port" : 544,
+			"record_screen" : false,
+			"restart_subprocesses" : false,
+			"ril_broadcast" : "192.168.97.3",
+			"ril_dns" : "8.8.8.8",
+			"ril_gateway" : "192.168.97.1",
+			"ril_ipaddr" : "192.168.97.2",
+			"ril_prefixlen" : 30,
+			"run_as_daemon" : true,
+			"seccomp_policy_dir" : "<HOST_PATH>",
+			"serial_number" : "<SERIAL>",
+			"session_id" : 0,
+			"setupwizard_mode" : "DISABLED",
+			"smt" : false,
+			"start_casimir" : true,
+			"start_netsim" : true,
+			"start_pica" : false,
+			"start_rootcanal" : false,
+			"start_wmediumd_instance" : true,
+			"super_image" : "<HOST_PATH>",
+			"system_target_zip" : "",
+			"target_arch" : 1,
+			"tombstone_receiver_port" : 6600,
+			"touchpad_configs" : [],
+			"use_bridged_wifi_tap" : false,
+			"use_cvdalloc" : false,
+			"use_pmem" : true,
+			"use_sdcard" : true,
+			"userdata_format" : "f2fs",
+			"uuid" : "699acfc4-c8c4-11e7-882b-5065f31dc101",
+			"vbmeta_image" : "<HOST_PATH>",
+			"vbmeta_system_dlkm_image" : "<HOST_PATH>",
+			"vbmeta_system_image" : "<HOST_PATH>",
+			"vbmeta_vendor_dlkm_image" : "<HOST_PATH>",
+			"vendor_boot_image" : "<HOST_PATH>",
+			"vhal_proxy_server_port" : 9300,
+			"vhost_net" : false,
+			"vhost_user_block" : false,
+			"vhost_user_vsock" : true,
+			"virtual_disk_paths" : 
+			[
+				"<HOST_PATH>",
+				"<HOST_PATH>",
+				"<HOST_PATH>"
+			],
+			"vsock_guest_cid" : 3,
+			"vsock_guest_group" : "",
+			"vvmtruststore_path" : "",
+			"webrtc_assets_dir" : "<HOST_PATH>",
+			"webrtc_device_id" : "apkrun_target_fpy5sx-1-1",
+			"webrtc_tcp_port_range" : 
+			[
+				15550,
+				15599
+			],
+			"webrtc_udp_port_range" : 
+			[
+				15550,
+				15599
+			],
+			"wifi_bridge_name" : "cvd-wbr",
+			"wifi_mac" : "<MAC>",
+			"wifi_mac_prefix" : 5554,
+			"wifi_tap_name" : "cvd-wifiap-01"
+		}
+	},
+	"instances_uds_dir" : "<HOST_PATH>",
+	"kvm_path" : "",
+	"netsim_args" : [],
+	"netsim_connector_instance_num" : 0,
+	"netsim_instance_num" : 0,
+	"pica_uci_port" : 7000,
+	"root_dir" : "<HOST_PATH>",
+	"rootcanal_args" : 
+	[
+		""
+	],
+	"rootcanal_hci_port" : 7300,
+	"rootcanal_link_ble_port" : 7600,
+	"rootcanal_link_port" : 7400,
+	"rootcanal_test_port" : 7500,
+	"secure_hals" : 
+	[
+		"guest_gatekeeper_insecure",
+		"guest_keymint_insecure",
+		"host_oemlock_secure"
+	],
+	"straced_host_executables" : [],
+	"vhost_vsock_path" : "",
+	"virtio_mac80211_hwsim" : true,
+	"vm_manager" : "crosvm",
+	"webrtc_sig_server_addr" : "<HOST_PATH>",
+	"webrtc_sig_server_port" : 8443
+}

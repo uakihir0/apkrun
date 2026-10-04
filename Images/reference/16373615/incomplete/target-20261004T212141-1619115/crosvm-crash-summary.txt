@@ -1,0 +1,16 @@
+Sanitized crosvm diagnostic for this incomplete capture
+
+Capture: target-20261004T212141-1619115
+Apport report SHA-256: 82e17f0558a90bfe3277b933c2125f2141eb9305716bc2e5f3836bc0a560f0cb
+Cuttlefish host package: 1.57.0, VCS 9bb9c72329cedcb436bb75afc05c24d73fbcdf5d
+crosvm Build ID: d724bf54f045b0ec7dbe14049b0fed9a16e52a23
+
+This attempt was intended to run the diagnostic crosvm wrapper with
+LD_PRELOAD=/lib/aarch64-linux-gnu/libgcc_s.so.1. The wrapper marker is absent
+from launcher.log, and the Apport process environment contains no LD_PRELOAD.
+The override had been passed to `cvd create`, but `cvd start` selected its own
+default crosvm binary. The process again ended with SIGSEGV, so this run did
+not test the preload hypothesis or recover the panic message.
+
+The raw Apport report and core remain in private Lima storage. Neither was
+copied into the repository.

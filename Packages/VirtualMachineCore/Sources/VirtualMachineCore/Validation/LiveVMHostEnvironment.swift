@@ -32,6 +32,10 @@ struct LiveVMHostEnvironment: VMHostEnvironment {
         Bundle.main.infoDictionary?["NSMicrophoneUsageDescription"] as? String
     }
 
+    var allowsTestOnlyDiskSync: Bool {
+        false
+    }
+
     func probeFile(at url: URL) -> VMFileProbe {
         guard url.isFileURL else {
             return VMFileProbe(

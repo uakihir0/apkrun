@@ -9,6 +9,7 @@ package protocol VMHostEnvironment: Sendable {
     var minimumAllowedMemorySize: UInt64 { get }
     var maximumAllowedMemorySize: UInt64 { get }
     var microphoneUsageDescription: String? { get }
+    var allowsTestOnlyDiskSync: Bool { get }
 
     func probeFile(at url: URL) -> VMFileProbe
 }

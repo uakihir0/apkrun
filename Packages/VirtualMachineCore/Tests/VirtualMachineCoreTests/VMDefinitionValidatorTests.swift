@@ -223,6 +223,45 @@ import Virtualization
     )
 }
 
+@Test func onlyATestHostCanAllowUnsynchronizedDisks() {
+    let builder = VMDefinitionBuilder()
+    let diskURL = URL(fileURLWithPath: "/fixtures/userdata.img")
+    var definition = builder.build()
+    definition.disks = [
+        DiskDefinition(
+            url: diskURL,
+            readOnly: false,
+            synchronization: .none,
+            role: "userdata"
+        )
+    ]
+    let probes = [
+        builder.kernelURL: VMFileProbeFixture(
+            sizeBytes: 64,
+            first64Bytes: validArm64KernelHeader
+        ),
+        diskURL: VMFileProbeFixture(),
+    ]
+    let productionHost = FakeVMHostEnvironment(fileProbes: probes)
+    let testHost = FakeVMHostEnvironment(
+        allowsTestOnlyDiskSync: true,
+        fileProbes: probes
+    )
+
+    #expect(
+        VMDefinitionValidator(
+            host: productionHost,
+            frameworkValidator: FakeFrameworkConfigurationValidator()
+        ).findings(definition) == [.diskSyncModeTestOnly(role: "userdata")]
+    )
+    #expect(
+        VMDefinitionValidator(
+            host: testHost,
+            frameworkValidator: FakeFrameworkConfigurationValidator()
+        ).findings(definition).isEmpty
+    )
+}
+
 @Test func diskIdentifierMustBeAtMostTwentyASCIICharacters() {
     let builder = VMDefinitionBuilder()
     let diskURL = URL(fileURLWithPath: "/fixtures/disk.img")
@@ -404,10 +443,10 @@ import Virtualization
 
 @Test func findingsLogsOnlyTheSanitizedSummaryToTheVMConfigurationCategory() {
     let builder = VMDefinitionBuilder()
-    let diskURL = URL(fileURLWithPath: "/private/customer/data.img")
+    let diskURL = URL(fileURLWithPath: "/private/customer/userdata.img")
     var definition = builder.build()
     definition.disks = [
-        DiskDefinition(url: diskURL, readOnly: false, role: "/private/customer")
+        DiskDefinition(url: diskURL, readOnly: false, role: "userdata")
     ]
     definition.consolePorts.append(
         ConsolePortDefinition(role: .service(name: "../private/customer"))
@@ -427,6 +466,11 @@ import Virtualization
     #expect(entry?.subsystem == .vm)
     #expect(entry?.category == "config")
     #expect(entry?.publicMessage.contains("VM definition summary:") == true)
+    #expect(entry?.publicMessage.contains("userdata.img") == true)
+    #expect(entry?.publicMessage.contains("\"role\":\"userdata\"") == true)
+    #expect(entry?.publicMessage.contains("\"readOnly\":false") == true)
+    #expect(entry?.publicMessage.contains("\"caching\":\"automatic\"") == true)
+    #expect(entry?.publicMessage.contains("\"synchronization\":\"full\"") == true)
     #expect(entry?.publicMessage.contains("/private/customer") == false)
     #expect(entry?.publicMessage.contains("redacted") == true)
 }

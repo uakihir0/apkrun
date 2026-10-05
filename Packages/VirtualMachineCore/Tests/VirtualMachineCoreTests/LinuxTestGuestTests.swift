@@ -10,7 +10,7 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
     let definition = LinuxTestGuest.definition(
         kernel: URL(fileURLWithPath: "/fixtures/Image"),
         initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
-        tests: ["blk", "ports"],
+        tests: ["ports"],
         powerOff: true,
         extraCommandLine: ["loglevel=7"]
     )
@@ -23,7 +23,7 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
     #expect(boot.1 == URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"))
     #expect(
         boot.2
-            == "console=hvc0 apkrun.test=blk,ports apkrun.test.poweroff=1 loglevel=7"
+            == "console=hvc0 apkrun.test=ports apkrun.test.poweroff=1 loglevel=7"
     )
     #expect(definition.disks.isEmpty)
     #expect(definition.network == nil)
@@ -79,6 +79,33 @@ func linuxTestGuestUsesTheCustomEntropyDeviceForPendingElementProbe() {
     #expect(!definition.entropy)
     #expect(definition.customDevices.count == 1)
     #expect(definition.customDevices[0].descriptor.deviceID == 4)
+}
+
+@Test
+func linuxTestGuestAttachesBlockDisksByIdentifierInRequestedOrder() {
+    let disks = LinuxTestGuest.BlockDisks(
+        readOnly: URL(fileURLWithPath: "/fixtures/ro.img"),
+        readWrite: URL(fileURLWithPath: "/fixtures/rw.img")
+    )
+    let firstDefinition = LinuxTestGuest.definition(
+        kernel: URL(fileURLWithPath: "/fixtures/Image"),
+        initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
+        tests: ["blk"],
+        blockDisks: disks
+    )
+    let reversedDefinition = LinuxTestGuest.definition(
+        kernel: URL(fileURLWithPath: "/fixtures/Image"),
+        initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
+        tests: ["blk"],
+        blockDisks: disks,
+        blockDiskOrder: .readWriteThenReadOnly
+    )
+
+    #expect(firstDefinition.disks.map(\.identifier) == ["apkrun-ro", "apkrun-rw"])
+    #expect(firstDefinition.disks.map(\.readOnly) == [true, false])
+    #expect(firstDefinition.disks.map(\.url) == [disks.readOnly, disks.readWrite])
+    #expect(reversedDefinition.disks.map(\.identifier) == ["apkrun-rw", "apkrun-ro"])
+    #expect(reversedDefinition.disks.map(\.readOnly) == [false, true])
 }
 
 @Test

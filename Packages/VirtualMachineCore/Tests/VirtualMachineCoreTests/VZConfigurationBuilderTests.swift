@@ -66,6 +66,20 @@ import Virtualization
         (configuration.storageDevices[1] as? VZVirtioBlockDeviceConfiguration)?
             .blockDeviceIdentifier == "userdata-disk"
     )
+    let readOnlyAttachment = try #require(
+        (configuration.storageDevices[0] as? VZVirtioBlockDeviceConfiguration)?
+            .attachment as? VZDiskImageStorageDeviceAttachment
+    )
+    #expect(readOnlyAttachment.isReadOnly)
+    #expect(readOnlyAttachment.cachingMode == .automatic)
+    #expect(readOnlyAttachment.synchronizationMode == .full)
+    let readWriteAttachment = try #require(
+        (configuration.storageDevices[1] as? VZVirtioBlockDeviceConfiguration)?
+            .attachment as? VZDiskImageStorageDeviceAttachment
+    )
+    #expect(!readWriteAttachment.isReadOnly)
+    #expect(readWriteAttachment.cachingMode == .uncached)
+    #expect(readWriteAttachment.synchronizationMode == .fsync)
     #expect(configuration.networkDevices.count == 1)
     #expect(configuration.networkDevices[0].attachment is VZNATNetworkDeviceAttachment)
     #expect(configuration.socketDevices.count == 1)

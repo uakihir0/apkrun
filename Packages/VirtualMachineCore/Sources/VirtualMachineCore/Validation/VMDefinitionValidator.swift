@@ -181,7 +181,8 @@ public struct VMDefinitionValidator: Sendable {
         where probe.exists && probe.isRegularFile && !disk.readOnly && !probe.isWritable {
             failures.append(.diskNotWritable(role: VMDiagnosticToken.sanitize(disk.role)))
         }
-        for disk in definition.disks where disk.synchronization == .none {
+        for disk in definition.disks
+        where disk.synchronization == .none && !host.allowsTestOnlyDiskSync {
             failures.append(.diskSyncModeTestOnly(role: VMDiagnosticToken.sanitize(disk.role)))
         }
         for disk in definition.disks {

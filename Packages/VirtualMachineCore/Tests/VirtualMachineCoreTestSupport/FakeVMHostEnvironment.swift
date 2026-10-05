@@ -10,6 +10,7 @@ package struct FakeVMHostEnvironment: VMHostEnvironment {
     package let minimumAllowedMemorySize: UInt64
     package let maximumAllowedMemorySize: UInt64
     package let microphoneUsageDescription: String?
+    package let allowsTestOnlyDiskSync: Bool
     private let fileProbes: [URL: VMFileProbeFixture]
 
     package init(
@@ -20,6 +21,7 @@ package struct FakeVMHostEnvironment: VMHostEnvironment {
         minimumAllowedMemorySize: UInt64 = 1 * 1_024 * 1_024 * 1_024,
         maximumAllowedMemorySize: UInt64 = 64 * 1_024 * 1_024 * 1_024,
         microphoneUsageDescription: String? = nil,
+        allowsTestOnlyDiskSync: Bool = false,
         fileProbes: [URL: VMFileProbeFixture] = [:]
     ) {
         self.activeProcessorCount = activeProcessorCount
@@ -29,6 +31,7 @@ package struct FakeVMHostEnvironment: VMHostEnvironment {
         self.minimumAllowedMemorySize = minimumAllowedMemorySize
         self.maximumAllowedMemorySize = maximumAllowedMemorySize
         self.microphoneUsageDescription = microphoneUsageDescription
+        self.allowsTestOnlyDiskSync = allowsTestOnlyDiskSync
         self.fileProbes = Dictionary(
             uniqueKeysWithValues: fileProbes.map { ($0.key.standardizedFileURL, $0.value) }
         )

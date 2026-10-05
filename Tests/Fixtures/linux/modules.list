@@ -2,6 +2,7 @@
 # virtio_console and virtio_pci are built into this kernel.
 gpio_pl061
 evdev
+ext4
 virtio_blk
 virtio_net
 vsock

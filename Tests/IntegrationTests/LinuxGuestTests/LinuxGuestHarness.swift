@@ -90,6 +90,7 @@ enum LinuxGuestHarness {
         case observeGuestReboot
         case observeGuestPanic
         case forcedAfterConsoleLine(String)
+        case forcedAfterConsoleLineDelay(String, Duration)
     }
 
     enum RebootObservation: Equatable {
@@ -136,6 +137,8 @@ enum LinuxGuestHarness {
         stopBehavior: StopBehavior,
         powerOff: Bool,
         tests: [String] = [],
+        blockDisks: LinuxTestGuest.BlockDisks? = nil,
+        blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
         entropyTestDevice: EntropyTestDevice? = nil,
         recordObserver: (@Sendable (TestGuestRecord) -> Void)? = nil,
         extraCommandLine: [String] = []
@@ -158,6 +161,8 @@ enum LinuxGuestHarness {
             kernel: artifacts.kernel,
             initrd: artifacts.initrd,
             tests: tests,
+            blockDisks: blockDisks,
+            blockDiskOrder: blockDiskOrder,
             entropyTestDevice: entropyTestDevice,
             powerOff: powerOff,
             extraCommandLine: extraCommandLine
@@ -186,6 +191,8 @@ enum LinuxGuestHarness {
         )
         var consoleMarkers: [(name: String, bytes: Data)] = []
         if case .forcedAfterConsoleLine(let marker) = stopBehavior {
+            consoleMarkers.append((name: marker, bytes: Data(marker.utf8)))
+        } else if case .forcedAfterConsoleLineDelay(let marker, _) = stopBehavior {
             consoleMarkers.append((name: marker, bytes: Data(marker.utf8)))
         }
         if tests.contains("ports") {
@@ -282,6 +289,21 @@ enum LinuxGuestHarness {
                     stateStream.stream,
                     timeout: .seconds(60)
                 )
+            } else if case .forcedAfterConsoleLineDelay(let marker, let delay) = stopBehavior {
+                try await waitForConsoleMarker(
+                    marker,
+                    events: events.stream,
+                    timeout: .seconds(60)
+                )
+                try await Task.sleep(for: delay)
+                try await controller.stop()
+                await waitForConsoleTask(parserTask)
+                observedRecords = await collectRecords(records.stream)
+                rebootObservation = nil
+                observedStates = try await statesThroughGuestStop(
+                    stateStream.stream,
+                    timeout: .seconds(60)
+                )
             } else if stopBehavior == .observeGuestPanic {
                 observedRecords = try await recordsUntilDone(records.stream)
                 rebootObservation = nil
@@ -328,7 +350,8 @@ enum LinuxGuestHarness {
                     try await controller.stop()
                 case .observeGuestReboot:
                     preconditionFailure("Reboot observation is handled above.")
-                case .observeGuestPanic, .forcedAfterConsoleLine:
+                case .observeGuestPanic, .forcedAfterConsoleLine,
+                    .forcedAfterConsoleLineDelay:
                     preconditionFailure("The specialized console probe is handled above.")
                 }
 

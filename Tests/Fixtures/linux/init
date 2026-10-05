@@ -35,6 +35,10 @@ poweroff_after_tests=0
 reboot_after_rng=0
 flood_line_count=0
 panic_after_tests=0
+blk_phase=
+blk_ro_sha256=
+blk_token=
+blk_order=
 for argument in $(cat /proc/cmdline); do
     case "$argument" in
         apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
@@ -42,6 +46,10 @@ for argument in $(cat /proc/cmdline); do
         apkrun.test.rng.reboot=*) reboot_after_rng="${argument#apkrun.test.rng.reboot=}" ;;
         apkrun.test.flood=*) flood_line_count="${argument#apkrun.test.flood=}" ;;
         apkrun.test.panic=*) panic_after_tests="${argument#apkrun.test.panic=}" ;;
+        apkrun.test.blk.phase=*) blk_phase="${argument#apkrun.test.blk.phase=}" ;;
+        apkrun.test.blk.ro_sha256=*) blk_ro_sha256="${argument#apkrun.test.blk.ro_sha256=}" ;;
+        apkrun.test.blk.token=*) blk_token="${argument#apkrun.test.blk.token=}" ;;
+        apkrun.test.blk.order=*) blk_order="${argument#apkrun.test.blk.order=}" ;;
     esac
 done
 
@@ -141,6 +149,226 @@ run_rng_pending_test() {
     /usr/bin/head -c 1 /dev/hwrng >/tmp/apkrun-rng-pending.bin 2>/dev/null &
     sleep 0.5
     printf 'APKRUN-TEST: rng-pending ok background read submitted\n'
+}
+
+find_block_device_by_serial() {
+    wanted_serial="$1"
+    for sys_block in /sys/block/vd*; do
+        [ -r "$sys_block/serial" ] || continue
+        device_serial=$(cat "$sys_block/serial")
+        if [ "$device_serial" = "$wanted_serial" ]; then
+            printf '/dev/%s' "${sys_block##*/}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+block_test_fail() {
+    printf 'APKRUN-TEST: blk fail %s %s\n' "$blk_phase" "$1"
+    return 1
+}
+
+run_block_test() {
+    case "$blk_phase" in
+        format|verify|stress|recover|order) ;;
+        *) block_test_fail invalid-phase; return 1 ;;
+    esac
+
+    case "$blk_token" in
+        ""|*[!0-9a-f]*)
+            block_test_fail invalid-token
+            return 1
+            ;;
+    esac
+    if [ "${#blk_token}" -ne 64 ]; then
+        block_test_fail invalid-token
+        return 1
+    fi
+
+    if [ "$blk_phase" = order ]; then
+        if [ -z "$blk_order" ]; then
+            block_test_fail missing-order
+            return 1
+        fi
+        observed_order=
+        for sys_block in /sys/block/vd*; do
+            [ -r "$sys_block/serial" ] || continue
+            device_serial=$(cat "$sys_block/serial")
+            if [ -n "$observed_order" ]; then
+                observed_order="$observed_order,$device_serial"
+            else
+                observed_order="$device_serial"
+            fi
+        done
+        if [ "$observed_order" != "$blk_order" ]; then
+            block_test_fail "order expected=$blk_order observed=$observed_order"
+            return 1
+        fi
+        printf 'APKRUN-TEST: blk ok order %s\n' "$observed_order"
+        return 0
+    fi
+
+    read_write_device=$(find_block_device_by_serial apkrun-rw) || {
+        block_test_fail missing-apkrun-rw
+        return 1
+    }
+    case "$blk_phase" in
+        format)
+            case "$blk_ro_sha256" in
+                ""|*[!0-9a-f]*)
+                    block_test_fail invalid-ro-sha256
+                    return 1
+                    ;;
+            esac
+            if [ "${#blk_ro_sha256}" -ne 64 ]; then
+                block_test_fail invalid-ro-sha256
+                return 1
+            fi
+            read_only_device=$(find_block_device_by_serial apkrun-ro) || {
+                block_test_fail missing-apkrun-ro
+                return 1
+            }
+            if ! mkfs.ext4 -F "$read_write_device" >/dev/null; then
+                block_test_fail mkfs
+                return 1
+            fi
+            mkdir -p /mnt/rw || {
+                block_test_fail mount-directory
+                return 1
+            }
+            if ! mount -t ext4 "$read_write_device" /mnt/rw; then
+                block_test_fail mount
+                return 1
+            fi
+            if ! printf '%s\n' "$blk_token" > /mnt/rw/token; then
+                umount /mnt/rw
+                block_test_fail write-token
+                return 1
+            fi
+            sync
+            if ! umount /mnt/rw; then
+                block_test_fail unmount
+                return 1
+            fi
+            if [ "$(blockdev --getro "$read_only_device" 2>/dev/null)" != 1 ]; then
+                block_test_fail read-only-flag
+                return 1
+            fi
+            if printf '\000' | dd of="$read_only_device" bs=1 count=1 conv=notrunc \
+                2>/dev/null
+            then
+                block_test_fail read-only-write-succeeded
+                return 1
+            fi
+            actual_ro_sha256=$(sha256sum "$read_only_device" | awk '{ print $1 }') || {
+                block_test_fail read-only-hash
+                return 1
+            }
+            if [ "$actual_ro_sha256" != "$blk_ro_sha256" ]; then
+                block_test_fail read-only-hash-mismatch
+                return 1
+            fi
+            ;;
+        verify)
+            mkdir -p /mnt/rw || {
+                block_test_fail mount-directory
+                return 1
+            }
+            if ! mount -t ext4 "$read_write_device" /mnt/rw; then
+                block_test_fail mount
+                return 1
+            fi
+            actual_token=$(cat /mnt/rw/token 2>/dev/null) || {
+                umount /mnt/rw
+                block_test_fail missing-token
+                return 1
+            }
+            if [ "$actual_token" != "$blk_token" ]; then
+                umount /mnt/rw
+                block_test_fail token-mismatch
+                return 1
+            fi
+            umount /mnt/rw || {
+                block_test_fail unmount
+                return 1
+            }
+            ;;
+        stress)
+            mkdir -p /mnt/rw || {
+                block_test_fail mount-directory
+                return 1
+            }
+            if ! mount -t ext4 -o commit=600 "$read_write_device" /mnt/rw; then
+                block_test_fail mount
+                return 1
+            fi
+            actual_token=$(cat /mnt/rw/token 2>/dev/null) || {
+                umount /mnt/rw
+                block_test_fail missing-token
+                return 1
+            }
+            if [ "$actual_token" != "$blk_token" ]; then
+                umount /mnt/rw
+                block_test_fail token-mismatch
+                return 1
+            fi
+            sync
+            stress_counter=0
+            while :; do
+                if ! printf 'stress-%s\n' "$stress_counter" > /mnt/rw/stress.pending; then
+                    block_test_fail stress-write
+                    return 1
+                fi
+                if ! mv -f /mnt/rw/stress.pending /mnt/rw/stress.current; then
+                    block_test_fail stress-rename
+                    return 1
+                fi
+                if [ "$stress_counter" -eq 0 ]; then
+                    printf 'APKRUN-BLK-STRESS-READY\n'
+                fi
+                stress_counter=$((stress_counter + 1))
+            done
+            ;;
+        recover)
+            e2fsck_log=/tmp/apkrun-e2fsck.log
+            e2fsck -fy "$read_write_device" > "$e2fsck_log" 2>&1
+            e2fsck_status=$?
+            if [ "$e2fsck_status" -ne 0 ] && [ "$e2fsck_status" -ne 1 ]; then
+                block_test_fail "e2fsck-exit-$e2fsck_status"
+                return 1
+            fi
+            if ! grep -qi 'recovering journal' "$e2fsck_log"; then
+                block_test_fail journal-recovery-not-observed
+                return 1
+            fi
+            printf 'APKRUN-BLK-RECOVERY journal replayed\n'
+            mkdir -p /mnt/rw || {
+                block_test_fail mount-directory
+                return 1
+            }
+            if ! mount -t ext4 "$read_write_device" /mnt/rw; then
+                block_test_fail mount-after-recovery
+                return 1
+            fi
+            actual_token=$(cat /mnt/rw/token 2>/dev/null) || {
+                umount /mnt/rw
+                block_test_fail missing-token
+                return 1
+            }
+            if [ "$actual_token" != "$blk_token" ]; then
+                umount /mnt/rw
+                block_test_fail token-mismatch
+                return 1
+            fi
+            umount /mnt/rw || {
+                block_test_fail unmount
+                return 1
+            }
+            ;;
+    esac
+
+    printf 'APKRUN-TEST: blk ok %s\n' "$blk_phase"
 }
 
 read_console_marker() {
@@ -247,6 +475,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             rng-pending)
                 run_rng_pending_test
+                ;;
+            blk)
+                run_block_test
                 ;;
             ports)
                 run_ports_test

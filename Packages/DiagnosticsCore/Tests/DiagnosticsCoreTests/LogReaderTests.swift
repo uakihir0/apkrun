@@ -127,8 +127,9 @@ import Testing
     defer { try? FileManager.default.removeItem(at: directory) }
     let paths = APKRunPaths(homeDirectory: directory)
     try FileManager.default.createDirectory(at: paths.logsRoot, withIntermediateDirectories: true)
+    let timestamp = ISO8601DateFormatter().string(from: .now.addingTimeInterval(-60))
     let mirror = """
-        2026-09-29T01:02:03Z notice io.apkrun.cli/command version 0.1\u{1F}private version
+        \(timestamp) notice io.apkrun.cli/command version 0.1\u{1F}private version
         """
     try mirror.write(to: paths.daemonLogFile, atomically: true, encoding: .utf8)
 

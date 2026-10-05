@@ -32,12 +32,112 @@ done < /etc/apkrun/modules.list
 
 requested_tests=
 poweroff_after_tests=0
+reboot_after_rng=0
 for argument in $(cat /proc/cmdline); do
     case "$argument" in
         apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
         apkrun.test.poweroff=*) poweroff_after_tests="${argument#apkrun.test.poweroff=}" ;;
+        apkrun.test.rng.reboot=*) reboot_after_rng="${argument#apkrun.test.rng.reboot=}" ;;
     esac
 done
+
+wait_for_rng_source() {
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if grep -qw virtio_rng.0 /sys/class/misc/hw_random/rng_available 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+read_rng_sample() {
+    sample_path="$1"
+    if ! head -c 65536 /dev/hwrng > "$sample_path"; then
+        return 1
+    fi
+    sample_size=$(wc -c < "$sample_path" | tr -d ' \n')
+    if [ "$sample_size" -ne 65536 ]; then
+        return 1
+    fi
+    sample_sha=$(sha256sum "$sample_path" | cut -d ' ' -f 1)
+    sample_head=$(od -An -N16 -tx1 "$sample_path" | tr -d ' \n')
+    [ "${#sample_sha}" -eq 64 ] && [ "${#sample_head}" -eq 32 ]
+}
+
+run_rng_test() {
+    if ! wait_for_rng_source; then
+        printf 'APKRUN-TEST: rng fail virtio_rng.0 was not registered\n'
+        return 1
+    fi
+
+    if ! read_rng_sample /tmp/apkrun-rng-first.bin; then
+        printf 'APKRUN-TEST: rng fail could not read 65536 bytes from /dev/hwrng\n'
+        return 1
+    fi
+    printf 'APKRUN-TEST: rng ok sha256=%s head=%s\n' "$sample_sha" "$sample_head"
+
+    if [ "$reboot_after_rng" = 1 ]; then
+        printf 'APKRUN-TEST: rng-reboot ok reboot requested after first read\n'
+        sync
+        /sbin/reboot -f
+        while :; do sleep 1; done
+    fi
+
+    rng_device_path=
+    for candidate in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+        if [ -e "$candidate" ]; then
+            rng_device_path="$candidate"
+            break
+        fi
+    done
+    if [ -z "$rng_device_path" ]; then
+        printf 'APKRUN-TEST: rng fail virtio_rng device was not bound\n'
+        return 1
+    fi
+    rng_device=${rng_device_path##*/}
+    if ! printf '%s' "$rng_device" > /sys/bus/virtio/drivers/virtio_rng/unbind; then
+        printf 'APKRUN-TEST: rng fail could not unbind virtio_rng\n'
+        return 1
+    fi
+
+    rng_unbound=0
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if [ ! -e "$rng_device_path" ]; then
+            rng_unbound=1
+            break
+        fi
+        sleep 0.1
+    done
+    if [ "$rng_unbound" -ne 1 ]; then
+        printf 'APKRUN-TEST: rng fail virtio_rng unbind did not complete\n'
+        return 1
+    fi
+    if ! printf '%s' "$rng_device" > /sys/bus/virtio/drivers/virtio_rng/bind; then
+        printf 'APKRUN-TEST: rng fail could not rebind virtio_rng\n'
+        return 1
+    fi
+    if ! wait_for_rng_source; then
+        printf 'APKRUN-TEST: rng fail virtio_rng.0 was not restored after reset\n'
+        return 1
+    fi
+    if ! read_rng_sample /tmp/apkrun-rng-second.bin; then
+        printf 'APKRUN-TEST: rng fail could not read after driver reset\n'
+        return 1
+    fi
+    printf 'APKRUN-TEST: rng ok sha256=%s head=%s\n' "$sample_sha" "$sample_head"
+}
+
+run_rng_pending_test() {
+    if ! wait_for_rng_source; then
+        printf 'APKRUN-TEST: rng-pending fail virtio_rng.0 was not registered\n'
+        return 1
+    fi
+
+    /usr/bin/head -c 1 /dev/hwrng >/tmp/apkrun-rng-pending.bin 2>/dev/null &
+    sleep 0.5
+    printf 'APKRUN-TEST: rng-pending ok background read submitted\n'
+}
 
 power_monitor_pid=
 if [ "$poweroff_after_tests" != 1 ]; then
@@ -90,7 +190,17 @@ if [ -n "$requested_tests" ]; then
     previous_ifs=$IFS
     IFS=,
     for test_name in $requested_tests; do
-        printf 'APKRUN-TEST: %s fail unsupported test in this guest build\n' "$test_name"
+        case "$test_name" in
+            rng)
+                run_rng_test
+                ;;
+            rng-pending)
+                run_rng_pending_test
+                ;;
+            *)
+                printf 'APKRUN-TEST: %s fail unsupported test in this guest build\n' "$test_name"
+                ;;
+        esac
     done
     IFS=$previous_ifs
 fi

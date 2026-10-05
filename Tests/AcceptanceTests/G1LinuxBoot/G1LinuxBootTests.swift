@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import VirtualMachineCore
 
 final class G1LinuxBootTests: XCTestCase {

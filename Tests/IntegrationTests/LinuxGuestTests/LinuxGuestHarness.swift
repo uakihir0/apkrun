@@ -1,6 +1,7 @@
 import Darwin
 import DiagnosticsCore
 import Foundation
+import VirtioDeviceCore
 import XCTest
 
 @testable import VirtualMachineCore
@@ -86,26 +87,48 @@ enum LinuxGuestHarness {
         case guestPowerOff
         case requestPowerButton
         case forced
+        case observeGuestReboot
+    }
+
+    enum RebootObservation: Equatable {
+        case guestRestarted
+        case guestDidStop
+        case noRestartObserved
     }
 
     struct RunResult {
         let records: [TestGuestRecord]
         let states: [VMState]
+        let rebootObservation: RebootObservation?
     }
 
-    private enum HarnessFailure: Error {
+    enum HarnessEvent: Sendable {
+        case record(TestGuestRecord)
+        case state(VMState)
+        case rebootProbeTimedOut
+    }
+
+    enum HarnessFailure: Error, Equatable {
         case missingArtifacts(String)
         case invalidArtifactDirectory(String)
         case timedOut
         case consoleEnded
         case startUnexpectedlySucceeded
         case unexpectedStartFailure
+        case guestCheckFailed(name: String, detail: String)
+        case guestFinishedBeforeRestartMarker
+        case guestStoppedBeforeRestartMarker
+        case guestVMFailedDuringRebootObservation
     }
 
     static func run(
         testCase: XCTestCase,
         stopBehavior: StopBehavior,
-        powerOff: Bool
+        powerOff: Bool,
+        tests: [String] = [],
+        entropyTestDevice: EntropyTestDevice? = nil,
+        recordObserver: (@Sendable (TestGuestRecord) -> Void)? = nil,
+        extraCommandLine: [String] = []
     ) async throws -> RunResult {
         let artifacts = try artifactURLs()
         let runDirectory = FileManager.default.temporaryDirectory
@@ -119,7 +142,10 @@ enum LinuxGuestHarness {
         let definition = LinuxTestGuest.definition(
             kernel: artifacts.kernel,
             initrd: artifacts.initrd,
-            powerOff: powerOff
+            tests: tests,
+            entropyTestDevice: entropyTestDevice,
+            powerOff: powerOff,
+            extraCommandLine: extraCommandLine
         )
         let validated = try VMDefinitionValidator().validate(definition)
         let paths = APKRunPaths(
@@ -139,6 +165,10 @@ enum LinuxGuestHarness {
             of: TestGuestRecord.self,
             bufferingPolicy: .bufferingNewest(256)
         )
+        let events = AsyncStream.makeStream(
+            of: HarnessEvent.self,
+            bufferingPolicy: .unbounded
+        )
         let consoleCapture = LinuxGuestConsoleCapture()
         let parserTask = Task {
             var parser = TestGuestLineParser()
@@ -146,11 +176,15 @@ enum LinuxGuestHarness {
                 guard !Task.isCancelled else { break }
                 for record in parser.consume(bytes) {
                     records.continuation.yield(record)
+                    recordObserver?(record)
+                    events.continuation.yield(.record(record))
                 }
             }
             if !Task.isCancelled {
                 for record in parser.finish() {
                     records.continuation.yield(record)
+                    recordObserver?(record)
+                    events.continuation.yield(.record(record))
                 }
             }
             records.continuation.finish()
@@ -167,34 +201,68 @@ enum LinuxGuestHarness {
             for await state in controller.stateUpdates {
                 guard !Task.isCancelled else { break }
                 stateStream.continuation.yield(state)
+                events.continuation.yield(.state(state))
             }
             stateStream.continuation.finish()
         }
 
         do {
             try await controller.start()
-            let observedRecords = try await recordsUntilDone(records.stream)
-            switch stopBehavior {
-            case .guestPowerOff:
-                break
-            case .requestPowerButton:
-                try await controller.requestGuestStop()
-            case .forced:
-                try await controller.stop()
-            }
-
-            let stateTimeout: Duration =
-                stopBehavior == .requestPowerButton ? .seconds(10) : .seconds(60)
-            let observedStates = try await statesThroughGuestStop(
-                stateStream.stream,
-                timeout: stateTimeout
-            )
-            if stopBehavior == .requestPowerButton {
-                XCTAssertEqual(
-                    observedStates,
-                    [.stopped, .starting, .running, .stopping, .stopped]
+            let observedRecords: [TestGuestRecord]
+            let observedStates: [VMState]
+            let rebootObservation: RebootObservation?
+            if stopBehavior == .observeGuestReboot {
+                let observation = try await observeGuestReboot(
+                    events: events.stream,
+                    continuation: events.continuation
                 )
+                observedRecords = observation.records
+                rebootObservation = observation.outcome
+
+                switch observation.outcome {
+                case .guestRestarted, .noRestartObserved:
+                    let state = await controller.state
+                    if state == .running || state == .paused {
+                        try await controller.stop()
+                    }
+                    observedStates = try await statesThroughGuestStop(
+                        stateStream.stream,
+                        timeout: .seconds(10)
+                    )
+                case .guestDidStop:
+                    observedStates = try await statesThroughGuestStop(
+                        stateStream.stream,
+                        timeout: .seconds(10)
+                    )
+                }
+            } else {
+                observedRecords = try await recordsUntilDone(records.stream)
+                rebootObservation = nil
+                switch stopBehavior {
+                case .guestPowerOff:
+                    break
+                case .requestPowerButton:
+                    try await controller.requestGuestStop()
+                case .forced:
+                    try await controller.stop()
+                case .observeGuestReboot:
+                    preconditionFailure("Reboot observation is handled above.")
+                }
+
+                let stateTimeout: Duration =
+                    stopBehavior == .requestPowerButton ? .seconds(10) : .seconds(60)
+                observedStates = try await statesThroughGuestStop(
+                    stateStream.stream,
+                    timeout: stateTimeout
+                )
+                if stopBehavior == .requestPowerButton {
+                    XCTAssertEqual(
+                        observedStates,
+                        [.stopped, .starting, .running, .stopping, .stopped]
+                    )
+                }
             }
+            events.continuation.finish()
             await waitForConsoleTask(parserTask)
             await waitForConsoleTask(captureTask)
             stateTask.cancel()
@@ -205,8 +273,13 @@ enum LinuxGuestHarness {
                 tailOmittedByteCount: tailCaptureByteStream.droppedByteCount,
                 to: testCase
             )
-            return RunResult(records: observedRecords, states: observedStates)
+            return RunResult(
+                records: observedRecords,
+                states: observedStates,
+                rebootObservation: rebootObservation
+            )
         } catch {
+            events.continuation.finish()
             await cleanup(controller)
             stateTask.cancel()
             await stateTask.value
@@ -607,6 +680,104 @@ enum LinuxGuestHarness {
         }
     }
 
+    private static func statesThroughTerminalState(
+        _ stream: AsyncStream<VMState>,
+        timeout: Duration
+    ) async throws -> [VMState] {
+        try await withThrowingTaskGroup(of: [VMState].self) { group in
+            group.addTask {
+                var observed: [VMState] = []
+                var sawRunning = false
+                for await state in stream {
+                    observed.append(state)
+                    if state == .running {
+                        sawRunning = true
+                    }
+                    if sawRunning {
+                        if state == .stopped {
+                            return observed
+                        }
+                        if case .failed = state {
+                            return observed
+                        }
+                    }
+                }
+                throw HarnessFailure.consoleEnded
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw HarnessFailure.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw HarnessFailure.consoleEnded
+            }
+            return result
+        }
+    }
+
+    static func observeGuestReboot(
+        events: AsyncStream<HarnessEvent>,
+        continuation: AsyncStream<HarnessEvent>.Continuation
+    ) async throws -> (records: [TestGuestRecord], outcome: RebootObservation) {
+        var records: [TestGuestRecord] = []
+        var iterator = events.makeAsyncIterator()
+        var didSeeRebootMarker = false
+        var sawRunning = false
+        var timeoutTask = Task {
+            try? await Task.sleep(for: .seconds(60))
+            guard !Task.isCancelled else { return }
+            continuation.yield(.rebootProbeTimedOut)
+        }
+        defer { timeoutTask.cancel() }
+
+        while let event = await iterator.next() {
+            switch event {
+            case .record(let record):
+                records.append(record)
+                if case .check(name: "rng-reboot", result: .ok, detail: _) = record {
+                    didSeeRebootMarker = true
+                    timeoutTask.cancel()
+                    timeoutTask = Task {
+                        try? await Task.sleep(for: .seconds(15))
+                        guard !Task.isCancelled else { return }
+                        continuation.yield(.rebootProbeTimedOut)
+                    }
+                } else if didSeeRebootMarker, record == .bootOK {
+                    return (records, .guestRestarted)
+                } else if case .check(
+                    name: let name,
+                    result: .fail,
+                    detail: let detail
+                ) = record {
+                    throw HarnessFailure.guestCheckFailed(name: name, detail: detail)
+                } else if record == .done {
+                    if didSeeRebootMarker {
+                        return (records, .noRestartObserved)
+                    }
+                    throw HarnessFailure.guestFinishedBeforeRestartMarker
+                }
+            case .state(let state):
+                if state == .running {
+                    sawRunning = true
+                } else if case .failed = state {
+                    throw HarnessFailure.guestVMFailedDuringRebootObservation
+                } else if sawRunning, state == .stopped {
+                    if didSeeRebootMarker {
+                        return (records, .guestDidStop)
+                    }
+                    throw HarnessFailure.guestStoppedBeforeRestartMarker
+                }
+            case .rebootProbeTimedOut:
+                if didSeeRebootMarker {
+                    return (records, .noRestartObserved)
+                }
+                throw HarnessFailure.timedOut
+            }
+        }
+        throw HarnessFailure.consoleEnded
+    }
+
     private static func waitForConsoleTask(_ task: Task<Void, Never>) async {
         let didFinish = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -656,6 +827,7 @@ enum LinuxGuestHarness {
         attachmentData.append(snapshot.bytes)
         let attachment = XCTAttachment(data: attachmentData, uniformTypeIdentifier: "public.plain-text")
         attachment.name = "Linux test guest hvc0 console"
+        attachment.lifetime = .keepAlways
         testCase.add(attachment)
     }
 }

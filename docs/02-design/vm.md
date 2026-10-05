@@ -181,8 +181,15 @@ Apple does not document the order in which VZ assigns PCI functions to serial po
 
 Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
 
-- **Guest → host:** the guest writes into the pipe's write end. `ConsoleChannel` reads the read end with `DispatchIO` and publishes an `AsyncStream<Data>`.
+- **Guest → host:** the guest writes into the pipe's write end. `ConsoleChannel` reads the nonblocking read end with `DispatchSourceRead`, caps normal readiness work at 1 MiB per callback, and publishes an `AsyncStream<Data>`.
 - **Host → guest:** a second pipe. For `.systemConsole` and `.service` ports the host may write. For `.log` and `.silent` ports the host never writes and keeps the write end open, so guest reads block instead of seeing EOF.
+
+Host input writes do not hold the channel lifecycle lock while waiting for pipe
+capacity. Detaching a channel rejects new writes, closes the guest-readable end
+to release any blocked host writer, waits for admitted writes to finish, and
+then closes the remaining pipe endpoints. The host input descriptor suppresses
+`SIGPIPE` so a concurrent guest shutdown becomes a typed write failure instead
+of terminating the host process.
 
 `ConsoleChannel` publishes chunks of at most 64 KiB through a bounded buffer of
 64 chunks per subscriber. The default policy preserves the oldest queued chunks;
@@ -194,9 +201,17 @@ test records and the newest policy for its bounded 4 MiB failure attachment,
 which also includes both stream loss counts. Consumers that need the same
 output subscribe before the guest starts; a stream created before the first
 subscriber receives the buffered prefix. After the VZ driver releases the VM
-on its queue, the channel closes the guest-output writer and lets `DispatchIO`
-drain the pipe to EOF before ending the stream. Each channel is bound to its
-VM's serial queue and cannot be attached again after detachment.
+on its queue, the channel closes the guest-output writer and lets the read
+source drain the pipe to EOF before ending the stream. A stream drain barrier
+runs on the read queue after one bounded failure snapshot: at most 4 MiB and
+50 ms, stopping earlier at `EAGAIN`. The log subscription keeps its 64-chunk
+data limit plus one reserved control slot for the marker, so a full data buffer
+cannot reject or displace it. A waiter arriving after an earlier marker was
+queued waits for that marker and then gets a fresh snapshot and marker of its
+own. This keeps a continuous guest writer from delaying failure publication
+indefinitely; later bytes continue through normal read callbacks and the
+periodic log sync. Each channel is bound to its VM's serial queue and cannot be
+attached again after detachment.
 
 | Role | Guest → host data goes to | Host writes |
 |---|---|---|
@@ -207,10 +222,12 @@ VM's serial queue and cannot be attached again after detachment.
 
 ### 6.4 `ConsoleLogWriter`
 
-- One line per record, prefixed with wall-clock time (ISO 8601, ms) and host monotonic time since `VM_START`.
-- Rotation at 20 MiB, 5 generations (`console.log`, `console.1.log`, …).
-- Also writes a per-boot copy `vm/boot-<timestamp>.log`; the last 5 boots are kept.
-- Buffered writes are flushed and `fsync`ed every 250 ms or 64 KiB, whichever comes first, and on `VMState.failed`. Serial logs must survive a VM or host-process crash (NFR-REL-05).
+- A dedicated bounded `ConsoleChannel` subscription feeds the writer asynchronously, so disk I/O does not run on the pipe reader. If the writer subscription falls behind, it counts dropped bytes and reports an incomplete log through `vm.consoleWriter`.
+- Each record is prefixed with wall-clock time (ISO 8601, milliseconds) and host monotonic time since `VM_START`: `yyyy-MM-dd'T'HH:mm:ss.SSSZ +<seconds>.<milliseconds> `. A partial line is terminated and written at the next 250 ms flush; subsequent bytes start a new record.
+- Rotation at 20 MiB keeps five generations (`console.log`, `console.1.log`, …, `console.4.log`).
+- Also writes a per-boot copy `vm/boot-<yyyyMMdd'T'HHmmss'Z'>.log`; the newest five boots are kept.
+- Buffered writes are flushed and `fsync`ed every 250 ms or 64 KiB, whichever comes first, and when the VM fails or its console stream closes during stop/reset. Before publishing `.failed`, the controller performs the bounded read-queue snapshot, waits for all bytes yielded to the log subscription through its ordered barrier, then flushes and synchronizes both files. Serial logs must survive a VM or host-process crash (NFR-REL-05).
+- The `vm/` directory is mode `0700`; current, rotated, and per-boot log files are mode `0600`.
 - Invalid UTF-8 is written as-is (the file is bytes). The os_log mirror escapes it.
 - Never parses or redacts. Redaction happens only when a diagnostics bundle is built ([diagnostics.md](diagnostics.md) §6).
 
@@ -369,7 +386,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 - Subsystem `io.apkrun.vm`, categories `lifecycle`, `config`, `console`, `vsock`, `network`, and `virtio` (VirtioDeviceCore: `DRIVER_OK`, notifications, resets).
 - Every transition is logged with the operation ID that caused it.
 - `PerfMarker.vmStart` at `start()`. Other boot markers come from RuntimeCore ([diagnostics.md](diagnostics.md) §4).
-- Health (`HealthCheck` in DiagnosticsCore): `vm.state`, `vm.network` (warning `vm.networkAttachmentLost` after a disconnect), `vm.consoleWriter` (errors while writing logs: warning `vm.consoleLogWriteFailed`), `vm.virtualizationSupported`.
+- Health (`HealthCheck` in DiagnosticsCore): `vm.state`, `vm.network` (warning `vm.networkAttachmentLost` after a disconnect), `vm.consoleWriter` (write errors or dropped log bytes: warning `vm.consoleLogWriteFailed`), `vm.virtualizationSupported`.
 
 ## 15. Tests
 
@@ -381,6 +398,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | T1 | the disk rules of §3 with real files and permissions | #005 |
 | T1 | `VsockConnection` over a `socketpair` | #007 |
 | T2 | Linux test guest: boot + console marker | #003, #004 |
+| T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
 | T2 | block read-only/read-write | #005 |
 | T2 | network through a host-local server | #006 |
 | T2 | vsock echo/timeout/disconnect | #007 |
@@ -414,7 +432,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
 | `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
-| Serial port numbering with three ports | #004 | pending |
+| Serial port numbering with three ports | #004 | pending: IntegrationTests builds for testing with signing disabled, but VM execution has not run because the required local signing settings are unavailable |
 | Read-only disks are read-only in the guest | #005 | pending |
 | NAT network: DHCP lease and a host-local HTTP fetch | #006 | pending |
 | vsock echo, timeout, and disconnect detection | #007 | pending |

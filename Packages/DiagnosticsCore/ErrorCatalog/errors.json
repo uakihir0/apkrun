@@ -201,6 +201,25 @@
       }
     },
     {
+      "code": "vm.consoleLogWriteFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't write Android's console log."
+      },
+      "remediation": {
+        "en": "Check the free disk space. Settings → Storage shows what APKRun uses."
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "consoleLogWriteFailed",
+        "when": "writing or synchronizing a VM serial console log failed",
+        "raisedBy": "ConsoleLogWriter",
+        "ref": "§14"
+      }
+    },
+    {
       "code": "vm.cpuCountOutOfRange",
       "parameters": [
         "requested",
@@ -896,6 +915,88 @@
       }
     },
     {
+      "code": "runtime.devConsoleGuestFailed",
+      "parameters": [],
+      "message": {
+        "en": "The Linux guest failed during the interactive console session.",
+        "ja": "対話コンソールの使用中に Linux ゲストで障害が発生しました。"
+      },
+      "remediation": {
+        "en": "Inspect the VM console log and run apkrun doctor for the subsystem health checks.",
+        "ja": "VM コンソールログを確認し、apkrun doctor でサブシステムの状態を調べてください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devConsoleGuestFailed",
+        "when": "the Linux VM enters its failed state during `apkrun dev console`",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devConsoleInputFailed",
+      "parameters": [],
+      "message": {
+        "en": "Console input could not be delivered during the interactive session.",
+        "ja": "対話コンソールの使用中に入力をゲストへ送信できませんでした。"
+      },
+      "remediation": {
+        "en": "Check the terminal and VM console log, then run the command again.",
+        "ja": "ターミナルと VM コンソールログを確認してから、コマンドをもう一度実行してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devConsoleInputFailed",
+        "when": "terminal input cannot be read or delivered to the guest during `apkrun dev console`",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devConsoleOutputDropped",
+      "parameters": [
+        "bytes"
+      ],
+      "message": {
+        "en": "The interactive console dropped at least {bytes} bytes, so terminal output is incomplete.",
+        "ja": "対話コンソールで少なくとも {bytes} バイトが失われたため、端末出力は不完全です。"
+      },
+      "remediation": {
+        "en": "Inspect the VM console log and reduce guest output before repeating the session.",
+        "ja": "VM コンソールログを確認し、ゲスト出力を減らしてから再実行してください。"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "case": "devConsoleOutputDropped",
+        "when": "the bounded raw console stream drops bytes or some buffered bytes do not reach the terminal",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devConsoleCleanupPending",
+      "parameters": [],
+      "message": {
+        "en": "APKRun could not release the Linux VM. It is keeping the instance lock while cleanup continues.",
+        "ja": "Linux VM を解放できなかったため、後処理が続く間インスタンスロックを保持しています。"
+      },
+      "remediation": {
+        "en": "The terminal has been restored. Wait for cleanup to finish before starting another VM.",
+        "ja": "端末設定は復元されました。後処理が終わるまで別の VM を起動しないでください。"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "case": "devConsoleCleanupPending",
+        "when": "both graceful and forced VM cleanup fail during `apkrun dev console`",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
       "code": "runtime.devLinuxTimedOut",
       "parameters": [
         "seconds"
@@ -1253,6 +1354,26 @@
         "when": "swift-argument-parser reports an unknown command or option, a missing argument, or another usage error",
         "raisedBy": "CLI",
         "ref": "§3.3"
+      }
+    },
+    {
+      "code": "cli.devConsoleRequiresTerminal",
+      "parameters": [],
+      "message": {
+        "en": "`apkrun dev console` requires an interactive terminal.",
+        "ja": "`apkrun dev console` の実行には対話型ターミナルが必要です。"
+      },
+      "remediation": {
+        "en": "Run the command from Terminal or another interactive terminal application.",
+        "ja": "ターミナルまたは別の対話型ターミナルアプリからコマンドを実行してください。"
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "case": "devConsoleRequiresTerminal",
+        "when": "`apkrun dev console` is run without terminal input and output",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
       }
     }
   ]

@@ -12,6 +12,8 @@ public actor VMController {
     private let forcedStopTimeout: Duration
     private let logger: APKLogger
     private let consoleStore: ConsoleChannelStore
+    private let consoleLogFileSystem: any ConsoleLogFileSystem
+    private let consoleLogClock: any ConsoleLogClock
     private let stateContinuation: AsyncStream<VMState>.Continuation
 
     /// The current explicit state of the VM.
@@ -25,6 +27,11 @@ public actor VMController {
     package private(set) var vmGeneration: UInt64 = 0
     private var activePublicOperation: UUID?
     private var driver: (any VirtualMachineDriver)?
+    private var consoleLogWriter: ConsoleLogWriter?
+    private var consoleLogByteStream: ConsoleByteStream?
+    private var consoleLogTask: Task<Void, Never>?
+    private var lastConsoleLogWriterFailed = false
+    private var lastConsoleLogWriterDroppedByteCount: UInt64 = 0
     private var eventTask: Task<Void, Never>?
     private var eventsDuringStart: [VirtualMachineEvent] = []
     package private(set) var networkAttachmentError: VZErrorInfo?
@@ -54,7 +61,9 @@ public actor VMController {
         diagnostics: DiagnosticsContext,
         queue: VMQueue,
         driverFactory: any VirtualMachineDriverFactory,
-        forcedStopTimeout: Duration = .seconds(10)
+        forcedStopTimeout: Duration = .seconds(10),
+        consoleLogFileSystem: any ConsoleLogFileSystem = SystemConsoleLogFileSystem(),
+        consoleLogClock: any ConsoleLogClock = SystemConsoleLogClock()
     ) {
         precondition(forcedStopTimeout > .zero)
         validatedDefinition = definition
@@ -62,6 +71,8 @@ public actor VMController {
         self.queue = queue
         self.driverFactory = driverFactory
         self.forcedStopTimeout = forcedStopTimeout
+        self.consoleLogFileSystem = consoleLogFileSystem
+        self.consoleLogClock = consoleLogClock
         logger = APKLogger(category: VMLogCategory.lifecycle, sink: diagnostics.logSink)
 
         let stateStream = AsyncStream.makeStream(
@@ -131,6 +142,24 @@ public actor VMController {
         return channel
     }
 
+    /// Whether the current VM console writer has reported a persistence failure.
+    public func consoleLogWriterHasFailed() async -> Bool {
+        guard let consoleLogWriter else { return lastConsoleLogWriterFailed }
+        return await consoleLogWriter.didFail
+    }
+
+    /// The number of console bytes that could not be persisted.
+    public func consoleLogWriterDroppedByteCount() async -> UInt64 {
+        guard let consoleLogWriter else { return lastConsoleLogWriterDroppedByteCount }
+        return await consoleLogWriter.droppedByteCount
+    }
+
+    /// Waits for VM release and for persisted console output to reach its final sync.
+    public func waitForConsoleLogDrain() async {
+        await waitForResourceReleaseIfNeeded()
+        await consoleLogTask?.value
+    }
+
     private func startWithinOperation() async throws(VMFailure) {
         await waitForResourceReleaseIfNeeded()
         let operationID = try beginPublicOperation(
@@ -141,7 +170,9 @@ public actor VMController {
 
         vmGeneration &+= 1
         let generation = vmGeneration
-        try transition(to: .starting, source: .publicRequest)
+        lastConsoleLogWriterFailed = false
+        lastConsoleLogWriterDroppedByteCount = 0
+        try await transition(to: .starting, source: .publicRequest)
         Perf.mark(.vmStart, timeline: diagnostics.perfTimeline)
 
         if hasAttemptedStart {
@@ -166,19 +197,20 @@ public actor VMController {
             )
         } catch let error {
             let failure = VMFailure.startFailed(underlying: error)
-            try transition(to: .failed(failure), source: .internalEvent)
+            try await transition(to: .failed(failure), source: .internalEvent)
             logFailure(failure, description: error.description)
             throw failure
         }
 
         driver = newDriver
         observe(newDriver, generation: generation)
+        await startConsoleLogging()
         do {
             try await newDriver.start()
         } catch let error {
             let failure = VMFailure.startFailed(underlying: error)
             if state == .starting {
-                try transition(to: .failed(failure), source: .internalEvent)
+                try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
             throw failure
@@ -188,7 +220,7 @@ public actor VMController {
             throw failure
         }
         if state == .starting {
-            try transition(to: .running, source: .internalEvent)
+            try await transition(to: .running, source: .internalEvent)
         }
 
         let pendingEvents = eventsDuringStart
@@ -217,7 +249,7 @@ public actor VMController {
         } catch let error {
             let failure = VMFailure.pauseFailed(underlying: error)
             if state == .running {
-                try transition(to: .failed(failure), source: .internalEvent)
+                try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
             throw failure
@@ -229,7 +261,7 @@ public actor VMController {
             }
             throw VMFailure.invalidTransition(from: state, to: .paused)
         }
-        try transition(to: .paused, source: .internalEvent)
+        try await transition(to: .paused, source: .internalEvent)
     }
 
     private func resumeWithinOperation() async throws(VMFailure) {
@@ -248,7 +280,7 @@ public actor VMController {
         } catch let error {
             let failure = VMFailure.resumeFailed(underlying: error)
             if state == .paused {
-                try transition(to: .failed(failure), source: .internalEvent)
+                try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
             throw failure
@@ -260,7 +292,7 @@ public actor VMController {
             }
             throw VMFailure.invalidTransition(from: state, to: .running)
         }
-        try transition(to: .running, source: .internalEvent)
+        try await transition(to: .running, source: .internalEvent)
     }
 
     private func stopWithinOperation() async throws(VMFailure) {
@@ -271,7 +303,7 @@ public actor VMController {
         defer { endPublicOperation(operationID) }
 
         if state != .stopping {
-            try transition(to: .stopping, source: .publicRequest)
+            try await transition(to: .stopping, source: .publicRequest)
         }
         guard let driver else {
             assertionFailure("A stopping VM must have a driver.")
@@ -311,8 +343,11 @@ public actor VMController {
         case .timedOut:
             if state == .stopping {
                 let failure = VMFailure.stopTimedOut
-                try transition(to: .failed(failure), source: .internalEvent)
-                throw failure
+                try await transition(to: .failed(failure), source: .internalEvent)
+                if case .failed(let activeFailure) = state {
+                    throw activeFailure
+                }
+                return
             }
             if case .failed(let failure) = state {
                 throw failure
@@ -322,7 +357,7 @@ public actor VMController {
                 if !stopOperationTasks.isEmpty, !(await waitForStopOperationsToDrain()) {
                     let failure = VMFailure.stopTimedOut
                     if state == .stopping {
-                        try transition(to: .failed(failure), source: .internalEvent)
+                        try await transition(to: .failed(failure), source: .internalEvent)
                     }
                     logFailure(
                         failure,
@@ -334,7 +369,7 @@ public actor VMController {
             if state == .stopping {
                 await releaseResources()
                 if state == .stopping {
-                    try transition(to: .stopped, source: .internalEvent)
+                    try await transition(to: .stopped, source: .internalEvent)
                 }
             }
             if case .failed(let failure) = state {
@@ -343,7 +378,7 @@ public actor VMController {
         case .completed(.failed(let error)):
             if state == .stopping {
                 let failure = VMFailure.stoppedWithError(underlying: error)
-                try transition(to: .failed(failure), source: .internalEvent)
+                try await transition(to: .failed(failure), source: .internalEvent)
                 logFailure(failure, description: error.description)
                 throw failure
             }
@@ -359,7 +394,7 @@ public actor VMController {
             allows: { $0 == .running || $0 == .paused }
         )
         defer { endPublicOperation(operationID) }
-        try transition(to: .stopping, source: .publicRequest)
+        try await transition(to: .stopping, source: .publicRequest)
         guard let driver else {
             assertionFailure("A running VM must have a driver.")
             throw VMFailure.invalidTransition(from: state, to: .stopped)
@@ -370,7 +405,7 @@ public actor VMController {
         } catch let error {
             let failure = VMFailure.stoppedWithError(underlying: error)
             if state == .stopping {
-                try transition(to: .failed(failure), source: .internalEvent)
+                try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
             throw failure
@@ -401,7 +436,7 @@ public actor VMController {
         stopOperationTasks.removeAll()
         stopCompletion = nil
         await releaseResources()
-        try transition(to: .stopped, source: .internalEvent)
+        try await transition(to: .stopped, source: .internalEvent)
     }
 
     package func receive(_ event: VirtualMachineEvent, generation: UInt64) async {
@@ -426,8 +461,10 @@ public actor VMController {
                 await completion.gate.complete(.completed(.succeeded))
                 return
             }
-            try? transition(to: .stopped, source: .internalEvent)
-            await releaseResources()
+            let release = beginResourceRelease()
+            try? await transition(to: .stopped, source: .internalEvent)
+            await release.task.value
+            await finishResourceRelease(id: release.id)
 
         case .didStopWithError(let error):
             guard state == .running || state == .paused || state == .stopping else {
@@ -437,7 +474,7 @@ public actor VMController {
                 await completion.gate.complete(.completed(.failed(error)))
             }
             let failure = VMFailure.stoppedWithError(underlying: error)
-            try? transition(to: .failed(failure), source: .internalEvent)
+            try? await transition(to: .failed(failure), source: .internalEvent)
             logFailure(failure, description: error.description)
 
         case .networkAttachmentDisconnected(let error):
@@ -465,31 +502,41 @@ public actor VMController {
     }
 
     private func releaseResources() async {
-        let releaseID: UUID
+        let release = beginResourceRelease()
+        await release.task.value
+        await finishResourceRelease(id: release.id)
+    }
+
+    private func beginResourceRelease() -> (id: UUID, task: Task<Void, Never>) {
         if let resourceRelease {
-            releaseID = resourceRelease.id
-            await resourceRelease.task.value
-            finishResourceRelease(id: releaseID)
-            return
+            return resourceRelease
         }
 
-        releaseID = UUID()
+        let releaseID = UUID()
         let driver = self.driver
         let channels = consoleChannels
+        let consoleLogTask = self.consoleLogTask
         let task = Task {
             await driver?.release()
             for channel in channels {
                 channel.close()
             }
+            await consoleLogTask?.value
         }
         resourceRelease = (releaseID, task)
-        await task.value
-        finishResourceRelease(id: releaseID)
+        return (releaseID, task)
     }
 
-    private func finishResourceRelease(id releaseID: UUID) {
+    private func finishResourceRelease(id releaseID: UUID) async {
         guard resourceRelease?.id == releaseID else { return }
+        if let consoleLogWriter {
+            lastConsoleLogWriterFailed = await consoleLogWriter.didFail
+            lastConsoleLogWriterDroppedByteCount = await consoleLogWriter.droppedByteCount
+        }
         self.driver = nil
+        consoleLogTask = nil
+        consoleLogWriter = nil
+        consoleLogByteStream = nil
         eventTask?.cancel()
         eventTask = nil
         resourceRelease = nil
@@ -498,7 +545,7 @@ public actor VMController {
     private func waitForResourceReleaseIfNeeded() async {
         guard let resourceRelease else { return }
         await resourceRelease.task.value
-        finishResourceRelease(id: resourceRelease.id)
+        await finishResourceRelease(id: resourceRelease.id)
     }
 
     private func stopOperationDidFinish(_ identifier: UUID) async {
@@ -552,8 +599,27 @@ public actor VMController {
     private func transition(
         to nextState: VMState,
         source: TransitionSource
-    ) throws(VMFailure) {
+    ) async throws(VMFailure) {
+        if case .failed = nextState {
+            let systemConsole = consoleChannels.first(where: { $0.role == .systemConsole })
+            if let systemConsole, let consoleLogByteStream {
+                await systemConsole.drainPendingGuestOutputAndWait(for: consoleLogByteStream)
+            } else {
+                await consoleLogByteStream?.waitForDrain()
+            }
+            if let consoleLogWriter {
+                await consoleLogWriter.flush()
+            }
+        }
         guard VMStateTransitions.isAllowed(from: state, to: nextState) else {
+            if case .failed = nextState {
+                if state == .stopped {
+                    return
+                }
+                if case .failed = state {
+                    return
+                }
+            }
             let failure = VMFailure.invalidTransition(from: state, to: nextState)
             logger.fault(
                 "Rejected VM state transition from \(state.logLabel, .public) to \(nextState.logLabel, .public)",
@@ -585,6 +651,37 @@ public actor VMController {
         queue: VMQueue
     ) -> [ConsoleChannel] {
         ports.map { ConsoleChannel(role: $0.role, vmQueue: queue) }
+    }
+
+    private func startConsoleLogging() async {
+        guard let channel = consoleChannels.first(where: { $0.role == .systemConsole }) else {
+            return
+        }
+        let writer = ConsoleLogWriter(
+            directoryURL: diagnostics.paths.vmLogsDirectory,
+            logger: APKLogger(category: VMLogCategory.console, sink: diagnostics.logSink),
+            fileSystem: consoleLogFileSystem,
+            clock: consoleLogClock
+        )
+        let byteStream = channel.makeLogByteStream()
+        await writer.start()
+        consoleLogWriter = writer
+        consoleLogByteStream = byteStream
+        consoleLogTask = Task {
+            for await bytes in byteStream.stream {
+                if bytes.isEmpty {
+                    await writer.recordStreamDroppedBytes(byteStream.droppedByteCount)
+                    byteStream.acknowledgeDrainBarrier()
+                    continue
+                }
+                await writer.append(bytes)
+                await writer.recordStreamDroppedBytes(byteStream.droppedByteCount)
+                byteStream.acknowledgeConsumedBytes(bytes.count)
+            }
+            await writer.recordStreamDroppedBytes(byteStream.droppedByteCount)
+            await writer.finish()
+            byteStream.acknowledgeStreamEnd()
+        }
     }
 }
 

@@ -14,17 +14,19 @@ import Testing
             "diskNotReadable", "diskNotWritable", "diskSyncModeTestOnly", "diskIdentifierInvalid",
             "missingSystemConsole", "invalidMACAddress", "machineIdentifierInvalid",
             "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
-            "configurationInvalid",
+            "configurationInvalid", "consoleLogWriteFailed",
         ].map { "vm.\($0)" }
             + [
                 "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",
                 "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
-                "malformedReply", "versionSkew", "invalidArguments",
+                "malformedReply", "versionSkew", "invalidArguments", "devConsoleRequiresTerminal",
             ].map { "cli.\($0)" }
             + [
                 "instanceLocked", "instanceLockFailed", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
+                "devConsoleGuestFailed", "devConsoleInputFailed",
+                "devConsoleOutputDropped", "devConsoleCleanupPending",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

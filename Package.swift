@@ -269,6 +269,11 @@ let package = Package(
                 .copy("Fixtures/kernel-headers")
             ]
         ),
+        .testTarget(
+            name: "VirtualMachineCoreSystemTests",
+            dependencies: ["DiagnosticsCore", "VirtualMachineCore"],
+            path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests"
+        ),
         .target(
             name: "VirtualMachineCoreTestSupport",
             dependencies: ["DiagnosticsCore", "VirtualMachineCore", "VirtioDeviceCore"],

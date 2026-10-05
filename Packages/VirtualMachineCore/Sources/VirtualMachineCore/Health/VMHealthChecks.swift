@@ -18,6 +18,11 @@ public enum VMHealthChecks {
         try await registry.register(
             VMStateHealthCheck(state: { await controller.state })
         )
+        try await registry.register(
+            VMConsoleWriterHealthCheck(hasFailed: {
+                await controller.consoleLogWriterHasFailed()
+            })
+        )
     }
 }
 
@@ -80,6 +85,34 @@ private struct VMStateHealthCheck: HealthCheck {
             title: title,
             detail: "The virtual machine failed.",
             error: errorInfo(for: failure),
+            measuredAt: context.clock.now
+        )
+    }
+}
+
+private struct VMConsoleWriterHealthCheck: HealthCheck {
+    let hasFailed: @Sendable () async -> Bool
+
+    var id: HealthCheckID { "vm.consoleWriter" }
+    var group: HealthGroup { .virtualization }
+    var requirement: HealthRequirement { .daemon }
+    var cost: HealthCost { .quick }
+    var title: LocalizedText {
+        LocalizedText(key: id, fallback: "VM console log")
+    }
+
+    func run(_ context: HealthContext) async -> HealthResult {
+        let failed = await hasFailed()
+        let failure = VMFailure.consoleLogWriteFailed
+        return HealthResult(
+            id: id,
+            group: group,
+            state: failed ? .warning : .pass,
+            title: title,
+            detail: failed
+                ? "The guest console log could not be fully saved."
+                : "The guest console log writer is available.",
+            error: failed ? errorInfo(for: failure) : nil,
             measuredAt: context.clock.now
         )
     }

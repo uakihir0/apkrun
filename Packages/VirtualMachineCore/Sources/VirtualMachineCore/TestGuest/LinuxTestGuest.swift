@@ -20,6 +20,14 @@ public enum LinuxTestGuest {
             usesEntropyDevice
             ? (entropyTestDevice ?? EntropyTestDevice(seed: 0))
             : nil
+        let consolePorts: [ConsolePortDefinition] =
+            tests.contains("ports")
+            ? [
+                ConsolePortDefinition(role: .systemConsole),
+                ConsolePortDefinition(role: .service(name: "test-1")),
+                ConsolePortDefinition(role: .service(name: "test-2")),
+            ]
+            : [ConsolePortDefinition(role: .systemConsole)]
         let commandLine =
             ([
                 "console=hvc0",
@@ -40,7 +48,7 @@ public enum LinuxTestGuest {
             disks: [],
             network: nil,
             vsockEnabled: false,
-            consolePorts: [ConsolePortDefinition(role: .systemConsole)],
+            consolePorts: consolePorts,
             entropy: !usesEntropyDevice,
             customDevices: customDevices + (entropyDevice.map { [$0 as any VirtioDeviceModel] } ?? [])
         )

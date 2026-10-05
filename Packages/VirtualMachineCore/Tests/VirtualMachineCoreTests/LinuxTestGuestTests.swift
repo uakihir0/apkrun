@@ -28,7 +28,14 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
     #expect(definition.disks.isEmpty)
     #expect(definition.network == nil)
     #expect(!definition.vsockEnabled)
-    #expect(definition.consolePorts == [ConsolePortDefinition(role: .systemConsole)])
+    #expect(
+        definition.consolePorts
+            == [
+                ConsolePortDefinition(role: .systemConsole),
+                ConsolePortDefinition(role: .service(name: "test-1")),
+                ConsolePortDefinition(role: .service(name: "test-2")),
+            ]
+    )
     #expect(definition.entropy)
 }
 

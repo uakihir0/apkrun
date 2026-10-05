@@ -124,6 +124,21 @@ if mode == "branch":
     component["commit"] = "main"
 elif mode == "short-commit":
     component["commit"] = "6a52f32"
+elif mode == "reference-non-source":
+    component["ships"] = "reference"
+elif mode == "reference-build-flags":
+    component["kind"] = "source"
+    component["ships"] = "reference"
+    component["buildFlags"] = ["-DREFERENCE_FIXTURE"]
+elif mode == "reference-patch":
+    component["kind"] = "source"
+    component["ships"] = "reference"
+    component["patches"] = ["swift-argument-parser/0001-reference.patch"]
+    patch_path = root / "ThirdParty/patches/swift-argument-parser/0001-reference.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text("reference fixture patch\n")
+elif mode == "unsupported-ships":
+    component["ships"] = "reference-only"
 elif mode == "missing-patch":
     component["patches"] = ["swift-argument-parser/0001-missing.patch"]
 elif mode == "pin-mismatch":
@@ -293,6 +308,22 @@ PY
 
 expect_pass "valid lock" "$fixture_root"
 expect_pass "repository lock" "$repo_root"
+
+reference_non_source_root="$(new_fixture reference-non-source)"
+mutate_lock "$reference_non_source_root" reference-non-source
+expect_fail "reference classification requires a source" "reference to be the sole ships value for a source component" "$reference_non_source_root"
+
+reference_build_flags_root="$(new_fixture reference-build-flags)"
+mutate_lock "$reference_build_flags_root" reference-build-flags
+expect_fail "reference entries reject build flags" "reference entries must not declare build flags or patches" "$reference_build_flags_root"
+
+reference_patch_root="$(new_fixture reference-patch)"
+mutate_lock "$reference_patch_root" reference-patch
+expect_fail "reference entries reject patches" "reference entries must not declare build flags or patches" "$reference_patch_root"
+
+unsupported_ships_root="$(new_fixture unsupported-ships)"
+mutate_lock "$unsupported_ships_root" unsupported-ships
+expect_fail "unsupported ships classification" "unsupported 'ships' value" "$unsupported_ships_root"
 
 branch_root="$(new_fixture branch-name)"
 mutate_lock "$branch_root" branch

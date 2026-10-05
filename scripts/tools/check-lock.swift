@@ -369,7 +369,7 @@ func check(root: URL) throws -> [String] {
     let allowedKinds: Set<String> = [
         "source", "prebuilt", "vendored", "swiftpm", "gradle", "cargo",
     ]
-    let allowedShips: Set<String> = ["app", "image", "tooling", "derived"]
+    let allowedShips: Set<String> = ["app", "image", "tooling", "derived", "reference"]
     let lowerHex40 = try NSRegularExpression(pattern: "^[0-9a-f]{40}\\z")
     let hex64 = try NSRegularExpression(pattern: "^[0-9a-fA-F]{64}\\z")
 
@@ -413,6 +413,11 @@ func check(root: URL) throws -> [String] {
         if ships.isEmpty || ships.contains(where: { !allowedShips.contains($0) }) {
             failures.append("\(lockURL.path): \(label) has an unsupported 'ships' value")
         }
+        if ships.contains("reference") && (kind != "source" || ships != ["reference"]) {
+            failures.append(
+                "\(lockURL.path): \(label) requires reference to be the sole ships value for a source component"
+            )
+        }
 
         let licenseFiles = arrayOfStrings(component["licenseFiles"]) ?? []
         if component["licenseFiles"] == nil || arrayOfStrings(component["licenseFiles"]) == nil {
@@ -439,12 +444,18 @@ func check(root: URL) throws -> [String] {
             }
         }
 
-        if arrayOfStrings(component["buildFlags"]) == nil {
+        let buildFlags = arrayOfStrings(component["buildFlags"]) ?? []
+        if component["buildFlags"] == nil || arrayOfStrings(component["buildFlags"]) == nil {
             failures.append("\(lockURL.path): \(label) requires a 'buildFlags' string array")
         }
         let patches = arrayOfStrings(component["patches"]) ?? []
         if component["patches"] == nil || arrayOfStrings(component["patches"]) == nil {
             failures.append("\(lockURL.path): \(label) requires a 'patches' string array")
+        }
+        if ships == ["reference"] && (!buildFlags.isEmpty || !patches.isEmpty) {
+            failures.append(
+                "\(lockURL.path): \(label) reference entries must not declare build flags or patches"
+            )
         }
         for patch in patches {
             guard safeRelativePath(patch), patch.hasPrefix("\(name)/") else {

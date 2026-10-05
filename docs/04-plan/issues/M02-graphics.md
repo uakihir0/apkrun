@@ -262,6 +262,7 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 ### Scope
 
 - Lock entries with repository, commit, license, build flags, and local patches.
+- A `depot_tools` source pin in the `virgl-runtime` group, so the ANGLE build helper revision participates in the cache identity.
 - Build scripts for ANGLE (Metal backend only), libepoxy, and virglrenderer.
 - The patches from #018, starting with `virglrenderer/0001-msaa-downgrade.patch` (§5.1).
 - The `GraphicsBridge` skeleton: `gb_renderer_create`, `gb_renderer_destroy`, `gb_renderer_metal_device`, `gb_capset_info`, and `gb_capset_fill`.
@@ -275,6 +276,7 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 ### Deliverables
 
 - The `angle`, `libepoxy`, and `virglrenderer` lock entries and their patches.
+- The pinned `depot_tools` build helper in the same lock group.
 - `ThirdParty/build/build-{angle,libepoxy,virglrenderer}.sh`, driven by `scripts/build-third-party.sh virgl-runtime`. The output goes to `ThirdParty/out/virgl-runtime/<lock hash>/`.
 - The `GraphicsBridge` C target with the skeleton functions of §5.2 and opaque handles only ([AGENTS.md](../../../AGENTS.md) §6.5).
 - The T1 renderer test.
@@ -285,9 +287,10 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 
 1. **Lock entries and patches.**
    - Add the three entries with the pins of §2.1, adjusted by #018.
+   - Pin `depot_tools` at `f70835271105ca56d2cd5382a0118152bc2bdeea` in the `virgl-runtime` group, with its BSD-3-Clause license and `ships: tooling`, so tool updates invalidate the same cache.
    - Add each patch as `ThirdParty/patches/<name>/NNNN-short-description.patch`, made with `git format-patch` against the pinned commit ([../../05-development/build-system.md](../../05-development/build-system.md) §6).
-   - Add `--apply` to `scripts/check-lock.sh`: after the sources are checked out at their pinned commits, it applies every listed patch with `git am` and fails on the first one that does not apply ([../../05-development/build-system.md](../../05-development/build-system.md) §3).
-   - Check: the lock-file schema check passes, and `scripts/check-lock.sh --apply` applies each patch to a clean checkout.
+   - Add `--apply` to `scripts/check-lock.sh`: after the build-group sources are checked out at their pinned commits, it applies every listed patch with `git am` to a root-level staging checkout and atomically publishes the verified result under `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/`. It skips `ships: reference` entries such as RiftVM. The command serializes its own runs, validates each full series before publishing any patched checkout, and leaves pinned source checkouts unchanged ([../../05-development/build-system.md](../../05-development/build-system.md) §3, §6).
+   - Check: the lock-file schema check passes; `scripts/check-lock.sh --apply` creates clean patched checkouts from exact pinned sources, leaves source checkouts unchanged on both success and failure, rejects redirected or modified inputs, and safely reuses an already-published patched checkout. If an unexpected staging failure occurs, it preserves the generated staging checkout and reports its last-known path; concurrent same-user moves can make that path stale.
 2. **Build scripts.**
    - Write the three scripts and the `virgl-runtime` target of `scripts/build-third-party.sh`. ANGLE builds with the Metal backend only.
    - The scripts read every pin and flag from the lock file. They never build from a moving branch.

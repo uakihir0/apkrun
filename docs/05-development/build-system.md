@@ -118,7 +118,7 @@ Each check is a script that CI runs in the `lint` job (§15) and that works loca
 | `scripts/check-launcher.sh` | the built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`, `lipo -archs` is `arm64`, and the minimum OS is 27.0 | #068 |
 | `scripts/check-todos.sh` | every `TODO` and `FIXME` carries an issue number (`TODO(#123): …`), NFR-DEV-04 | #062 |
 | `scripts/check-format.sh` | `swift format lint --strict`, ktfmt check, `cargo fmt --check`, `ruff format --check` ([coding-conventions.md](coding-conventions.md) §2) | #062 |
-| `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` against its schema, every patch listed exists, the Swift package pins match `Package.resolved` and `project.yml` (§6.1). With `--apply`, which the `third-party` job runs after it checks out the sources (§15.1), it also applies every patch | #062; `--apply` #020 |
+| `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` against its schema, every patch listed exists, the Swift package pins match `Package.resolved` and `project.yml` (§6.1). With `--apply`, which the `third-party` job runs against clean, pinned build sources before compiling them (§15.1), it also applies every patch | #062; `--apply` #020 |
 | `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #035 |
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. Exempt paths: `scripts/dev/`, `Tests/Compatibility/`, `Images/tools/reference/` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3) | #027 |
 | `scripts/check-compatibility-db.sh` | `Tests/Compatibility/database/compatibility.json` against `compatibility.schema.json` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10) | #090 |
@@ -240,6 +240,8 @@ The **lock hash** of a build group is the SHA-256 over its buildable lock entrie
 - Patches live in `ThirdParty/patches/<name>/NNNN-short-description.patch`, made with `git format-patch` against the pinned commit, applied in order with `git am`.
 - Each patch has a header that says why it exists and whether it was sent upstream. Patches carried from RiftVM keep its attribution ([legal-and-licensing.md](legal-and-licensing.md) §3).
 - A patch that no longer applies fails the build. It is never skipped.
+- `scripts/check-lock.sh --apply` serializes patch applications with an advisory lock under `ThirdParty/out/`. It requires every pinned source checkout to have the exact locked commit, no symlinked checkout path, in-checkout Git and shared Git metadata, no in-progress Git operation, no tracked-index flags, no tracked, untracked, or ignored working-tree changes, and a detached HEAD. Reference-only entries are skipped.
+- Git subprocesses ignore system and global configuration, disable command-based helpers such as fsmonitor and hooks, disable optional index writes, and reject configured clean/smudge filters and merge drivers. Git config includes are rejected before Git reads them. Lock and patch inputs are opened without following path symlinks, must be regular files, and are read into bounded snapshots; each patch snapshot is used for both preflight and application. Every patch series is first applied in a disposable clone, then applied to a random root-level staging directory opened before Git runs. The command opens output directories without following symlinks and atomically publishes the verified checkout with a directory-descriptor-relative rename at `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/`. It checks the output directory identities before and after publication and attempts to roll back if they changed. Directory descriptors pin inodes, not pathnames: a same-user process can still move the staging directory while Git runs or move a checkout between publication and rollback. Such out-of-band changes can redirect writes or make reported recovery paths stale, so rollback and diagnostics are best effort under concurrent same-user filesystem mutation. The pinned input checkouts remain unchanged during normal operation. The command never runs `git am --abort` or `git reset --hard`.
 
 ### 6.3 virglrenderer, libepoxy, ANGLE
 
@@ -254,7 +256,7 @@ scripts/build-third-party.sh virgl-runtime
 # → ThirdParty/out/virgl-runtime/<lock hash>/{libvirglrenderer.dylib, libepoxy.dylib, libEGL.dylib, libGLESv2.dylib}
 ```
 
-- The driver script calls `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh` in that order ([../02-design/graphics.md](../02-design/graphics.md) §5.1). Sources are fetched into `ThirdParty/out/src/<name>/<commit>/` and checked against the pinned commit.
+- The driver script calls `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh` in that order ([../02-design/graphics.md](../02-design/graphics.md) §5.1). Pinned source checkouts are fetched into `ThirdParty/out/src/<name>/<commit>/`; patched source checkouts are generated at `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/` and are the build inputs.
 - Entries with `ships: reference`, such as RiftVM, are validated as lock records but are not fetched, patched, or built by `scripts/build-third-party.sh` or `scripts/check-lock.sh --apply`.
 - The outputs are arm64 dylibs with `@rpath` install names, built for macOS 27.0. `apkrund` finds them through `@executable_path/../Frameworks/VirGLRuntime`.
 - ANGLE needs about 11 GB of checkout and build space. The output is cached by lock hash on developer machines and in CI, so ANGLE is rebuilt only when its pin, flags, patches, or build script change.
@@ -284,7 +286,7 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 | Sparkle 2 | swiftpm | app | exact version in `project.yml`; confirmed by #057 step 1 (R-23) |
 | Kotlin stdlib, kotlinx-coroutines, protobuf-javalite | gradle | image and app (`Resources/guest/`) | `Guest/gradle/libs.versions.toml`; the resolved versions are locked in `Guest/<module>/gradle.lockfile` (Gradle dependency locking, `./gradlew -p Guest dependencies --write-locks`) |
 | libc, log, android_logger crates | cargo | image | `Guest/vsockd/Cargo.lock`; the product build uses the same crates from AOSP `external/rust/crates` |
-| depot_tools | source | tooling | used only by the ANGLE build |
+| depot_tools (`f70835271105ca56d2cd5382a0118152bc2bdeea`) | source, pinned in `ThirdParty/ThirdParty.lock.json` | tooling | used only by the ANGLE build; in the `virgl-runtime` lock group so its revision changes the renderer cache key |
 
 ### 6.6 Caches
 
@@ -292,6 +294,7 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 |---|---|---|
 | `virgl-runtime` outputs | lock hash | `ThirdParty/out/virgl-runtime/<lock hash>/` locally, the runner's persistent cache in CI |
 | third-party sources | commit | `ThirdParty/out/src/` |
+| patched third-party sources | patch-set SHA-256 | `ThirdParty/out/patched-src/` |
 | pinned tools | version and hash | `build/tools/` |
 | Gradle | wrapper and catalog hash | `~/.gradle` |
 | Cuttlefish downloads | build ID and artifact hash | `Images/work/<buildId>/download/` |
@@ -646,7 +649,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
 | | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |
-| | | `third-party` | — | `xcode-27` for PRs; `apkrun-ci` on `main` | `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/check-lock.sh --apply`, `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
+| | | `third-party` | — | `xcode-27` for PRs; `apkrun-ci` on `main` | `scripts/check-lock.sh --apply` against clean, pinned sources, `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
 | | | `fuzz-short` | T1 | disposable T1 runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code the pull request changes (§15.2) |
 | `integration.yml` | matching pushes to `main`; manual dispatch from `main` | `linux-guest` | T2 | persistent `apkrun-lab`, trusted `main` only | suite LinuxGuest; exact path filter below; ≤ 15 min. Pull-request runs remain disabled until disposable lab capacity is provisioned |
 | | label `t2-android` or `run-t2` | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |

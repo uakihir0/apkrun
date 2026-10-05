@@ -74,6 +74,12 @@ fetch_component() {
 for component in \
     alpine-linux-virt \
     alpine-minirootfs \
+    alpine-e2fsprogs \
+    alpine-e2fsprogs-libs \
+    alpine-libblkid \
+    alpine-libcom-err \
+    alpine-libeconf \
+    alpine-libuuid \
     alpine-socat \
     alpine-libcrypto3 \
     alpine-libgpiod \

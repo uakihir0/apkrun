@@ -18,7 +18,7 @@ lock_file="$repo_root/ThirdParty/ThirdParty.lock.json"
 modules_list="$repo_root/Tests/Fixtures/linux/modules.list"
 init_script="$repo_root/Tests/Fixtures/linux/init"
 
-for tool in awk cpio find gzip jq shasum sort tar touch; do
+for tool in awk cpio find gzip jq readlink shasum sort tar touch; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf 'build-test-initramfs: required tool not found: %s\n' "$tool" >&2
         exit 1
@@ -66,6 +66,12 @@ mkdir -p "$root"
 tar -xzf "$rootfs_archive" -C "$root"
 
 for component in \
+    alpine-e2fsprogs \
+    alpine-e2fsprogs-libs \
+    alpine-libblkid \
+    alpine-libcom-err \
+    alpine-libeconf \
+    alpine-libuuid \
     alpine-socat \
     alpine-libcrypto3 \
     alpine-libgpiod \
@@ -79,6 +85,24 @@ do
     tar -xzf "$package" -C "$root"
 done
 rm -f "$root/.PKGINFO" "$root"/.SIGN.*
+
+for utility in "$root/sbin/e2fsck" "$root/sbin/mkfs.ext4"; do
+    if [[ ! -x "$utility" ]]; then
+        printf 'build-test-initramfs: required block utility is missing: %s\n' \
+            "${utility#"$root"}" >&2
+        exit 1
+    fi
+done
+
+blockdev_path="$root/sbin/blockdev"
+busybox_path="$root/bin/busybox"
+busybox_paths="$root/etc/busybox-paths.d/busybox"
+if [[ ! -L "$blockdev_path" || "$(readlink "$blockdev_path")" != /bin/busybox \
+    || ! -x "$busybox_path" || ! -f "$busybox_paths" ]] \
+    || ! awk '$0 == "sbin/blockdev" { found = 1 } END { exit !found }' "$busybox_paths"; then
+    printf 'build-test-initramfs: required BusyBox blockdev applet is missing\n' >&2
+    exit 1
+fi
 
 module_release="$(<"$output_dir/kernel.release")"
 module_source="$output_dir/modules/$module_release"

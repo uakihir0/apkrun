@@ -281,6 +281,26 @@ names include `libGLES_mesa.so`, or the set `libEGL_mesa.so`,
 `libGLESv1_CM_mesa.so`, and `libGLESv2_mesa.so`. The current guest inventory
 found none of those names in its inspected vendor EGL directory. This
 reinforces checking guest image packaging before changing image properties.
+A second, read-only inventory of the manifest-pinned `super.img`
+(SHA-256
+`54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05`)
+confirmed the driver paths in the image itself. Using the repository's
+`apkrun_image.lp` and `apkrun_image.sparse` readers and `dump.erofs` from
+`erofs-utils` 1.7.1, `vendor_a:/lib64/egl` contains only
+`libEGL_emulation.so`, `libGLESv1_CM_emulation.so`, and
+`libGLESv2_emulation.so`. In `system_a`, both `/lib64/egl` and
+`/system/lib64/egl` are absent, covering the guest path whether that
+partition is mounted at `/system` or at `/`. Its `/system/lib64` contains
+the platform EGL/GLES and ANGLE libraries but no Mesa-named driver. The
+live guest inventory independently reports the same three emulator modules
+at `/vendor/lib64/egl` and no `/system/lib64/egl`. This confirms that the
+pinned image lacks Mesa drivers in the preferred vendor directory and the
+corresponding system EGL directory, consistent with the selected `mesa`
+property's load failure. Keep this capture incomplete. Any run using a
+corrected guest image is separate scope with independently recorded source
+provenance and tracked packaging work; do not alter the pinned image or its
+graphics properties as a reference-capture workaround. See
+[IR-185](../04-plan/implementation-review.md#ir-185-verify-mesa-driver-payload-in-the-pinned-cuttlefish-image).
 
 The rebuild notes below document the feature-enabled Virgl diagnostic host
 used in IR-171 and IR-172. They do not make a reproducible host-package build

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VirtioDeviceCore
 import VirtualMachineCoreTestSupport
 
 @testable import VirtualMachineCore
@@ -29,6 +30,48 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
     #expect(!definition.vsockEnabled)
     #expect(definition.consolePorts == [ConsolePortDefinition(role: .systemConsole)])
     #expect(definition.entropy)
+}
+
+@Test
+func linuxTestGuestReplacesBuiltInEntropyForTheRNGCheck() {
+    let device = EntropyTestDevice(seed: 42, performsConfigurationProbe: false)
+    let definition = LinuxTestGuest.definition(
+        kernel: URL(fileURLWithPath: "/fixtures/Image"),
+        initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
+        tests: ["rng"],
+        entropyTestDevice: device,
+        powerOff: true,
+        extraCommandLine: ["loglevel=7"]
+    )
+
+    let boot = definition.bootKernelConfigurationForTesting
+    #expect(
+        boot.2
+            == "console=hvc0 apkrun.test=rng apkrun.test.poweroff=1 rng_core.default_quality=0 loglevel=7"
+    )
+    #expect(!definition.entropy)
+    #expect(definition.customDevices.count == 1)
+    #expect(definition.customDevices[0].descriptor.deviceID == 4)
+    #expect(definition.customDevices[0].descriptor.configurationSpace.count == 8)
+}
+
+@Test
+func linuxTestGuestUsesTheCustomEntropyDeviceForPendingElementProbe() {
+    let device = EntropyTestDevice(seed: 42, performsConfigurationProbe: false)
+    let definition = LinuxTestGuest.definition(
+        kernel: URL(fileURLWithPath: "/fixtures/Image"),
+        initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
+        tests: ["rng-pending"],
+        entropyTestDevice: device,
+        powerOff: false
+    )
+
+    let boot = definition.bootKernelConfigurationForTesting
+    #expect(boot.2.contains("apkrun.test=rng-pending"))
+    #expect(boot.2.contains("rng_core.default_quality=0"))
+    #expect(!definition.entropy)
+    #expect(definition.customDevices.count == 1)
+    #expect(definition.customDevices[0].descriptor.deviceID == 4)
 }
 
 @Test

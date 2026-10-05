@@ -1,6 +1,7 @@
 import DiagnosticsCore
 import Dispatch
 import Foundation
+import VirtioDeviceCore
 import Virtualization
 
 /// Builds and operates Virtualization.framework VMs on one private serial queue.
@@ -26,10 +27,11 @@ package struct VZVirtualMachineDriverFactory: VirtualMachineDriverFactory {
                         attachments.append(try channel.makeAttachment())
                         attachedChannels.append(channel)
                     }
-                    let configuration = try VZConfigurationBuilder.build(
+                    let buildResult = try VZConfigurationBuilder.build(
                         definition,
                         consolePortAttachments: attachments
                     )
+                    let configuration = buildResult.configuration
                     try configuration.validate()
 
                     let stream = AsyncStream.makeStream(
@@ -49,6 +51,7 @@ package struct VZVirtualMachineDriverFactory: VirtualMachineDriverFactory {
                         delegate: delegate,
                         queue: queue,
                         consoleChannels: consoleChannels,
+                        customDeviceAdapters: buildResult.customDeviceAdapters,
                         events: stream.stream,
                         eventContinuation: stream.continuation
                     )
@@ -73,6 +76,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
     private let queue: VMQueue
     private let eventContinuation: AsyncStream<VirtualMachineEvent>.Continuation
     private let consoleChannels: [ConsoleChannel]
+    private var customDeviceAdapters: [VZCustomVirtioDeviceAdapter]
     private var attachmentsAreActive = true
 
     /// The delegate event stream.
@@ -83,6 +87,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
         delegate: VZVirtualMachineEventDelegate,
         queue: VMQueue,
         consoleChannels: [ConsoleChannel],
+        customDeviceAdapters: [VZCustomVirtioDeviceAdapter],
         events: AsyncStream<VirtualMachineEvent>,
         eventContinuation: AsyncStream<VirtualMachineEvent>.Continuation
     ) {
@@ -90,6 +95,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
         self.delegate = delegate
         self.queue = queue
         self.consoleChannels = consoleChannels
+        self.customDeviceAdapters = customDeviceAdapters
         self.events = events
         self.eventContinuation = eventContinuation
     }
@@ -171,8 +177,12 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
             queue.dispatchQueue.async {
                 assertOnVMQueue(self.queue)
                 self.machine?.delegate = nil
+                for adapter in self.customDeviceAdapters {
+                    adapter.prepareForRelease()
+                }
                 self.machine = nil
                 self.delegate = nil
+                self.customDeviceAdapters.removeAll(keepingCapacity: false)
                 if self.attachmentsAreActive {
                     for channel in self.consoleChannels {
                         channel.detachAttachment()

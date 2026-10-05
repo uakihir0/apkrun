@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VirtioDeviceCore
 import VirtualMachineCoreTestSupport
 import Virtualization
 
@@ -47,10 +48,11 @@ import Virtualization
         count: definition.consolePorts.count
     )
 
-    let configuration = try VZConfigurationBuilder.build(
+    let buildResult = try VZConfigurationBuilder.build(
         definition,
         consolePortAttachments: attachments
     )
+    let configuration = buildResult.configuration
 
     #expect(configuration.cpuCount == definition.cpuCount)
     #expect(configuration.memorySize == definition.memorySize)
@@ -88,5 +90,46 @@ import Virtualization
 
     #expect(throws: VZConfigurationBuilderError.consoleAttachmentCountMismatch) {
         try VZConfigurationBuilder.build(definition, consolePortAttachments: [])
+    }
+}
+
+@Test func vzBuilderAttachesCustomDevicesAndRetainsTheirAdapters() throws {
+    let builder = VMDefinitionBuilder()
+    var definition = builder.build()
+    definition.customDevices = [
+        BuilderVirtioDevice(
+            descriptor: VirtioDeviceDescriptor(
+                name: "builder-test",
+                deviceID: 4,
+                pciClass: 0x10,
+                pciSubclass: 0,
+                queueCount: 1,
+                mandatoryFeatures: 0,
+                optionalFeatures: 1 << 33
+            )
+        )
+    ]
+    let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(
+        count: definition.consolePorts.count
+    )
+
+    let result = try VZConfigurationBuilder.build(
+        definition,
+        consolePortAttachments: attachments
+    )
+
+    #expect(result.customDeviceAdapters.count == 1)
+    #expect(result.configuration.customVirtioDevices.count == 1)
+    #expect(result.configuration.customVirtioDevices[0].deviceID == 4)
+    #expect(result.configuration.customVirtioDevices[0].pciClassID == 0x10)
+    #expect(result.configuration.customVirtioDevices[0].virtioQueueCount == 1)
+    #expect(result.configuration.customVirtioDevices[0].supportsSaveRestore == false)
+}
+
+private final class BuilderVirtioDevice: VirtioDeviceModel, Sendable {
+    let descriptor: VirtioDeviceDescriptor
+
+    init(descriptor: VirtioDeviceDescriptor) {
+        self.descriptor = descriptor
     }
 }

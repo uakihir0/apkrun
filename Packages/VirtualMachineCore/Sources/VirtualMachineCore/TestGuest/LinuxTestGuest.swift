@@ -1,4 +1,5 @@
 import Foundation
+import VirtioDeviceCore
 
 /// Builds the small ARM64 guest used by the M0 VM integration tests.
 public enum LinuxTestGuest {
@@ -7,16 +8,24 @@ public enum LinuxTestGuest {
         kernel: URL,
         initrd: URL,
         tests: [String] = [],
+        customDevices: [any VirtioDeviceModel] = [],
+        entropyTestDevice: EntropyTestDevice? = nil,
         powerOff: Bool = false,
         extraCommandLine: [String] = []
     ) -> VMDefinition {
         let checks = tests.joined(separator: ",")
+        let runsEntropyTest = tests.contains("rng")
+        let usesEntropyDevice = runsEntropyTest || tests.contains("rng-pending")
+        let entropyDevice =
+            usesEntropyDevice
+            ? (entropyTestDevice ?? EntropyTestDevice(seed: 0))
+            : nil
         let commandLine =
             ([
                 "console=hvc0",
                 "apkrun.test=\(checks)",
                 "apkrun.test.poweroff=\(powerOff ? 1 : 0)",
-            ] + extraCommandLine)
+            ] + (usesEntropyDevice ? ["rng_core.default_quality=0"] : []) + extraCommandLine)
             .joined(separator: " ")
 
         return VMDefinition(
@@ -32,7 +41,8 @@ public enum LinuxTestGuest {
             network: nil,
             vsockEnabled: false,
             consolePorts: [ConsolePortDefinition(role: .systemConsole)],
-            entropy: true
+            entropy: !usesEntropyDevice,
+            customDevices: customDevices + (entropyDevice.map { [$0 as any VirtioDeviceModel] } ?? [])
         )
     }
 }

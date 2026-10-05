@@ -340,6 +340,54 @@ import Virtualization
     )
 }
 
+@Test func adapterDescriptorRejectionMapsToCustomDeviceInvalid() {
+    let builder = VMDefinitionBuilder()
+    let validator = makeValidator(
+        for: builder,
+        frameworkValidator: FakeFrameworkConfigurationValidator(
+            customDeviceFailure: .customDeviceInvalid(
+                name: "fixture",
+                reason: "shared memory region count exceeds the framework limit"
+            )
+        )
+    )
+
+    #expect(
+        validator.findings(builder.build()) == [
+            .customDeviceInvalid(
+                name: "fixture",
+                reason: "shared memory region count exceeds the framework limit"
+            )
+        ]
+    )
+}
+
+@Test func vzAdapterDescriptorFailureMapsToCustomDeviceInvalid() {
+    let builder = VMDefinitionBuilder()
+    var definition = builder.build()
+    definition.customDevices = [
+        TestVirtioDevice(
+            name: "overlapping-features",
+            queueCount: 1,
+            mandatoryFeatures: 1 << 5,
+            optionalFeatures: 1 << 5
+        )
+    ]
+    let validator = VMDefinitionValidator(
+        host: makeHost(for: builder),
+        frameworkValidator: VZFrameworkConfigurationValidator()
+    )
+
+    #expect(
+        validator.findings(definition) == [
+            .customDeviceInvalid(
+                name: "overlapping-features",
+                reason: "mandatory and optional features overlap"
+            )
+        ]
+    )
+}
+
 @Test func frameworkValidationIsSkippedWhenLocalRulesFail() {
     let builder = VMDefinitionBuilder()
     var definition = builder.build()
@@ -557,15 +605,20 @@ private let validArm64KernelHeader: Data = {
 private final class TestVirtioDevice: VirtioDeviceModel, Sendable {
     let descriptor: VirtioDeviceDescriptor
 
-    init(name: String, queueCount: UInt16) {
+    init(
+        name: String,
+        queueCount: UInt16,
+        mandatoryFeatures: UInt64 = 0,
+        optionalFeatures: UInt64 = 0
+    ) {
         descriptor = VirtioDeviceDescriptor(
             name: name,
             deviceID: 1,
             pciClass: 0,
             pciSubclass: 0,
             queueCount: queueCount,
-            mandatoryFeatures: 0,
-            optionalFeatures: 0
+            mandatoryFeatures: mandatoryFeatures,
+            optionalFeatures: optionalFeatures
         )
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import VirtioDeviceCore
 import Virtualization
 
 enum VZConfigurationBuilder {
@@ -19,7 +20,7 @@ enum VZConfigurationBuilder {
     static func build(
         _ definition: VMDefinition,
         consolePortAttachments: [VZSerialPortAttachment]
-    ) throws -> VZVirtualMachineConfiguration {
+    ) throws -> VZConfigurationBuildResult {
         guard consolePortAttachments.count == definition.consolePorts.count else {
             throw VZConfigurationBuilderError.consoleAttachmentCountMismatch
         }
@@ -109,16 +110,26 @@ enum VZConfigurationBuilder {
             configuration.audioDevices = []
         }
 
-        // Custom virtio devices are attached by VirtioDeviceCore after #063.
-        configuration.customVirtioDevices = []
+        let customDeviceAdapters = try definition.customDevices.enumerated().map { index, model in
+            try VZCustomVirtioDeviceAdapter(model: model, index: index)
+        }
+        configuration.customVirtioDevices = customDeviceAdapters.map(\.configuration)
         configuration.graphicsDevices = []
         configuration.keyboards = []
         configuration.pointingDevices = []
         configuration.directorySharingDevices = []
         configuration.usbControllers = []
 
-        return configuration
+        return VZConfigurationBuildResult(
+            configuration: configuration,
+            customDeviceAdapters: customDeviceAdapters
+        )
     }
+}
+
+struct VZConfigurationBuildResult {
+    let configuration: VZVirtualMachineConfiguration
+    let customDeviceAdapters: [VZCustomVirtioDeviceAdapter]
 }
 
 enum VZConfigurationBuilderError: Error, Equatable {

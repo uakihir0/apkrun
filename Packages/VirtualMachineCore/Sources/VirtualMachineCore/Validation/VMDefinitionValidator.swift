@@ -57,9 +57,19 @@ public struct VMDefinitionValidator: Sendable {
     private func collectFindings(in definition: VMDefinition) -> [VMConfigurationFailure] {
         var failures = localFindings(definition)
         if failures.isEmpty,
-            let underlying = frameworkValidator.validate(definition)
+            let frameworkFailure = frameworkValidator.validate(definition)
         {
-            failures.append(.frameworkRejected(underlying: underlying))
+            switch frameworkFailure {
+            case .customDeviceInvalid(let name, let reason):
+                failures.append(
+                    .customDeviceInvalid(
+                        name: VMDiagnosticToken.sanitize(name),
+                        reason: reason
+                    )
+                )
+            case .rejected(let underlying):
+                failures.append(.frameworkRejected(underlying: underlying))
+            }
         }
         logSummary(for: definition)
         return failures

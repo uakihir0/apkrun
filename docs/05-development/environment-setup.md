@@ -386,14 +386,24 @@ sanitized backtrace summary belongs in an incomplete repository capture.
 
 For the 2026-10-04 crosvm crash, the pinned Cuttlefish 1.57.0 panic hook
 temporarily redirects stderr to a pipe, sets `RUST_BACKTRACE=1`, and calls
-Rust's default panic hook before logging the captured text. If stack unwinding
-faults inside that hook, the original panic message may remain unread in the
-pipe. This is a diagnostic hypothesis, not a confirmed cause. The captured
-crosvm also links `libgcc_s.so.1`, while its loaded gfxstream library exports
-LLVM libunwind symbols; that makes symbol interposition worth checking but
-does not show that gfxstream or Virgl caused the original failure. See
+Rust's default panic hook before logging the captured text. The installed
+crosvm and gfxstream Build IDs match the crash record. A runtime loader trace
+with `LD_BIND_NOW=1 LD_DEBUG=bindings` confirmed that, without preload,
+crosvm's `_Unwind_GetIP` resolves to `libgfxstream_backend.so` while
+`_Unwind_Backtrace` resolves to `libgcc_s.so.1`. A second trace with the same
+settings and `LD_PRELOAD=/lib/aarch64-linux-gnu/libgcc_s.so.1` showed that
+`_Unwind_GetIP` references from both libraries resolve to libgcc_s. The IR-171
+diagnostic capture already used this
+preload and recovered the original panic, `Failed to create virtio gpu worker
+thread: invalid rutabaga build parameters`, before crosvm exited with
+`SIGABRT`. Together with the earlier crash's unwinder stack frames, this is
+consistent with a secondary fault during panic backtrace collection, but does
+not establish where the earlier SIGSEGV occurred. The loader-only check does
+not reproduce that fault, and the evidence does not show that gfxstream itself
+caused the original panic. See
 [IR-171](../04-plan/implementation-review.md#ir-171-diagnose-crosvm-panic-output)
-for the observed Build IDs and source revisions.
+and [IR-187](../04-plan/implementation-review.md#ir-187-verify-runtime-crosvm-unwinder-symbol-binding)
+for the capture and binding details.
 
 When the crosvm report is absent on a retry, check `/var/log/apport.log`.
 Apport can suppress a new report while the matching report in `/var/crash`

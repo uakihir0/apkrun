@@ -614,6 +614,8 @@ See [../test-strategy.md](../test-strategy.md).
 
 - **Pinned Android shell syntax check (2026-10-05; see IR-186).** On the arm64 Lima host, the manifest-matching `system_a` and its `com.android.runtime` APEX were mounted read-only, and the image's actual `/system/bin/sh` parsed all 27 outer commands in `guest-capture.txt` plus its nine nested `su 0 sh -c` bodies with `-n -c`. An invalid-syntax control was rejected. The linker warned that the generated `/linkerconfig/ld.config.txt` was absent from the temporary chroot; the parser checks still succeeded. This verifies syntax compatibility only. It does not execute the commands or complete the acceptance criterion requiring live ADB and serial-shell runs.
 
+- **Runtime libunwind binding check (2026-10-05; see IR-187).** The installed Cuttlefish package binaries match the Build IDs in the earlier crosvm crash record. In a `crosvm --help` process with `LD_BIND_NOW=1 LD_DEBUG=bindings`, the runtime loader binds crosvm's `_Unwind_GetIP` to `libgfxstream_backend.so` and `_Unwind_Backtrace` to `libgcc_s.so.1`; in a second process with the same settings and `LD_PRELOAD=libgcc_s.so.1`, it binds `_Unwind_GetIP` references from both crosvm and gfxstream to libgcc_s. This confirms the loader's symbol-binding change for those processes, but does not execute the panic hook or GPU worker. Together with the earlier crash's unwinder stack frames, this is consistent with a secondary fault during panic backtrace collection, but does not establish where the earlier SIGSEGV occurred. The preload capture in IR-171 already recovered the `invalid rutabaga build parameters` panic and ended with SIGABRT before guest kernel output; no duplicate VM boot was run.
+
 ---
 
 ## #009 AndroidImageManifest

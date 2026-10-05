@@ -7120,3 +7120,41 @@ The configured command and expected executable are separate because a diagnostic
 **Reason.** The task's current T0 parses every command with the host's `/bin/sh`. A check against the actual Android `/system/bin/sh` in build 16373615 can catch shell-parser incompatibilities earlier, without starting Cuttlefish. Syntax-only parsing does not establish that the Android commands succeed or that either transport passes the command strings unchanged.
 
 **Verification.** The clean `super.img` used for IR-185 matched the manifest SHA-256. The repository's sparse-image and liblp readers extracted `system_a`; EROFS and the `com.android.runtime` APEX were mounted read-only under Lima. The image's `/system/bin/sh` accepted all 27 non-comment command strings with `-n -c`. `shlex.split` identified nine nested `su 0 sh -c` bodies, and the same Android shell accepted each body separately with `-n -c`. A negative control (`if then`) was rejected with a syntax error. The Android linker warned that the generated `/linkerconfig/ld.config.txt` was unavailable in the chroot, but all syntax checks returned success. No guest boot, guest command execution, ADB query, or serial-shell execution was performed. Temporary extracts and package files were removed after the check.
+
+## IR-187: Verify runtime crosvm unwinder symbol binding
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Record the runtime symbol-binding comparison as supplemental
+evidence for IR-171. Rely on the already completed preload capture to recover
+the panic text; do not repeat a Cuttlefish boot solely for that purpose.
+
+**Reason.** IR-171's third diagnostic capture already applied the wrapper to
+both `cvd create` and `cvd start`, recorded `LD_PRELOAD`, and recovered the
+panic message before crosvm exited with `SIGABRT`. Its source investigation
+traced that panic to the host package requesting `backend=virglrenderer`
+without crosvm's `virgl_renderer` feature. A loader-only comparison can
+directly check the interposition hypothesis without another guest boot. It
+cannot by itself prove which callback frame caused the earlier SIGSEGV.
+
+**Verification.** On the arm64 Lima host, the installed package binaries have the
+same Build IDs as the prior crosvm crash record: crosvm
+`d724bf54f045b0ec7dbe14049b0fed9a16e52a23` and
+`libgfxstream_backend.so` `6b8f3105442da5c66988881a1fa76e812b13c3e8`.
+`readelf` confirms that crosvm needs both `libgfxstream_backend.so` and
+`libgcc_s.so.1`, that crosvm imports `_Unwind_GetIP` and `_Unwind_Backtrace`,
+and that gfxstream exports `_Unwind_GetIP` and `unw_get_reg`. In a
+`crosvm --help` process with `LD_BIND_NOW=1 LD_DEBUG=bindings`, the loader
+binds crosvm's `_Unwind_GetIP` to gfxstream and `_Unwind_Backtrace` to
+libgcc_s. In a separate `crosvm --help` process with the same loader settings
+and `LD_PRELOAD=/lib/aarch64-linux-gnu/libgcc_s.so.1`, it binds `_Unwind_GetIP`
+references from both crosvm and gfxstream to libgcc_s. These checks exercise
+dynamic loading, not the panic hook or GPU worker. The prior IR-171 run
+already recovered `Failed to create virtio gpu worker thread: invalid
+rutabaga build parameters`; it had no guest kernel output or Android boot
+evidence. This loader comparison did not start a Cuttlefish VM or issue ADB
+or serial-shell commands.

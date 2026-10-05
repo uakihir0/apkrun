@@ -13,6 +13,7 @@ enum CLIFailure: APKRunError {
     case malformedReply(operation: String)
     case versionSkew(version: String, found: String)
     case invalidArguments
+    case devConsoleRequiresTerminal
 
     static var domain: ErrorDomain { .cli }
 
@@ -40,6 +41,8 @@ enum CLIFailure: APKRunError {
             "versionSkew"
         case .invalidArguments:
             "invalidArguments"
+        case .devConsoleRequiresTerminal:
+            "devConsoleRequiresTerminal"
         }
     }
 
@@ -47,7 +50,7 @@ enum CLIFailure: APKRunError {
         switch self {
         case .confirmationRequired(let flag):
             ["flag": .text(flag)]
-        case .declined, .logsUnavailable, .invalidArguments:
+        case .declined, .logsUnavailable, .invalidArguments, .devConsoleRequiresTerminal:
             [:]
         case .invalidPackageName(let package):
             ["package": .text(package)]

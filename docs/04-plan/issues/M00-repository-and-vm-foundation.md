@@ -1186,6 +1186,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** do not `fsync` on every line. At boot, the kernel can print thousands of lines a second. The 250 ms and 64 KiB policy keeps the disk load bounded.
 - The dev console behavior (booting the Linux test guest in embedded mode, and Ctrl-] requesting a guest stop) is a choice of this plan. [../../02-design/cli.md](../../02-design/cli.md) §5 does not say which VM `dev console` uses before #014.
 - Writing no marker into port 0 is also a choice. It follows §6.3. [../../02-design/vm.md](../../02-design/vm.md) §6.2 step 1 would write into every port.
+- **Implementation checkpoint (2026-10-05):** the T0 writer and VM-health tests and T1 real-pipe/filesystem tests pass, and the IntegrationTests target builds for testing with signing disabled. Signed T2 execution and the `kill -9` manual check remain unrun because this shell has no `APKRUN_TEST_DEVELOPMENT_TEAM` or `APKRUN_TEST_CODE_SIGN_IDENTITY`; do not close this task or record the three-port result until they pass. The exact stream-loss comparison and failure-flush ordering are recorded in [implementation-review.md](../implementation-review.md) IR-194.
 
 ---
 

@@ -201,6 +201,7 @@ evaluated against a redistribution allow-list.
 | Mesa (virgl driver), `kmscube` | tooling | MIT | Alpine packages in the test initramfs; the recorded `kmscube` stream in `Tests/Fixtures/graphics/` is committed |
 | Alpine `linux-virt` kernel | tooling, downloaded | GPL-2.0-only | never committed or published (§4.4) |
 | Alpine minirootfs and Linux test packages (`socat`, `libcrypto3`, `libgpiod`, `libssl3`, `readline`, `libncursesw`, `ncurses-terminfo-base`) | tooling, downloaded | package component licenses, checked against Alpine metadata and upstream notices; `socat` GPL-2.0-only WITH OpenSSL-Exception; `libcrypto3` and `libssl3` Apache-2.0; `libgpiod` GPL-2.0-or-later AND LGPL-2.1-or-later; `readline` GPL-3.0-or-later; ncurses packages X11 | same |
+| Alpine e2fsprogs packages (`e2fsprogs`, `e2fsprogs-libs`, `libcom-err`, `libblkid`, `libuuid`, `libeconf`) | tooling, downloaded | component-specific GPL, LGPL, BSD, and MIT terms recorded in `ThirdParty/ThirdParty.lock.json` | The e2fsprogs entries select `LGPL-2.1-only` under the upstream LGPL-2-or-later grant; this interpretation needs maintainer review (IR-195) |
 | depot_tools | tooling, downloaded | BSD-3-Clause | ANGLE build only |
 
 - Tools that only run (Xcode, protoc, buf, XcodeGen, ruff, ktfmt, bundletool, the Android SDK build tools) are not lock entries and are never committed or redistributed. Each developer accepts their terms when installing them ([environment-setup.md](environment-setup.md)).

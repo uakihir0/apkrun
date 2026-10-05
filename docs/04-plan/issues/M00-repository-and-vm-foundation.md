@@ -1268,8 +1268,8 @@ Out of scope:
 4. **Guest `blk` phases.** The guest finds each disk by reading `/sys/block/vd*/serial`, never by letter.
    - `format`: runs `mkfs.ext4 -F` on `apkrun-rw`, mounts it, writes `token` into `/mnt/rw/token`, runs `sync`, and unmounts. It then checks that `apkrun-ro` is read-only, with `blockdev --getro` = 1 and a write attempt that fails, and that `sha256sum` of `apkrun-ro` equals `ro_sha256`.
    - `verify`: mounts `apkrun-rw` and compares the token.
-   - `stress`: writes files in a loop until the host stops the VM.
-   - `recover`: runs `e2fsck -fy`, requires an exit code of 0 or 1, mounts the disk, and compares the token.
+   - `stress`: mounts ext4 with a 600-second journal commit interval, writes and renames one file, then signals readiness; the host stops the VM three seconds later while the loop continues.
+   - `recover`: runs `e2fsck -fy`, requires an exit code of 0 or 1 and an observed `recovering journal` message, mounts the disk, and compares the token.
    - `order`: prints the serials in `vdX` order and compares them with `apkrun.test.blk.order`.
 
    Each phase prints `APKRUN-TEST: blk ok <phase>` or `fail <phase> <detail>`.
@@ -1308,6 +1308,9 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** `rw.img` is sparse. Copying it with a tool that is not sparse-aware inflates it to 64 MiB. That is harmless, but it slows the runner cache.
 - **Pitfall:** the `stress` phase must `sync` its token file before the loop starts. Otherwise a forced stop can legitimately lose the token.
 - The `.diskNotReadable` case and the `blk` phase protocol are choices of this plan. The case is in [vm.md](../../02-design/vm.md) §3. The `blk` phases are defined only here.
+- The disk generator creates a fresh, private output directory and refuses an existing one so it cannot follow an existing `ro.img` symlink and overwrite its target.
+- **Review decision (IR-195).** The e2fsprogs lock entries use `LGPL-2.1-only` for code whose upstream notice grants LGPL version 2 or any later version. This selects a later version already allowed by that grant and present on the tooling allow-list; it does not change the allow-list. Maintainer review of this license interpretation is required before treating it as settled.
+- **Review decisions (IR-196–IR-198).** The recovery phase requires observable journal replay; the disk generator rejects pre-existing output directories; and VZ guest-visible device order remains unverified until the signed T2 result is recorded.
 
 ---
 

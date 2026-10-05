@@ -7280,3 +7280,59 @@ transfer the executable path recorded for the earlier PID to it.
 **Loss-reporting review.** Output cancellation runs through a separate callback before serialized event delivery, so a console write waiting on terminal capacity cannot block cleanup from restoring the terminal. The cleanup-pending message is deferred until after the raw stream consumer acknowledges its bounded drain barrier and is joined; this prevents a blocked stderr write from holding the event-sink lock needed by that consumer. The consumer stays active through its barrier, then is joined before loss is reported. The failure-drain budget is intentionally fixed at 4 MiB or 50 ms, checked between pipe reads; output still in the guest pipe beyond that cutoff is not included, so the cataloged count says “at least.” The instance lock remains held while VM or log cleanup continues after the warning.
 
 **Verification.** The final `swift test -j 2` suite passed after the timeout-ordering, read-deadline, and cleanup-message-order fixes, including 78 `VirtualMachineCoreTests`, 12 `VirtualMachineCoreSystemTests`, four `RuntimeHostTests`, and the new `RuntimeCore` console-task timeout regression. The continuous-output drain test passed in 25 ms; the open-stream task cancellation test passed at its 10 ms deadline. `swift build --traits EmbeddedRuntime` passed. The non-TTY CLI check returned the expected exit 64 and cataloged terminal remediation. `xcodebuild -quiet build-for-testing` passed for the IntegrationTests scheme with code signing disabled. `scripts/ci/run-checks.sh` passed all six checks: test fixtures, module dependencies, logging, TODOs, formatting, and lock validation; both error-catalog generator checks and `sh -n Tests/Fixtures/linux/init` also passed. Hostile review found stderr backpressure could hold the event-sink lock before drain acknowledgment; the warning now follows raw consumer drain and join. The reviewer confirmed no remaining actionable P1/P2 findings in cleanup ordering, bounded loss reporting, or parser cancellation. Signed T2 guest execution and the `kill -9` manual check are not complete: this shell does not have `APKRUN_TEST_DEVELOPMENT_TEAM` or `APKRUN_TEST_CODE_SIGN_IDENTITY`. The three-port result remains pending, so #004 is not complete.
+
+## IR-195: Select an allowed LGPL version for the Linux block tools
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #005 |
+| Affected files | `ThirdParty/ThirdParty.lock.json`; `ThirdParty/licenses/alpine-e2fsprogs/`; `ThirdParty/licenses/alpine-e2fsprogs-libs/`; `ThirdParty/licenses/alpine-libcom-err/`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §5; [M00](issues/M00-repository-and-vm-foundation.md) #005 |
+
+**Choice.** Record `LGPL-2.1-only` for the e2fsprogs package components whose upstream notice grants LGPL version 2 or any later version. Keep the existing tooling allow-list unchanged, and include the package license files in the lock inventory.
+
+**Reason.** The pinned Alpine package metadata describes these components with an LGPL-2.0-or-later term, while the project's tooling allow-list admits LGPL-2.1-only but not LGPL-2.0-or-later. The upstream notice's later-version grant permits selecting version 2.1 for those covered files. This is a license interpretation made to use the test-only ext4 tools without changing repository policy; it needs maintainer review and is not legal approval. The remaining package licenses are recorded separately in their lock entries.
+
+**Verification.** The copied upstream notices and package license texts are present under `ThirdParty/licenses/`; `scripts/check-lock.sh` passes. The separate `scripts/check-licenses.sh` policy checker belongs to #093 and is not present in this checkout.
+
+## IR-196: Require observable ext4 journal replay after a forced stop
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #005 |
+| Affected files | `Tests/Fixtures/linux/init`; `Tests/IntegrationTests/LinuxGuestTests/BlockTests.swift`; [M00](issues/M00-repository-and-vm-foundation.md) #005 |
+
+**Choice.** Mount the stress filesystem with a 600-second journal commit interval, signal readiness only after the first stress-file write and rename succeed, stop the VM three seconds later, and require `e2fsck -fy` output to contain `recovering journal` before declaring recovery successful. Continue to verify that the synced token survives.
+
+**Reason.** Accepting `e2fsck` exit 0 or 1 alone can pass on an already-clean filesystem, so it does not prove journal recovery occurred. Signaling only after a successful write and rename proves the stress workload began before the host's delay. The long commit interval is intended to suppress periodic journal commits during the short forced-stop window, and the recovery marker is the required evidence that journal replay happened. The virtual-machine run remains required to validate this behavior on the lab Mac.
+
+**Verification.** Guest shell syntax and the host-side fixture checks pass. Hostile review caught that the original readiness marker preceded the first write; it now follows the first successful write and rename, and the final re-review found no remaining actionable issues. Signed T2 execution has not run, so journal replay remains unverified until the `recover` marker is observed on the guest.
+
+## IR-197: Create block fixtures only in a fresh directory
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #005 |
+| Affected files | `Tests/Fixtures/linux/make-test-disks.sh`; `scripts/tests/test_make_test_disks.sh`; `Tests/IntegrationTests/LinuxGuestTests/BlockTests.swift` |
+
+**Choice.** The disk generator creates the requested output directory with mode 0700 and fails if that directory already exists.
+
+**Reason.** The previous `mkdir -p` accepted an existing directory, after which opening `ro.img` for writing followed a pre-existing symlink and could truncate a file outside the fixture directory. Atomic creation of the final directory rejects that case before either image is opened.
+
+**Verification.** The fixture test checks deterministic image sizes and hash output, and verifies that the generator refuses a directory containing a symlink without modifying its target.
+
+## IR-198: Keep guest-visible block order unverified until T2
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #005 |
+| Affected documents | [vm.md](../02-design/vm.md) §§5, 17; [M00](issues/M00-repository-and-vm-foundation.md) #005 |
+
+**Choice.** Describe attachment-array order as the #005 test expectation, while marking the corresponding guest-visible `/sys/block/vdX/serial` order unverified until the signed T2 test records it.
+
+**Reason.** T0 proves the order in the built `VZVirtualMachineConfiguration.storageDevices` array, but that does not prove the guest's device enumeration. The current environment lacks the local signing settings needed to run the virtualization test. No product code relies on `vdX` letters or PCI slot numbers.
+
+**Verification.** T0 configuration inspection passes. The order and reversed-order guest checks are implemented but have not run against the Linux VM; do not record a device-order result yet.

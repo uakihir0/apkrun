@@ -52,16 +52,16 @@ The `kind: stock` image comes from a ci.android.com build ([../02-design/android
 
 ### 3.1 RiftVM
 
-RiftVM is MIT-licensed. It is read and partly reused for the graphics path ([../02-design/graphics.md](../02-design/graphics.md) §2). It is never a build dependency.
+RiftVM's repository source is MIT-licensed and is reviewed as a technical reference for the graphics path ([../02-design/graphics.md](../02-design/graphics.md) §2). #018 copies no RiftVM code, and the RiftVM package is never a build dependency or distributed component.
 
 | Rule | Detail |
 |---|---|
-| Lock entry | `riftvm`: `kind: source`, `ships: derived`, the full commit of `v1.0.4`, `license: MIT`, `licenseFiles: ["LICENSE"]` ([build-system.md](build-system.md) §6.5) |
+| Lock entry | `riftvm`: `kind: source`, `ships: reference`, commit `51f19193b1d3326b2e164d37a2a59e9970375170` (`riftvm-v0.6.1`), `license: MIT`, `licenseFiles: ["LICENSE"]` ([build-system.md](build-system.md) §6.5; IR-188) |
 | Analysis first | #018 records in `docs/02-design/riftvm-analysis.md`, per file, its license header and whether we copy, adapt, or rewrite it ([graphics.md](../02-design/graphics.md) §2.2) |
 | Copied or adapted file | keeps RiftVM's copyright and MIT permission notice at the top, then the line `Derived from RiftVM <commit> (MIT)` with the full pinned commit, in `//` comments ([coding-conventions.md](coding-conventions.md)) |
 | Rewritten file | written from our own understanding without copying code; no RiftVM notice. If in doubt, treat it as adapted |
 | File with another license | a RiftVM file whose header is not MIT is not copied. It is either rewritten, or its origin becomes its own lock entry under §4 |
-| Notices | the `riftvm` section of `ThirdPartyNotices.html` has the MIT text and lists the files that carry the marker (§6.2) |
+| Notices | reference-only RiftVM source is excluded from `ThirdPartyNotices.html`; if APKRun later copies or adapts RiftVM code, change the lock entry to `ships: derived` and include its MIT text and marked file list (§6.2) |
 | Check | `scripts/check-licenses.sh` fails when a file with the marker names a commit other than the pin, or when the MIT notice above it is missing |
 
 ### 3.2 Patches
@@ -95,6 +95,7 @@ The `ships` value of the lock entry ([build-system.md](build-system.md) §6.1) d
 | `app`, `derived` | linked, embedded, or copied into APKRun.app, the CLI, the launcher, or our source | app list (§4.2) |
 | `image`, added by us | the agents, `apkrun_vsockd`, and what they contain | app list (§4.2) |
 | `image`, from AOSP | everything the AOSP build installs, including the kernel | image rules (§4.3) |
+| `reference` | pinned source consulted only for analysis; not built, copied, linked, or distributed | no redistribution list; license identity and source license files remain recorded for review |
 | `tooling`, committed (`kind: vendored`, `gradle` for fixture apps) | files in the repository: vendored scripts, test vectors, fixture APKs, recorded streams | app list (§4.2) |
 | `tooling`, downloaded (`kind: prebuilt`, `source`) | build and test inputs that are fetched, never committed, never published | tooling list (§4.4) |
 
@@ -146,17 +147,22 @@ LGPL-3.0-or-later
 MPL-2.0
 ```
 
-The tooling list is allowed only for `ships: tooling` entries with `kind: prebuilt` or `kind: source`. These are downloaded by a script, pinned by hash or commit, and never committed, uploaded as a CI artifact, or published. The Alpine test guest is the main case ([../02-design/vm.md](../02-design/vm.md) §12).
+The tooling list is allowed only for `ships: tooling` entries with `kind: prebuilt` or `kind: source`. These are downloaded by a script, pinned by hash or commit, and never committed, uploaded as a CI artifact, or published. The Alpine test guest is the main case ([../02-design/vm.md](../02-design/vm.md) §12). `ships: reference` entries are also pinned source inputs, but are neither build/test inputs nor redistributed; their licenses are recorded without applying a redistribution allow-list.
 
 ### 4.5 Expressions and unknown licenses
 
 | Value | Rule |
 |---|---|
-| `A OR B` | passes if at least one side is allowed. The notices carry every license file upstream ships |
+| `A OR B` | passes if at least one side is allowed. For components included in a notice output, include every license file upstream ships |
 | `A AND B` | passes if every part is allowed |
 | `A WITH E` | passes only if the whole `A WITH E` is on the list |
 | empty, missing, `NOASSERTION`, `LicenseRef-*` | fails |
-| anything not on the list | fails, for example AGPL, SSPL, BUSL, and non-commercial licenses |
+| anything not on the list for a distributed or build/test tooling component | fails, for example AGPL, SSPL, BUSL, and non-commercial licenses |
+
+The expression checks apply to components that APKRun distributes or uses as
+build/test tooling. A `ships: reference` entry must still have an identified
+license and a committed copy of the pinned source license, but it is not
+evaluated against a redistribution allow-list.
 
 ### 4.6 A new or changed component
 
@@ -164,7 +170,7 @@ The tooling list is allowed only for `ships: tooling` entries with `kind: prebui
 2. The pull request adds the lock entry with `license`, `licenseFiles`, and `ships`, and the license file copies of §6.1 ([build-system.md](build-system.md) §6.8).
 3. `scripts/check-licenses.sh` passes in the same pull request. After #093, this is required for every new component (M12 #093, Notes).
 4. A pin update re-reads the upstream license files. If the license changed, the pull request updates `license` and says so in its description.
-5. A component whose license is not allowed is replaced or removed. That needs an ADR and its own task (#093, Out of scope).
+5. A component that APKRun distributes or uses as build/test tooling whose license is not allowed is replaced or removed. A reference-only source is not subject to this redistribution rule. Replacement needs an ADR and its own task (#093, Out of scope).
 
 ---
 
@@ -185,7 +191,7 @@ The tooling list is allowed only for `ships: tooling` entries with `kind: prebui
 | Kotlin stdlib, `org.jetbrains:annotations` | app, image | Apache-2.0 | inside the Guest Agent APK: `Resources/guest/` and the image |
 | kotlinx-coroutines | app, image | Apache-2.0 | same |
 | protobuf-javalite | app, image | BSD-3-Clause | same |
-| RiftVM | derived | MIT | §3.1 |
+| RiftVM | reference | MIT | source-only analysis input; excluded from app notices unless later copied or adapted (§3.1) |
 | `libc`, `log`, `android_logger`, and their `Cargo.lock` dependencies | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product build uses AOSP `external/rust/crates`, which carry their own AOSP metadata |
 | AOSP, including the prebuilt kernel | image | many; kernel GPL-2.0-only | not lock entries (§4.3); notices and source offer in §7 |
 | `avbtool.py` | tooling, committed | MIT | vendored (§3.3). `platform/external/avb` is MIT; #093 confirms the header of the pinned copy |
@@ -234,7 +240,7 @@ The Guest Agent APK in `Resources/guest/` is covered by the Kotlin entries. The 
 
 | Check | Where |
 |---|---|
-| every entry has an allowed license and committed license file copies; every resolved package has an entry; RiftVM markers name the pin | `scripts/check-licenses.sh` in the `lint` job ([build-system.md](build-system.md) §3); T0 tests with a sample lock that has one missing license, and the real lock ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §6.13) |
+| every distributed/tooling entry has an allowed license; every lock entry has a committed license file copy; reference entries preserve an identified license; every resolved package has an entry; RiftVM markers name the pin | `scripts/check-licenses.sh` in the `lint` job ([build-system.md](build-system.md) §3); T0 tests with a sample lock that has one missing license, and the real lock ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §6.13) |
 | the generator's output for a sample lock equals a golden file | T0 script test in the `lint` job |
 | the Release build contains the notices with every `ships: app` and `derived` entry | `scripts/release/check-release-build.sh` (T1, [build-system.md](build-system.md) §3.1) |
 | the notices are visible in APKRun.app and in the image | C10-8 ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §8.7) |
@@ -338,9 +344,9 @@ people only if you have the right to redistribute this app.
 A maintainer copies this list into #093, ticks each line with evidence, and records the result in R-10.
 
 - [ ] APKRun's license is chosen in an ADR and named in the notices (§1).
-- [ ] Every lock entry, Swift package, Gradle artifact, and crate has an allowed license and committed license files. `scripts/check-licenses.sh` passes (§4, §5, §6.1).
-- [ ] `ThirdPartyNotices.html` ships in APKRun.app with every `ships: app` and `derived` component, including the RiftVM attribution and the virglrenderer, libepoxy, and ANGLE notices. The Help menu opens it (§6).
-- [ ] RiftVM-derived files carry the notice and the marker with the pinned commit (§3.1).
+- [ ] Every distributed/tooling lock entry, Swift package, Gradle artifact, and crate has an allowed license; every lock entry has committed license files, and reference entries have identified licenses. `scripts/check-licenses.sh` passes (§4, §5, §6.1).
+- [ ] `ThirdPartyNotices.html` ships in APKRun.app with every `ships: app` and `derived` component, including the virglrenderer, libepoxy, and ANGLE notices. The Help menu opens it (§6).
+- [ ] Reference-only entries are excluded from `ThirdPartyNotices.html`; if RiftVM-derived files exist, they carry the notice and marker with the pinned commit (§3.1).
 - [ ] The custom image shows its notices in Settings → About → Legal information, including the agents (§7.1).
 - [ ] The image build has no module without license metadata, and every `proprietary` or `by_exception_only` module has a recorded decision (§7.2).
 - [ ] Release bundles carry `legal/notice.html` with the source offers. The corresponding source is published for every release image (§7.3, §7.4).

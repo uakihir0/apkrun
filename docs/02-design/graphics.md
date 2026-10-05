@@ -42,35 +42,35 @@ borrow scanout texture ─▶ 1 GPU blit ─▶ IOSurface[i] of SurfacePool(scan
 ScanoutEvent.frameReady(scanout, i, seq) ─▶ RuntimeCore ─▶ XPC frameReady ─▶ wrapper layer.contents
 ```
 
-The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-05, NFR-PERF-05). RiftVM measures the same path at about 60 fps with 0.4–0.8 ms per present. The only difference is that RiftVM blits into a `CAMetalLayer` drawable in the same process, while we blit into an IOSurface that another process presents ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md)).
+The normal path has no CPU copy of pixel data and no GPU→CPU readback (FR-GFX-05, NFR-PERF-05). RiftVM reports about 60 fps with 0.4–0.8 ms per present in a specific Omarchy/Hyprland run; that is upstream evidence, not an APKRun measurement or a universal target. RiftVM blits into a `CAMetalLayer` drawable in the same process, while APKRun blits into an IOSurface that another process presents ([ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md), [riftvm-analysis.md](riftvm-analysis.md) §7).
 
 ---
 
-## 2. RiftVM as the reference implementation (#018)
+## 2. RiftVM as a technical reference (#018)
 
-RiftVM (MIT, `github.com/riftvm/riftvm`, v1.0.4) already implements a standard virtio-gpu device (device ID 16) on the macOS 27 custom virtio API. The guest side is the stock Linux `virtio_gpu` driver with Mesa VirGL, and the host side is virglrenderer → ANGLE → Metal. APKRun uses it as the starting point: we do not design GPU virtualization from scratch.
+The planned RiftVM v1.0.4 source tag is not present in the upstream tag list checked for #018. The available reference is `riftvm-v0.6.1`, pinned to commit `51f19193b1d3326b2e164d37a2a59e9970375170` in `ThirdParty/ThirdParty.lock.json` (IR-188). The tag contains a Custom VirGL implementation used by RiftVM's normal VM graphics path; its maintained architecture covers general Linux VMs as well as its Omarchy integration. APKRun analyzes the low-level `Experiments/VZVirtioGPUPrototype` package, its production caller, and the pinned renderer build inputs. This source is not treated as equivalent to the unavailable v1.0.4 release or as APKRun's product architecture.
 
 ### 2.1 What RiftVM provides (research baseline)
 
-| Area | RiftVM v1.0.4 |
+| Area | RiftVM `riftvm-v0.6.1` prototype at `51f19193` |
 |---|---|
-| Device | deviceID 16, PCI class 0x03 (display) / subclass 0x80 (other), 2 queues (control, cursor) |
-| Features | `VIRTIO_GPU_F_VIRGL`, `VIRTIO_GPU_F_EDID`. No `RESOURCE_BLOB`, no `CONTEXT_INIT`, no shared memory regions |
-| Guest memory | backing pages reached through `guestMemoryMapping(atPhysicalAddress:length:)` |
-| Renderer | virglrenderer 960bd667, libepoxy 1b6d7db, ANGLE 2d91f554 (Metal backend) |
-| Threading | All VirGL/ANGLE work on one thread. At most one frame in flight plus one pending (`LatestFrameScheduler`) |
-| Fences | Completed in order (no `CONTEXT_INIT`, so one global timeline) |
-| Scanout | `virgl_renderer_borrow_texture_for_scanout` → texture → blit into the `CAMetalLayer` drawable's `MTLTexture`, wrapped with `eglCreateImage(…, EGL_METAL_TEXTURE_ANGLE, …)`. No IOSurface, no CPU copy |
-| Patches | virglrenderer MSAA downgrade (ANGLE exposes GLES 3.0 limits) |
-| Limits | 2 GiB total resource memory, 256 contexts, 8192 px maximum dimension, 256 MiB per buffer |
+| Device | device ID 16, PCI class `0x03` / subclass `0x80`, two queues (control and cursor); one scanout and one capset in the device config |
+| Features | `VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID`; no resource blobs, `CONTEXT_INIT`, or shared-memory regions |
+| Guest memory | `guestMemoryMapping(atPhysicalAddress:length:)` mappings are retained with each resource's backing and released on detach/reset/stop |
+| Renderer | virglrenderer `960bd6674a25a438da2aac8a0af8c6d6e2b3a77e`, libepoxy `1b6d7db184bb1a0d9af0e200e06a0331028eaaae`, ANGLE `2d91f554ab55bd1bef6998ab4094f60ae3e7feb5` (Metal) |
+| Threading | serial VZ device queue, one dedicated renderer thread for virglrenderer/ANGLE, and bounded main-thread presentation (`LatestFrameScheduler`: one in flight plus the newest pending frame) |
+| Fences | `CONTEXT_INIT` is not offered; host completions are serialized into the guest's single timeline and time out after two seconds |
+| Scanout | borrows the VirGL texture, wraps the destination `CAMetalDrawable` texture in an ANGLE `EGLImage`, then GPU-blits; same-process `CAMetalLayer`, no IOSurface pool |
+| Patches | RiftVM's MSAA downgrade patch; macOS build patches and recipe patches are listed in [riftvm-analysis.md](riftvm-analysis.md) §4 |
+| Limits | 8192 px texture edge, 256 MiB buffer, 4096 resources, 256 contexts, 4 GiB renderer budget, 4 GiB total guest backing; the full set and APKRun differences are in [riftvm-analysis.md](riftvm-analysis.md) §3 |
 | Save/restore | Disabled for VirGL (renderer state cannot be serialized) |
-| Input | Not virtio-input (impossible without a config-write callback). USB digitizer + vsock agent with uinput |
-| Performance | ≈ 60 fps, 0.4–0.8 ms per present |
-| Reusable files | `VirtioGPUDevice.swift`, `VirtioGPUProtocol.swift`, `CVirGLBridge.c`, `VirGLRenderer.swift`, `LatestFrameScheduler.swift` |
+| Input | GPU prototype does not implement input. A separate experimental `virtio-input` probe is not a production backend; RiftVM uses USB and its Guest Agent/uinput path |
+| Performance | Upstream reports ≈ 60 fps and 0.4–0.8 ms per present for a specific Omarchy/Hyprland run; not measured by APKRun |
+| Source files | `VirtioGPUDevice.swift`, `VirtioGPUProtocol.swift`, `VirGLRenderer.swift`, `RiftVMVirGLRuntime.swift`, `CVirGLBridge.c`, `ActiveContextSet.h`, `RendererExecutor.swift`, `LatestFrameScheduler.swift`, and the production caller `VMCustomVirGLGraphics.swift`; file-by-file reuse decisions are in [riftvm-analysis.md](riftvm-analysis.md) |
 
 ### 2.2 #018 deliverable
 
-#018 asks for `docs/graphics/riftvm-analysis.md`. In this repository's docs tree it is **`docs/02-design/riftvm-analysis.md`** (the path change is recorded in [../04-plan/traceability.md](../04-plan/traceability.md)). It is written by reading the RiftVM source at a pinned commit (recorded in `ThirdParty/ThirdParty.lock.json` as `riftvm`) and must cover, for each step of the flow:
+#018 writes `docs/02-design/riftvm-analysis.md`. It analyzes the RiftVM source at the full commit recorded in `ThirdParty/ThirdParty.lock.json` as `riftvm` and covers, for each step of the flow:
 
 | Step | Questions the analysis answers |
 |---|---|
@@ -93,7 +93,7 @@ Acceptance: the document identifies the exact source components required for APK
 
 - Copied or adapted RiftVM files keep the MIT notice at the top plus the line `Derived from RiftVM <commit> (MIT)`. The notice is also included in `ThirdPartyNotices.html` ([../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md)).
 - Code is adapted to our module boundaries: device-agnostic parts go to `VirtioDeviceCore`, and the virtio-gpu parts go to `GraphicsCore`. We do not keep RiftVM's app structure.
-- RiftVM is not a build dependency. We never import its package; we own the copied code.
+- The #018 pin is `ships: reference`: the source is recorded for analysis only and is not built, imported, copied, or distributed. If a later task copies or adapts RiftVM code, it changes the lock entry to `ships: derived`, preserves the required notices, and still never imports the RiftVM package.
 
 ---
 
@@ -302,9 +302,10 @@ Commands flow device queue → render thread in batches (one batch per queue dra
 - Pins, build flags, and patch lists live in `ThirdParty/ThirdParty.lock.json`. The build scripts are `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh`, driven by `scripts/build-third-party.sh virgl-runtime` ([../05-development/build-system.md](../05-development/build-system.md) §6).
 - Outputs are dylibs with `@rpath` install names, placed in `ThirdParty/out/virgl-runtime/<lock hash>/`. They are embedded into `APKRun.app/Contents/Frameworks/VirGLRuntime/` and signed inside-out with the app.
 - The ANGLE Metal build needs about 11 GB of dependencies. CI caches the outputs keyed by the lock hash, so ANGLE is rebuilt only when its pin or patches change.
-- Initial patch set (final list from #018):
-  1. `virglrenderer/0001-msaa-downgrade.patch`: clamp requested MSAA sample counts to what ANGLE reports (from RiftVM).
-  2. Any build fixes for macOS (no GBM, no eventfd, no DRM), carried from RiftVM or the startergo/homebrew taps it used.
+- RiftVM's reference build flags and recipe archive identities are recorded in [riftvm-analysis.md](riftvm-analysis.md) §4. Its virglrenderer, libepoxy, and ANGLE source commits match the initial pins above; APKRun keeps its own configure flags and validates each recipe patch in #020.
+- Initial patch set:
+  1. `virglrenderer/0001-msaa-downgrade.patch`: preserve the RiftVM single-sample fallback when ANGLE's GLES host cannot multisample a requested format.
+  2. Review the pinned RiftVM recipe patches for macOS renderer support. Carry or rewrite only the changes #020 needs, keeping each patch's original source and license; the recipe patches listed in [riftvm-analysis.md](riftvm-analysis.md) are not automatically adopted.
 - #020 acceptance: a fresh checkout produces the libraries with `scripts/build-third-party.sh virgl-runtime` and no manual file editing. This is checked in CI.
 
 ### 5.2 GraphicsBridge
@@ -351,9 +352,10 @@ int  gb_wait_sync(gb_renderer *r, void *sync, uint64_t timeout_ns);
 
 Implementation notes:
 
-- EGL display: `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, …, EGL_PLATFORM_ANGLE_TYPE_ANGLE = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE)`. virglrenderer is initialized on its external-EGL path, with callbacks for GL context create, destroy, and make-current, and `get_egl_display` returning ANGLE's display. The exact flags follow RiftVM (#018).
+- EGL display: `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, …, EGL_PLATFORM_ANGLE_TYPE_ANGLE = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE)`. The pinned RiftVM prototype then calls `eglInitialize`, binds `EGL_OPENGL_ES_API`, and creates a 1 × 1 pbuffer config with GLES 2/3 support and 8-bit RGBA channels. Its `virgl_renderer_init` uses callback version 4 and **flags `0`**, with GL context create/destroy, make-current, fence, and EGL-display callbacks. It does not pass `VIRGL_RENDERER_USE_EGL` or `VIRGL_RENDERER_USE_SURFACELESS`; details are in [riftvm-analysis.md](riftvm-analysis.md) §2–§4.
 - The IOSurface-backed Metal textures must be created on **ANGLE's `MTLDevice`**, queried with `EGL_ANGLE_device_metal` (`eglQueryDisplayAttribEXT(EGL_DEVICE_EXT)` → `eglQueryDeviceAttribEXT(EGL_METAL_DEVICE_ANGLE)`). On multi-GPU Macs this avoids cross-device copies.
 - `gb_present_blit`: `virgl_renderer_borrow_texture_for_scanout` gives the GL texture of the resource. The destination `MTLTexture` is imported once per pool buffer as an `EGLImage` (`EGL_METAL_TEXTURE_ANGLE`) and attached to an FBO. `glBlitFramebuffer` performs the copy with Y-flip and format conversion. Then an EGL fence sync is created and `glFlush` is called.
+- RiftVM's prototype instead blits to a same-process `CAMetalLayer` drawable. Its inspected `glBlitFramebuffer` call uses increasing Y coordinates and has no explicit vertical reversal or separate format-conversion step. This does not change APKRun's intended blit; #023 verifies the wrapper-facing IOSurface orientation and pixel layout.
 
 ### 5.3 What the guest gets
 
@@ -551,7 +553,7 @@ Each step lists what to build and how it is verified. Steps within a task are in
 
 ### #018 RiftVM analysis (M2)
 
-1. Pin the RiftVM commit (v1.0.4) in `ThirdParty.lock.json` (source only; not built).
+1. Pin the available RiftVM reference tag `riftvm-v0.6.1` at its full commit in `ThirdParty.lock.json` (source only; not built; substitution recorded in IR-188).
 2. Read the files in §2.1 and the architecture document. Write `docs/02-design/riftvm-analysis.md` with the table in §2.2 filled in, file by file.
 3. List the patches and exact build flags for virglrenderer, libepoxy, and ANGLE used by RiftVM. They seed #020.
 4. Update §2.1 and §5.1 of this document if the analysis finds differences.
@@ -672,7 +674,7 @@ Subsystem `io.apkrun.graphics`, categories `device` (negotiation, commands, gues
 | What VZ does on a guest reboot is not documented: a device reset and a second boot, or `guestDidStop` (§3.3) | #063 observes it with the Linux test guest and records it in §3.3 and R-01 |
 | `maximumAllowedSharedMemoryRegionCount` is not documented (§3.1) | v1 offers no shared-memory region (§4.1). The first Vulkan spike in #096 checks that the count is ≥ 1 (§10) |
 | Does `updateDeviceSpecificConfiguration` raise a config-change interrupt in the guest (§4.3, R-01) | #019 runs the spike with the Linux test guest, and #028 repeats it with Android. If not, fallback A (the Guest Agent forces a DRM connector re-probe on the custom image; #028 checks that the driver re-reads the display info), then B (all pool scanouts enabled at boot), then C (a fixed display count per boot, R-04) |
-| The exact RiftVM patches, build flags, and EGL init flags (§5.1, §5.2) | #018 lists them in `riftvm-analysis.md` and updates §2.1 and §5.1. Until then, the initial patch set in §5.1 is the working default |
+| Which RiftVM recipe patches APKRun should carry or reimplement (§5.1) | #020 checks the pinned macOS and ANGLE/libepoxy recipe patches against APKRun's own pinned sources; adopt only the required, license-reviewed changes. The source flags and EGL init behavior are recorded in [riftvm-analysis.md](riftvm-analysis.md) |
 | The present ordering relies on ANGLE's Metal backend using one command queue per display (§6.2) | #023 checks that HelloGL's alternating-color test shows no tearing |
 | How the EDID physical size affects the density of secondary displays (§6.4, OQ-39) | #067. Working default: the density is set with `setDisplayPolicy` only, and the result is recorded in §6.4 |
 | Whether `gpuUtilization` from the IOKit accelerator statistics is usable (§7, OQ-07) | #070 checks it on the reference Mac. Working default: best effort, reported as unavailable when the key is missing |
@@ -691,7 +693,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Question | Task | Result |
 |---|---|---|
 | Custom virtio API with `EntropyTestDevice`: queue validity before DRIVER_OK, same-size config updates, reset and mapping invalidation, guest reboot | #063 | pending (§3.1, §3.3) |
-| RiftVM analysis: differences to §2.1 and §5.1, renderer patches, and build flags | #018 | pending (§2.1, §5.1) |
+| RiftVM source analysis: `riftvm-v0.6.1` commit `51f19193b1d3326b2e164d37a2a59e9970375170`, source/build flags, license and APKRun differences | #018 | 2026-10-05: source-only review and lock validation recorded in [riftvm-analysis.md](riftvm-analysis.md); no renderer build or VM test; maintainer review pending (IR-188) |
 | The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | pending (§12) |
 | Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | pending (§4.3) |
 | Clean build of the runtime libraries from the lock file; renderer create and the `VIRGL2` capset on the host | #020 | pending (§5.1) |

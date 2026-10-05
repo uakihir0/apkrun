@@ -220,6 +220,20 @@
           "sha256": "1bb1feec68a13da18d581aa2c631798f86f6bc10b55d587b2dd31446a0f8a203"
         }
       ]
+    },
+    {
+      "name": "riftvm",
+      "group": "graphics-reference",
+      "kind": "source",
+      "repository": "https://github.com/riftvm/riftvm.git",
+      "commit": "51f19193b1d3326b2e164d37a2a59e9970375170",
+      "version": "0.6.1",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "reference",
+      "upstream": { "watch": "commits", "branch": "main" }
     }
   ]
 }

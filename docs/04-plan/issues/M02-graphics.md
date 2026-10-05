@@ -86,31 +86,32 @@ The team knows exactly which RiftVM components APKRun reuses, rewrites, or ignor
 
 ### Scope
 
-- Pinning RiftVM v1.0.4 as a source-only lock entry.
-- Reading the files of §2.1 and the RiftVM architecture document.
+- Pinning the available RiftVM `riftvm-v0.6.1` source as a source-only lock entry. This replaces the unavailable v1.0.4 tag and is recorded for maintainer review in [implementation-review.md](../implementation-review.md) IR-188.
+- Reading the files of §2.1, the RiftVM architecture document, and the production application's Custom VirGL integration and lifecycle.
 - The file-by-file table of §2.2, covering the flow the task lists: `VZCustomVirtioDevice`, virtqueue handling, virtio-gpu commands, resource creation, resource backing, VirGL, scanout, ANGLE, Metal, and the cursor.
 - The patches and exact build flags that RiftVM uses for virglrenderer, libepoxy, and ANGLE, and its EGL init flags.
 - License review of every reusable file.
 - Out of scope:
-  - Copying any code. Code is copied in #019 and #020, under the rules of §2.3.
+  - Copying any code in #018. Any later task that copies or adapts RiftVM code follows the rules of §2.3 and updates the lock classification; #020 does not copy RiftVM Swift code.
   - Building RiftVM or depending on it. RiftVM is never a build dependency (§2.3).
 
 ### Deliverables
 
 - `docs/02-design/riftvm-analysis.md` with the §2.2 table filled in, file by file.
-- The `riftvm` entry in `ThirdParty/ThirdParty.lock.json`: repository `github.com/riftvm/riftvm`, the v1.0.4 commit, license MIT, source only and not built.
+- The `riftvm` entry in `ThirdParty/ThirdParty.lock.json`: repository `github.com/riftvm/riftvm`, commit `51f19193b1d3326b2e164d37a2a59e9970375170`, license MIT, source only and not built.
 - The patch and build-flag list that seeds #020.
 - The updates to §2.1 and §5.1 of [../../02-design/graphics.md](../../02-design/graphics.md) where the analysis differs.
 
 ### Implementation steps
 
 1. **Pin RiftVM.**
-   - Add the `riftvm` lock entry at the v1.0.4 commit, marked source only ([../../05-development/build-system.md](../../05-development/build-system.md) §6).
+   - Add the `riftvm` lock entry at the `riftvm-v0.6.1` commit, marked source only ([../../05-development/build-system.md](../../05-development/build-system.md) §6). The planned v1.0.4 tag is unavailable; see IR-188.
    - Check: the lock-file schema check in CI accepts the entry, and no build script reads it.
 2. **Read and classify.**
    - Read every file in §2.1 and the architecture document.
+   - Trace the production-facing runtime caller, its initialization boundary, VM binding, snapshot policy, and shutdown lifecycle.
    - For each file, record in the §2.2 table: what it does, the flow step it covers, and the decision (reuse with changes, rewrite, or ignore) with the reason.
-   - Check: every flow step has at least one row, and every §2.1 file has a decision.
+   - Check: every flow step and the production integration have at least one row, and every §2.1 file has a decision.
 3. **Renderer patches and flags.**
    - List RiftVM's patches, configure flags, and build flags for virglrenderer, libepoxy, and ANGLE, and its EGL init flags.
    - Compare them with the pins of §2.1 (virglrenderer 960bd667, libepoxy 1b6d7db, ANGLE 2d91f554) and the initial patch set of §5.1.

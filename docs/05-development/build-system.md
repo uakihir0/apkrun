@@ -123,7 +123,7 @@ Each check is a script that CI runs in the `lint` job (§15) and that works loca
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. Exempt paths: `scripts/dev/`, `Tests/Compatibility/`, `Images/tools/reference/` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3) | #027 |
 | `scripts/check-compatibility-db.sh` | `Tests/Compatibility/database/compatibility.json` against `compatibility.schema.json` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10) | #090 |
 | `scripts/check-fixtures.sh` | every APK in `Tests/Fixtures/apks/` is newer than its sources, and no committed fixture file is larger than 10 MiB (§8) | #016 |
-| `scripts/check-licenses.sh` | every lock entry, and every package in `Package.resolved` and the Gradle and Cargo locks, has an entry with an SPDX `license` that is allowed for its `ships` value, and `licenseFiles` with committed copies in `ThirdParty/licenses/<name>/`. It fails on a missing license, on `NOASSERTION` or an empty value, on a license outside the allowed list ([legal-and-licensing.md](legal-and-licensing.md) §4), and on a `Derived from RiftVM` marker that does not name the pinned commit ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #093 |
+| `scripts/check-licenses.sh` | every lock entry, and every package in `Package.resolved` and the Gradle and Cargo locks, has an SPDX `license` and committed `licenseFiles`; distribution and tooling entries must use a license allowed for their `ships` value, while `reference` entries retain their identified upstream license without a redistribution check. It fails on missing or unresolved licenses, missing license copies, disallowed licenses ([legal-and-licensing.md](legal-and-licensing.md) §4), and a `Derived from RiftVM` marker that does not name the pinned commit ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #093 |
 | `scripts/check-strings.sh` | every `.xcstrings` file and `errors.json`: for the Release configuration, no missing `ja` value, no `stale` entry, and no `needs review` entry; Debug builds only warn ([../02-design/host-ui.md](../02-design/host-ui.md) §13) | #092 |
 
 The rules behind these checks are in [coding-conventions.md](coding-conventions.md). A new dependency edge or a new third-party component needs an ADR before the check is changed ([../01-architecture/decisions/README.md](../01-architecture/decisions/README.md)).
@@ -138,7 +138,7 @@ The rules behind these checks are in [coding-conventions.md](coding-conventions.
 | no test keys | no public key, key ID, or certificate fingerprint of `Tests/Fixtures/signing/` in the bundle |
 | image trust | `ImageTrustStore` of the Release build holds only release key IDs: no ID of `test-image-ed25519` and no per-developer key ([../02-design/android-image.md](../02-design/android-image.md) §10.1) |
 | image manifest | a release image manifest has no `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2) |
-| notices | `Contents/Resources/ThirdPartyNotices.html` has a section for every lock entry with `ships: app` or `ships: derived`, including the RiftVM attribution ([legal-and-licensing.md](legal-and-licensing.md) §6, #093) |
+| notices | `Contents/Resources/ThirdPartyNotices.html` has a section for every lock entry with `ships: app` or `ships: derived`; reference-only entries are excluded ([legal-and-licensing.md](legal-and-licensing.md) §6, #093) |
 | key rotation | the Sparkle public key and the Developer ID certificate are not both different from the previous release (release rule R6, [workflow.md](workflow.md) §9) |
 | build number | `CFBundleVersion` is higher than every published build on every channel (release rule R1, [workflow.md](workflow.md) §8) |
 | migration chain | for every data file, `Tests/Fixtures/schemas/<file>/` has a golden `v<n>.json` for every schema version in the `dataSchemas` of the stable releases of the last 24 months (release rule R5, [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5) |
@@ -221,19 +221,19 @@ Every third-party input is pinned by commit or by hash, never by a moving branch
 | Field | Meaning |
 |---|---|
 | `name` | unique; also the directory name under `ThirdParty/patches/` |
-| `group` | build unit; `virgl-runtime` for the three renderer libraries |
-| `kind` | `source` (built from a commit), `prebuilt` (download with `sha256`), `vendored` (copied into the tree), `swiftpm`, `gradle`, `cargo` (pinned by their own lock files; listed here for licenses and notices) |
+| `group` | build unit; `virgl-runtime` for the three renderer libraries. A reference-only entry may use a descriptive group such as `graphics-reference`, which is not a build unit and is excluded from build-group processing |
+| `kind` | `source` (pinned VCS source at a commit; built only when selected by a build group and not classified as `reference`), `prebuilt` (download with `sha256`), `vendored` (copied into the tree), `swiftpm`, `gradle`, `cargo` (pinned by their own lock files; listed here for licenses and notices) |
 | `repository` | the upstream git URL, for `source` and `vendored` entries |
 | `url` | the download URL of a `prebuilt` entry. The download is checked against `sha256` before use, and a mismatch fails the build |
 | `commit` / `sha256` | the full commit hash, or the hash of the download |
-| `buildFlags` | the exact flags the build script passes, for `source` entries |
-| `patches` | the local patches, in order, relative to `ThirdParty/patches/` (§6.2). An empty list when there are none |
+| `buildFlags` | the exact flags the build script passes, for `source` entries; must be empty for `ships: reference` |
+| `patches` | the local patches, in order, relative to `ThirdParty/patches/` (§6.2). An empty list when there are none; must be empty for `ships: reference` |
 | `version` | the label shown in `components.json`; for patched code, upstream version plus `+apkrun.<n>` |
-| `license`, `licenseFiles` | SPDX identifier and the files copied into the notices ([legal-and-licensing.md](legal-and-licensing.md) §6) |
-| `ships` | `app` (inside APKRun.app), `image` (inside the runtime image), `tooling` (build or test only), `derived` (source copied or adapted into our code); a list such as `["app", "image"]` when a component ships in more than one place ([legal-and-licensing.md](legal-and-licensing.md) §4.1) |
+| `license`, `licenseFiles` | SPDX identifier and upstream-relative license-file paths; committed copies live under `ThirdParty/licenses/<name>/<path>`. Reference entries retain those copies for review but are excluded from notice generation; distribution notice generators include files only for components in their applicable scope ([legal-and-licensing.md](legal-and-licensing.md) §§4, 6) |
+| `ships` | `app` (inside APKRun.app), `image` (inside the runtime image), `tooling` (build or test only), `derived` (source copied or adapted into our code), `reference` (pinned source used only for analysis; never built, copied, or distributed); a list such as `["app", "image"]` when a component ships in more than one place ([legal-and-licensing.md](legal-and-licensing.md) §4.1) |
 | `upstream` | what the security check watches (§6.7) |
 
-The **lock hash** of a group is the SHA-256 over its lock entries (canonical JSON), its patch files, and its build scripts. It names the output directory and the CI cache key.
+The **lock hash** of a build group is the SHA-256 over its buildable lock entries (canonical JSON), their patch files, and their build scripts. It names the output directory and the CI cache key. Descriptive groups containing only `ships: reference` entries are excluded from build-group discovery, source preparation, patch application, and lock-hash calculation.
 
 ### 6.2 Patches
 
@@ -255,6 +255,7 @@ scripts/build-third-party.sh virgl-runtime
 ```
 
 - The driver script calls `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh` in that order ([../02-design/graphics.md](../02-design/graphics.md) §5.1). Sources are fetched into `ThirdParty/out/src/<name>/<commit>/` and checked against the pinned commit.
+- Entries with `ships: reference`, such as RiftVM, are validated as lock records but are not fetched, patched, or built by `scripts/build-third-party.sh` or `scripts/check-lock.sh --apply`.
 - The outputs are arm64 dylibs with `@rpath` install names, built for macOS 27.0. `apkrund` finds them through `@executable_path/../Frameworks/VirGLRuntime`.
 - ANGLE needs about 11 GB of checkout and build space. The output is cached by lock hash on developer machines and in CI, so ANGLE is rebuilt only when its pin, flags, patches, or build script change.
 - #020 acceptance: a fresh checkout produces the libraries with this one command and no manual edits. The weekly `clean-third-party` job checks it with an empty cache (§15.1).
@@ -277,7 +278,7 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 |---|---|---|---|
 | aapt2 (`com.android.tools.build:aapt2:8.9.1-12782657:osx` from Google Maven) | prebuilt | app (`Resources/tools/aapt2`) | its arm64 slice is checked with `lipo`; golden tests pin its output format; it runs under `sandbox-exec` ([../02-design/package-store.md](../02-design/package-store.md) §4.3) |
 | Alpine `linux-virt` kernel and minirootfs, `socat`, `libgpiod` | prebuilt | tooling | the test Linux guest ([../02-design/vm.md](../02-design/vm.md) §12); never shipped |
-| RiftVM `v1.0.4` (`github.com/riftvm/riftvm`, commit hash) | source, pinned as `riftvm` | derived | read for #018; copied or adapted files keep its MIT notice ([../02-design/graphics.md](../02-design/graphics.md) §2.3) |
+| RiftVM `riftvm-v0.6.1` (`github.com/riftvm/riftvm`, `51f19193b1d3326b2e164d37a2a59e9970375170`) | source, pinned as `riftvm` | reference | analysis-only source for #018; not built, copied, imported, or distributed ([../02-design/graphics.md](../02-design/graphics.md) §2.3; [../04-plan/implementation-review.md](../04-plan/implementation-review.md) IR-188) |
 | apksig test vectors | vendored | tooling | Apache-2.0, `Packages/APKStoreCore/Tests/APKStoreCoreTests/Resources/apksig/` ([../02-design/package-store.md](../02-design/package-store.md) §4.5) |
 | swift-protobuf, swift-argument-parser, ZIPFoundation | swiftpm | app | exact versions in `Package.swift` (ZIPFoundation: ADR-0017) |
 | Sparkle 2 | swiftpm | app | exact version in `project.yml`; confirmed by #057 step 1 (R-23) |

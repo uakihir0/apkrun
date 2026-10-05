@@ -852,8 +852,8 @@ Every component that APKRun.app or the runtime image ships has a known, compatib
   - every entry of `ThirdParty/ThirdParty.lock.json` has `license`, `licenseFiles`, and `ships` ([../../05-development/build-system.md](../../05-development/build-system.md) §6.1);
   - the SwiftPM, Gradle, and Cargo locks are covered;
   - the Android image components are covered.
-- A lint check that fails on a missing license, an unresolved license, or a license outside the allowed list of [../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md) §4 ([../../05-development/build-system.md](../../05-development/build-system.md) §6.8 step 3).
-- `Contents/Resources/ThirdPartyNotices.html` from `generate-notices.py` ([../../05-development/build-system.md](../../05-development/build-system.md) §11). It includes the RiftVM MIT attribution (§6.2, [../../02-design/graphics.md](../../02-design/graphics.md) §2) and the virglrenderer, libepoxy, and ANGLE notices (§6.3). APKRun.app shows it from the Help menu.
+- A lint check that fails on a missing or unresolved license for any lock entry, and on a license outside the allowed list of [../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md) §4 for components APKRun distributes or uses as build/test tooling. A `reference` entry must still identify its license and commit the license file ([../../05-development/build-system.md](../../05-development/build-system.md) §6.8 step 3).
+- `Contents/Resources/ThirdPartyNotices.html` from `generate-notices.py` ([../../05-development/build-system.md](../../05-development/build-system.md) §11). It includes notices for the virglrenderer, libepoxy, and ANGLE components (§6.3). Include RiftVM attribution only if RiftVM source is later copied or adapted and its lock entry is changed from `reference` to `derived`. APKRun.app shows the notices from the Help menu.
 - The image notices:
   - the custom image shows its notices in Android Settings → About → Legal information;
   - the image bundle carries a notice file that lists the source offers for GPL and LGPL components, such as the kernel.
@@ -879,17 +879,17 @@ Every component that APKRun.app or the runtime image ships has a known, compatib
 ### Implementation steps
 
 1. **Inventory** ([../../05-development/build-system.md](../../05-development/build-system.md) §6.1, §6.5).
-   - Fill `license`, `licenseFiles`, and `ships` for every lock entry. The entries include virglrenderer, libepoxy, ANGLE, the RiftVM-derived code, aapt2, swift-protobuf, swift-argument-parser, Sparkle, the Kotlin libraries, and the Cargo crates. Cover `Package.resolved`, the Gradle lock, and `Cargo.lock`.
+   - Fill `license`, `licenseFiles`, and `ships` for every lock entry. The entries include virglrenderer, libepoxy, ANGLE, the RiftVM source reference (or derived code if later copied or adapted), aapt2, swift-protobuf, swift-argument-parser, Sparkle, the Kotlin libraries, and the Cargo crates. Cover `Package.resolved`, the Gradle lock, and `Cargo.lock`.
    - List the image components with the licenses from the AOSP build's notice data.
    - Check: every shipped component has a license and license files.
 2. **License check** ([../../05-development/build-system.md](../../05-development/build-system.md) §3, §6.8 step 3).
-   - `scripts/check-licenses.sh` fails on a missing license, an unresolved license (`NOASSERTION` or empty), or a license outside the allowed list of [../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md) §4. Add it to the `lint` job and to the table of [../../05-development/build-system.md](../../05-development/build-system.md) §3.
+   - `scripts/check-licenses.sh` fails on a missing license, an unresolved license (`NOASSERTION` or empty), or a license outside the allowed list of [../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md) §4 for components APKRun distributes or uses as build/test tooling. For `ships: reference`, require an identified license and committed license copy without applying the redistribution allow-list. Add it to the `lint` job and to the table of [../../05-development/build-system.md](../../05-development/build-system.md) §3.
    - Check: T0 test. A lock sample with one missing license fails, and the real lock passes.
 3. **App notices** ([../../05-development/build-system.md](../../05-development/build-system.md) §6.2, §6.3, §11).
-   - `generate-notices.py` writes `Contents/Resources/ThirdPartyNotices.html` from the locks. It has one section per component with the license text and the copyright lines, and it includes the RiftVM MIT attribution.
+   - `generate-notices.py` writes `Contents/Resources/ThirdPartyNotices.html` from the locks. It has one section per distributed app/derived component with the license text and copyright lines. It excludes `reference` entries; it includes the RiftVM MIT attribution only if RiftVM code is copied or adapted and the lock entry is classified as `derived`.
    - The Help menu item **Third-Party Notices** opens the file.
-   - Add the notices row to `scripts/release/check-release-build.sh` ([../../05-development/build-system.md](../../05-development/build-system.md) §3.1): the file has a section for every lock entry with `ships: app` or `ships: derived`, including the RiftVM attribution.
-   - Check: the file in a Release build lists every component with `ships: app` or `ships: derived`. A fixture bundle with a section missing fails the release check. The menu item opens it.
+   - Add the notices row to `scripts/release/check-release-build.sh` ([../../05-development/build-system.md](../../05-development/build-system.md) §3.1): the file has a section for every lock entry with `ships: app` or `ships: derived`.
+   - Check: the file in a Release build lists every component with `ships: app` or `ships: derived` and omits `reference` entries. A fixture bundle with a required section missing fails the release check. The menu item opens it.
 4. **Image notices and source offers** ([../../02-design/android-image.md](../../02-design/android-image.md) §2.3, §10.1, §11).
    - The custom image build keeps AOSP's notice generation, so Android Settings → About → Legal information shows the image notices.
    - The bundle tool adds the notice file `legal/notice.html` to the bundle, names it in the manifest `legal.notice`, and lists it in `files` ([../../03-reference/runtime-image-manifest.md](../../03-reference/runtime-image-manifest.md) §4.2). The file has the source offer for each GPL and LGPL component. The offer names the exact source revision, which comes from the manifest `provenance`, and the place where that source is published.
@@ -903,7 +903,7 @@ Every component that APKRun.app or the runtime image ships has a known, compatib
    - Record the results in the checklist.
    - Check: each item has a result.
 6. **Legal review and checklist** ([../../05-development/legal-and-licensing.md](../../05-development/legal-and-licensing.md)).
-   - A maintainer completes the compliance checklist. The review covers notices, source offers, the allowed licenses, and redistribution. Record the result in R-10.
+   - A maintainer completes the compliance checklist. The review covers notices, source offers, allowed licenses for distributed and build/test tooling components, identified licenses for reference-only entries, and redistribution. Record the result in R-10.
    - Do checklist item C10-8.
    - Check: the acceptance criteria below.
 
@@ -917,7 +917,7 @@ Every component that APKRun.app or the runtime image ships has a known, compatib
 ### Acceptance criteria
 
 - [ ] Every shipped component has a known license in the inventory, and the license check passes. A missing or unresolved license fails the `lint` job.
-- [ ] `ThirdPartyNotices.html` ships in APKRun.app, lists every shipped component with its license, and includes the RiftVM attribution. The Help menu opens it.
+- [ ] `ThirdPartyNotices.html` ships in APKRun.app, lists every component with `ships: app` or `ships: derived`, and excludes `reference` entries. The RiftVM attribution appears only if RiftVM code is copied or adapted. The Help menu opens it.
 - [ ] The custom image shows its notices in Android. The image bundle carries a notice file with source offers for GPL and LGPL components, and the source is published.
 - [ ] No stock Google-built image and no GMS component is distributed.
 - [ ] The legal checklist is complete, and R-10 has a result (C10-8).

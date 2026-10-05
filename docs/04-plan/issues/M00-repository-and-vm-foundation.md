@@ -1524,7 +1524,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 | Depends on | #003 |
 | Requirements | FR-VM-06 |
 | Design | [../../02-design/graphics.md](../../02-design/graphics.md) §3 (§3.1–§3.3), §8 (lifecycle rules that apply to every device), §12 (#063 steps 1–4), §14; [../../02-design/vm.md](../../02-design/vm.md) §3 (`customDeviceInvalid`), §4 (`customVirtioDevices`), §9.5, §12; [../../01-architecture/decisions/0002-virtualization-framework-macos27.md](../../01-architecture/decisions/0002-virtualization-framework-macos27.md) |
-| Modules / paths | `Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/` (`API/`, `VZAdapter/`, `TestDevices/EntropyTestDevice.swift`), `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTestSupport/`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/` (`Framework/VZConfigurationBuilder.swift`, `Validation/`, `TestGuest/`), `Tests/Fixtures/linux/` (`init`, `modules.list`), `Tests/IntegrationTests/LinuxGuestTests/EntropyDeviceTests.swift` |
+| Modules / paths | `Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/` (`API/`, `VZAdapter/`, `TestDevices/EntropyTestDevice.swift`), `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, `Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTestSupport/`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/` (`Framework/VZConfigurationBuilder.swift`, `Validation/`, `TestGuest/`), `Tests/Fixtures/linux/` (`init`, `modules.list`), `Tests/IntegrationTests/LinuxGuestTests/` (`EntropyDeviceTests.swift`, `LinuxGuestRebootObservationTests.swift`) |
 | Risks / questions | R-01 (the #063 part: queues, config updates, resets); R-07 (`supportsSaveRestore` stays off) |
 
 ### Goal
@@ -1546,6 +1546,7 @@ A host-implemented virtio-rng device, built on the macOS 27 custom virtio device
   - it splits feature bits into `subset0` and `subset1`.
 - The fakes in `VirtioDeviceCoreTestSupport` and the T0 tests ([../../02-design/graphics.md](../../02-design/graphics.md) §12 step 2).
 - `EntropyTestDevice` (§3.3), and the `rng` guest check.
+- A forced-stop `rng-pending` probe that retains a live mapping and deferred VZ queue element until stop.
 - Wiring `VMDefinition.customDevices` into the VZ builder and the `.customDeviceInvalid` rule.
 - The config-update probe on the host, and recording VZ's guest-reboot behavior.
 
@@ -1572,22 +1573,24 @@ Out of scope:
 These are the design steps of [../../02-design/graphics.md](../../02-design/graphics.md) §12 (#063). Step 1 is the design's step 1 with the corrections below. Steps 2–4 match the design's steps 2–4, and step 5 records the results.
 
 1. **API and VZ adapter (design step 1).** Implement §3.2 with three corrections, which this pull request also writes into [graphics.md](../../02-design/graphics.md) §3.2:
-   - `drain` takes ownership of each element: `func drain(_ body: (consuming VirtioElement) throws -> Void) rethrows`. With `inout`, the body cannot call the `consuming` `complete()`.
+   - `drain` takes ownership of each element and its body is nonthrowing: `func drain(_ body: (consuming VirtioElement) -> Void)`. Virtualization.framework suppresses notifications until the queue is empty, so the body handles failures locally and completes the current element before the loop continues.
    - `defer()` becomes `deferCompletion() -> PendingElement`, because `defer` is a Swift keyword.
    - The fakes live in `VirtioDeviceCoreTestSupport`, not `VirtioDeviceCoreTesting` ([../test-strategy.md](../test-strategy.md) §3.2).
 
    Adapter rules:
    - VZ objects are touched only on the device queue.
    - `queue(_:)` and `negotiatedFeatures` are valid only after `DRIVER_OK`. Before that they fail with `VirtioFailure.notReady`.
-   - Guest memory mappings are cached per device and dropped on `WillReset` and `WillStop`.
-   - `updateConfigurationSpace` rejects a different size with `.configSizeMismatch`.
+   - Guest memory mappings are cached per device and invalidated on `WillReset` and `WillStop` before calling the model lifecycle method.
+   - Configuration updates reject a different size with `.configSizeMismatch`, run serially, and fail with `.notReady` if reset or release invalidates their generation.
+   - `VirtioDeviceContext` is not `Sendable`; each callback receives a context bound to that device generation, and async work captures its `Sendable` `configurationUpdater` while still on the device queue. A saved updater or context from an earlier generation cannot update configuration, access queues/features/memory, or reset the device after the guest sets `DRIVER_OK` again.
    - `VirtioFailure` is internal to device models. Device models convert it into their own domain errors, and it never reaches users (see Notes).
 
    Check: the module builds, and the adapter builds a `VZCustomVirtioDeviceConfiguration` for a test descriptor.
 2. **Fakes and T0 (design step 2).** `FakeVirtioQueue` and `FakeGuestMemory` back the T0 tests:
    - the drain loop runs until the queue is empty;
-   - completion happens exactly once, enforced by the type system;
-   - the debug `deinit` check for a forgotten element, as a Swift Testing exit test;
+   - noncopyable elements and pending handles prevent duplicate completion at compile time; the copyable one-shot completion token traps on a second completion at runtime;
+   - deferred completion retains an element until its `Sendable` pending handle or one-shot completion token completes across an actor hop;
+   - debug exit tests catch dropping either an uncompleted element or pending handle;
    - bounds checks, and `gpa + len` overflow;
    - `copyReadable` takes one snapshot;
    - the feature split into `subset0` and `subset1`.
@@ -1595,7 +1598,7 @@ These are the design steps of [../../02-design/graphics.md](../../02-design/grap
    Check: the T0 tests pass.
 3. **EntropyTestDevice (design step 3).** The descriptor has deviceID 4, PCI class 0x10, one queue, no features, and an 8-byte configuration space holding a generation counter.
    - The device fills each writable buffer from a deterministic generator (SplitMix64) seeded by the test.
-   - On `deviceWillReset`, it drops its mappings and restarts the generator from the seed.
+   - On `deviceWillReset`, it restarts the generator from the seed. Mapping probe mode retains only the already-invalidated mapping token until the next start or stop callback so the test can assert that both callbacks reject access.
    - It logs `DRIVER_OK`, each notification (count and bytes, at `debug`, with an `info` summary), and each reset. Logs go to `io.apkrun.vm`, category `virtio` ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §3.1).
    - The device never sets `supportsSaveRestore`.
 
@@ -1607,18 +1610,20 @@ These are the design steps of [../../02-design/graphics.md](../../02-design/grap
    5. Unbinds and rebinds the virtio device from `virtio_rng` through sysfs.
    6. Reads 64 KiB again and prints a second `rng ok` line.
 
-   `LinuxTestGuest` adds the device, sets `entropy = false` when `rng` is requested, and adds `rng_core.default_quality=0` to the command line.
+   `LinuxTestGuest` adds the device and disables built-in entropy when either `rng` or `rng-pending` is requested; it adds `rng_core.default_quality=0` to the command line.
 
    Check: the guest prints both `rng ok` lines on a lab Mac.
-4. **T2 acceptance (design step 4).** `EntropyDeviceTests` checks four things:
+4. **T2 acceptance (design step 4).** `EntropyDeviceTests` checks:
    - For each read, the test finds the offset of `head` within the first 1 MiB of the seeded stream. It then requires `sha256` to equal the SHA-256 of 64 KiB from that offset. This tolerates bytes that the kernel took for itself.
    - The host log shows `DRIVER_OK`, notifications, the reset, `DRIVER_OK` again, and more notifications, in that order.
    - Config probe (host side): after `DRIVER_OK`, `updateConfigurationSpace` with 8 new bytes completes, and 4 bytes fail with `.configSizeMismatch`.
+   - A real VZ guest-memory mapping retained by the model rejects a zero-byte access as `.guestMemoryInvalidated` in both `deviceWillReset` and `deviceWillStop`. The tested VZ shutdown calls `WillReset` before `WillStop`, so the stop callback checks a mapping already invalidated by reset.
    - A validator case: a descriptor that VZ rejects becomes `.customDeviceInvalid`.
+   - A separate forced-stop run records the callback stream as `DRIVER_OK`, mapping creation, then `WillStop`, with no intervening `WillReset`; it rejects the live mapping and attempts completion through the old deferred-element token after stop.
 
    Check: `EntropyDeviceTests` passes.
 5. **VZ reboot behavior and records.**
-   - Boot once with `apkrun.test.rng.reboot=1`, where `/init` calls `reboot -f` after the first read. Record what VZ does: whether it restarts the guest (with `WillReset` and a second boot) or reports `guestDidStop`.
+   - Boot once with `apkrun.test.rng.reboot=1`, where `/init` calls `reboot -f` after the first read. Record what VZ does: whether it restarts the guest (with `WillReset` and a second boot) or reports `guestDidStop`. Fail the observation if the VM enters a failed state or the reboot produces neither accepted outcome.
    - Record the result in the [../../02-design/graphics.md](../../02-design/graphics.md) §16 verification log, the §3.3 acceptance text, and [../../02-design/vm.md](../../02-design/vm.md) §9. Correct §3.1 of that document where a platform fact differs.
    - Write the #063 part of the R-01 Result line in [../risks.md](../risks.md): what was confirmed about queue validity before `DRIVER_OK`, same-size config updates, resets, and mapping invalidation. R-01 stays `open` for #019 and #028.
    - Add the #063 line to the ADR-0002 Verification section.
@@ -1631,7 +1636,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 - **T0** (`Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests/`, with `VirtioDeviceCoreTestSupport`):
   - drain;
-  - exactly-once completion, including the exit test for a forgotten element;
+  - exactly-once completion, deferred completion across an actor hop, duplicate token completion trapping, and debug exit tests for forgotten elements;
   - bounds and overflow;
   - the feature split;
   - `notReady` before `DRIVER_OK`;
@@ -1639,20 +1644,24 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - `EntropyTestDevice` filling buffers from a fake queue and restarting on reset.
 - **T0** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/`): `customDevices` in the built configuration; `.customDeviceInvalid` mapping.
 - **T1**: none.
-- **T2** (`LinuxGuest`, `EntropyDeviceTests`): the `rng` check ([../test-strategy.md](../test-strategy.md) §6.1); the seeded bytes before and after a driver reset; the host log order; the config update probe; the reboot observation run.
+- **T2** (`LinuxGuest`, `EntropyDeviceTests`): the `rng` check ([../test-strategy.md](../test-strategy.md) §6.1); the seeded bytes before and after a driver reset; stale-context rejection by the VZ adapter after rebind; live guest-memory mapping invalidation; the host log order; the config update probe; the reboot observation run with per-stream event ordering; forced-stop invalidation of a live mapping and deferred VZ element, followed by a late completion attempt.
 - **T3**: none.
 
 ### Acceptance criteria
 
-- [ ] With the built-in VZ entropy device disabled, the Linux test guest lists `virtio_rng.0` in `/sys/class/misc/hw_random/rng_available` ([../../02-design/graphics.md](../../02-design/graphics.md) §3.3).
-- [ ] The guest reads 64 KiB from `/dev/hwrng` that match the host's seeded sequence.
-- [ ] After a device reset (driver unbind and bind), a second 64 KiB read works and matches the sequence.
-- [ ] The host log shows `DRIVER_OK`, notifications, and the reset in order.
-- [ ] Every element is completed exactly once. The type system prevents double completion, and a debug build catches a forgotten element (T0).
-- [ ] VZ objects are touched only on the device queue. Guest data is copied once before it is validated (§3.2 design rules).
-- [ ] `supportsSaveRestore` is off for the device.
-- [ ] VZ's guest-reboot behavior is recorded in [graphics.md](../../02-design/graphics.md) §3.3.
-- [ ] R-01 has a Result line for the #063 part, and ADR-0002 Verification has the #063 line.
+- [x] With the built-in VZ entropy device disabled, the Linux test guest lists `virtio_rng.0` in `/sys/class/misc/hw_random/rng_available` ([../../02-design/graphics.md](../../02-design/graphics.md) §3.3).
+- [x] The guest reads 64 KiB from `/dev/hwrng` that match the host's seeded sequence.
+- [x] After a device reset (driver unbind and bind), a second 64 KiB read works and matches the sequence.
+- [x] A retained context from the old generation cannot access the new queue, inspect its features, map its guest memory, or reset the restarted device.
+- [x] A live VZ guest-memory mapping retained across reset and stop rejects access in both model lifecycle callbacks. On this macOS build, VZ sends `WillReset` before `WillStop`, so the mapping checked during stop was already invalidated by reset.
+- [x] The host log shows `DRIVER_OK`, notifications, and the reset in order.
+- [x] Forced VM stop without an earlier device reset invalidates a live guest-memory mapping and a deferred VZ queue element; the recorded callback sequence confirms there was no intervening `WillReset`, and completion through the old handle is attempted after stop.
+- [x] After `DRIVER_OK`, a same-size configuration update succeeds and a different-size update fails with `.configSizeMismatch`.
+- [x] Every element is completed exactly once. The type system prevents double completion of noncopyable handles; the one-shot completion token rejects duplicate calls at runtime, and a debug build catches a forgotten handle (T0).
+- [x] VZ objects are touched only on the device queue. Guest data is copied once before it is validated (§3.2 design rules).
+- [x] `supportsSaveRestore` is off for the device.
+- [x] VZ's guest-reboot behavior is recorded in [graphics.md](../../02-design/graphics.md) §3.3.
+- [x] R-01 has a Result line for the #063 part, and ADR-0002 Verification has the #063 line.
 
 ### Notes
 

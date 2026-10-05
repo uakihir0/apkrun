@@ -264,6 +264,13 @@ released and the state changed to `.stopped`. Public lifecycle calls therefore
 cannot reach a machine that is being detached, and a later `start()` waits for
 the release barrier before making a new driver.
 
+The #063 LinuxGuest T2 probe on arm64 macOS 27.0 build 26A428 recorded the
+guest console's first boot, reboot marker, and second boot in order. The
+serialized VZ callback stream recorded `WillReset` between the custom device's
+first and second `DRIVER_OK`; VZ did not report `guestDidStop` in that run. The
+harness then explicitly stopped the VM. These are per-stream observations for
+the tested OS build, not a cross-version promise.
+
 ### 9.3 Stopping Android correctly
 
 `requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:

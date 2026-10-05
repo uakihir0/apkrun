@@ -38,3 +38,5 @@ Use Virtualization.framework, requiring **macOS 27 or later on Apple Silicon**. 
 ## Verification
 
 G1 (ARM64 Linux boots, #003), #063 (a custom virtio test device works end to end), G3 (SurfaceFlinger renders through virtio-gpu → Metal, #023).
+
+- #063 verification, 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: VirtioDeviceCore and VirtualMachineCore T0 suites passed (26 and 71 tests); the clean filtered-copy Xcode integration build passed; LinuxGuest T2 passed all 10 XCTest cases and 6 observer tests. The seeded virtio-rng survived guest driver unbind/rebind, and config updates and mapping invalidation behaved as designed. The forced-stop callback attachment records no `WillReset` between mapping creation and `WillStop`, then confirms a late completion attempt through the invalidated token. Reboot evidence records the guest-console order and VZ callback order independently; it does not infer an order between those streams. See [graphics.md](../../02-design/graphics.md) §3.3 and §16. R-01 remains open for #019/#028 config-interrupt and hotplug verification.

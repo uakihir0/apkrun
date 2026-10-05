@@ -478,7 +478,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #007 | `connect` timeout and state checks with a fake driver | `VsockConnection` over a `socketpair` | vsock echo of 1 MiB, timeout, disconnect | — |
 | #061 | `LogMessage` privacy rendering, error catalog checks, `ErrorPresenter`, health verdict table ([diagnostics.md](../02-design/diagnostics.md) §12 T1-1, T1-4, T1-5, T1-6); logging lint | compile-fail tests; `LogMirrorWriter`; `apkrun logs` with and without `log show` access | — | — |
 | #062 | `check-module-deps.sh` rejects a fixture manifest with a forbidden edge | — | — | — |
-| #063 | VirtioDeviceCore fakes: drain, completion, bounds, features | — | LinuxGuest `rng` | — |
+| #063 | VirtioDeviceCore fakes: drain, compile-time exactly-once handles, one-shot token runtime guard, bounds, features | — | LinuxGuest `rng`, reboot, and forced-stop lifecycle probes | — |
 
 ### 6.2 M1 Android bring-up
 

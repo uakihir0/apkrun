@@ -106,6 +106,7 @@ Acceptance: the document identifies the exact source components required for APK
 - The provider is `VZCustomVirtioDeviceDelegateProvider(deviceQueue:delegate:)`. The delegate receives `didCreateDevice`, and the device delegate receives `didReceiveNotificationForQueue`, `DidAcceptDriverOk`, `WillStop`, `WillPause`, `WillResume`, `WillReset`, and the save/restore methods. Everything runs on `deviceQueue`, in the process that owns the `VZVirtualMachine` (apkrund).
 - `VZCustomVirtioDevice.queueAtIndex:` and `negotiatedFeatures` are valid only after DRIVER_OK. `guestMemoryMappingAtPhysicalAddress:length:` mappings become invalid after reset, reboot, or stop. `requestDeviceReset` sets DEVICE_NEEDS_RESET. `updateDeviceSpecificConfiguration:completionHandler:` replaces the config bytes with data of the **same size**.
 - `VZVirtioQueue.nextElement` disables notifications until the queue is drained, so callers must loop until it returns `nil`. Element `readBuffers` are zero-copy views of guest memory. `returnToQueue` must be called exactly once. Apple warns about time-of-check/time-of-use (the guest can change memory after we read it).
+- The configuration delegate's `didCreateDevice` callback runs on the VM's serial queue and must set `device.delegate` before returning. The configured device queue serializes all later device and device-delegate operations.
 - Not available: a "raise interrupt" call (completion and config updates are the only signals), and any callback for **guest writes to config space**. `maximumAllowedSharedMemoryRegionCount` is not documented.
 
 ### 3.2 API
@@ -130,44 +131,77 @@ public struct VirtioDeviceDescriptor: Sendable {
 
 public protocol VirtioDeviceModel: AnyObject, Sendable {
     var descriptor: VirtioDeviceDescriptor { get }
-    /// Called on the device queue. `context` stays valid until `deviceWillReset` / `deviceWillStop`.
     func deviceDidStart(context: VirtioDeviceContext, negotiatedFeatures: UInt64)
     func queueNotified(index: Int, context: VirtioDeviceContext)
     func deviceWillPause()
     func deviceWillResume()
-    func deviceWillReset()                          // guest reset or reboot: drop all guest-derived state
-    func deviceWillStop()                           // VM stopping: release host resources
+    func deviceWillReset()
+    func deviceWillStop()
 }
 
-public final class VirtioDeviceContext {            // confined to the device queue
-    public func queue(_ index: Int) -> VirtioQueue
+public final class VirtioDeviceContext {            // not Sendable; synchronous access is device-queue confined
+    public func queue(_ index: Int) throws(VirtioFailure) -> any VirtioQueue
+    public var negotiatedFeatures: UInt64 { get throws(VirtioFailure) }
     public func mapGuestMemory(_ range: GuestPhysicalRange) throws(VirtioFailure) -> GuestMemory
-    public func updateConfigurationSpace(_ bytes: Data) async throws(VirtioFailure)  // same size, else .configSizeMismatch
+    public var configurationUpdater: VirtioDeviceConfigurationUpdater { get }
+    public func updateConfigurationSpace(_ bytes: Data) async throws(VirtioFailure)
     public func requestReset(reason: String)
-    public var negotiatedFeatures: UInt64 { get }
+}
+
+public struct VirtioDeviceConfigurationUpdater: Sendable {
+    public func updateConfigurationSpace(_ bytes: Data) async throws(VirtioFailure)
 }
 
 public protocol VirtioQueue {                       // VZ-backed and fake implementations
     /// Calls `body` for every available element until the queue is empty.
-    func drain(_ body: (consuming VirtioElement) throws -> Void) rethrows
+    /// Handle errors inside the body so the queue can always be drained.
+    func drain(_ body: (consuming VirtioElement) -> Void)
 }
 
 public struct VirtioElement: ~Copyable {
     public var readableByteCount: Int { get }
     public var writableByteCount: Int { get }
     public func copyReadable(maxBytes: Int) throws(VirtioFailure) -> [UInt8]   // one snapshot of guest data
-    public mutating func write(_ bytes: UnsafeRawBufferPointer) throws(VirtioFailure)
+    public func write(_ bytes: UnsafeRawBufferPointer) throws(VirtioFailure)
     public consuming func complete()                                           // returnToQueue, exactly once
     public consuming func deferCompletion() -> PendingElement                  // completion later (fenced commands)
 }
+
+public struct PendingElement: ~Copyable, Sendable {
+    public consuming func complete()
+}
 ```
+
+`VirtioDeviceModel` lifecycle methods default to no-ops. Implementations run on
+the per-device queue. A context is not `Sendable`, so synchronous queue,
+feature, and guest-memory operations cannot be moved into an asynchronous task.
+When asynchronous work needs to update configuration, obtain
+`configurationUpdater` on the device queue before creating the task. Configuration
+updates are serialized per device and tied to the current reset generation;
+reset or release completes outstanding requests with `.notReady`. Each model
+callback receives a context bound to that generation. Its `configurationUpdater`
+carries the captured generation across an actor hop, so a delayed update from a
+previous generation fails with `.notReady` even after the device reaches
+`DRIVER_OK` again. Synchronous queue access, feature inspection, and guest-memory
+mapping also carry that generation: an old context fails with `.notReady` after
+reset even if the device is ready again. A stale `requestReset` is ignored.
+
+`VirtioElement` is non-copyable and device-queue confined. `PendingElement` is
+also non-copyable, but is `Sendable` so a renderer fence may carry it to another
+queue; its completion is always returned to the device queue. For an API that
+requires a copyable escaping closure, `PendingElement` can transfer its storage
+to a package-scoped, lock-protected one-shot completion token. The token keeps
+the abandonment diagnostic and schedules late completion through the same
+device-queue path.
 
 Design rules:
 
 - **One device queue per device** (a serial `DispatchQueue` with `.userInteractive` QoS). VZ objects (`VZCustomVirtioDevice`, queues, elements) are touched only on it.
+- **Keep the VZ callback objects alive.** The configuration provider's delegate and `VZCustomVirtioDevice.delegate` are weak references. The VM driver retains the adapter and model through VM release. `didCreateDevice` is the one callback on the VM queue; it only stores the device and sets its delegate before returning. Before releasing the machine, the driver drains each device queue, stops the model, invalidates guest-backed state, and clears the weak delegate.
 - **Copy, then validate.** Request bytes are copied out of guest memory exactly once (`copyReadable`) before any field is validated. Validated values are never re-read from guest memory. This is the TOCTOU rule from Apple's documentation.
-- **Exactly-once completion.** `VirtioElement` is non-copyable. `complete()` and `deferCompletion()` consume it, and `PendingElement.complete()` consumes the pending handle. The type system prevents double returns (a double `returnToQueue` raises an exception in VZ). A `deinit` check in debug builds catches forgotten elements.
-- **Guest memory mappings** are cached per device and dropped in `deviceWillReset`/`deviceWillStop`. A `GuestMemory` value checks bounds on every access, and every length is checked for overflow (`gpa + len` must not wrap).
+- **Drain without throwing.** `VZVirtioQueue` suppresses notifications until `nextElement()` returns `nil`. The `drain` body therefore cannot throw out of the loop; it handles each element's failure locally and completes the element before the next iteration.
+- **Exactly-once completion.** `VirtioElement` and `PendingElement` are non-copyable, so the type system prevents completing either handle twice. A copyable `PendingElementCompletionToken` supports escaping callbacks; its lock-backed one-shot gate traps at runtime if `complete()` is called a second time (covered by a T0 process-exit test). A double `returnToQueue` raises an exception in VZ. In debug builds, dropping a live handle without completing it schedules/returns the VZ element to keep the guest queue usable, then raises an assertion. Reset or stop invalidates pending elements first, so dropping a handle that the adapter has already invalidated is a no-op and does not assert.
+- **Guest memory mappings** are cached per device and invalidated on reset/stop before the model lifecycle callback. A `GuestMemory` value checks bounds on every access, and every length is checked for overflow (`gpa + len` must not wrap).
 - **Features** are expressed as a `UInt64` and split into `subset0` (bits 0–31) and `subset1` (bits 32–63) only in the VZ adapter.
 - A `FakeVirtioQueue` and `FakeGuestMemory` live in the `VirtioDeviceCoreTestSupport` target so device models can be unit-tested (T0) without a VM.
 
@@ -175,7 +209,22 @@ Design rules:
 
 Following the WWDC26 sample, VirtioDeviceCore ships `EntropyTestDevice`: deviceID 4 (virtio-rng), PCI class 0x10, one queue, no features. It fills each writable buffer from a deterministic generator seeded by the test (so the guest can check the bytes). It is used only in T2 tests.
 
-Acceptance (#063): the Linux test guest ([vm.md](vm.md) §12), with the built-in VZ entropy device disabled, lists `virtio_rng.0` in `/sys/class/misc/hw_random/rng_available`. It reads 64 KiB from `/dev/hwrng` that match the seeded sequence. After a device reset (driver unbind and bind), a second read works. The host log shows DRIVER_OK, notifications, and reset in order. What VZ does on a guest reboot (a device reset and a second boot, or `guestDidStop`) is not documented; #063 observes it and records the result here.
+Acceptance (#063): the Linux test guest ([vm.md](vm.md) §12), with the built-in VZ entropy device disabled, lists `virtio_rng.0` in `/sys/class/misc/hw_random/rng_available`. It reads 64 KiB from `/dev/hwrng` that match the seeded sequence. After a device reset (driver unbind and bind), a second read works. A context retained from the prior generation rejects queue access, feature inspection, and guest-memory mapping after the device is ready again; a reset request through that stale context does not disrupt the current generation. A real guest-memory mapping retained by the test model rejects access as invalidated during both the reset and stop callbacks. On the tested shutdown path VZ sends `WillReset` before `WillStop`, so the mapping observed during `WillStop` was already invalidated by the preceding reset; the adapter also runs its invalidation barrier on `WillStop`. The host log shows `DRIVER_OK`, notifications, and reset in order.
+
+The separate forced-stop probe retains a live mapping and a deferred VZ queue
+element until VM stop. The adapter invalidates both before the model's stop
+callback; a callback timeline records `DRIVER_OK`, mapping creation, and
+`WillStop` with no intervening `WillReset`. The probe then attempts completion
+through the old handle after stop. This covers the stop invalidation path
+without an earlier guest reset.
+
+On arm64 macOS 27.0 build 26A428, the Linux test guest's `reboot -f` produced a
+guest console sequence of the first boot, reboot marker, and second boot. In the
+same run, the serialized VZ callback stream contained `WillReset` between the
+device's first and second `DRIVER_OK`; the VM did not report `guestDidStop`. The
+integration harness then forced the VM to stop after observing the second boot.
+These are per-stream observations on that OS build, not a cross-version
+guarantee.
 
 ---
 
@@ -569,9 +618,9 @@ Each step lists what to build and how it is verified. Steps within a task are in
 ### #063 VirtioDeviceCore + test device (M0)
 
 1. `VirtioDeviceDescriptor`, `VirtioDeviceModel`, `VirtioDeviceContext`, `VirtioQueue`, `VirtioElement`, `GuestMemory` (§3.2), and the VZ adapter that builds `VZCustomVirtioDeviceConfiguration` from a descriptor.
-2. Fakes (`FakeVirtioQueue`, `FakeGuestMemory`) and T0 tests: drain loop, exactly-once completion, bounds and overflow checks, feature splitting.
+2. Fakes (`FakeVirtioQueue`, `FakeGuestMemory`) and T0 tests: drain loop, compile-time exactly-once semantics for noncopyable handles, deferred completion from an async task or completion token, a process-exit test for duplicate token completion, debug exit tests for forgotten handles, bounds and overflow checks, feature splitting.
 3. `EntropyTestDevice` (§3.3). Extend the Linux test guest's `/init` with the `rng` check.
-4. T2: acceptance in §3.3.
+4. T2: acceptance in §3.3, including live guest-memory and deferred-element invalidation during forced VM stop.
 
 ### #019 virtio-gpu device layer (M2)
 
@@ -661,7 +710,7 @@ Subsystem `io.apkrun.graphics`, categories `device` (negotiation, commands, gues
 
 | Tier | Test | Task |
 |---|---|---|
-| T0 | VirtioDeviceCore fakes: drain, completion, bounds, features | #063 |
+| T0 | VirtioDeviceCore fakes: drain, compile-time exactly-once handles, deferred completion (including actor and completion-token hops), duplicate token completion trap, forgotten-handle exit checks, bounds, features | #063 |
 | T0 | `VirtioGPUProtocol` decode/encode for every command, including truncated and oversized inputs; golden vectors from Linux traces | #019 |
 | T0 | `ResourceTable` limits and overflow, backing validation, reset clearing | #019, #022 |
 | T0 | Display event logic (§4.3): generation counter, clearing on `GET_DISPLAY_INFO`, change during an in-flight query | #019, #028 |
@@ -701,7 +750,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Custom virtio API with `EntropyTestDevice`: queue validity before DRIVER_OK, same-size config updates, reset and mapping invalidation, guest reboot | #063 | pending (§3.1, §3.3) |
+| Custom virtio API with `EntropyTestDevice`: queue validity before DRIVER_OK, same-size config updates, reset and stop mapping invalidation, deferred completion, guest reboot | #063 | 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: VirtioDeviceCore and VirtualMachineCore T0 passed (26 and 71 tests); clean filtered-copy Xcode integration build passed; LinuxGuest T2 passed 10 XCTest cases and 6 observer tests. The forced-stop callback attachment records `DRIVER_OK → mapping creation → WillStop`; it contains no `WillReset` between mapping creation and stop. The live mapping is rejected and the old deferred-element completion is attempted after stop. Reboot evidence records the guest console order and VZ callback order independently. Full repository checks passed; the final hostile review's completion-token documentation finding was corrected and a regression test added. See IR-193. |
 | RiftVM source analysis: `riftvm-v0.6.1` commit `51f19193b1d3326b2e164d37a2a59e9970375170`, source/build flags, license and APKRun differences | #018 | 2026-10-05: source-only review and lock validation recorded in [riftvm-analysis.md](riftvm-analysis.md); no renderer build or VM test; maintainer review pending (IR-188) |
 | The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | pending (§12) |
 | Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | pending (§4.3) |

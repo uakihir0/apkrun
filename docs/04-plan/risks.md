@@ -61,7 +61,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Open part.** Scanout hotplug through a config-change interrupt.
 - **Fallbacks** ([../02-design/graphics.md](../02-design/graphics.md) §4.3): A. the Guest Agent forces a DRM connector re-probe (custom image); B. all pool scanouts enabled at boot with a placeholder mode; C. a fixed display count per boot (a product regression, then also recorded under R-04).
 - **Settled by.** #063 (the test device exercises queues, config updates, and resets), #019 (hotplug spike with the Linux test guest), #028 (the same with Android).
-- **Result.** Not yet run.
+- **Result.** Partial (#063, 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428): 26 VirtioDeviceCore T0 tests and 71 VirtualMachineCore T0 tests passed; a clean filtered-copy Xcode integration build passed, followed by all 10 LinuxGuest XCTest cases and 6 observer tests. The test device gates queue/context access until `DRIVER_OK`; same-size configuration updates succeeded, size mismatch was rejected, and guest unbind/rebind reset the device and served a second seeded sample. A real 4 KiB VZ guest-memory mapping at GPA `0x70000000` rejected access in reset, ordinary stop, and forced-stop callbacks. In the forced-stop run, the callback timeline contains no `WillReset` between mapping creation and `WillStop`; a late attempt through the invalidated deferred-element token was recorded after stop. Reboot evidence records the guest-console order and VZ callback order independently; the streams do not establish a cross-stream order. Config-change interrupt delivery is not tested by virtio-rng and remains for #019/#028. R-01 stays open for the virtio-gpu hotplug work.
 
 ### R-02 virglrenderer / ANGLE correctness
 

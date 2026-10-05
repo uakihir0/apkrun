@@ -68,6 +68,9 @@ The `EmbeddedRuntime` trait uses trait-conditioned target dependencies (SE-0450)
 | `<App>Tests`, `<App>UITests` | unit-test and UI-test bundles per app | — | `Apps/<App>/Tests/` (T0), `Apps/<App>/UITests/` (T1, XCUITest against the embedded runtime fake) | the app's modules |
 
 The CLI is not an Xcode target. The `APKRun` target builds it with SwiftPM and embeds it (§11).
+Every target that preprocesses an Info.plist with the shared `BuildStamp.h`
+prefix depends on the `BuildStamp` aggregate target, including
+`APKRunTestHost`.
 
 ### 2.3 Schemes
 

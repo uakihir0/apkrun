@@ -111,6 +111,15 @@ public final class LinuxTestGuestSession: Sendable {
     /// The raw serial output, with the same bounded buffering as `ConsoleChannel`.
     public let consoleOutput: AsyncStream<Data>
 
+    /// The number of bytes dropped from the bounded raw console output stream.
+    public var consoleOutputDroppedByteCount: UInt64 {
+        consoleOutputByteStream.droppedByteCount
+    }
+
+    package var consoleOutputLossByteCount: UInt64 {
+        consoleOutputByteStream.droppedAndPendingByteCount
+    }
+
     /// Parsed `APKRUN-TEST:` records, including the boot and done markers.
     public let records: AsyncStream<LinuxTestGuestRecord>
 
@@ -118,6 +127,7 @@ public final class LinuxTestGuestSession: Sendable {
     public let states: AsyncStream<LinuxTestGuestState>
 
     private let controller: VMController
+    private let consoleOutputByteStream: ConsoleByteStream
     private let recordTask: Task<Void, Never>
     private let stateTask: Task<Void, Never>
 
@@ -137,6 +147,7 @@ public final class LinuxTestGuestSession: Sendable {
                 for record in parser.consume(bytes) {
                     recordStream.continuation.yield(Self.map(record))
                 }
+                recordByteStream.acknowledgeConsumedBytes(bytes.count)
             }
             if !Task.isCancelled {
                 for record in parser.finish() {
@@ -145,7 +156,9 @@ public final class LinuxTestGuestSession: Sendable {
             }
             recordStream.continuation.finish()
         }
-        consoleOutput = console.makeByteStream().stream
+        let consoleOutputByteStream = console.makeByteStream()
+        self.consoleOutputByteStream = consoleOutputByteStream
+        consoleOutput = consoleOutputByteStream.stream
 
         let stateStream = AsyncStream.makeStream(
             of: LinuxTestGuestState.self,
@@ -171,6 +184,27 @@ public final class LinuxTestGuestSession: Sendable {
         try await controller.requestGuestStop()
     }
 
+    /// Sends host input to the guest's system console.
+    public func writeConsoleInput(_ data: Data) throws(ConsoleChannelWriteFailure) {
+        try controller.console(.systemConsole).writeHostInput(data)
+    }
+
+    package func acknowledgeConsoleOutput(_ byteCount: Int) {
+        consoleOutputByteStream.acknowledgeConsumedBytes(byteCount)
+    }
+
+    package func acknowledgeConsoleOutputBarrier() {
+        consoleOutputByteStream.acknowledgeDrainBarrier()
+    }
+
+    package func acknowledgeConsoleOutputStreamEnd() {
+        consoleOutputByteStream.acknowledgeStreamEnd()
+    }
+
+    package func waitForConsoleOutputDrain() async {
+        await consoleOutputByteStream.waitForDrain()
+    }
+
     /// Force-stops the guest.
     public func stop() async throws {
         try await controller.stop()
@@ -181,32 +215,13 @@ public final class LinuxTestGuestSession: Sendable {
         try await controller.reset()
     }
 
-    /// Waits up to two seconds for console EOF, then cancels the parser if needed.
+    /// Waits for the VM log sync and up to two seconds for parsed console EOF.
     ///
     /// Returns `false` when the stream did not reach EOF within the timeout.
     @discardableResult
     public func waitForConsoleDrain() async -> Bool {
-        let didDrain = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await self.recordTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(2))
-                return false
-            }
-
-            let didDrain = await group.next() ?? false
-            if !didDrain {
-                self.recordTask.cancel()
-            }
-            group.cancelAll()
-            return didDrain
-        }
-        if !didDrain {
-            recordTask.cancel()
-        }
-        await recordTask.value
+        let didDrain = await waitForConsoleTaskDrain(recordTask, timeout: .seconds(2))
+        await controller.waitForConsoleLogDrain()
         return didDrain
     }
 
@@ -240,4 +255,32 @@ public final class LinuxTestGuestSession: Sendable {
         case .failed: .failed
         }
     }
+}
+
+package func waitForConsoleTaskDrain(
+    _ task: Task<Void, Never>,
+    timeout: Duration
+) async -> Bool {
+    let didDrain = await withTaskGroup(of: Bool.self) { group in
+        group.addTask {
+            await task.value
+            return true
+        }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return false
+        }
+
+        let didDrain = await group.next() ?? false
+        if !didDrain {
+            task.cancel()
+        }
+        group.cancelAll()
+        return didDrain
+    }
+    if !didDrain {
+        task.cancel()
+    }
+    await task.value
+    return didDrain
 }

@@ -214,7 +214,7 @@ evaluated against a redistribution allow-list.
 
 - `licenseFiles` lists paths inside the upstream source (for example `COPYING`, `LICENSE`, `NOTICE`).
 - A copy of each is committed as `ThirdParty/licenses/<name>/<file>`. `scripts/release/generate-notices.py --refresh <name>` fetches the pinned source and refreshes the copies. For Gradle and Cargo packages whose artifact has no license file, the copy comes from the upstream repository at the pinned version.
-- The `third-party` CI job runs `generate-notices.py --check`, which compares the copies of `kind: source` entries with the fetched sources and fails on a difference ([build-system.md](build-system.md) §15.1).
+- The `third-party` CI job runs `generate-notices.py --check`, which fetches pinned `kind: source` entries to verify their committed license copies and fails on a difference ([build-system.md](build-system.md) §15.1). This license check may fetch a `ships: reference` source, but does not build it or include it in generated notices.
 
 ### 6.2 Generation
 

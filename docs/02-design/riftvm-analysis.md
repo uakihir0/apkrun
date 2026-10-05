@@ -389,9 +389,11 @@ upstream release API reports `immutable: false`. The MIT license copy matches
 the pinned repository's root `LICENSE`.
 
 `scripts/check-lock.sh` accepted the source-only entry. The lock group is
-`graphics-reference`; no APKRun build script refers to or fetches RiftVM.
-`git diff --check` passed. The #018 test strategy defines no executable test
-suite: this task is an analysis document accepted by review. No RiftVM build,
-renderer build, VM boot, Android test, or Metal presentation test was run.
-Maintainer review of the source-version substitution and this analysis is
-still required.
+`graphics-reference`; renderer build-group processing and `check-lock.sh
+--apply` exclude it. The future `generate-notices.py --check` may fetch the
+pinned source solely to verify its committed license copy; it does not build
+RiftVM or include it in generated notices. `git diff --check` passed. The #018
+test strategy defines no executable test suite: this task is an analysis
+document accepted by review. No RiftVM build, renderer build, VM boot, Android
+test, or Metal presentation test was run. Maintainer review of the source-version
+substitution and this analysis is still required.

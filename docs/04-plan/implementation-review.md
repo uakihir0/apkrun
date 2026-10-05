@@ -7305,9 +7305,9 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Choice.** Mount the stress filesystem with a 600-second journal commit interval, signal readiness only after the first stress-file write and rename succeed, stop the VM three seconds later, and require `e2fsck -fy` output to contain `recovering journal` before declaring recovery successful. Continue to verify that the synced token survives.
 
-**Reason.** Accepting `e2fsck` exit 0 or 1 alone can pass on an already-clean filesystem, so it does not prove journal recovery occurred. Signaling only after a successful write and rename proves the stress workload began before the host's delay. The long commit interval is intended to suppress periodic journal commits during the short forced-stop window, and the recovery marker is the required evidence that journal replay happened. The virtual-machine run remains required to validate this behavior on the lab Mac.
+**Reason.** Accepting `e2fsck` exit 0 or 1 alone can pass on an already-clean filesystem, so it does not prove journal recovery occurred. Signaling only after a successful write and rename proves the stress workload began before the host's delay. The long commit interval is intended to suppress periodic journal commits during the short forced-stop window, and the recovery marker is the required evidence that journal replay happened. The signed T2 run required by this decision has now passed on the lab Mac.
 
-**Verification.** Guest shell syntax and the host-side fixture checks pass. Hostile review caught that the original readiness marker preceded the first write; it now follows the first successful write and rename, and the final re-review found no remaining actionable issues. Signed T2 execution has not run, so journal replay remains unverified until the `recover` marker is observed on the guest.
+**Verification.** Guest shell syntax and the host-side fixture checks pass. Hostile review caught that the original readiness marker preceded the first write; it now follows the first successful write and rename, and the final re-review found no remaining actionable issues. On 2026-10-05 UTC, `LinuxGuestBlockTests.testForcedStopDuringWritesCanRecoverTheExt4Disk` passed on arm64 macOS 27.0 (26A428); the guest emitted `APKRUN-BLK-RECOVERY journal replayed`, then mounted the filesystem and verified the token.
 
 ## IR-197: Create block fixtures only in a fresh directory
 
@@ -7323,7 +7323,7 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Verification.** The fixture test checks deterministic image sizes and hash output, and verifies that the generator refuses a directory containing a symlink without modifying its target.
 
-## IR-198: Keep guest-visible block order unverified until T2
+## IR-198: Record measured guest-visible block order
 
 | Field | Value |
 |---|---|
@@ -7331,8 +7331,22 @@ transfer the executable path recorded for the earlier PID to it.
 | Task | #005 |
 | Affected documents | [vm.md](../02-design/vm.md) §§5, 17; [M00](issues/M00-repository-and-vm-foundation.md) #005 |
 
-**Choice.** Describe attachment-array order as the #005 test expectation, while marking the corresponding guest-visible `/sys/block/vdX/serial` order unverified until the signed T2 test records it.
+**Choice.** Record the signed T2 observation that guest-visible `/sys/block/vdX/serial` order follows the VZ attachment array for both `[ro, rw]` and `[rw, ro]` on macOS 27.0 (26A428). Keep this as a platform observation; product behavior must not depend on `vdX` letters or PCI slot numbers.
 
-**Reason.** T0 proves the order in the built `VZVirtualMachineConfiguration.storageDevices` array, but that does not prove the guest's device enumeration. The current environment lacks the local signing settings needed to run the virtualization test. No product code relies on `vdX` letters or PCI slot numbers.
+**Reason.** T0 proves the order in the built `VZVirtualMachineConfiguration.storageDevices` array, but only the guest test can establish its visible enumeration. The signed T2 test now covers both attachment orders on this OS build. VZ numbering may change with a future macOS release, so the host-side API continues to identify disks by serial rather than letter.
 
-**Verification.** T0 configuration inspection passes. The order and reversed-order guest checks are implemented but have not run against the Linux VM; do not record a device-order result yet.
+**Verification.** `LinuxGuestBlockTests.testBlockDeviceSerialOrderTracksBothAttachmentOrders` passed on 2026-10-05 UTC, arm64 macOS 27.0 (26A428). The guest reported the expected serial sequence for `[ro, rw]` and `[rw, ro]`.
+
+## IR-199: Use a temporary local signing identity for LinuxGuest T2
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #005 |
+| Affected files | [M00](issues/M00-repository-and-vm-foundation.md) #005; [vm.md](../02-design/vm.md) §17 |
+
+**Choice.** When the documented signing environment variables were unset, select the locally valid Apple Development identity with the latest certificate expiration for this T2 invocation. Pass the identity and Linux test artifact path only to the child `xcodebuild` process; do not write them to shell startup files or repository configuration.
+
+**Reason.** The signed LinuxGuest test is required to validate VZ disk behavior, and multiple valid local identities were available. Selecting the one with the latest expiration avoids choosing an identity near expiry while keeping the run temporary and independent of a committed team ID or certificate fingerprint.
+
+**Verification.** On 2026-10-05 UTC, the test host signed `APKRunTestHost.app` and `IntegrationTests.xctest`; `codesign --verify --deep --strict` passed for both, and the host app carried the Virtualization entitlement. The `LinuxGuest` test-plan configuration passed all three `LinuxGuestBlockTests`. The xcresult is local to the test host at `/tmp/apkrun-blk-signed-T2.xcresult`; no signing identity or team identifier is recorded in the repository.

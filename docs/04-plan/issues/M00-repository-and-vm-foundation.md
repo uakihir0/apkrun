@@ -1295,22 +1295,23 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Acceptance criteria
 
-- [ ] Read-only and read-write disk images are supported. The guest reads the read-only disk's known content and cannot write to it.
-- [ ] Disk order is deterministic. The guest sees the disks in `VMDefinition.disks` order, and each disk's `/sys/block/vdX/serial` equals its `identifier`.
-- [ ] Tests cover invalid paths and permissions: missing, not a regular file, dangling symlink, duplicate, not writable, not readable, and a bad identifier.
-- [ ] The Linux guest can mount, write, reboot, and recover a test file system. The token survives a new boot, and after a forced stop mid-write, `e2fsck` repairs the file system and the token is intact.
-- [ ] Disk logs contain the role and the file name, never the full path.
-- [ ] The `e2fsprogs` packages are pinned in the lock file.
+- [x] Read-only and read-write disk images are supported. The guest reads the read-only disk's known content and cannot write to it.
+- [x] Disk order is deterministic. The guest sees the disks in `VMDefinition.disks` order, and each disk's `/sys/block/vdX/serial` equals its `identifier`.
+- [x] Tests cover invalid paths and permissions: missing, not a regular file, dangling symlink, duplicate, not writable, not readable, and a bad identifier.
+- [x] The Linux guest can mount, write, reboot, and recover a test file system. The token survives a new boot, and after a forced stop mid-write, `e2fsck` repairs the file system and the token is intact.
+- [x] Disk logs contain the role and the file name, never the full path.
+- [x] The `e2fsprogs` packages are pinned in the lock file.
 
 ### Notes
 
-- **Record:** the observed device order on the current macOS build goes into [../../02-design/vm.md](../../02-design/vm.md) §5, which currently says "to be confirmed". If the order differs from the array, nothing in APKRun may rely on letters. Record the case under R-16.
+- **Record:** the signed T2 test on macOS 27.0 (26A428) observed guest-visible serial order matching both the normal and reversed attachment arrays; [../../02-design/vm.md](../../02-design/vm.md) §5 records the result. Nothing in APKRun may rely on `vdX` letters or PCI slot numbers; record any change on a later macOS build under R-16.
 - **Pitfall:** `rw.img` is sparse. Copying it with a tool that is not sparse-aware inflates it to 64 MiB. That is harmless, but it slows the runner cache.
 - **Pitfall:** the `stress` phase must `sync` its token file before the loop starts. Otherwise a forced stop can legitimately lose the token.
 - The `.diskNotReadable` case and the `blk` phase protocol are choices of this plan. The case is in [vm.md](../../02-design/vm.md) §3. The `blk` phases are defined only here.
 - The disk generator creates a fresh, private output directory and refuses an existing one so it cannot follow an existing `ro.img` symlink and overwrite its target.
 - **Review decision (IR-195).** The e2fsprogs lock entries use `LGPL-2.1-only` for code whose upstream notice grants LGPL version 2 or any later version. This selects a later version already allowed by that grant and present on the tooling allow-list; it does not change the allow-list. Maintainer review of this license interpretation is required before treating it as settled.
-- **Review decisions (IR-196–IR-198).** The recovery phase requires observable journal replay; the disk generator rejects pre-existing output directories; and VZ guest-visible device order remains unverified until the signed T2 result is recorded.
+- **Review decisions (IR-196–IR-199).** The recovery phase requires observable journal replay; the disk generator rejects pre-existing output directories; T2 records guest-visible order on this macOS build; and the local signing-identity choice for this run is documented without persisting identity details.
+- **Implementation checkpoint (2026-10-05 UTC):** 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned test initramfs was rebuilt with SHA-256 `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`. On an arm64 MacBook Pro with macOS 27.0 (26A428), the signed `LinuxGuestBlockTests` T2 run passed all three cases: read-only enforcement and persistence across a new VM, ext4 journal replay after a forced stop, and guest-visible serial order for both attachment orders. The xcresult was written to `/tmp/apkrun-blk-signed-T2.xcresult` on the test host. T3 is not specified for #005.
 
 ---
 

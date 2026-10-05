@@ -158,7 +158,7 @@ What the guest sees on VZ (from a captured VZ device tree; to be confirmed by #0
 Consequences for Android:
 
 - `androidboot.boot_devices` must name the PCI host bridge's platform device (crosvm uses `10000.pci`; the VZ value is discovered in #011 from `readlink -f /sys/block/vda`). All virtio-blk disks sit under that one bridge, so a single value covers `os.img`, `persistent.img`, and `userdata.img` ([android-image.md](android-image.md) §5.3).
-- The #005 acceptance test expects guest-visible block-device order to follow the configuration arrays. This remains unverified on the current macOS build until the signed T2 result is recorded; nothing in APKRun relies on `vdX` letters or PCI slot numbers. Android finds partitions by GPT name, and our code finds disks by `blockDeviceIdentifier` if it ever needs to.
+- The signed #005 T2 test on arm64 macOS 27.0 (26A428) observed guest-visible block-device serial order following the configuration arrays for both `[ro, rw]` and `[rw, ro]`. This is a measured result for that OS build, not a product dependency: nothing in APKRun relies on `vdX` letters or PCI slot numbers. Android finds partitions by GPT name, and our code finds disks by `blockDeviceIdentifier` if it ever needs to.
 - The discovered topology (`lspci -nn`, `/sys/bus/pci/devices`, `/proc/device-tree` dump) is committed to `Images/reference/vz/<macOS build>/topology.txt` by #011 and re-checked by the T2 suite on each new macOS build (R-16).
 
 ## 6. Console ports
@@ -433,8 +433,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
 | Serial port numbering with three ports | #004 | pending: IntegrationTests builds for testing with signing disabled, but VM execution has not run because the required local signing settings are unavailable |
-| Read-only disks are read-only in the guest | #005 | pending |
-| Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05, Mac17,9, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; IntegrationTests `build-for-testing` succeeded with signing disabled; pinned initramfs rebuilt with SHA-256 `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`. Signed LinuxGuest T2 remains pending because local signing settings are unavailable; no guest-order or recovery result is claimed |
+| Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |
+| Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |
 | NAT network: DHCP lease and a host-local HTTP fetch | #006 | pending |
 | vsock echo, timeout, and disconnect detection | #007 | pending |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5) |

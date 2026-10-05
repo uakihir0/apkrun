@@ -247,8 +247,13 @@ let package = Package(
         ),
         .testTarget(
             name: "VirtioDeviceCoreTests",
-            dependencies: ["VirtioDeviceCore"],
+            dependencies: ["VirtioDeviceCore", "VirtioDeviceCoreTestSupport"],
             path: "Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTests"
+        ),
+        .target(
+            name: "VirtioDeviceCoreTestSupport",
+            dependencies: ["VirtioDeviceCore"],
+            path: "Packages/VirtioDeviceCore/Tests/VirtioDeviceCoreTestSupport"
         ),
         .testTarget(
             name: "VirtualMachineCoreTests",

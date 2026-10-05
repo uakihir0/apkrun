@@ -271,7 +271,11 @@ let package = Package(
         ),
         .testTarget(
             name: "VirtualMachineCoreSystemTests",
-            dependencies: ["DiagnosticsCore", "VirtualMachineCore"],
+            dependencies: [
+                "DiagnosticsCore",
+                "VirtualMachineCore",
+                "VirtualMachineCoreTestSupport",
+            ],
             path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests"
         ),
         .target(

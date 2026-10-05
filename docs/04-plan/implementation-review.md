@@ -6409,13 +6409,15 @@ review found no actionable issues. The target capture and all its artifacts
 remain diagnostic-only.
 
 **Open provenance check for maintainer review.** The sanitized Apport summary
-contains the package and ELF Build IDs but does not retain the exact
-`ExecutablePath` field. The current Lima `.crash` inventory and Apport log
-also contain no crosvm report or entry. The `Launcher Build ID` is the
-Cuttlefish VCS revision, not a crosvm ELF identity. Keep the runtime path
-inferred from the package unconfirmed unless the original report becomes
-available; if it does, record only its `ExecutablePath` field and keep the raw
-report and core private.
+for IR-170's 2026-10-04 crash does not retain the exact `ExecutablePath`
+field. The current Lima `.crash` inventory and Apport log also contain no
+crosvm report or entry, so the path for PID 1573779 remains unconfirmed.
+IR-158's separate report for PID 1397163 names
+`/usr/lib/cuttlefish-common/bin/crosvm`; that evidence applies only to that
+older process. The `Launcher Build ID` is the Cuttlefish VCS revision, not a
+crosvm ELF identity. If the original report for PID 1573779 becomes
+available, record only its `ExecutablePath` field and keep the raw report
+and core private.
 
 ## IR-172: Diagnose guest EGL selection
 
@@ -7089,4 +7091,4 @@ root-cause finding.
 
 The configured command and expected executable are separate because a diagnostic launcher can `fexecve` another binary. The adjacent gfxstream path is only a candidate: Cuttlefish or the dynamic loader may select another library. `elf_identity.py` uses bounded ELF note parsing and streaming SHA-256; it does not add a host-tool dependency and emits no paths or raw file data.
 
-**Verification.** The focused identity suite passed 13 tests, including ELF32/ELF64, little- and big-endian notes, missing and malformed Build IDs, short non-ELF files, mutation during inspection, and unavailable/non-regular paths. The full image-tool suite passed 572 tests with four platform-specific skips. `scripts/ci/run-checks.sh` passed all six checks, and the final adversarial review found no remaining actionable issues. The helper run directly on the Lima host reproduced the crosvm and gfxstream Build IDs and SHA-256 values above. No new Cuttlefish boot was attempted; #064 remains open and no historic Apport `ExecutablePath` is claimed.
+**Verification.** The focused identity suite passed 13 tests, including ELF32/ELF64, little- and big-endian notes, missing and malformed Build IDs, short non-ELF files, mutation during inspection, and unavailable/non-regular paths. The full image-tool suite passed 572 tests with four platform-specific skips. `scripts/ci/run-checks.sh` passed all six checks, and the final adversarial review found no remaining actionable issues. The helper run directly on the Lima host reproduced the crosvm and gfxstream Build IDs and SHA-256 values above. The configured `$CVD_HOST_DIR` files resolve to the installed package files, confirming current configured-file identity but not, by itself, the executable used by a historical process. IR-158 separately records that Apport named `/usr/lib/cuttlefish-common/bin/crosvm` for the older crosvm PID 1397163. Do not transfer that path claim to IR-170's later PID 1573779. No new Cuttlefish boot was attempted; #064 remains open.

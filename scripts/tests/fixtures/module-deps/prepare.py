@@ -167,26 +167,13 @@ elif mode == "production-nested-tests-import":
     hidden_source.parent.mkdir(parents=True)
     hidden_source.write_text("import GraphicsCore\n")
 elif mode == "target-owner-path-mismatch":
-    old_declaration = (
-        '.target(\n'
-        '            name: "GraphicsCore",\n'
-        '            dependencies: ["VirtioDeviceCore", "DiagnosticsCore"],\n'
-        '            path: "Packages/GraphicsCore/Sources/GraphicsCore"\n'
-        "        )"
-    )
-    new_declaration = (
-        '.target(\n'
-        '            name: "GraphicsCore",\n'
-        '            dependencies: [\n'
-        '                "VirtualMachineCore", "GraphicsCore", "InputCore", "GuestProtocol",\n'
-        '                "ImageCore", "RuntimeAPI", "DiagnosticsCore",\n'
-        "            ],\n"
-        '            path: "Packages/RuntimeCore/Sources/GraphicsCore"\n'
-        "        )"
-    )
-    if old_declaration not in manifest:
+    target_start = manifest.find('.target(\n            name: "GraphicsCore",')
+    old_path = 'path: "Packages/GraphicsCore/Sources/GraphicsCore"'
+    path_start = manifest.find(old_path, target_start)
+    if target_start < 0 or path_start < 0:
         raise SystemExit("could not relocate GraphicsCore target in fixture manifest")
-    manifest = manifest.replace(old_declaration, new_declaration, 1)
+    new_path = 'path: "Packages/RuntimeCore/Sources/GraphicsCore"'
+    manifest = manifest[:path_start] + new_path + manifest[path_start + len(old_path):]
     old_source = destination / "Packages/GraphicsCore/Sources/GraphicsCore"
     moved_source = destination / "Packages/RuntimeCore/Sources/GraphicsCore"
     shutil.copytree(old_source, moved_source)

@@ -1216,7 +1216,7 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen third-party build test-swift test-images]
+  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
     errors << "CI jobs must match the required job set"
   end

@@ -125,6 +125,7 @@ jobs:
 
   test-swift:
     name: test-swift
+    needs: third-party
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -133,6 +134,18 @@ jobs:
           persist-credentials: false
       - name: Prepare result directory
         run: mkdir -p build/ci
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: third-party-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ThirdParty/out/virgl-runtime/${{ steps.third-party-key.outputs.key }}
+          key: ${{ runner.os }}-virgl-runtime-${{ steps.third-party-key.outputs.key }}
+      - name: Verify graphics libraries and public headers
+        run: scripts/build-third-party.sh virgl-runtime
       - name: Run Swift T0 tests
         run: swift test --skip 'SystemTests' -j 2 --xunit-output build/ci/swift-tests.xml
       - name: Upload test results on failure
@@ -145,6 +158,39 @@ jobs:
             build/ci/*.xml
           if-no-files-found: warn
           retention-days: 14
+
+  test-graphics:
+    name: test-graphics
+    needs: third-party
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: third-party-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ThirdParty/out/virgl-runtime/${{ steps.third-party-key.outputs.key }}
+          key: ${{ runner.os }}-virgl-runtime-${{ steps.third-party-key.outputs.key }}
+      - name: Verify graphics libraries and public headers
+        run: scripts/build-third-party.sh virgl-runtime
+      - name: Require a Metal-capable runner
+        run: >-
+          swift -e 'import Metal; guard MTLCreateSystemDefaultDevice() != nil
+          else { fatalError("runnerMissingMetal") }'
+      - name: Run Metal and VirGL T1 tests
+        run: swift test --filter GraphicsCoreSystemTests -j 2
+      - name: Run Metal and VirGL T1 tests with Address Sanitizer
+        run: swift test --sanitize=address --filter GraphicsCoreSystemTests -j 2
+      - name: Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer
+        run: swift test --sanitize=undefined --filter GraphicsCoreSystemTests -j 2
 
   test-images:
     name: test-images

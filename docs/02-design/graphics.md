@@ -315,7 +315,7 @@ Commands flow device queue → render thread in batches (one batch per queue dra
 
 ### 5.2 GraphicsBridge
 
-A C target (`Packages/GraphicsCore/Sources/GraphicsBridge`, with a small Objective-C file for Metal/IOSurface interop). Swift talks only to this interface, never to virglrenderer or EGL headers directly:
+A C target (`Packages/GraphicsCore/Sources/GraphicsBridge`, with Objective-C for Metal interop). Swift talks only to this interface, never to virglrenderer or EGL headers directly:
 
 ```c
 typedef struct gb_renderer gb_renderer;
@@ -326,15 +326,15 @@ typedef struct {
 } gb_callbacks;
 
 int  gb_renderer_create(const gb_callbacks *cb, void *user, gb_renderer **out);   // EGL (ANGLE Metal) + virgl_renderer_init
-void gb_renderer_destroy(gb_renderer *r);
+int  gb_renderer_destroy(gb_renderer *r);
 int  gb_renderer_reset(gb_renderer *r);
-void *gb_renderer_metal_device(gb_renderer *r);             // id<MTLDevice> ANGLE uses (EGL_ANGLE_device_metal)
+int  gb_renderer_metal_device(gb_renderer *r, void **out);  // id<MTLDevice> ANGLE uses (EGL_ANGLE_device_metal)
 
 int  gb_capset_info(gb_renderer *r, uint32_t capset_id, uint32_t *max_version, uint32_t *max_size);
-int  gb_capset_fill(gb_renderer *r, uint32_t capset_id, uint32_t version, void *out);
+int  gb_capset_fill(gb_renderer *r, uint32_t capset_id, uint32_t version, void *out, size_t out_size_bytes);
 
 int  gb_ctx_create(gb_renderer *r, uint32_t ctx_id, const char *name);
-void gb_ctx_destroy(gb_renderer *r, uint32_t ctx_id);
+int  gb_ctx_destroy(gb_renderer *r, uint32_t ctx_id);
 int  gb_ctx_attach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
 void gb_ctx_detach_resource(gb_renderer *r, uint32_t ctx_id, uint32_t res_id);
 int  gb_submit(gb_renderer *r, uint32_t ctx_id, const void *cmd, uint32_t size_bytes);
@@ -358,6 +358,9 @@ int  gb_wait_sync(gb_renderer *r, void *sync, uint64_t timeout_ns);
 Implementation notes:
 
 - EGL display: `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, …, EGL_PLATFORM_ANGLE_TYPE_ANGLE = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE)`. The pinned RiftVM prototype then calls `eglInitialize`, binds `EGL_OPENGL_ES_API`, and creates a 1 × 1 pbuffer config with GLES 2/3 support and 8-bit RGBA channels. Its `virgl_renderer_init` uses callback version 4 and **flags `0`**, with GL context create/destroy, make-current, fence, and EGL-display callbacks. It does not pass `VIRGL_RENDERER_USE_EGL` or `VIRGL_RENDERER_USE_SURFACELESS`; details are in [riftvm-analysis.md](riftvm-analysis.md) §2–§4.
+- `GraphicsBridge` loads the four app-bundled dylibs from `Contents/Frameworks/VirGLRuntime` only after finding an `.app` with one of the exact `CFBundleIdentifier`/`APKRunBuildIdentity` pairs: `io.apkrun.APKRun`/`release`, `io.apkrun.APKRun.updatetest`/`updatetest`, or (in Debug) `io.apkrun.APKRun.dev`/`dev`. ReleaseUpdateTest shares the Release package configuration, so its identity must be selected from the app's Info.plist at runtime. The resolver rejects a runtime directory or library symlink that resolves outside the bundle. Debug builds can override this with `APKRUN_VIRGL_RUNTIME_PATH` and otherwise search the repository's verified `ThirdParty/out/virgl-runtime/current` cache. The T1 renderer test sets that debug override from its source location because SwiftPM's test runner executable lives under `.build/`; a separate resolver test exercises valid bundle identities and rejects identity mismatches and symlink escapes.
+- virglrenderer has one process-wide renderer state. `GraphicsBridge` holds a process mutex while admitting one renderer, copies the public callback table into its opaque renderer, and keeps virglrenderer’s callback table alive until cleanup. Creation records the owner thread; every public renderer operation checks that thread and returns a typed status without changing state on mismatch. Callers serialize access and finish all in-flight calls, including rejected off-thread calls, before destroying the renderer; a handle is invalid after successful destruction. Callbacks run on the renderer thread. Callbacks and the ANGLE `MTLDevice` remain valid through renderer destruction. `gb_renderer_reset` invalidates guest-derived IDs; callers discard them before submitting more work.
+- `gb_capset_fill` requires the caller's output-buffer length. The bridge re-queries the maximum capset size and rejects an undersized buffer before calling virglrenderer.
 - The IOSurface-backed Metal textures must be created on **ANGLE's `MTLDevice`**, queried with `EGL_ANGLE_device_metal` (`eglQueryDisplayAttribEXT(EGL_DEVICE_EXT)` → `eglQueryDeviceAttribEXT(EGL_METAL_DEVICE_ANGLE)`). On multi-GPU Macs this avoids cross-device copies.
 - `gb_present_blit`: `virgl_renderer_borrow_texture_for_scanout` gives the GL texture of the resource. The destination `MTLTexture` is imported once per pool buffer as an `EGLImage` (`EGL_METAL_TEXTURE_ANGLE`) and attached to an FBO. `glBlitFramebuffer` performs the copy with Y-flip and format conversion. Then an EGL fence sync is created and `glFlush` is called.
 - RiftVM's prototype instead blits to a same-process `CAMetalLayer` drawable. Its inspected `glBlitFramebuffer` call uses increasing Y coordinates and has no explicit vertical reversal or separate format-conversion step. This does not change APKRun's intended blit; #023 verifies the wrapper-facing IOSurface orientation and pixel layout.
@@ -632,6 +635,7 @@ Before Android, prove VirGL end to end with Linux:
 | Case | Meaning | Remediation shown |
 |---|---|---|
 | `rendererInitFailed(stage, detail)` | EGL/ANGLE/virglrenderer initialization failed (stage: `egl`, `metal`, `virgl`) | update macOS / APKRun; try Graphics Safe Mode; attach diagnostics |
+| `rendererOperationFailed(operation, detail)` | capset, context, reset, or teardown failed, including a call from the wrong thread | restart Android; attach diagnostics if it continues |
 | `rendererLost(reason)` | context loss or GPU removal | Android restarts automatically |
 | `libraryMissing(name)` | VirGLRuntime dylib missing or invalid signature | reinstall APKRun |
 | `scanoutInvalid(ScanoutID)` | host requested a scanout outside 0…15 | bug report |
@@ -701,7 +705,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | RiftVM source analysis: `riftvm-v0.6.1` commit `51f19193b1d3326b2e164d37a2a59e9970375170`, source/build flags, license and APKRun differences | #018 | 2026-10-05: source-only review and lock validation recorded in [riftvm-analysis.md](riftvm-analysis.md); no renderer build or VM test; maintainer review pending (IR-188) |
 | The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | pending (§12) |
 | Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | pending (§4.3) |
-| Clean build of the runtime libraries from the lock file; renderer create and the `VIRGL2` capset on the host | #020 | pending (§5.1) |
+| Clean build of the runtime libraries from the lock file; renderer create, `VIRGL2` capset, context lifecycle, and recreation on the host | #020 | 2026-10-05, arm64 macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: clean native build and verified cache hit (IR-191); GraphicsBridge T0 (3 tests), host T1 (2 tests) normal/ASan/UBSan, Release bundle check, and full repository checks passed. Hostile review found no actionable P1/P2; callers must quiesce before destroy (IR-192). Maintainer review pending. |
 | `kmscube` on the Linux test guest: `virgl` renderer and `hostReadbacks = 0` headless (#022), ≥ 55 fps in the development window (#023) | #022, #023 | pending (§12) |
 | Android binds `virtio_gpu`: `card0` with 16 `Virtual-N` connectors, only `Virtual-1` connected | #021 | pending (§12) |
 | SurfaceFlinger uses GLES through virgl, no guest SwiftShader or ANGLE libraries, `sys.boot_completed=1` | #022 | pending (§5.3) |

@@ -263,10 +263,11 @@ Available in development builds only (`APKRUN_EMBEDDED_RUNTIME`). They run the r
 | `apkrun dev power sleep \| wake` | #069 | injects host sleep and wake messages ([runtime-daemon.md](runtime-daemon.md) §6) of the running `apkrun dev boot`. Like `dev console`, it does not run a runtime and does not take the instance lock: it writes the request to the control socket `$APKRUN_HOME/Runtime/dev-console/control.sock` of the process that owns the instance, which calls `DeveloperService.injectPower` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md)). Fails with exit 69 when no `apkrun dev boot` process owns the instance |
 | `apkrun dev adb [<args>…]` | #015 | runs the developer's `adb` (platform-tools on `PATH`) as `adb -s 127.0.0.1:6520 <args>` against the dev instance. APKRun does not ship `adb` |
 
-For `apkrun dev linux`, `APKRUN_TEST_LINUX_DIR` must be an absolute path so
-the artifact scripts, CLI, and hosted T2 tests select the same directory even
-when they run from different working directories. The default is
-`/tmp/apkrun-test-linux`.
+In Debug builds, `apkrun dev linux` honors `APKRUN_TEST_LINUX_DIR`; it must be
+an absolute path so the artifact scripts, CLI, and hosted T2 tests select the
+same directory even when they run from different working directories. Release
+builds ignore this test-only override and use `/tmp/apkrun-test-linux` unless
+the kernel and initramfs paths are supplied directly.
 
 ---
 

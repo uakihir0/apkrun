@@ -141,7 +141,7 @@ The product build compiles the same crate with the Rust prebuilt of the pinned A
 | `ANDROID_HOME`, `ANDROID_NDK_HOME` | §2.5 | Gradle, cargo-ndk, `adb` |
 | `APKRUN_ANDROID_BUILD_API_KEY` | §3.1 | `apkrun_image fetch` |
 | `APKRUN_HOME` | unset (Debug builds default to `~/Library/Application Support/APKRun-Dev/`, [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §2.6) | host tools, tests |
-| `APKRUN_TEST_LINUX_DIR` | unset (default `/tmp/apkrun-test-linux/`) | T2 Linux guest tests (§4) |
+| `APKRUN_TEST_LINUX_DIR` | unset (Debug CLI only; default `/tmp/apkrun-test-linux/`) | T2 Linux guest tests (§4) |
 | `APKRUN_TEST_DEVELOPMENT_TEAM` | Apple Development team ID for the lab test host | signed T2 and G1 VM tests |
 | `APKRUN_TEST_CODE_SIGN_IDENTITY` | SHA-1 fingerprint of that team's Apple Development certificate | signed T2 and G1 VM tests |
 | `APKRUN_AOSP_BUILDER` | `user@host` of the Linux builder | `scripts/aosp/remote-build.sh` (§5.5) |

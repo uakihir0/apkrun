@@ -266,7 +266,7 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 - A PyYAML source pin in the same group, so virglrenderer’s Meson configuration uses a reproducible Python module without relying on user-site packages.
 - Build scripts for ANGLE (Metal backend only), libepoxy, and virglrenderer.
 - The reviewed macOS, EGL/GLES, Metal shader, and MSAA patches from #018 (§5.1).
-- The `GraphicsBridge` skeleton: `gb_renderer_create`, `gb_renderer_destroy`, `gb_renderer_metal_device`, `gb_capset_info`, and `gb_capset_fill`.
+- The `GraphicsBridge` skeleton: `gb_renderer_create`, `gb_renderer_destroy`, `gb_renderer_metal_device`, `gb_capset_info`, `gb_capset_fill`, and the minimal context lifecycle needed by the T1 test. Capset writes include an explicit output-buffer length.
 - The CI job with caching by lock hash.
 - Embedding the output into `APKRun.app/Contents/Frameworks/VirGLRuntime/`.
 - Out of scope:
@@ -282,7 +282,7 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 - `ThirdParty/build/build-{angle,libepoxy,virglrenderer}.sh`, driven by `scripts/build-third-party.sh virgl-runtime`. The output goes to `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/` with a verified manifest.
 - The `GraphicsBridge` C target with the skeleton functions of §5.2 and opaque handles only ([AGENTS.md](../../../AGENTS.md) §6.5).
 - The T1 renderer test.
-- The CI third-party job, with a cache keyed by the lock hash and a weekly clean build.
+- The CI third-party job, with a cache keyed by lock and environment hashes, Swift T0 and graphics T1 jobs that restore and verify that cache, and a weekly clean build.
 - The notices of the three components in `ThirdPartyNotices.html`.
 
 ### Implementation steps
@@ -300,38 +300,43 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
    - Check: `scripts/build-third-party.sh virgl-runtime` on a fresh checkout writes the four libraries to `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`; an unchanged second run on the same toolchain verifies the manifest and does no build work.
 3. **GraphicsBridge skeleton.**
    - Create the C API of §5.2 for renderer creation, destruction, the Metal device, and the capsets.
+   - Resolve bundled libraries only from an ancestor app bundle with a matching bundle identifier and `APKRunBuildIdentity`: the production Release pair, the `ReleaseUpdateTest` pair, or the Debug pair. ReleaseUpdateTest uses Release-built package code, so the identity is checked at runtime; unrelated or mismatched bundle identities remain rejected.
+   - Reject a runtime directory or any runtime library symlink that resolves outside the matched app bundle. Keep the resolver probe available only in Debug for filesystem-fixture tests.
    - EGL uses `EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`. The Metal device comes from ANGLE through `EGL_ANGLE_device_metal`.
-   - A failure maps to `GraphicsFailure.rendererInitFailed` with the stage `egl`, `metal`, or `virgl`, and a missing library maps to `libraryMissing` (§13.1).
+   - Enforce virglrenderer’s process-wide singleton and keep callback state alive through teardown. Enforce same-thread renderer ownership for every operation, including destroy. Require callers to finish and synchronize all in-flight calls before destroy, and prohibit use of a handle after successful destroy. Reject capset writes whose output buffer is smaller than the reported capset size.
+   - Initialization failures map to `GraphicsFailure.rendererInitFailed` with the stage `egl`, `metal`, or `virgl`; missing libraries map to `libraryMissing`; runtime operation failures map to `rendererOperationFailed` (§13.1).
    - Check: T1 passes.
 4. **Host-only renderer test.**
-   - The T1 test creates the renderer, queries the `VIRGL2` capset, creates a context, and destroys everything.
+   - The T1 test creates the renderer, queries and fills the `VIRGL2` capset, rejects undersized output, creates/destroys/recreates a context ID, and verifies wrong-thread Metal-device, capset, context, reset, and destroy operations are rejected. It joins the worker before owner-thread teardown to satisfy the renderer lifetime contract, then verifies renderer recreation.
+   - A bundle-resolver test accepts the exact Release and ReleaseUpdateTest identity pairs, rejects mismatched or unknown identities, and rejects runtime-directory and library symlink escapes.
    - It needs a Metal device. Without one it skips with a clear message.
-   - It also runs under ASan and UBSan.
-   - Check: T1 passes on a Mac runner, and the sanitizer run reports nothing.
+   - It also runs under Address Sanitizer and Undefined Behavior Sanitizer. CI first checks that its Mac runner has a Metal device, so missing Metal fails CI rather than silently skipping.
+   - Check: T1 passes on a Mac runner, and both sanitizer runs report no issue.
 5. **CI and embedding.**
    - The CI `third-party` job runs `scripts/build-third-party.sh virgl-runtime`, which fetches locked sources before it calls `scripts/check-lock.sh --apply`, and caches the verified libraries by the composite key. A weekly job builds them clean.
+   - Swift T0 and Graphics T1 jobs restore and validate that same composite cache because compiling GraphicsBridge requires the pinned public headers.
    - The app build embeds the output in `APKRun.app/Contents/Frameworks/VirGLRuntime/`.
-   - Check: the clean CI job passes, and the Debug CLI finds the libraries.
+   - Check: the clean CI job passes, T1 and sanitizer runs pass, and a Debug CLI build resolves the libraries.
 
 ### Tests
 
 See [../test-strategy.md](../test-strategy.md) §6.3.
 
 - **T1** (`Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/`): `GraphicsBridge` renderer create and destroy, and the capsets. It needs Metal.
-- **CI:** the clean build from the lock file.
+- **CI:** the clean build from the lock file; host T1 with Metal; Address Sanitizer and Undefined Behavior Sanitizer runs.
 
 ### Acceptance criteria
 
-- [ ] virglrenderer, ANGLE, and the required EGL and GLES components are pinned, with revisions and patches recorded in `ThirdParty/ThirdParty.lock.json`.
-- [ ] A build script exists.
-- [ ] A fresh checkout produces the required libraries without manual file editing.
-- [ ] The T1 test creates a renderer on Metal, reads the `VIRGL2` capset, and destroys it cleanly.
-- [ ] Swift sees only opaque handles from `GraphicsBridge`.
-- [ ] The licenses are recorded and the notices are in `ThirdPartyNotices.html`.
+- [x] virglrenderer, ANGLE, and the required EGL and GLES components are pinned, with revisions and patches recorded in `ThirdParty/ThirdParty.lock.json`.
+- [x] A build script exists.
+- [x] A fresh checkout produces the required libraries without manual file editing.
+- [x] The T1 test creates a renderer on Metal, reads the `VIRGL2` capset, and destroys it cleanly.
+- [x] Swift sees only opaque handles from `GraphicsBridge`.
+- [x] The licenses are recorded and the notices are in `ThirdPartyNotices.html`.
 
 ### Notes
 
-- **Record:** the clean-build and renderer-create results in the #020 row of [../../02-design/graphics.md](../../02-design/graphics.md) §16, and the final patch list in §5.1.
+- **Record:** the clean-build, verified cache-hit, renderer-create, capset, context, and sanitizer results in the #020 row of [../../02-design/graphics.md](../../02-design/graphics.md) §16 and IR-192; list the final patches in §5.1.
 - **Pitfall:** the ANGLE build needs about 11 GB of disk (§5.1). Use the CI cache on developer Macs.
 - The Linux `virgl` run with `kmscube` needs the device of #019 and the 3D commands. #020 does not depend on #019, so the headless run is done in #022 and the windowed run in #023. Both fill the `kmscube` row of §16.
 

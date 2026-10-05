@@ -50,6 +50,8 @@ A clean checkout must build and pass `swift test` without manual steps (NFR-DEV-
 
 The `EmbeddedRuntime` trait uses trait-conditioned target dependencies (SE-0450). Verified for #001 on Xcode 27.0 / Swift 6.4: `swift build --traits EmbeddedRuntime` succeeds with the three same-package dependencies enabled, while `swift build` succeeds with the trait off. Keep the conditional edges in the package manifest; no fallback is needed.
 
+`GraphicsBridge` locates the active Xcode toolchain's dynamic UBSan runtime with `xcrun clang --print-file-name=libclang_rt.ubsan_osx_dynamic.dylib` and adds its directory to Debug links. SwiftPM may link the instrumented static C target into multiple test bundles even when one test filter is selected, so the runtime must be available at the C target boundary. This links the runtime without enabling UBSan for every Debug build; Release products do not receive it.
+
 ### 2.2 project.yml and the Xcode project
 
 `project.yml` is the XcodeGen spec for everything that is a bundle or needs entitlements. `scripts/generate-project.sh` runs the pinned XcodeGen ([environment-setup.md](environment-setup.md) §2.7) and writes `APKRun.xcodeproj`. The generated project is git-ignored and never edited by hand. The local package (`Package.swift`) is referenced from `project.yml` as a local Swift package. Sparkle is added as a remote Swift package with an exact version in #057 ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2).
@@ -652,7 +654,8 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `ci.yml` | every pull request, push to `main` | `lint` | — | `xcode-27` | §3 checks, `buf lint`, `buf breaking` |
 | | | `codegen` | — | `xcode-27` | §4 regeneration, `git diff --exit-code` |
 | | | `build` | — | `xcode-27` | needs `third-party`, restores and verifies the same graphics cache, then runs `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
-| | | `test-swift` | T0 | `xcode-27` | SwiftPM tests excluding `<Module>SystemTests`; no T1 or host-dependent checks |
+| | | `test-swift` | T0 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache so GraphicsBridge can compile against pinned public headers; SwiftPM tests excluding `<Module>SystemTests` |
+| | | `test-graphics` | T1 | `xcode-27` | needs `third-party`, restores and verifies the graphics runtime cache; requires a Metal device, then runs `GraphicsCoreSystemTests` normally, with Address Sanitizer, and with Undefined Behavior Sanitizer |
 | | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
 | | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |

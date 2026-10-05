@@ -612,6 +612,8 @@ See [../test-strategy.md](../test-strategy.md).
 
 - **Guest Mesa payload inspection (2026-10-05; see IR-185).** The manifest-pinned `super.img` was read-only inspected by logical partition. `vendor_a:/lib64/egl` contains only the three emulator EGL/GLES modules. In `system_a`, both `/lib64/egl` and `/system/lib64/egl` are absent, covering the possible `/system` and `/` mount locations; its `/system/lib64` contains no Mesa-named driver. This confirms the absence of Mesa drivers from the preferred vendor directory and corresponding system EGL directory in the pinned image, consistent with the live guest's EGL loader failure. Keep this target capture incomplete. Any run using a corrected guest image is separate scope and needs independently recorded source provenance and tracked packaging work.
 
+- **Pinned Android shell syntax check (2026-10-05; see IR-186).** On the arm64 Lima host, the manifest-matching `system_a` and its `com.android.runtime` APEX were mounted read-only, and the image's actual `/system/bin/sh` parsed all 27 outer commands in `guest-capture.txt` plus its nine nested `su 0 sh -c` bodies with `-n -c`. An invalid-syntax control was rejected. The linker warned that the generated `/linkerconfig/ld.config.txt` was absent from the temporary chroot; the parser checks still succeeded. This verifies syntax compatibility only. It does not execute the commands or complete the acceptance criterion requiring live ADB and serial-shell runs.
+
 ---
 
 ## #009 AndroidImageManifest

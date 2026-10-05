@@ -622,6 +622,204 @@
       "cliExitRule": "allConfigurationItemsInternalOrFailure"
     },
     {
+      "code": "graphics.rendererInitFailed",
+      "parameters": [
+        "stage",
+        "detail"
+      ],
+      "message": {
+        "en": "Graphics failed to start.",
+        "ja": "グラフィックスを起動できませんでした。"
+      },
+      "remediation": {
+        "en": "Start Android in Graphics Safe Mode. If that doesn't help, update macOS and APKRun, and create a diagnostics report.",
+        "ja": "グラフィックスセーフモードでAndroidを起動してください。解決しない場合は、macOSとAPKRunをアップデートして診断レポートを作成してください。"
+      },
+      "action": "startGraphicsSafeMode",
+      "cliExit": 1,
+      "doc": {
+        "case": "rendererInitFailed(stage, detail)",
+        "when": "EGL, ANGLE, or virglrenderer initialization fails before Android boots. `stage`: `egl`, `metal`, `virgl`",
+        "raisedBy": "GraphicsBridge",
+        "ref": "§8, §13.1"
+      }
+    },
+    {
+      "code": "graphics.rendererOperationFailed",
+      "parameters": [
+        "operation",
+        "detail"
+      ],
+      "message": {
+        "en": "A graphics operation could not be completed.",
+        "ja": "グラフィックス処理を完了できませんでした。"
+      },
+      "remediation": {
+        "en": "Restart Android. If the problem continues, create a diagnostics report.",
+        "ja": "Androidを再起動してください。解決しない場合は診断レポートを作成してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "case": "rendererOperationFailed(operation, detail)",
+        "when": "a renderer operation fails, including a call made from the wrong thread",
+        "raisedBy": "GraphicsBridge",
+        "ref": "§5.2, §13.1"
+      }
+    },
+    {
+      "code": "graphics.rendererLost",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "Android's graphics stopped working.",
+        "ja": "Androidのグラフィックスが停止しました。"
+      },
+      "remediation": {
+        "en": "Android restarts automatically. If this happens often, start Android in Graphics Safe Mode.",
+        "ja": "Androidは自動的に再起動します。頻繁に発生する場合は、グラフィックスセーフモードでAndroidを起動してください。"
+      },
+      "action": "startGraphicsSafeMode",
+      "cliExit": 1,
+      "doc": {
+        "case": "rendererLost(reason)",
+        "when": "context loss or GPU removal. RuntimeCore restarts Android",
+        "raisedBy": "GraphicsBridge",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "graphics.libraryMissing",
+      "parameters": [
+        "name"
+      ],
+      "message": {
+        "en": "Part of APKRun is missing or damaged.",
+        "ja": "APKRunの一部が見つからないか、破損しています。"
+      },
+      "remediation": {
+        "en": "Reinstall APKRun.",
+        "ja": "APKRunを再インストールしてください。"
+      },
+      "action": "openDownloadsPage",
+      "cliExit": 1,
+      "doc": {
+        "case": "libraryMissing(name)",
+        "when": "a VirGLRuntime dylib is missing or its signature is invalid",
+        "raisedBy": "GraphicsBridge",
+        "ref": "§5.1"
+      }
+    },
+    {
+      "code": "graphics.scanoutInvalid",
+      "parameters": [
+        "scanout"
+      ],
+      "message": {
+        "en": "Android's display configuration is not valid.",
+        "ja": "Androidのディスプレイ設定が正しくありません。"
+      },
+      "remediation": {
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "scanoutInvalid(ScanoutID)",
+        "when": "a host request names a scanout outside 0…15. A bug",
+        "raisedBy": "ScanoutTable",
+        "ref": "§6.1"
+      }
+    },
+    {
+      "code": "graphics.modeUnsupported",
+      "parameters": [
+        "mode"
+      ],
+      "message": {
+        "en": "Android's display configuration is not valid.",
+        "ja": "Androidのディスプレイ設定が正しくありません。"
+      },
+      "remediation": {
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "modeUnsupported(DisplayMode)",
+        "when": "a mode beyond the EDID or size limits. A bug (DisplayPool clamps)",
+        "raisedBy": "ScanoutTable",
+        "ref": "§6.4"
+      }
+    },
+    {
+      "code": "graphics.poolAllocationFailed",
+      "parameters": [
+        "size"
+      ],
+      "message": {
+        "en": "There isn't enough graphics memory for this window.",
+        "ja": "このウインドウに必要なグラフィックスメモリが不足しています。"
+      },
+      "remediation": {
+        "en": "Close other apps or windows, then try again. If it happens again, create a diagnostics report.",
+        "ja": "ほかのアプリやウインドウを閉じてから、もう一度お試しください。再発する場合は診断レポートを作成してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "poolAllocationFailed(PixelSize)",
+        "when": "an IOSurface or Metal texture can't be created",
+        "raisedBy": "SurfacePool",
+        "ref": "§6.3"
+      }
+    },
+    {
+      "code": "graphics.configUpdateFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "Android couldn't apply a display change.",
+        "ja": "Androidにディスプレイの変更を適用できませんでした。"
+      },
+      "remediation": {
+        "en": "Restart Android.",
+        "ja": "Androidを再起動してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "configUpdateFailed(detail)",
+        "when": "`updateConfigurationSpace` fails",
+        "raisedBy": "VirtioGPUDevice",
+        "ref": "§4.3"
+      }
+    },
+    {
+      "code": "graphics.deviceNotReady",
+      "parameters": [],
+      "message": {
+        "en": "Android's display isn't ready yet.",
+        "ja": "Androidのディスプレイはまだ準備できていません。"
+      },
+      "remediation": {
+        "en": "Try again in a moment.",
+        "ja": "少し待ってからもう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "deviceNotReady",
+        "when": "a host request before DRIVER_OK. DisplayPool retries after `.guestBound` or boot completion",
+        "raisedBy": "VirtioGPUDevice",
+        "ref": "§4.1"
+      }
+    },
+    {
       "code": "runtime.instanceLocked",
       "parameters": [
         "reason"
@@ -743,11 +941,11 @@
       "code": "runtime.devLinuxArtifactDirectoryMustBeAbsolute",
       "parameters": [],
       "message": {
-        "en": "APKRUN_TEST_LINUX_DIR must be an absolute path.",
-        "ja": "APKRUN_TEST_LINUX_DIR には絶対パスを指定してください。"
+        "en": "The Linux guest artifact directory must be an absolute path.",
+        "ja": "Linux テストゲストの成果物ディレクトリには絶対パスを指定してください。"
       },
       "remediation": {
-        "en": "Set it to an absolute path such as /tmp/apkrun-test-linux.",
+        "en": "Use an absolute path such as /tmp/apkrun-test-linux.",
         "ja": "/tmp/apkrun-test-linux のような絶対パスを指定してください。"
       },
       "action": "none",

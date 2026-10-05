@@ -1,12 +1,48 @@
 // swift-tools-version: 6.2
 
+import Foundation
 import PackageDescription
+
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let virglRuntimeCache =
+    packageRoot
+    .appendingPathComponent("ThirdParty/out/virgl-runtime/current")
+    .resolvingSymlinksInPath()
+let virglRuntimeIncludePath =
+    virglRuntimeCache
+    .appendingPathComponent("include")
+    .path
+
+let ubsanRuntimePath: String = {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    process.arguments = ["clang", "--print-file-name=libclang_rt.ubsan_osx_dynamic.dylib"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+
+    do {
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            FileManager.default.fileExists(atPath: path)
+        else {
+            fatalError("xcrun could not locate Clang's macOS Undefined Behavior Sanitizer runtime")
+        }
+        return URL(fileURLWithPath: path).deletingLastPathComponent().path
+    } catch {
+        fatalError("xcrun could not locate Clang's macOS Undefined Behavior Sanitizer runtime: \(error)")
+    }
+}()
 
 let package = Package(
     name: "APKRun",
     defaultLocalization: "en",
     platforms: [
-        .macOS("27.0"),
+        .macOS("27.0")
     ],
     products: [
         .library(name: "DiagnosticsCore", type: .static, targets: ["DiagnosticsCore"]),
@@ -31,7 +67,7 @@ let package = Package(
         .trait(
             name: "EmbeddedRuntime",
             description: "Enable in-process runtime commands for development builds."
-        ),
+        )
     ],
     dependencies: [
         .package(
@@ -60,9 +96,33 @@ let package = Package(
             path: "Packages/VirtualMachineCore/Sources/VirtualMachineCore"
         ),
         .target(
+            name: "GraphicsBridge",
+            path: "Packages/GraphicsCore/Sources/GraphicsBridge",
+            publicHeadersPath: "include",
+            cSettings: [
+                .unsafeFlags(["-I", virglRuntimeIncludePath]),
+                .define("DEBUG", .when(configuration: .debug)),
+                .unsafeFlags(["-fobjc-arc"]),
+            ],
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                // SwiftPM instruments C targets but omits the UBSan runtime at link time.
+                .unsafeFlags(
+                    [
+                        "-L", ubsanRuntimePath,
+                        "-lclang_rt.ubsan_osx_dynamic",
+                        "-Xlinker", "-rpath",
+                        "-Xlinker", ubsanRuntimePath,
+                    ], .when(configuration: .debug)),
+            ]
+        ),
+        .target(
             name: "GraphicsCore",
-            dependencies: ["VirtioDeviceCore", "DiagnosticsCore"],
-            path: "Packages/GraphicsCore/Sources/GraphicsCore"
+            dependencies: ["VirtioDeviceCore", "DiagnosticsCore", "GraphicsBridge"],
+            path: "Packages/GraphicsCore/Sources/GraphicsCore",
+            linkerSettings: [
+                .linkedFramework("Metal")
+            ]
         ),
         .target(
             name: "InputCore",
@@ -77,7 +137,7 @@ let package = Package(
         .target(
             name: "GuestProtocol",
             dependencies: [
-                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf")
             ],
             path: "Packages/GuestProtocol/Sources/GuestProtocol"
         ),
@@ -164,7 +224,7 @@ let package = Package(
             path: "CLI/apkrun",
             exclude: ["Tests", "apkrun-dev.entitlements"],
             swiftSettings: [
-                .define("APKRUN_EMBEDDED_RUNTIME", .when(traits: ["EmbeddedRuntime"])),
+                .define("APKRUN_EMBEDDED_RUNTIME", .when(traits: ["EmbeddedRuntime"]))
             ]
         ),
         .testTarget(
@@ -172,7 +232,7 @@ let package = Package(
             dependencies: ["DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests",
             resources: [
-                .copy("Fixtures"),
+                .copy("Fixtures")
             ]
         ),
         .target(
@@ -201,7 +261,7 @@ let package = Package(
             ],
             path: "Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests",
             resources: [
-                .copy("Fixtures/kernel-headers"),
+                .copy("Fixtures/kernel-headers")
             ]
         ),
         .target(
@@ -213,6 +273,11 @@ let package = Package(
             name: "GraphicsCoreTests",
             dependencies: ["GraphicsCore"],
             path: "Packages/GraphicsCore/Tests/GraphicsCoreTests"
+        ),
+        .testTarget(
+            name: "GraphicsCoreSystemTests",
+            dependencies: ["GraphicsCore", "GraphicsBridge"],
+            path: "Packages/GraphicsCore/Tests/GraphicsCoreSystemTests"
         ),
         .testTarget(
             name: "InputCoreTests",
@@ -284,7 +349,7 @@ let package = Package(
             dependencies: ["apkrun", "DiagnosticsCore", "DiagnosticsCoreTestSupport"],
             path: "CLI/apkrun/Tests",
             resources: [
-                .copy("Golden"),
+                .copy("Golden")
             ]
         ),
     ],

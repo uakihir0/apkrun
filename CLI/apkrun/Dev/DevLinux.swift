@@ -50,9 +50,13 @@
                 requestedTests = []
             }
 
-            let environment = ProcessInfo.processInfo.environment
+            #if DEBUG
+                let override = ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
+            #else
+                let override: String? = nil
+            #endif
             let artifactDirectory: URL
-            if let override = environment["APKRUN_TEST_LINUX_DIR"], !override.isEmpty {
+            if let override, !override.isEmpty {
                 guard override.hasPrefix("/") else {
                     throw RuntimeFailure.devLinuxArtifactDirectoryMustBeAbsolute
                 }

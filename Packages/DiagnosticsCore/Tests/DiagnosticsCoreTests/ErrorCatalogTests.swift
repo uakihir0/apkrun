@@ -26,6 +26,11 @@ import Testing
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
             ].map { "runtime.\($0)" }
+            + [
+                "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
+                "scanoutInvalid",
+                "modeUnsupported", "poolAllocationFailed", "configUpdateFailed", "deviceNotReady",
+            ].map { "graphics.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(ErrorCatalog.entries.values.allSatisfy { $0.message?["en"] != nil })
@@ -42,6 +47,7 @@ import Testing
             entry.code.hasPrefix("vm.")
                 || entry.code.hasPrefix("cli.")
                 || entry.code.hasPrefix("runtime.")
+                || entry.code.hasPrefix("graphics.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

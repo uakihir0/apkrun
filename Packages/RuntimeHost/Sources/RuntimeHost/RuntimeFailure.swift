@@ -52,6 +52,18 @@ public enum RuntimeFailure: APKRunError, Equatable {
     /// The development guest console closed before its done marker.
     case devLinuxDidNotFinish
 
+    /// A guest failed while attached to the interactive development console.
+    case devConsoleGuestFailed
+
+    /// Console input could not be delivered during an interactive session.
+    case devConsoleInputFailed
+
+    /// Interactive console output was dropped before it reached the terminal.
+    case devConsoleOutputDropped(bytes: UInt64)
+
+    /// VM cleanup failed and the session must retain ownership until release.
+    case devConsoleCleanupPending
+
     /// The stable error catalog namespace for the runtime host.
     public static let domain: ErrorDomain = .runtime
 
@@ -65,6 +77,10 @@ public enum RuntimeFailure: APKRunError, Equatable {
         case .devLinuxArtifactDirectoryMustBeAbsolute: "devLinuxArtifactDirectoryMustBeAbsolute"
         case .devLinuxCheckFailed: "devLinuxCheckFailed"
         case .devLinuxDidNotFinish: "devLinuxDidNotFinish"
+        case .devConsoleGuestFailed: "devConsoleGuestFailed"
+        case .devConsoleInputFailed: "devConsoleInputFailed"
+        case .devConsoleOutputDropped: "devConsoleOutputDropped"
+        case .devConsoleCleanupPending: "devConsoleCleanupPending"
         }
     }
 
@@ -79,7 +95,13 @@ public enum RuntimeFailure: APKRunError, Equatable {
             .devLinuxInvalidOptions,
             .devLinuxArtifactDirectoryMustBeAbsolute,
             .devLinuxCheckFailed,
-            .devLinuxDidNotFinish:
+            .devLinuxDidNotFinish,
+            .devConsoleGuestFailed,
+            .devConsoleInputFailed:
+            [:]
+        case .devConsoleOutputDropped(let bytes):
+            ["bytes": .count(Int(clamping: bytes))]
+        case .devConsoleCleanupPending:
             [:]
         }
     }

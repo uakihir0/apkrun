@@ -235,6 +235,8 @@ targets:
     platform: macOS
     sources:
       - path: Tests/IntegrationTests/LinuxGuestTests
+      - path: Tests/Fixtures/linux/make-test-disks.sh
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: IntegrationTests

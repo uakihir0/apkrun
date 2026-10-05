@@ -88,6 +88,8 @@ enum LinuxGuestHarness {
         case requestPowerButton
         case forced
         case observeGuestReboot
+        case observeGuestPanic
+        case forcedAfterConsoleLine(String)
     }
 
     enum RebootObservation: Equatable {
@@ -100,11 +102,17 @@ enum LinuxGuestHarness {
         let records: [TestGuestRecord]
         let states: [VMState]
         let rebootObservation: RebootObservation?
+        let consoleOutput: Data
+        let consoleOutputDroppedByteCount: UInt64
+        let consoleLog: Data
+        let bootLog: Data
+        let consoleLogDroppedByteCount: UInt64
     }
 
     enum HarnessEvent: Sendable {
         case record(TestGuestRecord)
         case state(VMState)
+        case consoleMarkerSeen(String)
         case rebootProbeTimedOut
     }
 
@@ -119,6 +127,8 @@ enum LinuxGuestHarness {
         case guestFinishedBeforeRestartMarker
         case guestStoppedBeforeRestartMarker
         case guestVMFailedDuringRebootObservation
+        case consoleMarkerNotObserved(String)
+        case consoleLogMissing
     }
 
     static func run(
@@ -137,7 +147,12 @@ enum LinuxGuestHarness {
             at: runDirectory,
             withIntermediateDirectories: true
         )
-        defer { try? FileManager.default.removeItem(at: runDirectory) }
+        var preserveRunDirectory = false
+        defer {
+            if !preserveRunDirectory {
+                try? FileManager.default.removeItem(at: runDirectory)
+            }
+        }
 
         let definition = LinuxTestGuest.definition(
             kernel: artifacts.kernel,
@@ -169,11 +184,37 @@ enum LinuxGuestHarness {
             of: HarnessEvent.self,
             bufferingPolicy: .unbounded
         )
+        var consoleMarkers: [(name: String, bytes: Data)] = []
+        if case .forcedAfterConsoleLine(let marker) = stopBehavior {
+            consoleMarkers.append((name: marker, bytes: Data(marker.utf8)))
+        }
+        if tests.contains("ports") {
+            consoleMarkers.append(contentsOf: [
+                (name: "APKRUN-PORT-READY-1", bytes: Data("APKRUN-PORT-READY-1\n".utf8)),
+                (name: "APKRUN-PORT-READY-2", bytes: Data("APKRUN-PORT-READY-2\n".utf8)),
+            ])
+        }
+        let maximumConsoleMarkerLength = consoleMarkers.map(\.bytes.count).max() ?? 0
         let consoleCapture = LinuxGuestConsoleCapture()
         let parserTask = Task {
             var parser = TestGuestLineParser()
+            var markerSearchBuffer = Data()
+            var pendingMarkers = Set(consoleMarkers.map(\.name))
             for await bytes in parserByteStream.stream {
                 guard !Task.isCancelled else { break }
+                if !pendingMarkers.isEmpty {
+                    markerSearchBuffer.append(bytes)
+                    for marker in consoleMarkers where pendingMarkers.contains(marker.name) {
+                        if markerSearchBuffer.range(of: marker.bytes) != nil {
+                            pendingMarkers.remove(marker.name)
+                            events.continuation.yield(.consoleMarkerSeen(marker.name))
+                        }
+                    }
+                    let retainedByteCount = max(0, maximumConsoleMarkerLength - 1)
+                    if markerSearchBuffer.count > retainedByteCount {
+                        markerSearchBuffer = Data(markerSearchBuffer.suffix(retainedByteCount))
+                    }
+                }
                 for record in parser.consume(bytes) {
                     records.continuation.yield(record)
                     recordObserver?(record)
@@ -208,10 +249,50 @@ enum LinuxGuestHarness {
 
         do {
             try await controller.start()
+            if tests.contains("ports") {
+                try await waitForConsoleMarker(
+                    "APKRUN-PORT-READY-1",
+                    events: events.stream,
+                    timeout: .seconds(60)
+                )
+                try controller.console(.service(name: "test-1"))
+                    .writeHostInput(Data("APKRUN-PORT-1\n".utf8))
+                try await waitForConsoleMarker(
+                    "APKRUN-PORT-READY-2",
+                    events: events.stream,
+                    timeout: .seconds(60)
+                )
+                try controller.console(.service(name: "test-2"))
+                    .writeHostInput(Data("APKRUN-PORT-2\n".utf8))
+            }
             let observedRecords: [TestGuestRecord]
             let observedStates: [VMState]
             let rebootObservation: RebootObservation?
-            if stopBehavior == .observeGuestReboot {
+            if case .forcedAfterConsoleLine(let marker) = stopBehavior {
+                try await waitForConsoleMarker(
+                    marker,
+                    events: events.stream,
+                    timeout: .seconds(60)
+                )
+                try await controller.stop()
+                await waitForConsoleTask(parserTask)
+                observedRecords = await collectRecords(records.stream)
+                rebootObservation = nil
+                observedStates = try await statesThroughGuestStop(
+                    stateStream.stream,
+                    timeout: .seconds(60)
+                )
+            } else if stopBehavior == .observeGuestPanic {
+                observedRecords = try await recordsUntilDone(records.stream)
+                rebootObservation = nil
+                observedStates = try await statesThroughTerminalState(
+                    stateStream.stream,
+                    timeout: .seconds(60)
+                )
+                if case .failed = await controller.state {
+                    try await controller.reset()
+                }
+            } else if stopBehavior == .observeGuestReboot {
                 let observation = try await observeGuestReboot(
                     events: events.stream,
                     continuation: events.continuation
@@ -247,6 +328,8 @@ enum LinuxGuestHarness {
                     try await controller.stop()
                 case .observeGuestReboot:
                     preconditionFailure("Reboot observation is handled above.")
+                case .observeGuestPanic, .forcedAfterConsoleLine:
+                    preconditionFailure("The specialized console probe is handled above.")
                 }
 
                 let stateTimeout: Duration =
@@ -267,20 +350,31 @@ enum LinuxGuestHarness {
             await waitForConsoleTask(captureTask)
             stateTask.cancel()
             await stateTask.value
+            await controller.waitForConsoleLogDrain()
             attachConsole(
                 consoleCapture.snapshot(),
                 parserOmittedByteCount: parserByteStream.droppedByteCount,
                 tailOmittedByteCount: tailCaptureByteStream.droppedByteCount,
                 to: testCase
             )
+            let consoleLog = try readConsoleLog(at: paths.consoleLogFile)
+            let bootLog = try readLatestBootLog(in: paths.vmLogsDirectory)
+            let capturedConsole = consoleCapture.snapshot()
             return RunResult(
                 records: observedRecords,
                 states: observedStates,
-                rebootObservation: rebootObservation
+                rebootObservation: rebootObservation,
+                consoleOutput: capturedConsole.bytes,
+                consoleOutputDroppedByteCount: parserByteStream.droppedByteCount
+                    &+ tailCaptureByteStream.droppedByteCount
+                    &+ capturedConsole.omittedByteCount,
+                consoleLog: consoleLog,
+                bootLog: bootLog,
+                consoleLogDroppedByteCount: await controller.consoleLogWriterDroppedByteCount()
             )
         } catch {
             events.continuation.finish()
-            await cleanup(controller)
+            preserveRunDirectory = !(await cleanup(controller))
             stateTask.cancel()
             await stateTask.value
             await waitForConsoleTask(parserTask)
@@ -291,11 +385,18 @@ enum LinuxGuestHarness {
                 tailOmittedByteCount: tailCaptureByteStream.droppedByteCount,
                 to: testCase
             )
+            if preserveRunDirectory {
+                testCase.add(
+                    XCTAttachment(
+                        string: "VM resources did not release cleanly. Console logs retained at \(runDirectory.path)"
+                    )
+                )
+            }
             throw error
         }
     }
 
-    private static func cleanup(_ controller: VMController) async {
+    private static func cleanup(_ controller: VMController) async -> Bool {
         var state = await controller.state
         if state == .running || state == .paused || state == .stopping {
             try? await controller.stop()
@@ -305,9 +406,12 @@ enum LinuxGuestHarness {
             try? await controller.reset()
             state = await controller.state
         }
-        if state != .stopped {
+        guard state == .stopped else {
             FailedLinuxGuestControllerRetention.shared.retainUntilReleased(controller)
+            return false
         }
+        await controller.waitForConsoleLogDrain()
+        return true
     }
 
     static func verifyFailedStartCanReset() async throws -> VZErrorInfo {
@@ -773,9 +877,98 @@ enum LinuxGuestHarness {
                     return (records, .noRestartObserved)
                 }
                 throw HarnessFailure.timedOut
+            case .consoleMarkerSeen:
+                continue
             }
         }
         throw HarnessFailure.consoleEnded
+    }
+
+    private static func waitForConsoleMarker(
+        _ marker: String,
+        events: AsyncStream<HarnessEvent>,
+        timeout: Duration
+    ) async throws {
+        guard !marker.isEmpty else {
+            throw HarnessFailure.consoleMarkerNotObserved(marker)
+        }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var sawRunning = false
+                for await event in events {
+                    switch event {
+                    case .consoleMarkerSeen(let observedMarker) where observedMarker == marker:
+                        return
+                    case .consoleMarkerSeen:
+                        continue
+                    case .record(.done):
+                        throw HarnessFailure.consoleMarkerNotObserved(marker)
+                    case .record(.check(name: let name, result: .fail, detail: let detail)):
+                        throw HarnessFailure.guestCheckFailed(name: name, detail: detail)
+                    case .record, .rebootProbeTimedOut:
+                        continue
+                    case .state(.running):
+                        sawRunning = true
+                    case .state(.stopped) where sawRunning:
+                        throw HarnessFailure.consoleMarkerNotObserved(marker)
+                    case .state(.failed) where sawRunning:
+                        throw HarnessFailure.consoleMarkerNotObserved(marker)
+                    case .state:
+                        continue
+                    }
+                }
+                throw HarnessFailure.consoleEnded
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw HarnessFailure.timedOut
+            }
+            defer { group.cancelAll() }
+            guard try await group.next() != nil else {
+                throw HarnessFailure.consoleEnded
+            }
+        }
+    }
+
+    private static func collectRecords(
+        _ stream: AsyncStream<TestGuestRecord>
+    ) async -> [TestGuestRecord] {
+        var observed: [TestGuestRecord] = []
+        for await record in stream {
+            observed.append(record)
+        }
+        return observed
+    }
+
+    private static func readConsoleLog(at url: URL) throws -> Data {
+        do {
+            return try Data(contentsOf: url)
+        } catch {
+            throw HarnessFailure.consoleLogMissing
+        }
+    }
+
+    private static func readLatestBootLog(in directory: URL) throws -> Data {
+        let bootLogs: [URL]
+        do {
+            bootLogs = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )
+            .filter { $0.lastPathComponent.hasPrefix("boot-") && $0.pathExtension == "log" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        } catch {
+            throw HarnessFailure.consoleLogMissing
+        }
+        guard let latestBootLog = bootLogs.first else {
+            throw HarnessFailure.consoleLogMissing
+        }
+        do {
+            return try Data(contentsOf: latestBootLog)
+        } catch {
+            throw HarnessFailure.consoleLogMissing
+        }
     }
 
     private static func waitForConsoleTask(_ task: Task<Void, Never>) async {

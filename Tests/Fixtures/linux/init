@@ -33,11 +33,15 @@ done < /etc/apkrun/modules.list
 requested_tests=
 poweroff_after_tests=0
 reboot_after_rng=0
+flood_line_count=0
+panic_after_tests=0
 for argument in $(cat /proc/cmdline); do
     case "$argument" in
         apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
         apkrun.test.poweroff=*) poweroff_after_tests="${argument#apkrun.test.poweroff=}" ;;
         apkrun.test.rng.reboot=*) reboot_after_rng="${argument#apkrun.test.rng.reboot=}" ;;
+        apkrun.test.flood=*) flood_line_count="${argument#apkrun.test.flood=}" ;;
+        apkrun.test.panic=*) panic_after_tests="${argument#apkrun.test.panic=}" ;;
     esac
 done
 
@@ -139,6 +143,53 @@ run_rng_pending_test() {
     printf 'APKRUN-TEST: rng-pending ok background read submitted\n'
 }
 
+read_console_marker() {
+    console_device="$1"
+    ready_marker="$2"
+    if ! stty -F "$console_device" raw -echo; then
+        return 1
+    fi
+    printf '%s\n' "$ready_marker" > /dev/hvc0
+    if ! IFS= read -r -t 5 console_marker < "$console_device"; then
+        return 1
+    fi
+    printf '%s' "$console_marker"
+}
+
+run_ports_test() {
+    hvc1_marker=$(read_console_marker /dev/hvc1 APKRUN-PORT-READY-1) || {
+        printf 'APKRUN-TEST: ports fail no host marker arrived on hvc1\n'
+        return 1
+    }
+    hvc2_marker=$(read_console_marker /dev/hvc2 APKRUN-PORT-READY-2) || {
+        printf 'APKRUN-TEST: ports fail no host marker arrived on hvc2\n'
+        return 1
+    }
+    if [ "$hvc1_marker" != "APKRUN-PORT-1" ] || [ "$hvc2_marker" != "APKRUN-PORT-2" ]; then
+        printf 'APKRUN-TEST: ports fail hvc1=%s hvc2=%s\n' "$hvc1_marker" "$hvc2_marker"
+        return 1
+    fi
+    printf 'APKRUN-TEST: ports ok hvc1=%s hvc2=%s\n' "$hvc1_marker" "$hvc2_marker"
+}
+
+run_flood_test() {
+    case "$flood_line_count" in
+        ""|*[!0-9]*)
+            printf 'APKRUN-TEST: flood fail apkrun.test.flood must be a decimal count\n'
+            return 1
+            ;;
+    esac
+    if [ "$flood_line_count" -le 0 ] || [ "$flood_line_count" -gt 10000000 ]; then
+        printf 'APKRUN-TEST: flood fail count must be between 1 and 10000000\n'
+        return 1
+    fi
+    flood_index=1
+    while [ "$flood_index" -le "$flood_line_count" ]; do
+        printf 'APKRUN-FLOOD %s\n' "$flood_index"
+        flood_index=$((flood_index + 1))
+    done
+}
+
 power_monitor_pid=
 if [ "$poweroff_after_tests" != 1 ]; then
     if ! gpio_chips=$(/usr/bin/gpiodetect); then
@@ -197,6 +248,15 @@ if [ -n "$requested_tests" ]; then
             rng-pending)
                 run_rng_pending_test
                 ;;
+            ports)
+                run_ports_test
+                ;;
+            flood)
+                run_flood_test
+                ;;
+            panic)
+                printf 'APKRUN-TEST: panic ok sysrq-trigger will run after done\n'
+                ;;
             *)
                 printf 'APKRUN-TEST: %s fail unsupported test in this guest build\n' "$test_name"
                 ;;
@@ -205,6 +265,12 @@ if [ -n "$requested_tests" ]; then
     IFS=$previous_ifs
 fi
 printf 'APKRUN-TEST: done\n'
+
+if [ "$panic_after_tests" = 1 ]; then
+    sync
+    printf 'c' > /proc/sysrq-trigger
+    while :; do sleep 1; done
+fi
 
 if [ "$poweroff_after_tests" = 1 ]; then
     /sbin/poweroff -f

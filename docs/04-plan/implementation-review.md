@@ -7038,3 +7038,39 @@ source hashes match `e5854d6`, the supplemental observer source hash matches
 scans found no matches. The earlier hostile review of the observer fix found
 no actionable issue. Keep #064 open until the end-to-end capture and the
 task's remaining acceptance criteria are verified.
+
+## IR-183: Separate Cuttlefish transport retries from Android ADB readiness
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/target-20261005T082217-1740702/`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Treat Cuttlefish's `adb_connector` and WebRTC retry messages as
+transport observations only. Do not treat an `adb connected` helper message
+as an Android ADB `device` state. Keep the capture incomplete and
+non-comparable; the available messages do not identify why the control
+connections failed.
+
+**Reason.** During the 2400-second target capture, the observer did not see
+Cuttlefish start event 5 and made no ADB polls. Separately, `launcher.log`
+records, across retries, 160 `adb_connector` connection attempts, 160
+`adb connected` messages, 159 `device not found` warnings, and 159
+disconnects. Those entries interleave; the final attempt and `adb connected`
+message occur at 23:22:03Z and 23:22:08Z, with no later warning or disconnect
+before `run_cvd` logs cancellation at 23:22:13Z. The log also records 2285
+WebRTC `Failed to connect:` messages from `vsock_connection.cpp`: 819 end in
+`OK`, while 1466 report `UNAVAILABLE` with `Connection reset by peer`.
+Separately, 2285 WebRTC `shared_fd.cpp` messages say `cannot connect to
+3:6900`. The normalized serial is redacted. These messages do not show an
+Android ADB `device` state, establish that the guest ADB service was ready,
+or explain the Cuttlefish start timeout. They also do not establish a causal
+link between the ADB and WebRTC failures or the final kernel-log state.
+
+**Verification.** The counts were parsed from the normalized launcher log;
+the observer event counts and guest milestones were parsed from the retained
+JSONL and kernel log. No ADB device inventory was queried. The post-run audit
+found no port 6520 listener and left the shared ADB server on port 5037
+untouched. Preserve this as an observation about one diagnostic run, not a
+root-cause finding.

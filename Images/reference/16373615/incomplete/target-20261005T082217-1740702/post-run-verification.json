@@ -35,6 +35,22 @@
     "virtualDeviceBootFailedMarkerPresent": false,
     "lastInitRecord": "[ 1027.830081][    T1] init: starting service 'misctrl'...",
     "crosvmCommandLineCaptured": false,
+    "cuttlefishControlTransportLogCounts": {
+      "adbConnectAttempts": 160,
+      "adbConnectedMessages": 160,
+      "adbDeviceNotFoundWarnings": 159,
+      "adbDisconnectMessages": 159,
+      "webRtcVsockFailedToConnectTotal": 2285,
+      "webRtcVsockFailedToConnectOk": 819,
+      "webRtcVsockFailedToConnectUnavailableConnectionReset": 1466,
+      "webRtcCid3Port6900ConnectFailures": 2285,
+      "adbSerialRedacted": true,
+      "firstAdbConnectAttemptUtc": "2026-10-04T22:42:18Z",
+      "lastAdbConnectAttemptUtc": "2026-10-04T23:22:03Z",
+      "lastAdbConnectedMessageUtc": "2026-10-04T23:22:08Z",
+      "lastAdbDeviceNotFoundUtc": "2026-10-04T23:21:58Z",
+      "runCvdCancelLoggedUtc": "2026-10-04T23:22:13Z"
+    },
     "supplementalObserverSample": {
       "file": "observer-fix-live-sample.jsonl",
       "sourceMetadata": "observer-fix-live-sample-source.json",

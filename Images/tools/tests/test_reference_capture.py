@@ -157,6 +157,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
         "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
+        "elf_identity.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -356,6 +357,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     (host_bin / "adb").symlink_to(fake_bin / "adb")
     (host_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (host_bin / "crosvm").chmod(0o755)
+    (host_bin / "libgfxstream_backend.so").write_bytes(b"synthetic gfxstream backend")
     launch_log = tmp_path / "launch-args.txt"
     start_log = tmp_path / "start-args.txt"
     tmpdir_log = tmp_path / "capture-tmpdir.txt"
@@ -450,10 +452,23 @@ def test_capture_script_uses_each_profile_launch_configuration(
     capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
-    assert metadata["schemaVersion"] == 2
+    assert metadata["schemaVersion"] == 3
     assert metadata["selectedGpuMode"] == (expected_gpu_mode or "guest_swiftshader")
     assert metadata["gpuVhostUserEnabled"] is False
     assert metadata["eglPlatform"] == ("surfaceless" if profile == "target" else None)
+    tool_identities = metadata["hostToolIdentities"]
+    assert tool_identities["crosvmCommand"] == tool_identities["expectedCrosvmExecutable"]
+    assert tool_identities["expectedCrosvmExecutable"]["status"] == "not_elf"
+    assert (
+        tool_identities["expectedCrosvmExecutable"]["sha256"]
+        == hashlib.sha256((cvd_host / "bin/crosvm").read_bytes()).hexdigest()
+    )
+    assert tool_identities["gfxstreamBackendCandidate"]["status"] == "not_elf"
+    assert (
+        tool_identities["gfxstreamBackendCandidate"]["sha256"]
+        == hashlib.sha256((cvd_host / "bin/libgfxstream_backend.so").read_bytes()).hexdigest()
+    )
+    assert str(tmp_path) not in json.dumps(tool_identities)
     assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
     if observer_enabled:
         observer_records = [
@@ -493,6 +508,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
         "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
+        "elf_identity.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -1337,6 +1353,22 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "crosvm-observer-executable-relative",
             id="crosvm-observer-executable-must-be-absolute",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "host-tool-identity-missing",
+            id="missing-host-tool-identity-invalidates-capture",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -1364,6 +1396,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         "collect_composite_specs.py",
         "boot_observer.py",
         "compare_boot.py",
+        "elf_identity.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -1884,7 +1917,11 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     )
     (fake_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_crosvm_override = fake_bin / "crosvm preload wrapper"
-    fake_crosvm_override.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_crosvm_override.write_text(
+        "#!/bin/sh\n# synthetic preload wrapper\nexit 0\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "libgfxstream_backend.so").write_bytes(b"synthetic override gfxstream backend")
     for executable in fake_bin.iterdir():
         executable.chmod(0o755)
 
@@ -1896,6 +1933,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     host_bin.mkdir()
     for executable in ("launch_cvd", "cvd", "adb", "crosvm"):
         (host_bin / executable).symlink_to(fake_bin / executable)
+    if boot_timeout_case != "host-tool-identity-missing":
+        (host_bin / "libgfxstream_backend.so").write_bytes(
+            b"synthetic Cuttlefish gfxstream backend"
+        )
     boot_image = b"pinned synthetic boot image\n"
     (product_out / "boot.img").write_bytes(boot_image)
     manifest_dir = repo / "Images/manifests/16373615"
@@ -2257,6 +2298,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "gpu-mode-oversized",
             "gpu-mode-nonstandard-json",
             "gpu-mode-duplicate-key",
+            "host-tool-identity-missing",
         }:
             assert result.returncode == 1
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
@@ -2265,6 +2307,50 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
             metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
             assert metadata["targetGpuMode"] == "drm_virgl"
+            if boot_timeout_case == "host-tool-identity-missing":
+                identities = metadata["hostToolIdentities"]
+                assert (
+                    identities["crosvmCommand"]["sha256"]
+                    == hashlib.sha256((host_bin / "crosvm").read_bytes()).hexdigest()
+                )
+                assert identities["expectedCrosvmExecutable"]["sha256"] is not None
+                assert identities["gfxstreamBackendCandidate"] == {
+                    "status": "unavailable",
+                    "sha256": None,
+                    "elfBuildId": None,
+                }
+                assert (
+                    "host-tool-identities\tone or more configured host binaries "
+                    "could not be hashed; keep this capture incomplete"
+                ) in missing
+                assert str(tmp_path) not in json.dumps(identities)
+                assert not (repo / "Images/reference/16373615/target").exists()
+                assert_scoped_group_removal()
+                assert_adb_disconnect_precedes_group_removal()
+                cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+                assert not cvd_home.exists()
+                return
+            if boot_timeout_case == "gpu-mode-mismatch-observed":
+                identities = metadata["hostToolIdentities"]
+                assert (
+                    identities["crosvmCommand"]["sha256"]
+                    == hashlib.sha256(fake_crosvm_override.read_bytes()).hexdigest()
+                )
+                assert (
+                    identities["expectedCrosvmExecutable"]["sha256"]
+                    == hashlib.sha256((fake_bin / "crosvm").read_bytes()).hexdigest()
+                )
+                assert (
+                    identities["gfxstreamBackendCandidate"]["sha256"]
+                    == hashlib.sha256(
+                        (fake_bin / "libgfxstream_backend.so").read_bytes()
+                    ).hexdigest()
+                )
+                assert (
+                    identities["crosvmCommand"]["sha256"]
+                    != identities["expectedCrosvmExecutable"]["sha256"]
+                )
+                assert str(tmp_path) not in json.dumps(identities)
             if boot_timeout_case == "gpu-vhost-user-enabled":
                 assert missing.count("selected-gpu-mode\t") == 0
                 assert missing.count("selected-gpu-vhost-user\t") == 1

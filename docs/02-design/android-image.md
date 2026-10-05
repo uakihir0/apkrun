@@ -677,6 +677,7 @@ host package whose pinned crosvm build enables `virgl_renderer`; see
 | Host side | Guest side (via `adb`) |
 |---|---|
 | crosvm command line (from `launcher.log` / `ps -ww`) | `/proc/cmdline`, `/proc/bootconfig` |
+| `host.json` crosvm command/executable and adjacent gfxstream ELF identities | |
 | `cuttlefish_runtime/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
 | composite disk specs (`ap`, `os`, and persistent composite config files) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
@@ -1018,6 +1019,22 @@ the actual mode from the selected instance in `cuttlefish_config.json`, along
 with `gpuVhostUserEnabled` from that same instance configuration.
 Schema version 2 adds `eglPlatform`, which records the host EGL platform
 selected for a VirGL target capture.
+Schema version 3 adds `hostToolIdentities`, with SHA-256 and GNU ELF Build ID
+for the configured crosvm command, its configured expected executable, and
+the adjacent `libgfxstream_backend.so` candidate. No absolute host paths are
+written. The command may be a diagnostic launcher; the executable is the
+value configured by `APKRUN_CROSVM_OBSERVER_EXECUTABLE` or the selected crosvm
+binary; this metadata does not verify a running process. The gfxstream entry
+is a candidate based on that executable's
+directory, not proof that the dynamic loader mapped that file. `status`
+distinguishes a complete identity, a missing Build ID, a non-ELF file,
+invalid ELF metadata, a file unavailable for reading, and a file changed
+during inspection. A SHA-256 is retained when readable even if no Build ID is
+available. If any of the three SHA-256 values is unavailable, `capture.sh`
+records `host-tool-identities` in `MISSING.txt` and publishes the capture as
+incomplete. A missing ELF Build ID alone does not fail identity collection
+when SHA-256 is present. The Cuttlefish VCS revision printed as `Launcher
+Build ID` is separate from these ELF Build IDs.
 Compare GPU profiles only when the actual selected mode matches the intended
 mode and vhost-user GPU is disabled; a mismatch or missing/invalid setting
 keeps the capture incomplete, even when the boot observer collected data

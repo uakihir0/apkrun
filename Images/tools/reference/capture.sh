@@ -1214,6 +1214,34 @@ if [ -z "$cvd_package_version" ]; then
   record_missing "host.json" \
     "set APKRUN_CVD_PACKAGE_VERSION or install dpkg-query to record the CVD package version"
 fi
+crosvm_command_for_identity=${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}
+crosvm_gfxstream_candidate="$(dirname "$crosvm_observer_executable")/libgfxstream_backend.so"
+if ! host_tool_identities=$(python3 "$script_dir/elf_identity.py" \
+  --crosvm-command "$crosvm_command_for_identity" \
+  --crosvm-executable "$crosvm_observer_executable" \
+  --gfxstream-backend "$crosvm_gfxstream_candidate"); then
+  host_tool_identities='{}'
+  record_missing "host.json" "could not collect Cuttlefish host-tool binary identities"
+elif ! python3 - "$host_tool_identities" <<'PY'
+import json
+import re
+import sys
+
+try:
+    identities = json.loads(sys.argv[1])
+except (IndexError, json.JSONDecodeError):
+    raise SystemExit(1)
+required = ("crosvmCommand", "expectedCrosvmExecutable", "gfxstreamBackendCandidate")
+for name in required:
+    identity = identities.get(name)
+    digest = identity.get("sha256") if isinstance(identity, dict) else None
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise SystemExit(1)
+PY
+then
+  record_missing "host-tool-identities" \
+    "one or more configured host binaries could not be hashed; keep this capture incomplete"
+fi
 if [ -n "$crosvm_binary_override" ]; then
   capture_failed=1
 fi
@@ -1231,6 +1259,7 @@ APKRUN_CAPTURE_SELECTED_GPU_MODE=$selected_gpu_mode \
 APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED=$selected_gpu_vhost_user_enabled \
 APKRUN_CAPTURE_EGL_PLATFORM=$capture_egl_platform \
 APKRUN_CAPTURE_VIRGL_SOURCE_REVISION=$virgl_source_revision \
+APKRUN_CAPTURE_HOST_TOOL_IDENTITIES=$host_tool_identities \
 APKRUN_CAPTURE_DURATION=$((capture_finished_at - capture_started_at)) \
 python3 - "$stage/host.json" <<'PY'
 import json
@@ -1240,7 +1269,7 @@ import sys
 from pathlib import Path
 
 document = {
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "buildId": "16373615",
     "profile": os.environ["APKRUN_CAPTURE_PROFILE"],
     "hostKind": os.environ["APKRUN_CAPTURE_HOST_KIND"],
@@ -1262,6 +1291,7 @@ document = {
     "drmVirglSourceRevision": (
         os.environ["APKRUN_CAPTURE_VIRGL_SOURCE_REVISION"] or None
     ),
+    "hostToolIdentities": json.loads(os.environ["APKRUN_CAPTURE_HOST_TOOL_IDENTITIES"]),
     "cpuCount": (
         int(os.environ["APKRUN_CAPTURE_CPU_COUNT"])
         if os.environ["APKRUN_CAPTURE_CPU_COUNT"].isdigit()

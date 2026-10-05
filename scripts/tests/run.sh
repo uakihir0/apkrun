@@ -31,7 +31,7 @@ expect_fail() {
         printf 'FAIL lock fixture %s: expected failure\n' "$name" >&2
         exit 1
     fi
-    if ! rg -q "$expected" "$output"; then
+    if ! rg -q -- "$expected" "$output"; then
         cat "$output" >&2
         printf 'FAIL lock fixture %s: expected diagnostic matching %s\n' "$name" "$expected" >&2
         exit 1
@@ -58,7 +58,7 @@ expect_module_fail() {
         printf 'FAIL module dependency fixture %s: expected failure\n' "$name" >&2
         exit 1
     fi
-    if ! rg -q "$expected" "$output"; then
+    if ! rg -q -- "$expected" "$output"; then
         cat "$output" >&2
         printf 'FAIL module dependency fixture %s: expected diagnostic matching %s\n' "$name" "$expected" >&2
         exit 1
@@ -79,6 +79,7 @@ mutate_lock() {
     local mode="$2"
     python3 - "$root" "$mode" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -139,8 +140,23 @@ elif mode == "reference-patch":
     patch_path.write_text("reference fixture patch\n")
 elif mode == "unsupported-ships":
     component["ships"] = "reference-only"
+elif mode == "non-source-patch":
+    component["patches"] = ["swift-argument-parser/0001-non-source.patch"]
+    patch_path = root / "ThirdParty/patches/swift-argument-parser/0001-non-source.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text("fixture patch on a non-source component\n")
 elif mode == "missing-patch":
+    component["kind"] = "source"
     component["patches"] = ["swift-argument-parser/0001-missing.patch"]
+    (root / "Package.swift").write_text(
+        "// swift-tools-version: 6.2\n"
+        "import PackageDescription\n"
+        'let package = Package(name: "LockFixture", dependencies: [], targets: [])\n'
+    )
+    resolved_path = root / "Package.resolved"
+    resolved = json.loads(resolved_path.read_text())
+    resolved["pins"] = []
+    resolved_path.write_text(json.dumps(resolved, indent=2) + "\n")
 elif mode == "pin-mismatch":
     component["commit"] = "0000000000000000000000000000000000000000"
 elif mode == "repository-path-suffix":
@@ -254,6 +270,21 @@ elif mode == "unlisted-project-package":
     use_project_package("https://example.com/unlisted.git", "9.9.9")
 elif mode == "malformed-patches":
     component["patches"] = [123]
+elif mode == "fifo-patch":
+    component["kind"] = "source"
+    component["patches"] = ["swift-argument-parser/0001-fifo.patch"]
+    patch = root / "ThirdParty/patches/swift-argument-parser/0001-fifo.patch"
+    patch.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(patch)
+    (root / "Package.swift").write_text(
+        "// swift-tools-version: 6.2\n"
+        "import PackageDescription\n"
+        'let package = Package(name: "LockFixture", dependencies: [], targets: [])\n'
+    )
+    resolved_path = root / "Package.resolved"
+    resolved = json.loads(resolved_path.read_text())
+    resolved["pins"] = []
+    resolved_path.write_text(json.dumps(resolved, indent=2) + "\n")
 elif mode == "duplicate-pin":
     resolved_path = root / "Package.resolved"
     resolved = json.loads(resolved_path.read_text())
@@ -309,6 +340,581 @@ PY
 expect_pass "valid lock" "$fixture_root"
 expect_pass "repository lock" "$repo_root"
 
+expect_cli_fail() {
+    local name="$1"
+    local expected="$2"
+    shift 2
+    local output="$temporary_root/cli-$name.log"
+    if "$checker" "$@" >"$output" 2>&1; then
+        printf 'FAIL check-lock arguments %s: expected failure\n' "$name" >&2
+        exit 1
+    fi
+    if ! rg -q -- "$expected" "$output"; then
+        cat "$output" >&2
+        printf 'FAIL check-lock arguments %s: expected diagnostic matching %s\n' "$name" "$expected" >&2
+        exit 1
+    fi
+    printf 'PASS check-lock arguments %s\n' "$name"
+}
+
+expect_cli_fail "unknown option" "usage: check-lock.swift" --unknown
+expect_cli_fail "missing root value" "usage: check-lock.swift" --root
+expect_cli_fail "root value cannot be another option" "usage: check-lock.swift" --root --apply
+expect_cli_fail "duplicate apply option" "--apply may be specified once" --apply --apply
+
+python3 - "$checker" "$fixture_root" "$temporary_root" <<'PY'
+import pathlib
+import os
+import shutil
+import subprocess
+import sys
+
+checker = pathlib.Path(sys.argv[1])
+fixture_root = pathlib.Path(sys.argv[2])
+temporary_root = pathlib.Path(sys.argv[3])
+for name, relative_path, expected in (
+    ("lock", "ThirdParty/ThirdParty.lock.json", "lock file is not a regular file"),
+    ("resolved", "Package.resolved", "Swift package lock file is not a regular file"),
+):
+    root = temporary_root / f"{name}-fifo"
+    shutil.copytree(fixture_root, root)
+    special_file = root / relative_path
+    special_file.unlink()
+    os.mkfifo(special_file)
+    try:
+        result = subprocess.run(
+            [str(checker), "--root", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"FAIL check-lock {name} FIFO: reading the file blocked")
+    output = result.stdout + result.stderr
+    if result.returncode == 0 or expected not in output:
+        raise SystemExit(f"FAIL check-lock {name} FIFO: unexpected result\n{output}")
+    print(f"PASS check-lock {name} FIFO is rejected without blocking")
+PY
+
+python3 - "$checker" "$fixture_root" "$temporary_root/apply-lock" "$repo_root" <<'PY'
+import json
+import os
+import fcntl
+import pathlib
+import shutil
+import stat
+import subprocess
+import sys
+import time
+
+checker = pathlib.Path(sys.argv[1])
+fixture_root = pathlib.Path(sys.argv[2])
+temporary_root = pathlib.Path(sys.argv[3])
+repo_root = pathlib.Path(sys.argv[4])
+
+
+def run_git(directory, *arguments, capture=False):
+    return subprocess.run(
+        ["git", "-C", str(directory), *arguments],
+        check=True,
+        capture_output=capture,
+        text=True,
+    )
+
+
+def prepare_fixture(name, mode):
+    root = temporary_root / name
+    shutil.copytree(fixture_root, root)
+    lock_path = root / "ThirdParty/ThirdParty.lock.json"
+    lock = json.loads(lock_path.read_text())
+    component = lock["components"][0]
+    component["kind"] = "source"
+    component["buildFlags"] = []
+    component["patches"] = []
+    component["ships"] = ["reference"] if mode == "reference" else "app"
+
+    package_manifest = root / "Package.swift"
+    package_manifest.write_text(
+        "// swift-tools-version: 6.2\n"
+        "import PackageDescription\n"
+        'let package = Package(name: "LockFixture", dependencies: [], targets: [])\n'
+    )
+    resolved_path = root / "Package.resolved"
+    resolved = json.loads(resolved_path.read_text())
+    resolved["pins"] = []
+    resolved_path.write_text(json.dumps(resolved, indent=2) + "\n")
+
+    if mode == "reference":
+        lock_path.write_text(json.dumps(lock, indent=2) + "\n")
+        return root, None, None
+
+    component["patches"] = ["swift-argument-parser/0001-fixture.patch"]
+    patch_path = root / "ThirdParty/patches/swift-argument-parser/0001-fixture.patch"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "missing":
+        patch_path.write_text("fixture patch; source is intentionally absent\n")
+        lock_path.write_text(json.dumps(lock, indent=2) + "\n")
+        return root, None, None
+
+    worktree = root / "source-worktree"
+    worktree.mkdir()
+    run_git(worktree, "init", "--quiet")
+    run_git(worktree, "config", "user.name", "APKRun Fixture")
+    run_git(worktree, "config", "user.email", "fixture@example.invalid")
+    if mode == "ignored-collision":
+        (worktree / ".gitignore").write_text("ignored-patch-output.txt\n")
+        run_git(worktree, "add", ".gitignore")
+    if mode in ("configured-filter", "configured-merge-driver"):
+        attribute = "filter=fixture" if mode == "configured-filter" else "merge=fixture"
+        (worktree / ".gitattributes").write_text(f"payload.txt {attribute}\n")
+        run_git(worktree, "add", ".gitattributes")
+    (worktree / "payload.txt").write_text("before\n")
+    run_git(worktree, "add", "payload.txt")
+    run_git(worktree, "commit", "--quiet", "-m", "fixture baseline")
+    baseline = run_git(worktree, "rev-parse", "HEAD", capture=True).stdout.strip()
+
+    (worktree / "payload.txt").write_text("after\n")
+    if mode == "ignored-collision":
+        (worktree / "ignored-patch-output.txt").write_text("patch contents\n")
+        run_git(worktree, "add", "payload.txt")
+        run_git(worktree, "add", "-f", "ignored-patch-output.txt")
+    else:
+        run_git(worktree, "add", "payload.txt")
+    run_git(worktree, "commit", "--quiet", "-m", "fixture patch")
+    patch = run_git(worktree, "format-patch", "--stdout", "-1", capture=True).stdout
+    patch_path.write_text(patch)
+    if mode == "patch-parent-symlink":
+        external_patches = temporary_root / f"{name}-external-patches"
+        patch_path.parent.rename(external_patches)
+        patch_path.parent.symlink_to(external_patches, target_is_directory=True)
+    if mode == "failing-series":
+        component["patches"].append("swift-argument-parser/0002-invalid.patch")
+        (patch_path.parent / "0002-invalid.patch").write_text("not a git patch\n")
+    run_git(worktree, "reset", "--quiet", "--hard", baseline)
+    run_git(worktree, "checkout", "--quiet", "--detach", baseline)
+
+    lock_commit = "1" * 40 if mode == "mismatched" else baseline
+    component["commit"] = lock_commit
+    source_root = root / "ThirdParty/out/src/swift-argument-parser" / lock_commit
+    source_root.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "symlink":
+        external_root = temporary_root / f"{name}-external"
+        external_root.parent.mkdir(parents=True, exist_ok=True)
+        worktree.rename(external_root)
+        source_root.symlink_to(external_root, target_is_directory=True)
+    elif mode == "external-common-dir":
+        run_git(
+            worktree,
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            str(source_root),
+            baseline,
+        )
+        pointer = (source_root / ".git").read_text().strip()
+        metadata_path = pathlib.Path(pointer.removeprefix("gitdir: ")).resolve()
+        local_metadata = source_root / ".git-metadata"
+        shutil.move(metadata_path, local_metadata)
+        (source_root / ".git").write_text(f"gitdir: {local_metadata}\n")
+        common_directory = run_git(
+            worktree, "rev-parse", "--absolute-git-dir", capture=True
+        ).stdout.strip()
+        (local_metadata / "commondir").write_text(f"{common_directory}\n")
+        (local_metadata / "gitdir").write_text(f"{source_root / '.git'}\n")
+    else:
+        worktree.rename(source_root)
+    if mode == "index-fifo":
+        index_path = pathlib.Path(
+            run_git(source_root, "rev-parse", "--git-path", "index", capture=True).stdout.strip()
+        )
+        if not index_path.is_absolute():
+            index_path = source_root / index_path
+        index_path.unlink()
+        os.mkfifo(index_path)
+    if mode == "head-fifo":
+        head_path = source_root / ".git/HEAD"
+        head_path.unlink()
+        os.mkfifo(head_path)
+    if mode == "active-operation":
+        state_path = run_git(
+            source_root, "rev-parse", "--git-path", "rebase-apply", capture=True
+        ).stdout.strip()
+        state_dir = pathlib.Path(state_path)
+        if not state_dir.is_absolute():
+            state_dir = source_root / state_dir
+        state_dir.mkdir(parents=True)
+    if mode == "ignored-collision":
+        (source_root / "ignored-patch-output.txt").write_text("user data\n")
+    if mode == "dirty":
+        (source_root / "payload.txt").write_text("local change\n")
+    if mode == "valid":
+        payload = source_root / "payload.txt"
+        payload_metadata = payload.stat()
+        os.utime(
+            payload,
+            ns=(payload_metadata.st_atime_ns, payload_metadata.st_mtime_ns + 5_000_000_000),
+        )
+    if mode == "assume-unchanged":
+        (source_root / "payload.txt").write_text("hidden local change\n")
+        run_git(source_root, "update-index", "--assume-unchanged", "payload.txt")
+    if mode == "fsmonitor":
+        marker = root / "fsmonitor-helper-invoked"
+        helper = root / "fsmonitor-helper.sh"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"printf x >> '{marker}'\n"
+            "printf 'token\\000'\n"
+        )
+        helper.chmod(0o700)
+        run_git(source_root, "config", "core.fsmonitor", str(helper))
+    if mode == "configured-filter":
+        marker = root / "filter-helper-invoked"
+        helper = root / "filter-helper.sh"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"printf x >> '{marker}'\n"
+            "cat\n"
+        )
+        helper.chmod(0o700)
+        run_git(source_root, "config", "filter.fixture.clean", str(helper))
+    if mode == "configured-merge-driver":
+        marker = root / "merge-driver-invoked"
+        helper = root / "merge-driver.sh"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"printf x >> '{marker}'\n"
+            "cat \"$1\"\n"
+        )
+        helper.chmod(0o700)
+        run_git(source_root, "config", "merge.fixture.driver", str(helper))
+    if mode == "config-include-fifo":
+        include_path = root / "blocked-config-include"
+        os.mkfifo(include_path)
+        (source_root / ".git/config").write_text(
+            f'[include]\n path = "{include_path}"\n'
+        )
+    if mode == "config-fifo":
+        config_path = source_root / ".git/config"
+        config_path.unlink()
+        os.mkfifo(config_path)
+    if mode == "output-parent-symlink":
+        external_output = temporary_root / f"{name}-external-output"
+        external_output.mkdir()
+        (root / "ThirdParty/out/patched-src").symlink_to(
+            external_output,
+            target_is_directory=True,
+        )
+    lock_path.write_text(json.dumps(lock, indent=2) + "\n")
+    return root, source_root, baseline
+
+
+def check(name, mode, expected, diagnostic=None):
+    root, source_root, baseline = prepare_fixture(name, mode)
+    source_index = (
+        (source_root / ".git/index").read_bytes()
+        if mode == "valid"
+        else None
+    )
+    environment = os.environ.copy()
+    if mode in ("valid", "fsmonitor"):
+        environment["GIT_DIR"] = run_git(
+            repo_root, "rev-parse", "--absolute-git-dir", capture=True
+        ).stdout.strip()
+    if mode == "lock-held":
+        lock_path = root / "ThirdParty/out/.check-lock-apply.lock"
+        lock_path.touch()
+        lock_handle = lock_path.open("r+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            result = subprocess.run(
+                [str(checker), "--root", str(root), "--apply"],
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=5
+                if mode in (
+                    "config-include-fifo",
+                    "config-fifo",
+                    "index-fifo",
+                    "head-fifo",
+                )
+                else 30,
+                check=False,
+            )
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+    elif mode == "output-parent-move":
+        output_parent = (
+            root / "ThirdParty/out/patched-src/swift-argument-parser" / baseline
+        )
+        moved_parent = temporary_root / f"{name}-moved-parent"
+        symlink_target = temporary_root / f"{name}-symlink-target"
+        symlink_target.mkdir()
+        process = subprocess.Popen(
+            [str(checker), "--root", str(root), "--apply"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        moved = False
+        deadline = time.monotonic() + 30
+        while process.poll() is None and time.monotonic() < deadline:
+            staging = list(root.glob(".apkrun-patch-staging-*"))
+            if (
+                staging
+                and output_parent.is_dir()
+                and not output_parent.is_symlink()
+            ):
+                output_parent.rename(moved_parent)
+                output_parent.symlink_to(symlink_target, target_is_directory=True)
+                moved = True
+                break
+            time.sleep(0.001)
+        if not moved:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: couldn't move the opened output parent\n"
+                f"{stdout}{stderr}"
+            )
+        try:
+            stdout, stderr = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: checker hung after output-parent move\n"
+                f"{stdout}{stderr}"
+            )
+        result = subprocess.CompletedProcess(
+            process.args,
+            process.returncode,
+            stdout,
+            stderr,
+        )
+    else:
+        result = subprocess.run(
+            [str(checker), "--root", str(root), "--apply"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=5
+            if mode in (
+                "config-include-fifo",
+                "config-fifo",
+                "index-fifo",
+                "head-fifo",
+            )
+            else 30,
+            check=False,
+        )
+    helper_marker = {
+        "fsmonitor": root / "fsmonitor-helper-invoked",
+        "configured-filter": root / "filter-helper-invoked",
+        "configured-merge-driver": root / "merge-driver-invoked",
+    }.get(mode)
+    if helper_marker is not None and helper_marker.exists():
+        raise SystemExit(f"FAIL lock patch fixture {name}: configured helper was executed")
+    if (result.returncode == 0) != expected:
+        raise SystemExit(
+            f"FAIL lock patch fixture {name}: unexpected exit {result.returncode}\n"
+            f"{result.stdout}{result.stderr}"
+        )
+    output = result.stdout + result.stderr
+    if diagnostic and diagnostic not in output:
+        raise SystemExit(
+            f"FAIL lock patch fixture {name}: missing {diagnostic!r}\n{output}"
+        )
+    if mode == "valid":
+        if (source_root / ".git/index").read_bytes() != source_index:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: check-lock changed the pinned source index"
+            )
+        source_head = run_git(
+            source_root, "rev-parse", "HEAD", capture=True
+        ).stdout.strip()
+        source_status = run_git(
+            source_root, "status", "--porcelain=v1", capture=True
+        ).stdout
+        if source_head != baseline or source_status:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: pinned source checkout changed"
+            )
+        patched_parent = (
+            root / "ThirdParty/out/patched-src/swift-argument-parser" / baseline
+        )
+        patched_checkouts = list(patched_parent.iterdir())
+        if len(patched_checkouts) != 1:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: expected one patch-set checkout, "
+                f"found {len(patched_checkouts)}"
+            )
+        patched_root = patched_checkouts[0]
+        actual = run_git(patched_root, "show", "HEAD:payload.txt", capture=True).stdout
+        if actual != "after\n":
+            raise SystemExit(f"FAIL lock patch fixture {name}: patch contents were not applied")
+        head = run_git(patched_root, "rev-parse", "HEAD", capture=True).stdout.strip()
+        if head == baseline:
+            raise SystemExit(f"FAIL lock patch fixture {name}: git am did not create a commit")
+        parent = run_git(patched_root, "rev-parse", "HEAD^", capture=True).stdout.strip()
+        if parent != baseline:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: applied commit has unexpected parent {parent}"
+            )
+        repeated = subprocess.run(
+            [str(checker), "--root", str(root), "--apply"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if repeated.returncode != 0 or "patches applied" not in repeated.stdout:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: existing patched output was not reusable\n"
+                f"{repeated.stdout}{repeated.stderr}"
+            )
+    if mode == "failing-series":
+        head = run_git(source_root, "rev-parse", "HEAD", capture=True).stdout.strip()
+        status = run_git(source_root, "status", "--porcelain=v1", capture=True).stdout
+        output_path = root / "ThirdParty/out/patched-src/swift-argument-parser" / baseline
+        if head != baseline or status or output_path.exists():
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: failed preflight changed the pinned checkout"
+            )
+    if mode == "symlink":
+        actual = run_git(source_root, "show", "HEAD:payload.txt", capture=True).stdout
+        if actual != "before\n":
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: linked checkout was unexpectedly modified"
+            )
+    if mode == "active-operation":
+        state_path = run_git(
+            source_root, "rev-parse", "--git-path", "rebase-apply", capture=True
+        ).stdout.strip()
+        state_dir = pathlib.Path(state_path)
+        if not state_dir.is_absolute():
+            state_dir = source_root / state_dir
+        if not state_dir.is_dir():
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: existing Git operation state was removed"
+            )
+    if mode == "ignored-collision":
+        if (source_root / "ignored-patch-output.txt").read_text() != "user data\n":
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: ignored user data was overwritten"
+            )
+        head = run_git(source_root, "rev-parse", "HEAD", capture=True).stdout.strip()
+        if head != baseline:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: ignored collision changed the pinned commit"
+            )
+    if mode == "assume-unchanged":
+        if (source_root / "payload.txt").read_text() != "hidden local change\n":
+            raise SystemExit(f"FAIL lock patch fixture {name}: hidden tracked edit was overwritten")
+        head = run_git(source_root, "rev-parse", "HEAD", capture=True).stdout.strip()
+        if head != baseline:
+            raise SystemExit(f"FAIL lock patch fixture {name}: hidden edit advanced HEAD")
+    if mode == "external-common-dir":
+        if (source_root / "payload.txt").read_text() != "before\n":
+            raise SystemExit(f"FAIL lock patch fixture {name}: shared repository checkout changed")
+    if mode == "lock-held":
+        head = run_git(source_root, "rev-parse", "HEAD", capture=True).stdout.strip()
+        if head != baseline:
+            raise SystemExit(f"FAIL lock patch fixture {name}: competing apply changed HEAD")
+    if mode == "config-include-fifo":
+        if not stat.S_ISFIFO((root / "blocked-config-include").lstat().st_mode):
+            raise SystemExit(f"FAIL lock patch fixture {name}: include FIFO was unexpectedly changed")
+    if mode == "config-fifo":
+        if not stat.S_ISFIFO((source_root / ".git/config").lstat().st_mode):
+            raise SystemExit(f"FAIL lock patch fixture {name}: config FIFO was unexpectedly changed")
+    if mode == "index-fifo":
+        if not stat.S_ISFIFO((source_root / ".git/index").lstat().st_mode):
+            raise SystemExit(f"FAIL lock patch fixture {name}: index FIFO was unexpectedly changed")
+    if mode == "head-fifo":
+        if not stat.S_ISFIFO((source_root / ".git/HEAD").lstat().st_mode):
+            raise SystemExit(f"FAIL lock patch fixture {name}: HEAD FIFO was unexpectedly changed")
+    if mode == "output-parent-symlink":
+        external_output = temporary_root / f"{name}-external-output"
+        if list(external_output.iterdir()):
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: symlink target received output"
+            )
+    if mode == "output-parent-move":
+        symlink_target = temporary_root / f"{name}-symlink-target"
+        staging = list(root.glob(".apkrun-patch-staging-*"))
+        if list(symlink_target.iterdir()):
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: clone or publication followed the replacement symlink"
+            )
+        if len(staging) != 1:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: expected one preserved root staging checkout"
+            )
+        if (source_root / ".git/HEAD").read_text().strip() != baseline:
+            raise SystemExit(
+                f"FAIL lock patch fixture {name}: moving the output parent changed the pinned source"
+            )
+    print(f"PASS lock patch fixture {name}")
+
+
+check("apply-valid", "valid", True, "patches applied")
+check("apply-missing-source", "missing", False, "pinned source checkout is missing")
+check("apply-wrong-pin", "mismatched", False, "expected pinned commit")
+check("apply-dirty-source", "dirty", False, "source checkout is not clean")
+check("apply-symlink-source", "symlink", False, "source checkout path contains a symlink")
+check("apply-reference-without-checkout", "reference", True, "no patches to apply")
+check("apply-preflights-failed-series", "failing-series", False, "source checkouts were not changed")
+check("apply-preserves-active-git-operation", "active-operation", False, "Git operation is already in progress")
+check("apply-preserves-ignored-user-data", "ignored-collision", False, "including ignored files")
+check("apply-detects-assume-unchanged", "assume-unchanged", False, "non-normal flags")
+check("apply-rejects-external-git-common-dir", "external-common-dir", False, "shared Git metadata must be inside")
+check("apply-disables-configured-fsmonitor", "fsmonitor", True, "patches applied")
+check(
+    "apply-rejects-configured-filter",
+    "configured-filter",
+    False,
+    "custom Git filters or merge drivers are configured",
+)
+check(
+    "apply-rejects-configured-merge-driver",
+    "configured-merge-driver",
+    False,
+    "custom Git filters or merge drivers are configured",
+)
+check(
+    "apply-rejects-included-config-fifo",
+    "config-include-fifo",
+    False,
+    "Git config includes are not allowed",
+)
+check("apply-rejects-config-fifo-without-blocking", "config-fifo", False, "Git config is not a regular file")
+check("apply-rejects-index-fifo-without-blocking", "index-fifo", False, "Git index is not a regular file")
+check("apply-rejects-head-fifo-without-blocking", "head-fifo", False, "Git HEAD is not a regular file")
+check(
+    "apply-rejects-output-parent-symlink",
+    "output-parent-symlink",
+    False,
+    "couldn't safely open patched-source output directory",
+)
+check(
+    "apply-detects-output-parent-move",
+    "output-parent-move",
+    False,
+    "couldn't safely open patched-source output directory",
+)
+check(
+    "apply-rejects-patch-parent-symlink",
+    "patch-parent-symlink",
+    False,
+    "patch is not a regular file within its allowed directory",
+)
+check("apply-serializes-concurrent-runs", "lock-held", False, "another check-lock --apply operation")
+PY
+
 reference_non_source_root="$(new_fixture reference-non-source)"
 mutate_lock "$reference_non_source_root" reference-non-source
 expect_fail "reference classification requires a source" "reference to be the sole ships value for a source component" "$reference_non_source_root"
@@ -324,6 +930,10 @@ expect_fail "reference entries reject patches" "reference entries must not decla
 unsupported_ships_root="$(new_fixture unsupported-ships)"
 mutate_lock "$unsupported_ships_root" unsupported-ships
 expect_fail "unsupported ships classification" "unsupported 'ships' value" "$unsupported_ships_root"
+
+non_source_patch_root="$(new_fixture non-source-patch)"
+mutate_lock "$non_source_patch_root" non-source-patch
+expect_fail "patches require a source component" "may declare patches only for source components" "$non_source_patch_root"
 
 branch_root="$(new_fixture branch-name)"
 mutate_lock "$branch_root" branch
@@ -408,6 +1018,10 @@ expect_fail "unlisted included project package" "has no ThirdParty lock entry" "
 malformed_patches_root="$(new_fixture malformed-patches)"
 mutate_lock "$malformed_patches_root" malformed-patches
 expect_fail "malformed patch list" "requires a 'patches' string array" "$malformed_patches_root"
+
+fifo_patch_root="$(new_fixture fifo-patch)"
+mutate_lock "$fifo_patch_root" fifo-patch
+expect_fail "FIFO patch rejected" "patch is not a regular file within its allowed directory" "$fifo_patch_root"
 
 duplicate_pin_root="$(new_fixture duplicate-pin)"
 mutate_lock "$duplicate_pin_root" duplicate-pin

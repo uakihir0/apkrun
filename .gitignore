@@ -6,8 +6,10 @@ APKRun.xcodeproj/
 DerivedData/
 *.xcresult
 Images/work/
+Images/tools/.venv/
 Images/tools/*.egg-info/
 Images/tools/**/__pycache__/
+__pycache__/
 ThirdParty/out/
 Guest/build/
 Guest/local.properties

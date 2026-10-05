@@ -118,7 +118,7 @@ Each check is a script that CI runs in the `lint` job (§15) and that works loca
 | `scripts/check-launcher.sh` | the built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`, `lipo -archs` is `arm64`, and the minimum OS is 27.0 | #068 |
 | `scripts/check-todos.sh` | every `TODO` and `FIXME` carries an issue number (`TODO(#123): …`), NFR-DEV-04 | #062 |
 | `scripts/check-format.sh` | `swift format lint --strict`, ktfmt check, `cargo fmt --check`, `ruff format --check` ([coding-conventions.md](coding-conventions.md) §2) | #062 |
-| `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` against its schema, every patch listed exists, the Swift package pins match `Package.resolved` and `project.yml` (§6.1). With `--apply`, which the `third-party` job runs against clean, pinned build sources before compiling them (§15.1), it also applies every patch | #062; `--apply` #020 |
+| `scripts/check-lock.sh` | `ThirdParty/ThirdParty.lock.json` against its schema, every patch listed exists, the Swift package pins match `Package.resolved` and `project.yml` (§6.1). With `--apply`, which the third-party build driver runs after fetching exact source commits, it also applies every patch | #062; `--apply` #020 |
 | `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #035 |
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` strings outside `ADBStoreAgentChannel` and `AdbClient`. Exempt paths: `scripts/dev/`, `Tests/Compatibility/`, `Images/tools/reference/` ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §3.3) | #027 |
 | `scripts/check-compatibility-db.sh` | `Tests/Compatibility/database/compatibility.json` against `compatibility.schema.json` ([../02-design/diagnostics.md](../02-design/diagnostics.md) §10) | #090 |
@@ -221,7 +221,7 @@ Every third-party input is pinned by commit or by hash, never by a moving branch
 | Field | Meaning |
 |---|---|
 | `name` | unique; also the directory name under `ThirdParty/patches/` |
-| `group` | build unit; `virgl-runtime` for the three renderer libraries. A reference-only entry may use a descriptive group such as `graphics-reference`, which is not a build unit and is excluded from build-group processing |
+| `group` | build unit; `virgl-runtime` for the renderer libraries and their pinned build tools. A reference-only entry may use a descriptive group such as `graphics-reference`, which is not a build unit and is excluded from build-group processing |
 | `kind` | `source` (pinned VCS source at a commit; built only when selected by a build group and not classified as `reference`), `prebuilt` (download with `sha256`), `vendored` (copied into the tree), `swiftpm`, `gradle`, `cargo` (pinned by their own lock files; listed here for licenses and notices) |
 | `repository` | the upstream git URL, for `source` and `vendored` entries |
 | `url` | the download URL of a `prebuilt` entry. The download is checked against `sha256` before use, and a mismatch fails the build |
@@ -231,9 +231,10 @@ Every third-party input is pinned by commit or by hash, never by a moving branch
 | `version` | the label shown in `components.json`; for patched code, upstream version plus `+apkrun.<n>` |
 | `license`, `licenseFiles` | SPDX identifier and upstream-relative license-file paths; committed copies live under `ThirdParty/licenses/<name>/<path>`. Reference entries retain those copies for review but are excluded from notice generation; distribution notice generators include files only for components in their applicable scope ([legal-and-licensing.md](legal-and-licensing.md) §§4, 6) |
 | `ships` | `app` (inside APKRun.app), `image` (inside the runtime image), `tooling` (build or test only), `derived` (source copied or adapted into our code), `reference` (pinned source used only for analysis; never built, copied, or distributed); a list such as `["app", "image"]` when a component ships in more than one place ([legal-and-licensing.md](legal-and-licensing.md) §4.1) |
+| `gnTargetPrefixes` | for ANGLE source dependencies, the `//third_party/` GN label prefixes whose presence in `libEGL` or `libGLESv2` requires this component's license notice; the native build compares these prefixes with `gn desc` output |
 | `upstream` | what the security check watches (§6.7) |
 
-The **lock hash** of a build group is the SHA-256 over its buildable lock entries (canonical JSON), their patch files, and their build scripts. It names the output directory and the CI cache key. Descriptive groups containing only `ships: reference` entries are excluded from build-group discovery, source preparation, patch application, and lock-hash calculation.
+The **lock hash** of a build group is the SHA-256 over its buildable lock entries (canonical JSON), their patch files, and the build pipeline scripts. Descriptive groups containing only `ships: reference` entries are excluded from build-group discovery, source preparation, patch application, and lock-hash calculation. The graphics output and CI cache key combine this hash with an environment hash over the selected Xcode and build, macOS build, SDK, Metal tools, compiler and Python identities, the pinned PyYAML commit and version, Git, Meson, Ninja, and pkg-config.
 
 ### 6.2 Patches
 
@@ -250,16 +251,21 @@ The **lock hash** of a build group is the SHA-256 over its buildable lock entrie
 | virglrenderer | `960bd667` + patches | MIT | Meson, against libepoxy and ANGLE's EGL |
 | libepoxy | `1b6d7db` | MIT | Meson, EGL only, no GLX or X11 |
 | ANGLE | `2d91f554` (`chromium/7151`) | BSD-3-Clause | GN and Ninja with pinned depot_tools; Metal backend only (`angle_enable_metal=true`, GL, Vulkan, and SwiftShader backends off) |
+| ANGLE ASTC encoder | `2319d9c4` | Apache-2.0 | static dependency of the Metal GLES targets; lock entry `angle-astc-encoder` |
+| ANGLE Vulkan headers | `c0fe12c8` | Apache-2.0 | header dependency in the Metal GLES target graph; lock entry `angle-vulkan-headers` |
+| ANGLE zlib | `e00f7038` | Zlib | static dependency of the Metal GLES targets; lock entry `angle-zlib` |
+| PyYAML | `49790e73` (`6.0.3`) | MIT | pinned pure-Python module used by virglrenderer’s Meson configuration; tooling only |
 
 ```bash
 scripts/build-third-party.sh virgl-runtime
-# → ThirdParty/out/virgl-runtime/<lock hash>/{libvirglrenderer.dylib, libepoxy.dylib, libEGL.dylib, libGLESv2.dylib}
+# → ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/{libvirglrenderer.1.dylib, libepoxy.0.dylib, libEGL.dylib, libGLESv2.dylib}
 ```
 
-- The driver script calls `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh` in that order ([../02-design/graphics.md](../02-design/graphics.md) §5.1). Pinned source checkouts are fetched into `ThirdParty/out/src/<name>/<commit>/`; patched source checkouts are generated at `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/` and are the build inputs.
+- The driver fetches exact commits into `ThirdParty/out/src/<name>/<commit>/`, then runs `scripts/check-lock.sh --apply` to generate patched checkouts at `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/`. It calls `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh` in that order ([../02-design/graphics.md](../02-design/graphics.md) §5.1). ANGLE's `gclient sync` and all compilation happen in `ThirdParty/out/work/virgl-runtime/<cache key>/`; the pinned and patched source checkouts stay clean. Virglrenderer’s Meson process gets `PYTHONPATH` set to the pinned PyYAML source only.
 - Entries with `ships: reference`, such as RiftVM, are validated as lock records but are not fetched, patched, or built by `scripts/build-third-party.sh` or `scripts/check-lock.sh --apply`.
-- The outputs are arm64 dylibs with `@rpath` install names, built for macOS 27.0. `apkrund` finds them through `@executable_path/../Frameworks/VirGLRuntime`.
-- ANGLE needs about 11 GB of checkout and build space. The output is cached by lock hash on developer machines and in CI, so ANGLE is rebuilt only when its pin, flags, patches, or build script change.
+- Before linking ANGLE, the driver compares `gn desc` dependencies for `//:libEGL` and `//:libGLESv2` with every locked `gnTargetPrefixes` entry. An unlicensed or no-longer-used `//third_party/` dependency fails the build. The output includes a `build-manifest.json` with the lock and environment hashes and each library's SHA-256. The driver validates that the four outputs are regular files, arm64-only, built for macOS 27.0 or later, use their required `@rpath` install names, and have no references to temporary build paths before publishing the directory atomically. `apkrund` finds them through `@executable_path/../Frameworks/VirGLRuntime`.
+- ANGLE needs about 11 GB of checkout and build space. The output cache directory combines the lock hash and the detected build environment; cache hits are reused only after every manifest hash and Mach-O property passes validation.
+- A fresh checkout requires network access for the pinned source commits and ANGLE's DEPS. It uses the pinned `depot_tools` tree and disables its self-update.
 - #020 acceptance: a fresh checkout produces the libraries with this one command and no manual edits. The weekly `clean-third-party` job checks it with an empty cache (§15.1).
 
 ### 6.4 Image tooling inputs: mkbootimg and avbtool
@@ -287,12 +293,13 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 | Kotlin stdlib, kotlinx-coroutines, protobuf-javalite | gradle | image and app (`Resources/guest/`) | `Guest/gradle/libs.versions.toml`; the resolved versions are locked in `Guest/<module>/gradle.lockfile` (Gradle dependency locking, `./gradlew -p Guest dependencies --write-locks`) |
 | libc, log, android_logger crates | cargo | image | `Guest/vsockd/Cargo.lock`; the product build uses the same crates from AOSP `external/rust/crates` |
 | depot_tools (`f70835271105ca56d2cd5382a0118152bc2bdeea`) | source, pinned in `ThirdParty/ThirdParty.lock.json` | tooling | used only by the ANGLE build; in the `virgl-runtime` lock group so its revision changes the renderer cache key |
+| PyYAML 6.0.3 (`49790e73684bebad1df05ef8d828fa12f685bffb`) | source, pinned in `ThirdParty/ThirdParty.lock.json` | tooling | pure-Python module loaded from the pinned checkout for virglrenderer’s Meson configuration |
 
 ### 6.6 Caches
 
 | Cache | Key | Where |
 |---|---|---|
-| `virgl-runtime` outputs | lock hash | `ThirdParty/out/virgl-runtime/<lock hash>/` locally, the runner's persistent cache in CI |
+| `virgl-runtime` outputs | lock hash + environment hash | `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/` locally and in the runner's persistent cache |
 | third-party sources | commit | `ThirdParty/out/src/` |
 | patched third-party sources | patch-set SHA-256 | `ThirdParty/out/patched-src/` |
 | pinned tools | version and hash | `build/tools/` |
@@ -454,7 +461,7 @@ The layout is fixed by [../01-architecture/filesystem-layout.md](../01-architect
 | Embed Login Items (copy files) | `Contents/Library/LoginItems/APKRunMenuBar.app` | the `APKRunMenuBar` target |
 | `scripts/build/write-launch-agent.sh` | `Contents/Library/LaunchAgents/io.apkrun.apkrund.plist` (`.dev` / `.updatetest` label, Mach service, `BundleProgram` = `Contents/Helpers/apkrund`) | `Daemon/apkrund/LaunchAgent.plist.in` |
 | Embed Frameworks | `Contents/Frameworks/Sparkle.framework` | Sparkle package |
-| `scripts/build/embed-virgl-runtime.sh` | `Contents/Frameworks/VirGLRuntime/` | `ThirdParty/out/virgl-runtime/<lock hash>/`; fails with the `build-third-party.sh` command if missing |
+| `scripts/build/embed-virgl-runtime.sh` | `Contents/Frameworks/VirGLRuntime/` | `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`; fails with the `build-third-party.sh` command if missing |
 | `scripts/build/embed-cli.sh` | `Contents/Resources/bin/apkrun` | `swift build -c <debug|release> --product apkrun` (with `--traits EmbeddedRuntime` in Debug), with an embedded Info.plist |
 | `scripts/build/embed-tools.sh` | `Contents/Resources/tools/aapt2` | the pinned Maven artifact, hash-checked |
 | `scripts/build/embed-guest.sh` | `Contents/Resources/guest/apkrun-guest.apk` | `Guest/build/out/` |
@@ -614,7 +621,7 @@ launchctl print gui/$(id -u)/io.apkrun.apkrund.dev
 | Generated code (`*.pb.swift`, `ErrorCatalog.generated.swift`, error catalog tables) | byte-identical from the pinned tools | CI diff (§4) |
 | Runtime image bundle | byte-identical for the same inputs and tool revision | T1 double build (§10.1) |
 | Local wrappers | byte-identical for the same configuration, launcher build, and icon ([../02-design/wrapper.md](../02-design/wrapper.md) §6.5) | T1 in WrapperCore |
-| `virgl-runtime` libraries | same inputs → same lock hash; output bytes are not required to match | weekly empty-cache build (§6.3) |
+| `virgl-runtime` libraries | same source, patches, scripts, and environment → same composite cache key; output bytes are not required to match | weekly empty-cache build (§6.3) |
 | Guest APKs | same revision → same `versionCode` and content; signatures differ by key | T1 content check |
 | APKRun.app | traceable, not bit-for-bit: code signatures carry secure timestamps and a notarization ticket | `components.json` commit, lock hashes, release notes |
 | Custom AOSP image | traceable: pinned manifest, container digest, Guest revision | `provenance` in the bundle manifest |
@@ -644,12 +651,12 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `ci-policy.yml` | opened, reopened, synchronize, edited, labeled, or unlabeled pull request events targeting `main` | `workflow-policy` | — | `ubuntu-latest` | trusted `main` code checks current PR head/base, changed paths, and reviews through read-only GitHub API; control paths include workflows, Xcode/Gradle build and convention scripts, generators, dependency pins, CI tool/formatter settings, test/build manifests, test trees, and the module graph; the approver must apply `ci-policy-approved`; a new commit, reopen, PR edit, or later label event resets the check, and removing the label revokes it |
 | `ci.yml` | every pull request, push to `main` | `lint` | — | `xcode-27` | §3 checks, `buf lint`, `buf breaking` |
 | | | `codegen` | — | `xcode-27` | §4 regeneration, `git diff --exit-code` |
-| | | `build` | — | `xcode-27` | `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
+| | | `build` | — | `xcode-27` | needs `third-party`, restores and verifies the same graphics cache, then runs `swift build`; `xcodebuild` Debug and Release (unsigned); `scripts/check-launcher.sh`; the release checks of §3.1 on the Release build |
 | | | `test-swift` | T0 | `xcode-27` | SwiftPM tests excluding `<Module>SystemTests`; no T1 or host-dependent checks |
 | | | `test-guest` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `scripts/build-guest.sh`, Gradle `test` for every Guest module, golden frames, `scripts/build-fixtures.sh` |
 | | | `test-images` | T0, T1 | `xcode-27` for T0; disposable T1 runner for PRs; `apkrun-ci` on `main` | `pytest Images/tools/tests`, fixture bundle double build (§10.1) |
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |
-| | | `third-party` | — | `xcode-27` for PRs; `apkrun-ci` on `main` | `scripts/check-lock.sh --apply` against clean, pinned sources, `scripts/build-third-party.sh virgl-runtime` (cached), `scripts/release/generate-notices.py --check` ([legal-and-licensing.md](legal-and-licensing.md) §6.1) |
+| | | `third-party` | — | `xcode-27` | compute the composite key with `scripts/build-third-party.sh --print-cache-key virgl-runtime`, restore that exact cache directory, then build and verify shipped-source license copies |
 | | | `fuzz-short` | T1 | disposable T1 runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code the pull request changes (§15.2) |
 | `integration.yml` | matching pushes to `main`; manual dispatch from `main` | `linux-guest` | T2 | persistent `apkrun-lab`, trusted `main` only | suite LinuxGuest; exact path filter below; ≤ 15 min. Pull-request runs remain disabled until disposable lab capacity is provisioned |
 | | label `t2-android` or `run-t2` | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |
@@ -665,7 +672,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | | | `fuzz-long` | T3 | `apkrun-ci` | 1 h per fuzz target (§15.2) |
 | | | `notarize` | T3 | `apkrun-lab`, environment `signing` | nightly notarization (#088): the Release app and a HelloText distribution wrapper are signed, notarized, stapled, and checked with `spctl` (§12.6) |
 | | weekly (Sunday) | `release-smoke` | T3 | `apkrun-reference` | `Tests/AcceptanceTests/ReleaseSmoke` on `main` |
-| | weekly (Sunday) | `clean-third-party` | — | `apkrun-ci` | `virgl-runtime` with an empty cache |
+| `clean-third-party.yml` | weekly (Sunday) | `clean-third-party` | — | `xcode-27` | remove all `ThirdParty/out` outputs and build `virgl-runtime` without restoring a cache |
 | `macos-seed.yml` | manual, after the seed lab Mac installs a new macOS build | `seed` | T2, T3 | `apkrun-seed` | the full T2 set and every closed gate check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §9.4) |
 | `release.yml` | tag `v*`; manual on `main` with the input `dry-run` or `promote` | `release` | — | `apkrun-lab`, environment `release` | [workflow.md](workflow.md) §9 |
 | `image-release.yml` | manual, with the input `action` (`candidate`, `beta`, `stable`, `rollout`, `remove`); `candidate` takes the `-user` image zip that a maintainer built on the image build machine | `image-release` | — | `apkrun-lab`, environment `release` | [workflow.md](workflow.md) §10 |

@@ -1,0 +1,4 @@
+brew "meson"
+brew "ninja"
+brew "pkg-config"
+brew "python@3.12"

@@ -46,7 +46,7 @@ M2 delivers the "VirGL accelerated rendering" item of the v0.1 Definition of Don
 
 Outside M2: #033 of M3 needs only #007, so it can start during M2 ([../roadmap.md](../roadmap.md) §1.4).
 
-The ANGLE build needs about 11 GB of disk and a long first build ([../../02-design/graphics.md](../../02-design/graphics.md) §5.1). #020 adds the CI cache keyed by the lock hash. Developer Macs use it instead of building ANGLE locally.
+The ANGLE build needs about 11 GB of disk and a long first build ([../../02-design/graphics.md](../../02-design/graphics.md) §5.1). #020 adds the CI cache keyed by the lock hash and detected build environment. Developer Macs reuse a verified cache when those identities match.
 
 Conventions used by every task in this file:
 
@@ -263,8 +263,9 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 
 - Lock entries with repository, commit, license, build flags, and local patches.
 - A `depot_tools` source pin in the `virgl-runtime` group, so the ANGLE build helper revision participates in the cache identity.
+- A PyYAML source pin in the same group, so virglrenderer’s Meson configuration uses a reproducible Python module without relying on user-site packages.
 - Build scripts for ANGLE (Metal backend only), libepoxy, and virglrenderer.
-- The patches from #018, starting with `virglrenderer/0001-msaa-downgrade.patch` (§5.1).
+- The reviewed macOS, EGL/GLES, Metal shader, and MSAA patches from #018 (§5.1).
 - The `GraphicsBridge` skeleton: `gb_renderer_create`, `gb_renderer_destroy`, `gb_renderer_metal_device`, `gb_capset_info`, and `gb_capset_fill`.
 - The CI job with caching by lock hash.
 - Embedding the output into `APKRun.app/Contents/Frameworks/VirGLRuntime/`.
@@ -277,7 +278,8 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 
 - The `angle`, `libepoxy`, and `virglrenderer` lock entries and their patches.
 - The pinned `depot_tools` build helper in the same lock group.
-- `ThirdParty/build/build-{angle,libepoxy,virglrenderer}.sh`, driven by `scripts/build-third-party.sh virgl-runtime`. The output goes to `ThirdParty/out/virgl-runtime/<lock hash>/`.
+- The pinned PyYAML 6.0.3 source used by virglrenderer’s Meson configuration.
+- `ThirdParty/build/build-{angle,libepoxy,virglrenderer}.sh`, driven by `scripts/build-third-party.sh virgl-runtime`. The output goes to `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/` with a verified manifest.
 - The `GraphicsBridge` C target with the skeleton functions of §5.2 and opaque handles only ([AGENTS.md](../../../AGENTS.md) §6.5).
 - The T1 renderer test.
 - The CI third-party job, with a cache keyed by the lock hash and a weekly clean build.
@@ -288,13 +290,14 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
 1. **Lock entries and patches.**
    - Add the three entries with the pins of §2.1, adjusted by #018.
    - Pin `depot_tools` at `f70835271105ca56d2cd5382a0118152bc2bdeea` in the `virgl-runtime` group, with its BSD-3-Clause license and `ships: tooling`, so tool updates invalidate the same cache.
+   - Pin PyYAML 6.0.3 by source commit, with its MIT license and `ships: tooling`; make the virglrenderer build use only that source checkout.
    - Add each patch as `ThirdParty/patches/<name>/NNNN-short-description.patch`, made with `git format-patch` against the pinned commit ([../../05-development/build-system.md](../../05-development/build-system.md) §6).
    - Add `--apply` to `scripts/check-lock.sh`: after the build-group sources are checked out at their pinned commits, it applies every listed patch with `git am` to a root-level staging checkout and atomically publishes the verified result under `ThirdParty/out/patched-src/<name>/<commit>/<patch-set SHA-256>/`. It skips `ships: reference` entries such as RiftVM. The command serializes its own runs, validates each full series before publishing any patched checkout, and leaves pinned source checkouts unchanged ([../../05-development/build-system.md](../../05-development/build-system.md) §3, §6).
    - Check: the lock-file schema check passes; `scripts/check-lock.sh --apply` creates clean patched checkouts from exact pinned sources, leaves source checkouts unchanged on both success and failure, rejects redirected or modified inputs, and safely reuses an already-published patched checkout. If an unexpected staging failure occurs, it preserves the generated staging checkout and reports its last-known path; concurrent same-user moves can make that path stale.
 2. **Build scripts.**
    - Write the three scripts and the `virgl-runtime` target of `scripts/build-third-party.sh`. ANGLE builds with the Metal backend only.
    - The scripts read every pin and flag from the lock file. They never build from a moving branch.
-   - Check: `scripts/build-third-party.sh virgl-runtime` on a fresh checkout writes the libraries to `ThirdParty/out/virgl-runtime/<lock hash>/`, and a second run with an unchanged lock does no work.
+   - Check: `scripts/build-third-party.sh virgl-runtime` on a fresh checkout writes the four libraries to `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`; an unchanged second run on the same toolchain verifies the manifest and does no build work.
 3. **GraphicsBridge skeleton.**
    - Create the C API of §5.2 for renderer creation, destruction, the Metal device, and the capsets.
    - EGL uses `EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`. The Metal device comes from ANGLE through `EGL_ANGLE_device_metal`.
@@ -306,7 +309,7 @@ A fresh checkout produces the pinned virglrenderer, libepoxy, and ANGLE librarie
    - It also runs under ASan and UBSan.
    - Check: T1 passes on a Mac runner, and the sanitizer run reports nothing.
 5. **CI and embedding.**
-   - The CI `third-party` job runs `scripts/check-lock.sh --apply`, then builds the libraries from the lock file and caches them by the lock hash. A weekly job builds them clean.
+   - The CI `third-party` job runs `scripts/build-third-party.sh virgl-runtime`, which fetches locked sources before it calls `scripts/check-lock.sh --apply`, and caches the verified libraries by the composite key. A weekly job builds them clean.
    - The app build embeds the output in `APKRun.app/Contents/Frameworks/VirGLRuntime/`.
    - Check: the clean CI job passes, and the Debug CLI finds the libraries.
 

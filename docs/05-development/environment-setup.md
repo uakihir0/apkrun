@@ -65,14 +65,10 @@ brew bundle --file scripts/Brewfile
 | Package | Why |
 |---|---|
 | `python@3.12` | image tooling (§2.4), release scripts, `compare_boot.py` |
-| `rustup` | Rust toolchain manager (§2.6) |
 | `meson`, `ninja`, `pkg-config` | virglrenderer and libepoxy builds ([build-system.md](build-system.md) §6) |
-| `jq` | scripts that read `ThirdParty.lock.json` and `components.json` |
-| `fdroidserver` | the F-Droid test repository (`fdroid update`, [../02-design/update-system.md](../02-design/update-system.md) §4.5); needed only for #051 work and on CI runners |
-| cask `temurin@17` | JDK 17 (§2.5) |
-| cask `android-commandlinetools` | `sdkmanager` (§2.5) |
 
 Homebrew versions float. Tools whose output is committed (protoc, protoc-gen-swift, buf, XcodeGen) are therefore not taken from Homebrew but pinned and installed by `scripts/bootstrap` (§2.7). ANGLE uses its own pinned `depot_tools`, fetched by `ThirdParty/build/build-angle.sh`.
+The graphics build also uses PyYAML 6.0.3 from its pinned source entry in `ThirdParty/ThirdParty.lock.json`; it does not require a separate Python package installation.
 
 ### 2.4 Python 3.12
 

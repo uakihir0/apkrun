@@ -88,7 +88,27 @@ targets:
           - "$(SRCROOT)/CLI/apkrun"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/bin/apkrun"
+      - name: Generate Third-Party Notices
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/release/generate-notices.py"
+        inputFiles:
+          - "$(SRCROOT)/scripts/release/generate-notices.py"
+          - "$(SRCROOT)/ThirdParty/ThirdParty.lock.json"
+          - "$(SRCROOT)/ThirdParty/licenses"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ThirdPartyNotices.html"
     postBuildScripts:
+      - name: Embed VirGL Runtime
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/embed-virgl-runtime.sh"
+        inputFiles:
+          - "$(SRCROOT)/scripts/build/embed-virgl-runtime.sh"
+          - "$(SRCROOT)/ThirdParty/ThirdParty.lock.json"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libvirglrenderer.1.dylib"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libepoxy.0.dylib"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libEGL.dylib"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/VirGLRuntime/libGLESv2.dylib"
       - name: Embed Helpers
         basedOnDependencyAnalysis: false
         script: |

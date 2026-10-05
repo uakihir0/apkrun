@@ -298,14 +298,19 @@ Commands flow device queue → render thread in batches (one batch per queue dra
 | virglrenderer | 960bd667 + APKRun patches | MIT | decodes VirGL command streams; manages GL objects |
 | libepoxy | 1b6d7db | MIT | GL/EGL function dispatch for virglrenderer |
 | ANGLE | 2d91f554, Metal backend only | BSD-3-Clause | EGL + GLES 3.0 on Metal |
+| PyYAML | 49790e73 (`6.0.3`) | MIT | pinned pure-Python build tooling used by virglrenderer’s Meson configuration |
 
 - Pins, build flags, and patch lists live in `ThirdParty/ThirdParty.lock.json`. The build scripts are `ThirdParty/build/build-angle.sh`, `build-libepoxy.sh`, and `build-virglrenderer.sh`, driven by `scripts/build-third-party.sh virgl-runtime` ([../05-development/build-system.md](../05-development/build-system.md) §6).
-- Outputs are dylibs with `@rpath` install names, placed in `ThirdParty/out/virgl-runtime/<lock hash>/`. They are embedded into `APKRun.app/Contents/Frameworks/VirGLRuntime/` and signed inside-out with the app.
-- The ANGLE Metal build needs about 11 GB of dependencies. CI caches the outputs keyed by the lock hash, so ANGLE is rebuilt only when its pin or patches change.
+- The virglrenderer build imports PyYAML only from the exact locked source checkout. It does not depend on a developer’s user-site packages or Homebrew Python modules.
+- Outputs are dylibs with `@rpath` install names, placed in `ThirdParty/out/virgl-runtime/<lock hash>-<environment hash>/`. They are embedded into `APKRun.app/Contents/Frameworks/VirGLRuntime/` and signed inside-out with the app.
+- The ANGLE Metal build needs about 11 GB of dependencies. CI caches the outputs by the lock hash and the detected Xcode, SDK, Metal, compiler, Python, pinned PyYAML, Meson, Ninja, pkg-config, and Git identities. A change to the locked inputs or the build environment selects a different cache directory.
 - RiftVM's reference build flags and recipe archive identities are recorded in [riftvm-analysis.md](riftvm-analysis.md) §4. Its virglrenderer, libepoxy, and ANGLE source commits match the initial pins above; APKRun keeps its own configure flags and validates each recipe patch in #020.
-- Initial patch set:
-  1. `virglrenderer/0001-msaa-downgrade.patch`: preserve the RiftVM single-sample fallback when ANGLE's GLES host cannot multisample a requested format.
-  2. Review the pinned RiftVM recipe patches for macOS renderer support. Carry or rewrite only the changes #020 needs, keeping each patch's original source and license; the recipe patches listed in [riftvm-analysis.md](riftvm-analysis.md) are not automatically adopted.
+- Adopted patches:
+  1. `virglrenderer/0001-add-macos-metal-support.patch`, `0002-downgrade-unsupported-msaa.patch`, and `0003-link-metal-runtime.patch`: carry macOS Metal support and the single-sample fallback from the pinned RiftVM recipe, then link the CoreFoundation and Objective-C runtime symbols used by that Metal path.
+  2. `libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, and `0003-enable-egl-platform-display.patch`: carry the EGL/GLES dispatch changes from the pinned RiftVM recipe.
+  3. `angle/0001-fix-metal-boolean-mix.patch`: carry the pinned ANGLE recipe fix for boolean `mix` in generated Metal shaders.
+- APKRun sets virglrenderer `venus=false`. The host Venus/Vulkan backend is outside v1; the guest uses the documented GLES/VirGL path. This differs from the RiftVM recipe and is recorded for maintainer review in [implementation-review.md](../04-plan/implementation-review.md) IR-190.
+- `scripts/build-third-party.sh virgl-runtime` validates the lock before looking up the cache, rejects patch paths that escape the patch tree, fetches clean pinned sources, applies the listed patches, then builds in separate work directories. Its manifest verifies artifact hashes, the arm64-only architecture, the macOS 27.0 minimum, `@rpath` install names, `@loader_path` runpaths, and every bundled dependency target. A cache hit is reused only when both lock and environment identities match and every output verifies.
 - #020 acceptance: a fresh checkout produces the libraries with `scripts/build-third-party.sh virgl-runtime` and no manual file editing. This is checked in CI.
 
 ### 5.2 GraphicsBridge

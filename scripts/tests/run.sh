@@ -11,6 +11,9 @@ checker="$repo_root/scripts/check-lock.sh"
 module_checker="$repo_root/scripts/check-module-deps.sh"
 
 python3 "$script_dir/test_test_linux_directory.py"
+python3 "$script_dir/test_third_party_build.py"
+python3 "$script_dir/test_third_party_notices.py"
+python3 "$script_dir/test_embed_virgl_runtime.py"
 
 expect_pass() {
     local name="$1"
@@ -1168,6 +1171,30 @@ def workflow_errors(workflow, trigger_key)
     end
   end
   build_commands = workflow.fetch("jobs").fetch("build").fetch("steps").map { |step| step["run"] }.compact
+  build_job = workflow.fetch("jobs").fetch("build")
+  unless build_job["needs"] == "third-party"
+    errors << "build must wait for the verified third-party runtime"
+  end
+  build_steps = build_job.fetch("steps")
+  build_key = build_steps.index { |step| step["id"] == "third-party-key" }
+  build_cache = build_steps.index do |step|
+    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/)
+  end
+  build_runtime_check = build_steps.index do |step|
+    step["run"] == "scripts/build-third-party.sh virgl-runtime"
+  end
+  project_generation = build_steps.index { |step| step["run"] == "scripts/generate-project.sh" }
+  unless build_key && build_cache && build_runtime_check && project_generation &&
+      build_key < build_cache && build_cache < build_runtime_check &&
+      build_runtime_check < project_generation
+    errors << "build must restore and verify the third-party cache before Xcode project generation"
+  end
+  build_cache_step = build_steps[build_cache] if build_cache
+  unless build_cache_step &&
+      build_cache_step.dig("with", "path").to_s.include?("ThirdParty/out/virgl-runtime") &&
+      build_cache_step.dig("with", "key").to_s.include?("steps.third-party-key.outputs.key")
+    errors << "build cache must use the verified renderer cache key and output path"
+  end
   build_parallelism_valid = build_commands.include?("swift build -j 2") &&
     build_commands.include?("swift build -j 2 --traits EmbeddedRuntime") &&
     build_commands.count { |command| command.include?("-jobs 2") } == 2
@@ -1189,9 +1216,30 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen build test-swift test-images]
+  expected_jobs = %w[lint codegen third-party build test-swift test-images]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
-    errors << "CI jobs must match the M0 and M1 required job set"
+    errors << "CI jobs must match the required job set"
+  end
+  third_party_steps = workflow.fetch("jobs").fetch("third-party").fetch("steps")
+  third_party_bootstrap = third_party_steps.index { |step| step["run"] == "scripts/bootstrap" }
+  third_party_key = third_party_steps.index { |step| step["id"] == "third-party-key" }
+  third_party_cache = third_party_steps.index do |step|
+    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/)
+  end
+  third_party_build = third_party_steps.index do |step|
+    step["run"] == "scripts/build-third-party.sh virgl-runtime"
+  end
+  unless third_party_bootstrap && third_party_key && third_party_cache && third_party_build &&
+      third_party_bootstrap < third_party_key &&
+      third_party_key < third_party_cache &&
+      third_party_cache < third_party_build
+    errors << "third-party must bootstrap, compute its pinned cache key, restore cache, then build"
+  end
+  cache_step = third_party_steps[third_party_cache] if third_party_cache
+  unless cache_step &&
+      cache_step.dig("with", "path").to_s.include?("ThirdParty/out/virgl-runtime") &&
+      cache_step.dig("with", "key").to_s.include?("steps.third-party-key.outputs.key")
+    errors << "third-party cache must use the detected renderer cache key and output path"
   end
   unless test_commands.none? { |command| command.include?("check-compile-fail.sh") }
     errors << "T1 compiler-fail checks must not run in the hosted T0 job"
@@ -1252,6 +1300,27 @@ unless policy_checkout&.dig("with", "ref") == "refs/heads/main"
   abort("FAIL CI policy workflow fixture: policy job must use trusted main")
 end
 puts("PASS CI policy workflow reruns on edits and label revocation using trusted main")
+RUBY
+
+ruby - "$repo_root/.github/workflows/clean-third-party.yml" <<'RUBY'
+require "yaml"
+
+workflow = YAML.load_file(ARGV.fetch(0))
+trigger_key = workflow.key?("on") ? "on" : true
+triggers = workflow.fetch(trigger_key)
+job = workflow.fetch("jobs").fetch("clean-third-party")
+steps = job.fetch("steps")
+commands = steps.map { |step| step["run"] }.compact
+clean_index = commands.index("rm -rf ThirdParty/out")
+build_index = commands.index("scripts/build-third-party.sh virgl-runtime")
+unless triggers.key?("schedule") && triggers.key?("workflow_dispatch") &&
+    job["if"] == "github.ref == 'refs/heads/main'" &&
+    job["runs-on"] == "xcode-27" &&
+    steps.none? { |step| step["uses"]&.start_with?("actions/cache@") } &&
+    clean_index && build_index && clean_index < build_index
+  abort("FAIL clean third-party workflow must rebuild main without restoring a cache")
+end
+puts("PASS weekly third-party workflow performs a clean, uncached build")
 RUBY
 
 python3 - "$repo_root/scripts/ci/check-pr-control-changes.py" <<'PY'
@@ -1837,6 +1906,52 @@ public_key = (repository / "Tests/Fixtures/signing/test-release-check-ed25519.pu
 avb_public_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture.avbpubkey").read_bytes()
 avb_private_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem").read_bytes()
 key_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
+runtime_libraries = (
+    "libvirglrenderer.1.dylib",
+    "libepoxy.0.dylib",
+    "libEGL.dylib",
+    "libGLESv2.dylib",
+)
+runtime_fixture = pathlib.Path(sys.argv[2]) / "virgl-runtime-fixture.dylib"
+runtime_fixture.parent.mkdir(parents=True, exist_ok=True)
+subprocess.run(
+    [
+        "xcrun",
+        "clang",
+        "-dynamiclib",
+        "-arch",
+        "arm64",
+        "-mmacosx-version-min=27.0",
+        "-Wl,-install_name,@rpath/libvirglrenderer.1.dylib",
+        str(source),
+        "-o",
+        str(runtime_fixture),
+    ],
+    check=True,
+)
+
+def populate_release_payload(app):
+    contents = app / "Contents"
+    resources = contents / "Resources"
+    resources.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            str(repository / "scripts/release/generate-notices.py"),
+            "--output",
+            str(resources / "ThirdPartyNotices.html"),
+        ],
+        check=True,
+    )
+    runtime_directory = contents / "Frameworks/VirGLRuntime"
+    runtime_directory.mkdir(parents=True, exist_ok=True)
+    for name in runtime_libraries:
+        destination = runtime_directory / name
+        shutil.copy2(runtime_fixture, destination)
+        subprocess.run(
+            ["install_name_tool", "-id", f"@rpath/{name}", str(destination)],
+            check=True,
+        )
+
 cases = (
     ("clean", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", None, True, None),
     ("test-hook", "APKRUN_STORE_FAULT", "release", None, False, "APKRUN_STORE_FAULT"),
@@ -1863,6 +1978,8 @@ for name, marker, identity, resource_suffix, should_pass, expected in cases:
             }
         )
     )
+    if name == "clean":
+        populate_release_payload(app)
     subprocess.run(
         [
             "xcrun",
@@ -1904,6 +2021,24 @@ for name, marker, identity, resource_suffix, should_pass, expected in cases:
             raise SystemExit(f"FAIL release fixture {name}: missing {expected!r}\n{output}")
     print(f"PASS release fixture {name}")
 
+stale_runtime_app = pathlib.Path(sys.argv[2]) / "clean.app"
+stale_runtime_directory = (
+    stale_runtime_app / "Contents/Frameworks/VirGLRuntime"
+)
+(stale_runtime_directory / "stale.dylib").write_bytes(b"stale runtime")
+stale_result = subprocess.run(
+    [str(checker), str(stale_runtime_app)],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+stale_output = stale_result.stdout + stale_result.stderr
+if stale_result.returncode == 0 or "unexpected VirGL runtime files" not in stale_output:
+    raise SystemExit(
+        "FAIL release fixture stale-runtime-file: expected rejection\n" + stale_output
+    )
+print("PASS release fixture stale-runtime-file")
+
 for name, embedded_identity, should_pass in (
     ("embedded-release-identity", "release", True),
     ("embedded-missing-identity", None, False),
@@ -1920,6 +2055,8 @@ for name, embedded_identity, should_pass in (
             }
         )
     )
+    if should_pass:
+        populate_release_payload(app)
     embedded_info = {}
     if embedded_identity is not None:
         embedded_info["APKRunBuildIdentity"] = embedded_identity
@@ -1967,6 +2104,19 @@ unsupported_fixture = unsupported_repo / "Tests/Fixtures/signing/test-unsupporte
 unsupported_checker.parent.mkdir(parents=True)
 unsupported_fixture.parent.mkdir(parents=True)
 shutil.copy2(checker, unsupported_checker)
+unsupported_notices = unsupported_repo / "scripts/release/generate-notices.py"
+unsupported_notices.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(repository / "scripts/release/generate-notices.py", unsupported_notices)
+unsupported_third_party = unsupported_repo / "ThirdParty"
+unsupported_third_party.mkdir(parents=True)
+shutil.copy2(
+    repository / "ThirdParty/ThirdParty.lock.json",
+    unsupported_third_party / "ThirdParty.lock.json",
+)
+shutil.copytree(
+    repository / "ThirdParty/licenses",
+    unsupported_third_party / "licenses",
+)
 unsupported_fixture.write_bytes(b"\xfe\xed\xfe\xedunsupported keystore fixture")
 result = subprocess.run(
     [str(unsupported_checker), str(pathlib.Path(sys.argv[2]) / "clean.app")],

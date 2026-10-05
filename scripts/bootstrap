@@ -74,6 +74,11 @@ setup_python_tools() {
             failures=$((failures + 1))
             return
         fi
+        if ! "$host_python" -m pip --version >/dev/null 2>&1; then
+            report FAIL "Python image tooling" "the virtual environment has no pip; run scripts/bootstrap"
+            failures=$((failures + 1))
+            return
+        fi
         if ! "$host_python" -c \
             'import apkrun_image, cryptography, jsonschema, lz4, pytest, ruff'; then
             report FAIL "Python image tooling" "the image tools environment is incomplete; run scripts/bootstrap"
@@ -84,8 +89,8 @@ setup_python_tools() {
         return
     fi
 
-    if [[ ! -x "$host_python" ]]; then
-        if ! "$system_python" -m venv "$environment"; then
+    if [[ ! -x "$host_python" ]] || ! "$host_python" -m pip --version >/dev/null 2>&1; then
+        if ! "$system_python" -m venv --clear "$environment"; then
             report FAIL "Python image tooling" "could not create Images/tools/.venv"
             failures=$((failures + 1))
             return
@@ -97,6 +102,46 @@ setup_python_tools() {
         return
     fi
     report ok "Python image tooling" "$("$host_python" --version 2>&1)"
+}
+
+setup_homebrew_tools() {
+    local brew_executable
+    brew_executable="$(command -v brew 2>/dev/null || true)"
+    if [[ -z "$brew_executable" ]]; then
+        report FAIL "Homebrew packages" "install Homebrew, then run scripts/bootstrap"
+        failures=$((failures + 1))
+        return
+    fi
+
+    local brewfile="$repo_root/scripts/Brewfile"
+    if [[ "$check_only" -eq 1 ]]; then
+        if "$brew_executable" bundle check --no-upgrade --file "$brewfile" >/dev/null; then
+            report ok "Homebrew packages" "Brewfile dependencies are installed"
+        else
+            report FAIL "Homebrew packages" "run brew bundle --file scripts/Brewfile"
+            failures=$((failures + 1))
+        fi
+        return
+    fi
+
+    if "$brew_executable" bundle --no-upgrade --file "$brewfile"; then
+        report ok "Homebrew packages" "Brewfile dependencies are installed"
+    else
+        report FAIL "Homebrew packages" "brew bundle failed for scripts/Brewfile"
+        failures=$((failures + 1))
+    fi
+}
+
+check_metal_toolchain() {
+    local metal metallib
+    metal="$(xcrun --find metal 2>/dev/null || true)"
+    metallib="$(xcrun --find metallib 2>/dev/null || true)"
+    if [[ -n "$metal" && -x "$metal" && -n "$metallib" && -x "$metallib" ]]; then
+        report ok "Metal toolchain" "$("$metal" -v 2>&1 | head -n 1)"
+    else
+        report FAIL "Metal toolchain" "select Xcode 27 and install its Metal toolchain"
+        failures=$((failures + 1))
+    fi
 }
 
 install_xcodegen() {
@@ -212,8 +257,8 @@ else
     report warning "Free disk" "less than 150 GB is available; image and graphics builds need substantial space"
 fi
 
-report skip "Metal toolchain" "added by #020"
-report skip "Homebrew packages" "added by #020"
+check_metal_toolchain
+setup_homebrew_tools
 setup_python_tools
 report skip "JDK and Android SDK" "added by #015"
 report skip "Rust and cargo-ndk" "added by #034"

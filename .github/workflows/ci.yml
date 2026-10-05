@@ -43,8 +43,33 @@ jobs:
       - name: Check generated files
         run: scripts/ci/codegen.sh
 
+  third-party:
+    name: third-party
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: third-party-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ThirdParty/out/virgl-runtime/${{ steps.third-party-key.outputs.key }}
+          key: ${{ runner.os }}-virgl-runtime-${{ steps.third-party-key.outputs.key }}
+      - name: Build pinned graphics libraries
+        run: scripts/build-third-party.sh virgl-runtime
+      - name: Verify shipped source license copies
+        run: scripts/release/generate-notices.py --check
+
   build:
     name: build
+    needs: third-party
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -55,6 +80,16 @@ jobs:
         run: mkdir -p build/ci
       - name: Install pinned repository tools
         run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: third-party-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ThirdParty/out/virgl-runtime/${{ steps.third-party-key.outputs.key }}
+          key: ${{ runner.os }}-virgl-runtime-${{ steps.third-party-key.outputs.key }}
+      - name: Verify graphics libraries
+        run: scripts/build-third-party.sh virgl-runtime
       - name: Check build environment
         run: scripts/bootstrap --check
       - name: Generate Xcode project

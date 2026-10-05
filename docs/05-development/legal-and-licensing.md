@@ -182,7 +182,7 @@ evaluated against a redistribution allow-list.
 |---|---|---|---|
 | virglrenderer | app | MIT | `Contents/Frameworks/VirGLRuntime/` |
 | libepoxy | app | MIT | same |
-| ANGLE | app | BSD-3-Clause | plus one entry per `third_party` directory linked into `libEGL` and `libGLESv2` of the Metal build (for example `angle-zlib`); #093 lists them from `gn desc` |
+| ANGLE | app | BSD-3-Clause | `angle-astc-encoder`, `angle-vulkan-headers`, and `angle-zlib` are separate pinned app entries; the native build checks their `gnTargetPrefixes` against `gn desc` for both Metal targets |
 | aapt2 | app | Apache-2.0 | plus the notices of the libraries it links statically, as shipped with the Maven artifact |
 | Sparkle 2 | app | MIT | plus the external licenses its `LICENSE` lists (ADR-0016) |
 | swift-protobuf | app | Apache-2.0 WITH Swift-exception | GuestProtocol |
@@ -214,7 +214,7 @@ evaluated against a redistribution allow-list.
 
 - `licenseFiles` lists paths inside the upstream source (for example `COPYING`, `LICENSE`, `NOTICE`).
 - A copy of each is committed as `ThirdParty/licenses/<name>/<file>`. `scripts/release/generate-notices.py --refresh <name>` fetches the pinned source and refreshes the copies. For Gradle and Cargo packages whose artifact has no license file, the copy comes from the upstream repository at the pinned version.
-- The `third-party` CI job runs `generate-notices.py --check`, which fetches pinned `kind: source` entries to verify their committed license copies and fails on a difference ([build-system.md](build-system.md) §15.1). This license check may fetch a `ships: reference` source, but does not build it or include it in generated notices.
+- The `third-party` CI job runs `generate-notices.py --check`. For #020, it verifies that every shipped app notice has a committed license copy and compares `kind: source` app/derived copies byte-for-byte with their pinned source checkout. The full check of reference sources and resolved Swift, Gradle, and Cargo packages remains part of #093.
 
 ### 6.2 Generation
 
@@ -228,7 +228,7 @@ evaluated against a redistribution allow-list.
 
 The output `Contents/Resources/ThirdPartyNotices.html`:
 
-- starts with APKRun's own copyright and license (§1);
+- starts with APKRun's own copyright and license (§1), or identifies OQ-40 while the project license is undecided;
 - has one section per entry with `ships` containing `app` or `derived`, sorted by name: name, version, repository, SPDX expression, the copyright lines found in the license files, and each license text in a `<pre>` block;
 - for `derived` entries, also lists the files that carry the marker (§3.1);
 - is deterministic: the same inputs give the same bytes (no dates, sorted keys);

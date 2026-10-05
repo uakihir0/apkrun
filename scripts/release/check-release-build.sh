@@ -23,6 +23,8 @@ python3 - "$repo_root" "$app_bundle" <<'PY'
 import base64
 import binascii
 import hashlib
+import importlib.util
+import json
 import pathlib
 import plistlib
 import re
@@ -33,6 +35,25 @@ repository = pathlib.Path(sys.argv[1])
 app = pathlib.Path(sys.argv[2]).resolve()
 signing_fixtures = repository / "Tests/Fixtures/signing"
 failures = []
+
+notice_path = app / "Contents/Resources/ThirdPartyNotices.html"
+notices_script = repository / "scripts/release/generate-notices.py"
+notice_spec = importlib.util.spec_from_file_location("apkrun_generate_notices", notices_script)
+if notice_spec is None or notice_spec.loader is None:
+    failures.append(f"{notices_script}: could not load the notices generator")
+else:
+    notices_module = importlib.util.module_from_spec(notice_spec)
+    try:
+        notice_spec.loader.exec_module(notices_module)
+        expected_notices = notices_module.generate_html(
+            repository,
+            json.loads((repository / "ThirdParty/ThirdParty.lock.json").read_text(encoding="utf-8")),
+        )
+        actual_notices = notice_path.read_text(encoding="utf-8")
+        if actual_notices != expected_notices:
+            failures.append(f"{notice_path}: notices differ from the current locked components")
+    except Exception as error:
+        failures.append(f"{notice_path}: could not verify third-party notices: {error}")
 
 hook_patterns = (
     re.compile(r"APKRUN_[A-Z0-9_]*_FAULT"),
@@ -301,6 +322,53 @@ for file in app.rglob("*"):
         failures.append(f"{file}: bundle file contains test signing material from Tests/Fixtures/signing")
     elif match == "identity":
         failures.append(f"{file}: Release bundle contains the ReleaseUpdateTest setting")
+
+runtime_directory = app / "Contents/Frameworks/VirGLRuntime"
+runtime_libraries = (
+    "libvirglrenderer.1.dylib",
+    "libepoxy.0.dylib",
+    "libEGL.dylib",
+    "libGLESv2.dylib",
+)
+if runtime_directory.is_symlink() or not runtime_directory.is_dir():
+    failures.append(f"{runtime_directory}: Release app has an unsafe VirGL runtime directory")
+else:
+    unexpected = sorted(
+        child.name
+        for child in runtime_directory.iterdir()
+        if child.name not in runtime_libraries
+    )
+    if unexpected:
+        failures.append(
+            f"{runtime_directory}: unexpected VirGL runtime files: {', '.join(unexpected)}"
+        )
+
+for name in runtime_libraries:
+    library = runtime_directory / name
+    if library.is_symlink() or not library.is_file():
+        failures.append(f"{library}: Release app is missing the VirGL runtime library")
+        continue
+    architectures = subprocess.run(
+        ["/usr/bin/lipo", "-archs", str(library)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if architectures.returncode != 0 or architectures.stdout.strip() != "arm64":
+        failures.append(f"{library}: Release runtime library must contain only arm64")
+    install_name = subprocess.run(
+        ["/usr/bin/otool", "-D", str(library)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    install_names = install_name.stdout.splitlines()
+    if (
+        install_name.returncode != 0
+        or len(install_names) < 2
+        or install_names[1].strip() != f"@rpath/{name}"
+    ):
+        failures.append(f"{library}: Release runtime library has an unexpected install name")
 
 if failures:
     for failure in failures:

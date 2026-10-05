@@ -1,0 +1,49 @@
+From dd519398005501cdfbaee759c6749cab9d3c1a6d Mon Sep 17 00:00:00 2001
+From: Akihiro Urushihara <a.urusihara@gmail.com>
+Date: Mon, 5 Oct 2026 15:20:05 +0900
+Subject: [PATCH] build(virglrenderer): link Metal runtime dependencies
+
+Link CoreFoundation and the Objective-C runtime in the non-Venus Metal build.
+
+Upstream: not submitted.
+
+Refs: #020
+---
+ meson.build     | 4 ++++
+ src/meson.build | 2 +-
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 32fed2a..8f84bcd 100644
+--- a/meson.build
++++ b/meson.build
+@@ -205,10 +205,14 @@ if cc.has_header('linux/udmabuf.h')
+ endif
+ 
+ metal_dep = dependency('appleframeworks', modules : ['Metal'], required: false)
++corefoundation_dep = not_found
++objc_dep = not_found
+ if metal_dep.found()
+    conf_data.set('ENABLE_METAL', 1)
+    add_languages('objc', required: true, native: false)
+    objc = meson.get_compiler('objc')
++   corefoundation_dep = dependency('appleframeworks', modules : ['CoreFoundation'])
++   objc_dep = objc.find_library('objc')
+    all_languages += 'objc'
+ endif
+ 
+diff --git a/src/meson.build b/src/meson.build
+index 28120f0..d6dd1a3 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -190,7 +190,7 @@ endif
+ 
+ if metal_dep.found()
+    virgl_sources += vrend_metal_sources
+-   virgl_depends += [metal_dep]
++   virgl_depends += [metal_dep, corefoundation_dep, objc_dep]
+ endif
+ 
+ if with_venus
+-- 
+2.54.0 (Apple Git-157)

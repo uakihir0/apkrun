@@ -1,0 +1,46 @@
+From fa2bdf15181acc6553acfe11b82ee863144e3381 Mon Sep 17 00:00:00 2001
+From: Everett <everettjf@live.com>
+Date: Sat, 19 Sep 2026 00:06:02 -0700
+Subject: [PATCH] Downgrade unsupported multisample resources on GLES
+
+ANGLE on Metal cannot multisample the affected GLES formats. Keep the context usable by creating a single-sample resource; the guest resolve becomes a copy and only antialiasing is lost.
+
+Carried from RiftVM f615e16ccdefdda68c877af9fd37db4a8ec3f094 (MIT).
+---
+ src/vrend/vrend_renderer.c | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 7cf5766..95cfc16 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -9009,11 +9009,28 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+ }
+ 
+ static struct vrend_resource *
+-vrend_resource_create(const struct vrend_renderer_resource_create_args *args)
++vrend_resource_create(const struct vrend_renderer_resource_create_args *requested)
+ {
+    struct vrend_resource *gr;
+    int ret;
+    char error_string[256];
++   struct vrend_renderer_resource_create_args downgraded = *requested;
++   const struct vrend_renderer_resource_create_args *args = &downgraded;
++
++   /* RiftVM: a GLES host (ANGLE on Metal) has no multisample textures, yet the
++    * caps still advertise texture_multisample for the GL version the guest
++    * needs. Rejecting the guest's multisample texture marks its whole context
++    * as failed, which blacks out every surface that context draws (a browser
++    * creating an antialiased WebGL canvas loses its entire window). Create a
++    * single-sample texture instead: the guest's resolve blit becomes a copy,
++    * and the rendering loses only its antialiasing. */
++   if (vrend_state.use_gles && downgraded.nr_samples > 1 &&
++       downgraded.format < VIRGL_FORMAT_MAX &&
++       !vrend_format_can_multisample(downgraded.format)) {
++      virgl_debug("%s: host cannot multisample %s; creating a single-sample texture\n",
++                  __func__, util_format_name(downgraded.format));
++      downgraded.nr_samples = 0;
++   }
+ 
+    ret = check_resource_valid(args, error_string);
+    if (ret) {

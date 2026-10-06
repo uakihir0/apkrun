@@ -17,6 +17,7 @@ downloads_dir="$output_dir/downloads"
 lock_file="$repo_root/ThirdParty/ThirdParty.lock.json"
 modules_list="$repo_root/Tests/Fixtures/linux/modules.list"
 init_script="$repo_root/Tests/Fixtures/linux/init"
+network_error_script="$repo_root/Tests/Fixtures/linux/network-errors.sh"
 
 for tool in awk cpio find gzip jq readlink shasum sort tar touch; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -73,6 +74,7 @@ for component in \
     alpine-libeconf \
     alpine-libuuid \
     alpine-socat \
+    alpine-ssl-client \
     alpine-libcrypto3 \
     alpine-libgpiod \
     alpine-libssl3 \
@@ -103,6 +105,24 @@ if [[ ! -L "$blockdev_path" || "$(readlink "$blockdev_path")" != /bin/busybox \
     printf 'build-test-initramfs: required BusyBox blockdev applet is missing\n' >&2
     exit 1
 fi
+
+ssl_client_path="$root/usr/bin/ssl_client"
+if [[ ! -x "$ssl_client_path" || -L "$ssl_client_path" ]]; then
+    printf 'build-test-initramfs: pinned ssl_client binary is missing\n' >&2
+    exit 1
+fi
+udhcpc_default_script="$root/usr/share/udhcpc/default.script"
+if [[ ! -x "$udhcpc_default_script" ]]; then
+    printf 'build-test-initramfs: Alpine udhcpc default script is missing\n' >&2
+    exit 1
+fi
+for library in libcrypto.so.3 libssl.so.3; do
+    if [[ ! -e "$root/usr/lib/$library" ]]; then
+        printf 'build-test-initramfs: pinned OpenSSL library is missing: %s\n' \
+            "$library" >&2
+        exit 1
+    fi
+done
 
 module_release="$(<"$output_dir/kernel.release")"
 module_source="$output_dir/modules/$module_release"
@@ -221,6 +241,10 @@ done < "$module_paths"
 
 mkdir -p "$root/etc/apkrun"
 cp "$modules_list" "$root/etc/apkrun/modules.list"
+cp "$network_error_script" "$root/etc/apkrun/network-errors.sh"
+chmod 644 "$root/etc/apkrun/network-errors.sh"
+cp "$repo_root/Tests/Fixtures/linux/udhcpc.script" "$root/etc/udhcpc/apkrun.script"
+chmod 755 "$root/etc/udhcpc/apkrun.script"
 cp "$init_script" "$root/init"
 chmod 755 "$root/init"
 

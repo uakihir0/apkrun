@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -u
+
+action="${1:-}"
+case "$action" in
+    bound|renew)
+        /usr/share/udhcpc/default.script "$@" || exit $?
+        lease_ip="${ip:-}"
+        lease_gateway="$(printf '%s\n' "${router:-}" | awk '{ print $1 }')"
+        lease_dns="$(printf '%s\n' "${dns:-}" | awk '{ print $1 }')"
+        mkdir -p /run || exit 1
+        printf '%s %s %s\n' "$lease_ip" "$lease_gateway" "$lease_dns" \
+            > /run/apkrun-net-lease.tmp || exit 1
+        mv -f /run/apkrun-net-lease.tmp /run/apkrun-net-lease
+        ;;
+    *)
+        exec /usr/share/udhcpc/default.script "$@"
+        ;;
+esac

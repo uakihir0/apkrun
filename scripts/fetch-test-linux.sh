@@ -81,6 +81,7 @@ for component in \
     alpine-libeconf \
     alpine-libuuid \
     alpine-socat \
+    alpine-ssl-client \
     alpine-libcrypto3 \
     alpine-libgpiod \
     alpine-libssl3 \

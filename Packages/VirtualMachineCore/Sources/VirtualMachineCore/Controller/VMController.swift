@@ -1,3 +1,4 @@
+import Darwin
 import DiagnosticsCore
 import Dispatch
 import Foundation
@@ -13,6 +14,7 @@ public actor VMController {
     private let logger: APKLogger
     private let configLogger: APKLogger
     private let networkLogger: APKLogger
+    private let vsockLogger: APKLogger
     private let consoleStore: ConsoleChannelStore
     private let consoleLogFileSystem: any ConsoleLogFileSystem
     private let consoleLogClock: any ConsoleLogClock
@@ -32,6 +34,7 @@ public actor VMController {
     private var hasAttemptedStart = false
     package private(set) var vmGeneration: UInt64 = 0
     private var activePublicOperation: UUID?
+    private var activePublicOperationTarget: VMState?
     private var driver: (any VirtualMachineDriver)?
     private var consoleLogWriter: ConsoleLogWriter?
     private var consoleLogByteStream: ConsoleByteStream?
@@ -41,6 +44,9 @@ public actor VMController {
     private var eventTask: Task<Void, Never>?
     private var eventsDuringStart: [VirtualMachineEvent] = []
     package private(set) var networkAttachmentError: VZErrorInfo?
+    private var vsockConnections: [UUID: VsockConnection] = [:]
+    private var pendingVsockConnects: [UUID: VsockConnectCompletionGate] = [:]
+    private var isVsockConnectAvailable = false
 
     package var hasNetworkAttachment: Bool {
         validatedDefinition.definition.network != nil
@@ -86,6 +92,7 @@ public actor VMController {
         logger = APKLogger(category: VMLogCategory.lifecycle, sink: diagnostics.logSink)
         configLogger = APKLogger(category: VMLogCategory.config, sink: diagnostics.logSink)
         networkLogger = APKLogger(category: VMLogCategory.network, sink: diagnostics.logSink)
+        vsockLogger = APKLogger(category: VMLogCategory.vsock, sink: diagnostics.logSink)
 
         let stateStream = AsyncStream.makeStream(
             of: VMState.self,
@@ -147,6 +154,13 @@ public actor VMController {
         }
     }
 
+    /// Opens a host-to-guest connection to a port in the running guest.
+    public func connect(vsockPort: UInt32, timeout: Duration) async throws -> VsockConnection {
+        try await OperationContext.withNew { @Sendable in
+            try await self.connectWithinOperation(vsockPort: vsockPort, timeout: timeout)
+        }
+    }
+
     /// Releases framework objects and clears a failed state.
     public func reset() async throws {
         try await OperationContext.withNew { @Sendable in
@@ -190,6 +204,7 @@ public actor VMController {
 
         vmGeneration &+= 1
         let generation = vmGeneration
+        isVsockConnectAvailable = false
         lastConsoleLogWriterFailed = false
         lastConsoleLogWriterDroppedByteCount = 0
         try await transition(to: .starting, source: .publicRequest)
@@ -257,6 +272,8 @@ public actor VMController {
         for event in pendingEvents {
             await receive(event, generation: generation)
         }
+        isVsockConnectAvailable =
+            state == .running && validatedDefinition.definition.vsockEnabled
         if case .failed(let failure) = state {
             throw failure
         }
@@ -268,6 +285,8 @@ public actor VMController {
             allows: { $0 == .running }
         )
         defer { endPublicOperation(operationID) }
+        isVsockConnectAvailable = false
+        cancelPendingVsockConnects(blockedBy: .paused)
         guard let driver else {
             assertionFailure("A running VM must have a driver.")
             throw VMFailure.invalidTransition(from: state, to: .paused)
@@ -278,6 +297,7 @@ public actor VMController {
         } catch let error {
             let failure = VMFailure.pauseFailed(underlying: error)
             if state == .running {
+                closeVsockResources(blockedBy: .failed(failure))
                 try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
@@ -291,6 +311,7 @@ public actor VMController {
             throw VMFailure.invalidTransition(from: state, to: .paused)
         }
         try await transition(to: .paused, source: .internalEvent)
+        isVsockConnectAvailable = false
     }
 
     private func resumeWithinOperation() async throws(VMFailure) {
@@ -309,6 +330,7 @@ public actor VMController {
         } catch let error {
             let failure = VMFailure.resumeFailed(underlying: error)
             if state == .paused {
+                closeVsockResources(blockedBy: .failed(failure))
                 try await transition(to: .failed(failure), source: .internalEvent)
             }
             logFailure(failure, description: error.description)
@@ -322,6 +344,7 @@ public actor VMController {
             throw VMFailure.invalidTransition(from: state, to: .running)
         }
         try await transition(to: .running, source: .internalEvent)
+        isVsockConnectAvailable = validatedDefinition.definition.vsockEnabled
     }
 
     private func stopWithinOperation() async throws(VMFailure) {
@@ -334,6 +357,7 @@ public actor VMController {
         if state != .stopping {
             try await transition(to: .stopping, source: .publicRequest)
         }
+        closeVsockResources(blockedBy: .stopping)
         guard let driver else {
             assertionFailure("A stopping VM must have a driver.")
             throw VMFailure.invalidTransition(from: state, to: .stopped)
@@ -424,6 +448,7 @@ public actor VMController {
         )
         defer { endPublicOperation(operationID) }
         try await transition(to: .stopping, source: .publicRequest)
+        closeVsockResources(blockedBy: .stopping)
         guard let driver else {
             assertionFailure("A running VM must have a driver.")
             throw VMFailure.invalidTransition(from: state, to: .stopped)
@@ -441,6 +466,156 @@ public actor VMController {
         }
     }
 
+    private func connectWithinOperation(
+        vsockPort: UInt32,
+        timeout: Duration
+    ) async throws -> VsockConnection {
+        guard state == .running else {
+            let failure = VMFailure.invalidTransition(from: state, to: .running)
+            vsockLogger.fault(
+                "Rejected vsock connect to port \(vsockPort, .public) while VM is \(state.logLabel, .public)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+        if let target = activePublicOperationTarget {
+            let failure = VMFailure.invalidTransition(from: target, to: .running)
+            vsockLogger.warning(
+                "Rejected vsock connect to port \(vsockPort, .public) while VM lifecycle operation targets \(target.logLabel, .public)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+        guard validatedDefinition.definition.vsockEnabled else {
+            let failure = VMFailure.vsockDeviceNotConfigured
+            vsockLogger.error(
+                "Rejected vsock connect to port \(vsockPort, .public): device is not configured",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+        guard isVsockConnectAvailable else {
+            let failure = VMFailure.invalidTransition(from: state, to: .running)
+            vsockLogger.warning(
+                "Rejected vsock connect to port \(vsockPort, .public): VM is stopping",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+        guard let driver else {
+            let failure = VMFailure.invalidTransition(from: state, to: .running)
+            vsockLogger.fault(
+                "Rejected vsock connect to port \(vsockPort, .public): running VM has no driver",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+        guard timeout > .zero else {
+            let failure = VMFailure.vsockConnectTimedOut(port: vsockPort)
+            vsockLogger.warning(
+                "Guest vsock connect timed out immediately on port \(vsockPort, .public)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+        }
+
+        let generation = vmGeneration
+        let connectID = UUID()
+        let gate = VsockConnectCompletionGate()
+        pendingVsockConnects[connectID] = gate
+        let outcome = await gate.wait(timeout: timeout) { completion in
+            driver.connect(toPort: vsockPort, completion: completion)
+        }
+        pendingVsockConnects.removeValue(forKey: connectID)
+
+        switch outcome {
+        case .timedOut:
+            let failure = VMFailure.vsockConnectTimedOut(port: vsockPort)
+            vsockLogger.warning(
+                "Guest vsock connect timed out on port \(vsockPort, .public)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+
+        case .cancelledByCaller:
+            throw CancellationError()
+
+        case .interruptedByVM(let blockedState):
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            let failure = VMFailure.invalidTransition(from: blockedState, to: .running)
+            vsockLogger.warning(
+                "Guest vsock connect on port \(vsockPort, .public) was interrupted by VM lifecycle change",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+
+        case .completed(.failure(.vsockDeviceUnavailable)):
+            let failure = VMFailure.vsockDeviceUnavailable
+            vsockLogger.error(
+                "Guest vsock device is unavailable while connecting to port \(vsockPort, .public)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+
+        case .completed(.failure(.virtualization(let error))):
+            let domain = error.domain
+            let code = error.code
+            if Self.isVsockPortRefused(error) {
+                let failure = VMFailure.vsockPortNotListening(port: vsockPort)
+                vsockLogger.warning(
+                    "Guest vsock port \(vsockPort, .public) is not listening (\(domain, .public), code \(code, .public))",
+                    errorCode: failure.qualifiedCode
+                )
+                throw failure
+            }
+
+            let failure = VMFailure.vsockConnectFailed(port: vsockPort, underlying: error)
+            vsockLogger.error(
+                "Guest vsock connect failed on port \(vsockPort, .public) (\(domain, .public), code \(code, .public)): \(error.description, .private)",
+                errorCode: failure.qualifiedCode
+            )
+            throw failure
+
+        case .completed(.success(let connection)):
+            guard
+                generation == vmGeneration,
+                state == .running,
+                activePublicOperationTarget == nil
+            else {
+                connection.close()
+                let unavailableState = activePublicOperationTarget ?? state
+                let failure = VMFailure.invalidTransition(from: unavailableState, to: .running)
+                vsockLogger.warning(
+                    "Discarded late guest vsock connection on port \(vsockPort, .public)",
+                    errorCode: failure.qualifiedCode
+                )
+                throw failure
+            }
+
+            let connectionID = UUID()
+            vsockConnections[connectionID] = connection
+            let closed = connection.closed
+            Task.detached { [weak self, closed] in
+                await closed.value
+                await self?.vsockConnectionDidClose(connectionID)
+            }
+            vsockLogger.info(
+                "Connected to guest vsock port \(vsockPort, .public)"
+            )
+            return connection
+        }
+    }
+
+    private func vsockConnectionDidClose(_ identifier: UUID) {
+        vsockConnections.removeValue(forKey: identifier)
+    }
+
+    private static func isVsockPortRefused(_ error: VZErrorInfo) -> Bool {
+        error.domain == NSPOSIXErrorDomain && error.code == ECONNREFUSED
+    }
+
     private func resetWithinOperation() async throws(VMFailure) {
         let operationID = try beginPublicOperation(
             target: .stopped,
@@ -451,6 +626,7 @@ public actor VMController {
         )
         defer { endPublicOperation(operationID) }
 
+        closeVsockResources(blockedBy: .stopped)
         stopTimeoutTask?.cancel()
         stopTimeoutTask = nil
         let stopTasks = Array(stopOperationTasks.values)
@@ -486,6 +662,7 @@ public actor VMController {
             guard state == .running || state == .paused || state == .stopping else {
                 return
             }
+            closeVsockResources(blockedBy: .stopped)
             if state == .stopping, let completion = stopCompletion {
                 await completion.gate.complete(.completed(.succeeded))
                 return
@@ -499,10 +676,11 @@ public actor VMController {
             guard state == .running || state == .paused || state == .stopping else {
                 return
             }
+            let failure = VMFailure.stoppedWithError(underlying: error)
+            closeVsockResources(blockedBy: .failed(failure))
             if state == .stopping, let completion = stopCompletion {
                 await completion.gate.complete(.completed(.failed(error)))
             }
-            let failure = VMFailure.stoppedWithError(underlying: error)
             try? await transition(to: .failed(failure), source: .internalEvent)
             logFailure(failure, description: error.description)
 
@@ -536,9 +714,29 @@ public actor VMController {
     }
 
     private func releaseResources() async {
+        closeVsockResources(blockedBy: state)
         let release = beginResourceRelease()
         await release.task.value
         await finishResourceRelease(id: release.id)
+    }
+
+    private func closeVsockResources(blockedBy state: VMState) {
+        isVsockConnectAvailable = false
+        cancelPendingVsockConnects(blockedBy: state)
+
+        let connections = Array(vsockConnections.values)
+        vsockConnections.removeAll()
+        for connection in connections {
+            connection.close()
+        }
+    }
+
+    private func cancelPendingVsockConnects(blockedBy state: VMState) {
+        let pendingConnects = Array(pendingVsockConnects.values)
+        pendingVsockConnects.removeAll()
+        for pendingConnect in pendingConnects {
+            pendingConnect.cancel(because: state)
+        }
     }
 
     private func beginResourceRelease() -> (id: UUID, task: Task<Void, Never>) {
@@ -622,12 +820,14 @@ public actor VMController {
         }
         let identifier = UUID()
         activePublicOperation = identifier
+        activePublicOperationTarget = target
         return identifier
     }
 
     private func endPublicOperation(_ identifier: UUID) {
         guard activePublicOperation == identifier else { return }
         activePublicOperation = nil
+        activePublicOperationTarget = nil
     }
 
     private func transition(
@@ -722,6 +922,118 @@ public actor VMController {
 private enum TransitionSource {
     case publicRequest
     case internalEvent
+}
+
+private enum VsockConnectCompletionOutcome: Sendable {
+    case completed(Result<VsockConnection, VirtualMachineDriverConnectFailure>)
+    case timedOut
+    case cancelledByCaller
+    case interruptedByVM(VMState)
+}
+
+private final class VsockConnectCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<VsockConnectCompletionOutcome, Never>?
+    private var outcome: VsockConnectCompletionOutcome?
+    private var timeoutTask: Task<Void, Never>?
+
+    func cancel(because state: VMState) {
+        resolve(.interruptedByVM(state))
+    }
+
+    func wait(
+        timeout: Duration,
+        startConnect:
+            @escaping @Sendable (
+                @escaping @Sendable (
+                    Result<VsockConnection, VirtualMachineDriverConnectFailure>
+                ) -> Void
+            ) -> Void
+    ) async -> VsockConnectCompletionOutcome {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                install(continuation)
+                guard !Task.isCancelled else {
+                    resolve(.cancelledByCaller)
+                    return
+                }
+                guard !isResolved else { return }
+
+                startConnect { [self] result in
+                    resolve(.completed(result))
+                }
+                guard !Task.isCancelled, !isResolved else { return }
+
+                let timeoutTask = Task { [weak self] in
+                    do {
+                        try await Task.sleep(for: timeout)
+                    } catch {
+                        return
+                    }
+                    self?.resolve(.timedOut)
+                }
+                installTimeoutTask(timeoutTask)
+            }
+        } onCancel: {
+            resolve(.cancelledByCaller)
+        }
+    }
+
+    private var isResolved: Bool {
+        lock.withLock { outcome != nil }
+    }
+
+    private func install(
+        _ continuation: CheckedContinuation<VsockConnectCompletionOutcome, Never>
+    ) {
+        let resolvedOutcome = lock.withLock { () -> VsockConnectCompletionOutcome? in
+            guard let outcome else {
+                self.continuation = continuation
+                return nil
+            }
+            return outcome
+        }
+        if let resolvedOutcome {
+            continuation.resume(returning: resolvedOutcome)
+        }
+    }
+
+    private func installTimeoutTask(_ task: Task<Void, Never>) {
+        let cancelImmediately = lock.withLock {
+            guard outcome == nil else { return true }
+            timeoutTask = task
+            return false
+        }
+        if cancelImmediately {
+            task.cancel()
+        }
+    }
+
+    private func resolve(_ newOutcome: VsockConnectCompletionOutcome) {
+        let resolution = lock.withLock {
+            () -> (
+                didWin: Bool,
+                continuation: CheckedContinuation<VsockConnectCompletionOutcome, Never>?,
+                timeoutTask: Task<Void, Never>?
+            ) in
+            guard outcome == nil else {
+                return (false, nil, nil)
+            }
+            outcome = newOutcome
+            let continuation = self.continuation
+            self.continuation = nil
+            let timeoutTask = self.timeoutTask
+            self.timeoutTask = nil
+            return (true, continuation, timeoutTask)
+        }
+
+        resolution.timeoutTask?.cancel()
+        if resolution.didWin {
+            resolution.continuation?.resume(returning: newOutcome)
+        } else if case .completed(.success(let connection)) = newOutcome {
+            connection.close()
+        }
+    }
 }
 
 extension VMState {

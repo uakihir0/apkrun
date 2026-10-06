@@ -71,6 +71,13 @@ public actor FakeVirtualMachineDriverGate {
     }
 }
 
+/// A callback script used to emulate immediate and late vsock connects.
+public typealias FakeVsockConnectHandler =
+    @Sendable (
+        UInt32,
+        @escaping @Sendable (Result<VsockConnection, VirtualMachineDriverConnectFailure>) -> Void
+    ) -> Void
+
 /// Results returned by one scripted fake VM driver.
 public struct FakeVirtualMachineDriverScript: Sendable {
     /// The result of starting the guest.
@@ -88,6 +95,9 @@ public struct FakeVirtualMachineDriverScript: Sendable {
     /// The result of resuming the guest.
     public var resume: Result<Void, VZErrorInfo>
 
+    /// Optional gate that keeps `pause()` pending until explicitly opened.
+    public var pauseGate: FakeVirtualMachineDriverGate?
+
     /// Optional gate that keeps `stop()` pending until explicitly opened.
     public var stopGate: FakeVirtualMachineDriverGate?
 
@@ -97,6 +107,9 @@ public struct FakeVirtualMachineDriverScript: Sendable {
     /// Optional gate that keeps `release()` pending until explicitly opened.
     public var releaseGate: FakeVirtualMachineDriverGate?
 
+    /// Optional callback script used to emulate immediate and late vsock connects.
+    public var connectHandler: FakeVsockConnectHandler?
+
     /// Creates a script whose operations succeed unless a failure is supplied.
     public init(
         start: Result<Void, VZErrorInfo> = .success(()),
@@ -104,18 +117,22 @@ public struct FakeVirtualMachineDriverScript: Sendable {
         requestStop: Result<Void, VZErrorInfo> = .success(()),
         pause: Result<Void, VZErrorInfo> = .success(()),
         resume: Result<Void, VZErrorInfo> = .success(()),
+        pauseGate: FakeVirtualMachineDriverGate? = nil,
         stopGate: FakeVirtualMachineDriverGate? = nil,
         startGate: FakeVirtualMachineDriverGate? = nil,
-        releaseGate: FakeVirtualMachineDriverGate? = nil
+        releaseGate: FakeVirtualMachineDriverGate? = nil,
+        connectHandler: FakeVsockConnectHandler? = nil
     ) {
         self.start = start
         self.stop = stop
         self.requestStop = requestStop
         self.pause = pause
         self.resume = resume
+        self.pauseGate = pauseGate
         self.stopGate = stopGate
         self.startGate = startGate
         self.releaseGate = releaseGate
+        self.connectHandler = connectHandler
     }
 }
 
@@ -135,6 +152,9 @@ public enum FakeVirtualMachineDriverOperation: Equatable, Sendable {
 
     /// The guest was resumed.
     case resume
+
+    /// A host-to-guest vsock connection was requested.
+    case connect(port: UInt32)
 
     /// Framework objects were released.
     case release
@@ -202,12 +222,59 @@ public final class FakeVirtualMachineDriver: VirtualMachineDriver, @unchecked Se
 
     /// Pauses the fake guest or returns the scripted pause failure.
     public func pause() async throws(VZErrorInfo) {
-        try await perform(.pause, result: script.pause)
+        try await perform(.pause, result: script.pause, gate: script.pauseGate)
     }
 
     /// Resumes the fake guest or returns the scripted resume failure.
     public func resume() async throws(VZErrorInfo) {
         try await perform(.resume, result: script.resume)
+    }
+
+    /// Emulates a host-to-guest vsock connection.
+    public func connect(
+        toPort port: UInt32,
+        completion:
+            @escaping @Sendable (
+                Result<VsockConnection, VirtualMachineDriverConnectFailure>
+            ) -> Void
+    ) {
+        let wasReleased = lock.withLock {
+            if didRelease {
+                recordedOperationsAfterRelease.append(.connect(port: port))
+                return true
+            }
+            recordedOperations.append(.connect(port: port))
+            return false
+        }
+        guard !wasReleased else {
+            completion(
+                .failure(
+                    .virtualization(
+                        VZErrorInfo(
+                            domain: "FakeVirtualMachineDriver",
+                            code: 2,
+                            description: "Operation attempted after the fake driver was released."
+                        )
+                    )
+                )
+            )
+            return
+        }
+        if let connectHandler = script.connectHandler {
+            connectHandler(port, completion)
+        } else {
+            completion(
+                .failure(
+                    .virtualization(
+                        VZErrorInfo(
+                            domain: "FakeVirtualMachineDriver",
+                            code: 1,
+                            description: "No vsock connect handler was configured."
+                        )
+                    )
+                )
+            )
+        }
     }
 
     /// Releases fake framework resources and finishes the event stream.

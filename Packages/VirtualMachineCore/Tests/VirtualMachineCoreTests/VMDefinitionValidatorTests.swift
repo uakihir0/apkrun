@@ -574,6 +574,8 @@ import Virtualization
             underlying: VZErrorInfo(domain: "VZErrorDomain", code: 5, description: "private path")
         ),
         VMFailure.stopTimedOut,
+        VMFailure.vsockDeviceNotConfigured,
+        VMFailure.vsockDeviceUnavailable,
         VMFailure.vsockConnectFailed(
             port: 7000,
             underlying: VZErrorInfo(domain: "VZErrorDomain", code: 6, description: "private path")

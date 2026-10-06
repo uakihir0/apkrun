@@ -9,6 +9,8 @@ public enum VMFailure: APKRunError, Equatable {
     case pauseFailed(underlying: VZErrorInfo)
     case resumeFailed(underlying: VZErrorInfo)
     case stopTimedOut
+    case vsockDeviceNotConfigured
+    case vsockDeviceUnavailable
     case vsockConnectFailed(port: UInt32, underlying: VZErrorInfo)
     case vsockPortNotListening(port: UInt32)
     case vsockConnectTimedOut(port: UInt32)
@@ -34,6 +36,10 @@ public enum VMFailure: APKRunError, Equatable {
             "resumeFailed"
         case .stopTimedOut:
             "stopTimedOut"
+        case .vsockDeviceNotConfigured:
+            "vsockDeviceNotConfigured"
+        case .vsockDeviceUnavailable:
+            "vsockDeviceUnavailable"
         case .vsockConnectFailed:
             "vsockConnectFailed"
         case .vsockPortNotListening:
@@ -66,6 +72,8 @@ public enum VMFailure: APKRunError, Equatable {
             .pauseFailed,
             .resumeFailed,
             .stopTimedOut,
+            .vsockDeviceNotConfigured,
+            .vsockDeviceUnavailable,
             .virtualizationUnavailable,
             .networkAttachmentLost,
             .consoleLogWriteFailed:
@@ -84,6 +92,8 @@ public enum VMFailure: APKRunError, Equatable {
             error.underlying
         case .invalidTransition,
             .stopTimedOut,
+            .vsockDeviceNotConfigured,
+            .vsockDeviceUnavailable,
             .vsockPortNotListening,
             .vsockConnectTimedOut,
             .virtualizationUnavailable,

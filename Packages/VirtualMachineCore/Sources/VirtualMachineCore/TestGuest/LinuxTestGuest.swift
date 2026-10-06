@@ -100,7 +100,7 @@ public enum LinuxTestGuest {
             ),
             disks: diskDefinitions,
             network: networkDefinition,
-            vsockEnabled: false,
+            vsockEnabled: tests.contains("vsock"),
             consolePorts: consolePorts,
             entropy: !usesEntropyDevice,
             customDevices: customDevices + (entropyDevice.map { [$0 as any VirtioDeviceModel] } ?? [])

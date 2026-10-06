@@ -48,6 +48,7 @@ package struct VZVirtualMachineDriverFactory: VirtualMachineDriverFactory {
                     )
                     let driver = VZVirtualMachineDriver(
                         machine: machine,
+                        socketDevice: machine.socketDevices.first as? VZVirtioSocketDevice,
                         delegate: delegate,
                         queue: queue,
                         consoleChannels: consoleChannels,
@@ -72,6 +73,7 @@ package struct VZVirtualMachineDriverFactory: VirtualMachineDriverFactory {
 // UNCHECKED-SENDABLE: queue serializes all VZ object access; machine and delegate are cleared on that queue by release().
 package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sendable {
     private var machine: VZVirtualMachine?
+    private var socketDevice: VZVirtioSocketDevice?
     private var delegate: VZVirtualMachineEventDelegate?
     private let queue: VMQueue
     private let eventContinuation: AsyncStream<VirtualMachineEvent>.Continuation
@@ -84,6 +86,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
 
     fileprivate init(
         machine: VZVirtualMachine,
+        socketDevice: VZVirtioSocketDevice?,
         delegate: VZVirtualMachineEventDelegate,
         queue: VMQueue,
         consoleChannels: [ConsoleChannel],
@@ -92,6 +95,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
         eventContinuation: AsyncStream<VirtualMachineEvent>.Continuation
     ) {
         self.machine = machine
+        self.socketDevice = socketDevice
         self.delegate = delegate
         self.queue = queue
         self.consoleChannels = consoleChannels
@@ -172,11 +176,46 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
         }
     }
 
+    package func connect(
+        toPort port: UInt32,
+        completion:
+            @escaping @Sendable (
+                Result<VsockConnection, VirtualMachineDriverConnectFailure>
+            ) -> Void
+    ) {
+        let vmQueue = queue
+        vmQueue.dispatchQueue.async {
+            assertOnVMQueue(vmQueue)
+            guard let socketDevice = self.socketDevice else {
+                completion(.failure(.vsockDeviceUnavailable))
+                return
+            }
+
+            socketDevice.connect(toPort: port) { result in
+                assertOnVMQueue(vmQueue)
+                switch result {
+                case .success(let connection):
+                    completion(
+                        .success(
+                            VsockConnection(
+                                virtualizationConnection: connection,
+                                queue: vmQueue
+                            )
+                        )
+                    )
+                case .failure(let error):
+                    completion(.failure(.virtualization(VZErrorInfo(error as NSError))))
+                }
+            }
+        }
+    }
+
     package func release() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.dispatchQueue.async {
                 assertOnVMQueue(self.queue)
                 self.machine?.delegate = nil
+                self.socketDevice = nil
                 for adapter in self.customDeviceAdapters {
                     adapter.prepareForRelease()
                 }

@@ -66,6 +66,26 @@ func linuxTestGuestAddsNATOnlyForTheNetworkCheck() {
 }
 
 @Test
+func linuxTestGuestEnablesVsockOnlyForTheVsockCheck() {
+    let kernel = URL(fileURLWithPath: "/fixtures/Image")
+    let initrd = URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz")
+
+    let withoutVsock = LinuxTestGuest.definition(
+        kernel: kernel,
+        initrd: initrd,
+        tests: ["ports"]
+    )
+    let withVsock = LinuxTestGuest.definition(
+        kernel: kernel,
+        initrd: initrd,
+        tests: ["vsock"]
+    )
+
+    #expect(!withoutVsock.vsockEnabled)
+    #expect(withVsock.vsockEnabled)
+}
+
+@Test
 func linuxTestGuestReplacesBuiltInEntropyForTheRNGCheck() {
     let device = EntropyTestDevice(seed: 42, performsConfigurationProbe: false)
     let definition = LinuxTestGuest.definition(

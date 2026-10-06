@@ -12,6 +12,15 @@ public enum VirtualMachineEvent: Equatable, Sendable {
     case networkAttachmentDisconnected(VZErrorInfo)
 }
 
+/// A vsock connect failure supplied by the driver.
+public enum VirtualMachineDriverConnectFailure: Error, Equatable, Sendable {
+    /// The VM does not expose its configured virtio-vsock device.
+    case vsockDeviceUnavailable
+
+    /// Virtualization.framework rejected the connection.
+    case virtualization(VZErrorInfo)
+}
+
 /// The asynchronous lifecycle surface used by `VMController`.
 public protocol VirtualMachineDriver: Sendable {
     /// Events from the VM delegate and its configured devices.
@@ -31,6 +40,15 @@ public protocol VirtualMachineDriver: Sendable {
 
     /// Resumes a paused guest.
     func resume() async throws(VZErrorInfo)
+
+    /// Opens a host-to-guest vsock connection.
+    func connect(
+        toPort port: UInt32,
+        completion:
+            @escaping @Sendable (
+                Result<VsockConnection, VirtualMachineDriverConnectFailure>
+            ) -> Void
+    )
 
     /// Releases framework objects on the VM queue.
     func release() async

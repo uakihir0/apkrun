@@ -85,6 +85,7 @@ import Virtualization
     #expect(configuration.networkDevices[0].attachment is VZNATNetworkDeviceAttachment)
     #expect(configuration.networkDevices[0].macAddress.string == macAddress)
     #expect(configuration.socketDevices.count == 1)
+    #expect(configuration.socketDevices[0] is VZVirtioSocketDeviceConfiguration)
     #expect(configuration.serialPorts.count == 2)
     #expect(configuration.entropyDevices.count == 1)
     #expect(configuration.memoryBalloonDevices.count == 1)
@@ -99,6 +100,20 @@ import Virtualization
     #expect(configuration.pointingDevices.isEmpty)
     #expect(configuration.directorySharingDevices.isEmpty)
     #expect(configuration.usbControllers.isEmpty)
+}
+
+@Test func vzBuilderDoesNotAttachVsockWhenDisabled() throws {
+    let definition = VMDefinitionBuilder().build()
+    let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(
+        count: definition.consolePorts.count
+    )
+
+    let result = try VZConfigurationBuilder.build(
+        definition,
+        consolePortAttachments: attachments
+    )
+
+    #expect(result.configuration.socketDevices.isEmpty)
 }
 
 @Test func vzBuilderRejectsConsoleAttachmentCountMismatch() {

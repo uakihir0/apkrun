@@ -10,6 +10,8 @@ func testGuestLineParserHandlesSplitUTF8CRLFAndInterleavedKernelLines() {
         Booting Linux on physical CPU 0x0000000000 [0x410fd0c1]
         APKRUN-TEST: boot ok
         APKRUN-TEST: network ok route and café
+        APKRUN-TEST: net ok ip=192.168.64.2 gw=192.168.64.1 dns=192.168.64.1 http=204
+        APKRUN-TEST: net fail http expected HTTP 204
         APKRUN-TEST: storage fail read-only
         APKRUN-TEST: done
         """
@@ -25,6 +27,12 @@ func testGuestLineParserHandlesSplitUTF8CRLFAndInterleavedKernelLines() {
         records == [
             .bootOK,
             .check(name: "network", result: .ok, detail: "route and café"),
+            .check(
+                name: "net",
+                result: .ok,
+                detail: "ip=192.168.64.2 gw=192.168.64.1 dns=192.168.64.1 http=204"
+            ),
+            .check(name: "net", result: .fail, detail: "http expected HTTP 204"),
             .check(name: "storage", result: .fail, detail: "read-only"),
             .done,
         ]

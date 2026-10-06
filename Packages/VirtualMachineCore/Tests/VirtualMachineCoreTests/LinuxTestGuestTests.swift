@@ -40,6 +40,32 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
 }
 
 @Test
+func linuxTestGuestAddsNATOnlyForTheNetworkCheck() {
+    let definition = LinuxTestGuest.definition(
+        kernel: URL(fileURLWithPath: "/fixtures/Image"),
+        initrd: URL(fileURLWithPath: "/fixtures/initramfs.cpio.gz"),
+        tests: ["net"],
+        powerOff: true,
+        extraCommandLine: ["apkrun.test.net.port=43210"]
+    )
+
+    guard case .nat(let macAddress)? = definition.network else {
+        Issue.record("the net check must attach a NAT network")
+        return
+    }
+
+    let octets = macAddress.split(separator: ":").compactMap { UInt8($0, radix: 16) }
+    #expect(octets.count == 6)
+    #expect(octets.first.map { ($0 & 0b10) != 0 } == true)
+    #expect(octets.first.map { ($0 & 0b01) == 0 } == true)
+    #expect(
+        definition.bootKernelConfigurationForTesting.2.contains(
+            "apkrun.test.net.port=43210"
+        )
+    )
+}
+
+@Test
 func linuxTestGuestReplacesBuiltInEntropyForTheRNGCheck() {
     let device = EntropyTestDevice(seed: 42, performsConfigurationProbe: false)
     let definition = LinuxTestGuest.definition(

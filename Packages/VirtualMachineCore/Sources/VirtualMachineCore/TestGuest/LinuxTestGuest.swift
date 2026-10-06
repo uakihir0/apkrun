@@ -61,6 +61,10 @@ public enum LinuxTestGuest {
                 "apkrun.test.poweroff=\(powerOff ? 1 : 0)",
             ] + (usesEntropyDevice ? ["rng_core.default_quality=0"] : []) + extraCommandLine)
             .joined(separator: " ")
+        let networkDefinition: NetworkDefinition? =
+            tests.contains("net")
+            ? .nat(macAddress: MachineIdentity.newMACAddress())
+            : nil
         let diskDefinitions: [DiskDefinition]
         if let blockDisks {
             let readOnlyDisk = DiskDefinition(
@@ -95,7 +99,7 @@ public enum LinuxTestGuest {
                 commandLine: commandLine
             ),
             disks: diskDefinitions,
-            network: nil,
+            network: networkDefinition,
             vsockEnabled: false,
             consolePorts: consolePorts,
             entropy: !usesEntropyDevice,

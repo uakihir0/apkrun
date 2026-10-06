@@ -96,7 +96,7 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #008 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #001 | | [android-image.md](../../02-design/android-image.md) §2–§3.1 |
 | #064 | Reference boot capture | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §8 |
 | #009 | AndroidImageManifest | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §3.2 |
-| #010 | Extract Android kernel and ramdisk | M1 | #008, #009 | | [android-image.md](../../02-design/android-image.md) §4.1, §6 |
+| #010 | Extract Android kernel and ramdisk | M1 | #008, #009, #064 | | [android-image.md](../../02-design/android-image.md) §4.1, §6 |
 | #011 | GPT disks and partition mapping | M1 | #005, #009, #010, #064 | | [android-image.md](../../02-design/android-image.md) §4.2, §5 |
 | #012 | Boot the Android kernel | M1 | #010, #011 | | [android-image.md](../../02-design/android-image.md) §6 |
 | #013 | Reach Android init | M1 | #012, #064 | | [android-image.md](../../02-design/android-image.md) §6 |

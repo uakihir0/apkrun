@@ -44,8 +44,9 @@ The full dependency list is in [issues/README.md](issues/README.md) §3. The tas
 The longest dependency chain runs through Android bring-up, graphics, multi-window, the daemon, and then two branches that meet at G9:
 
 ```text
-#001 → #002 → #003 (G1) → #005 ─────────────────────┐
-#001 → #008 → #009 → #010 ──────────────────────────┴→ #011 → #012 → #013 → #095 → #014 (G2)
+#001 → #002 → #003 (G1) → #005 ───────────────────────────┐
+#001 → #008 ──┬→ #009 ─┐                                  ├→ #011 → #012 → #013 → #095 → #014 (G2)
+              └→ #064 ─┴→ #010 ───────────────────────────┘
 #014 + #019 → #021 → #022 → #023 (G3)                 (#019 needs #018, #003, #063; #022 needs #020)
 #023 + #072 → #024 → #025 → #026 (G4) → #027 → #028 → #029 → #030 (G5) → #031 (G6)
 

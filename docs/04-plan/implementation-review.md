@@ -7886,3 +7886,39 @@ in 314.31 seconds. The skips require Linux parent-death signals or GNU
 the hostile review found no remaining actionable findings. No T2 guest
 verification or new reference capture was possible because Lima's guest SSH
 remained unavailable after a graceful VM restart.
+
+## IR-234: Gate the reference-derived image layout on the target capture
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #010 |
+| Affected files | [issues index](issues/README.md); [roadmap.md](roadmap.md) §1.3; [M01](issues/M01-android-bring-up.md) #010 and #013; [android-image.md](../02-design/android-image.md) §§6.2, 16; `Images/tools/tests/test_extract.py` |
+
+**Choice.** Make #064 an explicit dependency for completing #010. #064
+captures the Cuttlefish reference values, #010 copies them into the initial
+layer-2 layout, and #013 compares a live VZ boot with that reference. If
+evidence shows direct boot needs a different layer-2 value, #013 may update
+the VZ layout to the observed value and records the key and reason in
+`expected-differences.yaml`; the original remains in the #064 capture. Add a
+real-archive regression check that computes the five AVB values, merges them
+with the extracted vendor bootconfig and committed image layer, and enforces
+the 16 KiB build limit.
+
+**Reason.** M1's task order already places #064 before #010, and #010's final
+layout step requires its `target` capture, but the task index omitted that
+dependency. The design text also said the values would be filled in during
+#013, conflating reference collection with VZ validation. Making the two
+roles explicit prevents guessed values and keeps the task gate consistent
+with its acceptance criteria. A VZ adjustment must be supported by a live
+observation and retain the original reference in #064. AVB-computed values
+are part of layer 2, so the regression test includes them instead of checking
+only the layout's literal keys. The existing serialization API enforces the
+size limit.
+
+**Verification.** `Images/tools/tests/test_extract.py` passed all 19 tests.
+The complete `Images/tools/tests` suite passed 597 tests with four
+platform-specific skips in 301.48 seconds. Ruff lint, formatting checks, and
+`git diff --check` passed. No T2 guest check or new reference capture was
+possible because Lima guest SSH remained unavailable after the graceful VM
+restart.

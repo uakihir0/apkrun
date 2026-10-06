@@ -451,7 +451,7 @@ Merge rules:
 
 ### 6.2 Key catalogue (initial)
 
-"Reference" means the value is copied from the reference capture (§8) with the target profile, and the exact value is filled in during #013. The table is the checklist; the layout file is the source of truth.
+"Reference" means #064 captures Cuttlefish values from `target` and #010 copies them into the initial layer-2 layout. The image layer also includes values computed by `avb.py`. #013 compares a live VZ boot with the reference; if evidence shows direct boot needs a different layer-2 value, #013 updates the VZ layout to the observed value and records the key and reason in `expected-differences.yaml`. The original reference value remains in #064's capture. The table is the checklist; the layout file is the source of truth.
 
 | Key | Value | Layer | Status |
 |---|---|---|---|
@@ -1560,7 +1560,7 @@ Risks (R-NN) are in [../04-plan/risks.md](../04-plan/risks.md), open questions (
 | The VZ virtio-blk logical sector size is 512 bytes (§4.4) | #005 and #011 check it with `blockdev --getss` |
 | Android formats the blank userdata on first boot: `formattable` on `/data` and `/metadata`, and the metadata encryption path (§5.2) | #011 reads `/vendor/etc/fstab.*` in the reference capture, #013 boots it. If first-boot formatting fails under VZ: fallback A (the zip's `userdata.img`) or fallback B (a `make_f2fs` template), both with a fixed size |
 | The `androidboot.boot_devices` value, and whether it is stable across macOS builds (§5.3, R-16) | #011 discovers it, #013 confirms the by-name labels, and the T2 suite re-checks it on every new macOS build. Alternative: `androidboot.boot_part_uuid` with a single-disk layout, not built unless needed |
-| Exact values of the "reference" bootconfig keys and the security HAL APEX names (§6.2, §7.2) | copied from the reference capture of the target profile (§8) during #013 |
+| Exact values of the "reference" bootconfig keys and the security HAL APEX names (§6.2, §7.2) | #064 records them from the target-profile reference capture (§8); #010 copies the bootconfig values into the initial layer-2 layout, and #013 compares the live VZ boot against the capture |
 | Layer-2 keys of the `headless` GPU profile (§9.1) | #014 copies Cuttlefish's no-GPU graphics set from `bootconfig_args.cpp` at the revision of the pinned build |
 | The stock image on the VZ topology (R-06) | #012–#014 (gate G2), diffed against the reference capture (#064). Fallback: adapt the custom image (#035): kernel config, fstab, init scripts |
 | Direct kernel boot misses something that U-Boot provides (R-11, §6) | #012–#014, with the U-Boot inputs listed by #064. Fallback: a U-Boot EFI build ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) |

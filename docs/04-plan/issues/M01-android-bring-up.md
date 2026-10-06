@@ -727,7 +727,7 @@ See [../test-strategy.md](../test-strategy.md).
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #008, #009 |
+| Depends on | #008, #009, #064 |
 | Requirements | FR-IMG-03 |
 | Design | [../../02-design/android-image.md](../../02-design/android-image.md) §4.1, §6.1–§6.4; [../../03-reference/android-image-manifest.md](../../03-reference/android-image-manifest.md) §9; [../../01-architecture/decisions/0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
 | Modules / paths | `Images/tools/apkrun_image/{bootimg,kernel,bootconfig,avb}.py`, the `extract` subcommand, `Images/tools/layouts/cuttlefish-phone-arm64.json`, `Images/tools/tests/fixtures/bootconfig/`, `Images/work/<buildId>/boot/` |
@@ -833,7 +833,7 @@ See [../test-strategy.md](../test-strategy.md).
 - **Step 6 partial (2026-09-30):** Added the default phone layout with only the ADR-decided or source-verified image bootconfig keys and the mandatory `console=hvc0` argument. Reference-only keys remain omitted until #064 provides evidence; AVB values remain computed by `avb.py`. The default CLI extraction is covered against the pinned archive. This layout is intentionally incomplete for Android boot, and #010 remains open. See [implementation-review.md](../implementation-review.md) IR-074.
 - **Partial acceptance verification (2026-10-01):** On macOS 27.0 (build 26A428), re-running extraction against the pinned 16373615 archive produced the same six outputs and SHA-256 values as before; the archive SHA-256 remained `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The kernel bytes at offset `0x38` are `ARM\x64`, the kernel is uncompressed, and the current 157-byte command line contains no `androidboot.*` key and is below 2048 bytes. The non-ASCII extraction rejection and exact 2048-byte acceptance are tested. The reference-derived layer-2 values and final command line remain blocked on #064's target capture; #010 stays open.
 - **Final verification (2026-10-01):** `pytest Images/tools/tests -q` passed 343 tests with 3 platform skips (the reference-capture tests require GNU `timeout` on Linux). `manifest --check` and the default real-archive extraction passed; the six output hashes were unchanged and the pinned archive hash still matched. Ruff, format, `sh -n`, `git diff --check`, all six repository checks, and hostile review passed. The extraction implementation now rejects non-ASCII layout and source command lines and accepts an exact 2048-byte ASCII command line. #010 remains open for the reference-derived layout values and final command-line verification from #064's `target` capture.
-- **Supplemental T1 verification (2026-10-06):** On macOS 27.0 (build 26A428), the real-archive `extract` command and `manifest --check` passed. `Images/tools/tests/test_extract.py` passed all 19 tests, and the archive SHA-256 remained `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The current vendor and layout bootconfig layers merge to six keys and 284 serialized bytes, within the 16 KiB limit. The current measurements are unchanged; the 157-byte command line and layout values remain provisional pending #064's `target` capture.
+- **Supplemental T1 verification (2026-10-06; see IR-234):** On macOS 27.0 (build 26A428), the real-archive `extract` command and `manifest --check` passed. `Images/tools/tests/test_extract.py` passed all 19 tests, and the archive SHA-256 remained `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The real-archive test parses the extracted vendor bootconfig, computes the five AVB bootconfig values, merges both with the committed layer-2 layout through `bootconfig.py`, and asserts the complete serialized layer 1 + 2 block stays within 16 KiB. The full `Images/tools/tests` suite passed 597 tests with four platform-specific skips in 301.48 seconds. The reference-derived layout values and 157-byte command line remain provisional pending #064's `target` capture.
 
 ---
 
@@ -1145,6 +1145,7 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
    - Verify that first-stage init accepts `verifiedbootstate=orange`, `vbmeta.device_state=unlocked`, and the `avb.py` digest values.
    - Verify that `cat /proc/bootconfig` over the serial shell equals the merged block of #012.
    - Compare with `Images/reference/16373615/target/`.
+   - If live VZ evidence shows that direct boot needs a different layer-2 value, update the VZ layout to the observed value and record the key and reason in `expected-differences.yaml`; the original value remains in the #064 capture.
    - Check: no `libfs_avb` error lines. The bootconfig matches, or each difference has an `expected-differences.yaml` entry.
 5. **Debug ramdisk and SELinux.**
    - Build 16373615 is userdebug and already debuggable, so the debug ramdisk (`boot-debug.img` or `vendor_boot-debug.img`, if the inventory lists one) is not used. Record this decision in [android-image.md](../../02-design/android-image.md) §6.

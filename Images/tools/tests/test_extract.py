@@ -13,8 +13,17 @@ from zipfile import ZipFile
 import pytest
 
 import apkrun_image.extract as extract_module
+from apkrun_image.avb import calculate_vbmeta_bootconfig
+from apkrun_image.bootconfig import (
+    MAX_BUILD_BOOTCONFIG_SIZE,
+    BootconfigLayer,
+    merge_bootconfig_layers,
+    parse_bootconfig_text,
+    serialize_bootconfig,
+)
 from apkrun_image.bootimg import VendorBootImage
-from apkrun_image.extract import ExtractError, extract_images, main
+from apkrun_image.extract import ExtractError, _open_artifact, extract_images, main
+from apkrun_image.manifest import _archive_paths, _load_json, _resolve_archive_root
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PINNED_ARCHIVE = (
@@ -478,3 +487,36 @@ def test_real_archive_extraction_uses_committed_default_layout(tmp_path: Path) -
     for name, details in metadata["outputs"].items():
         assert (output / name).stat().st_size == details["size"]
         assert _sha256(output / name) == details["sha256"]
+
+    layout_document = json.loads(PINNED_LAYOUT.read_text(encoding="utf-8"))
+    bootconfig = layout_document["bootconfig"]
+    image_values = bootconfig["image"]
+    vendor_values = parse_bootconfig_text(
+        (output / "vendor-bootconfig.txt").read_text(encoding="ascii"),
+        layer_name="vendor",
+    )
+    pinned_manifest = _load_json(manifest_path, description="pinned Android image manifest")
+    source_root = _resolve_archive_root(pinned_manifest, source=None)
+    archives = pinned_manifest.get("source", {}).get("archives", [])
+    assert isinstance(archives, list)
+    archive_paths = _archive_paths(source_root, archives)
+    avb_values = calculate_vbmeta_bootconfig(
+        pinned_manifest,
+        lambda artifact: _open_artifact(
+            pinned_manifest,
+            source_root,
+            archive_paths,
+            artifact,
+        ),
+    )
+    assert set(image_values).isdisjoint(avb_values)
+    image_layer_values = dict(image_values)
+    image_layer_values.update(avb_values)
+    merged_values = merge_bootconfig_layers(
+        (
+            BootconfigLayer("vendor", vendor_values),
+            BootconfigLayer("image", image_layer_values),
+        )
+    )
+    serialized_bootconfig = serialize_bootconfig(merged_values)
+    assert len(serialized_bootconfig) <= MAX_BUILD_BOOTCONFIG_SIZE

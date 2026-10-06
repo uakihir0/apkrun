@@ -71,6 +71,14 @@ def _load_json(path: Path, *, description: str) -> object:
             f"{description} {path} is not valid JSON at line {error.lineno}, "
             f"column {error.colno}: {error.msg}"
         ) from error
+    except ValueError:
+        raise ManifestError(
+            f"{description} {path} contains a number that exceeds the JSON parser's integer limit."
+        ) from None
+    except RecursionError:
+        raise ManifestError(
+            f"{description} {path} exceeds the JSON parser's nesting limit."
+        ) from None
 
 
 def _schema_validator() -> Draft202012Validator:

@@ -7734,3 +7734,17 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** A standalone archive and an edited `inventory.json` could otherwise produce a draft that copied unverified build provenance and failed only at the later file-backed check. Requiring the metadata while generating the draft surfaces the provenance problem before writing a manifest.
 
 **Verification.** A regression test first reproduced the accepted unverified draft, then passed after the generator required complete fetched provenance. The shared fixture generator test also passed.
+
+## IR-227: Normalize JSON parser limit failures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected files | `Images/tools/apkrun_image/manifest.py`; `Images/tools/tests/test_manifest.py` |
+
+**Choice.** Convert Python's oversized-integer and excessive-nesting parser exceptions into concise `ManifestError` diagnostics, without echoing the rejected JSON value.
+
+**Reason.** Those parser exceptions bypassed the CLI's typed error handling and printed tracebacks containing attacker-controlled input. Returning the same safe failure class as other malformed manifests keeps both the CLI and generator actionable.
+
+**Verification.** CLI regression tests exercise a 5,000-digit integer and 10,000 nested arrays; both return exit code 2 with a bounded diagnostic and no traceback.

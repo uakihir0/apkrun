@@ -136,6 +136,33 @@ def test_schema_matches_the_reference_copy_byte_for_byte() -> None:
     assert checked_in == match.group(1) + "\n"
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_message"),
+    (
+        ("9" * 5000, "exceeds the JSON parser's integer limit"),
+        ("[" * 10000 + "0" + "]" * 10000, "exceeds the JSON parser's nesting limit"),
+    ),
+    ids=("integer-limit", "nesting-limit"),
+)
+def test_manifest_cli_reports_json_parser_limits_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    payload: str,
+    expected_message: str,
+) -> None:
+    """Oversized JSON numbers and nesting return safe CLI diagnostics."""
+    manifest_path = tmp_path / "malformed.json"
+    manifest_path.write_text(payload, encoding="utf-8")
+
+    result = manifest_main(["--check", str(manifest_path)])
+
+    assert result == 2
+    error_output = capsys.readouterr().err
+    assert expected_message in error_output
+    assert "Traceback" not in error_output
+    assert "9" * 100 not in error_output
+
+
 def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
     """Every checked-in valid example satisfies the versioned schema and M1–M9."""
     valid_directory = FIXTURE_ROOT / "valid"

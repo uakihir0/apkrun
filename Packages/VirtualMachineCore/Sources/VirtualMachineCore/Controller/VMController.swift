@@ -11,6 +11,7 @@ public actor VMController {
     private let driverFactory: any VirtualMachineDriverFactory
     private let forcedStopTimeout: Duration
     private let logger: APKLogger
+    private let configLogger: APKLogger
     private let consoleStore: ConsoleChannelStore
     private let consoleLogFileSystem: any ConsoleLogFileSystem
     private let consoleLogClock: any ConsoleLogClock
@@ -74,6 +75,7 @@ public actor VMController {
         self.consoleLogFileSystem = consoleLogFileSystem
         self.consoleLogClock = consoleLogClock
         logger = APKLogger(category: VMLogCategory.lifecycle, sink: diagnostics.logSink)
+        configLogger = APKLogger(category: VMLogCategory.config, sink: diagnostics.logSink)
 
         let stateStream = AsyncStream.makeStream(
             of: VMState.self,
@@ -200,6 +202,12 @@ public actor VMController {
             try await transition(to: .failed(failure), source: .internalEvent)
             logFailure(failure, description: error.description)
             throw failure
+        }
+
+        if case .nat(let macAddress)? = validatedDefinition.definition.network {
+            configLogger.info(
+                "Configured VM NAT network with MAC \(macAddress, .public)"
+            )
         }
 
         driver = newDriver

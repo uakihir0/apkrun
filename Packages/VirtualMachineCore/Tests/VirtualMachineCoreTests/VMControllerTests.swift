@@ -243,6 +243,31 @@ func vmControllerIgnoresEventsFromPreviousGenerationDuringRestart() async throws
 }
 
 @Test(.timeLimit(.minutes(1)))
+func vmControllerLogsConfiguredNetworkMACAsPublicConfigurationData() async throws {
+    let sink = RecordingLogSink()
+    let controller = VMController(
+        definition: try makeValidatedDefinition(networkEnabled: true),
+        diagnostics: .testing(logSink: sink),
+        queue: VMQueue(label: "io.apkrun.vm.network-config.test"),
+        driverFactory: FakeVirtualMachineDriverFactory(
+            drivers: [FakeVirtualMachineDriver()]
+        )
+    )
+
+    try await controller.start()
+
+    let entry = try #require(
+        sink.entries.first {
+            $0.subsystem == .vm && $0.category == VMLogCategory.config.rawValue
+                && $0.publicMessage.contains("Configured VM NAT network")
+        }
+    )
+    #expect(entry.publicMessage.contains("MAC 02:00:00:00:00:01"))
+    #expect(entry.operationID != nil)
+    try await controller.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func vmControllerRejectsOperationsWhileGuestStopReleasesResources() async throws {
     let releaseGate = FakeVirtualMachineDriverGate()
     let firstDriver = FakeVirtualMachineDriver(
@@ -391,8 +416,11 @@ private func makeController(
     )
 }
 
-private func makeValidatedDefinition() throws -> ValidatedVMDefinition {
+private func makeValidatedDefinition(networkEnabled: Bool = false) throws -> ValidatedVMDefinition {
     var builder = VMDefinitionBuilder()
+    if networkEnabled {
+        builder.network = .nat(macAddress: "02:00:00:00:00:01")
+    }
     var header = Data(repeating: 0, count: 64)
     header.replaceSubrange(0x38..<0x3C, with: [0x41, 0x52, 0x4D, 0x64])
     let host = FakeVMHostEnvironment(

@@ -36,7 +36,8 @@ import Virtualization
             role: "userdata"
         ),
     ]
-    builder.network = .nat(macAddress: "02:00:00:00:00:01")
+    let macAddress = "02:00:00:00:00:01"
+    builder.network = .nat(macAddress: macAddress)
     builder.vsockEnabled = true
     builder.consolePorts = [
         ConsolePortDefinition(role: .systemConsole),
@@ -82,6 +83,7 @@ import Virtualization
     #expect(readWriteAttachment.synchronizationMode == .fsync)
     #expect(configuration.networkDevices.count == 1)
     #expect(configuration.networkDevices[0].attachment is VZNATNetworkDeviceAttachment)
+    #expect(configuration.networkDevices[0].macAddress.string == macAddress)
     #expect(configuration.socketDevices.count == 1)
     #expect(configuration.serialPorts.count == 2)
     #expect(configuration.entropyDevices.count == 1)

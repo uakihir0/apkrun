@@ -7723,11 +7723,14 @@ transfer the executable path recorded for the earlier PID to it.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Needs maintainer review; startup trigger superseded by IR-233 |
 | Task | #064 |
 | Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; `Images/tools/tests/test_reference_capture.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
 
 **Choice.** Parse only four fixed `adb_connector` message classes from complete launcher-log lines, retain aggregate counts, and emit one summary when the observer shuts down. Start ADB polling only after a complete, source-qualified `socket_vsock_proxy` line records launcher event 5.
+
+The event-5-only startup trigger above is historical and is superseded by
+IR-233. The passive connector summary and its privacy findings remain current.
 
 **Reason.** IR-072 intentionally delayed active ADB observation until event 5 because that event identifies Cuttlefish's ADB proxy for this instance. Requiring a complete line tagged by `socket_vsock_proxy` prevents unrelated or partial text from opening the ADB observer. The recent target capture has many connector attempts but no event 5. The passive summary extracts Cuttlefish's own connection-attempt, message-sent, device-not-found, and disconnect counts without opening any host connection or exposing a foreign ADB listener. The field `connectMessagesSent` records Cuttlefish's log wording and is not a transport-readiness signal; the classifier requires a single serial token followed by the exact `successfully sent` suffix. Launcher lines are capped at 64 KiB, and an overlong line is discarded through its newline even when it spans reads. A missing, inaccessible, non-regular, or over-cap log resets counts and process identities and marks a gap. The output contains no connector PID, device serial, address, or raw log line. Launcher snapshot gaps and a partial line at shutdown remain explicit.
 
@@ -7830,3 +7833,49 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** `fetch.json` is editable local input read by both commands. Python can raise `ValueError` for an oversized integer token and `RecursionError` for excessive nesting; neither CLI handled these exceptions, so they escaped the typed error path with a traceback. Normalize both in the same way as manifest parser limits.
 
 **Verification.** The `fetch` CLI regression cases supply a 5,000-digit integer and 10,000 nested arrays in `fetch.json`; the inventory CLI has matching cases. Each command returns its documented error code with a bounded diagnostic, no traceback, and no echoed integer. The focused `test_fetch.py` and `test_inventory.py` suites passed 86 tests, and the full image-tools suite passed 594 tests with four platform skips.
+
+## IR-233: Observe ADB before Cuttlefish event 5
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/tools/reference/boot_observer.py`; `Images/tools/tests/test_boot_observer.py`; [android-image.md](../02-design/android-image.md) §8.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Start the private ADB observer after either the first complete,
+source-qualified `adb_connector` connection-attempt line or the complete
+`socket_vsock_proxy` event-5 line. Use a 60-second interval before event 5.
+Outside the final-probe reservation, event 5 wakes the existing thread for an
+immediate poll and changes subsequent regular polls to 15 seconds. Keep the
+final-probe reservation: regular polls, shell checks, and property queries
+remain paused in that window while the observer performs its bounded final
+state and logcat probe.
+
+**Reason.** The latest target captures contain connector attempts without
+event 5, leaving the observer unable to tell whether Cuttlefish's selected
+loopback ADB endpoint ever reaches `device`. A complete connector attempt is
+the earliest source-qualified evidence of the intended endpoint. The
+60-second pre-event interval bounds extra local probes, and event 5 retains
+its separate meaning while making later observation more frequent. Only an
+ADB `device` state permits shell diagnostics; none of these observations
+establishes Android boot completion. The reserved final window protects the
+capture deadline and final logcat collection. The event wake is not cleared
+from inside an in-flight SystemServer snapshot, so a newly observed event
+cannot be lost there.
+
+**Verification.** `test_boot_observer.py` passed 175 tests with one
+Linux-only skip. `ruff check Images/tools`, `ruff format --check Images/tools`,
+and `git diff --check` passed. The targeted synthetic capture case
+`staged-invalid-config-invalidates-capture` passed. An initial full
+image-tools run reported 588 passed, 6 failed, 3 errors, and 4 skipped because
+the host ran out of temporary storage. Five real-archive checks stopped before
+snapshotting because the 1,101,175,103-byte archive requires 1,369,610,559
+bytes of free temporary space including the reserve, while only 890,961,920
+bytes were available; the other failure and three setup errors also reported
+`No space left on device`. After host space recovered, the full
+`Images/tools/tests` suite passed 597 tests with four platform-specific skips
+in 314.31 seconds. The skips require Linux parent-death signals or GNU
+`timeout`. Ruff lint and formatting checks and `git diff --check` passed, and
+the hostile review found no remaining actionable findings. No T2 guest
+verification or new reference capture was possible because Lima's guest SSH
+remained unavailable after a graceful VM restart.

@@ -736,9 +736,13 @@ prevent it from terminating the CVD process group.
 For a long `cvd start`, setting `APKRUN_CAPTURE_BOOT_OBSERVER=1` also writes
 `boot-observer.jsonl` while the command is running. An independent sampler
 checks the Android crosvm every five seconds. It wakes on a one-second
-schedule to rescan the launcher log for event 5. RSS measurements retain their
-five-second interval. Once event 5 is observed, the ADB observer
-starts on that scan instead of waiting for the next RSS sample. Launcher
+schedule to rescan the launcher log for event 5 and complete ADB connector
+attempts. RSS measurements retain their five-second interval. The ADB
+observer starts when either a complete, source-qualified connector attempt or
+event 5 is observed, without waiting for the next RSS sample. Event 5 wakes the
+existing ADB thread for an immediate poll except during the reserved final
+probe window, when regular polling stays paused to protect the capture
+deadline. Launcher
 lines identify their emitting process by name and PID. The observer collects
 `process_restarter` PIDs directly from those prefixes, then accepts only a
 process whose executable and command line identify the private instance,
@@ -783,9 +787,16 @@ whether a partial line remained at shutdown. These counts describe only
 Cuttlefish's own logged connector messages. `connectMessagesSent` reflects
 Cuttlefish logging that a message was sent; it does not establish ADB device
 readiness. This passive summary runs even when launcher event 5 is absent.
-Event 5 starts ADB polling only when its marker appears on a complete,
-source-qualified `socket_vsock_proxy` log line. Starting the private ADB
-server and polling the guest remain gated on that event.
+The private ADB observer starts after either the first complete,
+source-qualified `adb_connector` connection-attempt line or the complete,
+source-qualified `socket_vsock_proxy` event 5 line. It uses a 60-second
+schedule before event 5. Event 5 remains a separate marker and wakes the
+existing observer thread for an immediate poll outside the reserved final
+probe window; the thread and private server are not started twice. Polls use
+the selected instance's loopback serial and the observer's private ADB socket.
+Shell diagnostics run only after `get-state` reports `device`. A connector
+attempt, event 5, or ADB `device` state does not establish Android boot
+completion.
 When `APKRUN_CROSVM_BINARY` selects a diagnostic command, the capture passes
 that command path to the observer so it checks the basename requested by
 `process_restarter` under the validated private instance. It preserves the
@@ -797,9 +808,13 @@ a different crosvm binary can also set
 and verifies `/proc/<pid>/exe` with `samefile` against the expected
 executable. It retains the private-instance check on the wrapper request.
 Both paths stay in memory and are not written to observer records.
-After launcher log event 5, it probes the selected localhost ADB serial on a
-monotonic 15-second schedule through a private ADB server socket and records
-only bounded state fields, including the numeric `systemServerStartCount`,
+Before launcher log event 5, it probes the selected localhost ADB serial on a
+monotonic 60-second schedule through a private ADB server socket. Event 5
+wakes that same observer thread immediately outside the final probe window;
+subsequent regular polls use a monotonic 15-second schedule. During the
+reserved final window, the observer skips regular shell and property polls and
+preserves its bounded final state and logcat probe. It records only bounded
+state fields, including the numeric `systemServerStartCount`,
 the nullable Boolean `systemServerStartCountPresent`, the nullable Boolean
 `sysBootCompletedPresent`, and the nullable Boolean `sysBootCompleted`
 signal. A successful, non-empty `sys.system_server.start_count` sets its
@@ -859,8 +874,9 @@ per-property fields: the byte count distinguishes an empty response from a
 non-empty unrecognized response, while a parsed response with a false
 `sysBootCompletedPresent` or `systemServerStartCountPresent` indicates an
 empty property value. These diagnostics retain no raw response content.
-If a property query times out, keep the 15-second ADB transport polling
-schedule but defer the next property shell query for 30 seconds; after a
+If a property query times out, keep the current phase's ADB transport polling
+schedule (60 seconds before event 5, 15 seconds after event 5) but defer the
+next property shell query for 30 seconds; after a
 second consecutive timeout, defer it for 60 seconds, capped at 60 seconds
 until a property command returns without timing out. The `getpropRetryInSeconds`
 field records the selected delay on a timeout and the rounded-up remaining

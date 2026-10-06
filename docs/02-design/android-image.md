@@ -767,6 +767,25 @@ identity is not used to detect a new generation. The observer checks the
 initial prefix and bytes around the last consumed offset; if the bounded
 snapshot is truncated or those bytes change, it clears prior process
 identities and records an observation gap.
+Launcher lines are capped at 64 KiB. If a line exceeds the cap across reads,
+the observer discards its remainder through the next newline before parsing
+again, so a continuation cannot be treated as a new record. A disappeared,
+inaccessible, non-regular, or over-cap snapshot clears candidate process
+identities and connector counts and marks an observation gap.
+The observer also classifies complete `adb_connector` launcher lines into
+`connectAttempts`, `connectMessagesSent`, `deviceNotFoundResponses`, and
+`disconnectRequests`, then emits one `cuttlefish_adb_connector_summary` record
+during observer shutdown. The summary stores no connector PID, device serial,
+address, or raw log line. `launcherLogObserved`,
+`launcherLogGapDetected`, and `partialLauncherLineAtStop` describe whether a
+valid launcher snapshot was read, whether the observer detected a gap, and
+whether a partial line remained at shutdown. These counts describe only
+Cuttlefish's own logged connector messages. `connectMessagesSent` reflects
+Cuttlefish logging that a message was sent; it does not establish ADB device
+readiness. This passive summary runs even when launcher event 5 is absent.
+Event 5 starts ADB polling only when its marker appears on a complete,
+source-qualified `socket_vsock_proxy` log line. Starting the private ADB
+server and polling the guest remain gated on that event.
 When `APKRUN_CROSVM_BINARY` selects a diagnostic command, the capture passes
 that command path to the observer so it checks the basename requested by
 `process_restarter` under the validated private instance. It preserves the

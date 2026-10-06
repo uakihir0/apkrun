@@ -20,12 +20,20 @@ from typing import Any
 
 START_EVENT_MARKER = b"Start event (5) received."
 LAUNCHER_SOURCE = re.compile(rb"^([A-Za-z0-9_.-]+)\(([0-9]+)\)")
+ADB_CONNECT_MESSAGE_SENT = re.compile(rb"adb connect message for \S+ successfully sent$")
+ADB_CONNECTOR_MESSAGES = (
+    ("connectAttempts", b"Attempting to connect to device with address "),
+    ("connectMessagesSent", b"adb connect message for "),
+    ("deviceNotFoundResponses", b"transport message failed, response body: device '"),
+    ("disconnectRequests", b"Sending adb disconnect"),
+)
 SNAPSHOT_TRUNCATION_MARKER = (
     b"[APKRun snapshot truncated; showing the final part of the host log.]\n"
 )
 MAX_LOG_BYTES = 64 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 5.0
 LAUNCHER_POLL_INTERVAL_SECONDS = 1.0
+MAX_LAUNCHER_LINE_BYTES = 65_536
 ADB_INTERVAL_SECONDS = 15.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
@@ -689,6 +697,10 @@ class BootObserver:
         self._launcher_tail = b""
         self._launcher_truncated = False
         self._launcher_fragment = bytearray()
+        self._launcher_discarding_oversized_line = False
+        self._launcher_log_observed = False
+        self._launcher_observation_gap = False
+        self._adb_connector_counts = {name: 0 for name, _ in ADB_CONNECTOR_MESSAGES}
         self._kernel_log_offset = 0
         self._kernel_log_prefix: bytes | None = None
         self._kernel_log_tail = b""
@@ -881,6 +893,7 @@ class BootObserver:
         if self._sample_thread is not None and self._sample_thread.is_alive():
             raise OSError("crosvm memory observer did not stop within its cleanup bound")
         if self._output_fd is not None:
+            self._refresh_launcher_log()
             self._refresh_instance_path()
             if self._instance_path_bytes is None:
                 self._record(
@@ -894,6 +907,16 @@ class BootObserver:
                     }
                 )
             self._record_unattempted_system_server_snapshot()
+            self._record(
+                {
+                    "event": "cuttlefish_adb_connector_summary",
+                    **self._adb_connector_counts,
+                    "launcherLogObserved": self._launcher_log_observed,
+                    "launcherLogGapDetected": self._launcher_observation_gap,
+                    "partialLauncherLineAtStop": bool(self._launcher_fragment),
+                    "startEvent5Observed": self._start_event_observed,
+                }
+            )
             self._record({"event": "observer_stopped"})
             os.close(self._output_fd)
             self._output_fd = None
@@ -1044,13 +1067,21 @@ class BootObserver:
         try:
             descriptor = os.open(self.launcher_log, flags)
         except FileNotFoundError:
+            if self._launcher_log_observed:
+                self._launcher_observation_gap = True
+                self._reset_launcher_log_snapshot(reset_counts=True)
             return
         except OSError:
+            self._launcher_observation_gap = True
+            self._reset_launcher_log_snapshot(reset_counts=True)
             return
         try:
             metadata = os.fstat(descriptor)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_LOG_BYTES:
+                self._launcher_observation_gap = True
+                self._reset_launcher_log_snapshot(reset_counts=True)
                 return
+            self._launcher_log_observed = True
             current_prefix = os.pread(descriptor, min(metadata.st_size, 4096), 0)
             if current_prefix.startswith(SNAPSHOT_TRUNCATION_MARKER):
                 if not self._launcher_truncated:
@@ -1060,10 +1091,9 @@ class BootObserver:
                             "discardedCandidateCount": len(self._crosvm_restarter_pids),
                         }
                     )
-                self._clear_launcher_identity()
+                self._launcher_observation_gap = True
+                self._reset_launcher_log_snapshot(reset_counts=False)
                 self._launcher_offset = 0
-                self._launcher_prefix = None
-                self._launcher_tail = b""
                 self._launcher_truncated = True
                 return
             self._launcher_truncated = False
@@ -1084,16 +1114,15 @@ class BootObserver:
                 metadata.st_size < self._launcher_offset or not prefix_matches or not tail_matches
             )
             if replaced:
+                self._launcher_observation_gap = True
+                self._adb_connector_counts = {name: 0 for name, _ in ADB_CONNECTOR_MESSAGES}
                 self._record(
                     {
                         "event": "launcher_log_replaced_observation_gap",
                         "discardedCandidateCount": len(self._crosvm_restarter_pids),
                     }
                 )
-                self._launcher_offset = 0
-                self._launcher_prefix = None
-                self._launcher_tail = b""
-                self._clear_launcher_identity()
+                self._reset_launcher_log_snapshot(reset_counts=False)
             if self._launcher_prefix is None and current_prefix:
                 self._launcher_prefix = current_prefix
             length = metadata.st_size - self._launcher_offset
@@ -1105,21 +1134,56 @@ class BootObserver:
         finally:
             os.close(descriptor)
 
+        if self._launcher_discarding_oversized_line:
+            newline = chunk.find(b"\n")
+            if newline < 0:
+                return
+            self._launcher_discarding_oversized_line = False
+            chunk = chunk[newline + 1 :]
         self._launcher_fragment.extend(chunk)
-        if START_EVENT_MARKER in self._launcher_fragment:
-            if not self._start_event_observed:
-                self._start_event_observed = True
-                self._record({"event": "cuttlefish_start_event_5_observed"})
         while True:
             newline = self._launcher_fragment.find(b"\n")
             if newline < 0:
                 break
+            if newline > MAX_LAUNCHER_LINE_BYTES:
+                self._launcher_observation_gap = True
+                self._record(
+                    {
+                        "event": "launcher_log_oversized_line_observation_gap",
+                        "discardedCandidateCount": len(self._crosvm_restarter_pids),
+                    }
+                )
+                remainder = bytes(self._launcher_fragment[newline + 1 :])
+                self._clear_launcher_identity()
+                self._launcher_fragment.extend(remainder)
+                continue
             line = bytes(self._launcher_fragment[:newline]).rstrip(b"\r")
             del self._launcher_fragment[: newline + 1]
             source = LAUNCHER_SOURCE.match(line)
+            if (
+                source is not None
+                and source.group(1) == b"socket_vsock_proxy"
+                and line.endswith(START_EVENT_MARKER + b" Starting proxy")
+            ):
+                if not self._start_event_observed:
+                    self._start_event_observed = True
+                    self._record({"event": "cuttlefish_start_event_5_observed"})
             if source is not None and source.group(1) == b"process_restarter":
                 self._crosvm_restarter_pids.add(int(source.group(2)))
-        if len(self._launcher_fragment) > 65_536:
+            elif source is not None and source.group(1) == b"adb_connector":
+                for name, message in ADB_CONNECTOR_MESSAGES:
+                    if message in line:
+                        if name == "connectMessagesSent":
+                            matched = ADB_CONNECT_MESSAGE_SENT.search(line) is not None
+                        elif name == "deviceNotFoundResponses":
+                            matched = b"' not found" in line
+                        else:
+                            matched = True
+                        if matched:
+                            self._adb_connector_counts[name] += 1
+                        break
+        if len(self._launcher_fragment) > MAX_LAUNCHER_LINE_BYTES:
+            self._launcher_observation_gap = True
             self._record(
                 {
                     "event": "launcher_log_oversized_line_observation_gap",
@@ -1128,6 +1192,17 @@ class BootObserver:
             )
             self._launcher_fragment.clear()
             self._clear_launcher_identity()
+            self._launcher_discarding_oversized_line = True
+
+    def _reset_launcher_log_snapshot(self, *, reset_counts: bool) -> None:
+        self._launcher_offset = 0
+        self._launcher_prefix = None
+        self._launcher_tail = b""
+        self._launcher_fragment.clear()
+        self._launcher_discarding_oversized_line = False
+        self._clear_launcher_identity()
+        if reset_counts:
+            self._adb_connector_counts = {name: 0 for name, _ in ADB_CONNECTOR_MESSAGES}
 
     def _refresh_kernel_log(self) -> None:
         if self.kernel_log is None or self._system_server_mprotect_guest_uptime is not None:

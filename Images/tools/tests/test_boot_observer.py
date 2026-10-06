@@ -28,6 +28,10 @@ assert OBSERVER_SPEC.loader is not None
 OBSERVER_MODULE = importlib.util.module_from_spec(OBSERVER_SPEC)
 OBSERVER_SPEC.loader.exec_module(OBSERVER_MODULE)
 BootObserver = OBSERVER_MODULE.BootObserver
+START_EVENT_LOG_LINE = (
+    b"socket_vsock_proxy(100)  I 10-05 07:42:18 100 100 "
+    b"socket_vsock_proxy.cpp:216] Start event (5) received. Starting proxy\n"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1688,8 +1692,7 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
     launcher_log.write_bytes(
         b"run_cvd(500)  D Started (pid: 499): /private/log_tee\n"
         b"run_cvd(500)  D --process_name=crosvm\n"
-        b"process_restarter(410)  D Starting Android crosvm\n"
-        b"Start event (5) received.\n"
+        b"process_restarter(410)  D Starting Android crosvm\n" + START_EVENT_LOG_LINE
     )
 
     observer.start()
@@ -1709,6 +1712,11 @@ def test_boot_observer_clears_crosvm_identity_after_launcher_log_truncation(
     assert gaps[0]["discardedCandidateCount"] == 1
     assert memory[0]["pid"] == 415
     assert memory[1]["identity"] == "unavailable"
+    summary = next(
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    )
+    assert summary["launcherLogObserved"] is True
+    assert summary["launcherLogGapDetected"] is True
 
 
 def test_boot_observer_detects_same_prefix_log_truncation_and_regrowth(
@@ -1963,8 +1971,21 @@ def test_boot_observer_starts_adb_observer_before_next_memory_sample(
     observer.sample(now=0)
     assert observer._next_sample == observer.sample_interval
 
-    launcher_log.write_bytes(b"Start event (5) received.\n")
+    launcher_log.write_bytes(b"run_cvd(100) D Start event (5) received. Starting proxy\n")
     observer.sample(now=1)
+    assert not observer._start_event_observed
+    assert not adb_started.is_set()
+
+    partial_proxy_line = START_EVENT_LOG_LINE.rstrip(b"\n")
+    with launcher_log.open("ab") as stream:
+        stream.write(partial_proxy_line)
+    observer.sample(now=2)
+    assert not observer._start_event_observed
+    assert not adb_started.is_set()
+
+    with launcher_log.open("ab") as stream:
+        stream.write(b"\n")
+    observer.sample(now=3)
     assert adb_started.wait(timeout=1)
     assert observer._next_sample == observer.sample_interval
 
@@ -1972,6 +1993,221 @@ def test_boot_observer_starts_adb_observer_before_next_memory_sample(
     records = _read_records(output)
     assert sum(record["event"] == "crosvm_memory" for record in records) == 1
     assert sum(record["event"] == "cuttlefish_start_event_5_observed" for record in records) == 1
+
+
+def test_boot_observer_summarizes_cuttlefish_adb_connector_messages_without_raw_identifiers(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    private_serial = b"private-device-serial"
+    launcher_log.write_bytes(
+        b"\n".join(
+            (
+                b"adb_connector(431) D 10-05 07:42:18 431 432 "
+                b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+                b"with address 127.0.0.1:6520",
+                b"adb_connector(431) D 10-05 07:42:18 431 432 "
+                b"adb_connection_maintainer.cpp:227] adb connect message for "
+                + private_serial
+                + b" successfully sent",
+                b"adb_connector(431) W 10-05 07:42:20 431 432 "
+                b"adb_connection_maintainer.cpp:227] adb connect message for "
+                + private_serial
+                + b" not successfully sent",
+                b"adb_connector(431) W 10-05 07:42:19 431 432 "
+                b"adb_connection_maintainer.cpp:227] adb connect message for "
+                + private_serial
+                + b" failed",
+                b"adb_connector(431) W 10-05 07:42:28 431 432 "
+                b"adb_connection_maintainer.cpp:250] transport message failed, "
+                b"response body: device '" + private_serial + b"' not found",
+                b"adb_connector(431) D 10-05 07:42:28 431 432 "
+                b"adb_connection_maintainer.cpp:285] Sending adb disconnect",
+                b"adb_connector(431) W 10-05 07:42:33 431 432 "
+                b"adb_connection_maintainer.cpp:250] transport message failed, "
+                b"response body: device '" + private_serial + b"' unauthorized",
+                b"run_cvd(430) D 10-05 07:42:18 430 430] Attempting to connect to "
+                b"device with address 127.0.0.1:6520",
+            )
+        )
+        + b"\n"
+    )
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    summaries = [
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["connectAttempts"] == 1
+    assert summary["connectMessagesSent"] == 1
+    assert summary["deviceNotFoundResponses"] == 1
+    assert summary["disconnectRequests"] == 1
+    assert summary["launcherLogObserved"] is True
+    assert summary["launcherLogGapDetected"] is False
+    assert summary["partialLauncherLineAtStop"] is False
+    assert summary["startEvent5Observed"] is False
+    assert not any(record["event"] == "adb_poll" for record in records)
+    assert not any(record["event"] == "private_adb_server_ready" for record in records)
+    output_text = output.read_text(encoding="ascii")
+    assert private_serial.decode("ascii") not in output_text
+    assert "127.0.0.1:6520" not in output_text
+    assert "adb_connector(431)" not in output_text
+    assert "Sending adb disconnect" not in output_text
+
+
+def test_boot_observer_rejects_oversized_complete_launcher_lines(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    oversized_proxy_line = (
+        b"socket_vsock_proxy(100)  I 10-05 07:42:18 100 100 "
+        b"socket_vsock_proxy.cpp:216] " + b"x" * (OBSERVER_MODULE.MAX_LAUNCHER_LINE_BYTES + 1)
+    )
+    valid_attempt_line = (
+        b"adb_connector(431) D 10-05 07:42:18 431 432 "
+        b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+        b"with address 127.0.0.1:6520"
+    )
+    launcher_log.write_bytes(oversized_proxy_line + b"\n" + valid_attempt_line + b"\n")
+
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    summary = next(
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    )
+    assert summary["connectAttempts"] == 1
+    assert summary["launcherLogGapDetected"] is True
+    assert summary["startEvent5Observed"] is False
+    assert not any(record["event"] == "adb_poll" for record in records)
+    assert any(
+        record["event"] == "launcher_log_oversized_line_observation_gap" for record in records
+    )
+
+
+def test_boot_observer_discards_overlong_line_remainder_across_reads(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    launcher_log.write_bytes(b"x" * (OBSERVER_MODULE.MAX_LAUNCHER_LINE_BYTES + 1))
+
+    observer.start()
+    observer.sample(now=0)
+    assert observer._launcher_discarding_oversized_line
+
+    valid_attempt_line = (
+        b"adb_connector(431) D 10-05 07:42:18 431 432 "
+        b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+        b"with address 127.0.0.1:6520\n"
+    )
+    with launcher_log.open("ab") as stream:
+        stream.write(START_EVENT_LOG_LINE + valid_attempt_line)
+    observer.sample(now=1)
+    assert not observer._launcher_discarding_oversized_line
+    observer.close()
+
+    records = _read_records(output)
+    summary = next(
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    )
+    assert summary["connectAttempts"] == 1
+    assert summary["launcherLogGapDetected"] is True
+    assert summary["startEvent5Observed"] is False
+    assert not any(record["event"] == "adb_poll" for record in records)
+
+
+def test_boot_observer_marks_missing_launcher_log_as_gap_after_observation(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    launcher_log.write_bytes(
+        b"adb_connector(431) D 10-05 07:42:18 431 432 "
+        b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+        b"with address 127.0.0.1:6520\n"
+    )
+
+    observer.start()
+    observer.sample(now=0)
+    assert observer._adb_connector_counts["connectAttempts"] == 1
+
+    launcher_log.unlink()
+    observer.sample(now=1)
+    assert observer._launcher_observation_gap
+    assert observer._adb_connector_counts["connectAttempts"] == 0
+    observer.close()
+
+    records = _read_records(output)
+    summary = next(
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    )
+    assert summary["launcherLogObserved"] is True
+    assert summary["launcherLogGapDetected"] is True
+    assert summary["connectAttempts"] == 0
+
+
+def test_boot_observer_clears_process_identity_after_capped_launcher_log(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "crosvm"
+    executable.write_bytes(b"test executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        516,
+        executable,
+        parent_pid=515,
+        instance_path=observer.instance_path,
+    )
+    _fake_proc_restarter(
+        proc_root,
+        515,
+        restarter_executable,
+        children=(516,),
+        instance_path=observer.instance_path,
+    )
+    _write_crosvm_launcher_identity(launcher_log, 515)
+
+    observer.start()
+    observer.sample(now=0)
+    with launcher_log.open("wb") as stream:
+        stream.truncate(OBSERVER_MODULE.MAX_LOG_BYTES + 1)
+    observer.sample(now=2)
+    observer.close()
+
+    records = _read_records(output)
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(memory) == 2
+    assert memory[0]["pid"] == 516
+    assert memory[1]["identity"] == "unavailable"
+    summary = next(
+        record for record in records if record["event"] == "cuttlefish_adb_connector_summary"
+    )
+    assert summary["launcherLogGapDetected"] is True
 
 
 def test_shutdown_wakeup_is_not_consumed_as_an_urgent_adb_poll(tmp_path: Path) -> None:
@@ -2170,7 +2406,7 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     monkeypatch.setenv("FAKE_ADB_CLIENT_DELAY", "0.2")
     monkeypatch.setenv("ADB_SERVER_SOCKET", "tcp:localhost:5037")
     monkeypatch.setenv("ADB_VENDOR_KEYS", "/private/host/adbkey")
-    launcher_log.write_bytes(b"Start event (5) received. Starting proxy\n")
+    launcher_log.write_bytes(START_EVENT_LOG_LINE)
 
     observer.start()
     observer.sample(now=0)
@@ -2386,7 +2622,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     fake_adb.chmod(0o700)
     observer.adb_path = fake_adb.resolve(strict=True)
     monkeypatch.setenv("FAKE_ADB_CALLS", str(calls))
-    launcher_log.write_bytes(b"Start event (5) received.\n")
+    launcher_log.write_bytes(START_EVENT_LOG_LINE)
 
     observer.start()
     observer.sample(now=0)
@@ -3391,7 +3627,7 @@ def test_private_adb_server_exits_when_observer_parent_is_killed(
     )
     fake_adb.chmod(0o700)
     observer.adb_path = fake_adb.resolve(strict=True)
-    launcher_log.write_bytes(b"Start event (5) received.\n")
+    launcher_log.write_bytes(START_EVENT_LOG_LINE)
     child_script = (
         "import runpy, sys, time\n"
         "from pathlib import Path\n"
@@ -3490,7 +3726,7 @@ def test_boot_observer_reserves_time_for_adb_cleanup_before_deadline(
     proc_root.mkdir()
     observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
     observer.deadline = time.monotonic() + 10
-    launcher_log.write_bytes(b"Start event (5) received.\n")
+    launcher_log.write_bytes(START_EVENT_LOG_LINE)
 
     observer.start()
     observer.sample(now=0)
@@ -4457,7 +4693,7 @@ def test_boot_observer_records_private_socket_directory_failure(
         raise OSError("synthetic /tmp failure")
 
     monkeypatch.setattr(OBSERVER_MODULE.tempfile, "mkdtemp", reject_directory)
-    launcher_log.write_bytes(b"Start event (5) received.\n")
+    launcher_log.write_bytes(START_EVENT_LOG_LINE)
 
     observer.start()
     observer.sample(now=0)

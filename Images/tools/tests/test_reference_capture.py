@@ -1599,7 +1599,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                     "$selected_gpu_vhost_user_enabled" >> "$instance/cuttlefish_config.json"
                 fi
                 if [ "${APKRUN_CAPTURE_BOOT_OBSERVER:-0}" = 1 ]; then
-                  printf 'Start event (5) received.\\n' >> "$instance/launcher.log"
+                  printf '%s%s\\n' \\
+                    'socket_vsock_proxy(100)  I 10-05 07:42:18 100 100' \\
+                    ' socket_vsock_proxy.cpp:216] Start event (5) received. Starting proxy' \\
+                    >> "$instance/launcher.log"
                   attempt=0
                   while [ ! -f "$HOME/cuttlefish-start-event-observed.txt" ] \
                     && [ "$attempt" -lt 100 ]; do

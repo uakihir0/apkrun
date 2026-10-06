@@ -172,6 +172,7 @@ def _observer(
     runtime_link_ready: bool = True,
     sample_interval: float = 5.0,
     adb_interval: float = 15.0,
+    adb_pre_event_interval: float = 60.0,
     background_sampling: bool = False,
     crosvm_path: Path | None = None,
     crosvm_executable_path: Path | None = None,
@@ -206,6 +207,7 @@ def _observer(
         proc_root=proc_root,
         sample_interval=sample_interval,
         adb_interval=adb_interval,
+        adb_pre_event_interval=adb_pre_event_interval,
         background_sampling=background_sampling,
     )
     return observer, output, log_directory / "launcher.log"
@@ -911,7 +913,7 @@ def test_boot_observer_source_marker_catchup_limit_records_gap(
         ),
     ),
 )
-def test_boot_observer_captures_system_server_threads_once_after_blocked_mprotect(
+def test_boot_observer_preserves_wakeup_while_capturing_system_server_threads(
     tmp_path: Path,
     short_private_home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -922,7 +924,7 @@ def test_boot_observer_captures_system_server_threads_once_after_blocked_mprotec
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
-    observer, output, _ = _observer(
+    observer, output, launcher_log = _observer(
         tmp_path,
         proc_root=proc_root,
         home_path=short_private_home,
@@ -953,6 +955,9 @@ def test_boot_observer_captures_system_server_threads_once_after_blocked_mprotec
         if "connect" in command:
             return 0, b"", False, True, False, True, False
         if command[-1:] == ["get-state"]:
+            if not observer._start_event_observed:
+                launcher_log.write_bytes(START_EVENT_LOG_LINE)
+                observer._refresh_launcher_log()
             return 0, b"device\n", False, True, False, True, False
         if command[-5:] == [
             "su",
@@ -995,6 +1000,8 @@ def test_boot_observer_captures_system_server_threads_once_after_blocked_mprotec
                 socket_path,
                 time.monotonic() + 30,
             )
+            assert observer._start_event_observed
+            assert observer._adb_wakeup.is_set()
     finally:
         observer.close()
         adb_socket.close()
@@ -1988,6 +1995,7 @@ def test_boot_observer_starts_adb_observer_before_next_memory_sample(
     observer.sample(now=3)
     assert adb_started.wait(timeout=1)
     assert observer._next_sample == observer.sample_interval
+    assert observer._adb_wakeup.is_set()
 
     observer.close()
     records = _read_records(output)
@@ -1995,13 +2003,117 @@ def test_boot_observer_starts_adb_observer_before_next_memory_sample(
     assert sum(record["event"] == "cuttlefish_start_event_5_observed" for record in records) == 1
 
 
+def test_boot_observer_starts_on_connector_attempt_and_reuses_thread_at_event5(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, _, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    launcher_log.write_bytes(
+        b"adb_connector(431) D 10-05 07:42:18 431 432 "
+        b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+        b"with address 127.0.0.1:6520\n"
+    )
+    adb_started = threading.Event()
+    allow_poll_exit = threading.Event()
+    poll_calls = 0
+
+    def fake_poll_adb() -> None:
+        nonlocal poll_calls
+        poll_calls += 1
+        adb_started.set()
+        allow_poll_exit.wait(timeout=2)
+
+    monkeypatch.setattr(observer, "_poll_adb", fake_poll_adb)
+    observer.start()
+    try:
+        observer.sample(now=0)
+        assert adb_started.wait(timeout=1)
+        first_thread = observer._adb_thread
+        assert first_thread is not None
+        assert not observer._start_event_observed
+
+        with launcher_log.open("ab") as stream:
+            stream.write(START_EVENT_LOG_LINE)
+        observer.sample(now=1)
+
+        assert observer._start_event_observed
+        assert observer._adb_wakeup.is_set()
+        assert observer._adb_thread is first_thread
+        assert poll_calls == 1
+    finally:
+        allow_poll_exit.set()
+        observer.close()
+
+
+def test_boot_observer_waits_for_complete_source_qualified_connector_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, _, launcher_log = _observer(tmp_path, proc_root=proc_root)
+    attempt_prefix = (
+        b"adb_connector(431) D 10-05 07:42:18 431 432 "
+        b"adb_connection_maintainer.cpp:223] Attempting to connect to device "
+        b"with address 127.0.0.1:6520"
+    )
+    launcher_log.write_bytes(
+        b"run_cvd(430) D 10-05 07:42:18 430 430] "
+        + attempt_prefix.split(b"] ", 1)[1]
+        + b"\n"
+        + attempt_prefix
+    )
+    adb_started = threading.Event()
+    monkeypatch.setattr(observer, "_poll_adb", adb_started.set)
+
+    observer.start()
+    try:
+        observer.sample(now=0)
+        assert observer._adb_thread is None
+        assert not adb_started.is_set()
+
+        with launcher_log.open("ab") as stream:
+            stream.write(b"\n")
+        observer.sample(now=1)
+        assert adb_started.wait(timeout=1)
+        assert not observer._start_event_observed
+    finally:
+        observer.close()
+
+
+def test_boot_observer_uses_sparse_adb_interval_until_event5(tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observer, _, _ = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        adb_interval=15.0,
+        adb_pre_event_interval=60.0,
+    )
+
+    assert observer._adb_poll_interval() == 60.0
+    assert OBSERVER_MODULE._next_adb_poll_time(0, 0, observer._adb_poll_interval()) == 60.0
+    observer._start_event_observed = True
+    assert observer._adb_poll_interval() == 15.0
+    assert OBSERVER_MODULE._next_adb_poll_time(0, 0, observer._adb_poll_interval()) == 15.0
+
+
 def test_boot_observer_summarizes_cuttlefish_adb_connector_messages_without_raw_identifiers(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
     observer, output, launcher_log = _observer(tmp_path, proc_root=proc_root)
     private_serial = b"private-device-serial"
+    adb_started = threading.Event()
+
+    def fake_poll_adb() -> None:
+        adb_started.set()
+
+    monkeypatch.setattr(observer, "_poll_adb", fake_poll_adb)
     launcher_log.write_bytes(
         b"\n".join(
             (
@@ -2053,6 +2165,7 @@ def test_boot_observer_summarizes_cuttlefish_adb_connector_messages_without_raw_
     assert summary["launcherLogGapDetected"] is False
     assert summary["partialLauncherLineAtStop"] is False
     assert summary["startEvent5Observed"] is False
+    assert adb_started.is_set()
     assert not any(record["event"] == "adb_poll" for record in records)
     assert not any(record["event"] == "private_adb_server_ready" for record in records)
     output_text = output.read_text(encoding="ascii")

@@ -35,6 +35,7 @@ SAMPLE_INTERVAL_SECONDS = 5.0
 LAUNCHER_POLL_INTERVAL_SECONDS = 1.0
 MAX_LAUNCHER_LINE_BYTES = 65_536
 ADB_INTERVAL_SECONDS = 15.0
+ADB_PRE_EVENT_INTERVAL_SECONDS = 60.0
 ADB_COMMAND_TIMEOUT_SECONDS = 2.0
 # Starting an Android shell can be slower than checking its ADB transport.
 ADB_GETPROP_TIMEOUT_SECONDS = 10.0
@@ -651,12 +652,13 @@ class BootObserver:
         proc_root: Path = Path("/proc"),
         sample_interval: float = SAMPLE_INTERVAL_SECONDS,
         adb_interval: float = ADB_INTERVAL_SECONDS,
+        adb_pre_event_interval: float = ADB_PRE_EVENT_INTERVAL_SECONDS,
         deadline: float | None = None,
         background_sampling: bool = False,
     ) -> None:
         if type(adb_port) is not int or not 1 <= adb_port <= 65_535:
             raise ValueError("ADB port is outside the supported range")
-        if sample_interval <= 0 or adb_interval <= 0:
+        if sample_interval <= 0 or adb_interval <= 0 or adb_pre_event_interval <= 0:
             raise ValueError("observer intervals must be positive")
         self.home = home.resolve(strict=True)
         try:
@@ -683,6 +685,7 @@ class BootObserver:
         self.proc_root = proc_root
         self.sample_interval = sample_interval
         self.adb_interval = adb_interval
+        self.adb_pre_event_interval = adb_pre_event_interval
         self.deadline = deadline
         self.background_sampling = background_sampling
         self._output_fd: int | None = None
@@ -839,7 +842,7 @@ class BootObserver:
 
     def _start_adb_observer_if_needed(self) -> None:
         if (
-            self._start_event_observed
+            (self._start_event_observed or self._adb_connector_counts["connectAttempts"] > 0)
             and self._adb_thread is None
             and not self._stop_event.is_set()
         ):
@@ -849,6 +852,9 @@ class BootObserver:
                 daemon=True,
             )
             self._adb_thread.start()
+
+    def _adb_poll_interval(self) -> float:
+        return self.adb_interval if self._start_event_observed else self.adb_pre_event_interval
 
     def _consume_adb_wakeup(self) -> bool:
         if not self._adb_wakeup.is_set():
@@ -1168,6 +1174,7 @@ class BootObserver:
                 if not self._start_event_observed:
                     self._start_event_observed = True
                     self._record({"event": "cuttlefish_start_event_5_observed"})
+                    self._adb_wakeup.set()
             if source is not None and source.group(1) == b"process_restarter":
                 self._crosvm_restarter_pids.add(int(source.group(2)))
             elif source is not None and source.group(1) == b"adb_connector":
@@ -1697,7 +1704,11 @@ class BootObserver:
                     )
                     break
                 after_poll = time.monotonic()
-                next_poll = _next_adb_poll_time(next_poll, after_poll, self.adb_interval)
+                next_poll = _next_adb_poll_time(
+                    next_poll,
+                    after_poll,
+                    self._adb_poll_interval(),
+                )
             if cleanup_reserve_reached:
                 self._record(
                     {
@@ -1940,7 +1951,6 @@ class BootObserver:
                 self._system_server_mprotect_guest_uptime is not None
                 and not self._system_server_snapshot_attempted
             ):
-                self._adb_wakeup.clear()
                 (
                     snapshot_code,
                     snapshot_output,

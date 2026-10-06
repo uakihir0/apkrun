@@ -7378,3 +7378,45 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** The first CRLF-aware flood run showed the log writer could not keep up: when the monitor terminated the guest 50 ms after line 100, stdout held 845 flood records while the per-boot log held 191. Repeated front-removal from `Data`, formatter construction for every record, per-record file writes, and rescanning an incomplete record on each append were avoidable writer costs. The bounded batching path reduced those costs while preserving private per-boot/current logs, record order, rotation boundaries, and durability accounting. This is a measured optimization; the bounded batch limit avoids an unbounded memory queue.
 
 **Verification.** On 2026-10-06 UTC, the writer tests passed 9/9, including a near-limit record followed by a maximum-length record that forces a batch flush before the combined guest bytes exceed 64 KiB, two writes for a 500-record burst across both destinations, a 65,535-byte record delivered in 256-byte chunks, deterministic retained records across rotation, and targeted one-destination write/fsync failures with recovery. `VirtualMachineCoreTests` passed 84/84 and `VirtualMachineCoreSystemTests` passed 18/18. The signed T2 suite passed 5/5; its final result bundle is `/tmp/apkrun-console-signed-T2-batchbound.xcresult`. In the final SIGKILL run, the CLI had received 1,025 contiguous flood records and the current and per-boot logs contained the same 1,024 complete contiguous records, through line 1,024. Their last timestamp, rounded to milliseconds, was within 1 ms of termination. The six repository checks, standalone format check, fixture shell syntax, and diff check passed. Final hostile review found no actionable issues in the batching boundary, cursor, rotation, dropped-byte accounting, flood CLI, CRLF, or panic changes.
+
+## IR-202: Preserve warning severity in unified logs without a message marker
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Logging/`; `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/`; [diagnostics.md](../02-design/diagnostics.md) §3.2 |
+
+**Choice.** Write warning entries with OSLog's `default` type under the reserved `.__apkrun_warning` category suffix. `apkrun logs` removes that suffix and restores the warning level. Apply a requested minimum level to normalized records from both OSLog and file mirrors; keep missing or unrecognized OSLog types as `unknown` and omit them when a minimum level is requested.
+
+**Reason.** Unified logging has no distinct warning type. Encoding severity in the message can misclassify retained legacy records or arbitrary user-controlled text. The category is set by the logger, so message contents cannot manufacture the warning signal. Filtering only debug specially did not implement the documented minimum-level contract.
+
+**Verification.** `DiagnosticsCoreTests` passed 85/85 on 2026-10-06 UTC, including OSLog category restoration, warning threshold behavior, message-text spoof resistance, unknown-type filtering, and mirror filtering. Hostile re-review found no actionable issues.
+
+## IR-203: Test NAT disconnect handling at T0 and live networking at T2
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | [M00](issues/M00-repository-and-vm-foundation.md) #006; [test-strategy.md](test-strategy.md) §6.1; [vm.md](../02-design/vm.md) §7 |
+
+**Choice.** Verify disconnect state, warning log, degraded health, and reset with the fake driver at T0. The real-VM T2 network test verifies DHCP, the host HTTP 204 request, and passing `vm.network` health throughout the run.
+
+**Reason.** Virtualization.framework provides no reliable supported trigger for intentionally disconnecting a NAT attachment. A T2 assertion that the callback fired would depend on an unavailable trigger. The tier split directly verifies the callback contract with its controllable driver and verifies real guest networking with VZ.
+
+**Verification.** On 2026-10-06 UTC, the focused T0 disconnect-controller and network-health tests passed with fake drivers. The T2 network test remains pending.
+
+## IR-204: Publish network health source changes for live diagnostics
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/VMController.swift`; `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Health/VMNetworkHealthState.swift`; [vm.md](../02-design/vm.md) §7 |
+
+**Choice.** `VMController` exposes `networkHealthUpdates` with an initial available state, a sanitized disconnect event containing only the VZ domain and code, and an available event when a later start clears the failure. The live diagnostics service consumes these changes to re-run `vm.network` and publish `healthChanged` under #059.
+
+**Reason.** A health check that only reads controller state when a report is requested can leave a subscribed UI stale after a disconnect. RuntimeAPI and DiagnosticsService are placeholders at M0, so #006 provides the VM-owned source-change stream while #059 owns subscription and wire publication. The event omits `VZErrorInfo.description`, which is private diagnostic data.
+
+**Verification.** On 2026-10-06 UTC, `VirtualMachineCoreTests` passed 86/86. The focused `vmControllerKeepsRunningWhenNetworkAttachmentDisconnects` test observed the initial, disconnect, and recovery events alongside the running-state and warning-log assertions; `vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart` passed the degraded and recovery health assertions. Hostile re-review found no actionable issues.

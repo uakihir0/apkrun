@@ -242,9 +242,10 @@ attached again after detachment.
 
 - One virtio-net device with a NAT attachment. The guest gets an address from VZ's DHCP (typically `192.168.64.0/24`), and DNS is served by the host. No entitlement is needed.
 - The MAC address is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`, so the guest sees a stable interface across boots.
+- `VMController.networkHealthUpdates` publishes the initial network state, each attachment loss, and recovery when a new start clears the failure. The live diagnostics service re-runs `vm.network` from these events and publishes the resulting `healthChanged` event ([diagnostics.md](diagnostics.md) §7.1, #059).
 - No inbound port forwarding exists or is needed. Host → guest traffic uses vsock (§8).
 - Cuttlefish expects particular interface names (for example, Wi-Fi via `virt_wifi` over a renamed ethernet interface). Whether the stock image brings up connectivity on VZ's single NIC is checked in #095 ([android-image.md](android-image.md) §7.4).
-- Test (T2, #006): the Linux test guest gets a DHCP lease and fetches `http://<gateway>:<port>/generate_204` from an HTTP server that the test runs on the host (expects 204), and the attachment's disconnect delegate callback is logged. T2 needs no Internet access. Resolving a public name and fetching `https://connectivitycheck.gstatic.com/generate_204` is a T3 network check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.5).
+- Test (#006): T0 uses the fake driver to verify that an attachment disconnect is logged, leaves the VM `running`, and degrades `vm.network`; the next start restores the check. T2 verifies that the Linux test guest gets a DHCP lease and fetches `http://<gateway>:<port>/generate_204` from a host HTTP server (204), while `vm.network` remains passing. T2 needs no Internet access. Resolving a public name and fetching `https://connectivitycheck.gstatic.com/generate_204` is a T3 network check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.5).
 
 ## 8. vsock (#007)
 

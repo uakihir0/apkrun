@@ -98,6 +98,21 @@ import Testing
     #expect(sink.entries.isEmpty)
 }
 
+@Test func loggerPreservesWarningSeverityAndCatalogCode() {
+    let sink = RecordingLogSink(minimumLevel: .warning)
+    let logger = APKLogger(category: VMLogCategory.network, sink: sink)
+
+    logger.warning(
+        "VM network attachment disconnected",
+        errorCode: "vm.networkAttachmentLost"
+    )
+
+    let entry = sink.entries.first
+    #expect(entry?.level == .warning)
+    #expect(entry?.category == VMLogCategory.network.rawValue)
+    #expect(entry?.errorCode == "vm.networkAttachmentLost")
+}
+
 private final class DescriptionCounter: CustomStringConvertible, @unchecked Sendable {
     private let lock = NSLock()
     private var descriptions = 0

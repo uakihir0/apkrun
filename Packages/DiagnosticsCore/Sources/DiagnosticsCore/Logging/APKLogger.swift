@@ -111,6 +111,11 @@ public struct APKLogger: Sendable {
         write(.notice, message: message)
     }
 
+    /// Writes a recoverable condition that needs attention.
+    public func warning(_ message: @autoclosure () -> LogMessage, errorCode: String? = nil) {
+        write(.warning, message: message, errorCode: errorCode)
+    }
+
     /// Writes an operation failure and its qualified error code.
     public func error(_ message: @autoclosure () -> LogMessage, errorCode: String? = nil) {
         write(.error, message: message, errorCode: errorCode)

@@ -1,7 +1,7 @@
-import DiagnosticsCore
 import DiagnosticsCoreTestSupport
 import Foundation
 import Testing
+@testable import DiagnosticsCore
 
 @Test func logReaderParsesUnifiedLogAndBuildsSafeArguments() async throws {
     let timestampFormatter = DateFormatter()
@@ -45,6 +45,203 @@ import Testing
             #"subsystem BEGINSWITH "io.apkrun" AND subsystem BEGINSWITH "io.apkrun.cli""#))
     #expect(arguments[0].contains("--style"))
     #expect(arguments[0].contains("ndjson"))
+}
+
+@Test func logReaderRestoresWarningSeverityFromOSLogCategory() async throws {
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let output = try JSONSerialization.data(
+        withJSONObject: [
+            "timestamp": timestamp,
+            "messageType": "Default",
+            "eventMessage": "Network disconnected\u{1F}private detail",
+            "subsystem": "io.apkrun.vm",
+            "category": "network\(OSLogCategory.warningSuffix)",
+        ],
+        options: [.sortedKeys]
+    )
+    let reader = LogReader(
+        paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: 0, standardOutput: output)
+        ])
+    )
+    let recorder = LogReadEventRecorder()
+
+    let report = try await reader.read(onEvent: recorder.append)
+
+    #expect(report.emittedEntries == 1)
+    #expect(recorder.entries.first?.level == "warning")
+    #expect(recorder.entries.first?.category == "network")
+    #expect(recorder.entries.first?.message == "Network disconnected")
+}
+
+@Test func logReaderAppliesMinimumLevelToUnifiedRecords() async throws {
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let messages = [
+        ("Debug", "debug", "detail"),
+        ("Info", "info", "transition"),
+        ("Default", "notice", "result"),
+        ("Default", "warning", "recoverable"),
+        ("Error", "error", "failed"),
+        ("Fault", "fault", "invariant"),
+    ]
+    let lines = try messages.map { messageType, level, message in
+        try JSONSerialization.data(
+            withJSONObject: [
+                "timestamp": timestamp,
+                "messageType": messageType,
+                "eventMessage": message,
+                "subsystem": "io.apkrun.vm",
+                "category": level == "warning"
+                    ? "network\(OSLogCategory.warningSuffix)"
+                    : "network",
+            ],
+            options: [.sortedKeys]
+        )
+    }
+    var output = Data()
+    for (index, line) in lines.enumerated() {
+        if index > 0 {
+            output.append(0x0A)
+        }
+        output.append(line)
+    }
+
+    for minimumLevel in LogLevel.allCases {
+        let reader = LogReader(
+            paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+            runner: FakeLogCommandRunner(results: [
+                LogCommandResult(exitCode: 0, standardOutput: output)
+            ])
+        )
+        let recorder = LogReadEventRecorder()
+
+        _ = try await reader.read(
+            LogReadOptions(since: "1h", level: minimumLevel),
+            onEvent: recorder.append
+        )
+
+        let expected = messages.compactMap { message -> String? in
+            let (_, level, _) = message
+            guard let recordLevel = LogLevel(rawValue: level), recordLevel >= minimumLevel else {
+                return nil
+            }
+            return level
+        }
+        #expect(recorder.entries.map(\.level) == expected)
+    }
+}
+
+@Test func logReaderDoesNotTreatMessageTextAsWarning() async throws {
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let originalMessage = "[APKRunLogLevel:warning] user text"
+    let output = try JSONSerialization.data(
+        withJSONObject: [
+            "timestamp": timestamp,
+            "messageType": "Default",
+            "eventMessage": originalMessage,
+            "subsystem": "io.apkrun.vm",
+            "category": "network",
+        ],
+        options: [.sortedKeys]
+    )
+    let reader = LogReader(
+        paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: 0, standardOutput: output)
+        ])
+    )
+    let recorder = LogReadEventRecorder()
+
+    let report = try await reader.read(
+        LogReadOptions(since: "1h", level: .warning),
+        onEvent: recorder.append
+    )
+
+    #expect(report.emittedEntries == 0)
+    #expect(recorder.entries.isEmpty)
+
+    let unfilteredReader = LogReader(
+        paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: 0, standardOutput: output)
+        ])
+    )
+    let unfilteredRecorder = LogReadEventRecorder()
+    _ = try await unfilteredReader.read(onEvent: unfilteredRecorder.append)
+    #expect(unfilteredRecorder.entries.first?.level == "notice")
+    #expect(unfilteredRecorder.entries.first?.message == originalMessage)
+}
+
+@Test func logReaderKeepsMissingAndNonstringOSLogTypesUnknown() async throws {
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let output = try JSONSerialization.data(
+        withJSONObject: [
+            "timestamp": timestamp,
+            "logType": 17,
+            "eventMessage": "future",
+            "subsystem": "io.apkrun.vm",
+            "category": "network",
+        ],
+        options: [.sortedKeys]
+    )
+    let reader = LogReader(
+        paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: 0, standardOutput: output)
+        ])
+    )
+    let recorder = LogReadEventRecorder()
+
+    let report = try await reader.read(
+        LogReadOptions(since: "1h", level: .notice),
+        onEvent: recorder.append
+    )
+
+    #expect(report.emittedEntries == 0)
+    #expect(recorder.entries.isEmpty)
+
+    let unfilteredReader = LogReader(
+        paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: 0, standardOutput: output)
+        ])
+    )
+    let unfilteredRecorder = LogReadEventRecorder()
+    _ = try await unfilteredReader.read(onEvent: unfilteredRecorder.append)
+    #expect(unfilteredRecorder.entries.first?.level == "unknown")
+}
+
+@Test func logReaderAppliesMinimumLevelToMirrorRecords() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("APKRun-LogReader-Level-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let paths = APKRunPaths(homeDirectory: directory)
+    try FileManager.default.createDirectory(at: paths.logsRoot, withIntermediateDirectories: true)
+    let timestamp = ISO8601DateFormatter().string(from: .now)
+    let mirror = """
+        \(timestamp) notice io.apkrun.vm/network notice
+        \(timestamp) warning io.apkrun.vm/network warning
+        \(timestamp) error io.apkrun.vm/network error
+        \(timestamp) fault io.apkrun.vm/network fault
+        """
+    try mirror.write(to: paths.daemonLogFile, atomically: true, encoding: .utf8)
+
+    let reader = LogReader(
+        paths: paths,
+        runner: FakeLogCommandRunner(results: [
+            LogCommandResult(exitCode: -1, timedOut: true)
+        ])
+    )
+    let recorder = LogReadEventRecorder()
+
+    let report = try await reader.read(
+        LogReadOptions(since: "1d", level: .warning),
+        onEvent: recorder.append
+    )
+
+    #expect(report.usedMirrors)
+    #expect(recorder.entries.map(\.level) == ["warning", "error", "fault"])
 }
 
 @Test func logReaderParsesFractionalISO8601Timestamps() async throws {

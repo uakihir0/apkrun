@@ -1415,7 +1415,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Record:** whether the host server on `0.0.0.0` triggers the macOS application firewall on lab Macs goes into [../test-strategy.md](../test-strategy.md) §3.6 as a lab setup step if needed.
 - **Pitfall:** the NAT bridge interface (`bridge100`) exists only while a NAT VM runs. Do not bind the test server to its address before the VM starts. Bind to all interfaces, and let the guest use its DHCP router address.
 - **Pitfall:** busybox `wget` does not verify TLS certificates. The external check proves reachability only, which is all FR-VM-04 asks for.
-- **Pitfall:** there is no reliable way to make VZ disconnect a NAT attachment on purpose. The disconnect path is therefore tested at T0 with the fake driver. [../test-strategy.md](../test-strategy.md) §6.1 lists "disconnect callback logged" under T2, which needs a trigger that the design does not give.
+- **Pitfall:** there is no reliable way to make VZ disconnect a NAT attachment on purpose. The disconnect path is tested at T0 with the fake driver; T2 checks that the network health remains passing during a real guest's DHCP and host HTTP request. [../test-strategy.md](../test-strategy.md) §6.1 uses this split.
 
 ---
 

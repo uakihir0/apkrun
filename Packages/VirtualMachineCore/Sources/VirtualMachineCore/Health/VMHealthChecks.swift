@@ -19,6 +19,12 @@ public enum VMHealthChecks {
             VMStateHealthCheck(state: { await controller.state })
         )
         try await registry.register(
+            VMNetworkHealthCheck(
+                hasNetworkAttachment: { await controller.hasNetworkAttachment },
+                attachmentError: { await controller.networkAttachmentError }
+            )
+        )
+        try await registry.register(
             VMConsoleWriterHealthCheck(hasFailed: {
                 await controller.consoleLogWriterHasFailed()
             })
@@ -49,6 +55,55 @@ private struct VirtualizationSupportedHealthCheck: HealthCheck {
                 ? "Virtualization.framework is supported."
                 : "Virtualization.framework is not supported on this Mac.",
             error: supported ? nil : errorInfo(for: failure),
+            measuredAt: context.clock.now
+        )
+    }
+}
+
+private struct VMNetworkHealthCheck: HealthCheck {
+    let hasNetworkAttachment: @Sendable () async -> Bool
+    let attachmentError: @Sendable () async -> VZErrorInfo?
+
+    var id: HealthCheckID { "vm.network" }
+    var group: HealthGroup { .virtualization }
+    var requirement: HealthRequirement { .runningRuntime }
+    var cost: HealthCost { .quick }
+    var title: LocalizedText {
+        LocalizedText(key: id, fallback: "VM network")
+    }
+
+    func run(_ context: HealthContext) async -> HealthResult {
+        guard await hasNetworkAttachment() else {
+            return HealthResult(
+                id: id,
+                group: group,
+                state: .pass,
+                title: title,
+                detail: "No VM network attachment is configured.",
+                measuredAt: context.clock.now
+            )
+        }
+
+        guard let error = await attachmentError() else {
+            return HealthResult(
+                id: id,
+                group: group,
+                state: .pass,
+                title: title,
+                detail: "The VM network attachment is connected.",
+                measuredAt: context.clock.now
+            )
+        }
+
+        let failure = VMFailure.networkAttachmentLost
+        return HealthResult(
+            id: id,
+            group: group,
+            state: .warning,
+            title: title,
+            detail: "The VM network attachment disconnected "
+                + "(VZ domain \(error.domain), code \(error.code)).",
+            error: errorInfo(for: failure),
             measuredAt: context.clock.now
         )
     }

@@ -264,6 +264,7 @@ The port number is logged, never shown.
 | `vsockPortNotListening(port:)` | `vm.vsockPortNotListening` | no guest listener on the port yet | VMController | "Android isn't ready yet." | "Try again in a moment." `retry` | 75 | §8 |
 | `vsockConnectTimedOut(port:)` | `vm.vsockConnectTimedOut` | the connection did not open within the timeout | VMController | "Android didn't answer in time." | "Try again. If it fails again, restart Android." `retry` | 1 | §8 |
 | `virtualizationUnavailable` | `vm.virtualizationUnavailable` | `VZVirtualMachineConfiguration.isSupported` is false, or the entitlement is missing | VMController | "Virtualization is not available on this Mac." | "APKRun can't run inside a virtual machine. On a real Mac, reinstall APKRun." `openTroubleshooting` | 1 | §13 |
+| `networkAttachmentLost` | `vm.networkAttachmentLost` | Virtualization.framework reports `attachmentWasDisconnectedWithError` | VMController | "Android lost its network connection." | "Restart Android. If it happens again, create a diagnostics report." `restartAndroid` | 1 | §7, §9.2 |
 | `consoleLogWriteFailed` | `vm.consoleLogWriteFailed` | writing or synchronizing a VM serial console log failed | ConsoleLogWriter | "APKRun couldn't write Android's console log." | "Check the free disk space. Settings → Storage shows what APKRun uses." `openStorageSettings` | 1 | §14 |
 
 ### 5.2 `VMConfigurationFailure`

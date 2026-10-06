@@ -9,6 +9,9 @@ public enum LogLevel: String, CaseIterable, Comparable, Sendable {
     /// A user-visible outcome.
     case notice
 
+    /// A recoverable condition that needs attention.
+    case warning
+
     /// An operation failed.
     case error
 
@@ -25,8 +28,9 @@ public enum LogLevel: String, CaseIterable, Comparable, Sendable {
         case .debug: 0
         case .info: 1
         case .notice: 2
-        case .error: 3
-        case .fault: 4
+        case .warning: 3
+        case .error: 4
+        case .fault: 5
         }
     }
 }

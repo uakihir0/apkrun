@@ -2,7 +2,7 @@ import DiagnosticsCore
 import Dispatch
 import Foundation
 
-/// Owns one VM lifecycle and publishes every explicit state transition.
+/// Owns one VM lifecycle and publishes state and network-health changes.
 public actor VMController {
     /// The definition is used by each driver created for this controller.
     private let validatedDefinition: ValidatedVMDefinition
@@ -12,16 +12,21 @@ public actor VMController {
     private let forcedStopTimeout: Duration
     private let logger: APKLogger
     private let configLogger: APKLogger
+    private let networkLogger: APKLogger
     private let consoleStore: ConsoleChannelStore
     private let consoleLogFileSystem: any ConsoleLogFileSystem
     private let consoleLogClock: any ConsoleLogClock
     private let stateContinuation: AsyncStream<VMState>.Continuation
+    private let networkHealthContinuation: AsyncStream<VMNetworkHealthState>.Continuation
 
     /// The current explicit state of the VM.
     public private(set) var state: VMState
 
     /// All states, including the initial `.stopped`, in transition order.
     public nonisolated let stateUpdates: AsyncStream<VMState>
+
+    /// The initial network-health state and each subsequent network-health change.
+    public nonisolated let networkHealthUpdates: AsyncStream<VMNetworkHealthState>
 
     private var consoleChannels: [ConsoleChannel]
     private var hasAttemptedStart = false
@@ -36,6 +41,10 @@ public actor VMController {
     private var eventTask: Task<Void, Never>?
     private var eventsDuringStart: [VirtualMachineEvent] = []
     package private(set) var networkAttachmentError: VZErrorInfo?
+
+    package var hasNetworkAttachment: Bool {
+        validatedDefinition.definition.network != nil
+    }
     private var stopCompletion: (id: UUID, gate: VMStopCompletionGate)?
     private var stopTimeoutTask: Task<Void, Never>?
     private var stopOperationTasks: [UUID: Task<Void, Never>] = [:]
@@ -76,6 +85,7 @@ public actor VMController {
         self.consoleLogClock = consoleLogClock
         logger = APKLogger(category: VMLogCategory.lifecycle, sink: diagnostics.logSink)
         configLogger = APKLogger(category: VMLogCategory.config, sink: diagnostics.logSink)
+        networkLogger = APKLogger(category: VMLogCategory.network, sink: diagnostics.logSink)
 
         let stateStream = AsyncStream.makeStream(
             of: VMState.self,
@@ -85,6 +95,14 @@ public actor VMController {
         stateContinuation = stateStream.continuation
         state = .stopped
         stateContinuation.yield(.stopped)
+
+        let networkHealthStream = AsyncStream.makeStream(
+            of: VMNetworkHealthState.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        networkHealthUpdates = networkHealthStream.stream
+        networkHealthContinuation = networkHealthStream.continuation
+        networkHealthContinuation.yield(.available)
 
         let channels = Self.makeConsoleChannels(
             for: definition.definition.consolePorts,
@@ -189,7 +207,10 @@ public actor VMController {
         }
         hasAttemptedStart = true
         eventsDuringStart.removeAll()
-        networkAttachmentError = nil
+        if networkAttachmentError != nil {
+            networkAttachmentError = nil
+            networkHealthContinuation.yield(.available)
+        }
 
         let newDriver: any VirtualMachineDriver
         do {
@@ -488,8 +509,13 @@ public actor VMController {
         case .networkAttachmentDisconnected(let error):
             guard state == .running || state == .paused else { return }
             networkAttachmentError = error
-            logger.error(
-                "VM network attachment disconnected: \(error.description, .private)",
+            networkHealthContinuation.yield(
+                .disconnected(domain: error.domain, code: error.code)
+            )
+            let domain = error.domain
+            let code = error.code
+            networkLogger.warning(
+                "Network attachment disconnected (\(domain, .public), code \(code, .public))",
                 errorCode: VMFailure.networkAttachmentLost.qualifiedCode
             )
         }

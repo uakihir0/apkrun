@@ -201,6 +201,27 @@
       }
     },
     {
+      "code": "vm.networkAttachmentLost",
+      "parameters": [],
+      "message": {
+        "en": "Android lost its network connection.",
+        "ja": "Androidのネットワーク接続が切断されました。"
+      },
+      "remediation": {
+        "en": "Restart Android. If it happens again, create a diagnostics report.",
+        "ja": "Androidを再起動してください。再発する場合は診断レポートを作成してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "networkAttachmentLost",
+        "when": "Virtualization.framework reports `attachmentWasDisconnectedWithError`",
+        "raisedBy": "VMController",
+        "ref": "§7, §9.2"
+      }
+    },
+    {
       "code": "vm.consoleLogWriteFailed",
       "parameters": [],
       "message": {

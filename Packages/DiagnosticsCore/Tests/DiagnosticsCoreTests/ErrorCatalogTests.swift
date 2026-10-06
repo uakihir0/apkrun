@@ -14,7 +14,7 @@ import Testing
             "diskNotReadable", "diskNotWritable", "diskSyncModeTestOnly", "diskIdentifierInvalid",
             "missingSystemConsole", "invalidMACAddress", "machineIdentifierInvalid",
             "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
-            "configurationInvalid", "consoleLogWriteFailed",
+            "configurationInvalid", "networkAttachmentLost", "consoleLogWriteFailed",
         ].map { "vm.\($0)" }
             + [
                 "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",

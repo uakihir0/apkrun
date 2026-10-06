@@ -183,10 +183,14 @@ func vmControllerKeepsRunningWhenNetworkAttachmentDisconnects() async throws {
     )
     let sink = RecordingLogSink()
     let driver = FakeVirtualMachineDriver()
+    let restartDriver = FakeVirtualMachineDriver()
     let controller = makeController(
-        factory: FakeVirtualMachineDriverFactory(drivers: [driver]),
-        diagnostics: .testing(logSink: sink)
+        factory: FakeVirtualMachineDriverFactory(drivers: [driver, restartDriver]),
+        diagnostics: .testing(logSink: sink),
+        networkEnabled: true
     )
+    var networkUpdates = controller.networkHealthUpdates.makeAsyncIterator()
+    #expect(await networkUpdates.next() == .available)
 
     try await controller.start()
     let startOperationID = sink.entries.first {
@@ -194,17 +198,30 @@ func vmControllerKeepsRunningWhenNetworkAttachmentDisconnects() async throws {
             && $0.publicMessage == "VM state changed from stopped to starting"
     }?.operationID
     driver.emit(.networkAttachmentDisconnected(underlying))
+    #expect(
+        await networkUpdates.next()
+            == .disconnected(domain: "VZErrorDomain", code: 5)
+    )
     #expect(await waitForNetworkError(underlying, on: controller))
     #expect(await controller.state == .running)
     #expect(await controller.networkAttachmentError == underlying)
 
     let eventEntry = sink.entries.first {
         $0.subsystem == .vm
-            && $0.publicMessage.hasPrefix("VM network attachment disconnected:")
+            && $0.category == VMLogCategory.network.rawValue
+            && $0.publicMessage.hasPrefix("Network attachment disconnected (")
     }
     #expect(startOperationID != nil)
     #expect(eventEntry?.operationID != nil)
     #expect(eventEntry?.operationID != startOperationID)
+    #expect(eventEntry?.level == .warning)
+    #expect(eventEntry?.errorCode == VMFailure.networkAttachmentLost.qualifiedCode)
+    #expect(eventEntry?.publicMessage.contains("VZErrorDomain, code 5") == true)
+
+    try await controller.stop()
+    try await controller.start()
+    #expect(await networkUpdates.next() == .available)
+    try await controller.stop()
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -404,9 +421,10 @@ func vmControllerBoundsResetWhileVZStopCallbackIsPending() async throws {
 private func makeController(
     factory: any VirtualMachineDriverFactory,
     diagnostics: DiagnosticsContext = .testing(),
-    forcedStopTimeout: Duration = .seconds(10)
+    forcedStopTimeout: Duration = .seconds(10),
+    networkEnabled: Bool = false
 ) -> VMController {
-    let definition = try! makeValidatedDefinition()
+    let definition = try! makeValidatedDefinition(networkEnabled: networkEnabled)
     return VMController(
         definition: definition,
         diagnostics: diagnostics,

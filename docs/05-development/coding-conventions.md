@@ -196,7 +196,7 @@ log.error("import failed for \(fileName, .private)", error: failure)   // adds e
 - Every interpolation states its privacy: `.public`, `.private`, or `.hashed`. What goes where is listed in [../02-design/diagnostics.md](../02-design/diagnostics.md) §3.2. In short, IDs, versions, codes, counts, sizes, durations, and states are public. Paths, file names, URLs beyond the domain, window titles, and app labels in free text are private or hashed.
 - Values that must never be logged are held in `Sensitive<T>`: clipboard content, notification text, IME text, file contents, credentials and tokens, and Android account names. Logging one does not compile.
 - Subsystems and categories are the closed enums of [../02-design/diagnostics.md](../02-design/diagnostics.md) §3.1. A new category is added there and in the enum in the same pull request.
-- Levels: `debug` for per-frame, per-event, and per-message detail; `info` for transitions and operation start and end; `notice` for user-visible outcomes; `error` for a failed operation, always with `error:`; `fault` for a broken invariant.
+- Levels: `debug` for per-frame, per-event, and per-message detail; `info` for transitions and operation start and end; `notice` for user-visible outcomes; `warning` for recoverable conditions that need attention; `error` for a failed operation, always with `error:`; `fault` for a broken invariant.
 - Hot paths (the frame path, input events, per-message protocol handling) log only at `debug`. Use `Perf.interval` to time them.
 - The operation context (`op=`, `pkg=`, `disp=`, `sess=`) is added by the facade. Do not repeat it in the message.
 

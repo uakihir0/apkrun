@@ -751,8 +751,12 @@ public struct LogReader: Sendable {
         if let subsystem = options.subsystem, !record.subsystem.hasPrefix(subsystem) {
             return false
         }
-        if let level = options.level, level == .info, record.level == LogLevel.debug.rawValue {
-            return false
+        if let minimumLevel = options.level {
+            guard let recordLevel = LogLevel(rawValue: record.level),
+                recordLevel >= minimumLevel
+            else {
+                return false
+            }
         }
         guard let timestamp = parseTimestamp(record.timestamp) else { return false }
         if let startingAt = options.startingAt, timestamp < startingAt {
@@ -1608,24 +1612,33 @@ private final class LogRecordAccumulator: @unchecked Sendable {
             let fields = object as? [String: Any],
             let timestamp = fields["timestamp"] as? String,
             let subsystem = fields["subsystem"] as? String,
-            let category = fields["category"] as? String,
+            let rawCategory = fields["category"] as? String,
             let eventMessage = fields["eventMessage"] as? String
         else {
             return nil
         }
-        let rawLevel =
-            (fields["messageType"] as? String)
-            ?? (fields["logType"] as? String)
-            ?? "Default"
+        let hasWarningCategory = rawCategory.hasSuffix(OSLogCategory.warningSuffix)
+        let category =
+            hasWarningCategory
+            ? String(rawCategory.dropLast(OSLogCategory.warningSuffix.count))
+            : rawCategory
+        let rawLevel = (fields["messageType"] as? String) ?? (fields["logType"] as? String)
+        let rawPublicMessage = eventMessage.components(separatedBy: "\u{1F}").first ?? ""
+        let publicMessage = rawPublicMessage
         let level: String
-        switch rawLevel.lowercased() {
-        case "debug": level = LogLevel.debug.rawValue
-        case "info": level = LogLevel.info.rawValue
-        case "error": level = LogLevel.error.rawValue
-        case "fault": level = LogLevel.fault.rawValue
-        default: level = LogLevel.notice.rawValue
+        if hasWarningCategory {
+            level = LogLevel.warning.rawValue
+        } else {
+            switch rawLevel?.lowercased() {
+            case "debug": level = LogLevel.debug.rawValue
+            case "info": level = LogLevel.info.rawValue
+            case "warning": level = LogLevel.warning.rawValue
+            case "error": level = LogLevel.error.rawValue
+            case "fault": level = LogLevel.fault.rawValue
+            case "default": level = LogLevel.notice.rawValue
+            default: level = "unknown"
+            }
         }
-        let publicMessage = eventMessage.components(separatedBy: "\u{1F}").first ?? ""
         return LogRecord(
             timestamp: timestamp,
             level: level,

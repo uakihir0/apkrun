@@ -31,14 +31,80 @@ func vmHealthChecksReportVirtualizationAvailabilityAndStoppedState() async throw
 
     #expect(
         await registry.checkIDs()
-            == ["vm.virtualizationSupported", "vm.state", "vm.consoleWriter"]
+            == ["vm.virtualizationSupported", "vm.state", "vm.network", "vm.consoleWriter"]
     )
-    #expect(results.map(\.id) == ["vm.virtualizationSupported", "vm.state", "vm.consoleWriter"])
+    #expect(
+        results.map(\.id)
+            == ["vm.virtualizationSupported", "vm.state", "vm.network", "vm.consoleWriter"]
+    )
     #expect(results[0].state == .failure)
     #expect(results[0].error?.code == "vm.virtualizationUnavailable")
     #expect(results[1].state == .pass)
     #expect(results[1].detail == "The virtual machine is stopped.")
-    #expect(results[2].state == .pass)
+    #expect(results[2].state == .skipped)
+    #expect(results[3].state == .pass)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart() async throws {
+    let firstDriver = FakeVirtualMachineDriver()
+    let secondDriver = FakeVirtualMachineDriver()
+    let controller = VMController(
+        definition: try makeValidatedDefinition(networkEnabled: true),
+        diagnostics: .testing(),
+        queue: VMQueue(label: "io.apkrun.vm.network-health.test"),
+        driverFactory: FakeVirtualMachineDriverFactory(
+            drivers: [firstDriver, secondDriver]
+        )
+    )
+    let registry = HealthCheckRegistry()
+    try await VMHealthChecks.register(in: registry, controller: controller)
+    let paths = APKRunPaths(
+        allowingHomeOverride: true,
+        environment: ["APKRUN_HOME": FileManager.default.temporaryDirectory.path]
+    )
+    let context = HealthContext(
+        daemonAvailable: true,
+        runtimeRunning: true,
+        paths: paths,
+        clock: ManualDiagnosticsClock()
+    )
+
+    try await controller.start()
+    let connectedResults = await registry.run(context: context)
+    let connected = try #require(connectedResults.first { $0.id == "vm.network" })
+    #expect(connected.state == .pass)
+
+    let underlying = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 5,
+        description: "private diagnostic detail"
+    )
+    firstDriver.emit(.networkAttachmentDisconnected(underlying))
+    #expect(await waitForNetworkError(underlying, on: controller))
+    #expect(await controller.state == .running)
+
+    let disconnectedResults = await registry.run(context: context)
+    let disconnected = try #require(disconnectedResults.first { $0.id == "vm.network" })
+    #expect(disconnected.state == .warning)
+    #expect(disconnected.error?.code == VMFailure.networkAttachmentLost.qualifiedCode)
+    #expect(
+        disconnected.error?.remediation?.fallback
+            == "Restart Android. If it happens again, create a diagnostics report."
+    )
+    #expect(
+        HealthVerdict.evaluate(
+            results: disconnectedResults,
+            context: HealthVerdictContext(runtimeState: .ready)
+        ) == .degraded
+    )
+
+    try await controller.stop()
+    try await controller.start()
+    let reconnectedResults = await registry.run(context: context)
+    let reconnected = try #require(reconnectedResults.first { $0.id == "vm.network" })
+    #expect(reconnected.state == .pass)
+    try await controller.stop()
 }
 
 @Test
@@ -167,8 +233,11 @@ private func makeController(
     )
 }
 
-private func makeValidatedDefinition() throws -> ValidatedVMDefinition {
-    let builder = VMDefinitionBuilder()
+private func makeValidatedDefinition(networkEnabled: Bool = false) throws -> ValidatedVMDefinition {
+    var builder = VMDefinitionBuilder()
+    if networkEnabled {
+        builder.network = .nat(macAddress: "02:00:00:00:00:01")
+    }
     var header = Data(repeating: 0, count: 64)
     header.replaceSubrange(0x38..<0x3C, with: [0x41, 0x52, 0x4D, 0x64])
     let host = FakeVMHostEnvironment(
@@ -184,4 +253,15 @@ private func makeValidatedDefinition() throws -> ValidatedVMDefinition {
         frameworkValidator: FakeFrameworkConfigurationValidator()
     )
     return try validator.validate(builder.build())
+}
+
+private func waitForNetworkError(
+    _ expected: VZErrorInfo,
+    on controller: VMController
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if await controller.networkAttachmentError == expected { return true }
+        await Task.yield()
+    }
+    return await controller.networkAttachmentError == expected
 }

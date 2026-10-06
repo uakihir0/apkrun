@@ -15,6 +15,7 @@ python3 "$script_dir/test_third_party_build.py"
 python3 "$script_dir/test_third_party_notices.py"
 python3 "$script_dir/test_embed_virgl_runtime.py"
 "$script_dir/test_make_test_disks.sh"
+"$script_dir/test_network_error_classification.sh"
 
 expect_pass() {
     local name="$1"

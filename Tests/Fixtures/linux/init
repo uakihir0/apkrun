@@ -17,6 +17,8 @@ mount -t devpts devpts /dev/pts || exit 1
 
 exec </dev/hvc0 >/dev/hvc0 2>&1
 
+. /etc/apkrun/network-errors.sh || fail missing-network-error-classifier
+
 if [ ! -r /etc/apkrun/modules.list ]; then
     fail missing-module-list
 fi
@@ -35,6 +37,8 @@ poweroff_after_tests=0
 reboot_after_rng=0
 flood_line_count=0
 panic_after_tests=0
+network_port=
+network_external=0
 blk_phase=
 blk_ro_sha256=
 blk_token=
@@ -46,6 +50,8 @@ for argument in $(cat /proc/cmdline); do
         apkrun.test.rng.reboot=*) reboot_after_rng="${argument#apkrun.test.rng.reboot=}" ;;
         apkrun.test.flood=*) flood_line_count="${argument#apkrun.test.flood=}" ;;
         apkrun.test.panic=*) panic_after_tests="${argument#apkrun.test.panic=}" ;;
+        apkrun.test.net.port=*) network_port="${argument#apkrun.test.net.port=}" ;;
+        apkrun.test.net.external=*) network_external="${argument#apkrun.test.net.external=}" ;;
         apkrun.test.blk.phase=*) blk_phase="${argument#apkrun.test.blk.phase=}" ;;
         apkrun.test.blk.ro_sha256=*) blk_ro_sha256="${argument#apkrun.test.blk.ro_sha256=}" ;;
         apkrun.test.blk.token=*) blk_token="${argument#apkrun.test.blk.token=}" ;;
@@ -428,6 +434,163 @@ run_flood_test() {
     printf 'APKRUN-TEST: flood ok lines=%s\n' "$flood_line_count"
 }
 
+valid_ipv4_address() {
+    printf '%s\n' "$1" | awk -F. '
+        NF != 4 { exit 1 }
+        {
+            for (octet_index = 1; octet_index <= 4; octet_index++) {
+                if ($octet_index !~ /^[0-9]+$/ || length($octet_index) > 3 \
+                    || ($octet_index + 0) > 255) {
+                    exit 1
+                }
+            }
+        }
+    '
+}
+
+network_fail() {
+    printf 'APKRUN-TEST: net fail %s %s\n' "$1" "$2"
+    return 1
+}
+
+run_network_test() {
+    case "$network_port" in
+        ""|*[!0-9]*)
+            network_fail http "apkrun.test.net.port must be a decimal port"
+            return 1
+            ;;
+    esac
+    if [ "${#network_port}" -gt 5 ] || [ "$network_port" -lt 1 ] \
+        || [ "$network_port" -gt 65535 ]; then
+        network_fail http "port must be between 1 and 65535"
+        return 1
+    fi
+    case "$network_external" in
+        0|1) ;;
+        *)
+            network_fail ext "apkrun.test.net.external must be 0 or 1"
+            return 1
+            ;;
+    esac
+
+    rm -f /run/apkrun-net-lease /run/apkrun-net-lease.tmp
+    if ! ifconfig eth0 up; then
+        network_fail dhcp "could not bring eth0 up"
+        return 1
+    fi
+    if ! udhcpc -i eth0 -q -n -t 5 -s /etc/udhcpc/apkrun.script; then
+        network_fail dhcp "no DHCP lease on eth0"
+        return 1
+    fi
+    if ! IFS=' ' read -r network_ip network_gateway network_dns \
+        < /run/apkrun-net-lease; then
+        network_fail dhcp "lease details were not recorded"
+        return 1
+    fi
+    if ! valid_ipv4_address "$network_ip" \
+        || ! valid_ipv4_address "$network_gateway" \
+        || ! valid_ipv4_address "$network_dns" \
+        || [ "$network_ip" = "0.0.0.0" ] \
+        || [ "$network_gateway" = "0.0.0.0" ] \
+        || [ "$network_dns" = "0.0.0.0" ]; then
+        network_fail dhcp "lease has invalid address, router, or DNS data"
+        return 1
+    fi
+
+    local_http_response=$(
+        wget -S -T 10 -O /dev/null \
+            "http://${network_gateway}:${network_port}/generate_204" 2>&1
+    )
+    local_http_status=$?
+    local_http_code=$(
+        printf '%s\n' "$local_http_response" \
+            | awk '$1 ~ /^HTTP\// && $2 ~ /^[0-9][0-9][0-9]$/ { print $2; exit }'
+    )
+    local_http_error=$(
+        printf '%s\n' "$local_http_response" \
+            | awk 'index($0, "wget: ") == 1 { sub(/^wget: /, ""); print; exit }'
+    )
+    if [ "$local_http_status" -ne 0 ] \
+        || ! printf '%s\n' "$local_http_response" \
+            | grep -Eq '^[[:space:]]*HTTP/[0-9.]+[[:space:]]+204([[:space:]]|$)'; then
+        local_http_detail="exit=${local_http_status}"
+        if [ -n "$local_http_code" ]; then
+            local_http_detail="${local_http_detail} status=${local_http_code}"
+        fi
+        if [ -n "$local_http_error" ]; then
+            local_http_detail="${local_http_detail} error=${local_http_error}"
+        fi
+        network_fail http "host endpoint did not return HTTP 204 (${local_http_detail})"
+        return 1
+    fi
+
+    network_result="ip=${network_ip} gw=${network_gateway} dns=${network_dns} http=204"
+    if [ "$network_external" = 1 ]; then
+        if ! nslookup connectivitycheck.gstatic.com >/dev/null 2>&1; then
+            network_fail dns "connectivitycheck.gstatic.com lookup failed"
+            return 1
+        fi
+        external_http_capture=$(
+            set -o pipefail
+            wget -S -T 20 -O /dev/null \
+                "https://connectivitycheck.gstatic.com/generate_204" 2>&1 \
+                | head -c 4097
+            external_http_capture_status=$?
+            printf '.%s' "$external_http_capture_status"
+        )
+        external_http_status="${external_http_capture##*.}"
+        external_http_response="${external_http_capture%.*}"
+        if apkrun_external_output_is_truncated "$external_http_response"; then
+            network_fail ext "client output exceeded the 4096-byte limit"
+            return 1
+        fi
+        external_http_code=$(
+            printf '%s\n' "$external_http_response" \
+                | awk '$1 ~ /^HTTP\// && $2 ~ /^[0-9][0-9][0-9]$/ { print $2; exit }'
+        )
+        external_http_error=$(
+            printf '%s\n' "$external_http_response" \
+                | awk 'index($0, "wget: ") == 1 {
+                    sub(/^wget: /, "")
+                    gsub(/[[:cntrl:]]/, " ")
+                    print substr($0, 1, 160)
+                    exit
+                }'
+        )
+        if [ -z "$external_http_code" ]; then
+            if [ "$external_http_status" -ne 0 ]; then
+                if apkrun_is_external_socket_connect_error "$external_http_response"; then
+                    network_fail ext "socket connection unavailable"
+                    return 1
+                fi
+                if apkrun_is_external_download_timeout "$external_http_response"; then
+                    network_fail ext "download timed out"
+                    return 1
+                fi
+                external_http_detail="client failed without HTTP response (exit=${external_http_status}"
+                if [ -n "$external_http_error" ]; then
+                    external_http_detail="${external_http_detail} error=${external_http_error}"
+                fi
+                network_fail ext "${external_http_detail})"
+            else
+                network_fail ext "HTTP response did not include a status line"
+            fi
+            return 1
+        fi
+        if [ "$external_http_code" != 204 ]; then
+            network_fail ext "HTTP status=${external_http_code} expected 204"
+            return 1
+        fi
+        if [ "$external_http_status" -ne 0 ]; then
+            network_fail ext "client exited ${external_http_status} after HTTP 204"
+            return 1
+        fi
+        network_result="${network_result} ext=204"
+    fi
+
+    printf 'APKRUN-TEST: net ok %s\n' "$network_result"
+}
+
 power_monitor_pid=
 if [ "$poweroff_after_tests" != 1 ]; then
     if ! gpio_chips=$(/usr/bin/gpiodetect); then
@@ -494,6 +657,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             flood)
                 run_flood_test
+                ;;
+            net)
+                run_network_test
                 ;;
             panic)
                 printf 'APKRUN-TEST: panic ok sysrq-trigger will run after done\n'

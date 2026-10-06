@@ -82,6 +82,21 @@ private final class FailedLinuxGuestControllerRetention: @unchecked Sendable {
     }
 }
 
+private final class LinuxGuestNetworkHealthCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [VMNetworkHealthState] = []
+
+    func append(_ state: VMNetworkHealthState) {
+        lock.withLock {
+            states.append(state)
+        }
+    }
+
+    func snapshot() -> [VMNetworkHealthState] {
+        lock.withLock { states }
+    }
+}
+
 enum LinuxGuestHarness {
     enum StopBehavior: Equatable {
         case guestPowerOff
@@ -102,6 +117,8 @@ enum LinuxGuestHarness {
     struct RunResult {
         let records: [TestGuestRecord]
         let states: [VMState]
+        let networkHealthStates: [VMNetworkHealthState]
+        let networkHealthResult: HealthResult?
         let rebootObservation: RebootObservation?
         let consoleOutput: Data
         let consoleOutputDroppedByteCount: UInt64
@@ -126,6 +143,7 @@ enum LinuxGuestHarness {
         case startUnexpectedlySucceeded
         case unexpectedStartFailure
         case guestCheckFailed(name: String, detail: String)
+        case cleanupFailed
         case guestFinishedBeforeRestartMarker
         case guestStoppedBeforeRestartMarker
         case guestVMFailedDuringRebootObservation
@@ -142,7 +160,8 @@ enum LinuxGuestHarness {
         blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
         entropyTestDevice: EntropyTestDevice? = nil,
         recordObserver: (@Sendable (TestGuestRecord) -> Void)? = nil,
-        extraCommandLine: [String] = []
+        extraCommandLine: [String] = [],
+        logSink: (any LogSink)? = nil
     ) async throws -> RunResult {
         let artifacts = try artifactURLs()
         let runDirectory = FileManager.default.temporaryDirectory
@@ -173,10 +192,19 @@ enum LinuxGuestHarness {
             allowingHomeOverride: true,
             environment: ["APKRUN_HOME": runDirectory.appending(path: "data").path]
         )
-        let controller = VMController(
-            definition: validated,
-            diagnostics: DiagnosticsContext.live(paths: paths)
+        let liveDiagnostics = DiagnosticsContext.live(paths: paths)
+        let diagnostics = DiagnosticsContext(
+            logSink: logSink ?? liveDiagnostics.logSink,
+            healthChecks: HealthCheckRegistry(),
+            perfTimeline: liveDiagnostics.perfTimeline,
+            paths: paths,
+            clock: liveDiagnostics.clock,
+            buildInfo: liveDiagnostics.buildInfo,
+            hostProbe: liveDiagnostics.hostProbe
         )
+        let controller = VMController(definition: validated, diagnostics: diagnostics)
+        try await VMHealthChecks.register(in: diagnostics.healthChecks, controller: controller)
+        let networkLogger = APKLogger(category: .network, sink: diagnostics.logSink)
         let console = controller.console(.systemConsole)
         let parserByteStream = console.makeByteStream()
         let tailCaptureByteStream = console.makeByteStream(
@@ -231,6 +259,7 @@ enum LinuxGuestHarness {
                 }
                 for record in parser.consume(bytes) {
                     records.continuation.yield(record)
+                    Self.logNetworkLease(from: record, using: networkLogger)
                     recordObserver?(record)
                     events.continuation.yield(.record(record))
                 }
@@ -238,6 +267,7 @@ enum LinuxGuestHarness {
             if !Task.isCancelled {
                 for record in parser.finish() {
                     records.continuation.yield(record)
+                    Self.logNetworkLease(from: record, using: networkLogger)
                     recordObserver?(record)
                     events.continuation.yield(.record(record))
                 }
@@ -260,6 +290,13 @@ enum LinuxGuestHarness {
                 events.continuation.yield(.state(state))
             }
             stateStream.continuation.finish()
+        }
+        let networkHealthCapture = LinuxGuestNetworkHealthCapture()
+        let networkHealthTask = Task {
+            for await state in controller.networkHealthUpdates {
+                guard !Task.isCancelled else { break }
+                networkHealthCapture.append(state)
+            }
         }
 
         do {
@@ -405,6 +442,21 @@ enum LinuxGuestHarness {
             events.continuation.finish()
             await waitForConsoleTask(parserTask)
             await waitForConsoleTask(captureTask)
+            networkHealthTask.cancel()
+            await networkHealthTask.value
+            let networkHealthResult: HealthResult?
+            if tests.contains("net") {
+                let healthResults = await diagnostics.healthChecks.run(
+                    deep: false,
+                    context: diagnostics.healthContext(
+                        daemonAvailable: true,
+                        runtimeRunning: true
+                    )
+                )
+                networkHealthResult = healthResults.first { $0.id == "vm.network" }
+            } else {
+                networkHealthResult = nil
+            }
             stateTask.cancel()
             await stateTask.value
             await controller.waitForConsoleLogDrain()
@@ -420,6 +472,8 @@ enum LinuxGuestHarness {
             return RunResult(
                 records: observedRecords,
                 states: observedStates,
+                networkHealthStates: networkHealthCapture.snapshot(),
+                networkHealthResult: networkHealthResult,
                 rebootObservation: rebootObservation,
                 consoleOutput: capturedConsole.bytes,
                 consoleOutputDroppedByteCount: parserByteStream.droppedByteCount
@@ -431,6 +485,8 @@ enum LinuxGuestHarness {
             )
         } catch {
             events.continuation.finish()
+            networkHealthTask.cancel()
+            await networkHealthTask.value
             preserveRunDirectory = !(await cleanup(controller))
             stateTask.cancel()
             await stateTask.value
@@ -448,8 +504,48 @@ enum LinuxGuestHarness {
                         string: "VM resources did not release cleanly. Console logs retained at \(runDirectory.path)"
                     )
                 )
+                throw HarnessFailure.cleanupFailed
             }
             throw error
+        }
+    }
+
+    private static func logNetworkLease(
+        from record: TestGuestRecord,
+        using logger: APKLogger
+    ) {
+        guard case .check(name: "net", result: .ok, let detail) = record else {
+            return
+        }
+
+        var fields: [String: String] = [:]
+        for token in detail.split(whereSeparator: \.isWhitespace) {
+            let pair = token.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2, fields[pair[0]] == nil else { return }
+            fields[pair[0]] = pair[1]
+        }
+        guard
+            let address = fields["ip"],
+            let gateway = fields["gw"],
+            let dns = fields["dns"],
+            fields["http"] == "204",
+            fields["ext"].map({ $0 == "204" }) != false,
+            isIPv4(address),
+            isIPv4(gateway),
+            isIPv4(dns)
+        else {
+            return
+        }
+
+        logger.info(
+            "lease interface=eth0 ip=\(address, .public) gw=\(gateway, .public) dns=\(dns, .public)"
+        )
+    }
+
+    private static func isIPv4(_ value: String) -> Bool {
+        var address = in_addr()
+        return value.withCString {
+            inet_pton(AF_INET, $0, &address) == 1
         }
     }
 
@@ -792,6 +888,13 @@ enum LinuxGuestHarness {
                 var observed: [TestGuestRecord] = []
                 for await record in stream {
                     observed.append(record)
+                    if case .check(
+                        name: let name,
+                        result: .fail,
+                        detail: let detail
+                    ) = record {
+                        throw HarnessFailure.guestCheckFailed(name: name, detail: detail)
+                    }
                     if record == .done {
                         return observed
                     }

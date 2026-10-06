@@ -4,6 +4,7 @@ gpio_pl061
 evdev
 ext4
 virtio_blk
+af_packet
 virtio_net
 vsock
 vmw_vsock_virtio_transport

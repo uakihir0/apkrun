@@ -268,6 +268,28 @@ def test_generator_matches_the_shared_fixture_manifest() -> None:
     assert {item["name"] for item in generated["logicalPartitions"]} == {"system_a", "vendor_a"}
 
 
+def test_generator_rejects_missing_fetched_build_provenance(tmp_path: Path) -> None:
+    """A standalone archive cannot supply trusted build provenance to a draft."""
+    archive_path = tmp_path / FIXTURE_ARCHIVE.name
+    archive_path.write_bytes(FIXTURE_ARCHIVE.read_bytes())
+    inventory_document = inventory(archive_path)
+    source = inventory_document["source"]
+    assert isinstance(source, dict)
+    source.update(
+        {
+            "branch": "aosp-android-latest-release",
+            "buildId": "16373615",
+            "target": "aosp_cf_arm64_only_phone-userdebug",
+        }
+    )
+
+    with pytest.raises(
+        ManifestError,
+        match="actual archive inventory is missing complete fetched build metadata",
+    ):
+        generate_manifest(inventory_document, source=archive_path)
+
+
 def test_vbmeta_role_order_follows_top_level_descriptor_order() -> None:
     """Chain role order comes from the top-level vbmeta descriptors, not IDs."""
     artifacts = [

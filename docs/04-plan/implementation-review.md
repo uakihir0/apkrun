@@ -7720,3 +7720,17 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** IR-072 intentionally delayed active ADB observation until event 5 because that event identifies Cuttlefish's ADB proxy for this instance. Requiring a complete line tagged by `socket_vsock_proxy` prevents unrelated or partial text from opening the ADB observer. The recent target capture has many connector attempts but no event 5. The passive summary extracts Cuttlefish's own connection-attempt, message-sent, device-not-found, and disconnect counts without opening any host connection or exposing a foreign ADB listener. The field `connectMessagesSent` records Cuttlefish's log wording and is not a transport-readiness signal; the classifier requires a single serial token followed by the exact `successfully sent` suffix. Launcher lines are capped at 64 KiB, and an overlong line is discarded through its newline even when it spans reads. A missing, inaccessible, non-regular, or over-cap log resets counts and process identities and marks a gap. The output contains no connector PID, device serial, address, or raw log line. Launcher snapshot gaps and a partial line at shutdown remain explicit.
 
 **Verification.** The observer test module passed 172 tests with one Linux-only skip; the full image-tools suite passed 577 tests with four platform-specific skips. Ruff lint and formatting checks and `git diff --check` passed. The focused regression tests cover source-qualified and complete event-5 lines, negated send text, oversized complete and split lines, capped logs, and disappearance after observation. A parser-only run over the retained `target-20261005T082217-1740702/launcher.log` emitted 160 `connectAttempts`, 160 `connectMessagesSent`, 159 `deviceNotFoundResponses`, and 159 `disconnectRequests`; it recorded `launcherLogObserved=true`, `launcherLogGapDetected=false`, `partialLauncherLineAtStop=false`, and `startEvent5Observed=false`. This parser-only check started no ADB process and did not boot Cuttlefish.
+
+## IR-226: Require fetched provenance when generating image manifests
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected files | `Images/tools/apkrun_image/manifest.py`; `Images/tools/tests/test_manifest.py` |
+
+**Choice.** The manifest generator rejects an archive inventory unless the fresh inventory of its source includes branch, build ID, and target metadata from a valid `fetch.json`.
+
+**Reason.** A standalone archive and an edited `inventory.json` could otherwise produce a draft that copied unverified build provenance and failed only at the later file-backed check. Requiring the metadata while generating the draft surfaces the provenance problem before writing a manifest.
+
+**Verification.** A regression test first reproduced the accepted unverified draft, then passed after the generator required complete fetched provenance. The shared fixture generator test also passed.

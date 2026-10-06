@@ -1251,6 +1251,21 @@ def generate_manifest(
         raise ManifestError(
             f"could not find the source archive under {root}; pass --source with the archive."
         )
+    missing_fetched_provenance = any(
+        not isinstance(actual_inventory.get("source"), dict)
+        or any(
+            not isinstance(actual_inventory["source"].get(field), str)
+            or not actual_inventory["source"][field]
+            for field in ("branch", "buildId", "target")
+        )
+        for actual_inventory in actual_inventories
+    )
+    if missing_fetched_provenance:
+        raise ManifestError(
+            "source: actual archive inventory is missing complete fetched build metadata "
+            "(branch, buildId, target). Pass the fetched download directory or create a "
+            "valid fetch.json."
+        )
     files = _inventory_files(inventory_document)
     actual_files = [
         entry
@@ -1263,11 +1278,9 @@ def generate_manifest(
         )
     for actual_inventory in actual_inventories:
         actual_source = actual_inventory.get("source")
-        if not isinstance(actual_source, dict):
-            continue
+        assert isinstance(actual_source, dict)
         for field in ("branch", "buildId", "target"):
-            actual_value = actual_source.get(field)
-            if actual_value is not None and actual_value != inventory_source.get(field):
+            if actual_source[field] != inventory_source.get(field):
                 raise ManifestError(
                     f"inventory.json: source.{field} does not match the fetched source. "
                     "Re-run inventory."

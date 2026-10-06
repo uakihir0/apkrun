@@ -591,6 +591,30 @@ run_network_test() {
     printf 'APKRUN-TEST: net ok %s\n' "$network_result"
 }
 
+run_vsock_test() {
+    /usr/bin/socat VSOCK-LISTEN:7000,fork EXEC:cat &
+    vsock_echo_pid=$!
+    /usr/bin/socat VSOCK-LISTEN:7001,fork EXEC:'head -c 16' &
+    vsock_close_pid=$!
+    sleep 0.1
+
+    if ! kill -0 "$vsock_echo_pid" 2>/dev/null; then
+        wait "$vsock_echo_pid"
+        listener_status=$?
+        printf 'APKRUN-TEST: vsock fail echo-listener status=%s\n' "$listener_status"
+        return 1
+    fi
+    if ! kill -0 "$vsock_close_pid" 2>/dev/null; then
+        wait "$vsock_close_pid"
+        listener_status=$?
+        kill "$vsock_echo_pid" 2>/dev/null || :
+        printf 'APKRUN-TEST: vsock fail close-listener status=%s\n' "$listener_status"
+        return 1
+    fi
+
+    printf 'APKRUN-TEST: vsock ok listening 7000,7001\n'
+}
+
 power_monitor_pid=
 if [ "$poweroff_after_tests" != 1 ]; then
     if ! gpio_chips=$(/usr/bin/gpiodetect); then
@@ -660,6 +684,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             net)
                 run_network_test
+                ;;
+            vsock)
+                run_vsock_test
                 ;;
             panic)
                 printf 'APKRUN-TEST: panic ok sysrq-trigger will run after done\n'

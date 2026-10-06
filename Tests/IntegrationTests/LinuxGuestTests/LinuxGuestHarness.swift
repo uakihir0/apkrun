@@ -160,6 +160,7 @@ enum LinuxGuestHarness {
         blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
         entropyTestDevice: EntropyTestDevice? = nil,
         recordObserver: (@Sendable (TestGuestRecord) -> Void)? = nil,
+        hostAction: (@Sendable (VMController) async throws -> Void)? = nil,
         extraCommandLine: [String] = [],
         logSink: (any LogSink)? = nil
     ) async throws -> RunResult {
@@ -301,6 +302,9 @@ enum LinuxGuestHarness {
 
         do {
             try await controller.start()
+            if let hostAction {
+                try await hostAction(controller)
+            }
             if tests.contains("ports") {
                 try await waitForConsoleMarker(
                     "APKRUN-PORT-READY-1",

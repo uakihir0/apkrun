@@ -1133,6 +1133,14 @@ def _fetch_context(
         value = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise InventoryError(f"{manifest_path}: could not read fetch metadata: {error}") from error
+    except ValueError:
+        raise InventoryError(
+            f"{manifest_path}: fetch metadata exceeds the JSON integer parser limit"
+        ) from None
+    except RecursionError:
+        raise InventoryError(
+            f"{manifest_path}: fetch metadata exceeds the JSON nesting limit"
+        ) from None
     if (
         not isinstance(value, dict)
         or isinstance(value.get("schemaVersion"), bool)

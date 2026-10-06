@@ -865,6 +865,36 @@ def test_download_directory_inventories_its_archive_and_provenance(tmp_path: Pat
     assert [item["path"] for item in result["files"]] == ["android-info.txt"]
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_message"),
+    (
+        ('{"schemaVersion":' + "9" * 5000 + "}", "JSON integer parser limit"),
+        (
+            '{"schemaVersion":' + "[" * 10000 + "0" + "]" * 10000 + "}",
+            "JSON nesting limit",
+        ),
+    ),
+    ids=("integer-limit", "nesting-limit"),
+)
+def test_inventory_cli_normalizes_fetch_json_parser_limits(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    payload: str,
+    expected_message: str,
+) -> None:
+    """Malformed fetch sidecars fail through the CLI without a parser traceback."""
+    download = tmp_path / "download"
+    download.mkdir()
+    (download / "fetch.json").write_text(payload, encoding="utf-8")
+
+    assert inventory_module.main([str(download)]) == 1
+
+    captured = capsys.readouterr()
+    assert expected_message in captured.err
+    assert "Traceback" not in captured.err
+    assert "9" * 100 not in captured.err
+
+
 def test_download_directory_rejects_archive_that_differs_from_fetch_manifest(
     tmp_path: Path,
 ) -> None:

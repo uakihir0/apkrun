@@ -656,6 +656,14 @@ def _load_existing_records(
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         raise FetchError(f"{path} is unreadable; remove it and run fetch again.") from None
+    except ValueError:
+        raise FetchError(
+            f"{path} exceeds the JSON integer parser limit; remove it and run fetch again."
+        ) from None
+    except RecursionError:
+        raise FetchError(
+            f"{path} exceeds the JSON nesting limit; remove it and run fetch again."
+        ) from None
     if (
         not isinstance(value, dict)
         or isinstance(value.get("schemaVersion"), bool)

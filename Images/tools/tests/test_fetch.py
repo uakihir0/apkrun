@@ -182,6 +182,50 @@ def test_manual_download_reports_next_step_when_missing(tmp_path: Path) -> None:
         fetch_artifacts(**fetch_arguments(tmp_path, None))
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_message"),
+    (
+        ('{"schemaVersion":' + "9" * 5000 + "}", "JSON integer parser limit"),
+        (
+            '{"schemaVersion":' + "[" * 10000 + "0" + "]" * 10000 + "}",
+            "JSON nesting limit",
+        ),
+    ),
+    ids=("integer-limit", "nesting-limit"),
+)
+def test_fetch_cli_normalizes_sidecar_json_parser_limits(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+    expected_message: str,
+) -> None:
+    """Malformed local sidecars fail without a parser traceback or input echo."""
+    (tmp_path / "fetch.json").write_text(payload, encoding="utf-8")
+    monkeypatch.delenv(fetch_module.API_KEY_ENV, raising=False)
+
+    result = fetch_module.main(
+        [
+            "--branch",
+            "branch",
+            "--target",
+            "target-userdebug",
+            "--build",
+            "16373615",
+            "--artifact",
+            "*.zip",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 2
+    captured = capsys.readouterr()
+    assert expected_message in captured.err
+    assert "Traceback" not in captured.err
+    assert "9" * 100 not in captured.err
+
+
 def test_build_api_downloads_signed_artifact_and_writes_hash(
     tmp_path: Path,
     fake_api: FakeBuildAPI,

@@ -290,7 +290,7 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 | Input | Kind | Ships | Notes |
 |---|---|---|---|
 | aapt2 (`com.android.tools.build:aapt2:8.9.1-12782657:osx` from Google Maven) | prebuilt | app (`Resources/tools/aapt2`) | its arm64 slice is checked with `lipo`; golden tests pin its output format; it runs under `sandbox-exec` ([../02-design/package-store.md](../02-design/package-store.md) §4.3) |
-| Alpine `linux-virt` kernel and minirootfs, `socat`, `libgpiod` | prebuilt | tooling | the test Linux guest ([../02-design/vm.md](../02-design/vm.md) §12); never shipped |
+| Alpine `linux-virt` kernel and minirootfs, `socat`, `libgpiod`, `ssl_client`, `libcrypto3`, `libssl3` | prebuilt | tooling | the test Linux guest ([../02-design/vm.md](../02-design/vm.md) §12); never shipped |
 | RiftVM `riftvm-v0.6.1` (`github.com/riftvm/riftvm`, `51f19193b1d3326b2e164d37a2a59e9970375170`) | source, pinned as `riftvm` | reference | analysis-only source for #018; not built, copied, imported, or distributed ([../02-design/graphics.md](../02-design/graphics.md) §2.3; [../04-plan/implementation-review.md](../04-plan/implementation-review.md) IR-188) |
 | apksig test vectors | vendored | tooling | Apache-2.0, `Packages/APKStoreCore/Tests/APKStoreCoreTests/Resources/apksig/` ([../02-design/package-store.md](../02-design/package-store.md) §4.5) |
 | swift-protobuf, swift-argument-parser, ZIPFoundation | swiftpm | app | exact versions in `Package.swift` (ZIPFoundation: ADR-0017) |
@@ -673,7 +673,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | | | `gates` | T3 | `apkrun-reference` | `scripts/run-gate.sh G<n>` for every closed gate |
 | | | `perf` | T3 | `apkrun-lab`, `apkrun-reference` | `swift run apkrun-perf` against `Tests/PerformanceTests/baselines/<model>.json` |
 | | | `compatibility` | T3 | `apkrun-lab` | the F-Droid corpus of `Tests/Compatibility/apps.json`; `scripts/dev/verify-corpus.sh` (apksigner differential) |
-| | | `network` | T3 | `apkrun-lab` | `Tests/AcceptanceTests/Network`, one retry, `external` classification |
+| | | `network` | T3 | `apkrun-lab` | Generate the Xcode project, build the pinned Linux guest, run `Tests/AcceptanceTests/Network` with one retry, and classify the same DNS failure or exact BusyBox `wget` socket-connect/download-timeout failure without an HTTP response or TLS/client diagnostic on both attempts as `external`; output over 4 KiB fails closed |
 | | | `soak` | T3 | `apkrun-lab` | 60-minute soak run ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §7.3) |
 | | | `fuzz-long` | T3 | `apkrun-ci` | 1 h per fuzz target (§15.2) |
 | | | `notarize` | T3 | `apkrun-lab`, environment `signing` | nightly notarization (#088): the Release app and a HelloText distribution wrapper are signed, notarized, stapled, and checked with `spctl` (§12.6) |

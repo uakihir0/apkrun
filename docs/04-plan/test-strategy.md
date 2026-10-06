@@ -87,7 +87,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 
 | Suite | Contents | CI job | Budget |
 |---|---|---|---|
-| LinuxGuest | Linux test guest: devices, disks, bootconfig, `rng`, `gpu`, `virgl` | `linux-guest` | ≤ 15 min |
+| LinuxGuest | Linux test guest: devices, disks, bootconfig, `net`, `rng`, `gpu`, `virgl` | `linux-guest` | ≤ 15 min |
 | AndroidStock | stock Cuttlefish image: boot, ADB, install and launch, graphics, input, windows, development-mode agent | `android-stock` | ≤ 60 min |
 | AndroidCustom | custom `userdebug` image (from #035): Store Agent, updates, rollback, wrappers, desktop integration, diagnostics, SELinux, image migration | `android-custom` | ≤ 90 min |
 | Maintenance | APKRun N → N+1 and its variants (`ReleaseUpdateTest`), feed-driven image update | `maintenance` | ≤ 120 min |
@@ -108,7 +108,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 | Release smoke matrix (§9.2) | `Tests/AcceptanceTests/ReleaseSmoke` | every release candidate, weekly on `main` | none |
 | Performance (§7.1) | `Tests/PerformanceTests/` (`apkrun-perf`) | nightly (`perf`); NFR numbers from the reference Mac | none; the regression rule of §7.1 applies |
 | Compatibility (§7.4) | `Tests/Compatibility/` | corpus nightly; full list before each release | none |
-| Network checks | `Tests/AcceptanceTests/Network` | nightly | one; then classified `external` (§2.7) |
+| Network checks | `Tests/AcceptanceTests/Network` | nightly | one retry; the same DNS failure, recognized BusyBox `wget` socket-connect error, or exact `wget: download timed out` error without an HTTP response or TLS/client diagnostics on both attempts is classified `external` (§2.7); external output over 4 KiB fails closed and cannot be skipped |
 | Long fuzzing (`fuzz-long`), soak, notarization (`notarize`: the Release app and a distribution wrapper) | §7.2, §7.3, #088 | nightly | none |
 | Manual checklists (§8) | the release issue | every release candidate | not applicable |
 
@@ -129,7 +129,7 @@ A behavior may have tests in several tiers. The rule is that every behavior has 
 - **Flaky** means that a test both passes and fails on the same commit and machine.
 - **T0 and T1.** No retry. The owner fixes the test the same working day or quarantines it.
 - **T2.** One automatic retry, recorded. A test that passes only on retry three times in 7 days is quarantined.
-- **T3.** Gate checks and the release smoke matrix are never retried and never quarantined. Network checks get one retry. When the failure is a connection or DNS error to a third-party host, the result is `external`, not `fail`. Three `external` results in a row open an issue.
+- **T3.** Gate checks and the release smoke matrix are never retried and never quarantined. Network checks retry one DNS failure or recognized BusyBox `wget` socket-connect/download-timeout failure when no HTTP response or TLS/client diagnostic was received; output over 4 KiB fails closed and cannot be skipped. Other failures are not retried. A repeated identical classified failure kind to a third-party host is `external`, not `fail`. Three `external` results in a row open an issue.
 - **Quarantine.** A quarantined test carries a tag with its issue link (TODO, reason, tracking issue, NFR-DEV-04). It still runs nightly, but its result does not fail the job. After 14 days it is fixed or deleted. Deleting it needs replacement coverage in another tier, recorded in the task. Security negative tests (§7.2) cannot be quarantined. A task cannot close while one of its listed tests is quarantined.
 - **Red `main`.** A T2 failure on `main` blocks further merges until the change is fixed or reverted. A T3 failure opens an issue with the label `nightly-failure` ([build-system.md](../05-development/build-system.md) §15). The owner fixes or reverts the breaking change within one working day.
 
@@ -224,9 +224,10 @@ Raw-ADB allowlist. The lint of [package-store.md](../02-design/package-store.md)
 Defined in [../02-design/vm.md](../02-design/vm.md) §12:
 
 - Kernel: pinned Alpine `linux-virt`, fetched and hash-checked by `scripts/fetch-test-linux.sh` (hash in `ThirdParty/ThirdParty.lock.json`), kept in the runner cache.
-- initramfs: built by `scripts/build-test-initramfs.sh` with `/init` from `Tests/Fixtures/linux/init`.
+- initramfs: built by `scripts/build-test-initramfs.sh` with `/init` and `/etc/udhcpc/apkrun.script` from `Tests/Fixtures/linux/`; the DHCP script delegates lease configuration to Alpine's default script and records the lease details atomically. The pinned `ssl_client` and OpenSSL libraries support the guest's external HTTPS probe.
 - Command line: `apkrun.test=blk,net,vsock,ports,rng,gpu,virgl` selects checks; `apkrun.test.poweroff=1` powers off at the end.
 - Output on `hvc0`: `APKRUN-TEST: boot ok`, then `APKRUN-TEST: <name> ok|fail <detail>` per check, then `APKRUN-TEST: done`.
+- Network check: `net` requires a DHCP lease and an HTTP 204 from the host's ephemeral-port server. T3 additionally checks public DNS and HTTPS; external output is capped at 4 KiB and truncation fails closed. After one retry, the same DNS failure, recognized BusyBox `wget` socket-connect error, or exact `wget: download timed out` error without an HTTP response or TLS/client diagnostics on both attempts is recorded as skipped `external`. Socket errors and download timeouts retain different failure details. Other TLS/client errors, an unexpected HTTP status, and all other failures fail the test.
 - Disks: raw test disks with known content, created at test time by the scripts in `Tests/Fixtures/linux/`.
 - Harness: `Tests/IntegrationTests/LinuxGuestTests`, VirtualMachineCore only, timeout 60 s.
 
@@ -262,6 +263,7 @@ The runner setup is in [../05-development/environment-setup.md](../05-developmen
 - runs on AC power with Low Power Mode off, runs `caffeinate -d` during a run, and has no other VMs running ([diagnostics.md](../02-design/diagnostics.md) §9.2);
 - runs the runner in the GUI session of the `apkrun-ci` user with automatic login, and has a second local test account (portable wrappers #089, host-only doctor, fresh-account checks);
 - has the permissions that macOS asks for once: Accessibility for the harness (`input-latency`, [environment-setup.md](../05-development/environment-setup.md) §6.3), Screen Recording for window captures, notifications for the fixture wrappers, and Microphone for apkrund (#084, [desktop-integration.md](../02-design/desktop-integration.md) §8.2). A test that finds a permission missing fails with `runnerMissingPermission`. It never clicks a prompt;
+- allows incoming connections for the signed `APKRunTestHost` in the macOS Application Firewall so the #006 guest can reach the host-local HTTP probe. On the reference Mac, the first listener start prompted once; after approval, the firewall recognized subsequent executions by designated requirement;
 - the lab Mac that runs the audio and microphone T3 jobs (#083, #084) has a virtual loopback audio device as its default output and input. #083 picks the device and documents its setup ([environment-setup.md](../05-development/environment-setup.md) §6.2). A lab Mac without one skips these jobs, and the v1.0 checklist covers them by hand (§8.7);
 - runs one VM at a time. Suites are serialized per machine;
 - keeps a runner cache (§4.1) with pinned SHA-256 values. No test downloads a large artifact during the run.
@@ -474,7 +476,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #003 | `VMController` edges with a fake driver | `InstanceLock` contention | LinuxGuest: boot and console marker | G1 check |
 | #004 | `ConsoleLogWriter` rotation and fsync policy with an injected clock and file system; a timed-out console task is cancelled before it is joined | `ConsoleChannel` with real pipes, including a blocked host writer during close; `ConsoleLogWriter` on disk | console marker; console port numbering; after a forced VM stop, every flood record delivered to the live stream is present in the persisted log, with zero dropped-byte counts (NFR-REL-05) | — |
 | #005 | storage mapping (order, identifiers, flags) | the disk rules with real files and permissions | read-only and read-write disks with known content | — |
-| #006 | NAT mapping; fake disconnect keeps `running`, logs warning, degrades `vm.network`, and resets on start | — | DHCP lease and host `generate_204`; `vm.network` remains passing | network check: public name resolution and `https://connectivitycheck.gstatic.com/generate_204` (nightly) |
+| #006 | NAT mapping; fake disconnect keeps `running`, logs warning, degrades `vm.network`, resets on start; shell test limits external classification to exact BusyBox `wget` socket-connect and download-timeout output without TLS/client diagnostics, and rejects truncated output | — | DHCP lease and host `generate_204`; `vm.network` remains passing | network check: public name resolution and `https://connectivitycheck.gstatic.com/generate_204` (nightly) |
 | #007 | `connect` timeout and state checks with a fake driver | `VsockConnection` over a `socketpair` | vsock echo of 1 MiB, timeout, disconnect | — |
 | #061 | `LogMessage` privacy rendering, error catalog checks, `ErrorPresenter`, health verdict table ([diagnostics.md](../02-design/diagnostics.md) §12 T1-1, T1-4, T1-5, T1-6); logging lint | compile-fail tests; `LogMirrorWriter`; `apkrun logs` with and without `log show` access | — | — |
 | #062 | `check-module-deps.sh` rejects a fixture manifest with a forbidden edge | — | — | — |

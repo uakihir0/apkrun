@@ -7405,7 +7405,7 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Reason.** Virtualization.framework provides no reliable supported trigger for intentionally disconnecting a NAT attachment. A T2 assertion that the callback fired would depend on an unavailable trigger. The tier split directly verifies the callback contract with its controllable driver and verifies real guest networking with VZ.
 
-**Verification.** On 2026-10-06 UTC, the focused T0 disconnect-controller and network-health tests passed with fake drivers. The T2 network test remains pending.
+**Verification.** On 2026-10-06 UTC, the focused T0 disconnect-controller and network-health tests passed with fake drivers. Signed `LinuxGuestNetworkTests` passed 3/3 on arm64 macOS 27.0 (26A428), verifying DHCP, the host HTTP 204 request, lease logging, and passing `vm.network` health.
 
 ## IR-204: Publish network health source changes for live diagnostics
 
@@ -7419,4 +7419,88 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Reason.** A health check that only reads controller state when a report is requested can leave a subscribed UI stale after a disconnect. RuntimeAPI and DiagnosticsService are placeholders at M0, so #006 provides the VM-owned source-change stream while #059 owns subscription and wire publication. The event omits `VZErrorInfo.description`, which is private diagnostic data.
 
-**Verification.** On 2026-10-06 UTC, `VirtualMachineCoreTests` passed 86/86. The focused `vmControllerKeepsRunningWhenNetworkAttachmentDisconnects` test observed the initial, disconnect, and recovery events alongside the running-state and warning-log assertions; `vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart` passed the degraded and recovery health assertions. Hostile re-review found no actionable issues.
+**Verification.** On 2026-10-06 UTC, `VirtualMachineCoreTests` passed 87/87. The focused `vmControllerKeepsRunningWhenNetworkAttachmentDisconnects` test observed the initial, disconnect, and recovery events alongside the running-state and warning-log assertions; `vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart` passed the degraded and recovery health assertions. Hostile re-review found no actionable issues.
+
+## IR-205: Pin the guest HTTPS probe client and runtime libraries
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `ThirdParty/ThirdParty.lock.json`; `ThirdParty/licenses/alpine-ssl-client/`; `scripts/fetch-test-linux.sh`; `scripts/build-test-initramfs.sh`; [build-system.md](../05-development/build-system.md) §6.5; [legal-and-licensing.md](../05-development/legal-and-licensing.md) |
+
+**Choice.** Use Alpine v3.24's pinned `ssl_client` package and its OpenSSL libraries for BusyBox `wget` in the Linux test guest. Record the package URL, version, hash, and GPL-2.0-only license, and include its license text. The binaries ship only in the test initramfs, not the APKRun product.
+
+**Reason.** The #006 nightly probe must exercise an HTTPS request from the guest. Pinning the distribution's matching TLS helper and libraries keeps that check within the existing guest toolchain and avoids an untracked host-side substitute. BusyBox `wget` does not validate server certificates in this fixture; the check measures DNS and network reachability only, as specified by #006.
+
+**Verification.** The repository lock check passed, and the initramfs builder verified `ssl_client`, `libcrypto.so.3`, and `libssl.so.3` in the generated guest. Signed run `apkrun-network-t3-20261006-a.xcresult` on arm64 macOS 27.0 (26A428) returned `ext=204`. Final run `apkrun-network-t3-20261006-g.xcresult` had 2 passed, 0 failed, and 1 `external` skip after `wget: download timed out` repeated on both attempts.
+
+## IR-206: Classify only unavailable external responses as external
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Tests/AcceptanceTests/Network/LinuxGuestNetworkAcceptanceTests.swift`; `Tests/Fixtures/linux/init`; `Tests/Fixtures/linux/network-errors.sh`; `scripts/tests/test_network_error_classification.sh`; [M00](issues/M00-repository-and-vm-foundation.md) #006; [test-strategy.md](test-strategy.md) §2.7, §3.9; [build-system.md](../05-development/build-system.md) §15 |
+
+**Choice.** Capture at most 4 KiB plus one sentinel byte from external `wget` output, then append a non-newline pipeline-status marker so command substitution preserves a trailing newline. Any output over 4 KiB fails and cannot be classified as `external`. Retry one DNS failure, a line matching BusyBox `wget`'s `can't connect to remote host` socket-connect diagnostic, or its exact `download timed out` diagnostic when it produced no HTTP response or TLS/client diagnostic, while keeping the host-local endpoint available. Keep socket-connect and download-timeout failures as distinct details so only the same classified failure kind on the retry is skipped as `external`. Treat TLS/client diagnostics, boot, DHCP, host HTTP, unexpected HTTP status, malformed response, guest client failure after HTTP 204, and teardown failures as test failures.
+
+**Reason.** Nightly lab egress can fail independently of the VM, but BusyBox `wget` and `ssl_client` report failures through the same output stream. The exact timeout or socket-connect line is eligible only when there is no accompanying TLS/client diagnostic; a TLS/client stall therefore remains a failure. Capturing one sentinel byte beyond the 4 KiB limit detects truncation even if the prefix looks like an external error, so truncated output fails instead of retaining unbounded data or masking later diagnostics. Separate guest details ensure a socket-connect failure followed by a download timeout is not mistaken for the same repeated failure. Classifying a repeated no-response download timeout as external availability is an explicit policy judgment that needs maintainer review.
+
+**Verification.** The local shell test exercises raw BusyBox-style connection-timeout, no-route, and download-timeout output; it rejects TLS/client diagnostics when accompanied by a timeout, prefixed lookalikes, a TLS error beyond a captured 4 KiB prefix, and the boundary case where byte 4097 is a newline. Acceptance-test assertions cover DNS, recognized socket errors, distinct and repeated timeout details, cross-kind retry mismatches, TLS/client errors, HTTP errors, missing status, post-204 client failures, and teardown failure. Final signed T3 run `apkrun-network-t3-20261006-g.xcresult` passed the two classifier/retry cases; the live external case correctly skipped after the identical download-timeout failure on both attempts. The earlier signed run `apkrun-network-t3-20261006-a.xcresult` returned `ext=204`. Hostile re-review found no actionable findings.
+
+## IR-207: Bind the network test endpoint on a bounded ephemeral listener
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHTTPServer.swift`; `Tests/IntegrationTests/LinuxGuestTests/NetworkTests.swift`; [vm.md](../02-design/vm.md) §§7, 15; [M00](issues/M00-repository-and-vm-foundation.md) #006 |
+
+**Choice.** Bind the test server to an ephemeral port on all IPv4 interfaces, accept only `GET /generate_204` for the 204 response, cap complete request headers (including the `\r\n\r\n` terminator) at 16 KiB, close incomplete requests after 10 seconds, and cancel active connections during teardown.
+
+**Reason.** The NAT router address and `bridge100` interface are created with the running VM, so the test must discover the guest's router through DHCP and make the endpoint reachable on whichever host interface VZ uses. Binding before the VM starts avoids depending on an interface that may not exist yet. Header and time bounds ensure a malformed or stalled guest request cannot keep the test process alive indefinitely.
+
+**Verification.** On 2026-10-06, signed `LinuxGuestNetworkTests` passed 3/3 on arm64 macOS 27.0 (26A428), including DHCP, host HTTP 204, lease logging, and passing `vm.network` health.
+
+## IR-208: Keep signed LinuxGuest test products outside Documents
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | [M00](issues/M00-repository-and-vm-foundation.md) #006; [vm.md](../02-design/vm.md) §17 |
+
+**Choice.** For local signed LinuxGuest runs, put `-derivedDataPath`, Linux test artifacts, and `-resultBundlePath` under `/private/tmp`, outside the user's Documents directory.
+
+**Reason.** When the signed `APKRunTestHost` app was launched from `build/DerivedData` under `~/Documents`, macOS TCC requested Documents-folder access from the test host and the test stalled before completing. Moving the test app bundle and outputs to `/private/tmp` avoids granting that extra folder access and keeps the guest fixture's existing path guard satisfied.
+
+**Verification.** The interrupted run's TCC log showed a pending `SystemPolicyDocumentsFolder` request for `io.apkrun.testhost` at its DerivedData path in the repository. The signed T2 retry from `/private/tmp` passed 3/3 without a Documents-folder approval request.
+
+## IR-209: Load AF_PACKET for the pinned Linux network guest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Tests/Fixtures/linux/modules.list`; `scripts/build-test-initramfs.sh`; [vm.md](../02-design/vm.md) §12; [M00](issues/M00-repository-and-vm-foundation.md) #006 |
+
+**Choice.** Load the pinned kernel's `af_packet` module in the test guest before running `udhcpc`.
+
+**Reason.** The first signed T2 run reached the guest but BusyBox `udhcpc` failed at `socket(AF_PACKET, ...)` with `Address family not supported by protocol`. The pinned Alpine kernel packages `af_packet.ko` as a module, so enabling NAT alone did not provide the packet socket required by the DHCP client.
+
+**Verification.** `modules.dep` for the locked kernel contains `kernel/net/packet/af_packet.ko.gz`. The signed T2 retry loaded it and passed the DHCP lease, host HTTP, and network-health checks.
+
+## IR-210: Bring up the Linux test guest interface before DHCP
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #006 |
+| Affected files | `Tests/Fixtures/linux/init`; [vm.md](../02-design/vm.md) §12; [M00](issues/M00-repository-and-vm-foundation.md) #006 |
+
+**Choice.** Run BusyBox `ifconfig eth0 up` before starting `udhcpc`.
+
+**Reason.** The T2 console showed that the packet socket was now available, but DHCP reported `sendto: Network is down`. The test guest owns bringing its discovered virtio network interface up before requesting a lease.
+
+**Verification.** The signed T2 run with `eth0` brought up obtained a DHCP lease and passed the host HTTP 204 check.

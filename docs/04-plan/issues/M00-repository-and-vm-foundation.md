@@ -1328,7 +1328,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 | Depends on | #003 |
 | Requirements | FR-VM-04 |
 | Design | [../../02-design/vm.md](../../02-design/vm.md) §4 (network mapping), §7, §9.2, §14, §15; [../test-strategy.md](../test-strategy.md) §2.5, §3.9, §6.1 |
-| Modules / paths | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/` (`Framework/VZConfigurationBuilder.swift`, `Controller/VMController.swift`, `Health/`, `TestGuest/`), `Packages/VirtualMachineCore/Tests/`, `Tests/Fixtures/linux/init`, `ThirdParty/ThirdParty.lock.json` (`ssl_client`), `Tests/IntegrationTests/LinuxGuestTests/NetworkTests.swift`, `Tests/AcceptanceTests/Network/LinuxGuestNetworkTests.swift`, `.github/workflows/nightly.yml` |
+| Modules / paths | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/` (`Framework/VZConfigurationBuilder.swift`, `Controller/VMController.swift`, `Health/`, `TestGuest/`), `Packages/VirtualMachineCore/Tests/`, `Tests/Fixtures/linux/init`, `Tests/Fixtures/linux/modules.list`, `Tests/Fixtures/linux/udhcpc.script`, `Tests/Fixtures/linux/network-errors.sh`, `ThirdParty/ThirdParty.lock.json` (`ssl_client`), `Tests/IntegrationTests/LinuxGuestTests/NetworkTests.swift`, `Tests/AcceptanceTests/Network/LinuxGuestNetworkAcceptanceTests.swift`, `scripts/tests/test_network_error_classification.sh`, `.github/workflows/nightly.yml` |
 | Risks / questions | None |
 
 ### Goal
@@ -1355,12 +1355,14 @@ Out of scope:
 - The network part of `VZConfigurationBuilder`: `VZVirtioNetworkDeviceConfiguration`, `VZNATNetworkDeviceAttachment`, and `macAddress`.
 - `VMController` handling of `networkAttachmentDisconnected`, and the `vm.network` check.
 - The `/init` `net` block:
-  - `udhcpc` on `eth0`;
+  - bring `eth0` up, then run `udhcpc` with `/etc/udhcpc/apkrun.script`; it delegates address configuration to Alpine's pinned default script and atomically records the assigned IPv4 address, router, and DNS server;
   - `wget -S http://<router>:<port>/generate_204`, with `<port>` from `apkrun.test.net.port=`;
   - with `apkrun.test.net.external=1`, `nslookup connectivitycheck.gstatic.com` and `wget -S https://connectivitycheck.gstatic.com/generate_204`.
+- The `af_packet` module in the test guest's `modules.list`, required by BusyBox `udhcpc` in the pinned kernel.
+- `network-errors.sh`, which classifies only recognized BusyBox `wget` socket-connect errors or its exact `download timed out` diagnostic when no TLS/client diagnostic accompanies it; external `wget` output is capped at 4 KiB and truncation is a failure. Socket and timeout failures keep distinct details so a retry must repeat the same failure kind; a local T0 shell test rejects mixed TLS/client output, truncated prefixes, and prefixed lookalikes.
 - The output line: `APKRUN-TEST: net ok ip=<ip> gw=<router> dns=<server> http=204[ ext=204]`.
-- The pinned `ssl_client` package (busybox `wget` uses it for HTTPS) and its libraries.
-- `NetworkTests.swift` (T2) and `LinuxGuestNetworkTests.swift` (T3, nightly `network` job, one retry, classification `external`).
+- The pinned `ssl_client` package (BusyBox `wget` uses it for HTTPS) and its OpenSSL libraries.
+- `NetworkTests.swift` (T2) and `LinuxGuestNetworkAcceptanceTests.swift` (T3, nightly `network` job, one retry, classification `external`).
 
 ### Implementation steps
 
@@ -1375,19 +1377,21 @@ Out of scope:
 
    Check: T0 with the fake driver.
 3. **Guest `net` check.**
-   - `/init` loads `virtio_net` if it is a module, then runs `udhcpc -i eth0 -q -n -t 5`.
-   - The router and DNS server come from the udhcpc script's environment.
+   - `/init` loads `virtio_net` if it is a module, brings `eth0` up with BusyBox `ifconfig`, then runs `udhcpc -i eth0 -q -n -t 5 -s /etc/udhcpc/apkrun.script`.
+   - `Tests/Fixtures/linux/udhcpc.script` invokes Alpine's default udhcpc script to configure the lease, then atomically writes the IPv4 address, router, and DNS server to `/run/apkrun-net-lease`.
    - The check prints the line in Deliverables, or `fail <step> <detail>` for `dhcp`, `http`, `dns`, or `ext`.
 
    Check: the guest prints `net ok` against a host server on a lab Mac.
 4. **Host endpoint and logging.**
    - `NetworkTests` starts an HTTP server with Network.framework on `0.0.0.0:<ephemeral port>` that answers `GET /generate_204` with 204. It passes the port to the guest.
    - The harness parses the `net ok` line and logs `lease ip=… gw=… dns=…` under `io.apkrun.vm`, category `network`. Log the interface information when available; the guest's line is the only source.
+   - The harness fails immediately on a guest `fail` record, even if the guest later prints `done`. The host server cancels active connections on teardown and bounds incomplete requests.
 
    Check: the T2 test passes and the log entry is present.
 5. **Nightly external check.**
-   - `LinuxGuestNetworkTests` boots with `apkrun.test.net.external=1` and requires `ext=204`.
-   - Add the `network` job to `nightly.yml` if it does not exist yet ([../../05-development/build-system.md](../../05-development/build-system.md) §15.1). It runs `Tests/AcceptanceTests/Network` with one retry, and failures are classified `external`.
+   - `LinuxGuestNetworkAcceptanceTests` boots with `apkrun.test.net.external=1` and requires `ext=204`.
+   - Retry a DNS failure, recognized `wget: can't connect to remote host` socket error, or exact `wget: download timed out` error without an HTTP response or TLS/client diagnostic once while keeping the host endpoint alive; classify only the same failure kind on both attempts as `external`. Other HTTPS client/TLS errors, unexpected HTTP status codes, guest boot, DHCP, host HTTP, and other failures remain test failures.
+   - The `network` job in `nightly.yml` generates the ignored Xcode project before building and running `Tests/AcceptanceTests/Network` ([../../05-development/build-system.md](../../05-development/build-system.md) §15.1).
 
    Check: one nightly run passes.
 
@@ -1395,27 +1399,29 @@ Out of scope:
 
 By tier ([../test-strategy.md](../test-strategy.md)):
 
-- **T0** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/`): network mapping with the MAC; a disconnect event keeps `running`, logs a warning, and sets `vm.network` to `degraded`; the next start resets it.
+- **T0** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/` and `scripts/tests/test_network_error_classification.sh`): network mapping with the MAC; a disconnect event keeps `running`, logs a warning, and sets `vm.network` to `degraded`; the next start resets it; only the exact BusyBox `wget` socket-connect and download-timeout messages qualify as external, and TLS/client diagnostics disqualify both.
 - **T1**: none.
 - **T2** (`LinuxGuest`, `NetworkTests`): a DHCP lease and `generate_204` from a server on the host ([../test-strategy.md](../test-strategy.md) §6.1). `vm.network` stays `pass` for the whole run. T2 needs no Internet ([../test-strategy.md](../test-strategy.md) §3.9).
 - **T3** (`Tests/AcceptanceTests/Network/`, nightly): the guest resolves `connectivitycheck.gstatic.com` and fetches `https://connectivitycheck.gstatic.com/generate_204` ([../../02-design/vm.md](../../02-design/vm.md) §15).
 
 ### Acceptance criteria
 
-- [ ] Networking uses a Virtualization.framework NAT attachment. There is no bridged mode and no `com.apple.vm.networking`.
-- [ ] The guest obtains an IP address through DHCP (T2).
-- [ ] The guest resolves DNS (T3 nightly, through the host's resolver).
-- [ ] The guest connects to a host-visible endpoint: `generate_204` on the host returns 204 (T2).
-- [ ] The guest reaches the external network: `https://connectivitycheck.gstatic.com/generate_204` returns 204 (T3 nightly).
-- [ ] The assigned interface information is logged: the MAC at configuration time, and the IP address, gateway, and DNS server from the guest's report.
-- [ ] A disconnected attachment leaves the VM `running`, is logged, and sets `vm.network` to `degraded`.
+- [x] Networking uses a Virtualization.framework NAT attachment. There is no bridged mode and no `com.apple.vm.networking`.
+- [x] The guest obtains an IP address through DHCP (T2).
+- [x] The guest resolves DNS (T3 nightly, through the host's resolver).
+- [x] The guest connects to a host-visible endpoint: `generate_204` on the host returns 204 (T2).
+- [x] The guest reaches the external network: `https://connectivitycheck.gstatic.com/generate_204` returns 204 (T3 nightly).
+- [x] The assigned interface information is logged: the MAC at configuration time, and the IP address, gateway, and DNS server from the guest's report.
+- [x] A disconnected attachment leaves the VM `running`, is logged, and sets `vm.network` to `degraded`.
 
 ### Notes
 
-- **Record:** whether the host server on `0.0.0.0` triggers the macOS application firewall on lab Macs goes into [../test-strategy.md](../test-strategy.md) §3.6 as a lab setup step if needed.
+- **Firewall:** the first listener start for the signed `APKRunTestHost` triggered macOS Application Firewall. The reference Mac allowed the app, and later starts at the same path were recognized by designated requirement; lab setup is recorded in [../test-strategy.md](../test-strategy.md) §3.6.
+- **TCC:** on a local signed T2 run, keep the test host's DerivedData, the Linux test artifacts, and the result bundle outside `~/Documents`. Running `APKRunTestHost` from `build/DerivedData` there triggered a Documents-folder approval request before the test completed.
 - **Pitfall:** the NAT bridge interface (`bridge100`) exists only while a NAT VM runs. Do not bind the test server to its address before the VM starts. Bind to all interfaces, and let the guest use its DHCP router address.
 - **Pitfall:** busybox `wget` does not verify TLS certificates. The external check proves reachability only, which is all FR-VM-04 asks for.
 - **Pitfall:** there is no reliable way to make VZ disconnect a NAT attachment on purpose. The disconnect path is tested at T0 with the fake driver; T2 checks that the network health remains passing during a real guest's DHCP and host HTTP request. [../test-strategy.md](../test-strategy.md) §6.1 uses this split.
+- **T3 verification:** signed run `apkrun-network-t3-20261006-a.xcresult` reached the external endpoint and returned `ext=204`. Final run `apkrun-network-t3-20261006-g.xcresult` on arm64 macOS 27.0 (26A428) had 2 passed, 0 failed, and one `external` skip after `wget: download timed out` repeated on both attempts. The scheduled GitHub nightly job has not yet run on `main`.
 
 ---
 

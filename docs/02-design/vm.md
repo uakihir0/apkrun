@@ -340,13 +340,14 @@ Changing either takes effect on the next VM start. The UI states that. Measureme
 
 M0 needs a small Linux guest that exercises every device before Android is involved.
 
-- **Kernel:** a pinned, prebuilt arm64 kernel with virtio PCI, blk, net, console, vsock (`vmw_vsock_virtio_transport`), rng, and DRM virtio-gpu available as built-ins or modules. Candidate: Alpine `linux-virt` (pinned version and SHA-256 in `ThirdParty/ThirdParty.lock.json`). `scripts/fetch-test-linux.sh` downloads it, verifies the hash, and decompresses it if the kernel file is gzip-compressed (the validator rejects compressed kernels, §3).
-- **initramfs:** built by `scripts/build-test-initramfs.sh` from a pinned Alpine minirootfs plus the needed kernel modules, `socat`, `libgpiod`, and our `/init` script (`Tests/Fixtures/linux/init`). `/init`:
+- **Kernel:** a pinned, prebuilt arm64 kernel with virtio PCI, blk, net, console, vsock (`vmw_vsock_virtio_transport`), rng, and DRM virtio-gpu available as built-ins or modules. Candidate: Alpine `linux-virt` (pinned version and SHA-256 in `ThirdParty/ThirdParty.lock.json`). `scripts/fetch-test-linux.sh` downloads it, verifies the hash, and decompresses it if the kernel file is gzip-compressed (the validator rejects compressed kernels, §3). In the pinned 6.18.54 build, `af_packet` is a module required by BusyBox `udhcpc`.
+- **initramfs:** built by `scripts/build-test-initramfs.sh` from a pinned Alpine minirootfs plus the needed kernel modules, `socat`, `libgpiod`, `ssl_client` and its OpenSSL libraries, our `/init` script (`Tests/Fixtures/linux/init`), and the network-error classifier (`Tests/Fixtures/linux/network-errors.sh`). `/init`:
   1. mounts proc/sys/dev, loads modules;
   2. unless it will power off after the tests, finds the GPIO chip labeled PL061 and starts `gpiomon` for rising edges on offset 6. It uses `gpioinfo` to verify that the line is held by the monitor before reporting readiness. If the chip or line request is unavailable, it reports an init failure and attempts to power off rather than booting without a stop path;
   3. prints `APKRUN-TEST: boot ok` to `hvc0`, then reports `powerinput ok` after the GPIO line request is confirmed;
   4. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check. The #004 flood check prints its requested `APKRUN-FLOOD <i>` lines followed by `APKRUN-TEST: flood ok lines=<n>`;
   5. prints `APKRUN-TEST: done`, then triggers `apkrun.test.panic=1` when requested. Otherwise it powers off when `apkrun.test.poweroff=1`, or keeps the serial shell available while waiting for the VZ power input. On the rising GPIO edge, it powers off.
+- For the `net` check, `/init` brings `eth0` up and runs `udhcpc` with `/etc/udhcpc/apkrun.script`. That script delegates lease setup to Alpine's default udhcpc script and atomically records the assigned address, router, and DNS server. The guest fetches `/generate_204` from a host HTTP server; the T3 variant also resolves `connectivitycheck.gstatic.com` and fetches its HTTPS `generate_204` endpoint. External output is capped at 4 KiB; output beyond the cap fails and cannot be classified as `external`. With no HTTP response, only a recognized BusyBox `wget` socket-connect line or its exact `download timed out` line, without a TLS/client diagnostic, is eligible for `external` classification. Socket-connect failures and download timeouts retain distinct details; only the same classified failure on one retry is skipped. Other HTTPS-client/TLS errors remain test failures. The host harness rejects any failed check record before accepting `done`.
 - **Disks:** `Tests/Fixtures/linux/` scripts create a small raw test disk at test time (read-only and read-write variants with known content).
 - The T2 test harness (`Tests/IntegrationTests/LinuxGuestTests`) boots this guest with `EmbeddedRuntimeService`-free plumbing (just VirtualMachineCore) and asserts on the `APKRUN-TEST:` lines. Timeout 60 s.
 - The pinned Alpine 6.18.54 kernel has `CONFIG_GPIO_CDEV=y` and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The initramfs uses the GPIO character-device API through `libgpiod`; it does not depend on the keyboard input driver. A captured T2 console identified `gpiochip0 [20060000.pl061]` and showed a rising event on offset 6 after `requestGuestStop()`. `gpiochip` is resolved by its PL061 label; only the verified offset is monitored.
@@ -408,12 +409,12 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | T2 | Linux test guest: boot + console marker | #003, #004 |
 | T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
 | T2 | block read-only/read-write | #005 |
-| T2 | network through a host-local server | #006 |
+| T2 | DHCP lease, host HTTP 204 endpoint, and live `vm.network` health | #006 |
 | T2 | vsock echo/timeout/disconnect | #007 |
 | T2 | console port numbering | #004, #095 |
 | T2 | pause/resume | #069 |
 | T3 | Gate check G1 (`Tests/AcceptanceTests/G1LinuxBoot`, [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §5): the pass conditions of [../04-plan/roadmap.md](../04-plan/roadmap.md) §2, 10 boots in a row | #003 |
-| T3 | Network check: the Linux test guest resolves a public name and fetches `https://connectivitycheck.gstatic.com/generate_204` (nightly) | #006 |
+| T3 | Network check: the Linux test guest resolves a public name and fetches `https://connectivitycheck.gstatic.com/generate_204`; after one retry, repeated DNS, recognized socket-connect failures, or the exact BusyBox `wget: download timed out` error without TLS/client diagnostics are classified as `external` when no HTTP response was received (nightly) | #006 |
 
 ## 16. Open items
 
@@ -443,7 +444,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Serial port numbering with three ports | #004 | 2026-10-06 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestConsoleTests` passed; guest-visible hvc1/hvc2 numbering matched attachment-array order |
 | Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |
 | Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |
-| NAT network: DHCP lease and a host-local HTTP fetch | #006 | pending |
+| NAT network: DHCP lease and a host-local HTTP fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestNetworkTests` passed 3/3; `hvc0` showed a DHCP lease, `http=204`, and `done`; all captured `vm.network` updates were available and the health check passed |
+| NAT network: external DNS and HTTPS fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed run `apkrun-network-t3-20261006-a.xcresult` returned public DNS, `http=204`, `ext=204`, and `done`; final run `apkrun-network-t3-20261006-g.xcresult` had 2 passed, 0 failed, and 1 `external` skip after `wget: download timed out` repeated on both attempts. The scheduled `main` nightly has not run |
 | vsock echo, timeout, and disconnect detection | #007 | pending |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5) |
 | Serial port numbering with 20 ports; network on the stock image | #095 | pending (§6.2, §7) |

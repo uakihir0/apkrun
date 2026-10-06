@@ -252,10 +252,10 @@ attached again after detachment.
 - One `VZVirtioSocketDevice`. Guest CID is 3, host CID is 2.
 - **Outbound only in v1:** the host calls `connect(toPort:)` on the device ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.1).
 - `VMController.connect(vsockPort:timeout:)` wraps the completion handler with a timeout (a `Task` race; VZ has no timeout parameter). A connection that completes after the timeout is closed immediately.
-- `VsockConnection` keeps a strong reference to the `VZVirtioSocketConnection`. The file descriptor is only valid while that object lives, so the reference must not be dropped while `DispatchIO` uses the fd.
-- Errors map to `VMFailure.vsockConnectFailed(port, underlying)`. A refused connection (nobody listening in the guest) is `.vsockPortNotListening(port)`. Callers treat it as "not ready yet" and retry with backoff.
+- `VsockConnection` keeps a strong reference to the `VZVirtioSocketConnection`. The file descriptor is only valid while that object lives, so the reference must not be dropped while `DispatchIO` uses the fd. Its serial stream channel reads in ordered 64 KiB chunks and caps unread buffered input at 1 MiB. At the cap it issues a one-byte probe to detect peer EOF without growing the buffer; if the peer sends more data, the connection closes and reads throw `bufferedInputLimitExceeded` after buffered bytes are drained. A single event consumer preserves data and EOF order; the channel low-water limit is one byte so small reads are delivered promptly. `read(upTo:)` checks cancellation before returning buffered data, and pending-read cancellation is arbitrated against data delivery before bytes are consumed. It returns available bytes, `write(_:)` writes the supplied data, and `closed` completes after peer EOF or local close.
+- A VZ error in `NSPOSIXErrorDomain` with `ECONNREFUSED` maps to `.vsockPortNotListening(port)`; other errors map to `VMFailure.vsockConnectFailed(port, underlying)`. Virtualization.framework documents that `connect(toPort:)` does nothing if the guest has no listener, so a caller may instead time out. On the reference macOS 27 host, the T2 unused-port probe returned `NSPOSIXErrorDomain` code 54 (`ECONNRESET`), so this case remains `.vsockConnectFailed`. The LinuxGuest readiness probe retries refused, timed-out, and observed startup `ECONNRESET` attempts with backoff for at most five seconds. Its T2 attachment records the typed unused-port outcome and VZ domain/code when the framework calls back with an error; if no callback arrives before the deadline, it records the timeout and that no VZ error was returned. Calling connect when vsock is disabled reports `.vsockDeviceNotConfigured`; if VZ does not expose the configured device, it reports `.vsockDeviceUnavailable`.
 - **`VsockLoopbackForwarder`** (generic, used for ADB): listens on `127.0.0.1:<hostPort>` with Network.framework (`NWListener`, `requiredLocalEndpoint` on the loopback address), and for each accepted TCP connection opens `connect(vsockPort:)` and splices both directions. RuntimeCore configures it as `guest 5555 ↔ 127.0.0.1:6520`. It never binds to a non-loopback interface (NFR-SEC-06).
-- Test (T2, #007): the test guest runs a small vsock echo server (`socat VSOCK-LISTEN:7000,fork EXEC:cat` from the test initramfs). The test sends 1 MiB and compares, checks timeout behaviour against an unused port, and checks disconnect detection when the guest closes.
+- Test (T2, #007): the test guest runs a small vsock echo server (`socat VSOCK-LISTEN:7000,fork EXEC:cat` from the test initramfs). The test sends 1 MiB and compares, checks the bounded typed result for an unused port, checks disconnect detection when the guest closes, and verifies that `VMController.stop()` closes a live host connection.
 
 ## 9. Lifecycle
 
@@ -378,6 +378,8 @@ public enum VMFailure: APKRunError {
     case pauseFailed(underlying: VZErrorInfo)
     case resumeFailed(underlying: VZErrorInfo)
     case stopTimedOut
+    case vsockDeviceNotConfigured
+    case vsockDeviceUnavailable
     case vsockConnectFailed(port: UInt32, underlying: VZErrorInfo)
     case vsockPortNotListening(port: UInt32)
     case vsockConnectTimedOut(port: UInt32)
@@ -410,7 +412,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
 | T2 | block read-only/read-write | #005 |
 | T2 | DHCP lease, host HTTP 204 endpoint, and live `vm.network` health | #006 |
-| T2 | vsock echo/timeout/disconnect | #007 |
+| T2 | vsock echo, unused-port result, guest disconnect, readiness, VM-stop cleanup | #007 |
 | T2 | console port numbering | #004, #095 |
 | T2 | pause/resume | #069 |
 | T3 | Gate check G1 (`Tests/AcceptanceTests/G1LinuxBoot`, [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §5): the pass conditions of [../04-plan/roadmap.md](../04-plan/roadmap.md) §2, 10 boots in a row | #003 |
@@ -446,7 +448,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |
 | NAT network: DHCP lease and a host-local HTTP fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestNetworkTests` passed 3/3; `hvc0` showed a DHCP lease, `http=204`, and `done`; all captured `vm.network` updates were available and the health check passed |
 | NAT network: external DNS and HTTPS fetch | #006 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): signed run `apkrun-network-t3-20261006-a.xcresult` returned public DNS, `http=204`, `ext=204`, and `done`; final run `apkrun-network-t3-20261006-g.xcresult` had 2 passed, 0 failed, and 1 `external` skip after `wget: download timed out` repeated on both attempts. The scheduled `main` nightly has not run |
-| vsock echo, timeout, and disconnect detection | #007 | pending |
+| vsock echo, unused-port error, guest disconnect, listener readiness, and VM-stop cleanup | #007 | 2026-10-06, arm64 MacBook Pro, macOS 27.0 (26A428): 102 `VirtualMachineCoreTests`, 23 `VirtualMachineCoreSystemTests`, and the signed `LinuxGuestVsockTests` T2 suite (5/5) passed. T1 filled the 1 MiB read buffer before peer EOF and verified the one-byte probe detected closure; a separate case verified over-limit input closes with `bufferedInputLimitExceeded`. T2 echoed 1 MiB, connected to both readiness ports, observed guest close within 1 s, and confirmed `VMController.stop()` closes a live connection. Port 7999 returned `vm.vsockConnectFailed` with `NSPOSIXErrorDomain` code 54 (`ECONNRESET`); the test attachment records the typed result and VZ log. Initial `ECONNRESET` connect attempts to ports 7000/7001 recovered on retry. Final result bundle: `/private/tmp/apkrun-vsock-readiness-final.xcresult` |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5) |
 | Serial port numbering with 20 ports; network on the stock image | #095 | pending (§6.2, §7) |
 | Pause and resume across host sleep | #069 | pending (§9.4) |

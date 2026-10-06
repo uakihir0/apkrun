@@ -7504,3 +7504,182 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** The T2 console showed that the packet socket was now available, but DHCP reported `sendto: Network is down`. The test guest owns bringing its discovered virtio network interface up before requesting a lease.
 
 **Verification.** The signed T2 run with `eth0` brought up obtained a DHCP lease and passed the host HTTP 204 check.
+
+## IR-211: Bound vsock input and report lifecycle interruption distinctly
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockConnection.swift`; `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/VMController.swift`; `Packages/VirtualMachineCore/Sources/VirtualMachineCore/State/VMFailure.swift`; [vm.md](../02-design/vm.md) §8; [M00](issues/M00-repository-and-vm-foundation.md) #007 |
+
+**Choice.** Read vsock input with 64 KiB `DispatchIO` operations and cap unread buffered input at 1 MiB. A VM lifecycle operation cancels pending connects with the target state that made the connection unavailable. Report a VZ device missing from an enabled VM as `vsockDeviceUnavailable`, separately from `vsockDeviceNotConfigured`.
+
+**Reason.** A background reader must continue after returning a partial read so it can observe peer EOF while additional bytes remain buffered. The fixed cap prevents a guest from making the host retain unbounded input when the client stops reading. `VMController` can be re-entered while a VZ operation or console drain is pending, so the state that interrupted a connect must be captured before the state transition finishes. The error catalog describes a disabled definition separately from an enabled definition whose VZ driver does not expose a socket device.
+
+**Verification.** On 2026-10-06, the 102 `VirtualMachineCoreTests` and 23 `VirtualMachineCoreSystemTests` passed. The signed T2 suite also passed 5/5; the observed unused-port VZ error domain and code are recorded in [vm.md](../02-design/vm.md) §8.
+
+## IR-212: Preserve vsock read order and cancellation ownership
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockConnection.swift`; `Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/VsockConnectionSystemTests.swift`; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** DispatchIO read callbacks yield events into one ordered `AsyncStream` consumer. Set the channel's low-water limit to one byte. `read(upTo:)` checks cancellation before returning already-buffered bytes. For a pending read, cancellation and data delivery are arbitrated by a lock-protected state token before buffered bytes are consumed.
+
+**Reason.** Creating independent tasks from DispatchIO callbacks can reorder data and EOF. The default low-water threshold can also delay a small read on a stream socket. Cancellation must become visible synchronously in the cancellation handler; otherwise an already queued read event can consume bytes before an actor task removes the cancelled continuation.
+
+**Verification.** On 2026-10-06, all 23 `VirtualMachineCoreSystemTests` passed, covering 1 MiB multi-chunk reads, prompt small reads, peer EOF with unread data and at the full-buffer limit, overflow rejection without buffering beyond 1 MiB, cancellation after a registration handshake, and cancellation before reading already-buffered bytes.
+
+## IR-213: Bound retries while the guest vsock listener starts
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift`; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** The T2 host retries `.vsockPortNotListening`, per-attempt `.vsockConnectTimedOut`, and `NSPOSIXErrorDomain/ECONNRESET` failures for up to five seconds. Each connect attempt is capped at 500 ms, with the existing exponential backoff starting at 100 ms.
+
+**Reason.** The harness invokes its host action as soon as `VMController.start()` returns, before the guest init script has started `socat`. Initial signed T2 attempts returned `ECONNRESET` within 140–510 ms of VM start for both listener ports, before the guest readiness record was available. The probe therefore retries this observed startup failure alongside refused and timed-out attempts, while preserving the same bounded five-second deadline.
+
+**Verification.** On 2026-10-06, the signed LinuxGuest T2 suite passed 5/5. Startup `ECONNRESET` failures on ports 7000 and 7001 recovered on retry, within the five-second bound.
+
+## IR-214: Decide guest-close success before timeout cleanup
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift` |
+
+**Choice.** The disconnect test records which task-group result wins the one-second race, then closes the connection only after a timeout has already been selected.
+
+**Reason.** Closing from the timeout task can make `connection.closed` complete and race the task group, incorrectly reporting a local cleanup close as a guest disconnect.
+
+**Verification.** On 2026-10-06, signed `testVsockGuestClosureCompletesClosedWithinOneSecond` passed on arm64 macOS 27.0 (26A428).
+
+## IR-215: Remediate an unconfigured vsock device at its source
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/DiagnosticsCore/ErrorCatalog/errors.json`; [error-catalog.md](../03-reference/error-catalog.md) §5.1 |
+
+**Choice.** `vm.vsockDeviceNotConfigured` tells the caller to enable vsock in the VM definition and uses the troubleshooting action instead of telling the user to restart the same VM.
+
+**Reason.** Restarting a VM created from the unchanged definition cannot add a disabled device. The error is raised because a caller requested host communication without enabling vsock.
+
+**Verification.** On 2026-10-06, `swift scripts/errorgen.swift --check` passed, along with all 86 DiagnosticsCore tests.
+
+## IR-216: Synchronize the pending-read regression test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockConnection.swift`; `Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/VsockConnectionSystemTests.swift` |
+
+**Choice.** The socketpair test constructor accepts a callback that signals after a read continuation is registered. Production connections use a no-op callback.
+
+**Reason.** A timed sleep cannot prove that a test task has reached the pending-read state before cancellation. The signal makes the cancellation-vs-delivery regression deterministic without exposing the actor's private state in the public API.
+
+**Verification.** The T1 cancellation test waits for the registration signal, cancels the read, immediately sends peer bytes, then verifies cancellation and that a following read receives the bytes.
+
+## IR-217: Close live vsock connections before releasing a stopped VM
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift`; [vm.md](../02-design/vm.md) §8–§9 |
+
+**Choice.** Keep a real host-to-guest connection open after a successful echo, then require it to signal closure within one second after `LinuxGuestHarness` force-stops the VM.
+
+**Reason.** Unit tests can check the controller's bookkeeping, but only a T2 connection exercises the Virtualization.framework-owned file descriptor and confirms `VMController.stop()` closes the connection before releasing VM resources.
+
+**Verification.** On 2026-10-06, the signed T2 stop test passed on arm64 macOS 27.0 (26A428); the connection echoed data while live and `closed` completed after the VM stopped.
+
+## IR-218: Record the limit on direct CID assertions
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | [vm.md](../02-design/vm.md) §8; `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift` |
+
+**Choice.** Keep the documented guest CID 3 and host CID 2 as Virtualization.framework defaults; do not add a T2 assertion that queries those values from the host.
+
+**Reason.** The framework does not expose a host API to query or set the guest CID. A host-to-guest connection is exercised directly by the T2 echo tests; the guest can inspect its own CID, but that does not independently prove the host CID. [Apple's Virtualization.framework discussion](https://developer.apple.com/forums/thread/772288?answerId=820780022) confirms the default guest CID 3 and host CID 2, and that the host has no guest-CID query API.
+
+**Verification.** T2 host-to-guest connections provide a functional check. A direct numeric host-side assertion remains unavailable through the supported framework API.
+
+## IR-219: Preserve the observed unused-port error mapping
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Controller/VMController.swift`; `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift`; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** Map only `NSPOSIXErrorDomain/ECONNREFUSED` to `.vsockPortNotListening`. On the reference macOS 27.0 host, require `NSPOSIXErrorDomain/ECONNRESET` for the unused port and keep it as `.vsockConnectFailed` with its underlying error. Other supported macOS versions may return `.vsockPortNotListening`, `.vsockConnectTimedOut`, or a different `.vsockConnectFailed`; the T2 attachment records the returned type and VZ error details.
+
+**Reason.** The T2 probe to unused guest port 7999 returned code 54 (`ECONNRESET`) immediately. Treating it as refused would silently broaden the designed error mapping and discard the distinction between VZ's actual error and `ECONNREFUSED`. Pinning the assertion on the reference macOS 27.0 release keeps the observed mapping regression-tested while allowing later supported releases to surface their own documented timeout/refusal behavior.
+
+**Verification.** On 2026-10-06, signed `testVsockUnusedPortReturnsTypedFailureWithinDeadline` passed within its two-second bound. The result attachment records `vsockConnectFailed port=7999 domain=NSPOSIXErrorDomain code=54`.
+
+## IR-220: Use a dedicated guest port for disconnect validation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/Fixtures/linux/init`; `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift` |
+
+**Choice.** Run the guest-close probe on port 7001, separate from the echo service on port 7000.
+
+**Reason.** The echo service must remain available for the 1 MiB transfer. The disconnect case needs the guest to read a fixed prefix and then close predictably, so an independent `socat` listener using `head -c 16` makes the expected EOF observable without changing the echo service.
+
+**Verification.** The signed T2 disconnect test sent 32 bytes, read the 16-byte prefix, and observed `closed` within one second.
+
+## IR-221: Probe peer EOF at the unread-buffer limit
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockConnection.swift`; `Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/VsockConnectionSystemTests.swift`; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** When the 1 MiB unread buffer is full, issue a one-byte read probe. If it receives another byte, close the connection and report `bufferedInputLimitExceeded` after buffered data is drained.
+
+**Reason.** Stopping reads at the buffer cap also stops EOF detection if the peer closes while unread data fills the buffer. The one-byte probe detects EOF without growing the buffer; closing at the first over-limit byte prevents unbounded memory use and silent data loss.
+
+**Verification.** On 2026-10-06, two socketpair T1 tests passed: one filled the buffer exactly, shut down the peer, and observed `closed` before draining the buffered bytes; the other sent one byte over the limit and observed connection closure plus `bufferedInputLimitExceeded`.
+
+## IR-222: Verify listener readiness through host connections
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/Fixtures/linux/init`; `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift`; [M00](issues/M00-repository-and-vm-foundation.md) #007 |
+
+**Choice.** Keep the guest's readiness record and make its T2 test connect to both listener ports before it passes. Initiate probe closes and leave resource cleanup to the harness's VM stop.
+
+**Reason.** The init script's process-existence checks only prove that `socat` started; they do not prove that the guest is accepting connections. Host-side connections exercise the actual Virtualization.framework path and avoid adding a separate in-guest probe whose tools and host CID assumptions would need independent validation. Awaiting connection closure can block harness cleanup if the framework stalls, so the probe starts closing and lets the controller close any remaining connection during VM stop.
+
+**Verification.** On 2026-10-06, the signed `testVsockGuestServicesReportReady` passed on arm64 macOS 27.0 (26A428) after the host connected to both guest ports.
+
+## IR-223: Make the vsock close deadline nonblocking
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #007 |
+| Affected files | `Tests/IntegrationTests/LinuxGuestTests/VsockTests.swift` |
+
+**Choice.** Race the close signal against a timer with a lock-protected one-shot continuation. If the timer wins, initiate `close()` and return without joining the task that awaits the non-cancellable `closed` signal.
+
+**Reason.** A structured task group waits for every child before leaving scope. Cancelling a child that awaits `connection.closed.value` does not cancel that wait, so a timeout can still hang the test and prevent `LinuxGuestHarness` from stopping the VM.
+
+**Verification.** On 2026-10-06, the signed LinuxGuest vsock suite passed 5/5 on arm64 macOS 27.0 (26A428), including guest disconnect and VM-stop closure checks using the nonblocking deadline helper.

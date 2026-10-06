@@ -1458,7 +1458,7 @@ Out of scope:
 
 ### Deliverables
 
-- `Vsock/VsockConnection.swift`, with `read(upTo:)`, `write(_:)`, `close()`, and `closed`. `closed` completes when the peer closes the connection or when the VM stops.
+- `Vsock/VsockConnection.swift`, with `read(upTo:)`, `write(_:)`, `close()`, and `closed`. `closed` completes when the peer closes the connection or when the VM stops. An over-limit peer is closed and produces `bufferedInputLimitExceeded` after buffered bytes are drained.
 - `connect(vsockPort:timeout:)` in `VMController`, and the driver's `connect(toPort:)` on the VM queue.
 - The `/init` `vsock` block:
   - `socat VSOCK-LISTEN:7000,fork EXEC:cat &`;
@@ -1488,11 +1488,13 @@ Out of scope:
    Check: T1 over a `socketpair` stand-in for the descriptor: reads, writes, EOF, and close.
 4. **Guest services and tests.**
    - `/init` starts both `socat` listeners when `vsock` is in `apkrun.test`.
-   - The host retries `.vsockPortNotListening` with backoff (100 ms, doubling) for up to 5 s, because the listeners start just after `boot ok`.
-   - `VsockTests` covers three cases:
+   - The host retries `.vsockPortNotListening`, `.vsockConnectTimedOut`, and the observed startup `NSPOSIXErrorDomain/ECONNRESET` with backoff (100 ms, doubling) for up to 5 s, because the listeners start just after `boot ok`.
+   - `VsockTests` covers five cases:
      - (a) Echo: sends 1 MiB of seeded bytes to port 7000 and compares the SHA-256 of what comes back.
-     - (b) An unused port: connects to port 7999 with a 2 s timeout and expects `.vsockPortNotListening` or `.vsockConnectTimedOut` within 2.5 s.
+     - (b) An unused port: connects to port 7999 with a 2 s timeout and records the VZ error domain and code. On the reference macOS 27.0 host, it requires `.vsockConnectFailed` with `NSPOSIXErrorDomain/ECONNRESET`; later supported releases may return `.vsockPortNotListening`, `.vsockConnectTimedOut`, or another `.vsockConnectFailed`. All outcomes must arrive within 2.5 s.
      - (c) Disconnect: sends 32 bytes to port 7001, receives 16, and expects `closed` within 1 s.
+     - (d) Listener readiness: verifies the guest reports both services ready and connects to both ports before the test passes.
+     - (e) VM stop: keeps a live connection open, then verifies it closes within 1 s after `VMController.stop()`.
 
    Check: `VsockTests` passes on a lab Mac.
 
@@ -1508,23 +1510,24 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - another error, then `.vsockConnectFailed`;
   - `connect` outside `running`;
   - connections closed on stop.
-- **T1** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/`): `VsockConnection` over a `socketpair`.
-- **T2** (`LinuxGuest`, `VsockTests`): a vsock echo of 1 MiB, the timeout on an unused port, and disconnect detection ([../test-strategy.md](../test-strategy.md) §6.1).
+- **T1** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/`): `VsockConnection` over a `socketpair`, including EOF at the full-buffer boundary and bounded overflow rejection.
+- **T2** (`LinuxGuest`, `VsockTests`): a 1 MiB vsock echo, the bounded typed result for an unused port, disconnect detection, listener readiness, and connection closure on VM stop ([../test-strategy.md](../test-strategy.md) §6.1).
 - **T3**: none.
 
 ### Acceptance criteria
 
-- [ ] The VM has a `VZVirtioSocketDevice`, with guest CID 3 and host CID 2.
-- [ ] The Linux guest runs a minimal echo service (`socat` on port 7000).
-- [ ] A host test client sends a 1 MiB payload over vsock and receives exactly the same bytes back.
-- [ ] Timeouts are handled: a connection that does not open within its timeout fails with `.vsockConnectTimedOut`, and a late connection is closed at once.
-- [ ] Disconnects are handled: when the guest closes the connection, `closed` completes within 1 s, and every connection is closed when the VM stops.
-- [ ] A refused connection fails with `.vsockPortNotListening`, which callers treat as "not ready yet". Every other failure is `.vsockConnectFailed` with a `VZErrorInfo`.
-- [ ] Connections are host to guest only. No guest-to-host listener is registered.
+- [x] The VM has a `VZVirtioSocketDevice`, with guest CID 3 and host CID 2.
+- [x] The Linux guest runs a minimal echo service (`socat` on port 7000).
+- [x] A host test client sends a 1 MiB payload over vsock and receives exactly the same bytes back.
+- [x] Timeouts are handled: a connection that does not open within its timeout fails with `.vsockConnectTimedOut`, and a late connection is closed at once.
+- [x] Disconnects are handled: when the guest closes the connection, `closed` completes within 1 s even with a full unread buffer, and every connection is closed when the VM stops.
+- [x] The 1 MiB unread-buffer limit is enforced: over-limit input closes the connection and reports `bufferedInputLimitExceeded` after buffered bytes are drained.
+- [x] A refused connection fails with `.vsockPortNotListening`, which callers treat as "not ready yet". Every other failure is `.vsockConnectFailed` with a `VZErrorInfo`; the reference Mac's unused-port result is recorded in `vm.md` §8.
+- [x] Connections are host to guest only. No guest-to-host listener is registered.
 
 ### Notes
 
-- **Record:** the `NSError` domain and code that VZ returns for a refused connection, and for a connection to a port with no listener, go into [../../02-design/vm.md](../../02-design/vm.md) §8. The mapping in step 2 depends on them.
+- **Record:** the T2 unused-port probe returned `NSPOSIXErrorDomain/ECONNRESET` (code 54), which maps to `.vsockConnectFailed`; this is recorded in [../../02-design/vm.md](../../02-design/vm.md) §8. No `ECONNREFUSED` result was returned by the live framework; T0 verifies that mapping using the fake driver.
 - **Pitfall:** dropping the `VZVirtioSocketConnection` while `DispatchIO` still uses its descriptor gives reads on a closed or reused descriptor. That produces silent corruption, not a crash.
 - **Pitfall:** `socat` with `fork` keeps listening after each connection. Without `fork`, the second test connection would be refused.
 - Throwing `.invalidTransition` from `connect` outside `running` is a choice of this plan. [../../02-design/vm.md](../../02-design/vm.md) §8 does not say what `connect` does in other states.

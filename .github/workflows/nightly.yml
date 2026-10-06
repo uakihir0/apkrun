@@ -48,3 +48,62 @@ jobs:
           path: build/gates/G1
           if-no-files-found: warn
           retention-days: 30
+
+  network:
+    name: network (external reachability)
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-lab
+    timeout-minutes: 30
+    env:
+      APKRUN_CI: "1"
+      APKRUN_TEST_LINUX_DIR: ${{ runner.temp }}/apkrun-test-linux
+      APKRUN_TEST_DEVELOPMENT_TEAM: ${{ vars.APKRUN_TEST_DEVELOPMENT_TEAM }}
+      APKRUN_TEST_CODE_SIGN_IDENTITY: ${{ vars.APKRUN_TEST_CODE_SIGN_IDENTITY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check test signing configuration
+        run: |
+          if [[ -z "$APKRUN_TEST_DEVELOPMENT_TEAM" || -z "$APKRUN_TEST_CODE_SIGN_IDENTITY" ]]; then
+            printf 'Set APKRUN_TEST_DEVELOPMENT_TEAM and APKRUN_TEST_CODE_SIGN_IDENTITY repository variables for the lab Apple Development certificate.\n' >&2
+            exit 1
+          fi
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Generate Xcode project
+        run: scripts/generate-project.sh
+      - name: Build Linux test guest
+        run: scripts/build-test-initramfs.sh
+      - name: Prepare network test results
+        run: |
+          rm -rf build/nightly/network/Network.xcresult
+          mkdir -p build/nightly/network
+      - name: Run external network acceptance check
+        run: >-
+          xcodebuild test
+          -project APKRun.xcodeproj
+          -scheme AcceptanceTests
+          -testPlan AcceptanceTests
+          -only-test-configuration Network
+          -only-testing:AcceptanceTests/LinuxGuestNetworkAcceptanceTests
+          -jobs 1
+          -derivedDataPath build/nightly/network/DerivedData
+          -resultBundlePath build/nightly/network/Network.xcresult
+          "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR"
+          "APKRUN_CI=$APKRUN_CI"
+          "DEVELOPMENT_TEAM=$APKRUN_TEST_DEVELOPMENT_TEAM"
+          CODE_SIGN_STYLE=Manual
+          "CODE_SIGN_IDENTITY=$APKRUN_TEST_CODE_SIGN_IDENTITY"
+      - name: Upload network test evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: network-${{ github.sha }}
+          path: build/nightly/network/Network.xcresult
+          if-no-files-found: warn
+          retention-days: 30

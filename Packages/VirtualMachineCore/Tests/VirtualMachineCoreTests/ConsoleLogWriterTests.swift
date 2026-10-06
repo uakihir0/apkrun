@@ -33,13 +33,72 @@ func consoleLogWriterPrefixesRecordsAndPreservesUnmodifiedGuestBytes() async thr
 }
 
 @Test(.timeLimit(.minutes(1)))
+func consoleLogWriterBatchesCompleteRecordsForBothLogFiles() async throws {
+    let fixture = makeConsoleLogWriter()
+    await fixture.writer.start()
+    let guestOutput = Data(
+        ((0..<500).map { "line-\($0)\n" }.joined()).utf8
+    )
+
+    await fixture.writer.append(guestOutput)
+
+    let mainLog = try #require(fixture.fileSystem.contents(at: fixture.paths.consoleLogFile))
+    let bootLog = try #require(fixture.fileSystem.contents(at: fixture.bootLogURL))
+    #expect(fixture.fileSystem.writeCallCount == 2)
+    #expect(mainLog == bootLog)
+    #expect(guestRecords(in: mainLog) == (0..<500).map { "line-\($0)" })
+    await fixture.writer.finish()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func consoleLogWriterFlushesBeforeCrossingBatchGuestByteLimit() async throws {
+    let fixture = makeConsoleLogWriter()
+    await fixture.writer.start()
+    let maximumRecordBytes = ConsoleLogWriter.maximumRecordBytes
+    var guestOutput = Data(repeating: 0x61, count: maximumRecordBytes - 65)
+    guestOutput.append(0x0A)
+    guestOutput.append(contentsOf: repeatElement(0x62, count: maximumRecordBytes - 1))
+    guestOutput.append(0x0A)
+
+    await fixture.writer.append(guestOutput)
+
+    let mainLog = try #require(fixture.fileSystem.contents(at: fixture.paths.consoleLogFile))
+    let bootLog = try #require(fixture.fileSystem.contents(at: fixture.bootLogURL))
+    #expect(fixture.fileSystem.writeCallCount == 4)
+    #expect(mainLog == bootLog)
+    let records = guestRecords(in: mainLog)
+    #expect(records.count == 2)
+    #expect(records.first == String(repeating: "a", count: maximumRecordBytes - 65))
+    #expect(records.last == String(repeating: "b", count: maximumRecordBytes - 1))
+    await fixture.writer.finish()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func consoleLogWriterHandlesLongRecordsDeliveredInSmallChunks() async throws {
+    let fixture = makeConsoleLogWriter(timerInterval: .seconds(10))
+    await fixture.writer.start()
+    let guestRecord = Data(repeating: 0x61, count: ConsoleLogWriter.maximumRecordBytes - 1)
+
+    for start in stride(from: 0, to: guestRecord.count, by: 256) {
+        let end = min(start + 256, guestRecord.count)
+        await fixture.writer.append(Data(guestRecord[start..<end]))
+    }
+    await fixture.writer.flush()
+
+    let output = try #require(fixture.fileSystem.contents(at: fixture.paths.consoleLogFile))
+    var completeGuestRecord = guestRecord
+    completeGuestRecord.append(0x0A)
+    #expect(output.suffix(completeGuestRecord.count) == completeGuestRecord)
+    #expect(output.filter { $0 == 0x0A }.count == 1)
+    await fixture.writer.finish()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func consoleLogWriterRotatesFiveGenerationsAndKeepsEachFilePrivate() async throws {
     let fixture = makeConsoleLogWriter(rotationLimit: 100)
     await fixture.writer.start()
-
-    for index in 0..<30 {
-        await fixture.writer.append(Data("line-\(index)\n".utf8))
-    }
+    let guestOutput = Data(((0..<30).map { "line-\($0)\n" }.joined()).utf8)
+    await fixture.writer.append(guestOutput)
     await fixture.writer.finish()
 
     #expect(fixture.fileSystem.contents(at: fixture.paths.consoleLogFile) != nil)
@@ -55,6 +114,25 @@ func consoleLogWriterRotatesFiveGenerationsAndKeepsEachFilePrivate() async throw
                 == 0o600
         )
     }
+
+    let retainedLogURLs =
+        (1...4).reversed().map { fixture.paths.consoleLogRotationFile(index: $0) }
+        + [fixture.paths.consoleLogFile]
+    var persistedRecords: [String] = []
+    for logURL in retainedLogURLs {
+        let contents = try #require(fixture.fileSystem.contents(at: logURL))
+        #expect(contents.count <= 100)
+        persistedRecords.append(
+            contentsOf:
+                String(decoding: contents, as: UTF8.self)
+                .split(separator: "\n")
+                .compactMap { $0.split(separator: " ").last.map(String.init) }
+        )
+    }
+
+    let expectedRecords = (20..<30).map { "line-\($0)" }
+    #expect(Set(persistedRecords).count == persistedRecords.count)
+    #expect(persistedRecords == expectedRecords)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -125,11 +203,40 @@ func consoleLogWriterReportsWriteAndSynchronizationFailures() async throws {
     let syncFixture = makeConsoleLogWriter()
     await syncFixture.writer.start()
     await syncFixture.writer.append(Data("durable\n".utf8))
-    syncFixture.fileSystem.failSynchronizations()
+    syncFixture.fileSystem.failSynchronizations(at: syncFixture.bootLogURL)
     await syncFixture.writer.flush()
     #expect(await syncFixture.writer.didFail)
+    #expect(await syncFixture.writer.droppedByteCount == UInt64("durable\n".utf8.count))
     #expect(syncFixture.failureCount.value == 1)
+    await syncFixture.writer.append(Data("later\n".utf8))
+    #expect(
+        await syncFixture.writer.droppedByteCount
+            == UInt64("durable\nlater\n".utf8.count)
+    )
+    syncFixture.fileSystem.allowSynchronizations(at: syncFixture.bootLogURL)
+    await syncFixture.writer.flush()
+    #expect(await syncFixture.writer.droppedByteCount == 0)
     await syncFixture.writer.finish()
+    #expect(await syncFixture.writer.droppedByteCount == 0)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func consoleLogWriterCountsBytesMissingFromOneRequiredDestination() async throws {
+    let fixture = makeConsoleLogWriter()
+    await fixture.writer.start()
+    fixture.fileSystem.failWrites(at: fixture.bootLogURL)
+    let guestOutput = Data("replicated\n".utf8)
+
+    await fixture.writer.append(guestOutput)
+
+    let mainLog = try #require(fixture.fileSystem.contents(at: fixture.paths.consoleLogFile))
+    let bootLog = try #require(fixture.fileSystem.contents(at: fixture.bootLogURL))
+    #expect(mainLog.range(of: guestOutput) != nil)
+    #expect(bootLog.isEmpty)
+    #expect(await fixture.writer.didFail)
+    #expect(await fixture.writer.droppedByteCount == UInt64(guestOutput.count))
+    #expect(fixture.failureCount.value == 1)
+    await fixture.writer.finish()
 }
 
 private struct ConsoleLogWriterFixture {
@@ -153,7 +260,8 @@ private struct ConsoleLogWriterFixture {
 
 private func makeConsoleLogWriter(
     rotationLimit: UInt64 = ConsoleLogWriter.maximumLogBytes,
-    retainedBootLogs: Int = ConsoleLogWriter.maximumBootLogs
+    retainedBootLogs: Int = ConsoleLogWriter.maximumBootLogs,
+    timerInterval: Duration = ConsoleLogWriter.flushInterval
 ) -> ConsoleLogWriterFixture {
     let paths = APKRunPaths(
         allowingHomeOverride: true,
@@ -170,6 +278,7 @@ private func makeConsoleLogWriter(
         clock: clock,
         rotationLimit: rotationLimit,
         retainedBootLogs: retainedBootLogs,
+        timerInterval: timerInterval,
         onWriteFailure: { failureCount.increment() }
     )
     return ConsoleLogWriterFixture(
@@ -189,6 +298,12 @@ private func formattedWallTime(_ date: Date) -> String {
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
     return formatter.string(from: date)
+}
+
+private func guestRecords(in output: Data) -> [String] {
+    String(decoding: output, as: UTF8.self)
+        .split(separator: "\n")
+        .compactMap { $0.split(separator: " ").last.map(String.init) }
 }
 
 private final class ConsoleLogFailureCounter: @unchecked Sendable {

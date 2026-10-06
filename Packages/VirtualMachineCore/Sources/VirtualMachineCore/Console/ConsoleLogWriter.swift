@@ -40,6 +40,7 @@ package actor ConsoleLogWriter {
     private let fileSystem: any ConsoleLogFileSystem
     private let clock: any ConsoleLogClock
     private let logger: APKLogger
+    private let wallClockFormatter: DateFormatter
     private let onWriteFailure: @Sendable () -> Void
     private let rotationLimit: UInt64
     private let retainedBootLogs: Int
@@ -50,7 +51,9 @@ package actor ConsoleLogWriter {
     private var bootLogURL: URL?
     private var mainLogSize: UInt64 = 0
     private var bytesSinceSynchronization: UInt64 = 0
+    private var hasUnconfirmedSynchronizationFailure = false
     private var pendingRecord = Data()
+    private var pendingSearchOffset = 0
     private var monotonicStart: Duration?
     private var streamDroppedByteCount: UInt64 = 0
     private var lastStreamDroppedByteCount: UInt64 = 0
@@ -61,8 +64,10 @@ package actor ConsoleLogWriter {
     private var writesDisabled = false
     private var timerTask: Task<Void, Never>?
 
+    /// Guest bytes dropped by the input stream or not confirmed in every log destination.
     package var droppedByteCount: UInt64 {
-        streamDroppedByteCount &+ writerDroppedByteCount
+        let unconfirmedByteCount = hasUnconfirmedSynchronizationFailure ? bytesSinceSynchronization : 0
+        return streamDroppedByteCount &+ writerDroppedByteCount &+ unconfirmedByteCount
     }
 
     package var didFail: Bool {
@@ -84,6 +89,7 @@ package actor ConsoleLogWriter {
         precondition(timerInterval > .zero)
         self.directoryURL = directoryURL
         self.logger = logger
+        self.wallClockFormatter = Self.makeWallClockFormatter()
         self.fileSystem = fileSystem
         self.clock = clock
         self.rotationLimit = rotationLimit
@@ -130,6 +136,7 @@ package actor ConsoleLogWriter {
         if !pendingRecord.isEmpty {
             let partial = pendingRecord
             pendingRecord.removeAll(keepingCapacity: true)
+            pendingSearchOffset = 0
             writeRecord(partial, addRecordSeparator: true)
         }
         synchronizeOpenFiles()
@@ -171,23 +178,91 @@ package actor ConsoleLogWriter {
     }
 
     private func writeReadyRecords() {
-        while !pendingRecord.isEmpty {
-            let newline = pendingRecord.firstIndex(of: 0x0A)
-            let lineLength = newline.map { pendingRecord.distance(from: pendingRecord.startIndex, to: $0) + 1 }
+        let pendingStart = pendingRecord.startIndex
+        let pendingEnd = pendingRecord.endIndex
+        var consumedThrough = pendingStart
+        var searchThrough = pendingRecord.index(
+            pendingStart,
+            offsetBy: min(pendingSearchOffset, pendingRecord.count)
+        )
+        var output = Data()
+        var guestByteCount: UInt64 = 0
+
+        while consumedThrough < pendingEnd {
+            let searchStart = max(consumedThrough, searchThrough)
+            let newline = pendingRecord[searchStart...].firstIndex(of: 0x0A)
+            searchThrough = newline ?? pendingEnd
+            let lineLength =
+                newline.map {
+                    pendingRecord.distance(from: consumedThrough, to: $0) + 1
+                }
+            let remainingLength = pendingRecord.distance(
+                from: consumedThrough,
+                to: pendingEnd
+            )
+            let recordLength: Int
+            let addRecordSeparator: Bool
+
             if let lineLength, lineLength <= Self.maximumRecordBytes {
-                let record = Data(pendingRecord.prefix(lineLength))
-                pendingRecord.removeFirst(lineLength)
-                writeRecord(record, addRecordSeparator: false)
+                recordLength = lineLength
+                addRecordSeparator = false
+            } else if remainingLength >= Self.maximumRecordBytes {
+                recordLength = Self.maximumRecordBytes
+                addRecordSeparator = true
+            } else {
+                break
+            }
+
+            let recordEnd = pendingRecord.index(consumedThrough, offsetBy: recordLength)
+            if searchThrough < recordEnd {
+                searchThrough = recordEnd
+            }
+            if writesDisabled {
+                writerDroppedByteCount &+= UInt64(recordLength)
+                consumedThrough = recordEnd
                 continue
             }
 
-            if pendingRecord.count >= Self.maximumRecordBytes {
-                let record = Data(pendingRecord.prefix(Self.maximumRecordBytes))
-                pendingRecord.removeFirst(Self.maximumRecordBytes)
-                writeRecord(record, addRecordSeparator: true)
-                continue
+            let guestRecord = pendingRecord[consumedThrough..<recordEnd]
+            var prefixedRecord = Data(makePrefix())
+            prefixedRecord.append(contentsOf: guestRecord)
+            if addRecordSeparator {
+                prefixedRecord.append(0x0A)
             }
-            return
+
+            if !output.isEmpty
+                && (guestByteCount + UInt64(recordLength) > UInt64(Self.maximumRecordBytes)
+                    || batchWouldCrossRotationLimit(
+                        currentBatchSize: UInt64(output.count),
+                        adding: UInt64(prefixedRecord.count)
+                    ))
+            {
+                writeRecordBatch(output, guestByteCount: guestByteCount)
+                output.removeAll(keepingCapacity: true)
+                guestByteCount = 0
+            }
+
+            output.append(prefixedRecord)
+            guestByteCount &+= UInt64(recordLength)
+            consumedThrough = recordEnd
+
+            if guestByteCount >= UInt64(Self.maximumRecordBytes)
+                || output.count >= Self.maximumRecordBytes
+            {
+                writeRecordBatch(output, guestByteCount: guestByteCount)
+                output.removeAll(keepingCapacity: true)
+                guestByteCount = 0
+            }
+        }
+
+        let consumedByteCount = pendingRecord.distance(from: pendingStart, to: consumedThrough)
+        let searchedByteCount = pendingRecord.distance(from: pendingStart, to: searchThrough)
+        if consumedByteCount > 0 {
+            pendingRecord.removeSubrange(pendingStart..<consumedThrough)
+        }
+        pendingSearchOffset = max(0, searchedByteCount - consumedByteCount)
+        if !output.isEmpty {
+            writeRecordBatch(output, guestByteCount: guestByteCount)
         }
     }
 
@@ -201,6 +276,14 @@ package actor ConsoleLogWriter {
         if addRecordSeparator {
             output.append(0x0A)
         }
+        writeRecordBatch(output, guestByteCount: UInt64(guestBytes.count))
+    }
+
+    private func writeRecordBatch(_ output: Data, guestByteCount: UInt64) {
+        guard !writesDisabled else {
+            writerDroppedByteCount &+= guestByteCount
+            return
+        }
 
         do {
             try ensureOpenFiles()
@@ -211,25 +294,28 @@ package actor ConsoleLogWriter {
             try mainHandle.write(output)
             mainLogSize &+= UInt64(output.count)
             try bootHandle.write(output)
-            bytesSinceSynchronization &+= UInt64(guestBytes.count)
+            bytesSinceSynchronization &+= guestByteCount
             if bytesSinceSynchronization >= UInt64(Self.maximumRecordBytes) {
                 synchronizeOpenFiles()
             }
         } catch {
             writesDisabled = true
-            reportFailure(error, droppedBytes: UInt64(guestBytes.count))
+            reportFailure(error, droppedBytes: guestByteCount)
             synchronizeOpenFiles()
         }
     }
 
+    private func batchWouldCrossRotationLimit(
+        currentBatchSize: UInt64,
+        adding nextRecordSize: UInt64
+    ) -> Bool {
+        let batchSize = currentBatchSize + nextRecordSize
+        let logSizeBeforeBatch = mainLogSize > 0 ? mainLogSize : 0
+        return logSizeBeforeBatch + batchSize > rotationLimit
+    }
+
     private func makePrefix() -> [UInt8] {
         let reading = clock.read()
-        let wallClock = DateFormatter()
-        wallClock.locale = Locale(identifier: "en_US_POSIX")
-        wallClock.calendar = Calendar(identifier: .iso8601)
-        wallClock.timeZone = TimeZone(secondsFromGMT: 0)
-        wallClock.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-
         let monotonicStart = monotonicStart ?? reading.monotonicUptime
         let elapsed = max(.zero, reading.monotonicUptime - monotonicStart)
         let components = elapsed.components
@@ -238,11 +324,20 @@ package actor ConsoleLogWriter {
         let fractionalMilliseconds = milliseconds % 1_000
         let prefix = String(
             format: "%@ +%lld.%03lld ",
-            wallClock.string(from: reading.wallTime),
+            wallClockFormatter.string(from: reading.wallTime),
             wholeSeconds,
             fractionalMilliseconds
         )
         return Array(prefix.utf8)
+    }
+
+    private static func makeWallClockFormatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        return formatter
     }
 
     private func openMainLog() throws {
@@ -333,6 +428,7 @@ package actor ConsoleLogWriter {
         if synchronizedAllFiles {
             bytesSinceSynchronization = 0
         }
+        hasUnconfirmedSynchronizationFailure = !synchronizedAllFiles
         return synchronizedAllFiles
     }
 

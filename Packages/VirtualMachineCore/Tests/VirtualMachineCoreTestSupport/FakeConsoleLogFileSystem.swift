@@ -8,9 +8,12 @@ public final class FakeConsoleLogFileSystem: ConsoleLogFileSystem, @unchecked Se
     private var modes: [String: UInt16] = [:]
     private var directories: [String: UInt16] = [:]
     private var synchronizations = 0
+    private var writes = 0
     private var shouldFailOpens = false
     private var shouldFailWrites = false
+    private var pathsWithFailedWrites: Set<String> = []
     private var shouldFailSynchronizations = false
+    private var pathsWithFailedSynchronizations: Set<String> = []
 
     public init() {}
 
@@ -29,6 +32,11 @@ public final class FakeConsoleLogFileSystem: ConsoleLogFileSystem, @unchecked Se
         lock.withLock { synchronizations }
     }
 
+    /// The number of attempted file writes.
+    public var writeCallCount: Int {
+        lock.withLock { writes }
+    }
+
     /// Installs a file before the writer starts.
     public func setContents(_ contents: Data, at url: URL, permissions: UInt16 = 0o600) {
         lock.withLock {
@@ -42,6 +50,11 @@ public final class FakeConsoleLogFileSystem: ConsoleLogFileSystem, @unchecked Se
         lock.withLock { shouldFailWrites = true }
     }
 
+    /// Makes writes to one file fail while other files remain writable.
+    public func failWrites(at url: URL) {
+        lock.withLock { _ = pathsWithFailedWrites.insert(url.path) }
+    }
+
     /// Makes later file-open operations fail.
     public func failOpens() {
         lock.withLock { shouldFailOpens = true }
@@ -50,6 +63,16 @@ public final class FakeConsoleLogFileSystem: ConsoleLogFileSystem, @unchecked Se
     /// Makes later synchronization operations fail.
     public func failSynchronizations() {
         lock.withLock { shouldFailSynchronizations = true }
+    }
+
+    /// Makes synchronization of one file fail while other files remain synchronized.
+    public func failSynchronizations(at url: URL) {
+        lock.withLock { _ = pathsWithFailedSynchronizations.insert(url.path) }
+    }
+
+    /// Allows synchronization of one file to succeed again.
+    public func allowSynchronizations(at url: URL) {
+        lock.withLock { _ = pathsWithFailedSynchronizations.remove(url.path) }
     }
 
     package func createDirectory(at url: URL, permissions: UInt16) throws {
@@ -107,17 +130,21 @@ public final class FakeConsoleLogFileSystem: ConsoleLogFileSystem, @unchecked Se
 
     fileprivate func append(_ data: Data, to path: String) throws {
         try lock.withLock {
-            guard !shouldFailWrites else {
+            writes += 1
+            guard !shouldFailWrites, !pathsWithFailedWrites.contains(path) else {
                 throw FakeConsoleLogFileSystemError.writeFailed
             }
             files[path, default: Data()].append(data)
         }
     }
 
-    fileprivate func synchronize() throws {
+    fileprivate func synchronize(path: String) throws {
         try lock.withLock {
             synchronizations += 1
-            guard !shouldFailSynchronizations else {
+            guard
+                !shouldFailSynchronizations,
+                !pathsWithFailedSynchronizations.contains(path)
+            else {
                 throw FakeConsoleLogFileSystemError.synchronizeFailed
             }
         }
@@ -145,7 +172,7 @@ private final class FakeConsoleLogFileHandle: ConsoleLogFileHandle, @unchecked S
     func synchronize() throws {
         try lock.withLock {
             guard !isClosed else { throw FakeConsoleLogFileSystemError.closed }
-            try fileSystem.synchronize()
+            try fileSystem.synchronize(path: path)
         }
     }
 

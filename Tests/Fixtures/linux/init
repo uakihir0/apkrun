@@ -385,14 +385,23 @@ read_console_marker() {
 }
 
 run_ports_test() {
-    hvc1_marker=$(read_console_marker /dev/hvc1 APKRUN-PORT-READY-1) || {
+    if ! stty -F /dev/hvc1 raw -echo; then
+        printf 'APKRUN-TEST: ports fail could not configure hvc1\n'
+        return 1
+    fi
+    if ! stty -F /dev/hvc2 raw -echo; then
+        printf 'APKRUN-TEST: ports fail could not configure hvc2\n'
+        return 1
+    fi
+    printf 'APKRUN-PORT-READY-1\nAPKRUN-PORT-READY-2\n' > /dev/hvc0
+    if ! IFS= read -r -t 5 hvc1_marker < /dev/hvc1; then
         printf 'APKRUN-TEST: ports fail no host marker arrived on hvc1\n'
         return 1
-    }
-    hvc2_marker=$(read_console_marker /dev/hvc2 APKRUN-PORT-READY-2) || {
+    fi
+    if ! IFS= read -r -t 5 hvc2_marker < /dev/hvc2; then
         printf 'APKRUN-TEST: ports fail no host marker arrived on hvc2\n'
         return 1
-    }
+    fi
     if [ "$hvc1_marker" != "APKRUN-PORT-1" ] || [ "$hvc2_marker" != "APKRUN-PORT-2" ]; then
         printf 'APKRUN-TEST: ports fail hvc1=%s hvc2=%s\n' "$hvc1_marker" "$hvc2_marker"
         return 1
@@ -416,6 +425,7 @@ run_flood_test() {
         printf 'APKRUN-FLOOD %s\n' "$flood_index"
         flood_index=$((flood_index + 1))
     done
+    printf 'APKRUN-TEST: flood ok lines=%s\n' "$flood_line_count"
 }
 
 power_monitor_pid=

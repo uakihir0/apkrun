@@ -4,6 +4,32 @@ import XCTest
 @testable import VirtualMachineCore
 
 final class LinuxGuestConsoleTests: XCTestCase {
+    func testConsoleMarkersMatchLFAndCRLFLineEndings() {
+        let marker = Data("APKRUN-PORT-READY-1\n".utf8)
+        let lineFeed = Data("prefix APKRUN-PORT-READY-1\nsuffix".utf8)
+        let carriageReturnLineFeed = Data("prefix APKRUN-PORT-READY-1\r\nsuffix".utf8)
+        let firstChunk = Data("prefix APKRUN-PORT-READY-1\r".utf8)
+
+        XCTAssertTrue(LinuxGuestHarness.consoleMarkerMatches(marker, in: lineFeed))
+        XCTAssertTrue(
+            LinuxGuestHarness.consoleMarkerMatches(marker, in: carriageReturnLineFeed)
+        )
+        var crossChunkBuffer = firstChunk
+        XCTAssertFalse(LinuxGuestHarness.consoleMarkerMatches(marker, in: crossChunkBuffer))
+        LinuxGuestHarness.retainConsoleMarkerSearchTail(
+            &crossChunkBuffer,
+            maximumMarkerLength: marker.count
+        )
+        crossChunkBuffer.append(0x0A)
+        XCTAssertTrue(LinuxGuestHarness.consoleMarkerMatches(marker, in: crossChunkBuffer))
+        XCTAssertFalse(
+            LinuxGuestHarness.consoleMarkerMatches(
+                marker,
+                in: Data("prefix APKRUN-PORT-READY-2\r\n".utf8)
+            )
+        )
+    }
+
     func testBootOutputIsLiveAndPersistedToCurrentAndPerBootLogs() async throws {
         let result = try await LinuxGuestHarness.run(
             testCase: self,

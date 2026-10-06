@@ -114,6 +114,7 @@ enum LinuxGuestHarness {
         case record(TestGuestRecord)
         case state(VMState)
         case consoleMarkerSeen(String)
+        case consoleStreamEnded
         case rebootProbeTimedOut
     }
 
@@ -195,6 +196,12 @@ enum LinuxGuestHarness {
         } else if case .forcedAfterConsoleLineDelay(let marker, _) = stopBehavior {
             consoleMarkers.append((name: marker, bytes: Data(marker.utf8)))
         }
+        if stopBehavior == .observeGuestPanic {
+            consoleMarkers.append(contentsOf: [
+                (name: "Kernel panic", bytes: Data("Kernel panic".utf8)),
+                (name: "Call trace:", bytes: Data("Call trace:".utf8)),
+            ])
+        }
         if tests.contains("ports") {
             consoleMarkers.append(contentsOf: [
                 (name: "APKRUN-PORT-READY-1", bytes: Data("APKRUN-PORT-READY-1\n".utf8)),
@@ -212,15 +219,15 @@ enum LinuxGuestHarness {
                 if !pendingMarkers.isEmpty {
                     markerSearchBuffer.append(bytes)
                     for marker in consoleMarkers where pendingMarkers.contains(marker.name) {
-                        if markerSearchBuffer.range(of: marker.bytes) != nil {
+                        if Self.consoleMarkerMatches(marker.bytes, in: markerSearchBuffer) {
                             pendingMarkers.remove(marker.name)
                             events.continuation.yield(.consoleMarkerSeen(marker.name))
                         }
                     }
-                    let retainedByteCount = max(0, maximumConsoleMarkerLength - 1)
-                    if markerSearchBuffer.count > retainedByteCount {
-                        markerSearchBuffer = Data(markerSearchBuffer.suffix(retainedByteCount))
-                    }
+                    Self.retainConsoleMarkerSearchTail(
+                        &markerSearchBuffer,
+                        maximumMarkerLength: maximumConsoleMarkerLength
+                    )
                 }
                 for record in parser.consume(bytes) {
                     records.continuation.yield(record)
@@ -234,6 +241,7 @@ enum LinuxGuestHarness {
                     recordObserver?(record)
                     events.continuation.yield(.record(record))
                 }
+                events.continuation.yield(.consoleStreamEnded)
             }
             records.continuation.finish()
         }
@@ -306,14 +314,40 @@ enum LinuxGuestHarness {
                 )
             } else if stopBehavior == .observeGuestPanic {
                 observedRecords = try await recordsUntilDone(records.stream)
+                try await waitForConsoleMarker(
+                    "Kernel panic",
+                    events: events.stream,
+                    timeout: .seconds(60),
+                    allowGuestDone: true,
+                    allowGuestTerminalState: true
+                )
+                try await waitForConsoleMarker(
+                    "Call trace:",
+                    events: events.stream,
+                    timeout: .seconds(60),
+                    allowGuestDone: true,
+                    allowGuestTerminalState: true
+                )
+                let panicState = await controller.state
+                if panicState == .running || panicState == .paused || panicState == .stopping {
+                    do {
+                        try await controller.stop()
+                    } catch {
+                        let stateAfterStopFailure = await controller.state
+                        if case .failed = stateAfterStopFailure {
+                            try await controller.reset()
+                        } else if stateAfterStopFailure != .stopped {
+                            throw error
+                        }
+                    }
+                } else if case .failed = panicState {
+                    try await controller.reset()
+                }
                 rebootObservation = nil
-                observedStates = try await statesThroughTerminalState(
+                observedStates = try await statesThroughGuestStop(
                     stateStream.stream,
                     timeout: .seconds(60)
                 )
-                if case .failed = await controller.state {
-                    try await controller.reset()
-                }
             } else if stopBehavior == .observeGuestReboot {
                 let observation = try await observeGuestReboot(
                     events: events.stream,
@@ -902,6 +936,8 @@ enum LinuxGuestHarness {
                 throw HarnessFailure.timedOut
             case .consoleMarkerSeen:
                 continue
+            case .consoleStreamEnded:
+                throw HarnessFailure.consoleEnded
             }
         }
         throw HarnessFailure.consoleEnded
@@ -910,7 +946,9 @@ enum LinuxGuestHarness {
     private static func waitForConsoleMarker(
         _ marker: String,
         events: AsyncStream<HarnessEvent>,
-        timeout: Duration
+        timeout: Duration,
+        allowGuestDone: Bool = false,
+        allowGuestTerminalState: Bool = false
     ) async throws {
         guard !marker.isEmpty else {
             throw HarnessFailure.consoleMarkerNotObserved(marker)
@@ -925,17 +963,21 @@ enum LinuxGuestHarness {
                         return
                     case .consoleMarkerSeen:
                         continue
-                    case .record(.done):
+                    case .record(.done) where !allowGuestDone:
                         throw HarnessFailure.consoleMarkerNotObserved(marker)
+                    case .record(.done):
+                        continue
                     case .record(.check(name: let name, result: .fail, detail: let detail)):
                         throw HarnessFailure.guestCheckFailed(name: name, detail: detail)
+                    case .consoleStreamEnded:
+                        throw HarnessFailure.consoleMarkerNotObserved(marker)
                     case .record, .rebootProbeTimedOut:
                         continue
                     case .state(.running):
                         sawRunning = true
-                    case .state(.stopped) where sawRunning:
+                    case .state(.stopped) where sawRunning && !allowGuestTerminalState:
                         throw HarnessFailure.consoleMarkerNotObserved(marker)
-                    case .state(.failed) where sawRunning:
+                    case .state(.failed) where sawRunning && !allowGuestTerminalState:
                         throw HarnessFailure.consoleMarkerNotObserved(marker)
                     case .state:
                         continue
@@ -952,6 +994,26 @@ enum LinuxGuestHarness {
                 throw HarnessFailure.consoleEnded
             }
         }
+    }
+
+    static func consoleMarkerMatches(_ marker: Data, in buffer: Data) -> Bool {
+        if buffer.range(of: marker) != nil {
+            return true
+        }
+        guard marker.last == 0x0A, marker.dropLast().last != 0x0D else {
+            return false
+        }
+        var crlfMarker = Data(marker.dropLast())
+        crlfMarker.append(contentsOf: [0x0D, 0x0A])
+        return buffer.range(of: crlfMarker) != nil
+    }
+
+    static func retainConsoleMarkerSearchTail(
+        _ buffer: inout Data,
+        maximumMarkerLength: Int
+    ) {
+        guard maximumMarkerLength > 0, buffer.count > maximumMarkerLength else { return }
+        buffer = Data(buffer.suffix(maximumMarkerLength))
     }
 
     private static func collectRecords(

@@ -7922,3 +7922,28 @@ platform-specific skips in 301.48 seconds. Ruff lint, formatting checks, and
 `git diff --check` passed. No T2 guest check or new reference capture was
 possible because Lima guest SSH remained unavailable after the graceful VM
 restart.
+
+## IR-235: Avoid timestamp-sensitive PID substring assertion
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/tests/test_boot_observer.py` |
+
+**Choice.** Remove the assertion that scans the entire observer JSONL output
+for the substring `593`. Keep the focused checks that reject PID 593 from
+shell-probe output and reject unexpected or PID fields in parsed diagnostics.
+
+**Reason.** A full-suite run failed because the substring also appeared in a
+JSONL event timestamp ending in `.593`; the assertion was unrelated to whether
+the PID had leaked. The dedicated allowlist and parser tests check the
+intended privacy behavior against the actual PID field and diagnostic output,
+without interpreting timestamps or unrelated serialized data as a PID.
+
+**Verification.** The focused parameterized case passed. The complete
+`Images/tools/tests` suite passed 597 tests with four platform-specific skips
+in 301.48 seconds. Ruff lint, formatting checks, and `git diff --check` passed.
+Hostile review found no remaining issue with the code change; the
+documentation reference mismatch it identified is corrected in
+`android-image.md` §16.

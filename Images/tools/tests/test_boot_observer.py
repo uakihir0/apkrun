@@ -3263,7 +3263,6 @@ def test_boot_observer_distinguishes_shell_probe_and_property_query_results(
     assert OBSERVER_MODULE.ADB_SHELL_PROBE_MARKER.decode("ascii") not in output.read_text(
         encoding="ascii"
     )
-    assert "593" not in output.read_text(encoding="ascii")
     assert len(calls) == expected_call_count
     assert output_limits == [OBSERVER_MODULE.ADB_COMMAND_MAX_OUTPUT_BYTES] * expected_call_count
     assert timeouts[:2] == [OBSERVER_MODULE.ADB_COMMAND_TIMEOUT_SECONDS] * min(

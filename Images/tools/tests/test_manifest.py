@@ -202,6 +202,18 @@ def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
         assert validate_manifest(_load_json(path)) == [], path
 
 
+def test_manifest_cli_checks_every_committed_manifest_without_image_files(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CI command validates each committed manifest through the CLI."""
+    paths = sorted(REPOSITORY_ROOT.glob("Images/manifests/*/android-image.json"))
+    assert paths
+
+    for path in paths:
+        assert manifest_main(["--check", "--no-files", str(path)]) == 0, path
+        assert capsys.readouterr().err == "", path
+
+
 def test_invalid_manifest_only_fixtures_match_their_expected_messages() -> None:
     """Python and Swift share exact expected messages for all manifest-only checks."""
     python_only = _python_only_fixtures()

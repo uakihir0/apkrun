@@ -7762,3 +7762,17 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** ImageCore decodes these values as Swift `Int` on supported 64-bit platforms. Python's arbitrary-precision integers previously let schema-only validation accept documents that Swift could not decode. The bound makes Python reject those documents while preserving the model's current type and behavior.
 
 **Verification.** Python regression cases reject values above the cap for archive, artifact, logical-partition, and blank-partition sizes. The Swift decoder rejects an out-of-range archive size with typed `ImageFailure.manifestInvalid`; the schema-copy test passes.
+
+## IR-229: Run the manifest CLI check in CI
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected files | `.github/workflows/ci.yml`; `Images/tools/tests/test_manifest.py` |
+
+**Choice.** The image CI job runs `manifest --check --no-files` for every committed `Images/manifests/*/android-image.json`, and a Python regression test exercises the same CLI path.
+
+**Reason.** The CI job previously called the validation function only through unit tests, leaving the documented command-line check and its exit behavior untested.
+
+**Verification.** The committed-manifest CLI regression passes locally, and the command succeeds for the pinned manifest.

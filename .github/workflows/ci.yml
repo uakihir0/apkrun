@@ -206,6 +206,13 @@ jobs:
         run: |
           python3.12 -m venv Images/tools/.venv
           Images/tools/.venv/bin/python -m pip install -e 'Images/tools[test]'
+      - name: Check committed Android image manifests
+        run: |
+          for manifest in Images/manifests/*/android-image.json; do
+            if [ -f "$manifest" ]; then
+              Images/tools/.venv/bin/python -m apkrun_image manifest --check --no-files "$manifest"
+            fi
+          done
       - name: Run image tooling tests
         run: Images/tools/.venv/bin/python -m pytest Images/tools/tests
       - name: Check image tooling style

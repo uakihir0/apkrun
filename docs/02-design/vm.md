@@ -177,6 +177,12 @@ Apple does not document the order in which VZ assigns PCI functions to serial po
 2. #095 repeats this with all 20 ports, using a small guest-side probe run from the test initramfs, before the Android boot relies on it.
 3. If VZ numbering is not the array order, `ConsolePortPlan` (RuntimeCore) re-orders the array so that the guest numbering matches the Cuttlefish map. The mapping is data, never scattered constants.
 
+**Observed on the reference Mac.** On 2026-10-05 UTC, arm64 macOS 27.0
+(26A428) reported `hvc1=APKRUN-PORT-1` and `hvc2=APKRUN-PORT-2` in the signed
+#004 T2 test. This confirms array order on this OS build; #095 still verifies
+all 20 ports, and the product must not depend on this observation across OS
+releases.
+
 ### 6.3 Attachments and sinks
 
 Each port gets a `VZFileHandleSerialPortAttachment` built from two pipes:
@@ -222,8 +228,9 @@ attached again after detachment.
 
 ### 6.4 `ConsoleLogWriter`
 
-- A dedicated bounded `ConsoleChannel` subscription feeds the writer asynchronously, so disk I/O does not run on the pipe reader. If the writer subscription falls behind, it counts dropped bytes and reports an incomplete log through `vm.consoleWriter`.
+- A dedicated bounded `ConsoleChannel` subscription feeds the writer asynchronously, so disk I/O does not run on the pipe reader. The dropped-byte count includes stream drops and guest bytes the writer cannot confirm in every required destination. Bytes awaiting a successful `fsync` after a synchronization error remain counted until a later successful sync. Either condition reports an incomplete log through `vm.consoleWriter`.
 - Each record is prefixed with wall-clock time (ISO 8601, milliseconds) and host monotonic time since `VM_START`: `yyyy-MM-dd'T'HH:mm:ss.SSSZ +<seconds>.<milliseconds> `. A partial line is terminated and written at the next 250 ms flush; subsequent bytes start a new record.
+- Complete records are written in bounded batches, ending a batch before the 64 KiB guest-byte threshold or a rotation boundary. Each record retains its own timestamp. A guest line longer than the 64 KiB record limit is split into newline-terminated records.
 - Rotation at 20 MiB keeps five generations (`console.log`, `console.1.log`, …, `console.4.log`).
 - Also writes a per-boot copy `vm/boot-<yyyyMMdd'T'HHmmss'Z'>.log`; the newest five boots are kept.
 - Buffered writes are flushed and `fsync`ed every 250 ms or 64 KiB, whichever comes first, and when the VM fails or its console stream closes during stop/reset. Before publishing `.failed`, the controller performs the bounded read-queue snapshot, waits for all bytes yielded to the log subscription through its ordered barrier, then flushes and synchronizes both files. Serial logs must survive a VM or host-process crash (NFR-REL-05).
@@ -337,8 +344,8 @@ M0 needs a small Linux guest that exercises every device before Android is invol
   1. mounts proc/sys/dev, loads modules;
   2. unless it will power off after the tests, finds the GPIO chip labeled PL061 and starts `gpiomon` for rising edges on offset 6. It uses `gpioinfo` to verify that the line is held by the monitor before reporting readiness. If the chip or line request is unavailable, it reports an init failure and attempts to power off rather than booting without a stop path;
   3. prints `APKRUN-TEST: boot ok` to `hvc0`, then reports `powerinput ok` after the GPIO line request is confirmed;
-  4. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check;
-  5. prints `APKRUN-TEST: done`, powers off when `apkrun.test.poweroff=1`, or keeps the serial shell available while waiting for the VZ power input. On the rising GPIO edge, it powers off.
+  4. runs the device checks requested on the command line (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`; `rng` is added by #063, `gpu` by #019, `virgl` by the renderer integration step in [graphics.md](graphics.md) §12) and prints `APKRUN-TEST: <name> ok|fail <detail>` per check. The #004 flood check prints its requested `APKRUN-FLOOD <i>` lines followed by `APKRUN-TEST: flood ok lines=<n>`;
+  5. prints `APKRUN-TEST: done`, then triggers `apkrun.test.panic=1` when requested. Otherwise it powers off when `apkrun.test.poweroff=1`, or keeps the serial shell available while waiting for the VZ power input. On the rising GPIO edge, it powers off.
 - **Disks:** `Tests/Fixtures/linux/` scripts create a small raw test disk at test time (read-only and read-write variants with known content).
 - The T2 test harness (`Tests/IntegrationTests/LinuxGuestTests`) boots this guest with `EmbeddedRuntimeService`-free plumbing (just VirtualMachineCore) and asserts on the `APKRUN-TEST:` lines. Timeout 60 s.
 - The pinned Alpine 6.18.54 kernel has `CONFIG_GPIO_CDEV=y` and `CONFIG_GPIO_PL061=m`, but no `CONFIG_KEYBOARD_GPIO`. The initramfs uses the GPIO character-device API through `libgpiod`; it does not depend on the keyboard input driver. A captured T2 console identified `gpiochip0 [20060000.pl061]` and showed a rising event on offset 6 after `requestGuestStop()`. `gpiochip` is resolved by its PL061 label; only the verified offset is monitored.
@@ -432,7 +439,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
 | `validate()` without the virtualization entitlement | #002 | pending |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
-| Serial port numbering with three ports | #004 | pending: IntegrationTests builds for testing with signing disabled, but VM execution has not run because the required local signing settings are unavailable |
+| Serial port numbering with three ports | #004 | 2026-10-06 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestConsoleTests` passed; guest-visible hvc1/hvc2 numbering matched attachment-array order |
 | Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |
 | Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |
 | NAT network: DHCP lease and a host-local HTTP fetch | #006 | pending |

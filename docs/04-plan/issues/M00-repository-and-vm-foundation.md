@@ -1096,9 +1096,11 @@ Out of scope:
 - `ConsoleLogWriter.swift` and `ConsoleLogFileSystem.swift` (the protocol, the live implementation, and a fake in `VirtualMachineCoreTestSupport`).
 - `/init` additions:
   - the `ports` check;
-  - `apkrun.test.flood=<n>`, which prints `n` numbered lines `APKRUN-FLOOD <i>` as fast as possible;
-  - `apkrun.test.panic=1`, which triggers `echo c > /proc/sysrq-trigger` after `boot ok`.
+  - `apkrun.test.flood=<n>`, which prints `n` numbered lines `APKRUN-FLOOD <i>` as fast as possible, then reports `APKRUN-TEST: flood ok lines=<n>`;
+  - `apkrun.test.panic=1`, which prints `done` and then triggers `echo c > /proc/sysrq-trigger`.
 - `apkrun dev console` (development builds only).
+- `apkrun dev linux --tests flood` defaults to 10,000,000 output lines;
+  `--flood-lines` accepts an explicit count from 1 through 10,000,000.
 - `Tests/IntegrationTests/LinuxGuestTests/ConsoleTests.swift`.
 
 ### Implementation steps
@@ -1142,7 +1144,10 @@ Out of scope:
    - (b) A panic. The kernel panic message and the call trace must be in `console.log` after the test stops the VM.
    - (c) A `failed` transition must flush the writer.
 
-   Manual check: `kill -9` the `apkrun-dev dev linux` process during a flood. The log then holds every line up to at most 250 ms before the kill.
+   Manual check: run
+   `apkrun-dev dev linux --tests flood --flood-lines 10000000 --timeout 3600`,
+   then `kill -9` that process during the flood. The log then holds every line
+   up to at most 250 ms before the kill.
 
    Check: the T2 tests pass, and the manual result is recorded in the pull request.
 
@@ -1170,14 +1175,14 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Acceptance criteria
 
-- [ ] Guest boot output is visible live: `apkrun-dev dev linux` prints it, and `apkrun dev console` gives an interactive `hvc0`.
-- [ ] The same output is persisted in `vm/` under the logs root. That is `~/Library/Logs/APKRun/vm/` in release builds and `~/Library/Logs/APKRun-Dev/vm/` in Debug builds.
-- [ ] Oversized logs rotate at 20 MiB with five generations, and the last five per-boot copies are kept.
-- [ ] A VM crash still leaves useful logs. After a forced stop mid-output, after a guest panic, and after `kill -9` of the host process, the log holds the output up to the last complete line, or up to at most 250 ms before a host crash (NFR-REL-05).
-- [ ] Each line carries the wall-clock and monotonic prefixes of [../../02-design/vm.md](../../02-design/vm.md) §6.4. The bytes are unchanged and unredacted.
-- [ ] The host never writes to `.log` or `.silent` ports. It writes to `.systemConsole` only in `apkrun dev console`.
-- [ ] The three-port numbering is verified by a T2 test and recorded.
-- [ ] Log write errors appear in the `vm.consoleWriter` health check.
+- [x] Guest boot output is visible live: `apkrun-dev dev linux` prints it, and `apkrun dev console` gives an interactive `hvc0`.
+- [x] The same output is persisted in `vm/` under the logs root. That is `~/Library/Logs/APKRun/vm/` in release builds and `~/Library/Logs/APKRun-Dev/vm/` in Debug builds.
+- [x] Oversized logs rotate at 20 MiB with five generations, and the last five per-boot copies are kept.
+- [x] A VM crash still leaves useful logs. After a forced stop mid-output, after a guest panic, and after `kill -9` of the host process, the log holds the output up to the last complete line, or up to at most 250 ms before a host crash (NFR-REL-05).
+- [x] Each line carries the wall-clock and monotonic prefixes of [../../02-design/vm.md](../../02-design/vm.md) §6.4. The bytes are unchanged and unredacted.
+- [x] The host never writes to `.log` or `.silent` ports. It writes to `.systemConsole` only in `apkrun dev console`.
+- [x] The three-port numbering is verified by a T2 test and recorded.
+- [x] Log write errors appear in the `vm.consoleWriter` health check.
 
 ### Notes
 
@@ -1186,7 +1191,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** do not `fsync` on every line. At boot, the kernel can print thousands of lines a second. The 250 ms and 64 KiB policy keeps the disk load bounded.
 - The dev console behavior (booting the Linux test guest in embedded mode, and Ctrl-] requesting a guest stop) is a choice of this plan. [../../02-design/cli.md](../../02-design/cli.md) §5 does not say which VM `dev console` uses before #014.
 - Writing no marker into port 0 is also a choice. It follows §6.3. [../../02-design/vm.md](../../02-design/vm.md) §6.2 step 1 would write into every port.
-- **Implementation checkpoint (2026-10-05):** the T0 writer and VM-health tests and T1 real-pipe/filesystem tests pass, and the IntegrationTests target builds for testing with signing disabled. Signed T2 execution and the `kill -9` manual check remain unrun because this shell has no `APKRUN_TEST_DEVELOPMENT_TEAM` or `APKRUN_TEST_CODE_SIGN_IDENTITY`; do not close this task or record the three-port result until they pass. The exact stream-loss comparison and failure-flush ordering are recorded in [implementation-review.md](../implementation-review.md) IR-194.
+- **Implementation checkpoint (2026-10-06 UTC):** 84 `VirtualMachineCoreTests`, 18 `VirtualMachineCoreSystemTests`, and 19 `apkrunTests` passed. Signed `LinuxGuestConsoleTests` passed 5/5 on arm64 macOS 27.0 (26A428), including persistence, LF/CRLF matching, flood stop, panic capture, and service-port numbering; the guest reported hvc1/hvc2 in attachment-array order. `APKRunTestHost.app` passed strict signature verification with the Virtualization entitlement. The final manual SIGKILL flood check stopped the CLI 50 ms after line 100; stdout had received 1,025 contiguous records and both persisted logs held the same 1,024 complete contiguous records, through line 1,024. The last log timestamp, rounded to milliseconds, was within 1 ms of termination. The interactive console echoed a guest command and exited 0 on Ctrl-]. `ConsoleLogWriterTests` passed all 9 cases. All six repository checks passed, and hostile review found no actionable issues in the final #004 changes. Verification and the recorded implementation choices are in [implementation-review.md](../implementation-review.md) IR-194 and IR-201.
 
 ---
 

@@ -163,6 +163,34 @@ def test_manifest_cli_reports_json_parser_limits_without_traceback(
     assert "9" * 100 not in error_output
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_path"),
+    (
+        (("source", "archives", 0, "size"), "source.archives.0.size"),
+        (("artifacts", 0, "size"), "artifacts.0.size"),
+        (("logicalPartitions", 0, "size"), "logicalPartitions.0.size"),
+        (("blankPartitions", 0, "size"), "blankPartitions.0.size"),
+    ),
+    ids=("archive", "artifact", "logical-partition", "blank-partition"),
+)
+def test_schema_rejects_integer_values_above_swift_int_range(
+    path: tuple[str | int, ...],
+    expected_path: str,
+) -> None:
+    """Python does not accept sizes that ImageCore cannot decode as Swift Int."""
+    manifest = _load_json(PINNED_MANIFEST)
+    parent: Any = manifest
+    for component in path[:-1]:
+        parent = parent[component]
+    parent[path[-1]] = 1 << 63
+
+    failures = validate_manifest(manifest)
+
+    assert any(
+        failure.startswith(f"{expected_path}:") and "maximum" in failure for failure in failures
+    )
+
+
 def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
     """Every checked-in valid example satisfies the versioned schema and M1–M9."""
     valid_directory = FIXTURE_ROOT / "valid"

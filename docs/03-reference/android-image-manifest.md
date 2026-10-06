@@ -558,6 +558,8 @@ The zip ships no image for these partitions. `metadata` is here because the #009
 
 This schema is copied byte for byte into `Images/tools/schemas/android-image-manifest.schema.json`. The Python tools validate with it. The Swift `Codable` model in ImageCore must accept exactly the same documents (§12).
 
+The maximum value for `schemaVersion` and byte-size fields is `9223372036854775807`, the largest signed 64-bit integer. ImageCore stores these fields as Swift `Int` on the supported 64-bit platforms.
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -567,7 +569,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
   "additionalProperties": false,
   "required": ["schemaVersion", "source", "android", "architecture", "deviceFamily", "artifacts", "roles", "logicalPartitions", "blankPartitions", "androidInfo"],
   "properties": {
-    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "schemaVersion": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -587,7 +589,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
             "required": ["name", "size", "sha256"],
             "properties": {
               "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$(?![\\s\\S])" },
-              "size": { "type": "integer", "minimum": 1 },
+              "size": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
               "sha256": { "$ref": "#/$defs/sha256" }
             }
           }
@@ -624,7 +626,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
             "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
           },
           "sha256": { "$ref": "#/$defs/sha256" },
-          "size": { "type": "integer", "minimum": 1 },
+          "size": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
           "kind": { "enum": ["bootImage", "vendorBootImage", "vbmeta", "sparse", "dynamicPartitions", "filesystem", "unknown"] },
           "partition": { "$ref": "#/$defs/partition" }
         }
@@ -653,7 +655,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
         "required": ["name", "size", "filesystem"],
         "properties": {
           "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$(?![\\s\\S])" },
-          "size": { "type": "integer", "minimum": 512, "multipleOf": 512 },
+          "size": { "type": "integer", "minimum": 512, "maximum": 9223372036854775807, "multipleOf": 512 },
           "filesystem": { "enum": ["ext4", "erofs", "f2fs", "unknown"] }
         }
       }
@@ -667,7 +669,7 @@ This schema is copied byte for byte into `Images/tools/schemas/android-image-man
         "required": ["partition", "size"],
         "properties": {
           "partition": { "$ref": "#/$defs/partition" },
-          "size": { "type": "integer", "minimum": 4096, "multipleOf": 4096 }
+          "size": { "type": "integer", "minimum": 4096, "maximum": 9223372036854775807, "multipleOf": 4096 }
         }
       }
     },

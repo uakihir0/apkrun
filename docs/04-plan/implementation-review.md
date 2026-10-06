@@ -7748,3 +7748,17 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** Those parser exceptions bypassed the CLI's typed error handling and printed tracebacks containing attacker-controlled input. Returning the same safe failure class as other malformed manifests keeps both the CLI and generator actionable.
 
 **Verification.** CLI regression tests exercise a 5,000-digit integer and 10,000 nested arrays; both return exit code 2 with a bounded diagnostic and no traceback.
+
+## IR-228: Bound manifest integers to ImageCore's representation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009 |
+| Affected documents | [android-image-manifest.md](../03-reference/android-image-manifest.md) §7; `Images/tools/schemas/android-image-manifest.schema.json`; Python and Swift manifest tests |
+
+**Choice.** Cap `schemaVersion` and all manifest byte-size fields at `9223372036854775807`.
+
+**Reason.** ImageCore decodes these values as Swift `Int` on supported 64-bit platforms. Python's arbitrary-precision integers previously let schema-only validation accept documents that Swift could not decode. The bound makes Python reject those documents while preserving the model's current type and behavior.
+
+**Verification.** Python regression cases reject values above the cap for archive, artifact, logical-partition, and blank-partition sizes. The Swift decoder rejects an out-of-range archive size with typed `ImageFailure.manifestInvalid`; the schema-copy test passes.

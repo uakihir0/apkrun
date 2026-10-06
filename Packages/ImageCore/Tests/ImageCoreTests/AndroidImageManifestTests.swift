@@ -122,6 +122,18 @@ func androidImageManifestReportsJSONTypeMismatchesAsTypedFailures() throws {
 }
 
 @Test
+func androidImageManifestRejectsIntegerOutsideSwiftIntRangeAsTypedFailure() throws {
+    let json = validManifestJSON.replacingOccurrences(
+        of: "\"size\": 1",
+        with: "\"size\": 9223372036854775808"
+    )
+
+    #expect(throws: ImageFailure.self) {
+        try decodeManifest(json)
+    }
+}
+
+@Test
 func androidImageManifestRejectsUnknownKeysAtEveryFixedObjectLevel() throws {
     let invalidJSON = [
         validManifestJSON.replacingOccurrences(

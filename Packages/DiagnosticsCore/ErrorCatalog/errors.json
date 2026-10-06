@@ -119,6 +119,44 @@
       }
     },
     {
+      "code": "vm.vsockDeviceNotConfigured",
+      "parameters": [],
+      "message": {
+        "en": "Android's host connection isn't enabled."
+      },
+      "remediation": {
+        "en": "Enable vsock in the VM definition before connecting. If APKRun created this VM, update the caller to request vsock and restart the VM."
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmFailure",
+        "case": "vsockDeviceNotConfigured",
+        "when": "VMController.connect is called for a VM definition without vsock enabled",
+        "raisedBy": "VMController",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "vm.vsockDeviceUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "Android's host connection is unavailable."
+      },
+      "remediation": {
+        "en": "Restart Android. If this happens again, create a diagnostics report."
+      },
+      "action": "restartAndroid",
+      "cliExit": 70,
+      "doc": {
+        "table": "vmFailure",
+        "case": "vsockDeviceUnavailable",
+        "when": "the VM definition enables vsock but Virtualization.framework does not expose its device",
+        "raisedBy": "VMController",
+        "ref": "§8"
+      }
+    },
+    {
       "code": "vm.vsockConnectFailed",
       "parameters": [
         "port"

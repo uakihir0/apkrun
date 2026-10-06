@@ -6,7 +6,9 @@ import Testing
     let expectedCodes = Set(
         [
             "invalidTransition", "startFailed", "stoppedWithError", "pauseFailed",
-            "resumeFailed", "stopTimedOut", "vsockConnectFailed", "vsockPortNotListening",
+            "resumeFailed", "stopTimedOut", "vsockDeviceNotConfigured", "vsockDeviceUnavailable",
+            "vsockConnectFailed",
+            "vsockPortNotListening",
             "vsockConnectTimedOut", "virtualizationUnavailable", "cpuCountOutOfRange",
             "memoryOutOfRange", "memoryExceedsHostCap", "kernelMissing",
             "kernelNotUncompressedImage", "initrdMissing", "initrdTooLarge",
@@ -70,6 +72,13 @@ import Testing
             }
         }
     }
+}
+
+@Test func unconfiguredVsockErrorPointsToTheVMDefinition() throws {
+    let entry = try #require(ErrorCatalog.entry(for: "vm.vsockDeviceNotConfigured"))
+
+    #expect(entry.action == .openTroubleshooting)
+    #expect(entry.remediation?["en"]?.contains("Enable vsock in the VM definition") == true)
 }
 
 @Test func configurationListExitUsesEveryItemAndHasSafeFallbacks() {

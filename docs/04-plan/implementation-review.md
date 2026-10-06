@@ -1820,10 +1820,11 @@ keeping runtime files and cleanup scoped to the temporary capture.
 **Choice.** File-backed manifest validation requires the recorded inventory
 source type to be `zip` before comparing its archive name, size, and hash with
 `source.archives`. It also compares `source.branch`, `source.buildId`, and
-`source.target` against the actual inventory generated from the fetched
-archive's `fetch.json`, even if both the manifest and recorded inventory agree
-on altered values. Fail closed when actual archive inventory lacks any fetched
-provenance field; an absent `fetch.json` is not independent confirmation.
+`source.target` against the actual inventory generated using the archive's
+adjacent `fetch.json` sidecar, even if both the manifest and recorded inventory
+agree on altered values. Fail closed when actual archive inventory lacks any
+required build metadata; an absent `fetch.json` does not independently confirm
+source origin. The sidecar itself is unsigned local metadata; see IR-230.
 Escape and bound inventory-derived values in diagnostics, and reject control,
 format, surrogate, line-separator, and paragraph-separator characters in
 fetched archive names before using them as paths.
@@ -1832,9 +1833,10 @@ fetched archive names before using them as paths.
 archive, and M10 requires its recorded archive fingerprint to match the
 manifest. Accepting `directory` here would let an edited inventory remove its
 archive name and fingerprints while retaining fetched build metadata, bypassing
-the provenance check. Comparing the build identifiers to the re-read archive
-inventory prevents a jointly edited manifest and inventory from overriding
-the fetch record. Control, format, surrogate, line-separator, and
+the archive consistency check. Comparing the build identifiers to the re-read
+archive inventory prevents a jointly edited manifest and inventory from
+disagreeing with the sidecar, but does not authenticate that sidecar or its
+build metadata. Control, format, surrogate, line-separator, and
 paragraph-separator characters in fetched archive names could forge diagnostics
 or make a path unencodable, so inventory rejects them before path use. Escaping
 metadata values prevents malformed local inventory files from forging log
@@ -7721,7 +7723,7 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Verification.** The observer test module passed 172 tests with one Linux-only skip; the full image-tools suite passed 577 tests with four platform-specific skips. Ruff lint and formatting checks and `git diff --check` passed. The focused regression tests cover source-qualified and complete event-5 lines, negated send text, oversized complete and split lines, capped logs, and disappearance after observation. A parser-only run over the retained `target-20261005T082217-1740702/launcher.log` emitted 160 `connectAttempts`, 160 `connectMessagesSent`, 159 `deviceNotFoundResponses`, and 159 `disconnectRequests`; it recorded `launcherLogObserved=true`, `launcherLogGapDetected=false`, `partialLauncherLineAtStop=false`, and `startEvent5Observed=false`. This parser-only check started no ADB process and did not boot Cuttlefish.
 
-## IR-226: Require fetched provenance when generating image manifests
+## IR-226: Require sidecar build metadata when generating image manifests
 
 | Field | Value |
 |---|---|
@@ -7729,11 +7731,11 @@ transfer the executable path recorded for the earlier PID to it.
 | Task | #009 |
 | Affected files | `Images/tools/apkrun_image/manifest.py`; `Images/tools/tests/test_manifest.py` |
 
-**Choice.** The manifest generator rejects an archive inventory unless the fresh inventory of its source includes branch, build ID, and target metadata from a valid `fetch.json`.
+**Choice.** The manifest generator rejects an archive inventory unless a fresh inventory of its source includes non-empty branch, build ID, and target metadata from a `fetch.json` sidecar whose archive fingerprint matches the bytes. This closes the missing-sidecar and stale-local-metadata paths; it does not authenticate who created the sidecar.
 
-**Reason.** A standalone archive and an edited `inventory.json` could otherwise produce a draft that copied unverified build provenance and failed only at the later file-backed check. Requiring the metadata while generating the draft surfaces the provenance problem before writing a manifest.
+**Reason.** A standalone archive and an edited `inventory.json` could otherwise produce a draft that copied local metadata without checking it against the current archive, then fail only at the later file-backed check. Requiring complete matching sidecar metadata during generation surfaces missing or stale local consistency data before writing a manifest. The sidecar remains unsigned and locally editable; see IR-230 for that trust boundary.
 
-**Verification.** A regression test first reproduced the accepted unverified draft, then passed after the generator required complete fetched provenance. The shared fixture generator test also passed.
+**Verification.** A regression test first reproduced the draft generated without sidecar metadata, then passed after the generator required complete matching metadata. The shared fixture generator test also passed.
 
 ## IR-227: Normalize JSON parser limit failures
 
@@ -7761,7 +7763,7 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Reason.** ImageCore decodes these values as Swift `Int` on supported 64-bit platforms. Python's arbitrary-precision integers previously let schema-only validation accept documents that Swift could not decode. The bound makes Python reject those documents while preserving the model's current type and behavior.
 
-**Verification.** Python regression cases reject values above the cap for archive, artifact, logical-partition, and blank-partition sizes. The Swift decoder rejects an out-of-range archive size with typed `ImageFailure.manifestInvalid`; the schema-copy test passes.
+**Verification.** On 2026-10-06, the focused Python manifest and no-file-name suites passed 41 tests. Regression cases reject values above the cap and accept the largest valid signed-64-bit archive, artifact, and aligned partition sizes. The Swift ImageCore manifest suite passed 26 tests, including typed rejection above `Int.max` and acceptance at its valid size boundaries. Both implementations also accept integral floating-form JSON numbers such as `37.0` for integer fields.
 
 ## IR-229: Run the manifest CLI check in CI
 
@@ -7775,4 +7777,46 @@ transfer the executable path recorded for the earlier PID to it.
 
 **Reason.** The CI job previously called the validation function only through unit tests, leaving the documented command-line check and its exit behavior untested.
 
-**Verification.** The committed-manifest CLI regression passes locally, and the command succeeds for the pinned manifest.
+**Verification.** On 2026-10-06, the committed-manifest CLI regression passed in the 41-test focused Python run. `manifest --check Images/manifests/16373615/android-image.json` also succeeded with the real archive present.
+
+## IR-230: Define the fetch sidecar trust boundary
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #009, #064 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1; [android-image-manifest.md](../03-reference/android-image-manifest.md) §4.2, §8; [M01](issues/M01-android-bring-up.md) #009 and #064 |
+
+**Choice.** Treat `fetch.json` as unsigned local consistency metadata. Require its archive name, size, and SHA-256 to match the archive, and compare its build ID, target, and caller-asserted branch with inventory and manifest fields. Do not describe those checks as cryptographic authentication or proof that the `fetch` command wrote the sidecar.
+
+**Reason.** The inventory and manifest checks catch missing metadata and inconsistent local edits, while a locally fabricated sidecar containing the correct archive fingerprint and asserted build fields is indistinguishable from a sidecar written by `fetch`. The plan does not specify signed provenance or a signing-key lifecycle. Adding an attestation system would expand the design and create a new trust dependency. Preserve the documented local workflow and make the limitation visible for maintainer review; keep source-derived manifest values under the existing human review in IR-062.
+
+**Verification.** Documentation now distinguishes archive-byte consistency from source-origin authentication in the design, reference, and task documents. No code path or source metadata format changed for this clarification. The sidecar remains editable by a local user; the current checks do not establish who created it.
+
+## IR-231: Check installed crosvm unwinder symbols
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [environment setup](../05-development/environment-setup.md) §3.3; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Record the installed package path, ELF identities, dependencies, exported symbols, and saved Apport executable metadata as read-only evidence. Do not infer the earlier SIGSEGV's caller offsets or root cause from other processes, and do not repeat a VM boot for this check.
+
+**Reason.** The supplied diagnostic identified a possible collision between libgcc's backtrace context and LLVM unwinder entry points exported by gfxstream. Checking the installed package and saved Apport metadata tests whether the involved binaries and symbols are present without requiring matching debug symbols or another guest run. The loader checks in IR-187 were performed in separate `crosvm --help` processes, so these observations do not establish the actual symbol binding in PID 1573779 or prove the secondary-crash hypothesis.
+
+**Verification.** On the arm64 Lima host, `readelf -n` reported crosvm Build ID `d724bf54f045b0ec7dbe14049b0fed9a16e52a23` and gfxstream Build ID `6b8f3105442da5c66988881a1fa76e812b13c3e8`. `readelf --dyn-syms -W` showed gfxstream exports for `unw_get_reg` and `_Unwind_GetIP`; `readelf -d` showed crosvm dependencies on both `libgfxstream_backend.so` and `libgcc_s.so.1`. Three saved retry Apport metadata records for PIDs 1618196, 1620954, and 1619678 identify `/usr/lib/cuttlefish-common/bin/crosvm` and package `cuttlefish-base 1.57.0 [origin: android-cuttlefish]`. Those are not the first-crash PID 1573779. No core was opened or modified and no VM boot was run.
+
+## IR-232: Normalize fetch sidecar JSON parser limits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #008 |
+| Affected files | `Images/tools/apkrun_image/{fetch.py,inventory.py}`; `Images/tools/tests/{test_fetch.py,test_inventory.py}`; [M01](issues/M01-android-bring-up.md) #008 |
+
+**Choice.** Convert JSON integer-digit and nesting-limit exceptions while reading `fetch.json` into fixed `FetchError` or `InventoryError` diagnostics. Do not include rejected JSON values in the messages.
+
+**Reason.** `fetch.json` is editable local input read by both commands. Python can raise `ValueError` for an oversized integer token and `RecursionError` for excessive nesting; neither CLI handled these exceptions, so they escaped the typed error path with a traceback. Normalize both in the same way as manifest parser limits.
+
+**Verification.** The `fetch` CLI regression cases supply a 5,000-digit integer and 10,000 nested arrays in `fetch.json`; the inventory CLI has matching cases. Each command returns its documented error code with a bounded diagnostic, no traceback, and no echoed integer. The focused `test_fetch.py` and `test_inventory.py` suites passed 86 tests, and the full image-tools suite passed 594 tests with four platform skips.

@@ -471,6 +471,8 @@ cleanup. Select the `target` fallback explicitly by setting
 
 Without an M3 Mac, use an arm64 Linux machine (bare metal or cloud), or as a last resort an x86_64 Linux host with QEMU TCG.
 
+**Read-only crosvm package check (2026-10-06; see [IR-231](../04-plan/implementation-review.md#ir-231-check-installed-crosvm-unwinder-symbols)).** On the arm64 Lima host, `readelf` reported Build IDs `d724bf54f045b0ec7dbe14049b0fed9a16e52a23` for `/usr/lib/cuttlefish-common/bin/crosvm` and `6b8f3105442da5c66988881a1fa76e812b13c3e8` for its adjacent `libgfxstream_backend.so`. The backend exports `unw_get_reg` and `_Unwind_GetIP`; crosvm depends on both that backend and `libgcc_s.so.1`. Saved Apport retry metadata identifies the same executable path and package `cuttlefish-base 1.57.0 [origin: android-cuttlefish]`. This confirms the package path and symbol availability for those retries, not the exact binding or cause of PID 1573779's earlier SIGSEGV.
+
 ---
 
 ## 4. Test Linux guest

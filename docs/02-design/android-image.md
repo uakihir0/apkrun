@@ -140,7 +140,7 @@ The prebuilt image is used for development only (M1–M4). Release images are bu
 
 ### 3.1 Inventory (#008)
 
-`scripts/inventory-cuttlefish.py <zip or directory> [--out inventory.json]` lists every archive entry and classifies it **by content**. When given a download directory with one archive and `fetch.json`, it inventories that archive and carries the checked build provenance into the inventory. An unpacked directory without fetch metadata is inventoried as a directory. File names are recorded only as hints. #008 requires filename, size, hash, and probable purpose. The tool records more.
+`scripts/inventory-cuttlefish.py <zip or directory> [--out inventory.json]` lists every archive entry and classifies it **by content**. When given a download directory with one archive and `fetch.json`, it checks the sidecar's archive name, size, and SHA-256 against the archive and carries its build ID, target, and caller-asserted branch into the inventory. `fetch.json` is unsigned local metadata; these checks do not prove that `fetch` created it or authenticate its build fields ([android-image-manifest.md](../03-reference/android-image-manifest.md) §4.2). An unpacked directory without fetch metadata is inventoried as a directory. File names are recorded only as hints. #008 requires filename, size, hash, and probable purpose. The tool records more.
 
 | Detection | Test | Extra details recorded |
 |---|---|---|

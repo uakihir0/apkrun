@@ -28,7 +28,7 @@ Both files live in the source tree. Neither is shipped to users. The runtime ima
 |---|---|---|
 | `Images/manifests/<buildId>/inventory.json` | yes | the inventory (§4) |
 | `Images/manifests/<buildId>/android-image.json` | yes | the manifest (§5–§6) |
-| `Images/work/<buildId>/download/` | no (git-ignored) | the downloaded archives and `fetch.json` (name, size, SHA-256 per download; branch marked caller-asserted) |
+| `Images/work/<buildId>/download/` | no (git-ignored) | the downloaded archives and unsigned local `fetch.json` metadata (name, size, SHA-256 per download; branch marked caller-asserted) |
 | `Images/work/<buildId>/boot/`, `disks/`, `bundle/` | no | outputs of `extract`, `disks`, and `bundle` (§9) |
 | `Images/tools/schemas/android-image-manifest.schema.json` | yes | the JSON Schema of §7, byte for byte |
 | `Images/tools/layouts/<deviceFamily>.json` | yes | the disk plan, console port plan, and bootconfig baseline. It refers to partitions, never to files (§9) |
@@ -168,6 +168,15 @@ Shortened to four files. The real file lists every file in the archive.
 | `source.target` | string | when `fetch.json` is present | non-empty | the target supplied to `fetch` |
 | `source.buildId` | string | when `fetch.json` is present | non-empty | the build ID supplied to `fetch` |
 | `files` | array of entry (§4.3) | yes | sorted by `path`, byte order of UTF-8 | one entry per regular file. Directories are not listed |
+
+`fetch.json` is an unsigned local consistency record. Inventory checks that its
+archive name, size, and SHA-256 match the archive and carries its build ID,
+target, and caller-asserted branch into the manifest. These checks detect
+missing or stale sidecars and inconsistent edits, but cannot prove that the
+`fetch` command created the sidecar or independently authenticate its build
+metadata. A local user who can edit the sidecar can assert those fields. Keep
+source-derived values subject to maintainer review; see
+[IR-230](../04-plan/implementation-review.md#ir-230-define-fetch-sidecar-trust-boundary).
 
 ### 4.3 File entry
 
@@ -709,7 +718,7 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 | M7 | no duplicate partition names across `artifacts` and `blankPartitions` | `partition "misc" appears in artifacts[7] and blankPartitions[0].` |
 | M8 | artifact ids are unique | `artifact id "vbmeta" appears in artifacts[3] and artifacts[4].` |
 | M9 | `android.variant` equals the suffix of `source.target` | `android.variant "user" does not match target aosp_cf_arm64_only_phone-userdebug.` |
-| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind; the recorded inventory is archive-backed, its archive name, size, and hash match `source.archives`, and its branch, build ID, and target match the fetched archive metadata in a valid `fetch.json` | `artifacts[8] (cuttlefish_example_custom.img): kind filesystem does not match the inventory (unknown). Re-run the inventory.` |
+| M10 | each `file` is in exactly one archive, and its inventory entry has the same size, hash, and kind; the recorded inventory is archive-backed, its archive name, size, and hash match `source.archives`, and its branch, build ID, and target match the checked `fetch.json` sidecar (§4.2) | `artifacts[8] (cuttlefish_example_custom.img): kind filesystem does not match the inventory (unknown). Re-run the inventory.` |
 | M11 | every source inventory vbmeta file is a `kind: vbmeta` artifact listed in `roles.vbmeta`; chain items follow item 0's descriptor order | `roles.vbmeta[2] = "vbmeta_system_dlkm": vbmeta.img has no chain descriptor for partition vbmeta_system_dlkm.` |
 | M12 | `logicalPartitions` equals the non-empty partitions in the super metadata (name, size, filesystem) | `logicalPartitions: system_dlkm_a is in super.img but not in the manifest.` |
 | M13 | `android.release` and `securityPatch` equal the `roles.kernel` boot header `os_version`, and `sdk` equals the table entry for `release` | `android.release "16" does not match boot.img os_version 17.0.0.` |
@@ -717,7 +726,7 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 | M15 | logical partition names are unique | `logicalPartitions[1].name "system_a" duplicates logicalPartitions[0].name. Use a unique logical partition name.` |
 
 - A message always names the file or field, what was expected, what was found, and the fix.
-- For M10, a recorded inventory with `source.type` other than `zip` fails because it cannot establish the archive fingerprint declared by the manifest. The actual archive must also have matching `fetch.json` metadata with branch, build ID, and target; missing provenance fails closed. Those values are checked directly against the archive record, so editing both `inventory.json` and the manifest cannot override them. Use `fetch` without an API key to record a manual download before inventorying it.
+- For M10, a recorded inventory with `source.type` other than `zip` fails because it cannot establish the archive fingerprint declared by the manifest. The actual archive must also have a `fetch.json` sidecar whose name, size, and SHA-256 match the archive and whose branch, build ID, and target agree with the inventory and manifest; missing metadata fails closed. This prevents inconsistent manifest and inventory edits, but the unsigned local sidecar is not proof that `fetch` created it or that its build metadata is authentic. Use `fetch` without an API key to record a manual download before inventorying it, and have a maintainer review source-derived values.
 - The layout check is part of `disks` and `bundle`: `layout cuttlefish-tablet-arm64 does not match deviceFamily cuttlefish-phone-arm64.` Every partition the layout names must be an artifact `partition` or a `blankPartitions` entry: `layout partition "custom" has no artifact or blank partition.`
 
 ## 9. Consumers
@@ -738,7 +747,7 @@ The layout file never names a file. It names partitions, and this manifest maps 
 - A reader refuses a newer version with M1. `Images/tools` reads only the current version. A change that raises the version also rewrites every committed manifest, in the same change.
 - Unknown fields are rejected. This file is ours and reviewed by a human, so a typo must fail. (The Direct provider manifest does the opposite, because third parties write it: [direct-provider-manifest.md](direct-provider-manifest.md) §9.) ImageCore converts JSON decoding errors to typed manifest failures without including decoder debug descriptions or raw values. It escapes control, quoting, and bidirectional-formatting characters in input-derived paths and values, and limits each displayed value to 128 Unicode scalars.
 - Any change to the schema, even an optional field, raises `schemaVersion`. The schema `$id` carries the version.
-- `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current; it adds the bounded AVB footer `vbmetaSize` and `version` fields, plus checked `fetch.json` build provenance in `source`. Inventory files are regenerated, never migrated.
+- `inventory.json` has its own `schemaVersion` with the same rules. Version `2` is current; it adds the bounded AVB footer `vbmetaSize` and `version` fields, plus build metadata from the checked `fetch.json` sidecar in `source` (unsigned local metadata; §4.2). Inventory files are regenerated, never migrated.
 
 ## 11. Writers and readers
 

@@ -191,6 +191,42 @@ def test_schema_rejects_integer_values_above_swift_int_range(
     )
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    (
+        (("source", "archives", 0, "size"), (1 << 63) - 1),
+        (("artifacts", 0, "size"), (1 << 63) - 1),
+        (("logicalPartitions", 0, "size"), ((1 << 63) - 1) // 512 * 512),
+        (("blankPartitions", 0, "size"), ((1 << 63) - 1) // 4096 * 4096),
+    ),
+    ids=("archive", "artifact", "logical-partition", "blank-partition"),
+)
+def test_schema_accepts_largest_representable_manifest_sizes(
+    path: tuple[str | int, ...],
+    value: int,
+) -> None:
+    """Signed 64-bit bounds include the largest otherwise-valid size values."""
+    manifest = _load_json(PINNED_MANIFEST)
+    parent: Any = manifest
+    for component in path[:-1]:
+        parent = parent[component]
+    parent[path[-1]] = value
+
+    assert validate_manifest(manifest) == []
+
+
+def test_schema_accepts_integral_floating_json_numbers_for_integer_fields() -> None:
+    """Integral JSON numbers decode as Int in Swift as well as Python."""
+    manifest = _load_json(PINNED_MANIFEST)
+    manifest["source"]["archives"][0]["size"] = 1101175103.0
+    manifest["android"]["sdk"] = 37.0
+    manifest["artifacts"][0]["size"] = 67108864.0
+    manifest["logicalPartitions"][0]["size"] = 897581056.0
+    manifest["blankPartitions"][0]["size"] = 1048576.0
+
+    assert validate_manifest(manifest) == []
+
+
 def test_valid_shared_fixtures_and_committed_manifests_pass() -> None:
     """Every checked-in valid example satisfies the versioned schema and M1–M9."""
     valid_directory = FIXTURE_ROOT / "valid"

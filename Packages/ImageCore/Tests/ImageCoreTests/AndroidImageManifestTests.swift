@@ -134,6 +134,62 @@ func androidImageManifestRejectsIntegerOutsideSwiftIntRangeAsTypedFailure() thro
 }
 
 @Test
+func androidImageManifestAcceptsLargestRepresentableSizes() throws {
+    let maximum = Int.max
+    let json =
+        validManifestJSON
+        .replacingOccurrences(
+            of: "\"size\": 1",
+            with: "\"size\": \(maximum)"
+        )
+        .replacingOccurrences(
+            of: "\"size\": 512",
+            with: "\"size\": \(maximum - maximum % 512)"
+        )
+        .replacingOccurrences(
+            of: "\"blankPartitions\": []",
+            with:
+                "\"blankPartitions\": [{\"partition\": \"metadata\", "
+                + "\"size\": \(maximum - maximum % 4096)}]"
+        )
+
+    let manifest = try decodeManifest(json)
+    try AndroidImageManifestValidator().validate(manifest)
+
+    #expect(manifest.source.archives[0].size == maximum)
+    #expect(manifest.artifacts[0].size == maximum)
+}
+
+@Test
+func androidImageManifestAcceptsIntegralFloatingJSONNumbersForIntFields() throws {
+    let json =
+        validManifestJSON
+        .replacingOccurrences(
+            of: "\"size\": 1",
+            with: "\"size\": 1.0"
+        )
+        .replacingOccurrences(
+            of: "\"size\": 512",
+            with: "\"size\": 512.0"
+        )
+        .replacingOccurrences(
+            of: "\"sdk\": 37",
+            with: "\"sdk\": 37.0"
+        )
+        .replacingOccurrences(
+            of: "\"blankPartitions\": []",
+            with: "\"blankPartitions\": [{\"partition\": \"metadata\", \"size\": 4096.0}]"
+        )
+
+    let manifest = try decodeManifest(json)
+    try AndroidImageManifestValidator().validate(manifest)
+
+    #expect(manifest.source.archives[0].size == 1)
+    #expect(manifest.android.sdk == 37)
+    #expect(manifest.logicalPartitions[0].size == 512)
+}
+
+@Test
 func androidImageManifestRejectsUnknownKeysAtEveryFixedObjectLevel() throws {
     let invalidJSON = [
         validManifestJSON.replacingOccurrences(

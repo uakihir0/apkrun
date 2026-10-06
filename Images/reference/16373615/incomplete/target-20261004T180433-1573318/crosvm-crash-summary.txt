@@ -32,7 +32,11 @@ is stripped. A same-named debug-info library available from the host package
 has a different Build ID and was not used; matching debug symbols for Build
 ID 6b8f3105442da5c66988881a1fa76e812b13c3e8 remain unavailable.
 
-The raw Apport report, including its core-dump payload, remains on the Lima
-reference host. The temporary extraction used for GDB analysis was deleted.
-No core bytes, private temporary paths, process maps, or raw Apport report
-were copied into the repository.
+At the time of this capture, the raw Apport report, including its core-dump
+payload, was retained on the Lima reference host. A later read-only search
+did not locate this PID's report or core in the locations checked; see IR-224.
+The search ran as a non-root user; `coredumpctl` was unavailable, and
+protected paths under `/tmp` and `/var` limited its coverage.
+The temporary extraction used for GDB analysis was deleted. No core bytes,
+private temporary paths, process maps, or raw Apport report were copied into
+the repository.

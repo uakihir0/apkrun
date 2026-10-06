@@ -1570,7 +1570,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Question | Task | Result |
 |---|---|---|
 | VZ virtio-blk logical sector size | #005, #011 | pending (§4.4) |
-| Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | 2026-10-01; macOS 27.0 (26A428); build 16373615: uncompressed 42,031,616-byte kernel; one unnamed `PLATFORM` fragment of 18,816,072 bytes, included; current command line 157 bytes. Reference-derived command-line additions remain pending #064. |
+| Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | 2026-10-01; rechecked 2026-10-06 on macOS 27.0 (26A428); build 16373615: uncompressed 42,031,616-byte kernel; one unnamed `PLATFORM` fragment of 18,816,072 bytes, included; current command line 157 bytes. Reference-derived command-line additions remain pending #064. |
 | Real sizes of the blank partitions; omitted partitions not needed | #011 | pending (§3.2, §4.2) |
 | fstab `formattable` flags and the metadata encryption path | #011 | pending (§5.2) |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5.3) |

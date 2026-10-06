@@ -1569,6 +1569,16 @@ and boot command lines plus the mandatory console fit the limit; the final
 command-line length and reference-backed layout remain open until that capture
 exists.
 
+**Verification.** On macOS 27.0 (build 26A428), the real-archive `extract`
+command and `manifest --check` passed on 2026-10-06. The archive SHA-256
+remained
+`051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`;
+`Images/tools/tests/test_extract.py` passed all 19 tests. The target capture
+and its reference-derived layout values are still unavailable, so the
+157-byte command line remains provisional. Merging the current vendor and
+layout bootconfig layers produced six keys and 284 serialized bytes, below the
+16 KiB limit.
+
 ## IR-069: Enforce bootconfig parser structure limits
 
 | Field | Value |

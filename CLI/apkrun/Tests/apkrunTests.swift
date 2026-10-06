@@ -37,6 +37,40 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #expect((parsed as? VersionCommand)?.json == true)
 }
 
+@Test func devLinuxFloodArgumentsUseDefaultAndExplicitLineCounts() throws {
+    #expect(
+        try DevLinuxFloodArguments.make(tests: ["flood"], lineCount: nil)
+            == ["apkrun.test.flood=10000000"]
+    )
+    #expect(
+        try DevLinuxFloodArguments.make(tests: ["flood"], lineCount: 1234)
+            == ["apkrun.test.flood=1234"]
+    )
+    #expect(try DevLinuxFloodArguments.make(tests: ["ports"], lineCount: nil).isEmpty)
+}
+
+@Test func devLinuxFloodArgumentsRejectMisuseAndOutOfRangeCounts() {
+    do {
+        _ = try DevLinuxFloodArguments.make(tests: ["ports"], lineCount: 100)
+        Issue.record("flood line count without the flood test unexpectedly succeeded")
+    } catch CLIFailure.invalidArgument(let argument, let reason) {
+        #expect(argument == "--flood-lines")
+        #expect(reason == "requiresFloodTest")
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+
+    do {
+        _ = try DevLinuxFloodArguments.make(tests: ["flood"], lineCount: 10_000_001)
+        Issue.record("out-of-range flood line count unexpectedly succeeded")
+    } catch CLIFailure.invalidArgument(let argument, let reason) {
+        #expect(argument == "--flood-lines")
+        #expect(reason == "range")
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+}
+
 @Test func builtInOutputRequestsAreLimitedToSupportedCompletionShells() {
     #expect(APKRunCommand.isBuiltInOutputRequest(["--help"]))
     #expect(APKRunCommand.isBuiltInOutputRequest(["-help"]))

@@ -27,6 +27,9 @@
         @Option(name: .long, help: "Comma-separated test names to request from the guest.")
         var tests: String?
 
+        @Option(name: .long, help: "Number of lines for the flood test (1–10000000).")
+        var floodLines: Int?
+
         @Option(name: .long, help: "Seconds to wait for the guest's done marker (1–86400).")
         var timeout = 60
 
@@ -49,6 +52,10 @@
             } else {
                 requestedTests = []
             }
+            let extraCommandLine = try DevLinuxFloodArguments.make(
+                tests: requestedTests,
+                lineCount: floodLines
+            )
 
             #if DEBUG
                 let override = ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
@@ -78,7 +85,8 @@
                 initrdURL: initrd.map { URL(fileURLWithPath: $0) }
                     ?? artifactDirectory.appendingPathComponent("initramfs.cpio.gz"),
                 tests: requestedTests,
-                timeoutSeconds: timeout
+                timeoutSeconds: timeout,
+                extraCommandLine: extraCommandLine
             )
             try await DevLinux().run(options: options) { event in
                 switch event {

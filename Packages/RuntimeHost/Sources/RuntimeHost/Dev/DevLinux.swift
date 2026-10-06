@@ -16,17 +16,22 @@ public struct DevLinuxOptions: Sendable {
     /// Maximum seconds to wait for the guest's `done` record.
     public let timeoutSeconds: Int
 
+    /// Additional fixed kernel command-line arguments for the guest.
+    public let extraCommandLine: [String]
+
     /// Creates options for one development guest run.
     public init(
         kernelURL: URL,
         initrdURL: URL,
         tests: [String] = [],
-        timeoutSeconds: Int = 60
+        timeoutSeconds: Int = 60,
+        extraCommandLine: [String] = []
     ) {
         self.kernelURL = kernelURL
         self.initrdURL = initrdURL
         self.tests = tests
         self.timeoutSeconds = timeoutSeconds
+        self.extraCommandLine = extraCommandLine
     }
 }
 
@@ -88,7 +93,8 @@ public struct DevLinux: Sendable {
             options: LinuxTestGuestOptions(
                 kernelURL: options.kernelURL,
                 initrdURL: options.initrdURL,
-                tests: options.tests
+                tests: options.tests,
+                extraCommandLine: options.extraCommandLine
             )
         )
         let eventSink = DevLinuxEventSink(onEvent)

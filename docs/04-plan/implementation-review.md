@@ -7138,6 +7138,13 @@ The configured command and expected executable are separate because a diagnostic
 
 **Verification.** The remote tag ref peels to the locked commit, and the read-only checkout is at that exact commit. The root `LICENSE` is copied to `ThirdParty/licenses/riftvm/LICENSE`. The lock entry is in the `graphics-reference` group with empty build flags and patches; renderer build-group processing and `check-lock.sh --apply` exclude it. The future `generate-notices.py --check` may fetch it solely to verify the committed license copy; it does not build RiftVM or include it in generated notices. Lock tests accept the repository entry and reject reference entries with a non-source kind, build flags, patches, or an unknown classification. The build/legal documentation excludes reference entries from renderer build groups and redistribution notices while retaining the identified license and a committed copy of the upstream license. Adversarial review identified lifecycle, reference-validation, and licensing-scope gaps; those fixes passed a full CI check run. Follow-up reviews corrected the license-file path description, notice scope, and license-check fetch description; the final adversarial review found no remaining actionable issues. `git diff --check` passed, and the committed RiftVM license copy matches the pinned root license. No RiftVM code or renderer binary is copied or built for this task. The source choice, unsigned tag provenance, and v1.0.4 substitution remain for maintainer review.
 
+**Follow-up hostile review (2026-10-06).** A read-only subagent review of
+the #018 criteria, analysis, lock entry, and graphics design found no
+additional actionable documentation or lock inconsistencies. The pinned
+RiftVM source tree was not available in that review workspace, so it did not
+independently recheck the source-level claims; those remain supported by the
+pinned-checkout review recorded above. Maintainer review remains pending.
+
 ## IR-185: Verify Mesa driver payload in the pinned Cuttlefish image
 
 | Field | Value |

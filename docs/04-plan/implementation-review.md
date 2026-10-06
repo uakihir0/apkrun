@@ -7683,3 +7683,17 @@ transfer the executable path recorded for the earlier PID to it.
 **Reason.** A structured task group waits for every child before leaving scope. Cancelling a child that awaits `connection.closed.value` does not cancel that wait, so a timeout can still hang the test and prevent `LinuxGuestHarness` from stopping the VM.
 
 **Verification.** On 2026-10-06, the signed LinuxGuest vsock suite passed 5/5 on arm64 macOS 27.0 (26A428), including guest disconnect and VM-stop closure checks using the nonblocking deadline helper.
+
+## IR-224: Check for the first crosvm crash core
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Do not derive `crosvm+0x…` offsets unless a core attributable to PID 1573779 is available. Record the missing evidence and do not substitute a core from another Cuttlefish executable.
+
+**Reason.** The supplied diagnostic recommends collecting PCs from the existing core. On 2026-10-06, a read-only check of Lima found no Apport report or systemd coredump for PID 1573779. The remaining Apport reports identify other Cuttlefish executables, so their mappings and PCs cannot establish the crashed crosvm's executable path or code offsets. IR-171 already recovered the panic text from a later run without matching symbols; the proposed offset analysis is not needed to identify that later run's trigger.
+
+**Verification.** PID-filtered checks of `/var/crash`, `/var/lib/systemd/coredump`, and `coredumpctl` found no matching report or core. No core file was read, copied, or modified, and no VM boot or ADB command was issued for this check.

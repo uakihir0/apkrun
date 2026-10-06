@@ -616,6 +616,8 @@ See [../test-strategy.md](../test-strategy.md).
 
 - **Runtime libunwind binding check (2026-10-05; see IR-187).** The installed Cuttlefish package binaries match the Build IDs in the earlier crosvm crash record. In a `crosvm --help` process with `LD_BIND_NOW=1 LD_DEBUG=bindings`, the runtime loader binds crosvm's `_Unwind_GetIP` to `libgfxstream_backend.so` and `_Unwind_Backtrace` to `libgcc_s.so.1`; in a second process with the same settings and `LD_PRELOAD=libgcc_s.so.1`, it binds `_Unwind_GetIP` references from both crosvm and gfxstream to libgcc_s. This confirms the loader's symbol-binding change for those processes, but does not execute the panic hook or GPU worker. Together with the earlier crash's unwinder stack frames, this is consistent with a secondary fault during panic backtrace collection, but does not establish where the earlier SIGSEGV occurred. The preload capture in IR-171 already recovered the `invalid rutabaga build parameters` panic and ended with SIGABRT before guest kernel output; no duplicate VM boot was run.
 
+- **Core availability check for the first crosvm crash (2026-10-06; see IR-224).** A read-only Lima check found no Apport report or systemd coredump matching PID 1573779. The remaining reports name other Cuttlefish executables and cannot establish this process's executable path or supply its PCs. No `crosvm+0x…` offsets are inferred from unrelated core data. The preload capture already recovered the triggering panic for a later run, so matching debug symbols and a duplicate VM boot remain unnecessary.
+
 ---
 
 ## #009 AndroidImageManifest

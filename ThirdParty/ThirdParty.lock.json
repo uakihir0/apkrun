@@ -198,6 +198,20 @@
       "ships": "tooling"
     },
     {
+      "name": "alpine-ssl-client",
+      "group": "test-linux",
+      "kind": "prebuilt",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ssl_client-1.37.0-r31.apk",
+      "version": "1.37.0-r31",
+      "sha256": "fa2911d412b7922b17a07829914ee630c2cd7091ef558abd4329ffb6020f879d",
+      "repository": "https://git.busybox.net/busybox/",
+      "license": "GPL-2.0-only",
+      "licenseFiles": ["COPYING"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "tooling"
+    },
+    {
       "name": "alpine-libcrypto3",
       "group": "test-linux",
       "kind": "prebuilt",

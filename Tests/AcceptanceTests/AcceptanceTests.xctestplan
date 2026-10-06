@@ -4,6 +4,26 @@
       "id" : "00300001-0000-4000-8000-000000000001",
       "name" : "G1",
       "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_ACCEPTANCE_SUITE",
+            "value" : "g1",
+            "enabled" : true
+          }
+        ]
+      }
+    },
+    {
+      "id" : "00300001-0000-4000-8000-000000000006",
+      "name" : "Network",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_ACCEPTANCE_SUITE",
+            "value" : "network",
+            "enabled" : true
+          }
+        ]
       }
     }
   ],

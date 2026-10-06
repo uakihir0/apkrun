@@ -266,6 +266,7 @@ targets:
     sources:
       - path: Tests/AcceptanceTests
       - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHarness.swift
+      - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHTTPServer.swift
     settings:
       base:
         PRODUCT_NAME: AcceptanceTests

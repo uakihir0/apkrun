@@ -1,8 +1,16 @@
+import Foundation
 import XCTest
 
 @testable import VirtualMachineCore
 
 final class G1LinuxBootTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        guard ProcessInfo.processInfo.environment["APKRUN_ACCEPTANCE_SUITE"] == "g1" else {
+            throw XCTSkip("G1 checks run in the G1 test-plan configuration.")
+        }
+    }
+
     func testTenBootsStopThroughTheGuestPowerButton() async throws {
         for bootNumber in 1...10 {
             let result = try await LinuxGuestHarness.run(

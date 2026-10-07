@@ -488,6 +488,35 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
     assert "aa:bb:cc:dd:ee:ff" not in compressed
 
 
+def test_normalize_redacts_attestation_identifier_arrays_from_host_logcat(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "host-logcat.txt").write_text(
+        "AttestationIdInfo: serial=[13579, 24680] imei=[11223344, 55667788] "
+        "imei2=[99887766, 55443322] meid=[10293847, 56473829]\n",
+        encoding="utf-8",
+    )
+
+    result = _run("normalize", str(capture))
+
+    assert result.returncode == 0, result.stderr
+    normalized = (capture / "host-logcat.txt").read_text(encoding="utf-8")
+    assert "<IDENTIFIER_ARRAY>" in normalized
+    for identifier in (
+        "13579",
+        "24680",
+        "11223344",
+        "55667788",
+        "99887766",
+        "55443322",
+        "10293847",
+        "56473829",
+    ):
+        assert identifier not in normalized
+
+
 def test_normalize_redacts_loopback_adb_serial_in_cuttlefish_host_logs(
     tmp_path: Path,
 ) -> None:

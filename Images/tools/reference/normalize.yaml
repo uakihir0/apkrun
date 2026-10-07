@@ -15,6 +15,10 @@
       ]
     },
     {
+      "pattern": "(?i)(\\b(?:serial|imei2?|meid)\\b[\\\"']?\\s*[:=]\\s*)\\[[^\\]\\r\\n]*\\]",
+      "replacement": "\\1<IDENTIFIER_ARRAY>"
+    },
+    {
       "pattern": "(?i)(\\b(?:androidboot\\.|ro\\.)?serial(?:_?number|no)?\\b[\\\"']?\\s*\\]?\\s*[=:]\\s*[\\\"']?\\[?)([^\\]\\s,;\\\"']+)",
       "replacement": "\\1<SERIAL>"
     },

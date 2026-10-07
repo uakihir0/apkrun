@@ -1,0 +1,49 @@
+{
+  "architecture": "aarch64",
+  "buildId": "16373615",
+  "captureDurationSeconds": 602,
+  "cpuCount": 8,
+  "cvdInstanceNumber": 2,
+  "cvdPackageVersion": "1.57.0",
+  "drmVirglSourceRevision": null,
+  "eglPlatform": "surfaceless",
+  "gpuVhostUserEnabled": false,
+  "hostKind": "linux-apple",
+  "hostToolIdentities": {
+    "crosvmCommand": {
+      "elfBuildId": "faf3eaf415ce2d1fc6c90f5090a9e82ba8abccab",
+      "sha256": "d09e4a87ac8d174d9925bcedd0ff2d77f138f63f00c6eff9bbc1c7865e33c819",
+      "status": "identified"
+    },
+    "expectedCrosvmExecutable": {
+      "elfBuildId": "1f6c03321061aa58e1d1ec0d0a1ff54f",
+      "sha256": "48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7",
+      "status": "identified"
+    },
+    "gfxstreamBackendCandidate": {
+      "elfBuildId": "257833fa4c8e65fc5294f3fa2ea311c4",
+      "sha256": "c8e1f380e2ebfbe5814c57ba1f81d94659be0d6771edac421493cac02575f503",
+      "status": "identified"
+    }
+  },
+  "kernel": "Linux 6.8.0-142-generic aarch64 GNU/Linux",
+  "nestedVirtualization": "on",
+  "os": "Ubuntu 24.04.4 LTS",
+  "profile": "target",
+  "schemaVersion": 3,
+  "selectedGpuMode": "drm_virgl",
+  "targetGpuMode": "drm_virgl",
+  "virglPreflight": {
+    "expectedCrosvmExecutable": {
+      "elfBuildId": "1f6c03321061aa58e1d1ec0d0a1ff54f",
+      "sha256": "48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7",
+      "status": "identified"
+    },
+    "launchCommand": {
+      "elfBuildId": "faf3eaf415ce2d1fc6c90f5090a9e82ba8abccab",
+      "sha256": "d09e4a87ac8d174d9925bcedd0ff2d77f138f63f00c6eff9bbc1c7865e33c819",
+      "status": "identified"
+    },
+    "virglSupport": "uncertified"
+  }
+}

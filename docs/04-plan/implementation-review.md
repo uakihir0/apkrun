@@ -8070,3 +8070,36 @@ and `scripts/tests/run.sh` passed. The hostile review confirmed the cleanup
 fix and the bounded `EPERM` retry preserves the process-group safety
 invariant. Lima SSH remains unavailable, so no live reference profile or T2
 guest verification was possible.
+
+## IR-238: Repair the Lima guest root filesystem from a preserved copy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Preserve a byte-for-byte copy of the stopped Lima disk, attach a
+separate working copy to a rescue Linux VM, unmount the affected ext4
+partition, and run `fsck.ext4 -f -y` there. Promote the repaired image to the
+Lima instance only after a forced read-only fsck succeeds. Keep the original
+pre-repair copy and the image from the first failed boot attempt.
+
+**Reason.** The VM screen identified the Linux root filesystem as inconsistent
+and explicitly requested manual fsck. Running the repair inside a rescue Linux
+guest keeps the operation on the ext4 block device, avoids accessing macOS
+filesystems, and ensures fsck does not run against a mounted partition. The
+separate untouched image provides a rollback point if filesystem repair or
+subsequent boot validation fails.
+
+**Verification.** Before repair, the stopped Lima disk and its preserved copy
+compared byte-for-byte. The rescue VM attached the working image as `/dev/vdb`;
+`/dev/vdb1` was confirmed unmounted before repair. `fsck.ext4 -f -y
+/dev/vdb1` corrected the orphaned inode list and block/inode allocation
+counters. A subsequent `fsck.ext4 -f -n /dev/vdb1` completed without errors.
+The promoted Lima disk matched the repaired rescue image byte-for-byte.
+`limactl start apkrun-cuttlefish` reached `READY`; `systemctl
+is-system-running` reported `running`, and `limactl shell` successfully ran
+commands including `uptime`, `command -v launch_cvd`, and `adb version`.
+The Cuttlefish Android guest has not been boot-tested after this recovery;
+#064 remains open.

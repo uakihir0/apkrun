@@ -89,6 +89,167 @@ func vmControllerMapsDriverCreationValidationFailure() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func vmControllerDeduplicatesDelegateFailureWhileStartCompletionFails() async throws {
+    let completionError = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 20,
+        description: "start completion failed"
+    )
+    let delegateError = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 21,
+        description: "delegate reported the same start failure"
+    )
+    let startGate = FakeVirtualMachineDriverGate()
+    let driver = FakeVirtualMachineDriver(
+        script: FakeVirtualMachineDriverScript(
+            start: .failure(completionError),
+            startGate: startGate
+        )
+    )
+    let sink = RecordingLogSink()
+    let controller = makeController(
+        factory: FakeVirtualMachineDriverFactory(drivers: [driver]),
+        diagnostics: .testing(logSink: sink)
+    )
+    let observedStates = Task {
+        await collectStates(controller.stateUpdates, count: 3)
+    }
+    let startTask = Task {
+        try await controller.start()
+    }
+    await startGate.waitUntilEntered()
+    let generation = await controller.vmGeneration
+
+    await controller.receive(.didStopWithError(delegateError), generation: generation)
+    await startGate.open()
+    await #expect(throws: VMFailure.startFailed(underlying: completionError)) {
+        try await startTask.value
+    }
+
+    #expect(
+        await observedStates.value == [
+            .stopped,
+            .starting,
+            .failed(.startFailed(underlying: completionError)),
+        ]
+    )
+    #expect(await controller.state == .failed(.startFailed(underlying: completionError)))
+
+    await controller.receive(.didStopWithError(delegateError), generation: generation)
+    #expect(await controller.state == .failed(.startFailed(underlying: completionError)))
+    #expect(
+        sink.entries.filter {
+            $0.subsystem == .vm && $0.category == VMLogCategory.lifecycle.rawValue
+                && $0.publicMessage.hasPrefix("VM state changed")
+        }.count == 2
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func vmControllerDeduplicatesDelegateFailureAfterStartCompletionFails() async throws {
+    let completionError = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 22,
+        description: "start completion failed"
+    )
+    let delegateError = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 23,
+        description: "delegate reported the same start failure"
+    )
+    let driver = FakeVirtualMachineDriver(
+        script: FakeVirtualMachineDriverScript(start: .failure(completionError))
+    )
+    let sink = RecordingLogSink()
+    let controller = makeController(
+        factory: FakeVirtualMachineDriverFactory(drivers: [driver]),
+        diagnostics: .testing(logSink: sink)
+    )
+    let observedStates = Task {
+        await collectStates(controller.stateUpdates, count: 3)
+    }
+    let failure = VMFailure.startFailed(underlying: completionError)
+    let startTask = Task {
+        try await controller.start()
+    }
+
+    await #expect(throws: failure) {
+        try await startTask.value
+    }
+    let generation = await controller.vmGeneration
+    await controller.receive(.didStopWithError(delegateError), generation: generation)
+
+    #expect(
+        await observedStates.value == [
+            .stopped,
+            .starting,
+            .failed(failure),
+        ]
+    )
+    #expect(await controller.state == .failed(failure))
+    #expect(
+        sink.entries.filter {
+            $0.subsystem == .vm && $0.category == VMLogCategory.lifecycle.rawValue
+                && $0.publicMessage.hasPrefix("VM state changed")
+        }.count == 2
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func vmControllerClassifiesDriverBufferedStartupFailureAndDeduplicates() async throws {
+    let delegateError = VZErrorInfo(
+        domain: "VZErrorDomain",
+        code: 24,
+        description: "delegate reported a start failure"
+    )
+    let delegateEvents: [VirtualMachineEvent] = [
+        .didStopWithError(delegateError),
+        .didStopWithError(delegateError),
+    ]
+    let startGate = FakeVirtualMachineDriverGate()
+    let driver = FakeVirtualMachineDriver(
+        script: FakeVirtualMachineDriverScript(
+            startupEvents: delegateEvents,
+            startGate: startGate
+        )
+    )
+    let sink = RecordingLogSink()
+    let controller = makeController(
+        factory: FakeVirtualMachineDriverFactory(drivers: [driver]),
+        diagnostics: .testing(logSink: sink)
+    )
+    let observedStates = Task {
+        await collectStates(controller.stateUpdates, count: 3)
+    }
+    let startTask = Task {
+        try await controller.start()
+    }
+    await startGate.waitUntilEntered()
+    await startGate.open()
+    let failure = VMFailure.startFailed(underlying: delegateError)
+    await #expect(throws: failure) {
+        try await startTask.value
+    }
+
+    #expect(
+        await observedStates.value == [
+            .stopped,
+            .starting,
+            .failed(failure),
+        ]
+    )
+    #expect(
+        sink.entries.filter {
+            $0.subsystem == .vm && $0.category == VMLogCategory.lifecycle.rawValue
+                && $0.publicMessage.hasPrefix("VM state changed")
+        }.count == 2
+    )
+    try await controller.reset()
+    #expect(await controller.state == .stopped)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func vmControllerMapsGuestStopFromRunningAndStopping() async throws {
     let spontaneousReleaseGate = FakeVirtualMachineDriverGate()
     let spontaneousDriver = FakeVirtualMachineDriver(

@@ -80,6 +80,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
     private let consoleChannels: [ConsoleChannel]
     private var customDeviceAdapters: [VZCustomVirtioDeviceAdapter]
     private var attachmentsAreActive = true
+    private var startupEvents: [VirtualMachineEvent] = []
 
     /// The delegate event stream.
     package let events: AsyncStream<VirtualMachineEvent>
@@ -104,16 +105,34 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
         self.eventContinuation = eventContinuation
     }
 
-    package func start() async throws(VZErrorInfo) {
+    package func start() async throws(VZErrorInfo) -> [VirtualMachineEvent] {
         try await withVZOperationCompletion { completion in
             let queue = self.queue
             queue.dispatchQueue.async {
                 assertOnVMQueue(queue)
                 guard completion.markStarted() else { return }
+                self.startupEvents.removeAll()
+                self.delegate?.beginStart()
                 self.requireMachine().start { result in
                     assertOnVMQueue(queue)
+                    switch result {
+                    case .success:
+                        self.startupEvents = self.delegate?.finishStart() ?? []
+                    case .failure:
+                        self.delegate?.discardStart()
+                        self.startupEvents.removeAll()
+                    }
                     completion.complete(result)
                 }
+            }
+        }
+        return await withCheckedContinuation {
+            (continuation: CheckedContinuation<[VirtualMachineEvent], Never>) in
+            queue.dispatchQueue.async {
+                assertOnVMQueue(self.queue)
+                let events = self.startupEvents
+                self.startupEvents.removeAll()
+                continuation.resume(returning: events)
             }
         }
     }
@@ -221,6 +240,7 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
                 }
                 self.machine = nil
                 self.delegate = nil
+                self.startupEvents.removeAll()
                 self.customDeviceAdapters.removeAll(keepingCapacity: false)
                 if self.attachmentsAreActive {
                     for channel in self.consoleChannels {
@@ -245,11 +265,12 @@ package final class VZVirtualMachineDriver: VirtualMachineDriver, @unchecked Sen
 }
 
 // UNCHECKED-SENDABLE: the VM queue serializes delegate callbacks; the continuation and queue are Sendable values.
-private final class VZVirtualMachineEventDelegate: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
+package final class VZVirtualMachineEventDelegate: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     private let queue: VMQueue
     private let continuation: AsyncStream<VirtualMachineEvent>.Continuation
+    private var startupEventBuffer = VMStartupEventBuffer()
 
-    init(
+    package init(
         queue: VMQueue,
         continuation: AsyncStream<VirtualMachineEvent>.Continuation
     ) {
@@ -257,23 +278,45 @@ private final class VZVirtualMachineEventDelegate: NSObject, VZVirtualMachineDel
         self.continuation = continuation
     }
 
-    func guestDidStop(_ virtualMachine: VZVirtualMachine) {
+    package func beginStart() {
         assertOnVMQueue(queue)
-        continuation.yield(.guestDidStop)
+        startupEventBuffer.begin()
     }
 
-    func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
+    package func finishStart() -> [VirtualMachineEvent] {
         assertOnVMQueue(queue)
-        continuation.yield(.didStopWithError(VZErrorInfo(error as NSError)))
+        return startupEventBuffer.finish()
     }
 
-    func virtualMachine(
+    package func discardStart() {
+        assertOnVMQueue(queue)
+        startupEventBuffer.discard()
+    }
+
+    package func guestDidStop(_ virtualMachine: VZVirtualMachine) {
+        assertOnVMQueue(queue)
+        publish(.guestDidStop)
+    }
+
+    package func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
+        assertOnVMQueue(queue)
+        publish(.didStopWithError(VZErrorInfo(error as NSError)))
+    }
+
+    package func virtualMachine(
         _ virtualMachine: VZVirtualMachine,
         networkDevice: VZNetworkDevice,
         attachmentWasDisconnectedWithError error: Error
     ) {
         assertOnVMQueue(queue)
-        continuation.yield(.networkAttachmentDisconnected(VZErrorInfo(error as NSError)))
+        publish(.networkAttachmentDisconnected(VZErrorInfo(error as NSError)))
+    }
+
+    package func publish(_ event: VirtualMachineEvent) {
+        assertOnVMQueue(queue)
+        if !startupEventBuffer.append(event) {
+            continuation.yield(event)
+        }
     }
 }
 

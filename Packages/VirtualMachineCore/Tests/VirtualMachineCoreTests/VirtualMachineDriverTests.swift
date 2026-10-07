@@ -65,6 +65,19 @@ import VirtualMachineCoreTestSupport
     #expect(await iterator.next() == nil)
 }
 
+@Test func fakeVirtualMachineDriverReturnsStartupDelegateEventsWithStartCompletion() async throws {
+    let failure = VZErrorInfo(domain: "VZErrorDomain", code: 73, description: "private")
+    let events: [VirtualMachineEvent] = [
+        .didStopWithError(failure),
+        .didStopWithError(failure),
+    ]
+    let driver = FakeVirtualMachineDriver(
+        script: FakeVirtualMachineDriverScript(startupEvents: events)
+    )
+
+    #expect(try await driver.start() == events)
+}
+
 @Test func fakeVirtualMachineDriverCanHoldStopUntilReleased() async {
     let gate = FakeVirtualMachineDriverGate()
     let completion = DriverOperationCompletionProbe()

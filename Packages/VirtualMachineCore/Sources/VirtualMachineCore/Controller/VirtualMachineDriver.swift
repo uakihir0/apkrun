@@ -26,8 +26,8 @@ public protocol VirtualMachineDriver: Sendable {
     /// Events from the VM delegate and its configured devices.
     var events: AsyncStream<VirtualMachineEvent> { get }
 
-    /// Starts the guest.
-    func start() async throws(VZErrorInfo)
+    /// Starts the guest and returns delegate events delivered before completion.
+    func start() async throws(VZErrorInfo) -> [VirtualMachineEvent]
 
     /// Force-stops a running or paused guest.
     func stop() async throws(VZErrorInfo)

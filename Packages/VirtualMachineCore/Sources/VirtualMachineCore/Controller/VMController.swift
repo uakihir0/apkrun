@@ -249,10 +249,12 @@ public actor VMController {
         driver = newDriver
         observe(newDriver, generation: generation)
         await startConsoleLogging()
+        let startupEvents: [VirtualMachineEvent]
         do {
-            try await newDriver.start()
+            startupEvents = try await newDriver.start()
         } catch let error {
             let failure = VMFailure.startFailed(underlying: error)
+            eventsDuringStart.removeAll()
             if state == .starting {
                 try await transition(to: .failed(failure), source: .internalEvent)
             }
@@ -260,6 +262,18 @@ public actor VMController {
             throw failure
         }
 
+        let pendingEvents = startupEvents + eventsDuringStart
+        eventsDuringStart.removeAll()
+        if let startupError = pendingEvents.compactMap({ event -> VZErrorInfo? in
+            guard case .didStopWithError(let error) = event else { return nil }
+            return error
+        }).first {
+            let failure = VMFailure.startFailed(underlying: startupError)
+            closeVsockResources(blockedBy: .failed(failure))
+            try await transition(to: .failed(failure), source: .internalEvent)
+            logFailure(failure, description: startupError.description)
+            throw failure
+        }
         if case .failed(let failure) = state {
             throw failure
         }
@@ -267,8 +281,6 @@ public actor VMController {
             try await transition(to: .running, source: .internalEvent)
         }
 
-        let pendingEvents = eventsDuringStart
-        eventsDuringStart.removeAll()
         for event in pendingEvents {
             await receive(event, generation: generation)
         }

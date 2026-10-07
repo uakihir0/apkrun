@@ -83,6 +83,9 @@ public struct FakeVirtualMachineDriverScript: Sendable {
     /// The result of starting the guest.
     public var start: Result<Void, VZErrorInfo>
 
+    /// Delegate events delivered before a successful start completion.
+    public var startupEvents: [VirtualMachineEvent]
+
     /// The result of force-stopping the guest.
     public var stop: Result<Void, VZErrorInfo>
 
@@ -113,6 +116,7 @@ public struct FakeVirtualMachineDriverScript: Sendable {
     /// Creates a script whose operations succeed unless a failure is supplied.
     public init(
         start: Result<Void, VZErrorInfo> = .success(()),
+        startupEvents: [VirtualMachineEvent] = [],
         stop: Result<Void, VZErrorInfo> = .success(()),
         requestStop: Result<Void, VZErrorInfo> = .success(()),
         pause: Result<Void, VZErrorInfo> = .success(()),
@@ -124,6 +128,7 @@ public struct FakeVirtualMachineDriverScript: Sendable {
         connectHandler: FakeVsockConnectHandler? = nil
     ) {
         self.start = start
+        self.startupEvents = startupEvents
         self.stop = stop
         self.requestStop = requestStop
         self.pause = pause
@@ -206,8 +211,9 @@ public final class FakeVirtualMachineDriver: VirtualMachineDriver, @unchecked Se
     }
 
     /// Starts the fake guest or returns the scripted start failure.
-    public func start() async throws(VZErrorInfo) {
+    public func start() async throws(VZErrorInfo) -> [VirtualMachineEvent] {
         try await perform(.start, result: script.start, gate: script.startGate)
+        return script.startupEvents
     }
 
     /// Force-stops the fake guest or returns the scripted stop failure.

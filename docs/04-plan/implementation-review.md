@@ -8016,6 +8016,15 @@ reported the instance as `Running` with SSH forward `127.0.0.1:54899`.
 boot state, and SSH readiness remain unverified. No capture or T2 guest test
 ran, and no host route was changed.
 
+The final read-only check of `ha.stderr.log` found repeated SSH-forward
+attempts through `127.0.0.1:54899` failing to dial
+`192.168.5.15:22` with `no route to host`; SSH attempts ended with the same
+connection reset, and the Lima guest-agent event stream closed unexpectedly.
+`serialv.log` remained zero bytes. This confirms that Lima still cannot reach
+the configured guest SSH endpoint, but does not distinguish a guest boot
+problem from Lima's guest-network path. No route, VM setting, or guest state
+was changed.
+
 ## IR-237: Bound guest reference commands and clean up before publication
 
 | Field | Value |

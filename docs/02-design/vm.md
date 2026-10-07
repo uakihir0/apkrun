@@ -280,9 +280,19 @@ start()
   build VZVirtualMachine on the VM queue with the validated configuration
   attach delegates: VZVirtualMachineDelegate, VZNetworkDeviceAttachment disconnect handling
   vm.start { result }
-     success → state: running
-     failure → state: failed(.startFailed(underlying))
+     completion failure → state: failed(.startFailed(underlying))
+     completion success:
+       buffered didStopWithError → state: failed(.startFailed(underlying))
+       otherwise → state: running, then process buffered guest/device events
 ```
+
+The VZ delegate uses `VMStartupEventBuffer` to buffer callbacks on the VM queue
+while `start` is pending, then returns them with the start completion. This
+preserves callback order even when the controller's event-stream consumer is
+scheduled later. If start succeeds, the first buffered stop error is classified
+as `.startFailed`; subsequent reports are ignored after the terminal
+transition. If the start completion itself fails, its error is the
+`startFailed` cause and buffered events are discarded.
 
 `KERNEL_START` is recorded by RuntimeCore's `BootPhaseDetector` when the first console line arrives (Linux prints `Booting Linux on physical CPU` first).
 
@@ -291,7 +301,7 @@ start()
 | VZ callback | Transition |
 |---|---|
 | `guestDidStop(_:)` | `running/paused/stopping → stopped` |
-| `virtualMachine(_:didStopWithError:)` | `→ failed(.stoppedWithError(underlying))` |
+| `virtualMachine(_:didStopWithError:)` | while `starting`, buffer for `failed(.startFailed(underlying))`; while `running/paused/stopping`, `→ failed(.stoppedWithError(underlying))` |
 | `virtualMachine(_:networkDevice:attachmentWasDisconnectedWithError:)` | stays `running`; logged; health `vm.network = degraded` |
 
 For a spontaneous `guestDidStop`, `VMController` records `.stopped` before it
@@ -417,11 +427,13 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | Tier | Test | Task |
 |---|---|---|
 | T0 | Validator rules (§3); state machine edges; MAC/identifier persistence | #002 |
+| T0 | VZ delegate buffers start callbacks in order, resumes stream delivery after start completion, and discards buffered events when completion fails; controller maps a buffered start failure | #003 |
 | T0 | `ConsoleLogWriter` rotation and fsync policy (with an injected clock and file system) | #004 |
 | T1 | `ConsoleChannel` with real pipes (`.log` and `.silent` ports are never written); `ConsoleLogWriter` against a real directory (file modes, rotation on disk) | #004 |
 | T1 | the disk rules of §3 with real files and permissions | #005 |
 | T1 | `VsockConnection` over a `socketpair` | #007 |
 | T2 | Linux test guest: boot + console marker | #003, #004 |
+| T2 | Start completion versus delegate callback after VZ machine construction, with a successful guest-stop positive control | #003 |
 | T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
 | T2 | block read-only/read-write | #005 |
 | T2 | DHCP lease, host HTTP 204 endpoint, and live `vm.network` health | #006 |
@@ -438,7 +450,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | VZ serial port numbering is not documented (§6.2) | #004 checks three ports on the test Linux guest, #095 all 20 ports. If the order is not the array order, `ConsolePortPlan` re-orders the array |
 | Device order and the PCI host bridge's platform device name (§5) | discovered by #011 and committed to `Images/reference/vz/<macOS build>/topology.txt`. Nothing relies on `vdX` letters or slot numbers |
 | Whether `VZVirtualMachineConfiguration.validate()` runs in an unentitled `swift test` process (§3) | #002 verified that validation returns an explicit missing-entitlement error on an unentitled process; T0 uses the framework-validator fake, and the signed `IntegrationTests` bundle hosted by `APKRunTestHost` exercises the entitled path ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
-| How VZ reports a start failure: the `start` completion error, `didStopWithError`, or both (§9.1, §9.2) | #003 records it for a bad kernel and a missing disk. A second report of the same failure must not cause a second transition |
+| How VZ reports a start failure: the `start` completion error, `didStopWithError`, or both (§9.1, §9.2) | #003 records the completion result and delegate events for configuration rejection and a missing kernel after VZ driver creation. If #005 introduces a start-failure case from disk attachment, record that separately there. A second report of the same failure must not cause a second transition |
 | Whether macOS shows the microphone prompt at VM start or at the first capture (OQ-29, §11) | #084. The input stream is attached only while a package uses it, so neither answer changes the design |
 | Whether the stock Cuttlefish arm64 kernel carries `virtio_snd` (OQ-38, §11) | #083. If not, the custom image adds it ([android-image.md](android-image.md) §7.5) |
 | Virtualization.framework behavior changes on new macOS builds (R-16) | the T2 suite and the topology check run on every new macOS build ([../04-plan/risks.md](../04-plan/risks.md)) |
@@ -455,7 +467,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | PL061 power input and G1 ten-boot behavior | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): hvc0 showed a rising event on `gpiochip0` offset 6; after adding a line-owner readiness check, all LinuxGuest T2 tests and direct G1 acceptance on branch `codex` passed, including ten request-stop boots. The signed CLI smoke from `/tmp` printed boot/powerinput/done and exited 0 without a file-access prompt. The clean-`main` `scripts/run-gate.sh G1` run remains pending |
 | Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
 | `validate()` without the virtualization entitlement | #002 | 2026-10-07 UTC, arm64 Mac17,9, macOS 27.0.1 (26A434), Xcode 27.0 (27A266a): the opt-in `swift test` probe used the production builder with the pinned kernel and initramfs (SHA-256 values recorded in §3); `SecTaskCopyValueForEntitlement` confirmed no virtualization entitlement and no query error; `validate()` returned `VZErrorDomain/2` with an explicit missing-entitlement failure reason; the test passed; no `VZVirtualMachine` was created |
-| Error reporting of a failed start (completion vs delegate) | #003 | pending |
+| Error reporting of a failed start (completion vs delegate) | #003 | 2026-10-07 UTC, arm64 MacBook Pro, macOS 27.0.1 (26A434): signed T2 positive control completed `start` successfully, recorded `guestDidStop`, and reached VZ state `stopped`; after validating and constructing a VZ machine, deleting its kernel made `start` complete with `VZErrorDomain/2`, with no delegate callback observed during the following 2 seconds, and the VM reached terminal state `error`. The source probe and production configuration-rejection/reset test passed 2/2; result bundle `/tmp/apkrun-start-probe-final-3.xcresult`. This is a bounded observation for this build, not proof that no later callback can occur. T0 exercises production VZ delegate buffer/stream routing and separately verifies that buffered `didStopWithError` maps to `.startFailed` with one terminal transition |
 | Serial port numbering with three ports | #004 | 2026-10-06 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestConsoleTests` passed; guest-visible hvc1/hvc2 numbering matched attachment-array order |
 | Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |
 | Disk persistence, journal recovery, read-only enforcement, and guest-visible device order | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): 80 `VirtualMachineCoreTests` and 18 `VirtualMachineCoreSystemTests` passed; the pinned initramfs SHA-256 is `0f50a6b9abcfa8229c7686180b8edf365e1f204bed4eeccc435b4f0e729b4f43`; signed `LinuxGuestBlockTests` passed 3/3, including token persistence after a new VM, forced-stop ext4 journal replay, and both normal and reversed guest-visible serial orders (`/tmp/apkrun-blk-signed-T2.xcresult` on the test host) |

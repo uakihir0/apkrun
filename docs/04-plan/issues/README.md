@@ -194,3 +194,28 @@ Gates G1–G9 are the project checkpoints. Their pass conditions are in [../road
 - Keep the scope. If finishing a task needs something outside its scope, stop and file a follow-up task ([../../00-product/scope.md](../../00-product/scope.md) §5). New tasks get their number from GitHub when their issue is opened (#098 and up, not contiguous) and go into the milestone file and §3 ([../../05-development/workflow.md](../../05-development/workflow.md) §2.4).
 - Record verification results where the task's Notes section says (design document verification logs, [../risks.md](../risks.md), ADRs).
 - A task is done when all acceptance criteria are checked, the tests of every tier the task lists pass, and the documents the task changes are updated.
+
+## 5. Current progress
+
+**Updated:** 2026-10-07 UTC
+**Working branch:** `codex`
+
+Task entries remain the source of truth for scope and acceptance. This snapshot
+shows the active implementation work; results and decisions link to their
+task-specific records.
+
+| Task | Status | Verified | Remaining |
+|---|---|---|---|
+| #002 VMDefinition and VM validation | Implementation and opt-in entitlement probe recorded in commit `de7c678`; review choice IR-242 is open | 102 `VirtualMachineCoreTests`; 25 default `VirtualMachineCoreSystemTests`; 2 opt-in T1 tests; empty artifact path disables the probe; `scripts/ci/run-checks.sh` passed | Maintainer review of IR-242; task closure follows its full acceptance criteria |
+| #003 Boot minimal ARM64 Linux | Active (implementation commit `44a1a7d`) | 110 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests` passed. T0 exercises the production VZ delegate's buffer/stream routing and controller mapping separately. Signed T2 failure/reset and positive-control/kernel-removal probes passed 2/2; start returned `VZErrorDomain/2`, no delegate callback was observed for 2 s, and cleanup confirmed VM states `stopped` and `error`. All six `scripts/ci/run-checks.sh` checks passed | Full prior T2 boot and ten-boot evidence is recorded in M00. G1 still needs the clean-`main` gate run |
+
+The unentitled validation result and host details are in [vm.md](../../02-design/vm.md)
+§3 and §17. The implementation judgment for the opt-in T1 probe is in
+[implementation-review.md](../implementation-review.md) IR-242. #003's design
+and recorded gate evidence are in [M00](M00-repository-and-vm-foundation.md)
+and [vm.md](../../02-design/vm.md) §§9, 17.
+
+**Latest broad SwiftPM check:** all package tests passed except
+`apkrunTests.rootHelpMatchesGolden`, where the current root help output differs
+from `CLI/apkrun/Tests/Golden/help.txt`. This is outside #003 and remains an
+open CLI follow-up.

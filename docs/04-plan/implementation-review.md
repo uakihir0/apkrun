@@ -8414,3 +8414,42 @@ query succeeded and returned no `com.apple.security.virtualization` value, and
 validation returned `VZErrorDomain/2` with an explicit missing-entitlement
 failure reason. The artifact SHA-256 values and reproducible command are in
 [vm.md](../02-design/vm.md) §3. No runtime code changed.
+
+## IR-243: Classify delegate failures received during VM start
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected files | [vm.md](../02-design/vm.md) §§9, 17; `VMController.swift`; `VirtualMachineDriver.swift`; `VMStartupEventBuffer.swift`; `VZVirtualMachineDriver.swift`; `VMControllerTests.swift`; `VMStartupEventBufferTests.swift`; `VirtualMachineDriverTests.swift`; `FakeVirtualMachineDriver.swift`; `StartFailureProbeTests.swift` |
+
+**Choice.** While `start()` is pending, buffer VZ delegate events on the VM
+queue and return the events produced before the start completion with that
+completion result. If start succeeds but the buffer contains
+`didStopWithError`, transition directly from `.starting` to
+`.failed(.startFailed)` using the first buffered delegate error and discard
+duplicate terminal reports. If the completion throws, keep its error as the
+start failure cause.
+
+**Reason.** #003 requires every failed start to end in the typed
+`.startFailed` state. A delegate event yielded before the VZ start completion
+could remain queued in the asynchronous event-stream consumer while
+`VMController` published `.running`, misclassifying the same failure as
+`.stoppedWithError`. Returning events buffered on the same serial VM queue
+removes that scheduling race. The completion error remains authoritative when
+that operation itself fails.
+
+**Verification.** The 110 `VirtualMachineCoreTests` and 25 default
+`VirtualMachineCoreSystemTests` passed. T0 exercises the production VZ
+delegate's buffer/stream routing, the shared `VMStartupEventBuffer`, and
+separately verifies the controller's buffered-start mapping with its fake
+driver. The signed T2 probe directly measures Virtualization.framework behavior
+rather than instantiating the production VZ driver: its positive control
+recorded successful start completion, `guestDidStop`, and final VZ state
+`stopped`; after VZ machine construction, removing the kernel produced
+`VZErrorDomain/2` in the start completion, no delegate callback within two
+seconds, and final VZ state `error`. Both VMs reached terminal states before
+release. The source probe and configuration-rejection/reset test passed 2/2,
+with result bundle `/tmp/apkrun-start-probe-final-3.xcresult`. The bounded
+callback observation does not establish that a callback cannot arrive later;
+see [vm.md](../02-design/vm.md) §17.

@@ -623,7 +623,7 @@ enum LinuxGuestHarness {
         return errorInfo
     }
 
-    private static func artifactURLs() throws -> (kernel: URL, initrd: URL) {
+    static func artifactURLs() throws -> (kernel: URL, initrd: URL) {
         let artifactDirectory: URL
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         let documentsDirectory =

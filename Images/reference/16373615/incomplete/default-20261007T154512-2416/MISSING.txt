@@ -1,0 +1,11 @@
+guest	Cuttlefish group create or start failed; see cvd-create-console.log
+crosvm-command-line.txt	no crosvm process matched the private Cuttlefish HOME at artifact-collection time; this does not establish whether crosvm ran earlier
+internal-bootconfig.txt	not found in the selected Cuttlefish instance runtime
+cuttlefish_config.json	not found in the selected Cuttlefish instance runtime
+selected-gpu-mode	captured cuttlefish_config.json is unavailable for the selected instance; do not use this capture for GPU-profile comparison
+kernel.log	not found in the selected Cuttlefish instance runtime
+launcher.log	not found in the selected Cuttlefish instance runtime
+assemble_cvd.log	not found in the selected Cuttlefish instance runtime
+composite-disk-specs.json	no safely readable composite-disk config files in the selected Cuttlefish instance runtime
+guest	scoped cvd remove reported a shutdown failure
+cvd-runtime-home	CVD group removal failed; retained HOME path is printed to stderr

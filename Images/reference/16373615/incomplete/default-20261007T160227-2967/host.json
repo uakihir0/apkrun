@@ -1,0 +1,36 @@
+{
+  "architecture": "aarch64",
+  "buildId": "16373615",
+  "captureDurationSeconds": 602,
+  "cpuCount": 8,
+  "cvdInstanceNumber": 2,
+  "cvdPackageVersion": "1.57.0",
+  "drmVirglSourceRevision": null,
+  "eglPlatform": null,
+  "gpuVhostUserEnabled": false,
+  "hostKind": "linux-apple",
+  "hostToolIdentities": {
+    "crosvmCommand": {
+      "elfBuildId": "d724bf54f045b0ec7dbe14049b0fed9a16e52a23",
+      "sha256": "976c85081250f4a332d0fca6573d62f8aa5e71c6924d8d49f6de44624f24891a",
+      "status": "identified"
+    },
+    "expectedCrosvmExecutable": {
+      "elfBuildId": "d724bf54f045b0ec7dbe14049b0fed9a16e52a23",
+      "sha256": "976c85081250f4a332d0fca6573d62f8aa5e71c6924d8d49f6de44624f24891a",
+      "status": "identified"
+    },
+    "gfxstreamBackendCandidate": {
+      "elfBuildId": "6b8f3105442da5c66988881a1fa76e812b13c3e8",
+      "sha256": "f7d5665978d4a3f872789348934e13a1cab5441821359e18562b14e804199250",
+      "status": "identified"
+    }
+  },
+  "kernel": "Linux 6.8.0-142-generic aarch64 GNU/Linux",
+  "nestedVirtualization": "on",
+  "os": "Ubuntu 24.04.4 LTS",
+  "profile": "default",
+  "schemaVersion": 3,
+  "selectedGpuMode": "guest_swiftshader",
+  "targetGpuMode": null
+}

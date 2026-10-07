@@ -235,6 +235,17 @@ run `drm_virgl`. Use a Cuttlefish host package built from the pinned source
 with `virgl_renderer` enabled before expecting a target-profile boot; see
 [M01](../04-plan/issues/M01-android-bring-up.md) #064 and
 [IR-171](../04-plan/implementation-review.md#ir-171-diagnose-crosvm-panic-output).
+`capture.sh target` checks the expected crosvm ELF before starting
+Cuttlefish. The launch command can be a wrapper; for a launcher that executes a
+different ELF, set `APKRUN_CROSVM_OBSERVER_EXECUTABLE` to the absolute path of
+the executable used after the launcher's `exec`. For a direct crosvm override,
+`APKRUN_CROSVM_OBSERVER_EXECUTABLE` defaults to `APKRUN_CROSVM_BINARY`. The
+exact Build ID identified in IR-171 is refused. Other identified builds are
+allowed for diagnosis, but their Build ID and hash are recorded as uncertified
+in `host.json`, `MISSING.txt` marks the capture diagnostic-only, and the capture
+cannot become a comparable profile. The expected ELF is hashed again before
+both CVD create and start, and each matching running crosvm process is checked
+against that hash before its identity is recorded.
 `capture.sh` disables the arm64 vhost-user GPU backend for each profile and
 verifies the selected config.
 
@@ -428,9 +439,9 @@ diagnostic crosvm and preloads the host's `libgcc_s.so.1`. The pinned
 override to both commands only when this environment variable is set. A
 launcher that executes a different binary must set
 `APKRUN_CROSVM_OBSERVER_EXECUTABLE` to the executable used after the launcher's
-`exec`; the observer checks the staged wrapper requested by Cuttlefish and
-the resulting process executable separately. Direct crosvm overrides leave
-this variable unset. A
+`exec`; preflight and runtime checks compare that expected ELF with the process
+that Cuttlefish starts. For a direct crosvm override, leave this variable unset
+so it defaults to `APKRUN_CROSVM_BINARY`. A
 normalized run using the override is retained under `incomplete/` with a
 diagnostic-only reason, even if Android boots, because the host runtime has
 changed. The reason is written when staging begins, so interrupted runs

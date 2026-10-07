@@ -681,7 +681,7 @@ host package whose pinned crosvm build enables `virgl_renderer`; see
 | `cuttlefish_runtime/internal/bootconfig` (AVB footer stripped) | `getprop` (all) |
 | composite disk specs (`ap`, `os`, and persistent composite config files) | `ls -l /dev/block/by-name/`, `readlink -f /sys/block/vd*`, `lsblk` equivalent from sysfs |
 | `cuttlefish_config.json` | `/proc/mounts`, `/vendor/etc/fstab.*` |
-| `assemble_cvd.log`, `kernel.log`, `launcher.log` | `dmesg`, `lsmod`, first-stage init log lines |
+| `assemble_cvd.log`, `kernel.log`, `launcher.log`, `host-logcat.txt` | `dmesg`, `lsmod`, first-stage init log lines |
 | | `ls -l /dev/hvc*` and which process holds each (`/proc/*/fd`) |
 | | `logcat -d -b all` (gzip), `lshal`, `service list`, `ls /apex`, `pm list features` |
 | | `ip addr`, `ip route`, `ip link`, `dumpsys connectivity` summary |
@@ -719,13 +719,19 @@ Both `cvd create --nostart` and named-group `cvd start` run through
 command runs, the helper schedules `cvd logs --nopretty` polls 0.5 seconds
 apart from each poll's start time and atomically snapshots
 `assemble_cvd.log`, `kernel.log`, and `launcher.log` into the private staging
-directory. A snapshot is limited to 64 MiB, accepts only regular files beneath
-the private Cuttlefish `HOME`, and remains available if Cuttlefish deletes its
-runtime logs during shutdown. A later artifact copy uses the same bounded,
-atomic path; if that copy fails, the earlier snapshot stays intact. Each log
-name is attempted at most once per listing poll after its path is validated as
-a regular file beneath the private HOME. Invalid duplicate rows cannot suppress
-a later valid path or trigger repeated full-file copies.
+directory. Each live snapshot is limited to 64 MiB, accepts only regular files
+beneath the private Cuttlefish `HOME`, and remains available if Cuttlefish
+deletes its runtime logs during shutdown. Host `logcat` is excluded from live
+polling because it can grow quickly. After the CVD command returns, artifact
+collection takes one bounded, atomic snapshot of the selected instance's
+`logcat`, when available. The snapshot is renamed to `host-logcat.txt` before
+normalization. If it exceeds the cap, the retained tail starts at a complete
+line boundary. An absent or unsafe logcat is recorded in `MISSING.txt`; an
+artifact that cannot be safely normalized is discarded and also leaves the
+capture incomplete. Each live-polled log name is attempted at most once per
+listing poll after its path is validated as a regular file beneath the private
+HOME. Invalid duplicate rows cannot suppress a later valid path or trigger
+repeated full-file copies.
 The listing parser preserves spaces in paths and accepts either a bare log
 name or a group and instance prefix such as
 `<group>:<instance>:kernel.log`. It matches only a known final log name and
@@ -1097,13 +1103,18 @@ match the separately saved `drm_virgl` property file (see the #064 fallback
 record in [IR-173](../04-plan/implementation-review.md#ir-173-swiftshader-target-fallback)).
 
 The host capture also stores `assemble_cvd.log`, `crosvm-command-line.txt`,
-`internal-bootconfig.txt` (UTF-8 bootconfig with a valid AVB footer removed),
-`composite-disk-specs.json`, `cuttlefish_config.json`, `kernel.log`, and
-`launcher.log`. During `cvd start`, the capture polls `cvd logs --nopretty`
-and atomically snapshots these three host logs into its private staging
-directory. Each live snapshot is capped at 64 MiB. The final runtime files
-replace the snapshots when available; if Cuttlefish removes them during a
-failed startup, the snapshots remain in the normalized incomplete capture.
+`crosvm-runtime-identity.txt` for Virgl runs, `internal-bootconfig.txt` (UTF-8
+bootconfig with a valid AVB footer removed), `composite-disk-specs.json`,
+`cuttlefish_config.json`, `kernel.log`, `launcher.log`, and `host-logcat.txt`.
+While either CVD command runs, live polling snapshots only
+`assemble_cvd.log`, `kernel.log`, and `launcher.log`. After the command returns,
+artifact collection copies the selected instance's `logcat` once, if available,
+with a 64 MiB cap, then renames it to `host-logcat.txt`. Oversized logcat is
+truncated from a complete line boundary. Before retention, it receives the
+capture's path, serial, MAC, and secret redactions. A missing or unsafe logcat
+is recorded in `MISSING.txt` and leaves the capture incomplete. Runtime log
+snapshots remain available if Cuttlefish removes those files during failed
+startup.
 The runtime paths are discovered below
 `$HOME/cuttlefish_runtime`, and stale files from previous runs are excluded.
 `collect_composite_specs.py` reads `*_composite_disk_config.txt` files from

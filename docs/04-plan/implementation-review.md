@@ -8004,3 +8004,60 @@ reported 351 GiB available, and the latest check reported 390 GiB available.
 `ThirdParty/out` measures 561 MiB; pinned source, patched-source, and published
 renderer directories remain. The documentation checks and
 `scripts/tests/run.sh` passed.
+
+**VPN-off follow-up (2026-10-07).** With the VPN reported disconnected, an
+earlier route lookup for `192.168.5.15` selected gateway `100.64.0.1` on
+`en0`; the latest lookup selected `10.253.56.1` on `en0`. The lookup for
+`192.168.64.2` selected `bridge100`. `limactl restart` exited with
+`did not receive an event with the running status`; `limactl list` still
+reported the instance as `Running` with SSH forward `127.0.0.1:54899`.
+`limactl shell apkrun-cuttlefish -- uname -a` then ended with
+`kex_exchange_identification: read: Connection reset by peer`. The guest IP,
+boot state, and SSH readiness remain unverified. No capture or T2 guest test
+ran, and no host route was changed.
+
+## IR-237: Bound guest reference commands and clean up before publication
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; `Images/tools/reference/capture.sh`; `Images/tools/reference/capture_guest_command.py`; `Images/tools/reference/capture_cvd_start.py`; `Images/tools/tests/test_capture_guest_command.py`; `Images/tools/tests/test_reference_capture.py` |
+
+**Choice.** Run each guest-side ADB capture command through a deadline-aware
+helper using the capture's remaining boot deadline. Stream command output to a
+temporary file, atomically publish only successful output, and enforce a
+64 MiB cumulative raw guest-output budget, with a separate 64 MiB limit on
+the compressed logcat artifact. Read `internal/bootconfig` only after opening
+it without following symlinks, confirming it is a regular file, and checking
+its size against a 64 MiB limit. Terminate the supervised process group even
+when the command leader exits before its descendants.
+Remove the private Cuttlefish HOME before publishing a complete profile; if
+cleanup fails, retain the data as incomplete and report the HOME that remains.
+
+**Reason.** A guest diagnostic can stall or emit unbounded data, so independent
+per-command timeouts and output limits do not provide a shared capture bound.
+Streaming avoids holding raw command output in memory, and atomic publication
+prevents partial files from looking complete. A regular-file and size check
+keeps bootconfig reads from following an unexpected path or allocating an
+unbounded input. A command that closes stdout can still leave descendants
+running, so process-group cleanup must also run on normal leader exit.
+On macOS, a leader can exit between the non-reaping `waitid` check and
+`killpg`, which can report `EPERM` for a zombie-only group. Recheck exit state
+for a short, bounded interval while keeping the leader unreaped; still fail
+closed if it remains alive or the group contains live descendants. Publishing
+while the private HOME remains would leave runtime state behind and
+misrepresent cleanup as complete.
+
+**Verification.** The focused guest-command and Cuttlefish process-supervision
+tests passed 30 cases. They include a child that closes stdout and continues
+running, a normally exiting leader with a surviving descendant, cleanup
+failure with hidden-temp removal, exit-state rechecking after `EPERM`, and a
+bounded retry when the leader remains alive. The dedicated
+`test_reference_capture.py` suite passed 56 tests with three Linux-only skips.
+The final complete `Images/tools/tests` suite passed 610 tests with four
+platform-specific skips. Ruff lint and formatting, `sh -n`, `git diff --check`,
+and `scripts/tests/run.sh` passed. The hostile review confirmed the cleanup
+fix and the bounded `EPERM` retry preserves the process-group safety
+invariant. Lima SSH remains unavailable, so no live reference profile or T2
+guest verification was possible.

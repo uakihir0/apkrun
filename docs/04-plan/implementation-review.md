@@ -967,7 +967,7 @@ target settings.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #003 |
-| Affected documents | [build-system.md](../05-development/build-system.md) §15.1, [workflow.md](workflow.md) §§5.1, 7; [test-strategy.md](test-strategy.md) §2.4; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §15.1, [workflow.md](../05-development/workflow.md) §§5.1, 7; [test-strategy.md](test-strategy.md) §2.4; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
 
 **Choice.** `linux-guest` runs on pushes to `main` and manual dispatch. It does
 not run pull-request source on the persistent `apkrun-lab` runner.
@@ -8509,3 +8509,41 @@ remaining listener on ports 5038 or 6521. This verifies the live identity
 event and reconfirms the guest-side EGL failure; it does not prove host Virgl
 initialization, Android boot completion, rendered frames, or any of #064's
 remaining profile acceptance criteria.
+
+## IR-245: Reconcile RiftVM analysis with the implemented graphics path
+
+| Field | Value |
+|---|---|
+| Status | Documentation findings corrected; final hostile review passed; maintainer review pending |
+| Task | #018 |
+| Affected documents | [riftvm-analysis.md](../02-design/riftvm-analysis.md) §§1–2, 4, 7–8; [graphics.md](../02-design/graphics.md) §§5.1, 16; [progress snapshot](issues/README.md) §5 |
+
+**Choice.** Describe RiftVM's 4 GiB renderer budget as a four-byte-per-texel
+workload estimate, map command-specific error paths for backing attachment and
+context attach/detach (including the successful `CTX_ATTACH_RESOURCE` path),
+distinguish a resize event on RiftVM's single scanout from connector-topology
+hotplug, and reconcile each current APKRun patch with the pinned RiftVM recipe
+and the completed #020 build. Describe CI as checking source-only lock
+metadata and the license-file reference; retain the manual byte comparison of
+the MIT copy as this review's evidence.
+
+**Reason.** The pinned implementation, current graphics design, and existing
+#020 verification record describe different layers of evidence. Stating those
+boundaries directly avoids treating a workload estimate as a memory guarantee,
+a single-head resize as multi-display hotplug, or already-built patch inputs
+as future work. A source-only reference lock also has different notice checks
+from shipped source components.
+
+**Verification.** The edits address the first hostile review's resource
+estimate, response mapping, scanout behavior, patch crosswalk, and lock-license
+claims. A later hostile follow-up found the missing invalid-context and
+missing/non-renderer-resource responses for `CTX_ATTACH_RESOURCE` and an
+ambiguous backing-attachment mapping; the table now separates each condition
+and response using the pinned handler. A final hostile review found no
+remaining actionable findings. Maintainer review remains pending.
+`scripts/ci/run-checks.sh` passed all six checks:
+`scripts/tests/run.sh`, `scripts/check-module-deps.sh`,
+`scripts/check-logging.sh`, `scripts/check-todos.sh`,
+`scripts/check-format.sh`, and `scripts/check-lock.sh`. The repository also
+passed `git diff --check`. #020's clean build and tests remain recorded in
+IR-191.

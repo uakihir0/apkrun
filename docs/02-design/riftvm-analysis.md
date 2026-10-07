@@ -24,7 +24,7 @@ is copied by #018.
 | Tag | `riftvm-v0.6.1` |
 | Commit | `51f19193b1d3326b2e164d37a2a59e9970375170` |
 | Commit date | 2026-09-29 |
-| Lock entry | `riftvm` in `ThirdParty/ThirdParty.lock.json`, `kind: source`, `ships: reference`; it is not a build, test, or distribution input |
+| Lock entry | `riftvm` in `ThirdParty/ThirdParty.lock.json`, `kind: source`, `ships: reference`; RiftVM is not built, run as test software, or distributed. CI validates the lock metadata and license-file presence; this review manually compared the committed license copy with the pinned source. |
 | License | Repository-root MIT license, copied to `ThirdParty/licenses/riftvm/LICENSE` |
 
 The upstream tag list checked on 2026-10-05 contains no `v1.0.4` or
@@ -115,6 +115,22 @@ a header is logged and completed without a response payload. A response write
 failure is logged. APKRun still needs its own typed error surface, rate-limited
 diagnostics, and exactly-once element ownership API.
 
+The pinned handler's command-level response mapping includes these cases. This
+is observed behavior, not an APKRun error-policy recommendation:
+
+| Command path | Observed validation and failure responses |
+|---|---|
+| Common dispatch | Unknown command: `ERR_UNSPEC`. Wrong queue, undersized request, or invalid parameter: `ERR_INVALID_PARAMETER`. A request shorter than the header is logged and completed without a response payload. |
+| 2D/3D resource creation | Invalid dimensions, zero/duplicate resource ID, or resource-count limit: `ERR_INVALID_PARAMETER`. Renderer-budget rejection or renderer create refusal: `ERR_OUT_OF_MEMORY`. |
+| `RESOURCE_ATTACH_BACKING` | A short request returns `ERR_INVALID_PARAMETER`; a missing resource returns `ERR_INVALID_RESOURCE_ID`. Existing backing, invalid entry count/length, an undersized entry list, or an unmapped guest range returns `ERR_INVALID_PARAMETER`; budget exhaustion returns `ERR_OUT_OF_MEMORY`; renderer refusal returns `ERR_UNSPEC`. |
+| Context creation and resource attachment | `CTX_CREATE` returns `ERR_INVALID_PARAMETER` for a short request, zero/duplicate ID, or capacity exhaustion; renderer refusal returns `ERR_UNSPEC`. For `CTX_ATTACH_RESOURCE`, a short request or unknown context returns `ERR_INVALID_PARAMETER`, and a missing/non-renderer resource returns `ERR_INVALID_RESOURCE_ID`. A valid attach returns `OK_NODATA`; the renderer attach method has no failure result. |
+| Context resource detach | `CTX_DETACH_RESOURCE` returns `ERR_INVALID_PARAMETER` for a short request, unknown context, or resource not attached to that context; a missing/non-renderer resource returns `ERR_INVALID_RESOURCE_ID`. A valid detach returns `OK_NODATA`. |
+| `SET_SCANOUT` | Nonzero scanout ID: `ERR_INVALID_SCANOUT_ID`; unknown resource: `ERR_INVALID_RESOURCE_ID`; a rectangle outside the resource: `ERR_INVALID_PARAMETER`. Resource ID zero clears the active binding and returns success. |
+| `RESOURCE_FLUSH` | An invalid rectangle returns `ERR_INVALID_PARAMETER`. A flush with no matching active scanout, or before the renderer texture exists, returns success without presenting; a later flush retries the texture borrow. |
+
+The attach and context mappings above are from the pinned
+[`VirtioGPUDevice.swift`](https://github.com/riftvm/riftvm/blob/51f19193b1d3326b2e164d37a2a59e9970375170/Experiments/VZVirtioGPUPrototype/Sources/VZVirtioGPUPrototype/VirtioGPUDevice.swift#L864-L981).
+
 ### 2.2 Commands, resources, and backing
 
 `VirtioGPUProtocol.swift` contains little-endian wire decoding and the
@@ -124,6 +140,14 @@ queries, 2D and 3D resource creation, resource attach/detach/unref, contexts,
 implementation supports only scanout 0 and capset index 0. In particular, its
 single-scanout implementation is not the 16-scanout device specified by
 APKRun's §4.1.
+
+On a guest mode switch, `SET_SCANOUT` with resource ID zero clears the active
+resource/rectangle and cancels queued presentation. The host view keeps its
+last successfully published drawable visible until a later flush supplies a
+replacement; unref of a borrowed scanout likewise stops borrowing the released
+resource while retaining the last drawable. Device reset or shutdown is the
+separate boundary that releases device state. The pinned device tracks display
+events for its one scanout, but has no multi-scanout topology to reconcile.
 
 `RESOURCE_ATTACH_BACKING` maps each guest physical range with
 `guestMemoryMapping(atPhysicalAddress:length:)`. The resource retains the
@@ -143,7 +167,7 @@ The pinned limits in `VirtioGPUProtocol.Limits` are:
 | Texture width or height | 8192 px |
 | 3D resource texels | 256 Mi |
 | `PIPE_BUFFER` width | 256 MiB |
-| Renderer resource estimate | 4 GiB total |
+| Renderer-resource admission budget | 4 GiB total |
 | Resource count | 4096 |
 | Context count | 256 |
 | 2D resource pixel storage | 256 MiB each; 512 MiB total |
@@ -156,6 +180,16 @@ most 15, and sample count at most 16. For `PIPE_BUFFER` target 0, width is
 treated as a byte count rather than a texture edge. These are observations of
 this tag, not proposed replacements for APKRun's independently specified
 limits in [graphics.md](graphics.md) §5.4.
+
+The 4 GiB renderer-resource budget is applied to an estimate, not enforced by
+the renderer as a hard allocation ceiling. `estimatedRendererResourceBytes`
+uses 4 bytes per texel for the expected R8G8B8A8/B8G8R8A8 workload, multiplies
+by at least one and otherwise the declared sample count, and doubles the
+estimate when a mip chain is present; `PIPE_BUFFER` uses its byte width
+directly. The source notes that
+texture formats can use up to 16 bytes per texel, so the 4-byte estimate can
+undercount other accepted formats. Do not treat this upstream workload
+heuristic as a conservative worst-case memory bound or as an APKRun limit.
 
 `UPDATE_CURSOR` snapshots pixels into host memory and creates a `CGImage`.
 Renderer-backed cursor resources use `transfer_read` before that copy. The
@@ -241,6 +275,21 @@ reference values, not automatic changes to APKRun's own build commands.
 | ANGLE | `2d91f554ab55bd1bef6998ab4094f60ae3e7feb5`; source archive SHA-256 `c24c4e7bc464a63069b67a9f663717b6e0f4a5ff4b6404215a7dc98ea83c6ba7` | RiftVM recipe `b010ac372569747a4b265e75eaa72868c6849f62`; recipe archive SHA-256 `076df85af0f3bcd5d1232be7285bdb0bc305f28df155bc5ac6d19e83e27e3195`; applies `angle-changes-main.patch` |
 | ANGLE build helper | depot_tools `f70835271105ca56d2cd5382a0118152bc2bdeea` | Checked out at that commit; ANGLE DEPS synchronized with that pinned ANGLE revision |
 
+The current APKRun patches reconcile with those recipe inputs as follows.
+“Adopted” describes the #020 working patch set. Their application, clean
+renderer build, cache reuse, and tests are recorded in
+[graphics.md](graphics.md) §16 and IR-191; #018 itself did not repeat the build.
+
+| APKRun patch | RiftVM recipe counterpart | Purpose and #020 disposition |
+|---|---|---|
+| `virglrenderer/0001-add-macos-metal-support.patch` | `virglrenderer-macos-unified.patch` | Adopted. Carries the macOS Metal and Objective-C build/renderer path from the pinned recipe. The patch also contains broader Venus-related source changes; APKRun configures `venus=false` and does not expose the Vulkan guest feature. |
+| `virglrenderer/0002-downgrade-unsupported-msaa.patch` | `virglrenderer-msaa-downgrade.patch` | Adopted. Falls back to single-sample storage when the GLES host cannot multisample a format; rendering can continue with antialiasing lost. |
+| `virglrenderer/0003-link-metal-runtime.patch` | None | Adopted as an APKRun downstream addition, not a RiftVM recipe patch. Links CoreFoundation and the Objective-C runtime for the non-Venus Metal build. Its patch header records that it has not been submitted upstream. |
+| `libepoxy/0001-improve-library-detection.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Resolves bundled ANGLE EGL/GLES dylibs and enables EGL on Apple platforms. |
+| `libepoxy/0002-disable-desktop-extensions-on-gles.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Keeps desktop GL extension providers from selecting the wrong unsuffixed entry point for GLES. |
+| `libepoxy/0003-enable-egl-platform-display.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Checks the EGL client version so `eglGetPlatformDisplay` can be resolved before a display exists. |
+| `angle/0001-fix-metal-boolean-mix.patch` | `angle-changes-main.patch` | Adopted. Emits Metal `select` for boolean-selector `mix` operations and raises the Metal shader UBO limit from 12 to 16. |
+
 The source-build script uses these configure/build arguments:
 
 | Component | Observed arguments |
@@ -253,21 +302,20 @@ The `-Dvenus=true` renderer build option is not guest Vulkan support. The
 prototype still advertises only VIRGL and EDID and does not advertise resource
 blobs; APKRun's Vulkan track remains #096.
 
-The ANGLE recipe also supplies a macOS patch; the libepoxy recipe supplies
-its EGL 1.5 patch; the virglrenderer recipe supplies its macOS unified patch.
-These recipe patches are delivered in checksum-pinned archives. The separate
-RiftVM patch downgrades unsupported multisample VirGL resources to
-single-sampled textures when the GLES host cannot multisample the format.
-The guest's resolve then becomes a copy, so antialiasing is lost but the
-resource can still render.
+The recipe patch archives are checksum-pinned. The crosswalk above records
+their correspondence to the patch files already listed as adopted in
+[graphics.md](graphics.md) §5.1. The #020 verification is evidence that the
+current patch series builds against the pinned sources; this analysis did not
+rebuild the libraries.
 
 RiftVM lists virglrenderer and libepoxy as MIT and ANGLE as BSD-3-Clause in
 its runtime dependency documentation. Those components are not covered by the
 single RiftVM MIT lock entry: APKRun must keep their own source pins, recipe
 patch provenance, and license notices when #020 implements the runtime build.
-The recipe patches are reference material; #020 must check applicability and
-licensing before adopting or rewriting each one. The MSAA behavior is the
-candidate patch already named by APKRun's #020 plan.
+The RiftVM MIT notice applies to RiftVM-authored source, not automatically to
+the renderer sources or recipe patches. Keep the patch-origin records and
+component license notices separate; the repository's legal review still
+covers the complete third-party package before release.
 
 The upstream `THIRD_PARTY_NOTICES.md` says the release packager still consumes
 bootstrap binaries while source-built libraries are being qualified. In the
@@ -368,6 +416,8 @@ limitations:
 |---|---|---|
 | Guest workload | Custom VirGL is used by general Linux VMs and Omarchy; the detailed end-to-end validation is Omarchy/Hyprland | Android ARM64, AOSP Cuttlefish, Mesa VirGL and SurfaceFlinger; guest packaging and boot must be independently verified |
 | Scanouts and capsets | One scanout and one VirGL capset | 16 scanout slots and the project-defined VirGL/VIRGL2 behavior |
+| Display changes | One fixed scanout (ID 0); host-requested size/mode changes are reported for it, with no connector-topology hotplug | 16 fixed scanout slots; `ScanoutTable` reports enable/mode changes through display events, with config-interrupt behavior still under R-01/#028 verification |
+| GPU profiles | One device configuration advertises VIRGL and EDID and handles both 2D and 3D resource commands | `drmVirgl` advertises VIRGL + EDID; `guestSwiftshader` advertises EDID only and uses a separate host 2D backing-copy renderer. The software profile is not merely 2D command handling on the VirGL device. |
 | Presentation ownership | `CAMetalLayer` drawable in the RiftVM process | IOSurface pool owned by apkrund and presented by a wrapper process |
 | Device model | One large Swift class owns GPU and presentation state | `VirtioDeviceCore`, `GraphicsCore`, `GraphicsBridge`, RuntimeCore, and WindowingCore boundaries |
 | Display model | Scanout 0 only | `DisplayPool` assigns displays dynamically; no fixed app-to-scanout mapping |
@@ -388,12 +438,15 @@ at that commit. `git verify-tag` reports that the tag has no signature. The
 upstream release API reports `immutable: false`. The MIT license copy matches
 the pinned repository's root `LICENSE`.
 
-`scripts/check-lock.sh` accepted the source-only entry. The lock group is
-`graphics-reference`; renderer build-group processing and `check-lock.sh
---apply` exclude it. The future `generate-notices.py --check` may fetch the
-pinned source solely to verify its committed license copy; it does not build
-RiftVM or include it in generated notices. `git diff --check` passed. The #018
-test strategy defines no executable test suite: this task is an analysis
-document accepted by review. No RiftVM build, renderer build, VM boot, Android
-test, or Metal presentation test was run. Maintainer review of the source-version
-substitution and this analysis is still required.
+`scripts/check-lock.sh` accepted the source-only entry and its required license
+file. The lock group is `graphics-reference`; renderer build-group processing
+and `check-lock.sh --apply` exclude it. The current
+`generate-notices.py --check` validates shipped app/derived copies and excludes
+`ships: reference` entries. This review manually compared the committed MIT
+copy with the pinned repository's root `LICENSE`; the full reference-source
+license check remains part of #093. `git diff --check` passed. The #018 test
+strategy defines no executable test suite: this task is an analysis document
+accepted by review. #018 did not build RiftVM, run a VM boot, or perform an
+Android/Metal presentation test; the separately scoped #020 renderer build and
+tests are recorded in [graphics.md](graphics.md) §16 / IR-191. Maintainer
+review of the source-version substitution and this analysis is still required.

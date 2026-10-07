@@ -206,8 +206,9 @@ task-specific records.
 
 | Task | Status | Verified | Remaining |
 |---|---|---|---|
-| #002 VMDefinition and VM validation | Implementation and opt-in entitlement probe recorded in commit `de7c678`; review choice IR-242 is open | 102 `VirtualMachineCoreTests`; 25 default `VirtualMachineCoreSystemTests`; 2 opt-in T1 tests; empty artifact path disables the probe; `scripts/ci/run-checks.sh` passed | Maintainer review of IR-242; task closure follows its full acceptance criteria |
-| #003 Boot minimal ARM64 Linux | Active (implementation commits `44a1a7d`, `d31e7e3`) | 110 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests` passed. T0 exercises the production VZ delegate's buffer/stream routing and controller mapping separately. Signed `LinuxGuest` T2 passed 33/33 on commit `d31e7e3` (MacBook Pro arm64, macOS 27.0.1 build 26A434); signed failure/reset and positive-control/kernel-removal probes passed 2/2; start returned `VZErrorDomain/2`, no delegate callback was observed for 2 s, and cleanup confirmed VM states `stopped` and `error`. All six `scripts/ci/run-checks.sh` checks passed. Earlier direct G1 ten-boot and CLI smoke evidence is recorded in M00 and vm.md | Remaining: complete the #002 hard dependency (including IR-242 review); resolve IR-243 and the paired license-policy review IR-044/IR-241; link a maintainer-run LinuxGuest T2 result for the reviewed commit before the closing PR merges; and pass `scripts/run-gate.sh G1` from a clean `main` checkout with evidence attached to the G1 gate issue. The clean-main gate cannot be marked complete from branch `codex` |
+| #001 Bootstrap Xcode workspace | Implementation and recorded acceptance criteria complete | Full `swift test` suites passed with and without `--traits EmbeddedRuntime`, including the appropriate CLI root-help golden in each build; the original clean-checkout, Xcode build, and product smoke verification is recorded in M00 | No known implementation or acceptance gap |
+| #002 VMDefinition and VM validation | Implementation and opt-in entitlement probe recorded in commit `de7c678`; acceptance tests now cover the memory minimum; IR-242 review is open | Full `swift test` passed with 111 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests`; focused below-minimum test passed; 2 opt-in T1 tests and the no-artifact skip behavior are recorded | Maintainer review of IR-242; #061 step 4 must reach `main` before formal task completion |
+| #003 Boot minimal ARM64 Linux | Active (implementation commits `44a1a7d`, `d31e7e3`) | 111 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests` passed. T0 exercises the production VZ delegate's buffer/stream routing and controller mapping separately. Signed `LinuxGuest` T2 passed 33/33 on commit `d31e7e3` (MacBook Pro arm64, macOS 27.0.1 build 26A434); signed failure/reset and positive-control/kernel-removal probes passed 2/2; start returned `VZErrorDomain/2`, no delegate callback was observed for 2 s, and cleanup confirmed VM states `stopped` and `error`. All six `scripts/ci/run-checks.sh` checks passed. Earlier direct G1 ten-boot and CLI smoke evidence is recorded in M00 and vm.md | Remaining: complete the #002 hard dependency (including IR-242 review); resolve IR-243 and the paired license-policy review IR-044/IR-241; link a maintainer-run LinuxGuest T2 result for the reviewed commit before the closing PR merges; and pass `scripts/run-gate.sh G1` from a clean `main` checkout with evidence attached to the G1 gate issue. The clean-main gate cannot be marked complete from branch `codex` |
 
 The unentitled validation result and host details are in [vm.md](../../02-design/vm.md)
 §3 and §17. The implementation judgment for the opt-in T1 probe is in
@@ -215,7 +216,6 @@ The unentitled validation result and host details are in [vm.md](../../02-design
 and recorded gate evidence are in [M00](M00-repository-and-vm-foundation.md)
 and [vm.md](../../02-design/vm.md) §§9, 17.
 
-**Latest broad SwiftPM check:** all package tests passed except
-`apkrunTests.rootHelpMatchesGolden`, where the current root help output differs
-from `CLI/apkrun/Tests/Golden/help.txt`. This is outside #003 and remains an
-open CLI follow-up.
+**Latest broad SwiftPM checks:** complete default and `--traits EmbeddedRuntime`
+test suites passed after fixing the root-help golden mismatch. Default and
+embedded-runtime help outputs now have separate golden coverage.

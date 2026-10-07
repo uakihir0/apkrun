@@ -250,6 +250,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** a path-level test such as "the GUI launches" needs a GUI session. The `apkrun-ci` runner has one ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §6.2). Hosted macOS runners may run static checks, builds, and T0 tests; T1 checks need the real Mac host.
 - `components.json` and `scripts/build/write-components.py` ([../../05-development/build-system.md](../../05-development/build-system.md) §5) are added by #057 (M10). They are not part of #001. See the Notes of #061.
 - Verification on 2026-09-29, arm64 macOS 27.0 / Xcode 27.0 / Swift 6.4: bootstrap checks, project generation, default and `EmbeddedRuntime` Swift builds, all 22 Swift tests, Xcode Debug and unsigned Release builds, Debug product smoke, bundle identities, entitlements, and arm64 slices passed.
+- **SwiftPM help regression (2026-10-07 UTC):** the default `apkrunTests` target lists `version` and `logs`; `dev` is present only in embedded-runtime builds. The help golden incorrectly retained `dev`. Added separate default and EmbeddedRuntime help goldens, with the test target receiving the same trait condition as the CLI; both focused help tests and the full `swift test` suites with and without `--traits EmbeddedRuntime` passed.
 
 ---
 
@@ -808,6 +809,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Pitfall:** Alpine and other distributions may ship arm64 kernels as EFI zboot images, which start with `MZ` rather than the `Image` header. The validator rejects them. `scripts/fetch-test-linux.sh` (#003) must extract the payload.
 - **Pitfall:** creating VZ configuration objects is fine in T0. Never create a `VZVirtualMachine` from a configuration that did not pass `validate()`; VZ raises an Objective-C exception instead of throwing.
 - The zboot detection and `.machineIdentifierInvalid` were added to [vm.md](../../02-design/vm.md) §3 and [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2 for this task.
+- **Memory lower-bound test coverage (2026-10-07 UTC):** hostile review found the validator's minimum-memory branch lacked a T0 case. Added a valid, aligned 3 GiB definition against a fake 4 GiB framework minimum and asserted the sole result is `.memoryOutOfRange`. The focused test and the full SwiftPM suite passed; the run included 111 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests`.
 
 ---
 

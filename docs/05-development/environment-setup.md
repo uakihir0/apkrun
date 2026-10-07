@@ -14,7 +14,7 @@ This guide lists every machine and tool needed to build and test APKRun, and how
 
 | Machine | Needed for | Minimum | Section |
 |---|---|---|---|
-| Developer Mac | all host code, Guest Gradle and Rust builds, image tooling, T0–T2 tests | Apple Silicon (M1 or later), macOS 27, 16 GB RAM, 150 GB free disk | §2 |
+| Developer Mac | all host code, Guest Gradle and Rust builds, image tooling, T0–T2 tests | Apple Silicon (M1 or later), macOS 27, 16 GB RAM, 150 GiB free disk | §2 |
 | Developer Mac, M3 or later | the Cuttlefish reference host as a nested-virtualization Linux VM (#064) | M3 or later, 24 GB RAM recommended | §3.3 |
 | Linux x86_64 AOSP builder | building the APKRun AOSP product (#035); as CI runner `apkrun-aosp`: nightly `userdebug` builds | ≥ 64 GB RAM, ≥ 400 GB disk | §5, §6.1 |
 | Image build machine | `user` release images, signed with the offline AOSP release keys; a maintainer-controlled AOSP builder that is never a CI runner | as the AOSP builder | §5.6 |
@@ -33,7 +33,7 @@ macOS cannot build AOSP ([../01-architecture/decisions/0003-cuttlefish-base-imag
 ### 2.1 Hardware and OS
 
 - Apple Silicon, macOS 27.0 or later. The deployment target of every host target is macOS 27.0 ([build-system.md](build-system.md) §2).
-- 150 GB free disk is a working minimum. The large items are the ANGLE checkout and build (about 11 GB, [../02-design/graphics.md](../02-design/graphics.md) §5), Cuttlefish downloads and bundles under `Images/work/` (about 10 GB per build ID), the runtime image and userdata under `APKRUN_HOME`, and Xcode DerivedData.
+- 150 GiB free disk is a working minimum. The large items are the ANGLE checkout and build (about 11 GB, [../02-design/graphics.md](../02-design/graphics.md) §5), Cuttlefish downloads and bundles under `Images/work/` (about 10 GB per build ID), the runtime image and userdata under `APKRUN_HOME`, and Xcode DerivedData.
 - An M3 or later Mac is needed only for the nested-virtualization reference host (§3.3). Everything else works on M1.
 
 ### 2.2 Xcode and command line tools
@@ -663,7 +663,7 @@ The harness checks `AXIsProcessTrusted()` at start and fails with a message that
 | protoc-gen-swift | `--version` | the swift-protobuf version in `Package.resolved` |
 | API key | `APKRUN_ANDROID_BUILD_API_KEY` is set | set (warning only) |
 | Nested virtualization | `VZGenericPlatformConfiguration.isNestedVirtualizationSupported` | reported (informational) |
-| Free disk | `df -g .` | ≥ 150 GB (warning only) |
+| Free disk | `df -g .` | ≥ 150 GiB (150 1-GiB blocks; warning only) |
 
 Then run the first build ([build-system.md](build-system.md) §1):
 

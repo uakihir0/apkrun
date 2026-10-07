@@ -7947,3 +7947,60 @@ in 301.48 seconds. Ruff lint, formatting checks, and `git diff --check` passed.
 Hostile review found no remaining issue with the code change; the
 documentation reference mismatch it identified is corrected in
 `android-image.md` §16.
+
+## IR-236: Restore disk headroom and diagnose Lima networking after reported VPN disconnect
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [environment setup](../05-development/environment-setup.md) §2 |
+
+**Choice.** Following the user's report that the VPN was disconnected, retry
+the existing Lima VM with an additional per-instance `vzNAT` network and
+retain that setting for further diagnosis. Do not manually add or delete host
+routes. The prescribed `df -g` check reported 148 GiB free, below the 150 GiB
+developer-host minimum. After `lsof +D ThirdParty/out/work` reported no open
+files, remove that 70 GiB generated work cache while preserving `src`,
+`patched-src`, and `virgl-runtime`.
+
+**Reason.** Lima continued waiting for SSH at `192.168.5.15:22`; Lima
+[documents](https://lima-vm.io/docs/config/network/user/) that default
+user-mode address as intentionally inaccessible from the host.
+An earlier route lookup for candidate VZ NAT address `192.168.64.2` selected
+`en0`, and ordinary and source-bound TCP probes timed out. This candidate was
+not confirmed as the VM's assigned address. On 2026-10-07, `scutil --nc list`
+reported Tailscale as disconnected, but route lookups for `192.168.5.15`,
+`192.168.64.2`, `192.168.105.2`, and `192.168.104.2` selected `utun5` through
+`10.142.128.64`. The host has a VZ NAT `bridge100` interface at
+`192.168.64.1/24`; a route lookup scoped to `bridge100` selects that interface,
+while the ordinary lookup selects `utun5` for `192.168.64.0/24`. This is an
+overlapping host route; the owner of `utun5` is not established. `arp` showed
+no neighbor on `bridge100`, so the guest IP remains unknown. The `bootpd`
+firewall rule permits incoming connections, but the empty serial log leaves
+guest boot state unknown. A fresh TCP probe bound to `192.168.64.1` also
+timed out when connecting to candidate `192.168.64.2:22`; this does not verify
+that the candidate is the guest's address. Lima's
+[VMNet documentation](https://lima-vm.io/docs/config/network/vmnet/)
+describes VZ NAT as host-reachable without `socket_vmnet`; its `lima:shared`
+alternative uses the root-managed helper.
+`ThirdParty/out/work` is generated build work and can be recreated from the
+pinned sources and patches. Removing only this directory restores disk
+headroom while retaining the checked-out sources and published renderer
+cache.
+
+**Verification.** The earlier `limactl start` attempt did not receive its
+`running` status event while `limactl list` reported the instance as running.
+On the 2026-10-07 retry, VZ reported `running` and `limactl list` continued to
+report `Running`, but `limactl start apkrun-cuttlefish --timeout=180s` exited
+with `did not receive an event with the running status`. The hostagent kept
+waiting for `192.168.5.15:22`; `serialv.log` remained empty and `arp` showed no
+guest on `bridge100`. The Tailscale service remained reported as disconnected
+while the global route still selected `utun5`. No Cuttlefish capture or T2
+guest test ran, and no host route or product code was changed. The only Lima
+instance setting changed was the additional `vzNAT` network. Removing
+`ThirdParty/out/work` completed; the immediate post-cleanup `df -g` check
+reported 351 GiB available, and the latest check reported 390 GiB available.
+`ThirdParty/out` measures 561 MiB; pinned source, patched-source, and published
+renderer directories remain. The documentation checks and
+`scripts/tests/run.sh` passed.

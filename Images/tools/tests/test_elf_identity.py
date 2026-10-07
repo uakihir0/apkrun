@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -136,6 +137,29 @@ def test_identify_reads_gnu_build_ids_from_32_and_64_bit_elf(
         "sha256": hashlib.sha256(contents).hexdigest(),
         "elfBuildId": build_id,
     }
+
+
+def test_identify_fd_keeps_the_open_inode_when_its_path_is_replaced(tmp_path: Path) -> None:
+    original_contents = _elf64(bytes.fromhex("0123456789abcdef"))
+    replacement_contents = _elf64(bytes.fromhex("fedcba9876543210"))
+    path = tmp_path / "binary"
+    path.write_bytes(original_contents)
+    descriptor = os.open(path, os.O_RDONLY)
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(replacement_contents)
+
+    try:
+        os.replace(replacement, path)
+        identity = IDENTITY_MODULE.identify_fd(descriptor)
+    finally:
+        os.close(descriptor)
+
+    assert identity == {
+        "status": "identified",
+        "sha256": hashlib.sha256(original_contents).hexdigest(),
+        "elfBuildId": "0123456789abcdef",
+    }
+    assert IDENTITY_MODULE.identify(path)["elfBuildId"] == "fedcba9876543210"
 
 
 def test_identify_hashes_non_elf_without_claiming_an_elf_build_id(tmp_path: Path) -> None:

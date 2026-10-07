@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -19,6 +20,8 @@ from pathlib import Path
 import pytest
 
 REFERENCE_PATH = Path(__file__).parents[1] / "reference"
+if str(REFERENCE_PATH) not in sys.path:
+    sys.path.insert(0, str(REFERENCE_PATH))
 OBSERVER_SPEC = importlib.util.spec_from_file_location(
     "boot_observer",
     REFERENCE_PATH / "boot_observer.py",
@@ -161,6 +164,54 @@ def _write_crosvm_launcher_identity(launcher_log: Path, restarter_pid: int) -> N
         b"run_cvd(500)  D --process_name=crosvm\n"
         + f"process_restarter({restarter_pid})  D Starting Android crosvm\n".encode("ascii")
     )
+
+
+def _seed_crosvm_candidate(
+    tmp_path: Path,
+    *,
+    restarter_pids: tuple[int, ...] = (410,),
+    child_pid: int = 413,
+    start_time: int = 12345,
+) -> tuple[BootObserver, Path, Path, Path, Path]:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    executable = tmp_path / "diagnostic" / "crosvm"
+    executable.parent.mkdir()
+    executable.write_bytes(b"feature-enabled crosvm executable")
+    executable.chmod(0o700)
+    restarter_executable = tmp_path / "process_restarter"
+    restarter_executable.write_bytes(b"test process_restarter executable")
+    restarter_executable.chmod(0o700)
+    observer, output, launcher_log = _observer(
+        tmp_path,
+        proc_root=proc_root,
+        sample_interval=1,
+    )
+    _fake_proc_process(
+        proc_root,
+        child_pid,
+        executable,
+        start_time=start_time,
+        parent_pid=restarter_pids[0],
+        instance_path=observer.instance_path,
+    )
+    for restarter_pid in restarter_pids:
+        _fake_proc_restarter(
+            proc_root,
+            restarter_pid,
+            restarter_executable,
+            children=(child_pid,),
+            instance_path=observer.instance_path,
+        )
+    launcher_log.write_bytes(
+        b"run_cvd(500)  D Started (pid: 499): /private/cuttlefish home/log_tee\n"
+        b"run_cvd(500)  D --process_name=crosvm\n"
+        + b"".join(
+            f"process_restarter({pid})  D Starting Android crosvm\n".encode("ascii")
+            for pid in restarter_pids
+        )
+    )
+    return observer, output, launcher_log, proc_root, executable
 
 
 def _observer(
@@ -1119,6 +1170,266 @@ def test_boot_observer_samples_only_the_launcher_identified_android_crosvm(
     )
     assert staged_crosvm.is_symlink()
     assert staged_crosvm.resolve() == executable.resolve()
+
+
+def test_boot_observer_records_crosvm_elf_identity_once_per_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, _, _ = _seed_crosvm_candidate(tmp_path)
+    calls: list[int] = []
+
+    def identify(descriptor: int) -> dict[str, str | None]:
+        calls.append(descriptor)
+        return {
+            "status": "identified",
+            "sha256": "a" * 64,
+            "elfBuildId": "b" * 40,
+        }
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", identify)
+    observer.start()
+    observer.sample(now=0)
+    observer.sample(now=2)
+    observer.close()
+
+    records = _read_records(output)
+    identities = [record for record in records if record["event"] == "crosvm_runtime_identity"]
+    assert len(identities) == 1
+    assert identities[0]["pid"] == 413
+    assert identities[0]["status"] == "identified"
+    assert identities[0]["sha256"] == "a" * 64
+    assert identities[0]["elfBuildId"] == "b" * 40
+    assert identities[0]["attemptCount"] == 1
+    assert set(identities[0]) == {
+        "timestampUtc",
+        "event",
+        "pid",
+        "attemptCount",
+        "status",
+        "sha256",
+        "elfBuildId",
+    }
+    assert len(calls) == 1
+    assert sum(record["event"] == "crosvm_memory" for record in records) == 2
+
+
+def test_boot_observer_rejects_runtime_identity_if_process_changes_during_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, proc_root, executable = _seed_crosvm_candidate(tmp_path)
+    identify = OBSERVER_MODULE.identify_fd
+
+    def replace_process_during_hash(descriptor: int) -> dict[str, str | None]:
+        result = identify(descriptor)
+        (proc_root / "413" / "stat").write_bytes(
+            b"413 (crosvm worker) S 410 " + b"0 " * 17 + b"54321\n"
+        )
+        return result
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", replace_process_during_hash)
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    identities = [record for record in records if record["event"] == "crosvm_runtime_identity"]
+    assert len(identities) == 1
+    assert identities[0]["status"] == "process_changed"
+    assert identities[0]["sha256"] is None
+    assert identities[0]["elfBuildId"] is None
+    assert identities[0]["attemptCount"] == 1
+    assert executable.exists()
+
+
+def test_boot_observer_hashes_pinned_executable_if_proc_exe_changes_and_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, proc_root, executable = _seed_crosvm_candidate(tmp_path)
+    alternate = tmp_path / "diagnostic" / "other-crosvm"
+    alternate.write_bytes(b"different crosvm executable")
+    process_exe = proc_root / "413" / "exe"
+    original_target = os.readlink(process_exe)
+    identify = OBSERVER_MODULE.identify_fd
+
+    def switch_executable_while_hashing(descriptor: int) -> dict[str, str | None]:
+        process_exe.unlink()
+        process_exe.symlink_to(alternate)
+        try:
+            return identify(descriptor)
+        finally:
+            process_exe.unlink()
+            process_exe.symlink_to(original_target)
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", switch_executable_while_hashing)
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    identities = [
+        record for record in _read_records(output) if record["event"] == "crosvm_runtime_identity"
+    ]
+    assert len(identities) == 1
+    assert identities[0]["status"] == "not_elf"
+    assert identities[0]["sha256"] == hashlib.sha256(executable.read_bytes()).hexdigest()
+    assert identities[0]["sha256"] != hashlib.sha256(alternate.read_bytes()).hexdigest()
+    assert identities[0]["elfBuildId"] is None
+
+
+def test_boot_observer_records_a_new_identity_after_crosvm_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, proc_root, executable = _seed_crosvm_candidate(tmp_path)
+    calls: list[int] = []
+
+    def identify(descriptor: int) -> dict[str, str | None]:
+        calls.append(descriptor)
+        return {"status": "identified", "sha256": "c" * 64, "elfBuildId": "d" * 40}
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", identify)
+    observer.start()
+    observer.sample(now=0)
+    (proc_root / "410" / "task" / "410" / "children").write_text("", encoding="ascii")
+    observer.sample(now=2)
+    shutil.rmtree(proc_root / "413")
+    _fake_proc_process(
+        proc_root,
+        413,
+        executable,
+        start_time=54321,
+        parent_pid=410,
+        instance_path=observer.instance_path,
+    )
+    (proc_root / "410" / "task" / "410" / "children").write_text("413", encoding="ascii")
+    observer.sample(now=4)
+    observer.close()
+
+    identities = [
+        record for record in _read_records(output) if record["event"] == "crosvm_runtime_identity"
+    ]
+    assert len(identities) == 2
+    assert [record["pid"] for record in identities] == [413, 413]
+    assert [record["sha256"] for record in identities] == ["c" * 64, "c" * 64]
+    assert [record["attemptCount"] for record in identities] == [1, 1]
+    assert len(calls) == 2
+
+
+def test_boot_observer_tracks_pid_reuse_without_an_empty_children_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, proc_root, executable = _seed_crosvm_candidate(tmp_path)
+    calls = 0
+
+    def identify(descriptor: int) -> dict[str, str | None]:
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "identified",
+            "sha256": str(calls) * 64,
+            "elfBuildId": str(calls) * 40,
+        }
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", identify)
+    observer.start()
+    observer.sample(now=0)
+    (proc_root / "413" / "stat").write_bytes(
+        b"413 (crosvm worker) S 410 " + b"0 " * 17 + b"54321\n"
+    )
+    observer.sample(now=2)
+    observer.close()
+
+    records = _read_records(output)
+    identities = [record for record in records if record["event"] == "crosvm_runtime_identity"]
+    memory = [record for record in records if record["event"] == "crosvm_memory"]
+    assert len(identities) == 2
+    assert [record["pid"] for record in identities] == [413, 413]
+    assert [record["sha256"] for record in identities] == ["1" * 64, "2" * 64]
+    assert [record["attemptCount"] for record in identities] == [1, 1]
+    assert [record["pid"] for record in memory] == [413, 413]
+    assert calls == 2
+    assert executable.exists()
+
+
+def test_boot_observer_does_not_hash_ambiguous_crosvm_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, _, _ = _seed_crosvm_candidate(tmp_path, restarter_pids=(410, 411))
+
+    def fail_if_called(descriptor: int) -> dict[str, str | None]:
+        raise AssertionError(f"ambiguous crosvm was hashed via descriptor {descriptor}")
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", fail_if_called)
+    observer.start()
+    observer.sample(now=0)
+    observer.close()
+
+    records = _read_records(output)
+    assert not any(record["event"] == "crosvm_runtime_identity" for record in records)
+
+
+def test_boot_observer_retries_unavailable_runtime_identity_until_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, _, _ = _seed_crosvm_candidate(tmp_path)
+    calls = 0
+
+    def recover_after_unavailable(descriptor: int) -> dict[str, str | None]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"status": "unavailable", "sha256": None, "elfBuildId": None}
+        return {"status": "identified", "sha256": "e" * 64, "elfBuildId": "f" * 40}
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", recover_after_unavailable)
+    observer.start()
+    observer.sample(now=0)
+    observer.sample(now=2)
+    observer.close()
+
+    identities = [
+        record for record in _read_records(output) if record["event"] == "crosvm_runtime_identity"
+    ]
+    assert len(identities) == 1
+    assert identities[0]["status"] == "identified"
+    assert identities[0]["attemptCount"] == 2
+    assert identities[0]["sha256"] == "e" * 64
+    assert calls == 2
+
+
+def test_boot_observer_caps_unavailable_runtime_identity_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, output, _, _, _ = _seed_crosvm_candidate(tmp_path)
+    calls = 0
+
+    def unavailable(descriptor: int) -> dict[str, str | None]:
+        nonlocal calls
+        calls += 1
+        return {"status": "unavailable", "sha256": None, "elfBuildId": None}
+
+    monkeypatch.setattr(OBSERVER_MODULE, "identify_fd", unavailable)
+    observer.start()
+    observer.sample(now=0)
+    observer.sample(now=2)
+    observer.sample(now=4)
+    observer.close()
+
+    identities = [
+        record for record in _read_records(output) if record["event"] == "crosvm_runtime_identity"
+    ]
+    assert len(identities) == 1
+    assert identities[0]["status"] == "unavailable"
+    assert identities[0]["attemptCount"] == 3
+    assert identities[0]["sha256"] is None
+    assert identities[0]["elfBuildId"] is None
+    assert calls == 3
 
 
 def test_boot_observer_tracks_launcher_command_and_fexecve_executable_separately(

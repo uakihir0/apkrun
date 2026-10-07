@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from elf_identity import identify_fd
+
 START_EVENT_MARKER = b"Start event (5) received."
 LAUNCHER_SOURCE = re.compile(rb"^([A-Za-z0-9_.-]+)\(([0-9]+)\)")
 ADB_CONNECT_MESSAGE_SENT = re.compile(rb"adb connect message for \S+ successfully sent$")
@@ -31,6 +33,7 @@ SNAPSHOT_TRUNCATION_MARKER = (
     b"[APKRun snapshot truncated; showing the final part of the host log.]\n"
 )
 MAX_LOG_BYTES = 64 * 1024 * 1024
+CROSVM_RUNTIME_IDENTITY_MAX_ATTEMPTS = 3
 SAMPLE_INTERVAL_SECONDS = 5.0
 LAUNCHER_POLL_INTERVAL_SECONDS = 1.0
 MAX_LAUNCHER_LINE_BYTES = 65_536
@@ -298,6 +301,26 @@ def _getprop_retry_delay(consecutive_timeouts: int) -> float:
         if delay == ADB_GETPROP_RETRY_MAX_SECONDS:
             break
     return delay
+
+
+def _same_file_inode(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _same_file_version(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev,
+        left.st_ino,
+        left.st_size,
+        left.st_mtime_ns,
+        left.st_ctime_ns,
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_size,
+        right.st_mtime_ns,
+        right.st_ctime_ns,
+    )
 
 
 def _proc_identity(path: Path) -> tuple[int, bytes] | None:
@@ -715,6 +738,10 @@ class BootObserver:
         self._crosvm_restarter_pids: set[int] = set()
         self._crosvm_restarter_start_times: dict[int, bytes] = {}
         self._crosvm_start_times: dict[int, bytes] = {}
+        self._crosvm_runtime_identity_start_times: dict[int, bytes] = {}
+        self._crosvm_runtime_identity_attempts: dict[
+            int, tuple[bytes, int, dict[str, str | None]]
+        ] = {}
         self._start_event_observed = False
         self._system_server_mprotect_guest_uptime: float | None = None
         self._system_server_snapshot_attempted = False
@@ -812,13 +839,23 @@ class BootObserver:
                     candidate_owners[child_pid] = (restarter_pid, start_time)
         candidate_pids = set(candidate_owners)
         for stale_pid in self._crosvm_start_times.keys() - candidate_pids:
-            self._crosvm_start_times.pop(stale_pid, None)
-        candidates: list[dict[str, Any]] = []
+            self._forget_crosvm_generation(stale_pid, finalized_by="process_disappeared")
+        candidates: list[tuple[int, dict[str, Any], bytes, int, bytes]] = []
         for pid in sorted(candidate_pids - ambiguous_candidate_pids):
             restarter_pid, restarter_start_time = candidate_owners[pid]
+            expected_start_time = self._crosvm_start_times.get(pid)
+            if expected_start_time is not None:
+                current_identity = _proc_identity(self.proc_root / str(pid) / "stat")
+                if (
+                    current_identity is not None
+                    and current_identity[0] == restarter_pid
+                    and current_identity[1] != expected_start_time
+                ):
+                    self._forget_crosvm_generation(pid, finalized_by="process_replaced")
+                    expected_start_time = None
             identity = self._read_crosvm_memory(
                 pid,
-                self._crosvm_start_times.get(pid),
+                expected_start_time,
                 parent_pid=restarter_pid,
                 parent_start_time=restarter_start_time,
             )
@@ -826,11 +863,43 @@ class BootObserver:
                 continue
             sample, start_time = identity
             self._crosvm_start_times.setdefault(pid, start_time)
-            candidates.append(sample)
+            candidates.append((pid, sample, start_time, restarter_pid, restarter_start_time))
         if not self._refresh_instance_path():
             candidates.clear()
         if len(candidates) == 1:
-            self._record({"event": "crosvm_memory", **candidates[0]})
+            pid, sample, start_time, restarter_pid, restarter_start_time = candidates[0]
+            if self._crosvm_runtime_identity_start_times.get(pid) != start_time:
+                pending_identity = self._crosvm_runtime_identity_attempts.get(pid)
+                attempts = (
+                    pending_identity[1]
+                    if pending_identity is not None and pending_identity[0] == start_time
+                    else 0
+                )
+                runtime_identity = self._read_crosvm_runtime_identity(
+                    pid,
+                    start_time,
+                    parent_pid=restarter_pid,
+                    parent_start_time=restarter_start_time,
+                )
+                attempts += 1
+                if (
+                    runtime_identity["status"] == "unavailable"
+                    and attempts < CROSVM_RUNTIME_IDENTITY_MAX_ATTEMPTS
+                ):
+                    self._crosvm_runtime_identity_attempts[pid] = (
+                        start_time,
+                        attempts,
+                        runtime_identity,
+                    )
+                else:
+                    self._record_crosvm_runtime_identity(
+                        pid,
+                        start_time,
+                        attempts,
+                        runtime_identity,
+                    )
+                    self._crosvm_runtime_identity_attempts.pop(pid, None)
+            self._record({"event": "crosvm_memory", **sample})
         else:
             self._record(
                 {
@@ -913,6 +982,17 @@ class BootObserver:
                     }
                 )
             self._record_unattempted_system_server_snapshot()
+            for pid, (start_time, attempts, result) in list(
+                self._crosvm_runtime_identity_attempts.items()
+            ):
+                self._record_crosvm_runtime_identity(
+                    pid,
+                    start_time,
+                    attempts,
+                    result,
+                    finalized_by="observer_stopped",
+                )
+            self._crosvm_runtime_identity_attempts.clear()
             self._record(
                 {
                     "event": "cuttlefish_adb_connector_summary",
@@ -1424,6 +1504,99 @@ class BootObserver:
         ):
             return None
         return {int(child) for child in children if child.isdigit()}, before
+
+    def _forget_crosvm_generation(self, pid: int, *, finalized_by: str) -> None:
+        self._crosvm_start_times.pop(pid, None)
+        self._crosvm_runtime_identity_start_times.pop(pid, None)
+        pending_identity = self._crosvm_runtime_identity_attempts.pop(pid, None)
+        if pending_identity is not None:
+            start_time, attempts, result = pending_identity
+            self._record_crosvm_runtime_identity(
+                pid,
+                start_time,
+                attempts,
+                result,
+                finalized_by=finalized_by,
+            )
+
+    def _record_crosvm_runtime_identity(
+        self,
+        pid: int,
+        start_time: bytes,
+        attempts: int,
+        result: dict[str, str | None],
+        *,
+        finalized_by: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "event": "crosvm_runtime_identity",
+            "pid": pid,
+            "attemptCount": attempts,
+            **result,
+        }
+        if finalized_by is not None:
+            record["finalizedBy"] = finalized_by
+        self._record(record)
+        if finalized_by is None:
+            self._crosvm_runtime_identity_start_times[pid] = start_time
+
+    def _read_crosvm_runtime_identity(
+        self,
+        pid: int,
+        expected_start_time: bytes,
+        *,
+        parent_pid: int,
+        parent_start_time: bytes,
+    ) -> dict[str, str | None]:
+        process = self.proc_root / str(pid)
+        expected_crosvm = self._expected_crosvm_executable_path()
+        before = _proc_identity(process / "stat")
+        parent_before = _proc_start_time(self.proc_root / str(parent_pid) / "stat")
+        if (
+            expected_crosvm is None
+            or before != (parent_pid, expected_start_time)
+            or parent_before != parent_start_time
+        ):
+            return {"status": "process_changed", "sha256": None, "elfBuildId": None}
+
+        try:
+            executable_fd = os.open(
+                process / "exe",
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK,
+            )
+        except OSError:
+            return {"status": "unavailable", "sha256": None, "elfBuildId": None}
+        try:
+            executable_before = os.fstat(executable_fd)
+            expected_before = os.stat(expected_crosvm)
+            process_executable_before = os.stat(process / "exe")
+            if not stat.S_ISREG(executable_before.st_mode) or not (
+                _same_file_inode(executable_before, expected_before)
+                and _same_file_inode(executable_before, process_executable_before)
+            ):
+                return {"status": "executable_mismatch", "sha256": None, "elfBuildId": None}
+
+            identity = identify_fd(executable_fd)
+            executable_after = os.fstat(executable_fd)
+            expected_after = os.stat(expected_crosvm)
+            process_executable_after = os.stat(process / "exe")
+            after = _proc_identity(process / "stat")
+            parent_after = _proc_start_time(self.proc_root / str(parent_pid) / "stat")
+        except OSError:
+            return {"status": "process_changed", "sha256": None, "elfBuildId": None}
+        finally:
+            os.close(executable_fd)
+
+        if after != before or parent_after != parent_before:
+            return {"status": "process_changed", "sha256": None, "elfBuildId": None}
+        if not (
+            _same_file_inode(executable_before, executable_after)
+            and _same_file_version(executable_before, executable_after)
+            and _same_file_inode(executable_after, expected_after)
+            and _same_file_inode(executable_after, process_executable_after)
+        ):
+            return {"status": "executable_mismatch", "sha256": None, "elfBuildId": None}
+        return identity
 
     def _read_crosvm_memory(
         self,

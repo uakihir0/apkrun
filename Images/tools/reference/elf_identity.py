@@ -108,14 +108,7 @@ def _parse_build_id(stream: BinaryIO, file_size: int) -> str | None:
     return None
 
 
-def identify(path: Path) -> dict[str, str | None]:
-    """Return the file hash and, when present, its GNU ELF Build ID."""
-
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
-    except OSError:
-        return {"status": "unavailable", "sha256": None, "elfBuildId": None}
-
+def _identify_owned_descriptor(descriptor: int) -> dict[str, str | None]:
     try:
         before = os.fstat(descriptor)
     except OSError:
@@ -162,6 +155,26 @@ def identify(path: Path) -> dict[str, str | None]:
         return {"status": "unavailable", "sha256": None, "elfBuildId": None}
 
     return {"status": status, "sha256": file_hash, "elfBuildId": build_id}
+
+
+def identify_fd(descriptor: int) -> dict[str, str | None]:
+    """Identify the file pinned by an open descriptor without closing it."""
+
+    try:
+        duplicate = os.dup(descriptor)
+    except OSError:
+        return {"status": "unavailable", "sha256": None, "elfBuildId": None}
+    return _identify_owned_descriptor(duplicate)
+
+
+def identify(path: Path) -> dict[str, str | None]:
+    """Return the file hash and, when present, its GNU ELF Build ID."""
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        return {"status": "unavailable", "sha256": None, "elfBuildId": None}
+    return _identify_owned_descriptor(descriptor)
 
 
 def main() -> int:

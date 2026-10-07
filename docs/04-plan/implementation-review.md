@@ -8265,3 +8265,72 @@ and private-key scans found no matches. The live capture confirms the Cuttlefish
 1.57.0 host-logcat label and path, but predates the runtime identity
 instrumentation and does not verify that event. It remains incomplete: it did
 not establish Android boot completion or rendered frames.
+
+## IR-240: Plan a Mesa-enabled VirGL guest image without changing the reference pin
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064; proposed follow-up task number pending GitHub issue initialization |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [M02](issues/M02-graphics.md) #022; [M05](issues/M05-custom-android-image.md) #035; [task index](issues/README.md); [workflow](../05-development/workflow.md) |
+
+**Choice.** Preserve build 16373615 as the #064 reference. A corrected Mesa guest
+image must have its own build identity, manifest, hashes, and source/build
+provenance. The suggested follow-up is a candidate M2 task after #020 and #021
+and before #022; if adopted, #022 should depend on it, and #035 should reuse its
+verified product fragment. This keeps the image correction separate from #064.
+It does not establish a usable VirGL guest or unblock #064 by itself.
+
+The placement is deliberate. #022's acceptance criteria require Mesa VirGL,
+SurfaceFlinger, and `sys.boot_completed=1`. Putting the guest packaging work only
+in M5 would make it depend on #035, which depends on #034 and is downstream of
+#027, #026, and G3/#023. That creates a cycle if #022 also needs the Mesa image.
+The M2 task could build a minimal reusable product fragment; #035 can add the
+Guest Agent and other product services later. The M1 dependency does not block
+all M2 preparation: #018 can start, and #019 and #020 can proceed before M1
+closes. However, #021 depends on #014, which depends on #013 and transitively on
+#064. That unresolved chain gates the proposed task placement after #021 and
+before #022, as well as #022 integration; resolve the #064 acceptance question
+or revise the dependency path before those tasks proceed. The builder setup is
+also currently scheduled during M3; an M2 task that needs AOSP builds must move
+that prerequisite earlier or choose another documented build path. Do not
+assume that adding one `PRODUCT_PACKAGES` entry is sufficient: first compare
+the exact pinned source and built image, then verify the module, loader path,
+ABI, and dependencies.
+
+**Task-numbering constraint.** The authenticated local `gh` checks found no
+visible issues or pull requests, and the GitHub connector rejected issue
+creation with HTTP 403. This looks like a repository still awaiting its initial
+task-issue sequence, but the next GitHub number was not established. The
+workflow requires creating #001–#097 in order in a new repository before
+opening a later task or pull request. Therefore this note records the proposed
+scope but does not add an unnumbered task to the canonical index or create an
+issue with an unverified number. After the required issue sequence exists,
+obtain the next number from GitHub, add the task to M2 and the index, add it to
+FR-GFX-03 traceability, make #022 depend on it, record its reuse in #035, and
+update the builder setup order if required.
+
+If the exact source audit confirms that the needed modules are already in the
+pinned AOSP Mesa source, packaging them would use the existing Mesa/VirGL
+architecture of ADR-0004 without changing the reference image or graphics
+protocol. If it requires a new third-party driver source or a different
+renderer, pin and license it and complete the applicable ADR before
+implementation.
+
+**Reason.** IR-185 and IR-239 establish that build 16373615 selects `mesa` but
+does not contain Mesa-named drivers in the inspected vendor or system EGL
+directories. The feature-enabled diagnostic host reached ADB `device`, while
+the guest EGL loader reported that it could not load Mesa and SurfaceFlinger
+aborted. The evidence does not establish successful host VirGL initialization,
+rendered frames, or boot completion. The canonical capture remains incomplete;
+the separate image must not be used to mark #064 complete.
+
+**Verification.** Reviewed the #064, #022, and #035 scopes, the task dependency
+index, roadmap, workflow numbering rules, and ADR-0004. `scripts/bootstrap
+--check` passed for the current Mac environment; no project source or runtime
+image was changed. `gh issue list --state all` and `gh pr list --state all`
+returned no visible items, so no task number could be verified. A subagent
+adversarial review confirmed the M5 dependency cycle, flagged the unresolved
+M1/#064 prerequisite and the builder schedule, and agreed that an ADR is not
+needed only if the exact source audit confirms the existing pinned AOSP Mesa
+modules are sufficient.

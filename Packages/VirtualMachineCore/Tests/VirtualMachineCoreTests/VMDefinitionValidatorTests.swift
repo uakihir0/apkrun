@@ -53,6 +53,18 @@ import Virtualization
     #expect(validator.findings(definition).first == .memoryOutOfRange)
 }
 
+@Test func memoryValidationRejectsValuesBelowFrameworkMinimum() {
+    let builder = VMDefinitionBuilder()
+    let validator = makeValidator(
+        host: makeHost(
+            for: builder,
+            minimumAllowedMemorySize: 4 * 1_024 * 1_024 * 1_024
+        )
+    )
+
+    #expect(validator.findings(builder.build()) == [.memoryOutOfRange])
+}
+
 @Test func kernelValidationRejectsMissingAndCompressedFiles() {
     let builder = VMDefinitionBuilder()
     let missingHost = makeHost(
@@ -624,6 +636,7 @@ private func makeHost(
     for builder: VMDefinitionBuilder,
     activeCPUCount: Int = 8,
     physicalMemoryBytes: UInt64 = 16 * 1_024 * 1_024 * 1_024,
+    minimumAllowedMemorySize: UInt64 = 1 * 1_024 * 1_024 * 1_024,
     microphoneUsageDescription: String? = nil,
     fileProbes: [URL: VMFileProbeFixture] = [:]
 ) -> FakeVMHostEnvironment {
@@ -637,6 +650,7 @@ private func makeHost(
     return FakeVMHostEnvironment(
         activeProcessorCount: activeCPUCount,
         physicalMemoryBytes: physicalMemoryBytes,
+        minimumAllowedMemorySize: minimumAllowedMemorySize,
         microphoneUsageDescription: microphoneUsageDescription,
         fileProbes: probes
     )

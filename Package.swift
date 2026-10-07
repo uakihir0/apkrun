@@ -364,6 +364,9 @@ let package = Package(
             path: "CLI/apkrun/Tests",
             resources: [
                 .copy("Golden")
+            ],
+            swiftSettings: [
+                .define("APKRUN_EMBEDDED_RUNTIME", .when(traits: ["EmbeddedRuntime"]))
             ]
         ),
     ],

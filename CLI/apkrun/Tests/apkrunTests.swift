@@ -249,7 +249,11 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 @Test func rootHelpMatchesGolden() {
-    #expect(APKRunCommand.helpMessage() == golden("help.txt"))
+    #if APKRUN_EMBEDDED_RUNTIME
+        #expect(APKRunCommand.helpMessage() == golden("help-embedded-runtime.txt"))
+    #else
+        #expect(APKRunCommand.helpMessage() == golden("help.txt"))
+    #endif
 }
 
 private final class CLIOutputRecorder: @unchecked Sendable {

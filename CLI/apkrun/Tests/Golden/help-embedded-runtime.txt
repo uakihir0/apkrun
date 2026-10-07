@@ -9,5 +9,6 @@ OPTIONS:
 SUBCOMMANDS:
   version                 Show APKRun version information.
   logs                    Read APKRun host logs.
+  dev                     Run development-only APKRun commands.
 
   See 'apkrun help <subcommand>' for detailed help.

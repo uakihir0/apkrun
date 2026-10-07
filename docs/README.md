@@ -76,7 +76,7 @@ Exact formats. Code and tests are written against these documents.
 | Document | What it answers |
 |---|---|
 | [roadmap.md](04-plan/roadmap.md) | Milestones, the critical path, gates G1–G9, versions and their Definitions of Done, milestone reviews |
-| [issues/README.md](04-plan/issues/README.md) | The task index (#001–#097), the task entry format, and the rules for working a task. The milestone files hold every task in full |
+| [issues/README.md](04-plan/issues/README.md) | The task index (#001–#097), current-progress dashboard, task entry format, and rules for working a task. The milestone files hold every task in full |
 | [test-strategy.md](04-plan/test-strategy.md) | Test tiers T0–T3, fixture apps, CI and lab runs, gate tests |
 | [risks.md](04-plan/risks.md) | Technical and project risks, with mitigation, fallback, and the task that settles each |
 | [open-questions.md](04-plan/open-questions.md) | Undecided items, each with a working default |

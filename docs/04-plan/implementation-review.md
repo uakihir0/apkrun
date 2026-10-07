@@ -8453,3 +8453,59 @@ release. The source probe and configuration-rejection/reset test passed 2/2,
 with result bundle `/tmp/apkrun-start-probe-final-3.xcresult`. The bounded
 callback observation does not establish that a callback cannot arrive later;
 see [vm.md](../02-design/vm.md) §17.
+
+## IR-244: Verify live crosvm identity and repeat Mesa EGL diagnosis
+
+| Field | Value |
+|---|---|
+| Status | Diagnostic evidence recorded; #064 remains open |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [progress snapshot](issues/README.md) §5; `Images/tools/reference/{capture.sh,boot_observer.py,elf_identity.py,check_virgl_crosvm.py}`; `Images/reference/16373615/incomplete/target-20261008T030306-2167/` and its [verification receipt](../../Images/reference/16373615/incomplete/target-20261008T030306-2167.verification.txt) |
+
+**Choice.** Repeat one observer-enabled `target` capture in an isolated,
+writable Lima scratch checkout copied from commit
+`3c0e413ddc49e18f684c55306d607f1c8ead906a`. Keep the result in `incomplete/`
+because the configured crosvm override has no recorded Virgl certification.
+Use this run to verify the newly added live `/proc/<pid>/exe` identity event
+and to check whether the pinned guest still fails during Mesa EGL loading.
+
+**Reason.** The previous 600-second target diagnostic predates the live runtime
+identity event and therefore could not validate that observer change. The
+uncertified host binary and known guest-image mismatch make a canonical profile
+or a rendering claim unjustified. An isolated scratch tree also avoids
+overwriting the saved captures or changing the pinned product image.
+
+**Verification.** The pinned product's ten manifest artifacts passed their
+size and SHA-256 checks before capture. The 604-second run used Cuttlefish
+1.57.0 / VCS `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`, Ubuntu 24.04.4
+arm64 with nested virtualization, build 16373615, `drm_virgl`, and
+`EGL_PLATFORM=surfaceless`. The observer recorded a live crosvm identity for
+PID 2677 as `identified`, with SHA-256
+`48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7` and GNU
+Build ID `1f6c03321061aa58e1d1ec0d0a1ff54f`, matching the preflighted
+executable. The 600-second startup deadline expired. ADB reported `device` on
+13 of 20 polls; all three property probes timed out, with no parsed boot or
+SystemServer value. The kernel log has no boot-complete, boot-failed, or
+`system_server` marker. Host logcat recorded eight Mesa driver-load failures,
+eight fatal-signal records, and eight abort messages stating that no OpenGL ES
+implementation could be found. `MISSING.txt` records
+`crosvm-command-line.txt` as unavailable at artifact collection; the
+`crosvm-runtime-identity.txt` sidecar contains only its header because crosvm
+had already exited.
+
+The normalized schema-v3 `host.json` records path-free identities. The
+[verification receipt](../../Images/reference/16373615/incomplete/target-20261008T030306-2167.verification.txt)
+lists all 12 artifact hashes and records that they matched their Lima-side
+copies. A second normalization changed zero files; the JSON artifacts and all
+151 observer JSONL records parsed. The scans found no host paths, loopback ADB
+endpoints, MAC addresses, unmasked serial/IMEI/MEID arrays, raw IMEI/MEID
+values, or private-key markers; all 16 guest serial-property occurrences are
+`<SERIAL>` placeholders. Per IR-122, 48 Cuttlefish virtual UART endpoint
+tokens in `launcher.log` remain intentionally visible to preserve the UART
+mapping. The capture's Cuttlefish group, private HOME, staging directory, and
+lock were removed; the pre-existing stale instance-1 registry entry was left
+untouched. The dedicated ADB server on port 5038 was stopped, with no
+remaining listener on ports 5038 or 6521. This verifies the live identity
+event and reconfirms the guest-side EGL failure; it does not prove host Virgl
+initialization, Android boot completion, rendered frames, or any of #064's
+remaining profile acceptance criteria.

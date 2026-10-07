@@ -201,21 +201,36 @@ Gates G1–G9 are the project checkpoints. Their pass conditions are in [../road
 **Working branch:** `codex`
 
 Task entries remain the source of truth for scope and acceptance. This snapshot
-shows the active implementation work; results and decisions link to their
-task-specific records.
+summarizes active work and review dependencies; acceptance checkboxes and
+verification records remain in each task entry.
 
-**Project position:** M0, task #003, gate G1. #001 is complete. #002's
-implementation and tests are recorded, but formal completion is waiting for
-IR-242 maintainer review and #061 step 4 to reach `main`. #003 remains active:
-the G1 ten-boot acceptance test passed again on `codex`, while the required
-clean-`main` gate run and the other task-closing reviews are still pending.
-Later tasks remain behind these documented dependencies and gates.
+**Project position:** M0 #003 / G1 is still the formal gate-closing track.
+Roadmap §1.4 also permits M1 #064 to proceed once #008 is done, and M2 #018
+depends only on #001. These parallel tracks can advance while #003's clean
+`main` gate run and task-closing reviews remain open. #010 still depends on
+#064; #019 and #020 depend on #018.
 
 | Task | Status | Verified | Remaining |
 |---|---|---|---|
 | #001 Bootstrap Xcode workspace | Implementation and recorded acceptance criteria complete | Full `swift test` suites passed with and without `--traits EmbeddedRuntime`, including the appropriate CLI root-help golden in each build; the original clean-checkout, Xcode build, and product smoke verification is recorded in M00 | No known implementation or acceptance gap |
 | #002 VMDefinition and VM validation | Implementation and opt-in entitlement probe recorded in commit `de7c678`; acceptance tests now cover the memory minimum; IR-242 review is open | Full `swift test` passed with 111 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests`; focused below-minimum test passed; 2 opt-in T1 tests and the no-artifact skip behavior are recorded | Maintainer review of IR-242; #061 step 4 must reach `main` before formal task completion |
 | #003 Boot minimal ARM64 Linux | Active (implementation commits `44a1a7d`, `d31e7e3`) | 111 `VirtualMachineCoreTests` and 25 default `VirtualMachineCoreSystemTests` passed. T0 exercises the production VZ delegate's buffer/stream routing and controller mapping separately. Signed `LinuxGuest` T2 passed 33/33 on commit `d31e7e3` (MacBook Pro arm64, macOS 27.0.1 build 26A434); signed failure/reset and positive-control/kernel-removal probes passed 2/2; start returned `VZErrorDomain/2`, no delegate callback was observed for 2 s, and cleanup confirmed VM states `stopped` and `error`. All six `scripts/ci/run-checks.sh` checks passed. On `c497480`, the signed G1 test plan passed 4 tests with 1 configuration-scoped skip and 0 failures; the G1 ten-boot and failed-start/reset cases both passed. The skipped case was `testGuestResolvesDNSAndReachesExternalHTTPSProbe`, assigned to the Network configuration. Detailed result: [vm.md](../../02-design/vm.md) §17 | Remaining: complete the #002 hard dependency (including IR-242 review); resolve IR-243 and the paired license-policy review IR-044/IR-241; link a maintainer-run LinuxGuest T2 result for the reviewed commit before the closing PR merges; and pass `scripts/run-gate.sh G1` from a clean `main` checkout with evidence attached to the G1 gate issue |
+
+**Independent progress (roadmap §1.4):**
+
+| Task | Current evidence | Still open |
+|---|---|---|
+| #008 Acquire and inventory ARM64 Cuttlefish artifacts; #009 AndroidImageManifest | Acceptance criteria are marked 7/7 and 6/6 on `codex`; the pinned build 16373615 manifest and inventory are present. | Workflow completion still requires reviewed integration to `main` and issue closure. |
+| #064 Reference boot capture | Active; 1/6 acceptance criteria marked. The 2026-10-07 UTC diagnostic capture verified one live crosvm ELF identity and reproduced the guest Mesa EGL load failure. Record: [#064 notes](M01-android-bring-up.md#064-reference-boot-capture), [IR-244](../implementation-review.md#ir-244-verify-live-crosvm-identity-and-repeat-mesa-egl-diagnosis), [hash/privacy/cleanup receipt](../../../Images/reference/16373615/incomplete/target-20261008T030306-2167.verification.txt). | The three comparable profiles, normalization/privacy acceptance across those profiles, guest-command equivalence, exact boot-signal timings, and per-profile metadata remain incomplete. The latest run also lacks `crosvm-command-line.txt`; it did not reach boot completion or prove rendering. |
+| #010 Extract Android kernel and ramdisk | 6/7 acceptance criteria are marked; implementation and tests are recorded. | The final reference-derived values still depend on #064. |
+| #018 Analyze the RiftVM GPU prototype | The analysis now records command responses, the renderer-budget estimate limits, scanout behavior, profile/topology differences, and the current patch crosswalk. Final hostile review passed on 2026-10-07. | Maintainer review of the v0.6.1 source substitution remains open under IR-188; the #019/#020 dependency is not formally closed. |
+
+The #064 run is diagnostic evidence only: the crosvm build is uncertified for
+Virgl and the capture is retained under `Images/reference/16373615/incomplete/`.
+It does not change the pinned Android image or close #064. The guest Mesa
+payload correction is explicitly outside #064; the proposed reusable-image
+follow-up is documented in IR-240, but cannot enter the numbered task index
+until GitHub initializes the required #001–#097 task sequence.
 
 The unentitled validation result and host details are in [vm.md](../../02-design/vm.md)
 §3 and §17. The implementation judgment for the opt-in T1 probe is in

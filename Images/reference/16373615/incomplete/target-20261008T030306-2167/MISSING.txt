@@ -1,0 +1,4 @@
+virgl-preflight	crosvm Build ID 1f6c03321061aa58e1d1ec0d0a1ff54f has no recorded Virgl certification; this capture is diagnostic-only
+diagnostic-only	crosvm binary override changes the host runtime; this capture is never a reference profile
+guest	Cuttlefish create or start exceeded the 600-second boot deadline; see cvd-create-console.log
+crosvm-command-line.txt	no crosvm process matched the private Cuttlefish HOME at artifact-collection time; this does not establish whether crosvm ran earlier

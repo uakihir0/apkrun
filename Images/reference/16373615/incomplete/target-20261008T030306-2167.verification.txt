@@ -1,0 +1,61 @@
+# Capture verification receipt
+
+- Record: `target-20261008T030306-2167/`
+- Verified: 2026-10-07 UTC
+- Capture source commit: `3c0e413ddc49e18f684c55306d607f1c8ead906a`
+
+## Transfer and format checks
+
+The Lima-side source and repository copy contained the same 12 filenames, and
+all corresponding SHA-256 values matched. The values below are for the
+repository copy.
+
+| File | SHA-256 |
+|---|---|
+| `MISSING.txt` | `6941f27fc6c7b1f2cd6c18517256c1c21b0f6218411706c47da0650dca207342` |
+| `assemble_cvd.log` | `314570e0d57b681134bdd74778933f4839bcb3a8ed6ad4bcfbbba56cb24883ee` |
+| `boot-observer.jsonl` | `b2fca97e9aed52aa2158f377339602d09ae3eef1b6e21e31e83f37732c108c5f` |
+| `composite-disk-specs.json` | `c9b6f3374b29410c1faacc968f97916fcb36c10a03be82f1aeaa337bae11a3f5` |
+| `crosvm-runtime-identity.txt` | `d3c101a5b3a9811655e9a6065d898146ab0ac861217e4e1c1098adc1fd2daa64` |
+| `cuttlefish_config.json` | `d6da979120aaaf996ef47dc39644a53617e110fd6e46da1143c06e9719f3cec0` |
+| `cvd-create-console.log` | `08b53bb70acfdca11ceb9241ec645391b9db7eb286ee046324e0a837c4904178` |
+| `host-logcat.txt` | `bd83cc2bb7a4363ae9345752eb5d8ffd5fe527f0114fb9a56113546b34da55b6` |
+| `host.json` | `a6c6be7c2a0fb7b35dd35002ac507a2e7f6e8842ee042c5cebf8a6447991e5e0` |
+| `internal-bootconfig.txt` | `0bcb87f628ce7cdb6276f333d9517f73f6a8c4c2f871877221fd89c8fe1cc2cc` |
+| `kernel.log` | `e9141c3dfc9b9e467f3234b21ec04502bbaed7bebfb6ef652dbbb9619029600a` |
+| `launcher.log` | `9f9cd0bfa3aa6959d2c816ac4bd9f8f89273a6d0850ec854975857d9c6a43f5a` |
+
+`compare_boot.py normalize` reported `Normalized 0 files` on the second pass.
+`host.json`, `cuttlefish_config.json`, and `composite-disk-specs.json` parsed;
+all 151 non-empty `boot-observer.jsonl` records parsed; `host.json` has schema
+version 3.
+
+## Privacy scan
+
+| Pattern class | Matches |
+|---|---:|
+| Host paths (`/Users`, `/home/lima`, Cuttlefish temporary roots) | 0 |
+| Loopback ADB endpoints on ports 5038, 6520, and 6521 | 0 |
+| MAC addresses | 0 |
+| Guest serial properties (`androidboot.*` / `ro.*`) | 16 occurrences; all values are `<SERIAL>` placeholders |
+| Unmasked serial/IMEI/MEID arrays or raw IMEI/MEID values | 0 |
+| PEM private-key markers | 0 |
+
+Cuttlefish `--serial=hardware=...` UART endpoint configuration appears 48
+times in `launcher.log`. Its letter-and-hyphen endpoint tokens are intentionally
+retained by the normalization policy in [IR-122](../../../../docs/04-plan/implementation-review.md#ir-122-preserve-cuttlefish-serial-endpoint-identity-in-normalized-logs)
+so logs preserve the virtual UART mapping; they are not Android guest serial
+properties or host hardware serials.
+
+## Cleanup observation
+
+The capture lock, private Cuttlefish HOME, and `.target.capture.*` staging
+directory were absent. No `crosvm`, `run_cvd`, or `process_restarter` process
+was present, and no listener remained on ports 5038 or 6521. `cvd fleet`
+contained only the pre-existing stale instance-1 group
+`apkrun_target_whuuql`; it was left untouched.
+
+The capture's `MISSING.txt` records both `crosvm-command-line.txt` as
+unavailable at collection time and the Virgl certification gap. This receipt
+verifies the retained record and observed cleanup state; it does not turn the
+diagnostic capture into a reference profile.

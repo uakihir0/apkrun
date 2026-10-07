@@ -1075,7 +1075,19 @@ available. If any of the three SHA-256 values is unavailable, `capture.sh`
 records `host-tool-identities` in `MISSING.txt` and publishes the capture as
 incomplete. A missing ELF Build ID alone does not fail identity collection
 when SHA-256 is present. The Cuttlefish VCS revision printed as `Launcher
-Build ID` is separate from these ELF Build IDs.
+Build ID` is separate from these ELF Build IDs. When the optional boot
+observer sees one uniquely verified Android crosvm, it emits one
+`crosvm_runtime_identity` event per process generation by identifying
+`/proc/<pid>/exe`. The event contains no executable path; the observer verifies
+the child and parent process start times, opens the proc executable once, and
+hashes through that pinned file descriptor. It checks that descriptor against
+the expected ELF and proc link before hashing, then rechecks file metadata,
+process generations, and executable identity afterward. A transient unavailable
+read is retried up to three times for the same process generation; the final
+path-free event records its attempt count. Ambiguous candidates are not hashed,
+and failed reads retain a status without an identity. A readable file retains
+its SHA-256 even when ELF parsing fails or no GNU Build ID is present; an
+unavailable read or rejected process/executable race has no hash.
 Compare GPU profiles only when the actual selected mode matches the intended
 mode and vhost-user GPU is disabled; a mismatch or missing/invalid setting
 keeps the capture incomplete, even when the boot observer collected data
@@ -1111,10 +1123,11 @@ While either CVD command runs, live polling snapshots only
 artifact collection copies the selected instance's `logcat` once, if available,
 with a 64 MiB cap, then renames it to `host-logcat.txt`. Oversized logcat is
 truncated from a complete line boundary. Before retention, it receives the
-capture's path, serial, MAC, and secret redactions. A missing or unsafe logcat
-is recorded in `MISSING.txt` and leaves the capture incomplete. Runtime log
-snapshots remain available if Cuttlefish removes those files during failed
-startup.
+capture's path, serial, MAC, secret, and attestation identifier-array
+redactions. Arrays for `serial`, `imei`, `imei2`, and `meid` are replaced as a
+whole. A missing or unsafe logcat is recorded in `MISSING.txt` and leaves the
+capture incomplete. Runtime log snapshots remain available if Cuttlefish
+removes those files during failed startup.
 The runtime paths are discovered below
 `$HOME/cuttlefish_runtime`, and stale files from previous runs are excluded.
 `collect_composite_specs.py` reads `*_composite_disk_config.txt` files from
@@ -1143,7 +1156,8 @@ the commands are intended to work in the serial shell used by #014, but that
 path remains unverified until the T3 console check. `logcat` is
 compressed on the host with deterministic gzip metadata. The comparator refuses
 gzip artifacts whose compressed or decompressed size exceeds 64 MiB. Serial
-numbers, MAC addresses, IPv6 addresses with EUI-64-style interface identifiers,
+numbers, attestation identifier arrays for `serial`, `imei`, `imei2`, and
+`meid`, MAC addresses, IPv6 addresses with EUI-64-style interface identifiers,
 common host paths, and complete quoted or unquoted secret-keyed values are
 normalized by `compare_boot.py` and `normalize.yaml`. Private-key blocks are
 redacted by a linear marker scan.

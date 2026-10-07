@@ -8111,7 +8111,7 @@ The Cuttlefish Android guest has not been boot-tested after this recovery;
 |---|---|
 | Status | Needs maintainer review |
 | Task | #064 |
-| Affected files | [M01](issues/M01-android-bring-up.md) #064; [instance-1 collision](../../Images/reference/16373615/incomplete/default-20261007T154512-2416/); [default capture](../../Images/reference/16373615/incomplete/default-20261007T160227-2967/); [SwiftShader-profile capture](../../Images/reference/16373615/incomplete/swiftshader-20261007T161446-10503/); [stock Virgl failure](../../Images/reference/16373615/incomplete/target-20261007T164344-18219/); [feature-enabled Virgl diagnostic](../../Images/reference/16373615/incomplete/target-20261007T170221-19521/); `Images/tools/reference/{capture.sh,capture_cvd_start.py,check_virgl_crosvm.py,compare_boot.py,normalize.yaml}`; related tests |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [instance-1 collision](../../Images/reference/16373615/incomplete/default-20261007T154512-2416/); [default capture](../../Images/reference/16373615/incomplete/default-20261007T160227-2967/); [SwiftShader-profile capture](../../Images/reference/16373615/incomplete/swiftshader-20261007T161446-10503/); [stock Virgl failure](../../Images/reference/16373615/incomplete/target-20261007T164344-18219/); [feature-enabled Virgl diagnostic](../../Images/reference/16373615/incomplete/target-20261007T170221-19521/); [host-logcat Virgl diagnostic](../../Images/reference/16373615/incomplete/target-20261007T193655-32887/); `Images/tools/reference/{boot_observer.py,capture.sh,capture_cvd_start.py,check_virgl_crosvm.py,compare_boot.py,normalize.yaml}`; related tests |
 
 **Choice.** Keep the stale instance-1 registry entry for maintainer diagnosis; do
 not run global `cvd reset`. Use instance 2 for post-recovery captures. Do not
@@ -8136,12 +8136,27 @@ Capture the Cuttlefish instance's host-side `logcat` once after the CVD command
 returns, if the selected instance exposes it. Do not copy it on every live
 `cvd logs` poll because it can grow quickly. Keep the artifact bounded to 64
 MiB, rename it to `host-logcat.txt`, and apply the capture's path, serial, MAC,
-and secret redactions before retaining it. If truncated, the retained data
-starts at a complete log line so a multibyte UTF-8 character is not split. An
+secret, and attestation identifier-array redactions before retaining it. Arrays
+for `serial`, `imei`, `imei2`, and `meid` are replaced as a whole. If truncated,
+the retained data starts at a complete log line so a multibyte UTF-8 character
+is not split. An
 absent or unsafe logcat is recorded as missing; if it cannot be safely
 normalized, discard the artifact and keep the capture incomplete. On
 interruption, remove nested `.logcat.*` snapshot temporaries before
 normalization; discard the stage if cleanup fails.
+
+When the optional boot observer finds one uniquely verified Android crosvm, it
+also hashes `/proc/<pid>/exe` once per process generation and records a
+path-free `crosvm_runtime_identity` event with the PID, status, SHA-256, and GNU
+Build ID. It verifies the crosvm and parent restarter start times, opens the
+proc executable once, and hashes through that pinned file descriptor. Before
+hashing it checks the descriptor against the expected ELF and proc link; after
+hashing it rechecks descriptor metadata, both process generations, and
+executable identity. A transient unavailable read is retried up to three times
+for the same process generation; the final path-free event records its attempt
+count. Ambiguous candidates are not hashed. An unavailable or raced read is
+retained with a typed status and no hash; a readable non-ELF or Build-ID-less
+file retains its SHA-256 without a GNU Build ID.
 
 **Reason.** The persisted `apkrun_target_whuuql/1` registry entry still blocks
 instance 1 although the group runtime directory and Cuttlefish processes were
@@ -8177,9 +8192,14 @@ The `default` and `swiftshader` guest-SwiftShader records each show one
 SurfaceFlinger start, no SurfaceFlinger SIGABRT, and no zygote SIGKILL. The
 feature-enabled `target` record negotiates guest DRM features
 `+virgl +edid +resource_blob +host_visible` and discovers the `drm_hwcomposer`
-APEX. This correlation narrows the failure to the `target`/`drm_virgl` run, but
-does not establish whether RenderEngine/EGL, drm_hwcomposer, gralloc/minigbm,
-or a host/guest version mismatch caused the abort.
+APEX. A later 600-second `drm_virgl` run retained the Cuttlefish host logcat.
+Across five SurfaceFlinger aborts, `libEGL` reports that it cannot load the
+`mesa` driver selected by `ro.hardware.egl`; each crash summary says no OpenGL
+ES implementation could be found. This identifies the immediate guest-side
+abort as EGL driver loading. It agrees with [IR-185](#ir-185-verify-mesa-driver-payload-in-the-pinned-cuttlefish-image),
+which found no Mesa EGL/GLES driver in the pinned image's preferred vendor or
+system EGL paths. The log does not establish that the host Virgl renderer
+started successfully or that Android rendered a frame.
 
 **Verification.** The failed instance-1 capture lasted two seconds and records
 the exact registry conflict. The `default` and `swiftshader` instance-2 captures
@@ -8201,26 +8221,47 @@ appeared. The run did not verify Android boot completion, system-server
 readiness, or rendering and remains diagnostic evidence, not a reference
 profile.
 
-The old diagnostic record has no retained Cuttlefish host `logcat`, so it does
-not contain the SurfaceFlinger abort message or tombstone summary. A later
-`cvd logs --nopretty` query using the Lima guest's default CVD home returned no
-entries; the capture-specific temporary CVD home had already been removed, so
-that query cannot establish whether the logcat existed during the run. The
-fixture's `<group>:<instance>:logcat` label and `instances/cvd-N/logcat` path
-are synthetic-only; no retained real Cuttlefish 1.57.0 record confirms those
-names. The capture tool now retains a bounded, normalized host logcat for future
-runs when the actual listing exposes a matching safe path.
-No stock target capture was repeated. After the feature-enabled run, the
-port-5038 ADB server and task-created Cuttlefish processes were stopped; a
-point-in-time fleet check listed only the pre-existing stale instance-1 entry.
-The private capture HOME was removed. All five captures remain normalized under
-`incomplete/`; the second normalization pass changed zero files, and scans for
-host paths, private keys, and MAC addresses found no matches. #064 remains
-incomplete and no profile is comparable.
+The first feature-enabled diagnostic, captured earlier that day, did not
+retain host `logcat`. The later run at
+`Images/reference/16373615/incomplete/target-20261007T193655-32887/` captured it
+from the selected Cuttlefish 1.57.0 instance. This confirms the real log listing
+label and instance path used by the bounded host-logcat collector. Its normalized
+`host-logcat.txt` contains 11,093 lines and five `libEGL` Mesa-driver load
+failures, five SurfaceFlinger SIGABRTs, and five explicit abort messages.
 
-The final `Images/tools/tests` run passed 625 tests with 4 platform-specific
-skips (Linux parent-death signals and GNU `timeout`). Ruff lint and formatting,
-`sh -n Images/tools/reference/capture.sh`, and `git diff --check` passed. These
-implementation checks used synthetic Cuttlefish tools; no live Android capture
-was repeated, and the host-logcat label and path still need confirmation on a
-real Cuttlefish 1.57.0 run.
+The same run produced 121 `crosvm_memory` events; 119 identify PID 33476 and
+include RSS measurements, while two correctly report `unavailable` before the
+runtime link resolves and after teardown. ADB reported `device` on 12 of 20
+polls; the other eight had no device-state result. No poll parsed
+`sys.boot_completed` or `system_server` state. Three property probes timed out.
+The 600-second run did not complete Android boot and remains diagnostic-only.
+`host.json` records the expected crosvm ELF Build ID
+`1f6c03321061aa58e1d1ec0d0a1ff54f` and SHA-256
+`48a9553740a947a2f6f1679692a73d022ea364d43b7e4652d7c9ab6a0ac5aaf7`; the
+launcher log records verification of that staged input, and each valid observer
+sample passed the `/proc/<pid>/exe` `samefile` check. The post-run
+`crosvm-runtime-identity.txt` contains only its header because no crosvm remained
+at artifact-collection time. The launcher-log association between its verified
+hash and PID 33476 is indirect. This capture predates the new observer event, so
+the event's live output still needs confirmation in a later capture.
+
+No stock target capture was repeated. After the run, the port-5038 ADB server
+and task-created Cuttlefish processes were stopped; a fleet check listed only
+the pre-existing stale instance-1 entry, which remains untouched. The private
+capture HOME was removed. The new capture remains under `incomplete/`, and two
+normalization passes on a copy changed zero files and produced identical tree
+hashes. Its host logcat contains no private host paths, MAC addresses, or
+private-key markers. All six captures from this post-recovery sequence remain incomplete; no boot profile is
+comparable and #064 remains open.
+
+**Verification.** The final `Images/tools/tests` suite passed 635 tests with
+four platform-specific skips: one Linux parent-death-signal check and three GNU
+`timeout` checks. The focused observer, ELF-identity, and comparison suites
+passed 248 tests with one Linux-only skip. Ruff lint and formatting,
+`sh -n Images/tools/reference/capture.sh`, and `git diff --check` passed. Two
+normalization passes on a copy changed zero files; the saved host logcat has no
+remaining attestation identifier arrays, and the tested host-path, MAC-address,
+and private-key scans found no matches. The live capture confirms the Cuttlefish
+1.57.0 host-logcat label and path, but predates the runtime identity
+instrumentation and does not verify that event. It remains incomplete: it did
+not establish Android boot completion or rendered frames.

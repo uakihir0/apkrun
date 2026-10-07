@@ -243,7 +243,9 @@ def _load_substitutions(path: Path) -> list[NormalizationRule]:
 
 
 def _is_normalizable(path: Path) -> bool:
-    return path.suffix.lower() in TEXT_SUFFIXES or path.name.endswith(".gz")
+    return (
+        path.name == "logcat" or path.suffix.lower() in TEXT_SUFFIXES or path.name.endswith(".gz")
+    )
 
 
 def _read_capture_bytes(path: Path) -> bytes:
@@ -631,15 +633,31 @@ def normalize_capture(directory: Path, rules_path: Path = RULES_PATH) -> int:
             raise CaptureToolError(f"capture contains a symbolic link: {path}")
         if not path.is_file() or not _is_normalizable(path):
             continue
-        before = _read_capture_bytes(path)
-        after = _transform_text(
-            before,
-            path,
-            path.relative_to(directory).as_posix(),
-            substitutions,
-        )
-        if before != after:
-            _atomic_replace(path, after)
+        try:
+            before = _read_capture_bytes(path)
+            after = _transform_text(
+                before,
+                path,
+                path.relative_to(directory).as_posix(),
+                substitutions,
+            )
+            if before != after:
+                _atomic_replace(path, after)
+                changed += 1
+        except CaptureToolError:
+            if path.name not in {"logcat", "host-logcat.txt"}:
+                raise
+            try:
+                path.unlink()
+                with (directory / "MISSING.txt").open("a", encoding="utf-8") as missing:
+                    missing.write(
+                        "host-logcat.txt\toptional host logcat was discarded because it "
+                        "could not be safely normalized; this capture is incomplete\n"
+                    )
+            except OSError:
+                raise CaptureToolError(
+                    "cannot safely discard an unnormalizable optional host logcat artifact."
+                ) from None
             changed += 1
     return changed
 

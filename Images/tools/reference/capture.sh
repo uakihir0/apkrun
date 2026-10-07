@@ -68,6 +68,7 @@ if [ -n "$crosvm_observer_executable_override" ]; then
     exit 2
   fi
 fi
+crosvm_launch_executable=${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}
 crosvm_observer_executable=${crosvm_observer_executable_override:-${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}}
 
 for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink wc; do
@@ -177,6 +178,10 @@ fi
 target_gpu_mode=${APKRUN_TARGET_GPU_MODE:-drm_virgl}
 virgl_source_revision=${APKRUN_DRM_VIRGL_SOURCE_REVISION:-}
 virgl_properties_file=${APKRUN_DRM_VIRGL_PROPS_FILE:-}
+virgl_preflight_json='{"virglSupport":"not_applicable"}'
+virgl_expected_sha256=
+virgl_expected_build_id=
+virgl_support_status=not_applicable
 capture_egl_platform=
 unset EGL_PLATFORM
 if [ "$profile" = target ]; then
@@ -197,6 +202,17 @@ if [ "$profile" = target ]; then
       ;;
   esac
   if [ "$target_gpu_mode" = drm_virgl ]; then
+    if ! virgl_preflight_json=$(python3 "$script_dir/check_virgl_crosvm.py" \
+      --launch-command "$crosvm_launch_executable" \
+      --expected-executable "$crosvm_observer_executable"); then
+      exit 2
+    fi
+    virgl_expected_sha256=$(printf '%s' "$virgl_preflight_json" | python3 -c \
+      'import json,sys; print(json.load(sys.stdin)["expectedCrosvmExecutable"]["sha256"])')
+    virgl_expected_build_id=$(printf '%s' "$virgl_preflight_json" | python3 -c \
+      'import json,sys; print(json.load(sys.stdin)["expectedCrosvmExecutable"]["elfBuildId"])')
+    virgl_support_status=$(printf '%s' "$virgl_preflight_json" | python3 -c \
+      'import json,sys; print(json.load(sys.stdin)["virglSupport"])')
     capture_egl_platform=surfaceless
     EGL_PLATFORM=$capture_egl_platform
     export EGL_PLATFORM
@@ -364,13 +380,19 @@ discard_stage_with_raw_logcat() {
 
 remove_raw_logcat() {
   [ -n "${stage:-}" ] || return 0
-  raw_log="$stage/.logcat.raw"
-  [ -e "$raw_log" ] || return 0
-  if rm -f "$raw_log" >/dev/null 2>&1 && [ ! -e "$raw_log" ]; then
-    return 0
+  if ! find "$stage" \
+    \( -type f -o -type l \) -name '.logcat.*' -exec rm -f -- {} + \
+    >/dev/null 2>&1; then
+    discard_stage_with_raw_logcat
+    return 1
   fi
-  discard_stage_with_raw_logcat
-  return 1
+  if find "$stage" \
+    \( -type f -o -type l \) -name '.logcat.*' -print -quit \
+    | grep -q .; then
+    discard_stage_with_raw_logcat
+    return 1
+  fi
+  return 0
 }
 
 remove_composite_specs_temporary_files() {
@@ -563,6 +585,11 @@ record_missing() {
   printf '%s\t%s\n' "$1" "$2" >> "$missing_file"
   capture_failed=1
 }
+
+if [ "$virgl_support_status" = uncertified ]; then
+  record_missing "virgl-preflight" \
+    "crosvm Build ID $virgl_expected_build_id has no recorded Virgl certification; this capture is diagnostic-only"
+fi
 
 if [ -n "$crosvm_binary_override" ]; then
   printf '%s\t%s\n' "diagnostic-only" \
@@ -783,6 +810,14 @@ run_cvd_command_with_live_logs() {
     boot_deadline_expired=1
     return 124
   fi
+  if [ -n "$virgl_expected_sha256" ] \
+    && ! python3 "$script_dir/check_virgl_crosvm.py" \
+      --verify-executable "$crosvm_observer_executable" \
+      --expected-sha256 "$virgl_expected_sha256" >/dev/null; then
+    record_missing "virgl-preflight" \
+      "expected crosvm executable changed after preflight; this Cuttlefish command was not started"
+    return 1
+  fi
   if [ "$observe_boot" -eq 1 ] \
     && [ "${capture_boot_observer:-0}" -eq 1 ]; then
     observer_instance_path="$cvd_home/cuttlefish_runtime"
@@ -795,7 +830,7 @@ run_cvd_command_with_live_logs() {
       --boot-observer-output "$stage/boot-observer.jsonl" \
       --boot-observer-adb "$CVD_HOST_DIR/bin/adb" \
       --boot-observer-adb-port "$adb_port" \
-      --boot-observer-crosvm "${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}" \
+      --boot-observer-crosvm "$crosvm_launch_executable" \
       --boot-observer-crosvm-executable "$crosvm_observer_executable" \
       --boot-observer-instance-path \
       "$observer_instance_path" \
@@ -1063,7 +1098,7 @@ copy_first_match() {
     -name "$destination_name" -print -quit 2>/dev/null || true)
   if [ -n "$source_path" ] && [ -f "$source_path" ]; then
     case "$destination_name" in
-      assemble_cvd.log|kernel.log|launcher.log)
+      assemble_cvd.log|kernel.log|launcher.log|logcat)
         if ! HOME="$cvd_home" python3 \
           "$script_dir/capture_cvd_start.py" \
           --home "$cvd_home" \
@@ -1148,6 +1183,11 @@ PY
   fi
 }
 
+crosvm_runtime_identity_file=
+if [ -n "$virgl_expected_sha256" ]; then
+  crosvm_runtime_identity_file="$stage/crosvm-runtime-identity.txt"
+  printf 'PID\tSTATUS\tSHA256\n' > "$crosvm_runtime_identity_file"
+fi
 crosvm_process_rows=$(
   ps -ww -eo pid= | while IFS= read -r candidate_pid; do
     # procps right-aligns PIDs even when the column header is suppressed.
@@ -1181,12 +1221,33 @@ crosvm_process_rows=$(
       }
       END { exit !matched }
     '; then
+      if [ -n "$virgl_expected_sha256" ]; then
+        identity_result=
+        identity_status=mismatch
+        if identity_result=$(python3 "$script_dir/check_virgl_crosvm.py" \
+          --running-executable "/proc/$candidate_pid/exe" \
+          --expected-sha256 "$virgl_expected_sha256" 2>/dev/null); then
+          identity_status=verified
+        fi
+        identity_sha256=$(printf '%s' "$identity_result" | python3 -c \
+          'import json,sys; print(json.load(sys.stdin).get("identity",{}).get("sha256") or "unknown")' \
+          2>/dev/null || printf 'unknown')
+        printf '%s\t%s\t%s\n' \
+          "$candidate_pid" "$identity_status" "$identity_sha256" \
+          >> "$crosvm_runtime_identity_file"
+      fi
       printf '%s %s\n' "$candidate_pid" "$candidate_command"
     fi
   done
 )
 if [ -n "$crosvm_process_rows" ]; then
   printf 'PID COMMAND\n%s\n' "$crosvm_process_rows" > "$stage/crosvm-command-line.txt"
+  if [ -n "$crosvm_runtime_identity_file" ] \
+    && awk -F '\t' 'NR > 1 && $2 != "verified" { mismatch=1 } END { exit !mismatch }' \
+      "$crosvm_runtime_identity_file"; then
+    record_missing "crosvm-runtime-identity" \
+      "one or more running crosvm processes did not match the executable verified before launch"
+  fi
 else
   record_missing "crosvm-command-line.txt" \
     "no crosvm process matched the private Cuttlefish HOME at artifact-collection time; this does not establish whether crosvm ran earlier"
@@ -1275,6 +1336,7 @@ fi
 copy_first_match kernel.log
 copy_first_match launcher.log
 copy_first_match assemble_cvd.log
+copy_first_match logcat
 
 if ! python3 "$script_dir/collect_composite_specs.py" \
   "$cvd_home" "$instance_runtime" "$stage/composite-disk-specs.json"; then
@@ -1312,7 +1374,7 @@ if [ -z "$cvd_package_version" ]; then
   record_missing "host.json" \
     "set APKRUN_CVD_PACKAGE_VERSION or install dpkg-query to record the CVD package version"
 fi
-crosvm_command_for_identity=${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}
+crosvm_command_for_identity=$crosvm_launch_executable
 crosvm_gfxstream_candidate="$(dirname "$crosvm_observer_executable")/libgfxstream_backend.so"
 if ! host_tool_identities=$(python3 "$script_dir/elf_identity.py" \
   --crosvm-command "$crosvm_command_for_identity" \
@@ -1358,6 +1420,7 @@ APKRUN_CAPTURE_GPU_VHOST_USER_ENABLED=$selected_gpu_vhost_user_enabled \
 APKRUN_CAPTURE_EGL_PLATFORM=$capture_egl_platform \
 APKRUN_CAPTURE_VIRGL_SOURCE_REVISION=$virgl_source_revision \
 APKRUN_CAPTURE_HOST_TOOL_IDENTITIES=$host_tool_identities \
+APKRUN_CAPTURE_VIRGL_PREFLIGHT=$virgl_preflight_json \
 APKRUN_CAPTURE_DURATION=$((capture_finished_at - capture_started_at)) \
 python3 - "$stage/host.json" <<'PY'
 import json
@@ -1390,6 +1453,7 @@ document = {
         os.environ["APKRUN_CAPTURE_VIRGL_SOURCE_REVISION"] or None
     ),
     "hostToolIdentities": json.loads(os.environ["APKRUN_CAPTURE_HOST_TOOL_IDENTITIES"]),
+    "virglPreflight": json.loads(os.environ["APKRUN_CAPTURE_VIRGL_PREFLIGHT"]),
     "cpuCount": (
         int(os.environ["APKRUN_CAPTURE_CPU_COUNT"])
         if os.environ["APKRUN_CAPTURE_CPU_COUNT"].isdigit()
@@ -1430,6 +1494,15 @@ rm -f "$capture_marker"
 if ! remove_raw_logcat; then
   exit 1
 fi
+if [ -f "$stage/logcat" ]; then
+  if ! mv "$stage/logcat" "$stage/host-logcat.txt"; then
+    record_missing "host-logcat.txt" \
+      "could not prepare the bounded Cuttlefish host logcat for normalization"
+  fi
+else
+  record_missing "host-logcat.txt" \
+    "Cuttlefish did not expose its host-collected guest logcat during this capture"
+fi
 if ! python3 "$script_dir/compare_boot.py" normalize "$stage"; then
   failed_stage=$stage
   stage=
@@ -1442,6 +1515,9 @@ if ! python3 "$script_dir/compare_boot.py" normalize "$stage"; then
   exit 1
 fi
 stage_normalized=1
+if [ -s "$stage/MISSING.txt" ]; then
+  capture_failed=1
+fi
 
 if [ "$capture_failed" -ne 0 ]; then
   incomplete_root="$reference_root/incomplete"

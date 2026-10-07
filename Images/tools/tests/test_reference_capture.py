@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import textwrap
@@ -18,6 +19,21 @@ import pytest
 TOOLS_ROOT = Path(__file__).parents[1]
 CAPTURE_SCRIPT = TOOLS_ROOT / "reference/capture.sh"
 GUEST_COMMANDS = TOOLS_ROOT / "reference/guest-capture.txt"
+
+
+def _synthetic_elf64(build_id: bytes) -> bytes:
+    name = b"GNU\0"
+    note = (
+        struct.pack("<III", len(name), len(build_id), 3)
+        + name
+        + bytes((-len(name)) % 4)
+        + build_id
+        + bytes((-len(build_id)) % 4)
+    )
+    ident = b"\x7fELF" + bytes((2, 1, 1)) + bytes(9)
+    header = struct.pack("<HHIQQQIHHHHHH", 2, 183, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    program_header = struct.pack("<IIQQQQQQ", 4, 4, 120, 0, 0, len(note), len(note), 4)
+    return ident + header + program_header + note
 
 
 def test_guest_capture_has_one_shell_command_for_each_required_output() -> None:
@@ -135,11 +151,16 @@ def test_compare_boot_can_be_invoked_directly_with_the_project_python() -> None:
         "expected_gpu_mode",
         "expected_secure_hals",
         "observer_enabled",
+        "preflight_rejected",
+        "preflight_mismatched",
     ),
     (
-        ("default", None, False, False),
-        ("target", "drm_virgl", True, False),
-        ("swiftshader", "guest_swiftshader", True, True),
+        ("default", None, False, False, False, False),
+        ("target", "drm_virgl", True, False, False, False),
+        ("target", "drm_virgl", True, False, True, False),
+        ("target", "drm_virgl", True, False, False, True),
+        ("swiftshader", "guest_swiftshader", True, True, False, False),
+        ("swiftshader", "guest_swiftshader", True, True, False, True),
     ),
 )
 def test_capture_script_uses_each_profile_launch_configuration(
@@ -148,6 +169,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
     expected_gpu_mode: str | None,
     expected_secure_hals: bool,
     observer_enabled: bool,
+    preflight_rejected: bool,
+    preflight_mismatched: bool,
 ) -> None:
     repo = tmp_path / "repo"
     reference_tools = repo / "Images/tools/reference"
@@ -160,6 +183,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
         "boot_observer.py",
         "compare_boot.py",
         "elf_identity.py",
+        "check_virgl_crosvm.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -228,6 +252,10 @@ def test_capture_script_uses_each_profile_launch_configuration(
               printf 'synthetic kernel log\\n' > "$instance/kernel.log"
               printf 'synthetic launcher log\\n' > "$instance/launcher.log"
               printf 'synthetic assemble log\\n' > "$instance/assemble_cvd.log"
+              printf '%s\\n' \\
+                'F DEBUG: Abort message: synthetic /home/private/path /workspace/private/log' \\
+                'mac=aa:bb:cc:dd:ee:ff adb connected to 127.0.0.1:6522 token=private-value' \\
+                > "$instance/logcat"
               exit 0
             fi
             for argument in "$@"; do
@@ -357,8 +385,18 @@ def test_capture_script_uses_each_profile_launch_configuration(
     (host_bin / "cvd").symlink_to(fake_bin / "cvd")
     (host_bin / "launch_cvd").symlink_to(fake_bin / "cvd")
     (host_bin / "adb").symlink_to(fake_bin / "adb")
-    (host_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    if expected_gpu_mode == "drm_virgl":
+        crosvm_build_id = (
+            "d724bf54f045b0ec7dbe14049b0fed9a16e52a23" if preflight_rejected else "0123456789abcdef"
+        )
+        (host_bin / "crosvm").write_bytes(_synthetic_elf64(bytes.fromhex(crosvm_build_id)))
+    else:
+        (host_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (host_bin / "crosvm").chmod(0o755)
+    if preflight_mismatched:
+        custom_crosvm = host_bin / "custom-crosvm-launcher"
+        custom_crosvm.write_text("#!/bin/sh\nexec /opt/diagnostic/crosvm\n", encoding="utf-8")
+        custom_crosvm.chmod(0o755)
     (host_bin / "libgfxstream_backend.so").write_bytes(b"synthetic gfxstream backend")
     launch_log = tmp_path / "launch-args.txt"
     start_log = tmp_path / "start-args.txt"
@@ -391,6 +429,10 @@ def test_capture_script_uses_each_profile_launch_configuration(
         }
     )
     environment["EGL_PLATFORM"] = "drm"
+    if preflight_mismatched:
+        environment["APKRUN_CROSVM_BINARY"] = str(host_bin / "custom-crosvm-launcher")
+        if expected_gpu_mode == "drm_virgl":
+            environment["APKRUN_CROSVM_OBSERVER_EXECUTABLE"] = str(host_bin / "crosvm")
 
     result = subprocess.run(
         ["sh", str(capture_script), profile],
@@ -401,7 +443,32 @@ def test_capture_script_uses_each_profile_launch_configuration(
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
+    if preflight_rejected:
+        assert result.returncode == 2
+        assert "known to omit the rutabaga virgl_renderer feature" in result.stderr
+        assert not launch_log.exists()
+        assert not start_log.exists()
+        assert not (repo / "Images/reference/16373615").exists()
+        return
+
+    if expected_gpu_mode == "drm_virgl":
+        assert result.returncode == 1, result.stderr
+        assert "Virgl preflight warning" in result.stderr
+        assert "Incomplete capture retained" in result.stderr
+        partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+        assert len(partials) == 1
+        capture = partials[0]
+        assert not (repo / "Images/reference/16373615/target").exists()
+    elif preflight_mismatched:
+        assert result.returncode == 1, result.stderr
+        assert "Incomplete capture retained" in result.stderr
+        partials = list((repo / "Images/reference/16373615/incomplete").glob("swiftshader-*"))
+        assert len(partials) == 1
+        capture = partials[0]
+        assert not (repo / "Images/reference/16373615/swiftshader").exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        capture = repo / f"Images/reference/16373615/{profile}"
     launch_arguments = launch_log.read_text(encoding="utf-8").split()
     group_argument = next(
         argument for argument in launch_arguments if argument.startswith("--group_name=")
@@ -414,6 +481,8 @@ def test_capture_script_uses_each_profile_launch_configuration(
     if expected_gpu_mode is not None:
         expected_start_arguments.append(f"--gpu_mode={expected_gpu_mode}")
     expected_start_arguments.append("--gpu_vhost_user_mode=off")
+    if preflight_mismatched:
+        expected_start_arguments.append(f"--crosvm_binary={host_bin / 'custom-crosvm-launcher'}")
     assert start_log.read_text(encoding="utf-8").split() == expected_start_arguments
     expected_tmp_root = Path("/tmp").resolve()
     assert tmpdir_log.read_text(encoding="utf-8") == f"{expected_tmp_root}\n"
@@ -447,23 +516,50 @@ def test_capture_script_uses_each_profile_launch_configuration(
         assert observer_path.name == "cuttlefish_runtime"
         assert ".unresolved-cvd-instance-" not in str(observer_path)
         observer_crosvm_index = observer_calls[0].index("--boot-observer-crosvm")
-        assert observer_calls[0][observer_crosvm_index + 1] == str(cvd_host / "bin/crosvm")
+        expected_launch_command = (
+            host_bin / "custom-crosvm-launcher" if preflight_mismatched else cvd_host / "bin/crosvm"
+        )
+        assert observer_calls[0][observer_crosvm_index + 1] == str(expected_launch_command)
         observer_executable_index = observer_calls[0].index("--boot-observer-crosvm-executable")
-        assert observer_calls[0][observer_executable_index + 1] == str(cvd_host / "bin/crosvm")
+        expected_observer_executable = (
+            cvd_host / "bin/crosvm"
+            if preflight_mismatched and expected_gpu_mode == "drm_virgl"
+            else expected_launch_command
+        )
+        assert observer_calls[0][observer_executable_index + 1] == str(expected_observer_executable)
 
-    capture = repo / f"Images/reference/16373615/{profile}"
     metadata = json.loads((capture / "host.json").read_text(encoding="utf-8"))
     assert metadata["profile"] == profile
     assert metadata["schemaVersion"] == 3
     assert metadata["selectedGpuMode"] == (expected_gpu_mode or "guest_swiftshader")
     assert metadata["gpuVhostUserEnabled"] is False
     assert metadata["eglPlatform"] == ("surfaceless" if profile == "target" else None)
+    host_logcat = (capture / "host-logcat.txt").read_text(encoding="utf-8")
+    assert "F DEBUG: Abort message: synthetic <HOST_HOME_PATH>" in host_logcat
+    assert "<HOST_PATH>" in host_logcat
+    assert "127.0.0.1:6522" not in host_logcat
+    assert "aa:bb:cc:dd:ee:ff" not in host_logcat
+    assert "token=private-value" not in host_logcat
+    assert str(tmp_path) not in host_logcat
     tool_identities = metadata["hostToolIdentities"]
-    assert tool_identities["crosvmCommand"] == tool_identities["expectedCrosvmExecutable"]
-    assert tool_identities["expectedCrosvmExecutable"]["status"] == "not_elf"
+    if preflight_mismatched and expected_gpu_mode == "drm_virgl":
+        assert tool_identities["crosvmCommand"]["status"] == "not_elf"
+        assert (
+            tool_identities["crosvmCommand"]["sha256"]
+            != tool_identities["expectedCrosvmExecutable"]["sha256"]
+        )
+    else:
+        assert tool_identities["crosvmCommand"] == tool_identities["expectedCrosvmExecutable"]
+    expected_crosvm_status = "identified" if expected_gpu_mode == "drm_virgl" else "not_elf"
+    assert tool_identities["expectedCrosvmExecutable"]["status"] == expected_crosvm_status
+    expected_executable_path = (
+        host_bin / "custom-crosvm-launcher"
+        if preflight_mismatched and expected_gpu_mode != "drm_virgl"
+        else cvd_host / "bin/crosvm"
+    )
     assert (
         tool_identities["expectedCrosvmExecutable"]["sha256"]
-        == hashlib.sha256((cvd_host / "bin/crosvm").read_bytes()).hexdigest()
+        == hashlib.sha256(expected_executable_path.read_bytes()).hexdigest()
     )
     assert tool_identities["gfxstreamBackendCandidate"]["status"] == "not_elf"
     assert (
@@ -471,7 +567,20 @@ def test_capture_script_uses_each_profile_launch_configuration(
         == hashlib.sha256((cvd_host / "bin/libgfxstream_backend.so").read_bytes()).hexdigest()
     )
     assert str(tmp_path) not in json.dumps(tool_identities)
-    assert (capture / "MISSING.txt").read_text(encoding="utf-8") == ""
+    missing = (capture / "MISSING.txt").read_text(encoding="utf-8")
+    if expected_gpu_mode == "drm_virgl":
+        assert "virgl-preflight\tcrosvm Build ID " in missing
+        assert "has no recorded Virgl certification" in missing
+        assert "crosvm-runtime-identity\t" in missing
+        runtime_identity = (capture / "crosvm-runtime-identity.txt").read_text(encoding="utf-8")
+        assert runtime_identity.startswith("PID\tSTATUS\tSHA256\n")
+        assert "\tmismatch\t" in runtime_identity
+        if preflight_mismatched:
+            assert "diagnostic-only\tcrosvm binary override changes the host runtime" in missing
+    elif preflight_mismatched:
+        assert "diagnostic-only\tcrosvm binary override changes the host runtime" in missing
+    else:
+        assert missing == ""
     if observer_enabled:
         observer_records = [
             json.loads(line)
@@ -512,6 +621,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
         "boot_observer.py",
         "compare_boot.py",
         "elf_identity.py",
+        "check_virgl_crosvm.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -1465,6 +1575,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         "boot_observer.py",
         "compare_boot.py",
         "elf_identity.py",
+        "check_virgl_crosvm.py",
         "normalize.yaml",
         "guest-capture.txt",
     ):
@@ -1502,6 +1613,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               stage="${destination%/*}"
               printf 'private=/var/tmp/cvd/interrupted-raw-config\\n' \
                 > "$stage/.composite-disk-specs.json.interrupted"
+              mkdir -p "$stage/.live-cvd-logs/.poll-interrupted" || exit 90
+              printf '%s\\n' \\
+                'F DEBUG: /workspace/raw-logcat' \\
+                'adb connected to 127.0.0.1:6522 token=raw-logcat-secret' \\
+                > "$stage/.live-cvd-logs/.poll-interrupted/.logcat.interrupted" || exit 91
+              test -s "$stage/.live-cvd-logs/.poll-interrupted/.logcat.interrupted" || exit 92
+              touch "$stage/raw-logcat-fixture-created"
               kill -TERM "$PPID"
               exit 0
             fi
@@ -1545,7 +1663,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               instance=$(cat "$instance_file")
               listing="$HOME/cvd-logs-list-$$.txt"
               : > "$listing"
-              for name in assemble_cvd.log kernel.log launcher.log; do
+              for name in assemble_cvd.log kernel.log launcher.log logcat; do
                 if [ -f "$instance/$name" ]; then
                   printf '%s %s/%s\\n' "$name" "$instance" "$name" >> "$listing"
                 fi
@@ -1618,6 +1736,10 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               printf 'VIRTUAL_DEVICE_BOOT_COMPLETED\\n' > "$instance/kernel.log"
               printf 'launcher synthetic log\\n' > "$instance/launcher.log"
               printf 'assemble synthetic log\\n' > "$instance/assemble_cvd.log"
+              printf '%s\\n' \\
+                'F DEBUG: Abort message: synthetic /home/private/path /workspace/private/log' \\
+                'mac=aa:bb:cc:dd:ee:ff adb connected to 127.0.0.1:6522 token=private-value' \\
+                > "$instance/logcat"
               if [ "${FAKE_CVD_CREATE_FAIL_AFTER_LOGS:-0}" = 1 ]; then
                 sleep "${FAKE_CVD_CREATE_FAILURE_DELAY_SECONDS:-0.75}"
                 rm -f "$instance/assemble_cvd.log" \
@@ -1914,7 +2036,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             fi
             for argument in "$@"; do
               case "$argument" in
-                */.logcat.raw)
+                */.logcat.*)
                   if [ "${FAKE_RM_FAIL_LOGCAT_RAW:-0}" = 1 ]; then
                     exit 1
                   fi
@@ -2010,7 +2132,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         ),
         encoding="utf-8",
     )
-    (fake_bin / "crosvm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    if gpu_mode == "drm_virgl":
+        synthetic_crosvm = _synthetic_elf64(bytes.fromhex("0123456789abcdef"))
+        (fake_bin / "crosvm").write_bytes(synthetic_crosvm)
+    else:
+        synthetic_crosvm = b"#!/bin/sh\nexit 0\n"
+        (fake_bin / "crosvm").write_bytes(synthetic_crosvm)
     fake_crosvm_override = fake_bin / "crosvm preload wrapper"
     fake_crosvm_override.write_text(
         "#!/bin/sh\n# synthetic preload wrapper\nexit 0\n",
@@ -2131,7 +2258,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             ),
             "APKRUN_CROSVM_OBSERVER_EXECUTABLE": (
                 str(fake_bin / "crosvm")
-                if boot_timeout_case == "gpu-mode-mismatch-observed"
+                if boot_timeout_case in {"gpu-mode-mismatch-observed", "crosvm-binary-override"}
                 else "relative/crosvm"
                 if boot_timeout_case == "crosvm-observer-executable-relative"
                 else ""
@@ -2261,6 +2388,30 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             if event.startswith("cvd --group_name=") and event.endswith(" remove")
         )
         assert disconnect_index < remove_index
+
+    if should_capture and gpu_mode == "drm_virgl":
+        assert result.returncode == 1, result.stderr
+        assert "Virgl preflight warning" in result.stderr
+        assert "Incomplete capture retained" in result.stderr
+        partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+        assert len(partials) == 1
+        partial = partials[0]
+        missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+        metadata = json.loads((partial / "host.json").read_text(encoding="utf-8"))
+        assert "virgl-preflight\tcrosvm Build ID " in missing
+        assert "crosvm-runtime-identity\t" in missing
+        assert metadata["virglPreflight"]["virglSupport"] == "uncertified"
+        identity_rows = (
+            (partial / "crosvm-runtime-identity.txt").read_text(encoding="utf-8").splitlines()
+        )
+        assert identity_rows[0] == "PID\tSTATUS\tSHA256"
+        assert identity_rows[1].split("\t")[1] == "mismatch"
+        assert not (repo / "Images/reference/16373615/target").exists()
+        assert_scoped_group_removal()
+        assert_adb_disconnect_precedes_group_removal()
+        cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+        assert not cvd_home.exists()
+        return
 
     if not should_capture:
         expected_status = (
@@ -2516,6 +2667,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                         (fake_bin / "libgfxstream_backend.so").read_bytes()
                     ).hexdigest()
                 )
+                assert identities["crosvmCommand"]["status"] == "not_elf"
                 assert (
                     identities["crosvmCommand"]["sha256"]
                     != identities["expectedCrosvmExecutable"]["sha256"]
@@ -2675,6 +2827,11 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             captured = b"".join(path.read_bytes() for path in partial.rglob("*") if path.is_file())
             assert b"interrupted-raw-config" not in captured
             assert b"/var/tmp/cvd/" not in captured
+            assert b"raw-logcat-secret" not in captured
+            assert b"/workspace/raw-logcat" not in captured
+            assert b"127.0.0.1:6522" not in captured
+            assert (partial / "raw-logcat-fixture-created").is_file()
+            assert not list(partial.rglob(".logcat.*"))
             assert_adb_disconnect_precedes_group_removal()
             assert_scoped_group_removal()
             cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())

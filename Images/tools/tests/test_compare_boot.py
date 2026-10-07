@@ -329,6 +329,12 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
         "[ro.debug.token]: [private-property-value]\n"
     )
     (capture / "properties.txt").write_text(content, encoding="utf-8")
+    (capture / "logcat").write_text(
+        "F DEBUG: Abort message: failed in /home/alice/private.c "
+        "workspace=/workspace/cuttlefish/private mac=aa:bb:cc:dd:ee:ff "
+        "adb connected to 127.0.0.1:6522 token=private-value\n",
+        encoding="utf-8",
+    )
     (capture / "cuttlefish_config.json").write_text(
         json.dumps(
             {
@@ -411,6 +417,12 @@ def test_normalize_replaces_serial_mac_host_paths_and_secrets(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     normalized = (capture / "properties.txt").read_text(encoding="utf-8")
+    normalized_host_logcat = (capture / "logcat").read_text(encoding="utf-8")
+    assert "Abort message: failed in <HOST_HOME_PATH>" in normalized_host_logcat
+    assert "workspace=<HOST_PATH>" in normalized_host_logcat
+    assert "127.0.0.1:6522" not in normalized_host_logcat
+    assert "aa:bb:cc:dd:ee:ff" not in normalized_host_logcat
+    assert "token=private-value" not in normalized_host_logcat
     assert "SERIAL-123" not in normalized
     assert "SERIAL-JSON" not in normalized
     assert "json-secret" not in normalized
@@ -656,6 +668,55 @@ def test_normalize_streams_newline_dense_logs_and_preserves_assignment_diagnosti
     assert "/tmp/private" not in normalized
     assert "permission denied; see <HOST_PATH>" in normalized
     assert normalized.count(f"ordinary diagnostic{line_ending}") == 100_000
+
+
+def test_normalize_discards_invalid_optional_host_logcat_and_keeps_other_artifacts(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "host-logcat.txt").write_bytes(b"F DEBUG: \xff\xfe\n")
+    (capture / "kernel.log").write_text("ordinary kernel diagnostic\n", encoding="utf-8")
+
+    result = _run("normalize", str(capture))
+
+    assert result.returncode == 0, result.stderr
+    assert not (capture / "host-logcat.txt").exists()
+    assert (capture / "kernel.log").read_text(encoding="utf-8") == ("ordinary kernel diagnostic\n")
+    missing = (capture / "MISSING.txt").read_text(encoding="utf-8")
+    assert (
+        "host-logcat.txt\toptional host logcat was discarded because it could not be safely "
+        "normalized; this capture is incomplete\n"
+    ) == missing
+    assert "\xff" not in missing
+
+
+def test_normalize_discards_optional_host_logcat_when_redaction_exceeds_the_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    artifact = capture / "host-logcat.txt"
+    artifact.write_text("x\n", encoding="utf-8")
+    rules = tmp_path / "normalize.yaml"
+    rules.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "substitutions": [{"pattern": "x", "replacement": "expanded"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(compare_boot, "MAX_PLAIN_CAPTURE_SIZE", 4)
+
+    changed = compare_boot.normalize_capture(capture, rules)
+
+    assert changed == 1
+    assert not artifact.exists()
+    assert "optional host logcat was discarded" in (capture / "MISSING.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_normalize_rejects_gzip_expansion_above_the_size_limit(tmp_path: Path) -> None:

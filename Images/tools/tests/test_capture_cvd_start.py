@@ -31,6 +31,7 @@ def test_parse_log_listing_keeps_only_selected_absolute_paths() -> None:
             "apkrun_default_test:1:kernel.log /private/cvd/instances/cvd-1/kernel.log",
             "launcher.log /private/cvd/instances/cvd-1/launcher.log",
             "assemble_cvd.log /private/cvd/instances/cvd-1/assemble_cvd.log",
+            "apkrun_default_test:1:logcat /private/cvd/instances/cvd-1/logcat",
             "unknown.log /private/cvd/instances/cvd-1/unknown.log",
             "kernel.log relative/kernel.log",
             "There are no log files available",
@@ -41,6 +42,7 @@ def test_parse_log_listing_keeps_only_selected_absolute_paths() -> None:
         "kernel.log": Path("/private/cvd/instances/cvd-1/kernel.log"),
         "launcher.log": Path("/private/cvd/instances/cvd-1/launcher.log"),
         "assemble_cvd.log": Path("/private/cvd/instances/cvd-1/assemble_cvd.log"),
+        "logcat": Path("/private/cvd/instances/cvd-1/logcat"),
     }
 
 
@@ -181,7 +183,7 @@ def test_snapshot_log_is_bounded_and_atomic(
     source_directory = home / "cuttlefish_runtime"
     source_directory.mkdir(parents=True)
     source = source_directory / "kernel.log"
-    source.write_bytes(b"0123456789" * 20)
+    source.write_bytes(b"0123456789\n" * 20)
     source_stat = source.stat()
     stage = tmp_path / "stage"
     stage.mkdir()
@@ -197,9 +199,28 @@ def test_snapshot_log_is_bounded_and_atomic(
         source_stat.st_mtime_ns,
     )
     assert destination.read_bytes().startswith(b"[APKRun snapshot truncated;")
-    assert destination.read_bytes().endswith(b"0123456789" * 5)
+    assert destination.read_bytes().endswith(b"0123456789\n")
     assert len(destination.read_bytes()) <= 128
     assert list(stage.iterdir()) == [destination]
+
+
+def test_snapshot_log_truncation_starts_at_a_complete_utf8_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "private-home"
+    home.mkdir()
+    source = home / "logcat"
+    source.write_text("old line\n" + ("雪" * 100) + "\nfinal line\n", encoding="utf-8")
+    destination = tmp_path / "stage-logcat"
+    monkeypatch.setattr(capture_cvd_start, "MAX_LOG_BYTES", 128)
+
+    marker = capture_cvd_start.snapshot_log(source, destination, home.resolve())
+
+    assert marker is not None
+    contents = destination.read_text(encoding="utf-8")
+    assert contents.startswith("[APKRun snapshot truncated;")
+    assert contents.endswith("final line\n")
+    assert len(contents.encode("utf-8")) <= 128
 
 
 def test_snapshot_log_respects_the_aggregate_workspace_limit(
@@ -283,6 +304,46 @@ def test_snapshot_log_rejects_early_eof_and_keeps_the_last_complete_copy(
     assert destination.read_bytes() == b"last complete snapshot"
 
 
+def test_live_log_polling_defers_host_logcat_to_the_final_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "private-home"
+    source_directory = home / "cuttlefish_runtime"
+    source_directory.mkdir(parents=True)
+    source = source_directory / "logcat"
+    source.write_text("final abort message\n", encoding="utf-8")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    snapshots = stage / ".live-cvd-logs"
+    snapshots.mkdir()
+    destination = snapshots / "logcat"
+    observed: dict[tuple[str, str], tuple[int, int, int, int]] = {}
+    attempts = 0
+
+    def reject_repeated_copy(*_args: object, **_kwargs: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise AssertionError("live polling must not copy host logcat")
+
+    monkeypatch.setattr(capture_cvd_start, "snapshot_log", reject_repeated_copy)
+    capture_cvd_start._snapshot_listed_log(
+        f"apkrun_default_test:1:logcat {source}",
+        home.resolve(),
+        destination,
+        stage,
+        observed,
+        {},
+        {},
+        set(),
+        set(),
+    )
+
+    assert attempts == 0
+    assert source.exists()
+    assert not destination.exists()
+    assert observed == {}
+
+
 def test_snapshot_mode_keeps_existing_snapshot_when_source_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -320,7 +381,7 @@ def test_snapshot_mode_applies_the_log_size_limit(
     source_directory = home / "cuttlefish_runtime"
     source_directory.mkdir(parents=True)
     source = source_directory / "kernel.log"
-    source.write_bytes(b"x" * 256)
+    source.write_bytes((b"x" * 12 + b"\n") * 24)
     stage = tmp_path / "stage"
     stage.mkdir()
     arguments = argparse.Namespace(
@@ -342,10 +403,7 @@ def test_snapshot_mode_applies_the_log_size_limit(
     assert capture_cvd_start.run(arguments) == 0
     contents = (stage / "kernel.log").read_bytes()
     assert len(contents) <= 128
-    assert contents.endswith(
-        b"x"
-        * (128 - len(b"[APKRun snapshot truncated; showing the final part of the host log.]\n"))
-    )
+    assert contents.endswith(b"x" * 12 + b"\n")
 
 
 def test_collect_logs_snapshots_a_log_before_the_listing_command_exits(

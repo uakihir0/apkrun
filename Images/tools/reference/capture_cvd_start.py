@@ -18,11 +18,11 @@ import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
-LOG_NAMES = {"assemble_cvd.log", "kernel.log", "launcher.log"}
+LOG_NAMES = {"assemble_cvd.log", "kernel.log", "launcher.log", "logcat"}
 MAX_LOG_BYTES = 64 * 1024 * 1024
-MAX_LOG_SNAPSHOT_WORKSPACE_BYTES = 6 * MAX_LOG_BYTES
+MAX_LOG_SNAPSHOT_WORKSPACE_BYTES = 8 * MAX_LOG_BYTES
 MAX_LOG_LISTING_BYTES = 1024 * 1024
 LOG_POLL_SECONDS = 0.5
 LOG_COMMAND_TIMEOUT_SECONDS = 0.5
@@ -89,6 +89,24 @@ def _log_snapshot_workspace_bytes(root: Path) -> int:
     return total
 
 
+def _discard_partial_log_line(stream: BinaryIO, byte_limit: int) -> int:
+    """Advance to a complete line boundary without buffering an unbounded log line."""
+    initial_position = stream.tell()
+    remaining = byte_limit
+    while remaining:
+        chunk = stream.read(min(64 * 1024, remaining))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+        newline = chunk.find(b"\n")
+        if newline >= 0:
+            unread = len(chunk) - newline - 1
+            if unread:
+                stream.seek(stream.tell() - unread)
+            break
+    return stream.tell() - initial_position
+
+
 def snapshot_log(
     source: Path,
     destination: Path,
@@ -140,6 +158,8 @@ def snapshot_log(
                     output.write(marker[:MAX_LOG_BYTES])
                 stream.seek(start)
                 remaining = min(source_stat.st_size, copy_limit)
+                if truncated:
+                    remaining -= _discard_partial_log_line(stream, remaining)
                 while remaining:
                     chunk = stream.read(min(1024 * 1024, remaining))
                     if not chunk:
@@ -181,6 +201,10 @@ def _snapshot_listed_log(
     name = _log_name_from_label(label)
     source = Path(filename)
     if name not in LOG_NAMES or not source.is_absolute() or name in pending_attempted:
+        return
+    # Host logcat can grow quickly; capture it once after cvd start exits instead
+    # of copying up to 64 MiB on every live-log poll.
+    if name == "logcat":
         return
     try:
         if source.is_symlink() or not source.resolve(strict=True).is_relative_to(home):

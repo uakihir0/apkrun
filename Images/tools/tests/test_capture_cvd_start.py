@@ -589,6 +589,101 @@ def test_terminate_log_command_does_not_signal_a_reaped_process_group(
     assert signaled_groups == []
 
 
+def test_signal_group_rechecks_child_exit_after_permission_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    observe_exit = capture_cvd_start._child_exit_observed_without_reaping
+    deadline = time.monotonic() + 5
+    while not observe_exit(process) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert observe_exit(process)
+
+    observations = 0
+
+    def delay_exit_observation(candidate: subprocess.Popen[bytes]) -> bool:
+        nonlocal observations
+        observations += 1
+        if observations == 1:
+            return False
+        return observe_exit(candidate)
+
+    def reject_group_signal(_group_id: int, _signum: int) -> None:
+        raise PermissionError("simulated exit-observation race")
+
+    group_check = capture_cvd_start._group_has_live_members
+
+    def check_group_while_leader_is_pinned(
+        group_id: int,
+        *,
+        excluding_pid: int | None = None,
+    ) -> bool:
+        assert process.returncode is None
+        return group_check(group_id, excluding_pid=excluding_pid)
+
+    monkeypatch.setattr(
+        capture_cvd_start,
+        "_child_exit_observed_without_reaping",
+        delay_exit_observation,
+    )
+    monkeypatch.setattr(capture_cvd_start.os, "killpg", reject_group_signal)
+    monkeypatch.setattr(
+        capture_cvd_start,
+        "_group_has_live_members",
+        check_group_while_leader_is_pinned,
+    )
+
+    try:
+        assert (
+            capture_cvd_start._signal_group_while_leader_is_pinned(process, signal.SIGTERM) is False
+        )
+    finally:
+        process.wait()
+
+
+def test_signal_group_permission_error_times_out_for_live_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    def report_leader_running(_candidate: subprocess.Popen[bytes]) -> bool:
+        return False
+
+    def reject_group_signal(_group_id: int, _signum: int) -> None:
+        raise PermissionError("simulated permission failure")
+
+    started_at = time.monotonic()
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                capture_cvd_start,
+                "_child_exit_observed_without_reaping",
+                report_leader_running,
+            )
+            patch.setattr(capture_cvd_start.os, "killpg", reject_group_signal)
+            with pytest.raises(PermissionError, match="simulated permission failure"):
+                capture_cvd_start._signal_group_while_leader_is_pinned(
+                    process,
+                    signal.SIGTERM,
+                )
+            assert process.returncode is None
+    finally:
+        process.kill()
+        process.wait()
+
+    assert time.monotonic() - started_at < 1
+
+
 def test_terminate_child_kills_grandchildren_after_leader_exits_on_term(
     tmp_path: Path,
 ) -> None:

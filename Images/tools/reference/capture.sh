@@ -70,7 +70,7 @@ if [ -n "$crosvm_observer_executable_override" ]; then
 fi
 crosvm_observer_executable=${crosvm_observer_executable_override:-${crosvm_binary_override:-$CVD_HOST_DIR/bin/crosvm}}
 
-for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink; do
+for tool in adb chmod cp cvd launch_cvd timeout python3 gzip find ps grep awk readlink wc; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required host tool not found on PATH: %s\n' "$tool" >&2
     exit 2
@@ -214,6 +214,7 @@ if [ "$timeout_seconds" -lt 1 ]; then
   printf 'APKRUN_BOOT_TIMEOUT_SECONDS must be greater than zero.\n' >&2
   exit 2
 fi
+guest_capture_max_bytes=$((64 * 1024 * 1024))
 capture_boot_observer=${APKRUN_CAPTURE_BOOT_OBSERVER:-0}
 case "$capture_boot_observer" in
   0|1) ;;
@@ -821,8 +822,34 @@ run_cvd_command_with_live_logs() {
   return "$command_status"
 }
 
-capture_adb() {
-  HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ adb "$@"
+capture_guest_command() {
+  guest_output_path=$1
+  guest_output_limit=$2
+  shift 2
+  guest_command_now=$(date +%s)
+  guest_command_remaining=$((boot_timeout_deadline - guest_command_now))
+  if [ "$guest_command_remaining" -le 0 ]; then
+    boot_deadline_expired=1
+    return 124
+  fi
+  if guest_command_bytes=$(HOME="$cvd_home" APKRUN_CAPTURE_PID=$$ python3 \
+    "$script_dir/capture_guest_command.py" \
+    --timeout-seconds "$guest_command_remaining" \
+    --max-bytes "$guest_output_limit" \
+    --output "$guest_output_path" \
+    -- adb "$@" 2>/dev/null); then
+    case "$guest_command_bytes" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    guest_capture_bytes=$((guest_capture_bytes + guest_command_bytes))
+    return 0
+  else
+    guest_command_status=$?
+  fi
+  if [ "$guest_command_status" -eq 124 ]; then
+    boot_deadline_expired=1
+  fi
+  return "$guest_command_status"
 }
 
 boot_timeout_deadline=$(($(date +%s) + timeout_seconds))
@@ -841,6 +868,7 @@ elif ! verify_profile_gpu_configuration; then
   :
 else
   preserve_cvd_home=0
+  guest_capture_bytes=0
   booted=0
   device_invalid=0
   adb_poll_failed=0
@@ -937,11 +965,27 @@ else
           record_missing "$output_file" "missing guest command in guest-capture.txt"
           continue
         fi
+        guest_remaining_bytes=$((guest_capture_max_bytes - guest_capture_bytes))
+        if [ "$guest_remaining_bytes" -le 0 ]; then
+          record_missing "$output_file" \
+            "shared guest capture output exceeded the 64 MiB limit"
+          continue
+        fi
         if [ "$output_file" = logcat.txt.gz ]; then
           raw_log="$stage/.logcat.raw"
-          if capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
-            > "$raw_log" 2>/dev/null; then
+          if capture_guest_command "$raw_log" "$guest_remaining_bytes" \
+            -s "$adb_serial" exec-out sh -c "$guest_command"; then
             if gzip -n -c "$raw_log" > "$stage/$output_file"; then
+              compressed_size=$(wc -c < "$stage/$output_file")
+              if [ "$compressed_size" -gt "$guest_capture_max_bytes" ]; then
+                rm -f "$stage/$output_file" >/dev/null 2>&1 || true
+                if ! remove_raw_logcat; then
+                  exit 1
+                fi
+                record_missing "$output_file" \
+                  "compressed guest logcat exceeded the 64 MiB limit"
+                continue
+              fi
               if ! remove_raw_logcat; then
                 exit 1
               fi
@@ -953,15 +997,51 @@ else
               record_missing "$output_file" "could not gzip guest logcat output"
             fi
           else
+            guest_command_status=$?
             if ! remove_raw_logcat; then
               exit 1
             fi
-            record_missing "$output_file" "guest logcat command failed"
+            case "$guest_command_status" in
+              124)
+                record_missing "$output_file" \
+                  "guest command reached the shared boot deadline"
+                break
+                ;;
+              129|130|143)
+                exit "$guest_command_status"
+                ;;
+              125)
+                record_missing "$output_file" \
+                  "guest command output exceeded the remaining ${guest_remaining_bytes}-byte capture budget"
+                ;;
+              *)
+                record_missing "$output_file" "guest logcat command failed"
+                ;;
+            esac
           fi
-        elif ! capture_adb -s "$adb_serial" exec-out sh -c "$guest_command" \
-          > "$stage/$output_file" 2>/dev/null; then
+        elif capture_guest_command "$stage/$output_file" "$guest_remaining_bytes" \
+          -s "$adb_serial" exec-out sh -c "$guest_command"; then
+          :
+        else
+          guest_command_status=$?
           rm -f "$stage/$output_file"
-          record_missing "$output_file" "guest command failed: $guest_command"
+          case "$guest_command_status" in
+            124)
+              record_missing "$output_file" \
+                "guest command reached the shared boot deadline"
+              break
+              ;;
+            129|130|143)
+              exit "$guest_command_status"
+              ;;
+            125)
+              record_missing "$output_file" \
+                "guest command output exceeded the remaining ${guest_remaining_bytes}-byte capture budget"
+              ;;
+            *)
+              record_missing "$output_file" "guest command failed: $guest_command"
+              ;;
+          esac
         fi
       done < "$script_dir/guest-capture.txt"
     fi
@@ -1117,11 +1197,27 @@ internal_bootconfig=$(find "$instance_runtime" -newer "$capture_marker" -type f 
   -print -quit 2>/dev/null || true)
 if [ -n "$internal_bootconfig" ] && [ -f "$internal_bootconfig" ]; then
   if ! python3 - "$internal_bootconfig" "$stage/internal-bootconfig.txt" <<'PY'
+import os
+import stat
 import struct
 import sys
 from pathlib import Path
 
-source = Path(sys.argv[1]).read_bytes()
+maximum_bytes = 64 * 1024 * 1024
+descriptor = os.open(
+    sys.argv[1],
+    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+)
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum_bytes:
+        raise ValueError("Cuttlefish internal bootconfig is not a regular file within 64 MiB")
+    with os.fdopen(descriptor, "rb", closefd=False) as stream:
+        source = stream.read(maximum_bytes + 1)
+        if len(source) > maximum_bytes or stream.read(1):
+            raise ValueError("Cuttlefish internal bootconfig exceeds 64 MiB")
+finally:
+    os.close(descriptor)
 destination = Path(sys.argv[2])
 if len(source) >= 64 and source[-64:-60] == b"AVBf":
     magic, major, minor, original_size, vbmeta_offset, vbmeta_size = struct.unpack_from(
@@ -1139,7 +1235,9 @@ if len(source) >= 64 and source[-64:-60] == b"AVBf":
 destination.write_bytes(source)
 PY
   then
-    record_missing "internal-bootconfig.txt" "could not validate or strip its AVB footer"
+    rm -f "$stage/internal-bootconfig.txt"
+    record_missing "internal-bootconfig.txt" \
+      "could not validate its regular-file size or strip its AVB footer"
   fi
 else
   record_missing "internal-bootconfig.txt" \
@@ -1316,6 +1414,15 @@ if [ "$started" -eq 1 ]; then
     preserve_cvd_home=1
     record_missing "guest" "scoped cvd remove reported a shutdown failure"
     record_missing "cvd-runtime-home" "CVD group removal failed; retained HOME path is printed to stderr"
+  fi
+fi
+if [ "$preserve_cvd_home" -eq 0 ] && [ -n "$cvd_home" ]; then
+  if rm -rf "$cvd_home" && [ ! -e "$cvd_home" ] && [ ! -L "$cvd_home" ]; then
+    cvd_home=
+  else
+    preserve_cvd_home=1
+    record_missing "cvd-runtime-home" \
+      "could not remove the temporary Cuttlefish HOME before profile publication"
   fi
 fi
 rm -f "$capture_marker"

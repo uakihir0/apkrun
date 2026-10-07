@@ -84,6 +84,7 @@ def test_capture_script_has_valid_posix_shell_syntax() -> None:
     assert result.returncode == 0, result.stderr
     assert os.access(CAPTURE_SCRIPT, os.X_OK)
     assert os.access(TOOLS_ROOT / "reference/compare_boot.py", os.X_OK)
+    assert os.access(TOOLS_ROOT / "reference/capture_guest_command.py", os.X_OK)
 
 
 def test_unknown_profile_fails_before_touching_capture_paths(tmp_path: Path) -> None:
@@ -153,6 +154,7 @@ def test_capture_script_uses_each_profile_launch_configuration(
     reference_tools.mkdir(parents=True)
     for name in (
         "capture.sh",
+        "capture_guest_command.py",
         "capture_cvd_start.py",
         "collect_composite_specs.py",
         "boot_observer.py",
@@ -504,6 +506,7 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
     reference_tools.mkdir(parents=True)
     for name in (
         "capture.sh",
+        "capture_guest_command.py",
         "capture_cvd_start.py",
         "collect_composite_specs.py",
         "boot_observer.py",
@@ -1369,6 +1372,70 @@ def test_capture_rejects_untrusted_product_images_before_starting_cuttlefish(
             "host-tool-identity-missing",
             id="missing-host-tool-identity-invalidates-capture",
         ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "guest-output-cap",
+            id="guest-command-output-is-capped-before-publication",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "guest-command-hang",
+            id="guest-command-shares-the-boot-deadline",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "bootconfig-oversized",
+            id="oversized-internal-bootconfig-is-rejected-before-read",
+        ),
+        pytest.param(
+            "drm_virgl",
+            "16373615",
+            True,
+            True,
+            False,
+            False,
+            3,
+            None,
+            False,
+            False,
+            False,
+            False,
+            "cvd-home-cleanup-fails",
+            id="failed-private-home-cleanup-keeps-capture-incomplete",
+        ),
     ),
 )
 def test_capture_script_collects_a_synthetic_linux_capture(
@@ -1392,6 +1459,7 @@ def test_capture_script_collects_a_synthetic_linux_capture(
     reference_tools.mkdir(parents=True)
     for name in (
         "capture.sh",
+        "capture_guest_command.py",
         "capture_cvd_start.py",
         "collect_composite_specs.py",
         "boot_observer.py",
@@ -1531,6 +1599,14 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             footer = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(body), len(body), 0)
             Path(sys.argv[1]).write_bytes(body + footer + bytes(64 - len(footer)))
             PY
+              if [ "${FAKE_CVD_BOOTCONFIG_OVERSIZED:-0}" = 1 ]; then
+                python3 - "$instance/internal/bootconfig" <<'PY'
+            import sys
+            from pathlib import Path
+            with Path(sys.argv[1]).open("wb") as stream:
+                stream.truncate(64 * 1024 * 1024 + 1)
+            PY
+              fi
               printf '{\"instances\":{\"%s\":{\"gpu_mode\":\"guest_swiftshader\"}}}\\n' \
                 "$instance_num" > "$instance/cuttlefish_config.json"
               printf 'image=/var/tmp/cvd/host-501/os_composite.img\\n' \\
@@ -1743,6 +1819,15 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 kill -TERM "$APKRUN_CAPTURE_PID"
                 exit 0
               fi
+              if [ "$4" = "cat /proc/cmdline" ] \
+                && [ "${FAKE_ADB_GUEST_OUTPUT_HANG:-0}" = 1 ]; then
+                trap '' TERM
+                while :; do sleep 1; done
+              fi
+              if [ "$4" = "cat /proc/cmdline" ] \
+                && [ "${FAKE_ADB_GUEST_OUTPUT_OVER_CAP:-0}" = 1 ]; then
+                exec dd if=/dev/zero bs=65536 count=1025 2>/dev/null
+              fi
               printf 'synthetic output for %s\\n' "$4"
               exit 0
             fi
@@ -1817,6 +1902,13 @@ def test_capture_script_collects_a_synthetic_linux_capture(
               for argument in "$@"; do
                 case "$argument" in
                   */.target.capture.*) exit 1 ;;
+                esac
+              done
+            fi
+            if [ "${FAKE_RM_FAIL_CVD_HOME:-0}" = 1 ] && [ "$1" = -rf ]; then
+              for argument in "$@"; do
+                case "$argument" in
+                  */apkrun-cvd-home.target.*) exit 1 ;;
                 esac
               done
             fi
@@ -2024,6 +2116,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_CVD_CONFIG_OVERSIZED": (
                 "1" if config_oversized or boot_timeout_case == "gpu-mode-oversized" else "0"
             ),
+            "FAKE_CVD_BOOTCONFIG_OVERSIZED": (
+                "1" if boot_timeout_case == "bootconfig-oversized" else "0"
+            ),
             "APKRUN_CAPTURE_BOOT_OBSERVER": (
                 "1" if boot_timeout_case == "gpu-mode-mismatch-observed" else "0"
             ),
@@ -2057,6 +2152,12 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             "FAKE_ADB_PREFLIGHT_TIMEOUT": ("1" if boot_timeout_case == "adb-preflight" else "0"),
             "FAKE_ADB_WAIT_TIMEOUT": ("1" if boot_timeout_case == "adb-wait-for-device" else "0"),
             "FAKE_ADB_NO_DEVICE": "1" if boot_timeout_case == "adb-no-device" else "0",
+            "FAKE_ADB_GUEST_OUTPUT_HANG": (
+                "1" if boot_timeout_case == "guest-command-hang" else "0"
+            ),
+            "FAKE_ADB_GUEST_OUTPUT_OVER_CAP": (
+                "1" if boot_timeout_case == "guest-output-cap" else "0"
+            ),
             "FAKE_CVD_CREATE_DELAY_SECONDS": (
                 "0.1"
                 if boot_timeout_case == "cvd-create-delayed-logs"
@@ -2080,6 +2181,9 @@ def test_capture_script_collects_a_synthetic_linux_capture(
             ),
             "FAKE_RM_FAIL_LOGCAT_RAW": "1" if raw_cleanup_fails else "0",
             "FAKE_RM_FAIL_STAGE": "1" if raw_cleanup_fails == "stage-fails" else "0",
+            "FAKE_RM_FAIL_CVD_HOME": (
+                "1" if boot_timeout_case == "cvd-home-cleanup-fails" else "0"
+            ),
             "FAKE_STOP_TIMEOUT": "1" if stop_timeout is True else "0",
             "FAKE_STOP_HANG": "1" if stop_timeout == "real" else "0",
             "FAKE_ADB_DISCONNECT_TIMEOUT": "1" if abort_command else "0",
@@ -2108,6 +2212,8 @@ def test_capture_script_collects_a_synthetic_linux_capture(
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
     elif boot_timeout_case in {"cvd-start", "cvd-start-no-crosvm"}:
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "10"
+    elif boot_timeout_case == "guest-command-hang":
+        environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "4"
     elif boot_timeout_case == "adb-getprop":
         environment["APKRUN_BOOT_TIMEOUT_SECONDS"] = "6"
     elif boot_timeout_case == "adb-no-device":
@@ -2248,6 +2354,67 @@ def test_capture_script_collects_a_synthetic_linux_capture(
                 assert "entire capture stage was discarded" in result.stderr
                 assert staging == []
                 assert not list(repo.rglob(".logcat.raw"))
+        elif boot_timeout_case == "guest-output-cap":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            partial = partials[0]
+            missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+            assert (
+                "cmdline.txt\tguest command output exceeded the remaining "
+                "67108864-byte capture budget"
+            ) in missing
+            assert not (partial / "cmdline.txt").exists()
+            assert not list(partial.glob(".cmdline.txt.*"))
+            assert_scoped_group_removal()
+            assert_adb_disconnect_precedes_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
+        elif boot_timeout_case == "guest-command-hang":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            partial = partials[0]
+            missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+            assert ("cmdline.txt\tguest command reached the shared boot deadline") in missing
+            assert not (partial / "cmdline.txt").exists()
+            adb_calls = [
+                line.split("\t", maxsplit=1)[1]
+                for line in adb_log.read_text(encoding="utf-8").splitlines()
+            ]
+            assert sum(call.startswith("-s 127.0.0.1:6522 exec-out") for call in adb_calls) == 1
+            assert_scoped_group_removal()
+            assert_adb_disconnect_precedes_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
+        elif boot_timeout_case == "bootconfig-oversized":
+            assert "Incomplete capture retained" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            partial = partials[0]
+            missing = (partial / "MISSING.txt").read_text(encoding="utf-8")
+            assert (
+                "internal-bootconfig.txt\tcould not validate its regular-file size "
+                "or strip its AVB footer"
+            ) in missing
+            assert not (partial / "internal-bootconfig.txt").exists()
+            assert_scoped_group_removal()
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert not cvd_home.exists()
+        elif boot_timeout_case == "cvd-home-cleanup-fails":
+            assert "Incomplete capture retained" in result.stderr
+            assert "Cuttlefish HOME retained for inspection or cleanup" in result.stderr
+            partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))
+            assert len(partials) == 1
+            missing = (partials[0] / "MISSING.txt").read_text(encoding="utf-8")
+            assert (
+                "cvd-runtime-home\tcould not remove the temporary Cuttlefish HOME "
+                "before profile publication"
+            ) in missing
+            cvd_home = Path(cvd_home_log.read_text(encoding="utf-8").strip())
+            assert cvd_home.is_dir()
+            assert not (repo / "Images/reference/16373615/target").exists()
+            assert_scoped_group_removal()
         elif stop_timeout:
             assert "Cuttlefish HOME retained" in result.stderr
             partials = list((repo / "Images/reference/16373615/incomplete").glob("target-*"))

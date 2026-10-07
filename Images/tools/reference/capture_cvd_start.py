@@ -28,6 +28,7 @@ LOG_POLL_SECONDS = 0.5
 LOG_COMMAND_TIMEOUT_SECONDS = 0.5
 CHILD_STOP_GRACE_SECONDS = 1.0
 CHILD_POST_KILL_GRACE_SECONDS = 1.0
+CHILD_EXIT_OBSERVE_GRACE_SECONDS = 0.05
 LOG_COMMAND_STOP_GRACE_SECONDS = 0.05
 requested_signal: int | None = None
 DARWIN_SIGINFO_PID_OFFSET = 12
@@ -478,10 +479,13 @@ def _signal_group_while_leader_is_pinned(
     except ProcessLookupError:
         return False
     except PermissionError:
-        if _child_exit_observed_without_reaping(process) and not _group_has_live_members(
-            process.pid,
-            excluding_pid=process.pid,
-        ):
+        exit_deadline = time.monotonic() + CHILD_EXIT_OBSERVE_GRACE_SECONDS
+        while not _child_exit_observed_without_reaping(process):
+            remaining = exit_deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(0.005, remaining))
+        if not _group_has_live_members(process.pid, excluding_pid=process.pid):
             return False
         raise
     return True
@@ -519,8 +523,22 @@ def _terminate_process_group(
     process.wait()
 
 
+def child_exit_observed_without_reaping(process: subprocess.Popen[bytes]) -> bool:
+    """Return whether a child exited while keeping its process-group ID pinned."""
+    return _child_exit_observed_without_reaping(process)
+
+
+def terminate_process_group(
+    process: subprocess.Popen[bytes],
+    *,
+    term_grace_seconds: float = CHILD_STOP_GRACE_SECONDS,
+) -> None:
+    """Stop a supervised command and reap it only after its process group is empty."""
+    _terminate_process_group(process, term_grace_seconds=term_grace_seconds)
+
+
 def _terminate_child(process: subprocess.Popen[bytes]) -> None:
-    _terminate_process_group(process)
+    terminate_process_group(process)
 
 
 def run(args: argparse.Namespace) -> int:

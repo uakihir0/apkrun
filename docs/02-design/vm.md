@@ -120,12 +120,25 @@ public struct ValidatedVMDefinition: Sendable { /* only VMDefinitionValidator ca
 
 Tests (T0): one test per rule, including kernel magic detection with real gzip, lz4, and `Image` headers (fixture headers are 64 bytes, not whole kernels).
 
-**Unentitled `swift test` verification:** On macOS 27.0 (build `26A428`) with
-Xcode 27.0 (build `27A266a`), the real
-`VZVirtualMachineConfiguration.validate()` call fails with
-`VZErrorDomain` code 2 because the test process lacks
-`com.apple.security.virtualization`. T0 and T1 therefore inject the framework
-validator fake. The real call is reserved for the signed T2 test host in #003.
+**Opt-in unentitled `swift test` probe:** On 2026-10-07 UTC, the
+`VirtualMachineCoreSystemTests.vzConfigurationValidationReportsProcessEntitlement`
+test ran with
+`APKRUN_TEST_LINUX_DIR=/tmp/apkrun-test-linux-codex swift test --scratch-path /tmp/apkrun-swiftpm-codex --filter vzConfigurationValidationReportsProcessEntitlement`
+on arm64 Mac17,9 (macOS 27.0.1, build `26A434`; Xcode 27.0, build
+`27A266a`). The probe uses `VMDefinitionBuilder` and the production
+`VZConfigurationBuilder` with the pinned kernel
+(`e31110ab7979cee4cddcb975b36ab4f1231e98114eb8c360aeeffa00a6adbbc4`) and
+initramfs
+(`5eaacf941c1ebd9e81699dfaa7e7583e50e559a33df3e2a82f5e8bd31cce5e7f`).
+`SecTaskCopyValueForEntitlement` confirmed that the test process had no
+`com.apple.security.virtualization` entitlement, while
+`VZVirtualMachine.isSupported` was true. `validate()` returned
+`VZErrorDomain` code 2, and `NSLocalizedFailureReasonErrorKey` explicitly said
+the process lacked that entitlement; `NSDebugDescriptionErrorKey` was absent.
+The test passed and did not create a `VZVirtualMachine`. The default
+unentitled validation paths continue to use the framework-validator fake; this
+opt-in system test probes the real validator, and #003's signed T2 test host
+covers the entitled path.
 
 ## 4. Mapping to Virtualization.framework
 
@@ -424,7 +437,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 |---|---|
 | VZ serial port numbering is not documented (§6.2) | #004 checks three ports on the test Linux guest, #095 all 20 ports. If the order is not the array order, `ConsolePortPlan` re-orders the array |
 | Device order and the PCI host bridge's platform device name (§5) | discovered by #011 and committed to `Images/reference/vz/<macOS build>/topology.txt`. Nothing relies on `vdX` letters or slot numbers |
-| Whether `VZVirtualMachineConfiguration.validate()` runs in an unentitled `swift test` process (§3) | #002 tries it. If it needs the virtualization entitlement, the T0 validator tests stop before the framework step, and the framework rule is tested in the `IntegrationTests` bundle hosted by the entitled `APKRunTestHost` ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
+| Whether `VZVirtualMachineConfiguration.validate()` runs in an unentitled `swift test` process (§3) | #002 verified that validation returns an explicit missing-entitlement error on an unentitled process; T0 uses the framework-validator fake, and the signed `IntegrationTests` bundle hosted by `APKRunTestHost` exercises the entitled path ([../05-development/build-system.md](../05-development/build-system.md) §2.2) |
 | How VZ reports a start failure: the `start` completion error, `didStopWithError`, or both (§9.1, §9.2) | #003 records it for a bad kernel and a missing disk. A second report of the same failure must not cause a second transition |
 | Whether macOS shows the microphone prompt at VM start or at the first capture (OQ-29, §11) | #084. The input stream is attached only while a package uses it, so neither answer changes the design |
 | Whether the stock Cuttlefish arm64 kernel carries `virtio_snd` (OQ-38, §11) | #083. If not, the custom image adds it ([android-image.md](android-image.md) §7.5) |
@@ -441,7 +454,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | TCC path-guard checks for LinuxGuest artifact paths | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): seven script tests rejected direct `~/Documents` paths, symlink aliases, a missing-component/parent-reference alias, and a caller-overridden `HOME`; three path-only `LinuxGuestArtifactDirectoryTests` XTests passed (no VM start) with artifacts, DerivedData, and xcresult under `/tmp`; the default-path symlink into Documents was rejected; no file-access prompt appeared |
 | PL061 power input and G1 ten-boot behavior | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): hvc0 showed a rising event on `gpiochip0` offset 6; after adding a line-owner readiness check, all LinuxGuest T2 tests and direct G1 acceptance on branch `codex` passed, including ten request-stop boots. The signed CLI smoke from `/tmp` printed boot/powerinput/done and exited 0 without a file-access prompt. The clean-`main` `scripts/run-gate.sh G1` run remains pending |
 | Boot marker stability after one missing serial record | #003 | 2026-09-30, MacBook Pro, macOS 27.0 (26A428): one full T2 run's raw hvc0 attachment contained `APKRUN-TEST: done` but not `boot ok`; an isolated signed T2 run and 10 consecutive repetitions then passed, as did the boot test in the final full-suite rerun. The missing record was not reproduced; see IR-052 |
-| `validate()` without the virtualization entitlement | #002 | pending |
+| `validate()` without the virtualization entitlement | #002 | 2026-10-07 UTC, arm64 Mac17,9, macOS 27.0.1 (26A434), Xcode 27.0 (27A266a): the opt-in `swift test` probe used the production builder with the pinned kernel and initramfs (SHA-256 values recorded in §3); `SecTaskCopyValueForEntitlement` confirmed no virtualization entitlement and no query error; `validate()` returned `VZErrorDomain/2` with an explicit missing-entitlement failure reason; the test passed; no `VZVirtualMachine` was created |
 | Error reporting of a failed start (completion vs delegate) | #003 | pending |
 | Serial port numbering with three ports | #004 | 2026-10-06 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): signed `LinuxGuestConsoleTests` passed; guest-visible hvc1/hvc2 numbering matched attachment-array order |
 | Read-only disks are read-only in the guest | #005 | 2026-10-05 UTC, arm64 MacBook Pro, macOS 27.0 (26A428): `LinuxGuestBlockTests.testReadOnlyDiskAndReadWriteDiskPersistAcrossNewVM` passed; the guest verified the read-only image and rejected writes |

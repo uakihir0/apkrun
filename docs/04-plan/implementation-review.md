@@ -8382,3 +8382,35 @@ checks), and `git diff --check` passed; the format check skipped the absent
 Guest Kotlin and Rust sources. The repository's `check-licenses.sh` is planned
 for #093 and does not yet exist, so this lock interpretation and the tooling
 allowlist are not verified by a license-specific checker.
+
+## IR-242: Probe VZ configuration validation from the Swift test process
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002 |
+| Affected files | [M00](issues/M00-repository-and-vm-foundation.md) #002; [vm.md](../02-design/vm.md) §§3, 17; [environment-setup.md](../05-development/environment-setup.md) §2.8; `Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/VZConfigurationValidationSystemTests.swift` |
+
+**Choice.** Add an opt-in T1 system test that runs only when
+`APKRUN_TEST_LINUX_DIR` is nonempty. It safely resolves the artifact directory
+without entering `~/Documents`, builds the same configuration as the production
+validator, inspects the running process entitlement, and asserts that validation
+succeeds when entitled or returns the explicit missing-entitlement failure when
+unentitled. The test never creates or starts a `VZVirtualMachine`.
+
+**Reason.** The result depends on the process hosting `swift test`; a standalone
+probe outside the test runner cannot answer the #002 question. An empty
+environment variable means “not configured,” matching the fetch scripts. The
+opt-in requires the pinned kernel and initramfs but leaves ordinary, offline
+Swift tests independent of downloaded guest artifacts. The path guard prevents
+direct and symlinked Documents paths from triggering macOS file-access prompts.
+Checking the localized failure reason avoids attributing every `VZErrorDomain/2`
+to an entitlement problem.
+
+**Verification.** With the pinned kernel and initramfs, the opt-in SwiftPM
+system test passed on arm64 Mac17,9, macOS 27.0.1 (26A434), Xcode 27.0
+(27A266a). `VZVirtualMachine.isSupported` was true, the Security entitlement
+query succeeded and returned no `com.apple.security.virtualization` value, and
+validation returned `VZErrorDomain/2` with an explicit missing-entitlement
+failure reason. The artifact SHA-256 values and reproducible command are in
+[vm.md](../02-design/vm.md) §3. No runtime code changed.

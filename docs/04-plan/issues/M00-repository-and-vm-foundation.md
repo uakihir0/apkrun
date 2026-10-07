@@ -780,7 +780,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
   - MAC and machine identifier generation, and their round trip;
   - summary privacy;
   - catalog conformance.
-- **T1**: `VZVirtualMachineConfiguration.validate()` for real, when the test runner allows it (see Notes). The real file and permission cases come with #005.
+- **T1** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreSystemTests/`): the opt-in `VZConfigurationValidationSystemTests` probe builds a real configuration through `VZConfigurationBuilder`, checks the test process entitlement, and verifies either successful validation or the explicit missing-entitlement error. It runs when `APKRUN_TEST_LINUX_DIR` points to the pinned kernel and initramfs. The real file and permission cases come with #005.
 - **T2**: covered by #003, which validates and boots real definitions.
 - **T3**: none.
 
@@ -803,9 +803,8 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Notes
 
-- **Record:** whether `VZVirtualMachineConfiguration.validate()` works under `swift test` without the virtualization entitlement goes into [../../02-design/vm.md](../../02-design/vm.md) §3.
-  - If it works, the T1 test runs it.
-  - If it does not, T0 and T1 use the `FrameworkConfigurationValidator` fake, and the real call is covered by #003 in T2.
+- **Record:** whether `VZVirtualMachineConfiguration.validate()` works under `swift test` without the virtualization entitlement goes into [../../02-design/vm.md](../../02-design/vm.md) §3. The opt-in T1 probe uses the production builder and checks `SecTaskCopyValueForEntitlement`; its current result is recorded there. The ordinary validator unit tests keep using `FrameworkConfigurationValidator` fake, while #003's signed T2 test host covers the entitled call.
+- **Run the probe:** prepare the pinned artifacts with `scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh`, then set `APKRUN_TEST_LINUX_DIR` and run `swift test --filter vzConfigurationValidationReportsProcessEntitlement`. The test does not create or start a VM.
 - **Pitfall:** Alpine and other distributions may ship arm64 kernels as EFI zboot images, which start with `MZ` rather than the `Image` header. The validator rejects them. `scripts/fetch-test-linux.sh` (#003) must extract the payload.
 - **Pitfall:** creating VZ configuration objects is fine in T0. Never create a `VZVirtualMachine` from a configuration that did not pass `validate()`; VZ raises an Objective-C exception instead of throwing.
 - The zboot detection and `.machineIdentifierInvalid` were added to [vm.md](../../02-design/vm.md) §3 and [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5.2 for this task.

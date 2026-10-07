@@ -145,6 +145,7 @@ LGPL-2.1-or-later
 LGPL-3.0-only
 LGPL-3.0-or-later
 MPL-2.0
+X11
 ```
 
 The tooling list is allowed only for `ships: tooling` entries with `kind: prebuilt` or `kind: source`. These are downloaded by a script, pinned by hash or commit, and never committed, uploaded as a CI artifact, or published. The Alpine test guest is the main case ([../02-design/vm.md](../02-design/vm.md) §12). `ships: reference` entries are also pinned source inputs, but are neither build/test inputs nor redistributed; their licenses are recorded without applying a redistribution allow-list.
@@ -200,7 +201,7 @@ evaluated against a redistribution allow-list.
 | AndroidX, Compose, Kotlin in the fixture apps | tooling, committed | Apache-2.0 | inside the committed APKs of `Tests/Fixtures/apks/`; locked in `Tests/Fixtures/AndroidApps/<module>/gradle.lockfile` |
 | Mesa (virgl driver), `kmscube` | tooling | MIT | Alpine packages in the test initramfs; the recorded `kmscube` stream in `Tests/Fixtures/graphics/` is committed |
 | Alpine `linux-virt` kernel | tooling, downloaded | GPL-2.0-only | never committed or published (§4.4) |
-| Alpine minirootfs and Linux test packages (`socat`, `ssl_client`, `libcrypto3`, `libgpiod`, `libssl3`, `readline`, `libncursesw`, `ncurses-terminfo-base`) | tooling, downloaded | package component licenses, checked against Alpine metadata and upstream notices; `socat` GPL-2.0-only WITH OpenSSL-Exception; `ssl_client` GPL-2.0-only; `libcrypto3` and `libssl3` Apache-2.0; `libgpiod` GPL-2.0-or-later AND LGPL-2.1-or-later; `readline` GPL-3.0-or-later; ncurses packages X11 | same |
+| Alpine minirootfs and Linux test packages (`socat`, `ssl_client`, `libcrypto3`, `libgpiod`, `libssl3`, `readline`, `libncursesw`, `ncurses-terminfo-base`) | tooling, downloaded | package component licenses, checked against Alpine metadata and upstream notices; the `socat` lock proposes GPL-2.0-only as a conservative policy basis, not its full Alpine expression `GPL-2.0-only WITH OpenSSL-Exception`; `COPYING` and `COPYING.OpenSSL` are retained, while the separate exception statement is in the upstream README (IR-241); `ssl_client` GPL-2.0-only; `libcrypto3` and `libssl3` Apache-2.0; `libgpiod` GPL-2.0-or-later AND LGPL-2.1-or-later; `readline` GPL-3.0-or-later; ncurses packages X11 | same |
 | Alpine e2fsprogs packages (`e2fsprogs`, `e2fsprogs-libs`, `libcom-err`, `libblkid`, `libuuid`, `libeconf`) | tooling, downloaded | component-specific GPL, LGPL, BSD, and MIT terms recorded in `ThirdParty/ThirdParty.lock.json` | The e2fsprogs entries select `LGPL-2.1-only` under the upstream LGPL-2-or-later grant; this interpretation needs maintainer review (IR-195) |
 | depot_tools | tooling, downloaded | BSD-3-Clause | ANGLE build only |
 

@@ -998,6 +998,11 @@ locked Alpine metadata makes the unresolved policy question visible without
 misstating a package's license. #003 remains open until the license expressions
 are accepted or a compliant dependency set is selected.
 
+**Superseded by IR-241 for the proposed lock classification and tooling
+allowlist.** Review IR-241 together with this original decision; #003 remains
+open until the maintainer accepts the interpretation or selects a compliant
+replacement.
+
 ## IR-045: Bound reset while a stop callback remains pending
 
 | Field | Value |
@@ -8334,3 +8339,46 @@ adversarial review confirmed the M5 dependency cycle, flagged the unresolved
 M1/#064 prerequisite and the builder schedule, and agreed that an ADR is not
 needed only if the exact source audit confirms the existing pinned AOSP Mesa
 modules are sufficient.
+
+## IR-241: Propose a tooling-only license policy for Alpine test inputs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected files | [M00](issues/M00-repository-and-vm-foundation.md) #003; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §§4.4, 5; `ThirdParty/ThirdParty.lock.json` (`alpine-socat`) |
+
+**Choice.** Keep the pinned `socat` package and its committed `COPYING` and
+`COPYING.OpenSSL` files. Propose `GPL-2.0-only` as the lock's conservative
+policy basis, while explicitly recognizing that this is not the full Alpine
+metadata expression `GPL-2.0-only WITH OpenSSL-Exception`. Add SPDX `X11` only
+to the tooling allowlist for the pinned ncurses test packages. Do not change
+the app or image allowlists.
+
+**Reason.** These are downloaded `ships: tooling` inputs for the local Linux
+test guest; the project policy says they are never committed, uploaded as a CI
+artifact, or published. The package metadata's `OpenSSL-Exception` is not an
+exception identifier in the official SPDX 3.29.0 exception list, so the
+current lock schema cannot express the full metadata as an SPDX expression
+without changing policy. The proposed base-only value is a policy
+interpretation, not a claim that Alpine supplied no exception, that the binary
+is unlinked from OpenSSL, or that `COPYING.OpenSSL` contains the socat
+exception. The exception statement is in the upstream README; the committed
+license files retain the package's GPL and OpenSSL/SSLeay license texts. A
+maintainer must accept this narrower policy basis or require a compliant
+replacement before #003 closes. `X11` is an SPDX license identifier whose
+license text includes notice-retention and non-endorsement conditions;
+allowing it only for pinned test tooling resolves the two ncurses entries
+without changing product policy. The tooling-list change also requires
+maintainer approval.
+
+**Verification.** The pinned lock entries classify `socat`, `libncursesw`,
+and `ncurses-terminfo-base` as `ships: tooling`; both `socat` license files
+and both ncurses `COPYING` files are committed. The SPDX 3.29.0 license list
+contains `X11`, and its exception index does not contain a general
+`OpenSSL-Exception`. No APKRun runtime code or guest image behavior changes in
+this decision. `scripts/check-lock.sh`, `scripts/ci/run-checks.sh` (all six
+checks), and `git diff --check` passed; the format check skipped the absent
+Guest Kotlin and Rust sources. The repository's `check-licenses.sh` is planned
+for #093 and does not yet exist, so this lock interpretation and the tooling
+allowlist are not verified by a license-specific checker.

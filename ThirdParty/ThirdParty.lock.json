@@ -191,7 +191,7 @@
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/socat-1.8.1.3-r0.apk",
       "version": "1.8.1.3-r0",
       "sha256": "120356c2bfac5a960b8b79a2ac6c387cca73dd85af4887365523cd92a2db17f5",
-      "license": "GPL-2.0-only WITH OpenSSL-Exception",
+      "license": "GPL-2.0-only",
       "licenseFiles": ["COPYING", "COPYING.OpenSSL"],
       "buildFlags": [],
       "patches": [],

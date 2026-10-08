@@ -188,6 +188,16 @@ def write_gpt(
 ) -> None:
     """Write the protective MBR and both GPT copies into a disk of `disk_size` bytes."""
     validate_layout(disk_size, partitions)
+    _write_tables(out, disk_size=disk_size, guid=guid, partitions=partitions)
+
+
+def _write_tables(
+    out: BinaryIO,
+    *,
+    disk_size: int,
+    guid: uuid.UUID,
+    partitions: Sequence[GptPartition],
+) -> None:
     total_sectors = disk_size // SECTOR_SIZE
     entries = _entries(partitions)
     entries_crc = zlib.crc32(entries)
@@ -288,3 +298,63 @@ def read_gpt(stream: BinaryIO, disk_size: int) -> GptTable:
         backup_lba=backup_lba,
         partitions=tuple(partitions),
     )
+
+
+def instance_disk_guid(instance: uuid.UUID, role: str) -> uuid.UUID:
+    """Return the disk GUID that provisioning gives one instance's disk (§5.1)."""
+    return uuid.uuid5(GUID_NAMESPACE, f"instance/{instance}/{role}")
+
+
+def instance_partition_guid(instance: uuid.UUID, role: str, label: str) -> uuid.UUID:
+    """Return the partition GUID that provisioning gives one instance's partition."""
+    return uuid.uuid5(GUID_NAMESPACE, f"instance/{instance}/{role}/{label}")
+
+
+def provision_disk(
+    stream: BinaryIO,
+    *,
+    old_size: int,
+    new_size: int,
+    instance: uuid.UUID,
+    role: str,
+) -> GptTable:
+    """Give a cloned template its instance GUIDs and grow its last partition.
+
+    The caller has already extended the file to `new_size`. The old backup
+    header and entries are zeroed, both GPT copies are rewritten for the new
+    size, and the last partition ends at the new last usable sector
+    (android-image.md §5.2). ImageCore's `GPTDisk` does the same in Swift; the
+    fixtures in tests/fixtures/gpt/ pin both to the same bytes.
+    """
+    if new_size < old_size or new_size % SECTOR_SIZE:
+        raise GptError("the new disk size must be at least the old size and sector aligned.")
+    table = read_gpt(stream, old_size)
+    if not table.partitions:
+        raise GptError("the disk has no partition to grow.")
+    new_last = last_usable_lba(new_size)
+    partitions = [
+        GptPartition(
+            label=partition.label,
+            first_lba=partition.first_lba,
+            size=partition.size,
+            unique_guid=instance_partition_guid(instance, role, partition.label),
+            type_guid=partition.type_guid,
+        )
+        for partition in table.partitions
+    ]
+    last = partitions[-1]
+    partitions[-1] = GptPartition(
+        label=last.label,
+        first_lba=last.first_lba,
+        size=(new_last - last.first_lba + 1) * SECTOR_SIZE,
+        unique_guid=last.unique_guid,
+        type_guid=last.type_guid,
+    )
+    if new_size != old_size:
+        old_backup_entries = (old_size // SECTOR_SIZE - 1 - ENTRY_ARRAY_SECTORS) * SECTOR_SIZE
+        stream.seek(old_backup_entries)
+        stream.write(bytes((ENTRY_ARRAY_SECTORS + 1) * SECTOR_SIZE))
+    _write_tables(
+        stream, disk_size=new_size, guid=instance_disk_guid(instance, role), partitions=partitions
+    )
+    return read_gpt(stream, new_size)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,10 @@ from apkrun_image.gpt import (
     GptPartition,
     disk_guid,
     encode_name,
+    instance_disk_guid,
+    instance_partition_guid,
     partition_guid,
+    provision_disk,
     read_gpt,
     write_gpt,
 )
@@ -178,3 +182,45 @@ def test_macos_reads_the_partition_names(tmp_path: Path) -> None:
         subprocess.run(["hdiutil", "detach", device], capture_output=True, timeout=60, check=False)
     assert "GUID_partition_scheme" in listing
     assert listing.count("Linux Filesystem") == 2
+
+
+FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures/gpt"
+
+
+def test_provisioning_regrows_the_last_partition_and_rewrites_guids() -> None:
+    instance = uuid.UUID("3f2504e0-4f89-41d3-9a0c-0305e82c3301")
+    stream = io.BytesIO(_disk().getvalue() + bytes(4 * ALIGNMENT))
+
+    table = provision_disk(
+        stream, old_size=DISK_SIZE, new_size=2 * DISK_SIZE, instance=instance, role="data"
+    )
+
+    assert table.disk_size == 2 * DISK_SIZE
+    assert table.disk_guid == instance_disk_guid(instance, "data")
+    assert [partition.label for partition in table.partitions] == ["misc", "userdata"]
+    assert table.partitions[0].size == ALIGNMENT
+    assert table.partitions[1].last_lba == table.last_usable_lba
+    assert table.partitions[1].unique_guid == instance_partition_guid(instance, "data", "userdata")
+    old_backup = DISK_SIZE - SECTOR_SIZE
+    assert stream.getvalue()[old_backup : old_backup + 8] == bytes(8)
+
+
+def test_provisioning_rejects_a_smaller_size() -> None:
+    with pytest.raises(GptError, match="at least the old size"):
+        provision_disk(
+            _disk(),
+            old_size=DISK_SIZE,
+            new_size=DISK_SIZE - ALIGNMENT,
+            instance=uuid.uuid4(),
+            role="data",
+        )
+
+
+def test_the_committed_provisioning_fixture_is_current() -> None:
+    sys.path.insert(0, str(FIXTURE_DIRECTORY))
+    try:
+        import build_gpt_fixture  # noqa: PLC0415
+    finally:
+        sys.path.remove(str(FIXTURE_DIRECTORY))
+    committed = json.loads((FIXTURE_DIRECTORY / "provision.json").read_text(encoding="utf-8"))
+    assert build_gpt_fixture.build() == committed

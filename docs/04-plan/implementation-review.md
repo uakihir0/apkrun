@@ -9359,3 +9359,185 @@ not to create branches; the rename itself is not reverted.
 on instance 2 after each run. Both raw records and a `SHA256SUMS.txt` manifest
 are in the local store, and `git status` shows only the receipt and the
 entries recorded here.
+
+## IR-281: Route production log entries to the category that wrote them
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance: every transition logged under `io.apkrun.vm`, category `lifecycle`); #061 (DiagnosticsCore owner) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance criterion 8; [diagnostics.md](../02-design/diagnostics.md) §3 |
+
+**Choice.** `DiagnosticsContext.live` now uses `RoutingOSLogSink`. It keeps one
+`OSLogSink` per subsystem and category, and writes each entry to the destination
+that `APKLogger` recorded in it. `APKLogger`'s default path keeps the
+fixed-destination `OSLogSink`. The routing sink reports every level as enabled,
+because the destination is not known when the level is checked, so the level
+gate of `OSLogSink.isEnabled` does not apply on this path.
+
+**Reason.** The live context gave every logger one `OSLogSink` fixed to
+`io.apkrun.diagnostics` and category `health`. `APKLogger` had already put each
+entry's subsystem and category into `LogEntry`, and `OSLogSink.write` ignored
+them. The signed LinuxGuest run at `d98823f` printed `[health] VM state changed`
+lines, so the unified log did not show VM lifecycle entries under
+`io.apkrun.vm` / `lifecycle`. The T0 tests passed because `RecordingLogSink`
+keeps the metadata. The defect affected every subsystem that used the live
+context, not only VM. A sink injected per controller was rejected, because the
+other loggers would stay mis-filed.
+
+**Verification.** `OSLogRoutingTests` (two T0 tests) passed, and the
+`DiagnosticsCore` SwiftPM filter passed. The signed `LinuxGuest` suite at
+`ef9b729` passed 29 of 29 and printed 87 `[lifecycle] VM state changed` lines.
+`log stream --predicate 'subsystem == "io.apkrun.vm"'` during `apkrun dev linux`
+at `ef9b729` printed `[io.apkrun.vm:lifecycle] VM state changed from stopped to
+starting op=e7ea405d`, and the stop had its own operation ID. `scripts/check-logging.sh`
+passed.
+
+## IR-282: Create validation and identifier VZ objects on a VM queue
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance: VZ objects created and called only on `io.apkrun.vm.queue`); #002 (code owner) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance criterion 6; [vm.md](../02-design/vm.md) §4; [AGENTS.md](../../AGENTS.md) §6.2 |
+
+**Choice.** The live framework validator, the machine-identifier check in
+`VMDefinitionValidator`, and `MachineIdentity` run their VZ work through
+`VMQueue().performSynchronously`. Each call creates a private queue with the
+label `io.apkrun.vm.queue` and waits for the result. The #002 public API does
+not change. Class-level queries that create no VZ object stay on the caller's
+thread: `VZVirtualMachine.isSupported` in `VMHealthChecks`, and the CPU and
+memory limits in `LiveVMHostEnvironment`.
+
+**Reason.** Before this change, `VZFrameworkConfigurationValidator.validate`
+built and validated a `VZVirtualMachineConfiguration` on the caller's thread.
+`MachineIdentity` and the identifier check created `VZGenericMachineIdentifier`
+and `VZMACAddress` there. No controller exists while validation runs, so the
+controller's queue cannot serve it. Making validation `async` would change the
+#002 API and every caller. The per-call queue keeps the rule literal for VZ
+objects. The class-level queries are not VZ objects.
+
+**Verification.** `VMQueueTests` (two T0 tests) passed. `swift test --filter
+VirtualMachineCore` passed 114 `VirtualMachineCoreTests` and 25
+`VirtualMachineCoreSystemTests`, including the live validator path. The signed
+`LinuxGuest` suite at `ef9b729` passed 29 of 29, and every T2 test validates
+through the live validator. The `apkrun dev linux` smoke at `ef9b729` exited 0.
+
+## IR-283: Keep the G1 reference-Mac criterion open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance: G1 on the reference Mac with a clean build from `main`, evidence attached to the gate issue); OQ-02 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance criterion 5; [open-questions.md](../open-questions.md) OQ-02; [roadmap.md](../roadmap.md) §2 |
+
+**Choice.** Criterion 5 stays open. The G1 passes are recorded as evidence, not
+as closure. The `scripts/run-gate.sh G1` pass at `bba2959` (IR-272) and the
+signed G1 test-plan run at `ef9b729` both ran on Mac17,9 (macOS 26A434). The
+second run came from the `codex` branch, not from `main`. The evidence has not
+been attached to a gate issue.
+
+**Reason.** The criterion names the reference Mac. OQ-02 is still open, and its
+working proposal is the lowest-tier lab Mac (M1 with 16 GB,
+[diagnostics.md](../../02-design/diagnostics.md) §9.4). Mac17,9 is not that
+proposal, and no record names it as the reference. Creating a gate issue needs
+GitHub access, which this session does not have (IR-278). A pass on another Mac
+supports G1, but it does not meet the box. A maintainer should decide the
+reference Mac under OQ-02, and the gate should then run there from a clean
+`main` checkout.
+
+**Verification.** The G1 report at `build/gates/G1/report.txt` in the `/tmp`
+gate worktree shows commit `bba2959`, Mac17,9, macOS 26A434, and
+`status: passed`. On `ef9b729`, `xcodebuild test -scheme AcceptanceTests
+-testPlan AcceptanceTests -only-test-configuration G1` executed 5 tests, with 1
+configuration-scoped skip and 0 failures. `testTenBootsStopThroughTheGuestPowerButton`
+passed in 3.079 s, and `testFailedStartCanBeReset` passed.
+
+## IR-284: Accept the no-nil-state audit as evidence for the state criterion
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance: no state is inferred from a nil `VZVirtualMachine`) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance criterion 7; [AGENTS.md](../../AGENTS.md) §6.2; [state-machines.md](../01-architecture/state-machines.md) §1 |
+
+**Choice.** Criterion 7 is ticked on a code audit, not on a test. `VMController.state`
+is assigned in one place, `transition(to:source:)`, and that function logs every
+change. The `driver` optional works only as a resource handle. The five
+`guard let driver` sites (`pause`, `resume`, `stop`, `requestGuestStop`, and
+`connect`) follow an explicit state check. A nil driver there is an invariant
+violation (`assertionFailure`), not a state. In the forced-stop path,
+`releaseResources()` clears `driver` while the state is still `stopping`, as
+[vm.md](../02-design/vm.md) §9.2 describes. No driver guard can run in that
+window, because the active public operation blocks other lifecycle calls and
+`connect` requires `running`.
+
+**Reason.** No test can show that a state is not inferred from nil, because a nil
+driver never changes `state`. Such a test would have to exercise an internal
+path that cannot occur. The audit covers every code path that can clear
+`driver`. A maintainer should confirm that this reading of the criterion is the
+intended one.
+
+**Verification.** On `ef9b729`, `grep` found `state =` only at the initializer
+and in `transition`, and `guard let driver` only at the five sites above and in
+`await driver?.release()`. The signed `LinuxGuest` suite at `ef9b729` passed
+29 of 29, including the stop, forced-stop, and failed-start paths.
+
+## IR-285: Accept a clean-clone repeat as the reproducibility evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance: pinned by SHA-256 in the lock; the scripts produce the same artifacts on a clean clone) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance criterion 10; [build-system.md](../../05-development/build-system.md) §6.1; [vm.md](../02-design/vm.md) §12 |
+
+**Choice.** Criterion 10 is ticked. The kernel package, the minirootfs, and the
+socat, libgpiod, and runtime packages are pinned by SHA-256 in
+`ThirdParty.lock.json`, and `fetch-test-linux.sh` checks each one. The
+reproducibility evidence is a fresh clone of `d98823f`, where both scripts ran
+twice into an empty directory. The hashes of `Image` and `initramfs.cpio.gz`
+matched across the two runs and matched the artifacts that the signed T2 runs
+used. The built initramfs and the extracted `Image` are outputs, not lock
+entries. The lock pins their inputs.
+
+**Reason.** NFR-DEV-01 pins the inputs of the test guest, and the criterion asks
+that the scripts reproduce the same artifacts. A clean clone with repeated runs
+shows that reproduction. [vm.md](../02-design/vm.md) §17 records a different
+initramfs hash for #005 (`0f50…`). This check does not explain that difference,
+and it is not a reproducibility failure for the current inputs. Whether the
+outputs should also be pinned is a separate decision for the maintainer.
+
+**Verification.** `git clone` of `d98823f` into `/tmp/apkrun-003-clone`, then
+`scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh` with
+`APKRUN_TEST_LINUX_DIR` set to an empty `/tmp` directory, twice. Both runs gave
+`Image` `e31110ab…bbc4` and `initramfs.cpio.gz` `d1d1273e…705c`. These hashes
+equal `/tmp/apkrun-test-linux`. The second run verified all 16 locked packages
+without downloading them again.
+
+## IR-286: Record the missing stderr copy of failing lines in apkrun dev linux
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (step 8: failing lines on stderr; acceptance box for `apkrun-dev dev linux`) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003 step 8; [cli.md](../../02-design/cli.md) §5 |
+
+**Choice.** The `apkrun-dev dev linux` acceptance box is ticked. Step 8 says a
+failing run "prints the failing lines on stderr and exits 1". The
+implementation streams the console, including the
+`APKRUN-TEST: <name> fail <detail>` line, to stdout. Stderr gets only the
+catalog error `runtime.devLinuxCheckFailed` and a hint to check the console
+output. The step-8 stderr copy is recorded as a gap and is not fixed in this task.
+
+**Reason.** The box asks for live output, exit 0 only when every requested check
+printed `ok`, and exit 75 under the instance lock. The implementation meets all
+three. The smallest fix needs the failing record in the CLI. The CLI does not
+import RuntimeCore (AGENTS §6.1), so the fix is a failing-check case on
+`DevLinuxEvent` in RuntimeHost, which the CLI then writes to stderr. That changes
+the event model of an embedded-only facade. A maintainer should decide whether
+step 8's stderr copy is required before #003 closes.
+
+**Verification.** `apkrun dev linux --tests nosuchcheck` at `ef9b729` exited 1
+with `runtime.devLinuxCheckFailed`. Stdout contained
+`APKRUN-TEST: nosuchcheck fail unsupported test in this guest build`, and stderr
+had only the catalog error and the hint.

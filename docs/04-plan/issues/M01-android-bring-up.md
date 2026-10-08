@@ -712,6 +712,8 @@ See [../test-strategy.md](../test-strategy.md).
   The privacy scan of the 62 incomplete records found no host path, MAC or EUI address, or PEM marker in any capture file. Step 6's `androidboot.*`, `ro.adb.secure`, by-name, and hvc-holder notes remain open, because they need guest-side data from a booted guest.
 
 - **Stall diagnosis (2026-10-08; see IR-279 and IR-280).** Two live `default` runs on the reference host separated the candidate causes. A 600-second run ended while zygote was still preloading. A 3000-second run reached the system server twice and then ended during a third start. In each start, the framework Watchdog killed `system_server` after its main thread stopped answering for about 185 seconds (`WATCHDOG KILLING SYSTEM PROCESS`), so `sys.boot_completed` never became 1. The host did not stall, the `target` SurfaceFlinger EGL abort did not occur, and zygote did not hang. The root cause of the guest-wide slowness is not established. The receipt, with the guest timeline and SHA-256 values of the retained raw records, is [default-20261008-diagnosis.txt](../../../Images/reference/16373615/incomplete/default-20261008-diagnosis.txt). The raw records are kept outside git. Criteria 1, 2, and 6 remain open, and no profile is published.
+
+- **Boot ladder (2026-10-08; see IR-298 to IR-301 and the [ladder receipt](../../../Images/reference/16373615/incomplete/ladder-064-20261008.txt)).** Launch variants with the pinned build: 8192 MiB (four vCPUs), `--gpu_mode=none`, and `--enable_audio=false`. None reached `sys.boot_completed=1`. The 8 GiB run stayed up to its 2400-second deadline with adb in state `device` and the property unset. The headless run never started its Android VM. The audio-off receipt was lost (IR-298). The Watchdog timeout is not host-settable (IR-301). No profile candidate is recorded, and #064 stays open.
 ---
 
 ## #009 AndroidImageManifest
@@ -1474,6 +1476,7 @@ See [../test-strategy.md](../test-strategy.md).
 - If no headless configuration reaches `boot_completed`, stop and follow [../roadmap.md](../roadmap.md) §2, "When a gate does not pass". Record it in R-06 and R-12, and file a follow-up task (#098 or the next free number) that attaches the #019 virtio-gpu device for M1.
 - A gate failure is recorded in the design document's verification log and in [../risks.md](../risks.md) (status `realized` if a fallback is taken).
 - The console strings for `.systemServer` depend on the console log level ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3). If `starting service 'zygote'` is not visible, the ADB signal of #015 or the serial-shell reading covers it.
+- **Launch-option ladder (2026-10-08; see IR-298 to IR-301).** In this host configuration `--gpu_mode=none`, the design's headless profile, did not start the Android VM (IR-300), so `gpuProfiles.headless` has no boot evidence yet. The `system_server` Watchdog timeout is a DeviceConfig key, not a host bootconfig key (IR-301). This task stays open.
 
 ---
 

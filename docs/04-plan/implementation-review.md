@@ -9812,3 +9812,119 @@ open: IR-242 for #002, and IR-243 with IR-044 and IR-241 for #003.
 judgment calls that a maintainer should confirm, and they do not block the next
 tasks. Keeping the tasks formally open would only hold back the Android chain,
 which depends on them.
+
+## IR-298: Run the #064 boot ladder as bounded single-variant runs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 (and #014) |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064 and #014 Notes; `Experiments/cuttlefish-boot-diagnosis/boot_variant.sh`; `Images/reference/16373615/incomplete/ladder-064-20261008.txt` |
+
+**Choice.** Each ladder step is one bounded run of the `default` flags of
+android-image.md §8.2 with one variant flag passed to both `cvd create` and
+`cvd start`. The runner is `Experiments/cuttlefish-boot-diagnosis/boot_variant.sh`.
+It uses instance 2 and copies the pinned product directory before launch, verifies
+the copy against the checked-in manifest, and never writes the pinned files. Only
+a summary receipt is committed. The raw logs stay in the guest and are deleted.
+
+**Reason.** The existing `capture.sh` and the Experiments harness are fixed to
+the 2026-10-01 baseline. The harness accepts only 2048 or 4096 MiB, and
+`capture.sh` fixes four guest CPUs and the GPU mode. Testing 8 GiB, eight vCPUs,
+or audio off would widen either tool beyond this task. A small runner keeps each
+run to one changed flag, and it records the saved configuration so a flag that
+does not reach the saved file is visible.
+
+**Verification.** Each run verified 10 product artifacts against the manifest
+before launch. Saved configuration was checked for `gpu_mode=none` with 4096 MiB,
+4 CPUs, and `enable_gpu_vhost_user=False`. The first runs wrote their receipts
+inside the guest, which rebooted at 22:50 and cleared its `/tmp` before the
+receipts were copied. Those raw receipts are lost. The summary receipt keeps only
+the values printed in the session, and it says so. Two runner defects were found
+and fixed after the first run: the instance logs live under `/var/tmp/cvd`, not
+under `--base_directory`, and an unset `sys.boot_completed` was recorded as
+`none`. Cleanup after every run left no crosvm and no work directory.
+
+## IR-299: Record the 8 GiB, four-vCPU run as not booted within 2400 seconds
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/ladder-064-20261008.txt` (step 1a); [M01](issues/M01-android-bring-up.md) #064 Notes |
+
+**Choice.** Record the `--memory_mb 8192` run (create and start, four vCPUs, 2400
+seconds) as a non-booting diagnostic variant. Do not attribute the stall to
+memory size. The U-Boot-to-Linux comparison of IR-138 is unchanged.
+
+**Reason.** Guest memory was the first lever of the ladder. The run reached its
+deadline. adb answered `device` from 866 seconds, but `sys.boot_completed` stayed
+unset in every poll. crosvm RSS reached its plateau at 8.24 GiB at about 436
+seconds, which shows the guest used its full memory. The live kernel log showed
+zygote starting at guest uptime 160.1 seconds, and it showed no Watchdog line at
+the last check (guest uptime about 1950 seconds). That is earlier than the
+233-second zygote start of E1 but still not boot. Whether memory size shortens the
+slow startup is not settled by one run.
+
+**Verification.** The runner's poll output (adb state, unset property, RSS per 15
+seconds) and the live kernel-log reads are summarized in step 1a. The saved
+configuration of this run was not recorded, because the first runner did not read
+the instance logs; `memory_mb` was passed to both commands but not verified in the
+saved file. The raw receipt is lost (IR-298).
+
+## IR-300: Record `--gpu_mode=none` as blocked before the Android guest starts
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 |
+| Affected files | `Images/reference/16373615/incomplete/ladder-064-20261008.txt` (step 1b); [M01](issues/M01-android-bring-up.md) #014 step 2 |
+
+**Choice.** Treat `--gpu_mode=none` as blocked for this host package and
+configuration. Do not use it as the #014 headless profile until its launch is
+unblocked. The run was stopped after about nine minutes rather than at its
+2400-second deadline.
+
+**Reason.** The design's M1 headless profile (#014 step 2) needs a headless boot.
+In this run the kernel log stayed at 0 bytes, and the Android crosvm had one
+thread, asleep in a tun-device read since its start (16.6 MB RSS). Earlier
+`gpu_mode=none` records stopped at 600 seconds with an empty kernel log (IR-112
+and IR-113), so this matches them and is not new evidence of a boot result. Running
+to the deadline would have cost about 30 minutes without new information.
+
+**Verification.** The saved configuration recorded `gpu_mode=none`, 4096 MiB, 4
+CPUs, and `enable_gpu_vhost_user=False`. The thread count and wait channel were
+read from procfs. Cleanup left no crosvm process. The tun descriptor that the
+Android crosvm waits on was not identified; this is the next #014 question.
+
+## IR-301: Find no host-settable key for the Watchdog timeout
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 |
+| Affected files | `Images/reference/16373615/incomplete/ladder-064-20261008.txt` (step 2); [M01](issues/M01-android-bring-up.md) #014 |
+
+**Choice.** Do not add any bootconfig or kernel-command-line key for the
+`system_server` Watchdog or the ART first-boot work. The reference boot keeps the
+keys of android-image.md §6.2.
+
+**Reason.** The brief asked whether the Watchdog or ART first-boot work reads a
+key that the host can set. The pinned system partition was read from the pinned
+`super.img` into a private copy, read-only, and `framework/services.jar` was
+searched. The jar contains `WatchdogTimeoutMillis` and
+`system_server_watchdog_timeout_ms`. The second is an AOSP DeviceConfig key; this
+jar does not show which class reads it, so that is not verified here. The jar
+has `persist.debug.framework_watchdog.*` strings, which belong to PackageWatchdog,
+not to the system_server kill. The jar has no Watchdog-specific `ro.boot.*` or
+`androidboot.*` key. It reads `ro.debuggable` and `ro.secure`, but no link to the
+kill path was found. The dexopt strings are `dalvik.vm.*` and `pm.dexopt`, which
+host bootconfig cannot set. Changing the DeviceConfig value needs guest data
+written before first boot, which is guest state and outside the launch-option
+scope of this ladder.
+
+**Verification.** The `services.jar` string search covered the `classes*.dex`
+files of the extracted jar. The system partition extraction read one linear
+extent (959,066,112 bytes) from the pinned super image and wrote only to a private
+copy. Nothing was written into the repository, and no guest run was needed. The
+search is by string, not by call graph, so a missed reader cannot be excluded.

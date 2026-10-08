@@ -9595,3 +9595,29 @@ would leave local setup able to fail the same way.
 `ok Metal toolchain: Apple metal version 32023.921`. The hosted result is in the
 next CI run on `main` after this commit. The earlier failure is run
 37748879197, jobs `lint`, `codegen`, and `third-party`.
+
+## IR-289: Run the swiftshader repeat with a 2100-second deadline
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/default-20261008-diagnosis.txt` (swiftshader section); [M01](issues/M01-android-bring-up.md) #064 Notes |
+
+**Choice.** The `swiftshader` profile was run once with the unchanged tools, a
+2100-second boot deadline, instance 2, and the boot observer. The record is
+diagnostic and is not published. The deadline is shorter than the 3000-second
+`default` runs.
+
+**Reason.** The session time budget ended before a 3000-second run could
+finish. The 2100-second deadline still covers the point where the first
+`system_server` was killed in the `default` run, at uptime 1846 seconds.
+This choice shortens the observation window, so the record shows the kill and
+the start of a second cycle, not a full boot attempt.
+
+**Verification.** The record's `host.json` records `selectedGpuMode=guest_swiftshader`
+and `gpuVhostUserEnabled=false`, and `cuttlefish_config.json` records 4 vCPUs.
+Its kernel log shows the Watchdog sysrq dump at uptime 1512 to 1514 seconds and
+zygote's SIGKILL at 1528.9 seconds. A second system_server was active by 1788
+seconds. The retained `host-logcat.txt` ends before the kill, so the kill is
+evidenced by the kernel log. Cleanup left no crosvm, run_cvd, or ADB device.

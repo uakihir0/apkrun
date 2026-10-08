@@ -1,0 +1,9 @@
+gate: G1
+commit: bba2959eac29c778355149bb80311ae7932c5711
+started: 2026-10-08T05:56:52Z
+mac_model: Mac17,9
+macos_build: 26A434
+status: running
+finished: 2026-10-08T06:00:14Z
+status: passed
+exit_code: 0

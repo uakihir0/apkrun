@@ -9120,7 +9120,7 @@ work continues, so the user's branch layout does not change. A maintainer should
 decide whether the local `main` should stay at this commit and whether the G1
 evidence should be attached to a real gate issue.
 
-**Verification.** The gate report is `build/gates/G1/report.txt` in that worktree:
+**Verification.** The gate report is copied to `docs/04-plan/evidence/G1-bba2959-report.txt`. The worktree was removed after the run, when `codex` was renamed to `main`:
 commit `bba2959eac29c778355149bb80311ae7932c5711`, Mac17,9, macOS 26A434,
 `status: passed`, `exit_code: 0`. The LinuxGuest suite ran 29 tests with 0
 failures. The G1 suite ran 5 tests with 0 failures and 1 configuration-scoped

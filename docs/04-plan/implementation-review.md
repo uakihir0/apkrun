@@ -8959,3 +8959,19 @@ The `sdkmanager` script delegates to the Android CLI, which wrote `~/.android/bi
 **Verification.** `scripts/check-protos.sh` passes with the pinned buf. `scripts/generate-protos.sh` regenerates the Swift sources and the golden frames with no change. The `codegen` script was run locally. The hosted jobs were not run, because this repository has no remote.
 
 **Limit.** The `lint` job also runs `check-format.sh`, which runs `./gradlew -p Guest ktfmtCheck`. That needs the Android SDK, which bootstrap does not install until #015, so a clean hosted runner would fail there. The task entry therefore keeps the CI acceptance box open.
+
+## IR-268: Leave out a capability that the agent does not implement, instead of failing the handshake
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (capability negotiation); #034 and #072 implement the request checks |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §5.2, §5.3; [guest-components.md](../02-design/guest-components.md) §6.2 |
+
+**Choice.** When the host's HelloAck lists a capability that the agent does not implement, the agent drops it from its enabled set. `GuestCapability.enabled` intersects the host's list with the agent's implemented set, and the handshake still succeeds. The agent then answers `UNSUPPORTED` for any request that needs the capability (§5.3). The host reacts through its missing-capability path, `capabilityMissing` (§5.2).
+
+**Reason.** §5.3 says that the host "echoes the subset it will use", and that the agent "must reject (`UNSUPPORTED`) requests for capabilities that are not enabled, so both sides agree on what is in use". It does not say that a handshake must fail when the host enables something the agent does not implement. §5.2 handles the same situation for an older agent, per request: the agent answers `UNSUPPORTED`, and "the host treats a missing capability the same way before sending". Failing the whole handshake for one optional feature would also stop the operations that the agent does implement, such as `Ping` and `GetSnapshot`. guest-components.md §6.2 requires that a missing system method fails only its capability.
+
+**Verification.** `AgentHandshakeTest` pins the behavior. The host enables `display.v1` and `core.v1`, the agent implements only `core.v1`, and the enabled set is `[core.v1]`.
+
+**Limit.** The handshake does not tell the host that a capability was dropped, so the host's view can be wider than the agent's until the first `UNSUPPORTED` answer. A maintainer may prefer that the agent fail the handshake with a typed failure, or that the agent send its enabled set back. The first option needs only a new failure reason. The second needs a new message. Both should be reviewed before the field numbers freeze at merge.

@@ -85,6 +85,18 @@ class AgentHandshakeTest {
     }
 
     @Test
+    fun `a capability that the host enables but the agent does not implement is left out`() {
+        // The handshake still succeeds. The host learns from UNSUPPORTED on the first request
+        // that uses the capability (guest-protocol.md §5.2, §5.3; IR-268).
+        val accepted =
+            AgentHandshake.evaluate(
+                acceptedAck(capabilities = listOf("display.v1", "core.v1")),
+                implemented = setOf(GuestCapability.CORE),
+            )
+        assertEquals(listOf("core.v1"), accepted.enabledCapabilities)
+    }
+
+    @Test
     fun `a host major version of 2^31 is newer than supported, not older`() {
         // The wire value 0x80000000 arrives as a negative Int, and it must not be read as older.
         val failure =

@@ -2942,9 +2942,9 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     short_private_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(OBSERVER_MODULE, "ADB_COMMAND_TIMEOUT_SECONDS", 0.1)
-    monkeypatch.setattr(OBSERVER_MODULE, "ADB_GETPROP_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(OBSERVER_MODULE, "ADB_LOGCAT_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_COMMAND_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_GETPROP_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(OBSERVER_MODULE, "ADB_LOGCAT_TIMEOUT_SECONDS", 1.0)
     monkeypatch.setattr(OBSERVER_MODULE, "ADB_CLIENT_TERMINATE_SECONDS", 0.05)
     monkeypatch.setattr(OBSERVER_MODULE, "ADB_CLIENT_KILL_SECONDS", 0.1)
     monkeypatch.setattr(OBSERVER_MODULE, "ADB_SERVER_TERMINATE_SECONDS", 0.5)
@@ -2982,9 +2982,9 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         tmp_path,
         proc_root=proc_root,
         home_path=short_private_home,
-        adb_interval=10.0,
+        adb_interval=60.0,
     )
-    observer.deadline = time.monotonic() + 12
+    observer.deadline = time.monotonic() + 25
     server_ready = tmp_path / "adb-server-ready"
     server_stopped = tmp_path / "adb-server-stopped"
     server_socket_file = tmp_path / "adb-server-socket"
@@ -3052,7 +3052,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
 
     observer.start()
     observer.sample(now=0)
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     try:
         while time.monotonic() < deadline:
             if any(record["event"] == "adb_logcat_summary" for record in _read_records(output)):

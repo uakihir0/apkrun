@@ -1,0 +1,138 @@
+# Default-profile stall diagnosis (#064, 2026-10-08)
+
+Scope: why the `default` profile (and, by identical bootconfig, the
+`swiftshader` profile) never reached `sys.boot_completed=1`. The raw captures
+are retained outside the repository because they are large (host logcat up to
+13.7 MB). Each is normalized by `capture.sh` and contains no host paths; the
+SHA-256 values below identify the retained files.
+
+## Setup
+
+- Reference host: Ubuntu 24.04.4 arm64 nested-virtualization VM, 8 host vCPUs,
+  15 GiB RAM. Cuttlefish 1.57.0 (VCS `9bb9c72329cedcb436bb75afc05c24d73fbcdf5d`),
+  build 16373615 product images verified against the checked-in manifest.
+- Capture script: `Images/tools/reference/capture.sh`, last changed by
+  `fe1c726` (host logcat collection). The runs used the repository tools at
+  HEAD of `codex` on 2026-10-08 without a tool change.
+- Profile flags as in android-image.md §8.2: `default` = 4 guest vCPUs,
+  4096 MiB, `selectedGpuMode=guest_swiftshader`, vhost-user GPU off, console off,
+  boot observer on (`APKRUN_CAPTURE_BOOT_OBSERVER=1`).
+- Instance 2 was used because a stale instance-1 group (from an earlier target
+  run) still held instance 1 in the CVD registry; it was left untouched.
+
+## Records
+
+| Record | Boot deadline | Result |
+|---|---|---|
+| `default-20261008T150724-1970` (E0) | 600 s | Retained incomplete; deadline reached during zygote preload. |
+| `default-20261008T155958-10047` (E1) | 3000 s | Retained incomplete; deadline reached during the third system_server start. |
+| 8-vCPU variant (E2) | 3000 s | See the final section. Not a canonical profile. |
+
+Records are retained outside git. `host-logcat.txt` is present in both, which
+the 2026-09-30 to 2026-10-07 `default` and `swiftshader` records lack; those
+older records predate host-logcat collection.
+
+## Guest timeline (E1; guest uptime from `boot_progress_*`, UTC wall clock)
+
+| Event | Uptime (s) | UTC |
+|---|---|---|
+| zygote START (cycle 1) | 233.0 | 06:15:17 |
+| `boot_progress_preload_start` | 492.6 | 06:19:37 |
+| `boot_progress_preload_end` | 863.4 | 06:25:47 |
+| system_server entered (cycle 1) | 908.9 | 06:26:33 |
+| `boot_progress_pms_start` | 1066.3 | 06:29:10 |
+| `boot_progress_pms_system_scan_start` | 1129.5 | 06:30:14 |
+| `boot_progress_pms_ready` | 1467.4 | 06:35:51 |
+| Watchdog: main handler blocked 186 s | - | 06:39:44 |
+| Watchdog: WATCHDOG KILLING SYSTEM PROCESS (pid 1519) | - | 06:41:51 |
+| SIGKILL to pid 1519 | - | 06:41:57 |
+| zygote START (cycle 2) | 1866.3 | 06:42:30 |
+| preload start / end | 1894.4 / 1912.3 | 06:42:58 / 06:43:16 |
+| system_server entered (cycle 2) | 1925.5 | 06:43:30 |
+| `boot_progress_pms_ready` (cycle 2) | 2079.6 | 06:46:04 |
+| Watchdog: main handler blocked 185 s | - | 06:51:49 |
+| Watchdog: WATCHDOG KILLING SYSTEM PROCESS (pid 4229) | - | 06:53:49 |
+| zygote START (cycle 3) | 2575.4 | 06:54:19 |
+| preload start / end | 2610.1 / 2636.6 | 06:54:54 / 06:55:21 |
+| system_server entered (cycle 3) | 2641.2 | 06:55:25 |
+| `boot_progress_pms_start` (cycle 3) | 2655.2 | 06:55:39 |
+
+E1 deadline: 3000 s after launch, reached during cycle 3. No
+`sys.boot_completed` was observed.
+
+E0 (600 s): zygote START at 06:00:49 (uptime 154.7 s), preload start at
+06:03:15 (uptime 300.1 s). The deadline ended the run before preload finished.
+
+## Failure mechanism (E1)
+
+Each `system_server` cycle ended with the framework Watchdog killing it after
+its main thread failed to answer a handler check for about 185 seconds.
+
+- Cycle 1: the Watchdog's annotated main-thread stack ended in
+  `ArtManagerLocal$Injector.getDexoptHelper` (`ArtManagerLocal.java:1807`), and
+  the main thread had entered `ArtManagerLocal` only about four seconds before
+  the kill. Other threads reported long monitor contention on
+  `WindowManagerService.displayReady`, `ActivityManagerService` and
+  `SettingsProvider`.
+- Cycle 2: `SystemServerTiming` recorded `StartAudioService took 54296ms`;
+  the Watchdog's annotated top frame was
+  `FakeSoundTriggerHal.createDefaultProperties` (`FakeSoundTriggerHal.java:617`).
+
+The blocking code differs between cycles, so no single code path was
+identified. After the first kill, init sent SIGKILL to zygote and to the
+services in its class (audioserver, cameraserver, media, netd), and zygote
+restarted.
+
+`artd` is a lazy service (`disabled` plus `interface aidl artd`). It was not
+running and not registered (`service check artd` returned not found), and no
+init start request for `aidl/artd` appears in the logs. This is recorded as an
+observation, not as the cause: the blocked frame differed between cycles.
+
+Cycle 1 preload took 371 s; cycles 2 and 3 took 26 s and 18 s. The first
+cycle's cost is consistent with cold page-cache reads, which is not
+established.
+
+## Host-side evidence
+
+- Host crosvm RSS (boot observer, E0) reached about 4.2 GiB about 70 s after
+  launch and stayed near that value. The observer recorded 118 crosvm memory
+  samples in E0 and about 120 in the earlier `target` record.
+- Host-side per-thread CPU sample of the Android crosvm (10 s, E1,
+  06:11:10-06:11:25 UTC): this falls after the U-Boot banner (06:09:28 UTC)
+  and before Linux, inferred from zygote start minus its uptime; the exact
+  boot phase is not identified. `vcpu0` used about 86% of one CPU;
+  `vcpu1`-`vcpu3` used under 15% combined. Zygote's main thread (E0,
+  06:03 UTC, preload) alternated between `R` and `D` states.
+- Guest CPU during E1 cycle 2 (about 06:50 UTC, before the second kill): load
+  average about 10 on 4 vCPUs; over 10 s, idle was about 0%, and system plus
+  IRQ time was about 53% of busy time. `system_server` accumulated about 1300
+  system ticks per 10 s.
+- Guest I/O pressure (`/proc/pressure/io`) was low (some avg10 about 2%).
+
+## Ruled out or not supported
+
+- Host-side stall of crosvm or vCPUs: not supported; progress continues and
+  host vCPU threads run.
+- SurfaceFlinger EGL failure (the `target` failure): not present; SurfaceFlinger
+  initialized ANGLE on SwiftShader and started the boot animation in both
+  runs.
+- Zygote hang in preload: not present; preload completed in E1.
+- Missing `system_server` logs: caused by the older capture revision, which did
+  not collect host logcat; the current revision does.
+- Observer crosvm sampling failure: not present; samples were recorded.
+
+## Not established
+
+- The root cause of guest-wide slowness. Candidates are nested-virtualization
+  overhead (high guest system and IRQ time), cold-cache I/O in the first cycle,
+  and vCPU count. The 8-vCPU variant (E2) tests the vCPU count only.
+- The exact main-thread block in each cycle. Java thread stacks need root;
+  `adb root` and `debuggerd` were refused (`ro.secure=1`).
+
+## Next step
+
+Obtain root-readable `system_server` thread dumps for a boot that reaches
+the Watchdog window, through a diagnostic-only route that does not change the
+pinned image, and compare a second boot on warm caches. Failing that, the
+reference-host choice in android-image.md §8.1 (bare-metal arm64 Linux) is the
+path that removes the nested-virtualization overhead.

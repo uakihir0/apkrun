@@ -9126,3 +9126,162 @@ commit `bba2959eac29c778355149bb80311ae7932c5711`, Mac17,9, macOS 26A434,
 failures. The G1 suite ran 5 tests with 0 failures and 1 configuration-scoped
 skip, `testGuestResolvesDNSAndReachesExternalHTTPSProbe`, which belongs to the
 Network configuration.
+
+## IR-273: Require every ci.yml job, not only the four named in #062
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 acceptance criteria 1 and 9 and step 7; [build-system.md](../05-development/build-system.md) §15.1; IR-021 |
+
+**Choice.** Branch protection on `main` requires `workflow-policy` and every job
+present in `ci.yml`: `lint`, `codegen`, `third-party`, `build`, `test-swift`,
+`test-graphics`, and `test-images`. That is eight checks, not the five that #062
+names.
+
+**Reason.** §15.1 says every job present in `ci.yml` is required, and IR-021 says
+a planned job becomes required when a later task adds it. Three jobs were added
+after #062 (`third-party`, `test-graphics`, `test-images`). Requiring all of them
+keeps a removed or skipped job from passing silently. One conflict is left for
+the maintainer. `test-graphics` runs T1 tests (`GraphicsCoreSystemTests`) on a
+hosted `xcode-27` VM, which the #062 pitfall says not to do, and it needs a Metal
+device that a hosted image may not provide. The job fails with
+`runnerMissingMetal` when the device is missing. If that is unacceptable, the job
+should move to a real Mac and the required set should shrink to match.
+
+**Verification.** `scripts/tests/run.sh` checks the `ci.yml` job set against the
+seven names (`expected_jobs`). `scripts/tests/test_workflow_runners.rb` checks that
+`lint`, `codegen`, `build`, and `test-swift` have no `if` or `paths` key, and that
+pull requests and pushes to `main` carry no path filter. Branch protection itself
+cannot be read here. The remote `origin` has no branches or workflows (IR-278).
+
+## IR-274: Protect the notices generator and the lowercase test trees
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 workflow section; [build-system.md](../05-development/build-system.md) §3.1, §15.1; IR-025 |
+
+**Choice.** The policy checker's protected list adds
+`scripts/release/generate-notices.py`. It also treats any `tests/` or `test/`
+directory as a test tree, in addition to `Tests/` and `UITests/`.
+
+**Reason.** `generate-notices.py` writes `ThirdPartyNotices.html`. CI's
+`third-party` job runs it, and `check-release-build.sh` imports its `generate_html`
+function to check the bundle. Before this change, a pull request could change the
+generator without a reviewer, which could drop a notice while no protected path
+changed. `Images/tools/tests` (run by pytest in `test-images`) and Gradle `src/test`
+trees hold tests that CI runs, so an unreviewed edit could delete a failing test.
+IR-025 names the test trees with capitalized names only. Extending the list to the
+lowercase directories follows its intent, but it goes beyond the literal names and
+makes more pull requests need `ci-policy-approved`. A maintainer may narrow it.
+
+**Verification.** `scripts/tests/run.sh` asserts that the three new kinds of path
+are protected, and that `scripts/release/notes.md` is not. Commit `82d5ad9` passed
+`scripts/ci/run-checks.sh` in a worktree built from its staged state.
+
+## IR-275: Keep run-checks.sh as an explicit list with a registration guard
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 step 5; [build-system.md](../05-development/build-system.md) §3, §12 |
+
+**Choice.** `scripts/ci/run-checks.sh` keeps its explicit list of checks instead of
+running every `scripts/check-*.sh`. `scripts/tests/test_run_checks_coverage.sh`
+fails when a `scripts/check-*.sh` is missing from that list. `check-compile-fail.sh`
+is the only exception, because it is the manual T1 check.
+
+**Reason.** Step 5 says the runner runs "every §3 script present in the tree". A
+glob would also run checks that do not belong in lint. `check-compile-fail.sh`
+needs a debug build on a Mac, and `check-launcher.sh` (#068) needs built products.
+The explicit list plus the guard keeps the "present in the tree" guarantee without
+that risk. A later task that adds a check must register it, and the guard fails
+until it does.
+
+**Verification.** `scripts/tests/test_run_checks_coverage.sh` passes on the tree and
+rejects a fixture in which `check-beta.sh` is not registered. Commit `14fa271`
+passed `scripts/ci/run-checks.sh` in a worktree built from its staged state.
+
+## IR-276: Detect untracked codegen outputs in the three generated locations only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 step 5; [build-system.md](../05-development/build-system.md) §4 |
+
+**Choice.** `scripts/ci/codegen.sh` fails when a file under one of the three
+generated outputs is untracked and not ignored: `ErrorCatalog.generated.swift`,
+`docs/03-reference/error-catalog.md`, and
+`Packages/GuestProtocol/Sources/GuestProtocol/Generated/`. A new generator must add
+its output path to the list in the script.
+
+**Reason.** `git diff --exit-code` compares only tracked files, so a generated file
+that no commit tracks passed codegen. The new fixture showed that before the fix. A
+check over the whole tree would also fail on a developer's local scratch file. The
+§4 table names the outputs, so the three paths are the documented ones. The
+alternative, having each generator report what it wrote, would change the
+generators.
+
+**Verification.** `scripts/tests/test_codegen.sh` runs the real script in
+disposable repositories: a clean tree passes, a committed stale output fails, and an
+output that was never committed fails. Commit `5ff1d1f`. On the clean real tree at
+`4a076a1`, `scripts/ci/codegen.sh` exited 0 on 2026-10-08.
+
+## IR-277: Tick the policy and runner criteria on configuration and decision-logic evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 acceptance criteria 2, 3, and 13 |
+
+**Choice.** Acceptance criteria 2 (control-file policy) and 3 (fork pull requests run
+on hosted VMs, and no `pull_request` job uses a self-hosted runner) are ticked. Their
+evidence is the offline decision fixtures of `scripts/ci/check-pr-control-changes.py`
+and the workflow fixtures of `scripts/tests/test_workflow_runners.rb`. The live
+parts stay with criterion 13: a fork run on GitHub and the negative pull request.
+
+**Reason.** Both criteria describe what the checked-in workflows and the checker
+decide. The decision fixtures cover each event: commit, reopen, edit, label,
+unlabel, withdrawn approval, and base change. The workflow fixture checks the
+trigger types and the hosted runner labels. The live GitHub behavior cannot be
+tested here, because the remote has no workflows and this task does not push.
+Branch protection that makes `workflow-policy` required is part of criterion 1,
+which stays open. A maintainer should confirm this reading. If the maintainer wants
+a live fork run for criterion 3, that criterion should be reopened.
+
+**Verification.** On `4a076a1`, `scripts/tests/run.sh` passed its 16 policy decision
+fixtures, and `scripts/tests/test_check_pr_control_context.py` passed its 5 context
+fixtures. `scripts/tests/test_workflow_runners.rb` printed 9 PASS lines, one per
+rule and fixture. The counts are in the #062 Notes.
+
+## IR-278: Record that origin exists but holds no branches or workflows
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062 Notes; [issues/README.md](issues/README.md) §5; IR-021; IR-272 |
+
+**Choice.** The #062 brief and IR-021 say this checkout has no Git remote. It does
+have `origin`, set to `https://github.com/uakihir0/apkrun`. Read-only `gh` queries
+on 2026-10-08 found no branches, no workflows, no `ci-policy-approved` label, and no
+open pull requests, and `main` returns "Branch not found". This task did not push
+and did not change any remote setting. The #062 Notes and the progress row describe
+the remote as empty, not absent.
+
+**Reason.** The live GitHub run, branch protection, and the negative pull request
+cannot be verified until a branch is pushed, and the brief forbids pushing here.
+Recording the actual state lets the maintainer confirm that this is the intended
+remote before anything is pushed.
+
+**Verification.** `git remote -v` lists `origin`. `gh api repos/uakihir0/apkrun/branches`
+returned no branch names. `gh api repos/uakihir0/apkrun/actions/workflows` returned
+no workflows. `gh api repos/uakihir0/apkrun/labels` returned ten GitHub default
+labels and no `ci-policy-approved`. `gh api repos/uakihir0/apkrun/pulls?state=open`
+returned zero pull requests.

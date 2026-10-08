@@ -181,6 +181,20 @@ elif mode == "target-owner-path-mismatch":
     moved_module.write_text("import RuntimeAPI\n" + moved_module.read_text())
 elif mode == "forbidden-import":
     diagnostics_source.write_text("@_implementationOnly import RuntimeCore\n" + diagnostics_source.read_text())
+elif mode == "documented-edge-removed":
+    # The checker must read the allowed graph from modules.md. Rewriting the
+    # VirtioDeviceCore row to depend only on RuntimeAPI keeps every module row
+    # but makes the real manifest edge VirtioDeviceCore -> DiagnosticsCore
+    # forbidden. Deleting the row would fail the row-count guard instead.
+    modules_path = graph / "modules.md"
+    modules_text = modules_path.read_text(encoding="utf-8")
+    old_row = "VirtioDeviceCore         → DiagnosticsCore\n"
+    if modules_text.count(old_row) != 1:
+        raise SystemExit("could not rewrite the VirtioDeviceCore row in modules.md")
+    modules_path.write_text(
+        modules_text.replace(old_row, "VirtioDeviceCore         → RuntimeAPI\n"),
+        encoding="utf-8",
+    )
 elif mode != "valid":
     raise SystemExit(f"unknown module dependency fixture: {mode}")
 

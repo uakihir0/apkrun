@@ -20,6 +20,8 @@ ruby "$script_dir/test_workflow_runners.rb" "$repo_root"
 "$script_dir/test_make_test_disks.sh"
 "$script_dir/test_network_error_classification.sh"
 "$script_dir/test_codegen.sh"
+"$script_dir/test_check_format.sh"
+"$script_dir/test_run_checks_coverage.sh"
 
 expect_pass() {
     local name="$1"
@@ -1089,6 +1091,9 @@ expect_module_pass "valid graph" "$valid_module_root"
 
 forbidden_edge_root="$(new_module_fixture forbidden-edge)"
 expect_module_fail "forbidden target edge" "DiagnosticsCore -> RuntimeAPI" "$forbidden_edge_root"
+
+documented_edge_root="$(new_module_fixture documented-edge-removed)"
+expect_module_fail "edge missing from modules.md" "forbidden dependency edge 'VirtioDeviceCore -> DiagnosticsCore'.*modules.md" "$documented_edge_root"
 
 forbidden_import_root="$(new_module_fixture forbidden-import)"
 expect_module_fail "forbidden implementation-only import" "forbidden import edge 'DiagnosticsCore -> RuntimeCore'" "$forbidden_import_root"

@@ -12,6 +12,8 @@ Images/tools/**/__pycache__/
 __pycache__/
 ThirdParty/out/
 Guest/build/
+Guest/**/build/
+Guest/.gradle/
 Guest/local.properties
 Tests/Fixtures/AndroidApps/out/
 Tests/Fixtures/AndroidApps/local.properties

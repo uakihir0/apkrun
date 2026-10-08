@@ -1,0 +1,23 @@
+# Versions of the Kotlin guest build (coding-conventions.md §8, environment-setup.md §2.5).
+# protobuf-javalite and the protoc artifact use the same protobuf release as protoc in
+# scripts/tool-versions.env (PROTOC_VERSION 31.1 is protobuf 4.31.1).
+
+[versions]
+agp = "9.4.1"
+coroutines = "1.11.0"
+junit = "4.13.2"
+ktfmt = "0.64"
+protobuf = "4.31.1"
+protobufPlugin = "0.10.0"
+
+[libraries]
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+ktfmt = { module = "com.facebook:ktfmt", version.ref = "ktfmt" }
+protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
+protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

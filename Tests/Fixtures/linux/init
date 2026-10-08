@@ -664,11 +664,11 @@ if [ -n "$power_monitor_pid" ]; then
 fi
 wait_for_drm_path() {
     drm_wait_path=$1
-    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
         if [ -e "$drm_wait_path" ]; then
             return 0
         fi
-        sleep 0.1
+        sleep 1
     done
     return 1
 }
@@ -725,13 +725,14 @@ run_gpu_test() {
 }
 
 run_gpu_hotplug_test() {
-    for attempt in $(seq 1 300); do
+    # busybox has no seq applet, and whole-second sleeps keep the loop meaningful.
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
         gpu_hotplug_status=$(cat /sys/class/drm/card0-Virtual-2/status 2>/dev/null)
         if [ "$gpu_hotplug_status" = connected ]; then
-            printf 'APKRUN-TEST: gpu-hotplug ok scanout1=connected after about %s tenths of a second\n' "$attempt"
+            printf 'APKRUN-TEST: gpu-hotplug ok scanout1=connected after about %s seconds\n' "$attempt"
             return 0
         fi
-        sleep 0.1
+        sleep 1
     done
     printf 'APKRUN-TEST: gpu-hotplug fail scanout1=%s after 30 seconds without a display event\n' \
         "$gpu_hotplug_status"

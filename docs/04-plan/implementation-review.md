@@ -8788,3 +8788,34 @@ checkout has no `apk` tool to check Alpine's package signature. The SHA-256 valu
 are therefore trust-on-first-use over HTTPS, checked against the index for size
 and control checksum. A maintainer should confirm them against the Alpine signing
 key before the bump is accepted.
+
+## IR-259: Accept only the modes the EDID detailed timing and range descriptor can express
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.4; [IR-252](#ir-252-edid-timing-and-range-choices) |
+
+**Choice.** `DisplayMode.isSupported` now also requires that the CVT
+reduced-blanking timing of the mode fits the 16-bit detailed-timing clock
+(655.35 MHz) and that its horizontal frequency lies in the 30–255 kHz range of
+the range limits descriptor. Modes outside that check are rejected when a
+scanout is enabled, not when the guest asks for its EDID. Two accepted modes
+change as a result: `4095x4095@60` (about 1051 MHz) is rejected, and
+`4095x4095@24` is accepted. `1024x768@24` (about 18.8 kHz) is also rejected.
+The EDID bytes do not change, so the golden files stay the same.
+
+**Reason.** Before this change, `isSupported` accepted modes that the EDID
+generator then refused. An enabled scanout then reported a connector change the
+guest could not read, and GET_EDID returned an error. The range descriptor also
+claimed that every accepted mode lies within its limits, which was false for
+some modes. Rejecting an inexpressible mode keeps the advertised EDID
+truthful. The alternative was to widen the descriptor's horizontal minimum to
+about 1 kHz, but that changes the golden EDID bytes for every mode. It also
+accepts a 24 Hz 768-line mode that no standard range descriptor covers well.
+A maintainer may prefer that alternative, which would then change the golden
+files.
+
+**Verification.** `ScanoutTableTests` checks the four cases above. `GraphicsCoreTests`
+passes 69 tests, including the golden EDID tests, which are unchanged.

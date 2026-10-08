@@ -50,6 +50,7 @@ public struct DisplayMode: Equatable, Sendable, CustomStringConvertible {
             && (1...4095).contains(heightPixels)
             && (24...120).contains(refreshHz)
             && (1...1_200).contains(dotsPerInch)
+            && EDIDGenerator.expresses(self)
     }
 
     /// The mode as `WIDTHxHEIGHT@HZ`.

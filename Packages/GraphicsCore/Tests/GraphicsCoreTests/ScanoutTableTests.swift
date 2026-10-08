@@ -64,7 +64,13 @@ private func scanout(_ index: Int) throws -> ScanoutID {
 
 @Test func displayModeLimitsMatchTheEDIDRules() {
     #expect(DisplayMode.testDefault.isSupported)
-    #expect(DisplayMode(widthPixels: 4095, heightPixels: 4095, refreshHz: 60, dotsPerInch: 160).isSupported)
+    // 4095x4095 at 60 Hz needs about 1051 MHz, over the 655.35 MHz detailed-timing limit.
+    #expect(DisplayMode(widthPixels: 4095, heightPixels: 4095, refreshHz: 24, dotsPerInch: 160).isSupported)
+    #expect(!DisplayMode(widthPixels: 4095, heightPixels: 4095, refreshHz: 60, dotsPerInch: 160).isSupported)
+    // 1x4095 at 120 Hz has about 520 kHz horizontal, over the 255 kHz range limit.
+    #expect(!DisplayMode(widthPixels: 1, heightPixels: 4095, refreshHz: 120, dotsPerInch: 160).isSupported)
+    // 1024x768 at 24 Hz has about 18.8 kHz horizontal, under the 30 kHz range limit.
+    #expect(!DisplayMode(widthPixels: 1024, heightPixels: 768, refreshHz: 24, dotsPerInch: 160).isSupported)
     #expect(!DisplayMode(widthPixels: 4096, heightPixels: 768, refreshHz: 60, dotsPerInch: 160).isSupported)
     #expect(!DisplayMode(widthPixels: 0, heightPixels: 768, refreshHz: 60, dotsPerInch: 160).isSupported)
     #expect(!DisplayMode(widthPixels: 1024, heightPixels: 768, refreshHz: 0, dotsPerInch: 160).isSupported)

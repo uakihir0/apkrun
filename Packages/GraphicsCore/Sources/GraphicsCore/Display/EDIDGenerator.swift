@@ -15,7 +15,8 @@ enum EDIDGenerator {
     ///
     /// Throws `GraphicsFailure.modeUnsupported` when the mode is outside the
     /// EDID limits: a size over 4095 pixels, a density that gives a size over
-    /// 4095 mm, or a pixel clock that the 16-bit descriptor cannot hold.
+    /// 4095 mm, a pixel clock that the 16-bit descriptor cannot hold, or a horizontal
+    /// frequency outside the range limits descriptor.
     static func make(scanout: ScanoutID, mode: DisplayMode) throws(GraphicsFailure) -> [UInt8] {
         guard mode.isSupported else {
             throw .modeUnsupported(mode: mode)
@@ -57,6 +58,18 @@ enum EDIDGenerator {
         return edid
     }
 
+    /// Whether the reduced-blanking timing of `mode` fits the detailed timing field and the
+    /// horizontal frequency range that `rangeLimitBytes` advertises.
+    static func expresses(_ mode: DisplayMode) -> Bool {
+        guard let timing = try? reducedBlankingTiming(for: mode, widthMM: 0, heightMM: 0) else {
+            return false
+        }
+        let horizontalTotal = timing.hActive + timing.hBlank
+        let horizontalHertz = timing.pixelClock10kHz * 10_000 / horizontalTotal
+        let rangeHertz = (horizontalRangeKHz.lowerBound * 1_000)...(horizontalRangeKHz.upperBound * 1_000)
+        return rangeHertz.contains(horizontalHertz)
+    }
+
     /// The CVT reduced-blanking timing of one mode, in pixels, lines, and clock units.
     struct Timing: Equatable {
         var pixelClock10kHz: Int
@@ -82,6 +95,8 @@ enum EDIDGenerator {
     private static let reducedMinimumVerticalBlankMicroseconds = 460.0
     /// The pixel clock steps down to 250 kHz, which is 25 units of 10 kHz.
     private static let pixelClockStep10kHz = 25
+    /// The horizontal frequency range in the range limits descriptor, in kHz.
+    private static let horizontalRangeKHz = 30...255
 
     static func reducedBlankingTiming(
         for mode: DisplayMode,
@@ -193,7 +208,8 @@ enum EDIDGenerator {
     private static func rangeLimitBytes() -> [UInt8] {
         let maximumPixelClockIn10MHz = 66  // 655.35 MHz, the largest clock a detailed timing holds
         return [0x00, 0x00, 0x00, 0xFD, 0x00]
-            + [24, 120, 30, 255, UInt8(maximumPixelClockIn10MHz), 0x00]
+            + [24, 120, UInt8(horizontalRangeKHz.lowerBound), UInt8(horizontalRangeKHz.upperBound)]
+            + [UInt8(maximumPixelClockIn10MHz), 0x00]
             + [0x0A] + Array(repeating: 0x20, count: 6)
     }
 

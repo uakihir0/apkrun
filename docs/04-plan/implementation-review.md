@@ -9541,3 +9541,32 @@ step 8's stderr copy is required before #003 closes.
 with `runtime.devLinuxCheckFailed`. Stdout contained
 `APKRUN-TEST: nosuchcheck fail unsupported test in this guest build`, and stderr
 had only the catalog error and the hint.
+
+## IR-287: Record the 8-vCPU default variant as a repeat, not a CPU test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/default-20261008-diagnosis.txt` (repeat run section); [M01](issues/M01-android-bring-up.md) #064 Notes |
+
+**Choice.** Treat the run intended as an 8-vCPU variant as a repeat of the
+4-vCPU `default` profile. Its record is kept as a diagnostic repeat, and its
+result is reported as run-to-run variance. The vCPU-count hypothesis stays open.
+A retry must pass the count to `cvd start` as well as `cvd create`, and confirm
+`cpus` in the saved configuration before its result is read.
+
+**Reason.** The scratch copy changed `cvd create --cpus` from 4 to 8, but the
+saved configuration and the launcher log both record 4 vCPUs (`"cpus" : 4`,
+`--cpus=4`). Interpreting the run as a CPU-count test would be wrong. The repeat
+is still useful: under the same flags, its zygote start came at guest uptime
+466 seconds, against 233 seconds in E1, and PackageManager became ready at 2473
+seconds, against 1467 seconds. So the 4-vCPU timeline varies by about 1.7 times
+between runs, and any single-run timing in the diagnosis carries that spread.
+
+**Verification.** `cuttlefish_config.json` and `launcher.log` of the record
+were read directly: `"cpus" : 4` at line 103, and `--cpus=4` at launcher lines
+1690 and 1762. The E2 and E1 boot markers come from each run's `host-logcat.txt`
+(`boot_progress_*` and `SystemServer` lines). E2 reached PackageManager scanning
+at the 3000-second deadline, so it recorded no Watchdog kill. The record's
+SHA-256 values are in the local store manifest described in the receipt.

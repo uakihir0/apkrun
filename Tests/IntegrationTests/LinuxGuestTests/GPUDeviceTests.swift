@@ -56,7 +56,10 @@ final class GPUDeviceTests: XCTestCase {
             )
             XCTAssertEqual(result.records.last, .done)
             // The guest's own timing shows when the DRM connector reported the change (R-01).
-            print("R-01 gpu-hotplug: \(try okDetail(named: "gpu-hotplug", in: result.records))")
+            let detail = try okDetail(named: "gpu-hotplug", in: result.records)
+            let attachment = XCTAttachment(string: "R-01 gpu-hotplug: \(detail)")
+            attachment.lifetime = .keepAlways
+            add(attachment)
         } catch LinuxGuestHarness.HarnessFailure.guestCheckFailed(let name, let detail) where name == "gpu-hotplug" {
             // R-01 negative result: a config-space update did not raise a guest display event.
             XCTFail("R-01: scanout 1 did not reach the guest DRM connector: \(detail)")

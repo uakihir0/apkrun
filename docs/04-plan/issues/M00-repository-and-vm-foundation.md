@@ -436,15 +436,15 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 
 ### Acceptance criteria
 
-- [ ] The T0 and T1 tests above pass. The logging lint runs in CI; the compile-fail tests run on a real Apple Silicon Mac before merge.
-- [ ] `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §11 step 9).
-- [ ] A deliberately invalid CLI argument prints `error:`, `hint:`, and `code:` lines on stderr and exits 64.
-- [ ] `errors.json` holds every `vm.*` and `cli.*` entry of the catalog. `ErrorCatalog.generated.swift` and the marked catalog tables are current.
-- [ ] List errors preserve item order, repeated codes, and each item's typed parameters; CLI, GUI, and JSON hints render each item with its own values.
-- [ ] Logging a `Sensitive` value, or an interpolation without privacy, does not compile.
-- [ ] Every log entry made inside an `OperationContext` carries `op=` with the first 8 hex digits.
-- [ ] `apkrun logs` falls back to the mirrors and says so on stderr when `log` fails or returns nothing within 30 s.
-- [ ] `DiagnosticsContext.testing()` is available to other modules' tests through `DiagnosticsCoreTestSupport`.
+- [x] The T0 and T1 tests above pass. The logging lint runs in CI; the compile-fail tests run on a real Apple Silicon Mac before merge.
+- [x] `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §11 step 9).
+- [x] A deliberately invalid CLI argument prints `error:`, `hint:`, and `code:` lines on stderr and exits 64.
+- [x] `errors.json` holds every `vm.*` and `cli.*` entry of the catalog. `ErrorCatalog.generated.swift` and the marked catalog tables are current.
+- [x] List errors preserve item order, repeated codes, and each item's typed parameters; CLI, GUI, and JSON hints render each item with its own values.
+- [x] Logging a `Sensitive` value, or an interpolation without privacy, does not compile.
+- [x] Every log entry made inside an `OperationContext` carries `op=` with the first 8 hex digits.
+- [x] `apkrun logs` falls back to the mirrors and says so on stderr when `log` fails or returns nothing within 30 s.
+- [x] `DiagnosticsContext.testing()` is available to other modules' tests through `DiagnosticsCoreTestSupport`.
 - [ ] OQ-04 is settled and the result is recorded.
 
 ### Notes

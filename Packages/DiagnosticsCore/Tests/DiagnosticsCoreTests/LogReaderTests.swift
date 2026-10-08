@@ -776,9 +776,11 @@ import Testing
 }
 
 @Test func logReaderKeepsBufferedMatchesWhenTheHistoryWindowEvictsThem() async {
+    // Stamp the rows ahead of the clock, as the unseen-boundary test does. On a slow
+    // runner the checkpoint can pass rows stamped at test start and drop them.
     let runner = EvictedBufferedReplayLogCommandRunner(
         recordCount: 4_096,
-        timestamp: ISO8601DateFormatter().string(from: .now)
+        timestamp: ISO8601DateFormatter().string(from: .now.addingTimeInterval(60))
     )
     let reader = LogReader(
         paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),

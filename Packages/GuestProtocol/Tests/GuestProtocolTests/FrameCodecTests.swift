@@ -159,6 +159,31 @@ private func bodyKind(of envelope: GPEnvelope) -> String? {
     #expect(decoder.pendingByteCount == 0)
 }
 
+@Test func streamingDecoderReadsManySmallFramesFromOneBufferAndKeepsAPartialTail() throws {
+    // 200 000 frames of 100 bytes arrive in one append, a 20 MB buffer. Each frame is consumed
+    // without copying the rest of the buffer.
+    let frame = try FrameCodec.frame(body: Data(count: 96))
+    let count = 200_000
+    var stream = Data(capacity: frame.count * count)
+    for _ in 0..<count {
+        stream.append(frame)
+    }
+    stream.append(frame.prefix(3))
+
+    var decoder = FrameDecoder()
+    decoder.append(stream)
+    var bodies = 0
+    while try decoder.nextBody() != nil {
+        bodies += 1
+    }
+    #expect(bodies == count)
+    #expect(decoder.pendingByteCount == 3)
+
+    decoder.append(frame.dropFirst(3))
+    #expect(try decoder.nextBody() == Data(count: 96))
+    #expect(decoder.pendingByteCount == 0)
+}
+
 @Test func decodeRejectsTrailingBytesAfterTheFrame() throws {
     var frame = try GoldenFrames.frame(named: "valid-cancel")
     frame.append(0x00)

@@ -148,6 +148,26 @@ class FrameCodecTest {
         assertEquals(0, decoder.pendingByteCount)
     }
 
+    @Test(timeout = 20_000)
+    fun `the frame decoder reads many small frames from one buffer in linear time`() {
+        // 200 000 frames of 100 bytes arrive in one append, a 20 MB buffer. Copying the rest of the
+        // buffer for each frame would copy about 2 TB, far beyond the timeout.
+        val frame = FrameCodec.frame(ByteArray(96))
+        val count = 200_000
+        val stream = ByteArray(frame.size * count)
+        for (index in 0 until count) {
+            frame.copyInto(stream, index * frame.size)
+        }
+        val decoder = FrameDecoder()
+        decoder.append(stream)
+        var bodies = 0
+        while (decoder.nextBody() != null) {
+            bodies++
+        }
+        assertEquals(count, bodies)
+        assertEquals(0, decoder.pendingByteCount)
+    }
+
     @Test
     fun `the frame decoder rejects an oversize length before the body arrives`() {
         val decoder = FrameDecoder()

@@ -5144,7 +5144,19 @@ def test_boot_observer_samples_on_a_background_monotonic_schedule(
     )
 
     observer.start()
-    time.sleep(0.075)
+    # Wait for the samples rather than for a fixed time: a loaded CI runner can
+    # delay the sampler thread well past a 75 ms sleep. The deadline is generous,
+    # and the assertion below still fails if no schedule runs.
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            recorded = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+        except ValueError:
+            # The sampler may be part-way through a line.
+            recorded = []
+        if len(recorded) >= 3:
+            break
+        time.sleep(0.01)
     observer.close()
 
     memory = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]

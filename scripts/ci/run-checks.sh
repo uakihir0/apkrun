@@ -15,6 +15,7 @@ checks+=(
     "scripts/check-todos.sh"
     "scripts/check-format.sh"
     "scripts/check-lock.sh"
+    "scripts/check-protos.sh"
 )
 
 names=()

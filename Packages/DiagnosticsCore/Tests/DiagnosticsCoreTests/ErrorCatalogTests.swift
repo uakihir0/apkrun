@@ -1,6 +1,7 @@
-import DiagnosticsCore
 import Foundation
 import Testing
+
+@testable import DiagnosticsCore
 
 @Test func errorCatalogHasLocalizedEnglishTextAndDeclaredPlaceholders() {
     let expectedCodes = Set(
@@ -37,7 +38,11 @@ import Testing
             ].map { "graphics.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
-    #expect(ErrorCatalog.entries.values.allSatisfy { $0.message?["en"] != nil })
+    #expect(
+        ErrorCatalog.entries.values.allSatisfy {
+            $0.transparent || $0.message?["en"] != nil
+        }
+    )
 
     let healthCheckIDs: Set<String> = [
         "vm.state",
@@ -160,7 +165,7 @@ import Testing
     #expect(gui.copyDetails == details)
 }
 
-@Test func errorPresenterListsConfigurationItemsAndMarksWarnings() {
+@Test func errorPresenterListsConfigurationItemsAndMarksWarnings() throws {
     let presenter = ErrorPresenter(locale: Locale(identifier: "en"))
     let listOutput = presenter.cli(
         CatalogFixtureError.configuration("kernelMissing,diskMissing")
@@ -172,8 +177,16 @@ import Testing
     #expect(
         guiOutput.hints.map(\.message) == [
             "Files that Android needs are missing, or APKRun can't read or write them.",
-            "Files that Android needs are missing, or APKRun can't read or write them.",
+            "Android's configuration is not valid.",
         ])
+    #expect(!guiOutput.hints.contains { $0.message.contains("The  disk") })
+    let jsonText = presenter.json(CatalogFixtureError.configuration("kernelMissing,diskMissing"))
+    let fallbackJSON = try #require(
+        JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+    )
+    let fallbackError = try #require(fallbackJSON["error"] as? [String: Any])
+    let fallbackHints = try #require(fallbackError["hints"] as? [[String: String]])
+    #expect(fallbackHints.map { $0["message"] } == guiOutput.hints.map(\.message))
     let hintCount =
         listOutput
         .split(separator: "\n")
@@ -196,6 +209,163 @@ import Testing
     )
     #expect(warning.hasPrefix("warning:"))
     #expect(warning.contains("code: cli.versionSkew"))
+}
+
+@Test func errorPresenterUsesOrderedListItemParametersForEverySurface() throws {
+    let parent = ErrorCatalogEntry(
+        code: "vm.configurationInvalid",
+        parameters: ["items"],
+        message: ["en": "Android's configuration isn't valid."],
+        remediation: ["en": "Correct the listed values."],
+        action: RemediationAction.none,
+        cliExit: .code(1)
+    )
+    let child = ErrorCatalogEntry(
+        code: "vm.cpuCountOutOfRange",
+        parameters: ["requested"],
+        message: ["en": "The requested CPU count is {requested}."],
+        remediation: nil,
+        action: nil,
+        cliExit: .code(70)
+    )
+    let variantEntry = try #require(ErrorCatalog.entry(for: "cli.fileNotAccessible"))
+    let entries = [
+        parent.code: parent,
+        child.code: child,
+        variantEntry.code: variantEntry,
+    ]
+    let error = CatalogFixtureError.configurationList(
+        names: "cpuCountOutOfRange,cpuCountOutOfRange",
+        items: [
+            ErrorListItem(
+                selector: .errorCode("vm.cpuCountOutOfRange"),
+                parameters: ["requested": .count(2)]
+            ),
+            ErrorListItem(
+                selector: .errorCode("vm.cpuCountOutOfRange"),
+                parameters: ["requested": .count(8)]
+            ),
+            ErrorListItem(
+                selector: .variant(code: "cli.fileNotAccessible", key: "notFound"),
+                parameters: ["file": .fileName("missing.apk")]
+            ),
+        ]
+    )
+    let presenter = ErrorPresenter(locale: Locale(identifier: "en"), entries: entries)
+
+    let cli = presenter.cli(error)
+    #expect(cli.contains("hint: vm.cpuCountOutOfRange: The requested CPU count is 2."))
+    #expect(cli.contains("hint: vm.cpuCountOutOfRange: The requested CPU count is 8."))
+    #expect(
+        cli.contains("hint: cli.fileNotAccessible / notFound: missing.apk doesn't exist.")
+    )
+    let firstItem = try #require(cli.range(of: "count is 2."))
+    let secondItem = try #require(cli.range(of: "count is 8."))
+    #expect(firstItem.lowerBound < secondItem.lowerBound)
+
+    let gui = presenter.gui(error)
+    #expect(
+        gui.hints.map(\.code) == [
+            "vm.cpuCountOutOfRange",
+            "vm.cpuCountOutOfRange",
+            "cli.fileNotAccessible / notFound",
+        ])
+    #expect(
+        gui.hints.map(\.message) == [
+            "The requested CPU count is 2.",
+            "The requested CPU count is 8.",
+            "missing.apk doesn't exist.",
+        ])
+
+    let jsonText = presenter.json(error)
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+    )
+    let errorObject = try #require(json["error"] as? [String: Any])
+    let hints = try #require(errorObject["hints"] as? [[String: String]])
+    #expect(
+        hints.map { $0["message"] } == [
+            "The requested CPU count is 2.",
+            "The requested CPU count is 8.",
+            "missing.apk doesn't exist.",
+        ])
+}
+
+@Test func errorPresenterFallsBackWhenOrderedListItemsLackRequiredValues() throws {
+    let error = CatalogFixtureError.configurationList(
+        names: "diskMissing,fileNotAccessible",
+        items: [
+            ErrorListItem(selector: .errorCode("vm.diskMissing")),
+            ErrorListItem(
+                selector: .variant(code: "cli.fileNotAccessible", key: "notFound")
+            ),
+        ]
+    )
+    let presenter = ErrorPresenter(locale: Locale(identifier: "en"))
+    let fallback = "Android's configuration is not valid."
+
+    let cli = presenter.cli(error)
+    #expect(cli.contains("hint: vm.diskMissing: \(fallback)"))
+    #expect(cli.contains("hint: cli.fileNotAccessible / notFound: \(fallback)"))
+    #expect(!cli.contains("The  disk"))
+    #expect(!cli.contains("hint: cli.fileNotAccessible / notFound:  doesn't exist."))
+
+    let gui = presenter.gui(error)
+    #expect(gui.hints.map(\.message) == [fallback, fallback])
+
+    let jsonText = presenter.json(error)
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+    )
+    let errorObject = try #require(json["error"] as? [String: Any])
+    let hints = try #require(errorObject["hints"] as? [[String: String]])
+    #expect(hints.map { $0["message"] } == [fallback, fallback])
+}
+
+@Test func transparentCatalogEntriesInheritMessageRemediationActionAndExit() throws {
+    var entries = ErrorCatalog.entries
+    entries["cli.versionSkew"] = ErrorCatalogEntry(
+        code: "cli.versionSkew",
+        parameters: ["version", "found"],
+        message: ["en": "Version {version} differs from {found}."],
+        remediation: ["en": "Update APKRun."],
+        action: .updateAPKRun,
+        cliExit: .code(0)
+    )
+    entries["runtime.transparentFixture"] = ErrorCatalogEntry(
+        code: "runtime.transparentFixture",
+        parameters: [],
+        message: nil,
+        remediation: nil,
+        action: nil,
+        cliExit: .cause,
+        transparent: true
+    )
+    let cause = CatalogCLIFixtureError.versionSkew(version: "1.0", found: "1.1")
+    let error = CatalogTransparentOuterError(innerError: cause)
+
+    #expect(ErrorCatalog.cliExit(for: error, entries: entries) == 0)
+    let source = ErrorCatalog.presentationSource(for: error, entries: entries)
+    #expect(source.error.qualifiedCode == "cli.versionSkew")
+    #expect(source.entry.message?["en"] != nil)
+
+    let presenter = ErrorPresenter(locale: Locale(identifier: "en"), entries: entries)
+    let cli = presenter.cli(error)
+    #expect(cli.hasPrefix("warning:"))
+    #expect(cli.contains("code: runtime.transparentFixture"))
+
+    let gui = presenter.gui(error)
+    #expect(gui.title == "Version 1.0 differs from 1.1.")
+    #expect(gui.body == "Update APKRun.")
+    #expect(gui.action == .updateAPKRun)
+
+    let jsonText = presenter.json(error)
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+    )
+    let errorObject = try #require(json["error"] as? [String: Any])
+    #expect(errorObject["code"] as? String == "runtime.transparentFixture")
+    #expect(errorObject["message"] as? String == gui.title)
 }
 
 @Test func errorPresenterInheritsCauseRemediationAndEscapesTerminalControls() {
@@ -254,6 +424,7 @@ private func placeholders(in text: String) -> Set<String> {
 private indirect enum CatalogFixtureError: APKRunError {
     case startFailed
     case configuration(String)
+    case configurationList(names: String, items: [ErrorListItem])
 
     static var domain: ErrorDomain {
         .vm
@@ -263,7 +434,7 @@ private indirect enum CatalogFixtureError: APKRunError {
         switch self {
         case .startFailed:
             "startFailed"
-        case .configuration:
+        case .configuration, .configurationList:
             "configurationInvalid"
         }
     }
@@ -272,11 +443,19 @@ private indirect enum CatalogFixtureError: APKRunError {
         switch self {
         case .configuration(let items):
             ["items": .text(items)]
+        case .configurationList(let names, _):
+            ["items": .text(names)]
         case .startFailed:
             [:]
         }
     }
 
+    var listItems: [ErrorListItem] {
+        guard case .configurationList(_, let items) = self else {
+            return []
+        }
+        return items
+    }
 }
 
 private enum CatalogCLIFixtureError: APKRunError {
@@ -325,6 +504,16 @@ private struct CatalogOuterError: APKRunError {
     static var domain: ErrorDomain { .runtime }
 
     var code: String { "internal" }
+
+    var cause: (any APKRunError)? { innerError }
+}
+
+private struct CatalogTransparentOuterError: APKRunError {
+    let innerError: any APKRunError
+
+    static var domain: ErrorDomain { .runtime }
+
+    var code: String { "transparentFixture" }
 
     var cause: (any APKRunError)? { innerError }
 }

@@ -125,19 +125,28 @@ public enum ErrorCatalog {
 
     /// Returns the CLI exit code for a typed error, resolving transparent and unknown codes.
     public static func cliExit(for error: any APKRunError) -> Int {
-        cliExit(for: error, visited: [])
+        cliExit(for: error, entries: entries)
+    }
+
+    static func cliExit(
+        for error: any APKRunError,
+        entries: [String: ErrorCatalogEntry]
+    ) -> Int {
+        cliExit(for: error, visited: [], entries: entries)
     }
 
     /// Resolves an error to the first known error and entry that supply user-facing text.
     static func presentationSource(
-        for error: any APKRunError
+        for error: any APKRunError,
+        entries: [String: ErrorCatalogEntry] = ErrorCatalog.entries
     ) -> (error: any APKRunError, entry: ErrorCatalogEntry) {
-        presentationSource(for: error, visited: [])
+        presentationSource(for: error, visited: [], entries: entries)
     }
 
     private static func cliExit(
         for error: any APKRunError,
-        visited: Set<String>
+        visited: Set<String>,
+        entries: [String: ErrorCatalogEntry]
     ) -> Int {
         guard !visited.contains(error.qualifiedCode) else {
             return 1
@@ -145,11 +154,11 @@ public enum ErrorCatalog {
         var visited = visited
         visited.insert(error.qualifiedCode)
         guard let entry = entries[error.qualifiedCode] else {
-            return error.cause.map { cliExit(for: $0, visited: visited) } ?? 1
+            return error.cause.map { cliExit(for: $0, visited: visited, entries: entries) } ?? 1
         }
 
         if entry.transparent || entry.cliExit == .cause {
-            return error.cause.map { cliExit(for: $0, visited: visited) } ?? 1
+            return error.cause.map { cliExit(for: $0, visited: visited, entries: entries) } ?? 1
         }
 
         if entry.cliExitRule == .allConfigurationItemsInternalOrFailure {
@@ -178,12 +187,13 @@ public enum ErrorCatalog {
         if case .code(let code) = entry.cliExit {
             return code
         }
-        return error.cause.map { cliExit(for: $0, visited: visited) } ?? 1
+        return error.cause.map { cliExit(for: $0, visited: visited, entries: entries) } ?? 1
     }
 
     private static func presentationSource(
         for error: any APKRunError,
-        visited: Set<String>
+        visited: Set<String>,
+        entries: [String: ErrorCatalogEntry]
     ) -> (error: any APKRunError, entry: ErrorCatalogEntry) {
         guard !visited.contains(error.qualifiedCode) else {
             return (error, unknownEntry)
@@ -194,7 +204,7 @@ public enum ErrorCatalog {
         if let cause = error.cause {
             var visited = visited
             visited.insert(error.qualifiedCode)
-            return presentationSource(for: cause, visited: visited)
+            return presentationSource(for: cause, visited: visited, entries: entries)
         }
         return (error, unknownEntry)
     }

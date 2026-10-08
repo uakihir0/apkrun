@@ -285,7 +285,7 @@
         "allowed"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android can't use a CPU count of {requested}; the allowed range is {allowed}."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -323,7 +323,7 @@
         "cap"
       ],
       "message": {
-        "en": "The memory set for Android is more than this Mac allows."
+        "en": "Android's memory allocation exceeds this Mac's {cap} limit."
       },
       "remediation": {
         "en": "Choose less memory for Android in Settings → Runtime."
@@ -361,7 +361,7 @@
         "detected"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "The kernel image has an unsupported format ({detected})."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -435,7 +435,7 @@
         "role"
       ],
       "message": {
-        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+        "en": "The {role} disk file is missing."
       },
       "remediation": {
         "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
@@ -455,7 +455,7 @@
         "role"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "The {role} disk uses Android's unsupported sparse image format."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -475,7 +475,7 @@
         "role"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "The {role} disk is listed more than once."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -495,7 +495,7 @@
         "role"
       ],
       "message": {
-        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+        "en": "APKRun can't read the {role} disk."
       },
       "remediation": {
         "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
@@ -515,7 +515,7 @@
         "role"
       ],
       "message": {
-        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+        "en": "APKRun can't write to the {role} disk."
       },
       "remediation": {
         "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
@@ -535,7 +535,7 @@
         "role"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "The {role} disk uses a test-only synchronization mode."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -628,7 +628,7 @@
         "reason"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Custom device {name} is invalid."
       },
       "remediation": {
         "en": "Report the problem. The code identifies the rule that failed."
@@ -1214,11 +1214,9 @@
     },
     {
       "code": "cli.invalidSourceSpec",
-      "parameters": [
-        "argument"
-      ],
+      "parameters": [],
       "message": {
-        "en": "{argument} isn't a valid update source."
+        "en": "This update source isn't valid."
       },
       "remediation": {
         "en": "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them."

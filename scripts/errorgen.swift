@@ -1,4 +1,5 @@
 #!/usr/bin/env swift
+import CoreFoundation
 import Foundation
 
 struct CatalogVariant {
@@ -92,7 +93,8 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         fail("errors.json must have version 1 and an errors array")
     }
 
-    let knownExits: Set<Int> = [0, 1, 4, 5, 64, 69, 70, 75, 130]
+    // Keep this set aligned with the user-facing CLI contract in cli.md §3.3.
+    let knownExits: Set<Int> = [0, 1, 2, 3, 4, 5, 64, 69, 70, 75, 130]
     var entries: [CatalogEntry] = []
     var codes = Set<String>()
     for raw in rawEntries {
@@ -171,7 +173,10 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
             }
         }
 
-        if let fixedExit = cliExit as? Int {
+        if let fixedExit = cliExit as? Int,
+            let number = cliExit as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID()
+        {
             guard knownExits.contains(fixedExit) else {
                 fail("\(code): unsupported cliExit \(fixedExit)")
             }

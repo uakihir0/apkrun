@@ -87,6 +87,33 @@ public enum ErrorParameter: Codable, Equatable, Sendable {
     }
 }
 
+/// Selects the catalog text used to render one item in a list error.
+public enum ErrorListItemSelector: Codable, Equatable, Sendable {
+    /// A fully qualified error code, such as `vm.diskMissing`.
+    case errorCode(String)
+
+    /// A catalog variant, such as `cli.fileNotAccessible` / `notFound`.
+    case variant(code: String, key: String)
+}
+
+/// One ordered, parameterized item carried by a list error.
+public struct ErrorListItem: Codable, Equatable, Sendable {
+    /// The catalog entry or variant used to select this item's text.
+    public let selector: ErrorListItemSelector
+
+    /// Public-safe values used only by this item's templates.
+    public let parameters: [String: ErrorParameter]
+
+    /// Creates one item while preserving its own catalog parameters.
+    public init(
+        selector: ErrorListItemSelector,
+        parameters: [String: ErrorParameter] = [:]
+    ) {
+        self.selector = selector
+        self.parameters = parameters
+    }
+}
+
 /// The safe domain and integer code of a system error.
 public struct UnderlyingError: Codable, Equatable, Sendable {
     /// The system error namespace, without `userInfo` or path-bearing metadata.
@@ -128,6 +155,7 @@ public protocol APKRunError: Error, Sendable {
     static var domain: ErrorDomain { get }
     var code: String { get }
     var parameters: [String: ErrorParameter] { get }
+    var listItems: [ErrorListItem] { get }
     var cause: (any APKRunError)? { get }
     var underlying: UnderlyingError? { get }
 }
@@ -140,6 +168,9 @@ extension APKRunError {
 
     /// Safe catalog parameters, empty unless the error supplies its own values.
     public var parameters: [String: ErrorParameter] { [:] }
+
+    /// Ordered item details, empty unless the error is a list case.
+    public var listItems: [ErrorListItem] { [] }
 
     /// The typed error that caused this error, if any.
     public var cause: (any APKRunError)? { nil }

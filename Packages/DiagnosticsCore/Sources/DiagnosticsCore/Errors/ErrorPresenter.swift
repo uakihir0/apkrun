@@ -65,6 +65,7 @@ public struct ErrorPresenter {
     private let buildInfo: BuildInfo
     private let imageVersion: String
     private let timestamp: Date
+    private let catalogEntries: [String: ErrorCatalogEntry]
 
     /// Creates a presenter using the current build and operation context.
     public init(
@@ -79,11 +80,28 @@ public struct ErrorPresenter {
         self.buildInfo = buildInfo
         self.imageVersion = imageVersion
         self.timestamp = timestamp
+        self.catalogEntries = ErrorCatalog.entries
+    }
+
+    init(
+        locale: Locale = Locale(identifier: "en"),
+        operationID: OperationID? = nil,
+        buildInfo: BuildInfo = .current,
+        imageVersion: String = "unknown",
+        timestamp: Date = Date(),
+        entries: [String: ErrorCatalogEntry]
+    ) {
+        self.locale = locale
+        self.operationID = operationID
+        self.buildInfo = buildInfo
+        self.imageVersion = imageVersion
+        self.timestamp = timestamp
+        self.catalogEntries = entries
     }
 
     /// Renders an error as `error:`, `hint:`, and `code:` lines for stderr.
     public func cli(_ error: any APKRunError) -> String {
-        let source = ErrorCatalog.presentationSource(for: error)
+        let source = ErrorCatalog.presentationSource(for: error, entries: catalogEntries)
         let entry = source.entry
         let contentError = source.error
         let variant = selectedVariant(for: contentError, in: entry)
@@ -92,7 +110,8 @@ public struct ErrorPresenter {
             error: contentError,
             visited: []
         )
-        let heading = ErrorCatalog.cliExit(for: error) == 0 ? "warning" : "error"
+        let heading =
+            ErrorCatalog.cliExit(for: error, entries: catalogEntries) == 0 ? "warning" : "error"
         var lines = ["\(heading): \(message)"]
 
         let listItems = listItems(for: contentError)
@@ -130,7 +149,7 @@ public struct ErrorPresenter {
 
     /// Produces alert content for APKRun.app, the menu bar app, and the launcher.
     public func gui(_ error: any APKRunError) -> PresentedError {
-        let source = ErrorCatalog.presentationSource(for: error)
+        let source = ErrorCatalog.presentationSource(for: error, entries: catalogEntries)
         let entry = source.entry
         let contentError = source.error
         let variant = selectedVariant(for: contentError, in: entry)
@@ -185,7 +204,7 @@ public struct ErrorPresenter {
         }
         var visited = visited
         visited.insert(error.qualifiedCode)
-        let source = ErrorCatalog.presentationSource(for: error)
+        let source = ErrorCatalog.presentationSource(for: error, entries: catalogEntries)
         let entry = source.entry
         let contentError = source.error
         let variant = selectedVariant(for: contentError, in: entry)
@@ -229,7 +248,14 @@ public struct ErrorPresenter {
         for error: any APKRunError,
         in entry: ErrorCatalogEntry
     ) -> ErrorCatalogVariant? {
-        guard case .text(let reason)? = error.parameters["reason"] else {
+        selectedVariant(for: error.parameters, in: entry)
+    }
+
+    private func selectedVariant(
+        for parameters: [String: ErrorParameter],
+        in entry: ErrorCatalogEntry
+    ) -> ErrorCatalogVariant? {
+        guard case .text(let reason)? = parameters["reason"] else {
             return nil
         }
         return entry.variants[reason]
@@ -244,7 +270,7 @@ public struct ErrorPresenter {
         }
         var visited = visited
         visited.insert(error.qualifiedCode)
-        let source = ErrorCatalog.presentationSource(for: error)
+        let source = ErrorCatalog.presentationSource(for: error, entries: catalogEntries)
         if source.error.qualifiedCode != error.qualifiedCode {
             return remediation(for: source.error, visited: visited)
         }
@@ -272,12 +298,67 @@ public struct ErrorPresenter {
     }
 
     private func listItems(for error: any APKRunError) -> [(code: String, message: String)] {
-        guard case .text(let rawItems)? = error.parameters["items"] else {
-            return []
-        }
-        let source = ErrorCatalog.presentationSource(for: error)
+        let source = ErrorCatalog.presentationSource(for: error, entries: catalogEntries)
         let parentEntry = source.entry
         let contentError = source.error
+        if !contentError.listItems.isEmpty {
+            return contentError.listItems.map { item in
+                switch item.selector {
+                case .errorCode(let itemCode):
+                    guard let itemEntry = catalogEntries[itemCode] else {
+                        return (
+                            safeDisplayText(itemCode),
+                            localized(ErrorCatalog.unknownEntry.message) ?? ""
+                        )
+                    }
+                    let variant = selectedVariant(for: item.parameters, in: itemEntry)
+                    let message = localized(variant?.message, fallback: itemEntry.message) ?? ""
+                    let safeMessage = listItemMessage(
+                        message,
+                        parentEntry: parentEntry,
+                        error: contentError,
+                        parameters: item.parameters
+                    )
+                    return (
+                        safeDisplayText(itemCode),
+                        render(
+                            template: safeMessage,
+                            error: contentError,
+                            visited: [],
+                            parameters: item.parameters
+                        )
+                    )
+                case .variant(let itemCode, let key):
+                    guard let itemEntry = catalogEntries[itemCode] else {
+                        return (
+                            safeDisplayText(itemCode),
+                            localized(ErrorCatalog.unknownEntry.message) ?? ""
+                        )
+                    }
+                    let variant = itemEntry.variants[key]
+                    let message = localized(variant?.message, fallback: itemEntry.message) ?? ""
+                    let safeMessage = listItemMessage(
+                        message,
+                        parentEntry: parentEntry,
+                        error: contentError,
+                        parameters: item.parameters
+                    )
+                    return (
+                        "\(safeDisplayText(itemCode)) / \(safeDisplayText(key))",
+                        render(
+                            template: safeMessage,
+                            error: contentError,
+                            visited: [],
+                            parameters: item.parameters
+                        )
+                    )
+                }
+            }
+        }
+
+        guard case .text(let rawItems)? = contentError.parameters["items"] else {
+            return []
+        }
         let domain =
             contentError.qualifiedCode
             .split(separator: ".", maxSplits: 1)
@@ -292,33 +373,75 @@ public struct ErrorPresenter {
                 let itemCode = item.contains(".") ? item : "\(domain).\(item)"
                 if let variant = parentEntry.variants[item] {
                     let message = localized(variant.message, fallback: parentEntry.message) ?? ""
+                    let safeMessage = listItemMessage(
+                        message,
+                        parentEntry: parentEntry,
+                        error: contentError,
+                        parameters: contentError.parameters
+                    )
                     return (
                         "\(parentEntry.code) / \(safeDisplayText(item))",
-                        render(template: message, error: contentError, visited: [])
+                        render(template: safeMessage, error: contentError, visited: [])
                     )
                 }
-                guard let itemEntry = ErrorCatalog.entry(for: itemCode) else {
+                guard let itemEntry = catalogEntries[itemCode] else {
                     return (safeDisplayText(itemCode), localized(ErrorCatalog.unknownEntry.message) ?? "")
                 }
                 let variant = selectedVariant(for: contentError, in: itemEntry)
                 let message = localized(variant?.message, fallback: itemEntry.message) ?? ""
+                let safeMessage = listItemMessage(
+                    message,
+                    parentEntry: parentEntry,
+                    error: contentError,
+                    parameters: contentError.parameters
+                )
                 return (
                     safeDisplayText(itemCode),
-                    render(template: message, error: contentError, visited: [])
+                    render(template: safeMessage, error: contentError, visited: [])
                 )
             }
+    }
+
+    private func listItemMessage(
+        _ message: String,
+        parentEntry: ErrorCatalogEntry,
+        error: any APKRunError,
+        parameters: [String: ErrorParameter]
+    ) -> String {
+        let pattern = #"\{([A-Za-z][A-Za-z0-9]*)\}"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return message
+        }
+        let source = message as NSString
+        let matches = expression.matches(
+            in: message,
+            range: NSRange(location: 0, length: source.length)
+        )
+        let missingValue = matches.contains { match in
+            guard let range = Range(match.range(at: 1), in: message) else {
+                return false
+            }
+            let name = String(message[range])
+            return name == "cause" ? error.cause == nil : parameters[name] == nil
+        }
+        guard missingValue else {
+            return message
+        }
+        return localized(parentEntry.message) ?? localized(ErrorCatalog.unknownEntry.message) ?? ""
     }
 
     private func render(
         template: String,
         error: any APKRunError,
-        visited: Set<String>
+        visited: Set<String>,
+        parameters itemParameters: [String: ErrorParameter]? = nil
     ) -> String {
         guard !visited.contains(error.qualifiedCode) else {
             return template
         }
         var visited = visited
         visited.insert(error.qualifiedCode)
+        let parameters = itemParameters ?? error.parameters
         let pattern = #"\{([A-Za-z][A-Za-z0-9]*)\}"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else {
             return template
@@ -339,7 +462,10 @@ public struct ErrorPresenter {
             let name = String(result[nameRange])
             let replacement: String
             if name == "cause", let cause = error.cause {
-                let causeSource = ErrorCatalog.presentationSource(for: cause)
+                let causeSource = ErrorCatalog.presentationSource(
+                    for: cause,
+                    entries: catalogEntries
+                )
                 let causeVariant = selectedVariant(for: causeSource.error, in: causeSource.entry)
                 replacement = render(
                     template: localized(
@@ -349,7 +475,7 @@ public struct ErrorPresenter {
                     error: causeSource.error,
                     visited: visited
                 )
-            } else if let parameter = error.parameters[name] {
+            } else if let parameter = parameters[name] {
                 replacement = format(parameter)
             } else {
                 replacement = ""

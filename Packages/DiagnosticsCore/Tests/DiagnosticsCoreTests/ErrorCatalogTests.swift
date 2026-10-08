@@ -36,6 +36,10 @@ import Testing
                 "scanoutInvalid",
                 "modeUnsupported", "poolAllocationFailed", "configUpdateFailed", "deviceNotReady",
             ].map { "graphics.\($0)" }
+            + [
+                "manifestInvalid", "insufficientSpace", "cloneUnsupported", "cloneFailed",
+                "instanceCorrupt",
+            ].map { "image.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -57,6 +61,7 @@ import Testing
                 || entry.code.hasPrefix("cli.")
                 || entry.code.hasPrefix("runtime.")
                 || entry.code.hasPrefix("graphics.")
+                || entry.code.hasPrefix("image.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

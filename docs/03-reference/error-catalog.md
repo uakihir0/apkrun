@@ -575,6 +575,18 @@ Owner: ImageCore. Design: [../02-design/android-image.md](../02-design/android-i
 - `insufficientSpace` exists in two domains. `image.insufficientSpace` is ImageCore's check. `maintenance.insufficientSpace` is the update coordinator's check before a download (catalog §14.2). The codes differ, so both can exist.
 - The parameters `path`, `reason`, `keyID`, `file`, `report`, `key`, and `layerA`/`layerB` are logged and not shown. `{version}`, `{newVersion}`, and `{installedVersion}` are image versions.
 
+### 9.1 Image errors implemented by #011
+
+<!-- errorgen:begin image -->
+| Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
+|---|---|---|---|---|---|---|---|
+| `manifestInvalid(path:reason:)` | `image.manifestInvalid` | a size limit, the JSON, the schema, or a semantic rule fails. `path` and `reason` are logged | ImageCore | "This Android system isn't valid." | "Install Android again from Settings → Storage." `openStorageSettings` | 1 | [runtime-image-manifest.md](runtime-image-manifest.md) §7.1 |
+| `insufficientSpace(required:available:)` | `image.insufficientSpace` | provisioning would leave less than the 10 GiB margin of free space. `{needed}` is `required` | InstanceStore | "Android needs {needed} of free disk space, but only {available} is free." | "Free up disk space, then try again." `openStorageSettings` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5.1, §5.2 |
+| `cloneUnsupported(volume:)` | `image.cloneUnsupported` | the volume of the instance directory is not APFS, so `clonefile(2)` cannot share blocks | InstanceStore | "APKRun's data is not on an APFS volume." | "Move APKRun's data to an APFS volume." `none` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
+| `cloneFailed(underlying:)` | `image.cloneFailed` | `clonefile(2)`, `ftruncate`, or `fsync` of an instance disk fails. `errno` becomes the `UnderlyingError` | InstanceStore | "Android's disks couldn't be created." | "Check the free disk space, then try again. If it fails again, create a diagnostics report." `retry` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
+| `instanceCorrupt(reason:)` | `image.instanceCorrupt` | an instance disk's GPT does not verify, or disk sizes or `instance.json` are inconsistent. `reason` is logged | InstanceStore | "Android's data is damaged." | "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage." `openTroubleshooting` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5, §9.3 step 2 |
+<!-- errorgen:end image -->
+
 ---
 
 ## 10. Domain `store`

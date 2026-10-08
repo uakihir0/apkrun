@@ -1432,6 +1432,116 @@
         "raisedBy": "`apkrun dev console`",
         "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
       }
+    },
+    {
+      "code": "image.manifestInvalid",
+      "parameters": [
+        "path",
+        "reason"
+      ],
+      "message": {
+        "en": "This Android system isn't valid.",
+        "ja": "この Android システムは正しくありません。"
+      },
+      "remediation": {
+        "en": "Install Android again from Settings → Storage.",
+        "ja": "設定 → ストレージから Android をもう一度インストールしてください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "manifestInvalid(path:reason:)",
+        "when": "a size limit, the JSON, the schema, or a semantic rule fails. `path` and `reason` are logged",
+        "raisedBy": "ImageCore",
+        "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §7.1"
+      }
+    },
+    {
+      "code": "image.insufficientSpace",
+      "parameters": [
+        "needed",
+        "available"
+      ],
+      "message": {
+        "en": "Android needs {needed} of free disk space, but only {available} is free.",
+        "ja": "Android には {needed} の空き容量が必要ですが、空きは {available} しかありません。"
+      },
+      "remediation": {
+        "en": "Free up disk space, then try again.",
+        "ja": "ディスクの空き容量を増やしてから、もう一度お試しください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "insufficientSpace(required:available:)",
+        "when": "provisioning would leave less than the 10 GiB margin of free space. `{needed}` is `required`",
+        "raisedBy": "InstanceStore",
+        "ref": "[../02-design/android-image.md](../02-design/android-image.md) §5.1, §5.2"
+      }
+    },
+    {
+      "code": "image.cloneUnsupported",
+      "parameters": [
+        "volume"
+      ],
+      "message": {
+        "en": "APKRun's data is not on an APFS volume.",
+        "ja": "APKRun のデータが APFS ボリュームにありません。"
+      },
+      "remediation": {
+        "en": "Move APKRun's data to an APFS volume.",
+        "ja": "APKRun のデータを APFS ボリュームに移動してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "cloneUnsupported(volume:)",
+        "when": "the volume of the instance directory is not APFS, so `clonefile(2)` cannot share blocks",
+        "raisedBy": "InstanceStore",
+        "ref": "[../02-design/android-image.md](../02-design/android-image.md) §5.1"
+      }
+    },
+    {
+      "code": "image.cloneFailed",
+      "parameters": [],
+      "message": {
+        "en": "Android's disks couldn't be created.",
+        "ja": "Android のディスクを作成できませんでした。"
+      },
+      "remediation": {
+        "en": "Check the free disk space, then try again. If it fails again, create a diagnostics report.",
+        "ja": "ディスクの空き容量を確認してから、もう一度お試しください。再び失敗する場合は、診断レポートを作成してください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "cloneFailed(underlying:)",
+        "when": "`clonefile(2)`, `ftruncate`, or `fsync` of an instance disk fails. `errno` becomes the `UnderlyingError`",
+        "raisedBy": "InstanceStore",
+        "ref": "[../02-design/android-image.md](../02-design/android-image.md) §5.1"
+      }
+    },
+    {
+      "code": "image.instanceCorrupt",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "Android's data is damaged.",
+        "ja": "Android のデータが破損しています。"
+      },
+      "remediation": {
+        "en": "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage.",
+        "ja": "設定 → トラブルシューティングで Android をリセットするか、設定 → ストレージで復元ポイントに戻してください。"
+      },
+      "action": "openTroubleshooting",
+      "cliExit": 1,
+      "doc": {
+        "case": "instanceCorrupt(reason:)",
+        "when": "an instance disk's GPT does not verify, or disk sizes or `instance.json` are inconsistent. `reason` is logged",
+        "raisedBy": "InstanceStore",
+        "ref": "[../02-design/android-image.md](../02-design/android-image.md) §5, §9.3 step 2"
+      }
     }
   ]
 }

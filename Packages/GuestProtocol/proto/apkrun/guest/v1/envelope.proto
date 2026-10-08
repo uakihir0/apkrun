@@ -1,0 +1,306 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+import "apkrun/guest/v1/bulk.proto";
+import "apkrun/guest/v1/common.proto";
+import "apkrun/guest/v1/control.proto";
+import "apkrun/guest/v1/input.proto";
+import "apkrun/guest/v1/integration.proto";
+import "apkrun/guest/v1/store.proto";
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Envelope is the body of every frame on every guest channel. The frame adds a
+// 4-byte big-endian length in front of it (guest-protocol.md §4). Which bodies a
+// channel may carry is listed in guest-protocol.md §3.
+message Envelope {
+  // Per connection and per sender. Starts at 1 and strictly increases.
+  uint64 id = 1;
+  // Set on a response: the id of the request it answers.
+  uint64 reply_to = 2;
+  // Host OperationID, for log correlation only. Optional.
+  string operation_id = 3;
+
+  oneof body {
+    Hello hello = 10;
+    HelloAck hello_ack = 11;
+    Request request = 12;
+    Response response = 13;
+    Event event = 14;
+    Cancel cancel = 15;
+    InputBatch input_batch = 20;
+    InputAck input_ack = 21;
+    ImeCommand ime_command = 22;
+    ImeState ime_state = 23;
+    BulkFrame bulk = 30;
+  }
+}
+
+// Request carries one operation. The field number of an operation is the same in
+// Request.op and in Response.result, and the result type has the same name as the
+// operation's field (guest-protocol.md §4.1, §7.1, §11.1).
+message Request {
+  // The agent gives up after this many milliseconds. The host waits this long plus
+  // 1000 ms before it treats the request as lost.
+  uint32 timeout_ms = 1;
+
+  oneof op {
+    // core and control (Guest Agent), 10–39
+    Ping ping = 10;
+    GetSnapshot get_snapshot = 11;
+    SetDisplayPolicy set_display_policy = 12;
+    ClearDisplay clear_display = 13;
+    LaunchApplication launch_application = 14;
+    StopApplication stop_application = 15;
+    MoveTaskToDisplay move_task_to_display = 16;
+    ListTasks list_tasks = 17;
+    FocusDisplay focus_display = 18;
+    QueryPackage query_package = 19;
+    ListPackages list_packages = 20;
+    GetHealth get_health = 21;
+
+    // integration, host to Guest Agent, 40–59
+    ClipData set_clipboard = 40;
+    ActivateNotification activate_notification = 41;
+    DismissNotification dismiss_notification = 42;
+    SetNotificationForwarding set_notification_forwarding = 43;
+    SetUrlRedirect set_url_redirect = 44;
+    ImportFiles import_files = 45;
+    SetLocale set_locale = 46;
+    SetTimeZone set_time_zone = 47;
+    SyncTime sync_time = 48;
+    SetClockFormat set_clock_format = 49;
+    ResolveUrl resolve_url = 50;
+    ResolveExport resolve_export = 51;
+    SetSharedFolderAccess set_shared_folder_access = 52;
+    SetMicrophoneAccess set_microphone_access = 53;
+
+    // integration, Guest Agent to host (files.shared.v1), 60–69
+    HostListRoots host_list_roots = 60;
+    HostQueryChildren host_query_children = 61;
+    HostStat host_stat = 62;
+    HostOpenFile host_open_file = 63;
+    HostReadRange host_read_range = 64;
+    HostWriteRange host_write_range = 65;
+    HostCloseFile host_close_file = 66;
+    HostCreateDocument host_create_document = 67;
+    HostDeleteDocument host_delete_document = 68;
+    HostRenameDocument host_rename_document = 69;
+
+    // system and diagnostics (Guest Agent), 70–79. 71 is reserved (guest-protocol.md §7.1).
+    Shutdown shutdown = 70;
+    AuthorizeAdbKey authorize_adb_key = 72;
+    CollectDiagnostics collect_diagnostics = 73;
+
+    // Store Agent, 100–139
+    InspectArchive inspect_archive = 100;
+    InstallRequest begin_install = 101;
+    CommitInstall commit_install = 102;
+    AbandonInstall abandon_install = 103;
+    Uninstall uninstall = 104;
+    GetPackageMetadata get_package_metadata = 105;
+    ListManagedPackages list_managed_packages = 106;
+    RenderIcon render_icon = 107;
+    RollbackPackage rollback_package = 108;
+    RelinquishUpdateOwnership relinquish_update_ownership = 109;
+    CheckInstallConstraints check_install_constraints = 110;
+  }
+
+  reserved 71;
+}
+
+// Response answers one Request. The result field has the same number as the
+// operation. error is the only field outside the operation range.
+message Response {
+  oneof result {
+    GuestError error = 1;
+
+    // core and control (Guest Agent), 10–39
+    Pong ping = 10;
+    Snapshot get_snapshot = 11;
+    Empty set_display_policy = 12;
+    Empty clear_display = 13;
+    LaunchResult launch_application = 14;
+    Empty stop_application = 15;
+    Empty move_task_to_display = 16;
+    TaskList list_tasks = 17;
+    Empty focus_display = 18;
+    PackageInfo query_package = 19;
+    PackageList list_packages = 20;
+    Health get_health = 21;
+
+    // integration, host to Guest Agent, 40–59
+    Empty set_clipboard = 40;
+    Empty activate_notification = 41;
+    Empty dismiss_notification = 42;
+    Empty set_notification_forwarding = 43;
+    Empty set_url_redirect = 44;
+    ImportResult import_files = 45;
+    Empty set_locale = 46;
+    Empty set_time_zone = 47;
+    Empty sync_time = 48;
+    Empty set_clock_format = 49;
+    Empty resolve_url = 50;
+    ExportStart resolve_export = 51;
+    Empty set_shared_folder_access = 52;
+    Empty set_microphone_access = 53;
+
+    // integration, Guest Agent to host (files.shared.v1), 60–69
+    RootList host_list_roots = 60;
+    DocPage host_query_children = 61;
+    DocInfo host_stat = 62;
+    OpenFile host_open_file = 63;
+    ReadRangeResult host_read_range = 64;
+    Empty host_write_range = 65;
+    Empty host_close_file = 66;
+    DocInfo host_create_document = 67;
+    Empty host_delete_document = 68;
+    DocInfo host_rename_document = 69;
+
+    // system and diagnostics (Guest Agent), 70–79
+    Empty shutdown = 70;
+    Empty authorize_adb_key = 72;
+    CollectDiagnosticsResult collect_diagnostics = 73;
+
+    // Store Agent, 100–139
+    ArchiveInfo inspect_archive = 100;
+    BeginInstallResult begin_install = 101;
+    Empty commit_install = 102;
+    Empty abandon_install = 103;
+    UninstallResult uninstall = 104;
+    StorePackageInfo get_package_metadata = 105;
+    StorePackageList list_managed_packages = 106;
+    IconResult render_icon = 107;
+    RollbackResult rollback_package = 108;
+    Empty relinquish_update_ownership = 109;
+    ConstraintsResult check_install_constraints = 110;
+  }
+}
+
+// Event is pushed by the agent on a control or store connection. seq is per
+// connection and starts at 1. A gap is a protocol violation (guest-protocol.md §12.2).
+message Event {
+  uint64 seq = 1;
+
+  oneof kind {
+    // Guest Agent, 10–45 (guest-protocol.md §8.1)
+    SystemState system_state_changed = 10;
+    DisplayInfo display_added = 11;
+    DisplayInfo display_changed = 12;
+    DisplayRemoved display_removed = 13;
+    TaskInfo task_appeared = 14;
+    TaskInfo task_changed = 15;
+    TaskVanished task_vanished = 16;
+    DisplayEmpty display_empty = 17;
+    TasksCleared tasks_cleared = 18;
+    FocusedDisplayChanged focused_display_changed = 19;
+    PackageChanged package_changed = 20;
+    HealthWarning health_warning = 21;
+    AppProcessEvent app_process_event = 22;
+    ClipData clipboard_changed = 40;
+    Notification notification_posted = 41;
+    NotificationRemoved notification_removed = 42;
+    OpenUrlOnHost open_url_on_host = 43;
+    ExportFileOffered export_file_offered = 44;
+    RecordingChanged recording_changed = 45;
+
+    // Store Agent, 100–102 (guest-protocol.md §11.2)
+    InstallProgress install_progress = 100;
+    InstallFinished install_finished = 101;
+    PackageChanged store_package_changed = 102;
+  }
+}
+
+// Cancel asks the agent to stop an outstanding request. It is best effort, and a
+// response still arrives (GuestError CANCELLED, or the result).
+message Cancel {
+  uint64 target_id = 1;
+}
+
+// ProtocolVersion is the major and minor version of the protocol (guest-protocol.md §5.2).
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+// Hello is the first frame of every connection, sent by the agent (guest-protocol.md §5.1).
+message Hello {
+  ProtocolVersion protocol_version = 1;
+  AgentInfo agent = 2;
+  // ro.boot.apkrun.image: the imageVersion that ImageCore wrote into bootconfig for this boot.
+  string runtime_image_version = 3;
+  AndroidInfo android = 4;
+  // Capabilities that the agent implements (guest-protocol.md §5.3).
+  repeated string capabilities = 5;
+  // The channel that the agent believes it is serving (guest-protocol.md §3).
+  ChannelKind channel = 6;
+  AgentMode mode = 7;
+}
+
+message AgentInfo {
+  AgentKind kind = 1;
+  string version_name = 2;
+  int64 version_code = 3;
+  string build_id = 4;
+}
+
+message AndroidInfo {
+  int32 sdk_int = 1;
+  string release = 2;
+  string build_fingerprint = 3;
+  // "user" or "userdebug".
+  string build_type = 4;
+}
+
+// HelloAck is the host's reply to Hello (guest-protocol.md §5.1).
+message HelloAck {
+  oneof outcome {
+    Accepted accepted = 1;
+    Rejected rejected = 2;
+  }
+  ProtocolVersion host_protocol_version = 3;
+  // 16 random bytes for a control connection, shared with its secondary connections (§5.4).
+  bytes session_token = 4;
+  // The subset of the agent's capabilities that the host will use.
+  repeated string enabled_capabilities = 5;
+  // APKRun version, for guest logs.
+  string host_version = 6;
+}
+
+message Accepted {}
+
+message Rejected {
+  RejectReason reason = 1;
+  string detail = 2;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_INCOMPATIBLE_VERSION = 1;
+  REJECT_REASON_WRONG_CHANNEL = 2;
+  REJECT_REASON_BAD_TOKEN = 3;
+  REJECT_REASON_DUPLICATE_SESSION = 4;
+}
+
+enum ChannelKind {
+  CHANNEL_KIND_UNSPECIFIED = 0;
+  CHANNEL_KIND_GUEST_CONTROL = 1;
+  CHANNEL_KIND_GUEST_INPUT = 2;
+  CHANNEL_KIND_GUEST_BULK = 3;
+  CHANNEL_KIND_STORE_CONTROL = 4;
+  CHANNEL_KIND_STORE_ARTIFACTS = 5;
+  CHANNEL_KIND_DEVELOPMENT_IME = 6;
+}
+
+enum AgentKind {
+  AGENT_KIND_UNSPECIFIED = 0;
+  AGENT_KIND_GUEST_AGENT = 1;
+  AGENT_KIND_STORE_AGENT = 2;
+  AGENT_KIND_GUEST_IME = 3;
+}
+
+// GuestError, GuestErrorCode, and AgentMode live in common.proto. control.proto
+// uses them, and this file imports control.proto, so they cannot live here.

@@ -1,0 +1,285 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Store Agent operations 100–110 and events 100–102 (guest-protocol.md §11). The Store
+// Agent exists only on custom images, so these messages are not used on stock images.
+
+// store.metadata.v1, store.install.v1
+
+// ArtifactRef names an artifact that was already streamed with kind INSTALL_ARTIFACT.
+message ArtifactRef {
+  uint64 transfer_id = 1;
+  string name = 2;
+}
+
+message InspectArchive {
+  repeated ArtifactRef artifacts = 1;
+}
+
+// ArchiveInfo is what Android's parser reports for a staged archive.
+message ArchiveInfo {
+  string package = 1;
+  int64 version_code = 2;
+  string version_name = 3;
+  // The split names. "base" is the base APK.
+  repeated string split_names = 4;
+  repeated string native_abis = 5;
+  int32 min_sdk = 6;
+  int32 target_sdk = 7;
+  // The current signer digests.
+  repeated bytes signer_sha256 = 8;
+  int32 signing_scheme_version = 9;
+}
+
+enum InstallMode {
+  INSTALL_MODE_UNSPECIFIED = 0;
+  INSTALL_MODE_INSTALL_NEW = 1;
+  INSTALL_MODE_UPDATE = 2;
+  INSTALL_MODE_REINSTALL = 3;
+}
+
+// ArtifactSpec describes one artifact of an install. The host streams it on the artifact channel.
+message ArtifactSpec {
+  // "base", "split_config.arm64_v8a", and so on.
+  string name = 1;
+  uint64 size = 2;
+  bytes sha256 = 3;
+}
+
+// InstallRequest is the argument of BeginInstall (guest-protocol.md §11.3).
+message InstallRequest {
+  string expected_package = 1;
+  // 0 means that the version is not checked.
+  int64 expected_version_code = 2;
+  // The current signer digests from the host's verification.
+  repeated bytes expected_signer_sha256 = 3;
+  InstallMode mode = 4;
+  // SessionParams.setRequestUpdateOwnership (API 34). Needs store.ownership.v1.
+  bool request_update_ownership = 5;
+  // Always false in v1. The field exists so that the refusal is explicit.
+  bool allow_downgrade = 6;
+  repeated ArtifactSpec artifacts = 7;
+  // PackageManager.INSTALL_REASON_*.
+  int32 install_reason = 8;
+  // PackageInstaller.PACKAGE_SOURCE_*.
+  int32 package_source = 9;
+  // SessionParams.setEnableRollback. Needs store.rollback.v1 and the UPDATE mode.
+  bool enable_rollback = 10;
+}
+
+message BeginInstallResult {
+  string install_id = 1;
+  int32 android_session_id = 2;
+}
+
+message CommitInstall {
+  string install_id = 1;
+}
+
+message AbandonInstall {
+  string install_id = 1;
+}
+
+enum InstallStage {
+  INSTALL_STAGE_UNSPECIFIED = 0;
+  INSTALL_STAGE_RECEIVING = 1;
+  INSTALL_STAGE_VERIFYING = 2;
+  INSTALL_STAGE_COMMITTING = 3;
+}
+
+// InstallProgress is the event for a running install.
+message InstallProgress {
+  string install_id = 1;
+  InstallStage stage = 2;
+  // From 0.0 to 1.0.
+  float fraction = 3;
+}
+
+enum InstallStatus {
+  INSTALL_STATUS_UNSPECIFIED = 0;
+  INSTALL_STATUS_SUCCESS = 1;
+  INSTALL_STATUS_FAILURE = 2;
+  INSTALL_STATUS_ABORTED = 3;
+  INSTALL_STATUS_INCOMPATIBLE = 4;
+  INSTALL_STATUS_CONFLICT = 5;
+  INSTALL_STATUS_STORAGE = 6;
+  INSTALL_STATUS_INVALID = 7;
+  INSTALL_STATUS_BLOCKED = 8;
+  // The Store Agent cannot show UI on a display, so it abandons the session.
+  INSTALL_STATUS_USER_ACTION_REQUIRED = 9;
+}
+
+// InstallFinished is the outcome of a committed install.
+message InstallFinished {
+  string install_id = 1;
+  InstallStatus status = 2;
+  // PackageInstaller.STATUS_*.
+  int32 android_status = 3;
+  // The INSTALL_FAILED_* name, when it is known.
+  string legacy_status = 4;
+  string message = 5;
+  int64 installed_version_code = 6;
+}
+
+enum UninstallStatus {
+  UNINSTALL_STATUS_UNSPECIFIED = 0;
+  UNINSTALL_STATUS_SUCCESS = 1;
+  UNINSTALL_STATUS_FAILURE = 2;
+}
+
+message Uninstall {
+  string package = 1;
+  // Removes the package but keeps its data directory (pm uninstall -k).
+  bool keep_data = 2;
+}
+
+message UninstallResult {
+  UninstallStatus status = 1;
+  string message = 2;
+}
+
+// store.metadata.v1
+
+message GetPackageMetadata {
+  string package = 1;
+}
+
+// SigningInfo is the signing lineage of a package.
+message SigningInfo {
+  repeated bytes current_sha256 = 1;
+  // The lineage: earlier signers that remain trusted.
+  repeated bytes past_sha256 = 2;
+  int32 scheme_version = 3;
+}
+
+// StorePackageInfo is the metadata that the Store Agent reports for a package (guest-protocol.md §11.4).
+message StorePackageInfo {
+  string package = 1;
+  int64 version_code = 2;
+  string version_name = 3;
+  string label = 4;
+  string installer_of_record = 5;
+  // InstallSourceInfo.getUpdateOwnerPackageName() (API 34).
+  string update_owner = 6;
+  string initiating_package = 7;
+  int64 first_install_time_ms = 8;
+  int64 last_update_time_ms = 9;
+  int32 min_sdk = 10;
+  int32 target_sdk = 11;
+  // The split names.
+  repeated string splits = 12;
+  repeated string native_abis = 13;
+  SigningInfo signing = 14;
+  bool enabled = 15;
+  bool suspended = 16;
+  int32 requested_permissions_count = 17;
+}
+
+enum ManagedPackageFilter {
+  MANAGED_PACKAGE_FILTER_UNSPECIFIED = 0;
+  MANAGED_PACKAGE_FILTER_MANAGED_BY_APKRUN = 1;
+  MANAGED_PACKAGE_FILTER_ALL_USER_INSTALLED = 2;
+}
+
+message ListManagedPackages {
+  ManagedPackageFilter filter = 1;
+}
+
+message StorePackageList {
+  repeated StorePackageInfo packages = 1;
+}
+
+// store.icon.v1
+
+enum IconKind {
+  ICON_KIND_UNSPECIFIED = 0;
+  ICON_KIND_ADAPTIVE = 1;
+  ICON_KIND_LEGACY = 2;
+}
+
+enum IconRole {
+  ICON_ROLE_UNSPECIFIED = 0;
+  ICON_ROLE_FOREGROUND = 1;
+  ICON_ROLE_BACKGROUND = 2;
+  ICON_ROLE_MONOCHROME = 3;
+  ICON_ROLE_LEGACY = 4;
+}
+
+message RenderIcon {
+  string package = 1;
+  // Up to 1536. The host asks for 1536 px (wrapper.md §8.1).
+  uint32 size_px = 2;
+}
+
+message IconLayer {
+  IconRole role = 1;
+  // The bulk transfer that carries the layer, kind ICON_LAYER.
+  uint64 transfer_id = 2;
+}
+
+message IconResult {
+  IconKind kind = 1;
+  repeated IconLayer layers = 2;
+}
+
+// store.rollback.v1
+
+message RollbackPackage {
+  string package = 1;
+  int64 from_version_code = 2;
+  int64 to_version_code = 3;
+}
+
+enum RollbackStatus {
+  ROLLBACK_STATUS_UNSPECIFIED = 0;
+  ROLLBACK_STATUS_SUCCESS = 1;
+  // The update did not enable rollback, or the rollback has expired.
+  ROLLBACK_STATUS_NOT_AVAILABLE = 2;
+  ROLLBACK_STATUS_FAILURE = 3;
+}
+
+message RollbackResult {
+  RollbackStatus status = 1;
+  string message = 2;
+  int64 installed_version_code = 3;
+}
+
+// store.ownership.v1
+
+message RelinquishUpdateOwnership {
+  string package = 1;
+}
+
+// store.constraints.v1
+
+enum InstallConstraint {
+  INSTALL_CONSTRAINT_UNSPECIFIED = 0;
+  // PackageInstaller.InstallConstraints.GENTLE_UPDATE (API 34).
+  INSTALL_CONSTRAINT_GENTLE_UPDATE = 1;
+}
+
+message CheckInstallConstraints {
+  repeated string packages = 1;
+  InstallConstraint constraint = 2;
+  bool app_not_foreground_required = 3;
+  bool app_not_interacting_required = 4;
+  bool app_not_top_visible_required = 5;
+}
+
+message PackageConstraint {
+  string package = 1;
+  bool satisfied = 2;
+}
+
+// ConstraintsResult is a hint. The gentle-update gate evaluates again before each install.
+message ConstraintsResult {
+  repeated PackageConstraint results = 1;
+}
+
+// Store events (guest-protocol.md §11.2). PackageChanged is the same message as the
+// Guest Agent event, and the Envelope carries it as store_package_changed.

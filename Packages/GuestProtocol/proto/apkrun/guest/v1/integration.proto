@@ -1,0 +1,379 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Integration payloads (guest-protocol.md §8.4) and the integration operations
+// 40–53 (host to Guest Agent) and 60–69 (Guest Agent to host, files.shared.v1).
+// The protocol only carries the data. The behavior is in desktop-integration.md.
+
+// clipboard.text.v1, clipboard.image.v1
+
+enum ClipOrigin {
+  CLIP_ORIGIN_UNSPECIFIED = 0;
+  // The host wrote the clip.
+  CLIP_ORIGIN_HOST = 1;
+  // The guest wrote the clip.
+  CLIP_ORIGIN_GUEST = 2;
+}
+
+// ClipData is the clipboard payload in both directions. Its request form is
+// SetClipboard, and its event form is ClipboardChanged (operation 40).
+message ClipData {
+  // The sender's sequence number.
+  uint64 seq = 1;
+  // The agent ignores its own writes echoed back (loop prevention).
+  ClipOrigin origin = 2;
+  // Up to 1 MiB. Longer text is truncated, and truncated is set.
+  string text = 3;
+  bool truncated = 4;
+  // Optional, same limit.
+  string html = 5;
+  ClipImage image = 6;
+  // Guest to host only.
+  string source_package = 7;
+  // ClipDescription.EXTRA_IS_SENSITIVE. The host marks the pasteboard item concealed.
+  bool sensitive = 8;
+}
+
+message ClipImage {
+  string mime_type = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  // The bulk transfer that carries the image (guest-protocol.md §10).
+  uint64 transfer_id = 4;
+}
+
+// notifications.v1
+
+message NotificationAction {
+  // Remote input is not supported in v1, so an action has a title only.
+  string title = 1;
+}
+
+// Notification is the payload of NotificationPosted (guest-protocol.md §8.4).
+message Notification {
+  // StatusBarNotification key.
+  string key = 1;
+  string package = 2;
+  // At most 256 characters.
+  string title = 3;
+  // At most 2048 characters.
+  string text = 4;
+  int64 when_ms = 5;
+  string category = 6;
+  bool has_content_intent = 7;
+  repeated NotificationAction actions = 8;
+  bool ongoing = 9;
+  string channel_id = 10;
+  int32 importance = 11;
+  // Notification.getGroup(). Empty when the notification is not grouped.
+  string group_key = 12;
+  // False for an update with FLAG_ONLY_ALERT_ONCE.
+  bool alert = 13;
+  // Re-sent after SetNotificationForwarding. The host rebuilds its state and posts no banner.
+  bool replay = 14;
+}
+
+enum NotificationRemovalReason {
+  NOTIFICATION_REMOVAL_REASON_UNSPECIFIED = 0;
+  NOTIFICATION_REMOVAL_REASON_DISMISSED_BY_USER = 1;
+  NOTIFICATION_REMOVAL_REASON_CANCELLED_BY_APP = 2;
+  NOTIFICATION_REMOVAL_REASON_OTHER = 3;
+}
+
+// NotificationRemoved is the event for a notification that has gone.
+message NotificationRemoved {
+  string key = 1;
+  NotificationRemovalReason reason = 2;
+}
+
+// ActivateNotification sends the content intent, or an action intent, with display_id
+// as the launch display. NOT_FOUND means the notification has gone.
+message ActivateNotification {
+  string key = 1;
+  optional int32 action_index = 2;
+  int32 display_id = 3;
+}
+
+message DismissNotification {
+  string key = 1;
+}
+
+// SetNotificationForwarding replaces the list of packages whose notifications leave the guest.
+message SetNotificationForwarding {
+  repeated string packages = 1;
+}
+
+// url.v1
+
+message SetUrlRedirect {
+  bool enabled = 1;
+  // Links of these packages open in the in-Android browser and produce no event.
+  repeated string excluded_packages = 2;
+}
+
+// OpenUrlOnHost is the event for a link that the host should open.
+message OpenUrlOnHost {
+  uint64 request_id = 1;
+  string url = 2;
+  // From getLaunchedFromPackage().
+  string source_package = 3;
+  int32 display_id = 4;
+}
+
+enum UrlAction {
+  URL_ACTION_UNSPECIFIED = 0;
+  URL_ACTION_OPENED_ON_HOST = 1;
+  URL_ACTION_OPEN_IN_GUEST = 2;
+  URL_ACTION_DROP = 3;
+}
+
+// ResolveUrl answers an OpenUrlOnHost. Kept intents expire after 60 s (NOT_FOUND).
+message ResolveUrl {
+  uint64 request_id = 1;
+  UrlAction action = 2;
+}
+
+// files.v1
+
+enum ImportTarget {
+  IMPORT_TARGET_UNSPECIFIED = 0;
+  IMPORT_TARGET_DOWNLOADS = 1;
+  // Falls back to Downloads when the package has no send target.
+  IMPORT_TARGET_SHARE_TO_PACKAGE = 2;
+}
+
+message FileRef {
+  uint64 transfer_id = 1;
+  string name = 2;
+  string mime_type = 3;
+  uint64 size = 4;
+}
+
+message ImportFiles {
+  ImportTarget target = 1;
+  // Required for SHARE_TO_PACKAGE.
+  optional string package = 2;
+  int32 display_id = 3;
+  repeated FileRef files = 4;
+}
+
+enum ImportDisposition {
+  IMPORT_DISPOSITION_UNSPECIFIED = 0;
+  IMPORT_DISPOSITION_SHARED = 1;
+  IMPORT_DISPOSITION_SAVED_TO_DOWNLOADS = 2;
+}
+
+message ImportResult {
+  repeated string content_uri = 1;
+  ImportDisposition disposition = 2;
+}
+
+// ExportFileOffered is the event for a file that the guest offers to the host.
+message ExportFileOffered {
+  uint64 offer_id = 1;
+  string name = 2;
+  string mime_type = 3;
+  uint64 size = 4;
+  string source_package = 5;
+  int32 display_id = 6;
+}
+
+enum ExportDecision {
+  EXPORT_DECISION_UNSPECIFIED = 0;
+  EXPORT_DECISION_ACCEPT = 1;
+  EXPORT_DECISION_DECLINE = 2;
+}
+
+message ResolveExport {
+  uint64 offer_id = 1;
+  ExportDecision decision = 2;
+}
+
+// ExportStart is the result of ResolveExport. transfer_id is unset when the offer is declined.
+message ExportStart {
+  optional uint64 transfer_id = 1;
+}
+
+// locale.v1
+
+message SetLocale {
+  repeated string bcp47 = 1;
+}
+
+message SetTimeZone {
+  // An IANA identifier.
+  string tz_id = 1;
+}
+
+// SyncTime is applied when the difference is over 500 ms. Privileged app only.
+message SyncTime {
+  int64 unix_time_ms = 1;
+  uint32 rtt_ms = 2;
+}
+
+enum ClockFormat {
+  CLOCK_FORMAT_UNSPECIFIED = 0;
+  CLOCK_FORMAT_TWELVE = 1;
+  CLOCK_FORMAT_TWENTY_FOUR = 2;
+}
+
+message SetClockFormat {
+  ClockFormat format = 1;
+}
+
+// files.shared.v1
+
+enum AccessLevel {
+  ACCESS_LEVEL_UNSPECIFIED = 0;
+  ACCESS_LEVEL_READ_ONLY = 1;
+  ACCESS_LEVEL_READ_WRITE = 2;
+}
+
+message SharedRoot {
+  string root_id = 1;
+  string title = 2;
+  AccessLevel max_access = 3;
+}
+
+message PackageAccess {
+  string package = 1;
+  AccessLevel access = 2;
+}
+
+// SetSharedFolderAccess replaces the whole list. Packages that are not listed have no access.
+message SetSharedFolderAccess {
+  repeated SharedRoot roots = 1;
+  repeated PackageAccess access = 2;
+}
+
+// audio.v1
+
+message SetMicrophoneAccess {
+  repeated string packages = 1;
+}
+
+// RecordingChanged is the event for the packages that are recording now.
+message RecordingChanged {
+  repeated string packages = 1;
+}
+
+// files.shared.v1: requests from the Guest Agent to the host (guest-protocol.md §7.5).
+// The package is the Android caller. The host checks it, and the host resolves path itself.
+
+message HostListRoots {
+  string package = 1;
+}
+
+message RootInfo {
+  string root_id = 1;
+  string title = 2;
+  AccessLevel access = 3;
+  bool available = 4;
+  uint64 bytes_free = 5;
+}
+
+message RootList {
+  repeated RootInfo roots = 1;
+}
+
+message HostQueryChildren {
+  string package = 1;
+  string root_id = 2;
+  // Relative to the root, with "/" separators and no "..".
+  string path = 3;
+  // Empty for the first page.
+  string page_token = 4;
+}
+
+message DocInfo {
+  string path = 1;
+  string name = 2;
+  bool is_dir = 3;
+  uint64 size = 4;
+  int64 mtime_ms = 5;
+  string mime_type = 6;
+}
+
+// DocPage is one page of at most 4096 entries.
+message DocPage {
+  repeated DocInfo entries = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message HostStat {
+  string package = 1;
+  string root_id = 2;
+  string path = 3;
+}
+
+enum OpenMode {
+  OPEN_MODE_UNSPECIFIED = 0;
+  OPEN_MODE_READ = 1;
+  OPEN_MODE_WRITE = 2;
+  OPEN_MODE_READ_WRITE = 3;
+  OPEN_MODE_TRUNCATE = 4;
+}
+
+message HostOpenFile {
+  string package = 1;
+  string root_id = 2;
+  string path = 3;
+  OpenMode mode = 4;
+}
+
+message OpenFile {
+  // Host-allocated. Valid for the bulk connection that opened it.
+  uint64 handle = 1;
+  uint64 size = 2;
+}
+
+message HostReadRange {
+  uint64 handle = 1;
+  uint64 offset = 2;
+  // At most 1 MiB.
+  uint32 length = 3;
+}
+
+// ReadRangeResult is shorter than the requested length at the end of the file.
+message ReadRangeResult {
+  bytes data = 1;
+}
+
+message HostWriteRange {
+  uint64 handle = 1;
+  uint64 offset = 2;
+  // At most 1 MiB.
+  bytes data = 3;
+}
+
+message HostCloseFile {
+  uint64 handle = 1;
+  bool fsync = 2;
+}
+
+message HostCreateDocument {
+  string package = 1;
+  string root_id = 2;
+  string parent_path = 3;
+  string name = 4;
+  bool is_dir = 5;
+}
+
+message HostDeleteDocument {
+  string package = 1;
+  string root_id = 2;
+  string path = 3;
+}
+
+message HostRenameDocument {
+  string package = 1;
+  string root_id = 2;
+  string path = 3;
+  string new_name = 4;
+}

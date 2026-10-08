@@ -1,0 +1,160 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+import "apkrun/guest/v1/common.proto";
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// The input stream (guest-protocol.md §9). Its semantics are in input.md. It has no
+// request and response pairs.
+
+// InputBatch is one batch of host input events. At most 256 events per batch.
+message InputBatch {
+  uint64 batch_seq = 1;
+  // Stamped by InputRouter, never by the wrapper.
+  int32 display_id = 2;
+  // For host-side latency accounting only.
+  uint64 host_send_nanos = 3;
+  // Set on every 32nd batch (input.md §8).
+  bool ack_requested = 4;
+  repeated InputEvent events = 5;
+}
+
+message InputEvent {
+  // The injector keeps the relative spacing of these times.
+  uint64 host_time_nanos = 1;
+
+  oneof kind {
+    TouchEvent touch = 10;
+    MouseEvent mouse = 11;
+    ScrollEvent scroll = 12;
+    KeyEvent key = 13;
+    LongPress long_press = 14;
+    CancelAll cancel_all = 15;
+  }
+}
+
+enum TouchPhase {
+  TOUCH_PHASE_UNSPECIFIED = 0;
+  TOUCH_PHASE_DOWN = 1;
+  TOUCH_PHASE_MOVE = 2;
+  TOUCH_PHASE_UP = 3;
+  TOUCH_PHASE_CANCEL = 4;
+}
+
+message TouchEvent {
+  TouchPhase phase = 1;
+  int32 pointer_id = 2;
+  // Display pixels.
+  float x = 3;
+  float y = 4;
+}
+
+enum MouseAction {
+  MOUSE_ACTION_UNSPECIFIED = 0;
+  MOUSE_ACTION_HOVER_ENTER = 1;
+  MOUSE_ACTION_HOVER_MOVE = 2;
+  MOUSE_ACTION_HOVER_EXIT = 3;
+  MOUSE_ACTION_PRESS = 4;
+  MOUSE_ACTION_RELEASE = 5;
+}
+
+message MouseEvent {
+  MouseAction action = 1;
+  // MotionEvent button bits.
+  uint32 button = 2;
+  // MotionEvent button state bits.
+  uint32 button_state = 3;
+  float x = 4;
+  float y = 5;
+}
+
+// ScrollEvent uses Android axis units.
+message ScrollEvent {
+  float x = 1;
+  float y = 2;
+  float vscroll = 3;
+  float hscroll = 4;
+}
+
+enum KeyAction {
+  KEY_ACTION_UNSPECIFIED = 0;
+  KEY_ACTION_DOWN = 1;
+  KEY_ACTION_UP = 2;
+}
+
+// KeyEvent is also the key form of an ImeCommand.
+message KeyEvent {
+  KeyAction action = 1;
+  int32 key_code = 2;
+  uint32 meta_state = 3;
+  int32 repeat_count = 4;
+}
+
+message LongPress {
+  float x = 1;
+  float y = 2;
+}
+
+message CancelAll {}
+
+// InputAck is the agent's answer to a batch with ack_requested set.
+message InputAck {
+  uint64 batch_seq = 1;
+  uint32 receive_to_inject_micros = 2;
+  // Events in the batch that failed validation and were dropped.
+  uint32 rejected_events = 3;
+}
+
+// ImeCommand is sent from the host to the development IME (guest-protocol.md §9).
+message ImeCommand {
+  uint64 seq = 1;
+  int32 display_id = 2;
+
+  oneof kind {
+    // At most 4 KiB of UTF-8.
+    string commit_text = 10;
+    Composing set_composing = 11;
+    FinishComposing finish_composing = 12;
+    KeyEvent key = 13;
+    // An EditorInfo.IME_ACTION_* value.
+    int32 editor_action = 14;
+    ContextMenuAction context_menu_action = 15;
+  }
+}
+
+// Composing sets the composing region. Selection offsets are relative to text.
+message Composing {
+  string text = 1;
+  int32 selection_start = 2;
+  int32 selection_end = 3;
+}
+
+message FinishComposing {}
+
+enum ContextMenuAction {
+  CONTEXT_MENU_ACTION_UNSPECIFIED = 0;
+  CONTEXT_MENU_ACTION_COPY = 1;
+  CONTEXT_MENU_ACTION_CUT = 2;
+  CONTEXT_MENU_ACTION_PASTE = 3;
+  CONTEXT_MENU_ACTION_SELECT_ALL = 4;
+}
+
+// ImeState is sent from the IME to the host. It never contains the text of the field.
+message ImeState {
+  bool editor_focused = 1;
+  int32 display_id = 2;
+  string package = 3;
+  int32 input_type = 4;
+  int32 ime_options = 5;
+  int32 selection_start = 6;
+  int32 selection_end = 7;
+  // -1 when there is no composition.
+  int32 composing_start = 8;
+  int32 composing_end = 9;
+  // Empty when the cursor rectangle is unknown.
+  Rect cursor_rect_px = 10;
+}

@@ -1,0 +1,335 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+import "apkrun/guest/v1/common.proto";
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Operations and events of the Guest Agent control channel (guest-protocol.md §7, §8).
+// Each request message is the op named in Request.op, and each result message is
+// the type named in Response.result.
+
+// core.v1
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+  uint64 guest_uptime_ms = 2;
+}
+
+message GetSnapshot {}
+
+// Snapshot is the state that the host reads after every handshake (guest-protocol.md §6).
+message Snapshot {
+  SystemState system = 1;
+  repeated DisplayInfo displays = 2;
+  repeated TaskInfo tasks = 3;
+  int32 focused_display_id = 4;
+  // The APKRun IME is the default IME.
+  bool ime_selected = 5;
+  bool notification_listener_enabled = 6;
+  // The agent's current clip sequence number (guest-protocol.md §8.4).
+  uint64 clipboard_seq = 7;
+}
+
+// display.v1
+
+enum ImePolicy {
+  IME_POLICY_UNSPECIFIED = 0;
+  IME_POLICY_LOCAL = 1;
+  IME_POLICY_FALLBACK_DISPLAY = 2;
+  IME_POLICY_HIDE = 3;
+}
+
+message SetDisplayPolicy {
+  int32 display_id = 1;
+  // Applied with setForcedDisplayDensityForUser.
+  int32 density_dpi = 2;
+  // Applied with setDisplayImePolicy.
+  ImePolicy ime_policy = 3;
+}
+
+enum ClearPolicy {
+  CLEAR_POLICY_UNSPECIFIED = 0;
+  CLEAR_POLICY_FINISH_TASKS = 1;
+  CLEAR_POLICY_MOVE_TO_DEFAULT_DISPLAY = 2;
+}
+
+message ClearDisplay {
+  int32 display_id = 1;
+  ClearPolicy policy = 2;
+}
+
+message DisplayRemoved {
+  int32 display_id = 1;
+}
+
+message FocusedDisplayChanged {
+  int32 display_id = 1;
+}
+
+message DisplayEmpty {
+  int32 display_id = 1;
+}
+
+// TasksCleared is sent instead of DisplayEmpty when ClearDisplay empties a display.
+message TasksCleared {
+  int32 display_id = 1;
+  uint32 remaining_tasks = 2;
+}
+
+// launch.v1
+
+enum LaunchMode {
+  LAUNCH_MODE_UNSPECIFIED = 0;
+  LAUNCH_MODE_BRING_TO_FRONT_OR_START = 1;
+  LAUNCH_MODE_CLEAR_TASK = 2;
+}
+
+message LaunchApplication {
+  string package = 1;
+  // An explicit component. Optional.
+  optional string component = 2;
+  int32 display_id = 3;
+  optional string data_uri = 4;
+  optional string action = 5;
+  LaunchMode mode = 6;
+}
+
+enum LaunchOutcome {
+  LAUNCH_OUTCOME_UNSPECIFIED = 0;
+  LAUNCH_OUTCOME_STARTED = 1;
+  LAUNCH_OUTCOME_BROUGHT_TO_FRONT = 2;
+  // The package already had a task on another display, which the agent moved.
+  LAUNCH_OUTCOME_MOVED_FROM_DISPLAY = 3;
+}
+
+message LaunchResult {
+  int32 task_id = 1;
+  string component = 2;
+  LaunchOutcome outcome = 3;
+}
+
+enum StopMode {
+  STOP_MODE_UNSPECIFIED = 0;
+  // removeTask for each task of the package.
+  STOP_MODE_FINISH_TASKS = 1;
+  // IActivityManager.forceStopPackage.
+  STOP_MODE_FORCE_STOP = 2;
+}
+
+message StopApplication {
+  string package = 1;
+  StopMode mode = 2;
+}
+
+message MoveTaskToDisplay {
+  int32 task_id = 1;
+  int32 display_id = 2;
+  bool to_back = 3;
+}
+
+message ListTasks {
+  // All displays when unset.
+  optional int32 display_id = 1;
+}
+
+message TaskList {
+  repeated TaskInfo tasks = 1;
+}
+
+message FocusDisplay {
+  int32 display_id = 1;
+}
+
+// TaskAppeared and TaskChanged carry a TaskInfo. TaskVanished is below.
+message TaskVanished {
+  int32 task_id = 1;
+  int32 display_id = 2;
+  string package = 3;
+}
+
+// packages.v1
+
+message QueryPackage {
+  string package = 1;
+}
+
+message PackageInfo {
+  string package = 1;
+  int64 version_code = 2;
+  string version_name = 3;
+  // The label in the default locale.
+  string label = 4;
+  bool enabled = 5;
+  string launchable_component = 6;
+  string installer_package = 7;
+  int64 first_install_time_ms = 8;
+  int64 last_update_time_ms = 9;
+  int32 target_sdk = 10;
+  int32 min_sdk = 11;
+  // The digests of the current signers.
+  repeated bytes signing_sha256 = 12;
+}
+
+enum PackageFilter {
+  PACKAGE_FILTER_UNSPECIFIED = 0;
+  PACKAGE_FILTER_LAUNCHABLE = 1;
+  PACKAGE_FILTER_USER_INSTALLED = 2;
+  PACKAGE_FILTER_ALL = 3;
+}
+
+message ListPackages {
+  PackageFilter filter = 1;
+}
+
+message PackageSummary {
+  string package = 1;
+  string label = 2;
+  int64 version_code = 3;
+  bool launchable = 4;
+  bool user_installed = 5;
+}
+
+message PackageList {
+  repeated PackageSummary packages = 1;
+}
+
+enum PackageChangeKind {
+  PACKAGE_CHANGE_KIND_UNSPECIFIED = 0;
+  PACKAGE_CHANGE_KIND_ADDED = 1;
+  PACKAGE_CHANGE_KIND_REPLACED = 2;
+  PACKAGE_CHANGE_KIND_REMOVED = 3;
+  PACKAGE_CHANGE_KIND_CHANGED = 4;
+}
+
+// PackageChanged is also the payload of store_package_changed (guest-protocol.md §11.2).
+message PackageChanged {
+  string package = 1;
+  PackageChangeKind kind = 2;
+  int64 version_code = 3;
+}
+
+// health.v1
+
+message GetHealth {}
+
+message MemoryInfo {
+  uint64 total_kb = 1;
+  uint64 available_kb = 2;
+  bool low_memory = 3;
+}
+
+message InputCounters {
+  uint64 batches = 1;
+  uint64 events_injected = 2;
+  uint64 events_rejected = 3;
+}
+
+message Health {
+  uint64 agent_uptime_ms = 1;
+  AgentMode mode = 2;
+  int32 displays_count = 3;
+  bool ime_selected = 4;
+  bool notification_listener_enabled = 5;
+  bool adb_enabled = 6;
+  MemoryInfo memory = 7;
+  InputCounters input = 8;
+  uint32 open_sessions = 9;
+  GuestError last_error = 10;
+}
+
+enum HealthWarningKind {
+  HEALTH_WARNING_KIND_UNSPECIFIED = 0;
+  HEALTH_WARNING_KIND_LOW_MEMORY = 1;
+  HEALTH_WARNING_KIND_IME_NOT_SELECTED = 2;
+  HEALTH_WARNING_KIND_NOTIFICATION_LISTENER_DISABLED = 3;
+  HEALTH_WARNING_KIND_BROWSER_ROLE_LOST = 4;
+  HEALTH_WARNING_KIND_DISPLAY_POLICY_LOST = 5;
+}
+
+message HealthWarning {
+  HealthWarningKind kind = 1;
+  string detail = 2;
+}
+
+enum AppProcessEventKind {
+  APP_PROCESS_EVENT_KIND_UNSPECIFIED = 0;
+  APP_PROCESS_EVENT_KIND_CRASH = 1;
+  APP_PROCESS_EVENT_KIND_ANR = 2;
+  APP_PROCESS_EVENT_KIND_NATIVE_CRASH = 3;
+}
+
+message AppProcessEvent {
+  string package = 1;
+  AppProcessEventKind kind = 2;
+  int32 pid = 3;
+  string short_message = 4;
+}
+
+// system.v1
+
+message Shutdown {
+  string reason = 1;
+}
+
+message AuthorizeAdbKey {
+  // The adbkey.pub format.
+  string public_key = 1;
+}
+
+// diagnostics.v1
+
+enum DiagnosticsItem {
+  DIAGNOSTICS_ITEM_UNSPECIFIED = 0;
+  // Allowlisted properties only (diagnostics.md §6.2), named in CollectDiagnostics.properties.
+  DIAGNOSTICS_ITEM_GETPROP = 1;
+  DIAGNOSTICS_ITEM_LOGCAT = 2;
+  DIAGNOSTICS_ITEM_DUMPSYS_WINDOW = 3;
+  DIAGNOSTICS_ITEM_DUMPSYS_DISPLAY = 4;
+  DIAGNOSTICS_ITEM_DUMPSYS_INPUT = 5;
+  DIAGNOSTICS_ITEM_DUMPSYS_ACTIVITY = 6;
+  DIAGNOSTICS_ITEM_DUMPSYS_SURFACEFLINGER = 7;
+  DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO = 8;
+  DIAGNOSTICS_ITEM_TOMBSTONE_LIST = 9;
+  DIAGNOSTICS_ITEM_AGENT_LOG = 10;
+}
+
+message CollectDiagnostics {
+  repeated DiagnosticsItem items = 1;
+  // The byte limit of each item. Longer payloads are truncated.
+  uint64 max_bytes = 2;
+  // Property names for the GETPROP item. Each must be on the allowlist.
+  repeated string properties = 3;
+}
+
+enum DiagnosticsItemStatus {
+  DIAGNOSTICS_ITEM_STATUS_UNSPECIFIED = 0;
+  DIAGNOSTICS_ITEM_STATUS_OK = 1;
+  // The agent does not know the item. This does not fail the request.
+  DIAGNOSTICS_ITEM_STATUS_UNSUPPORTED = 2;
+  DIAGNOSTICS_ITEM_STATUS_TOO_LARGE = 3;
+  DIAGNOSTICS_ITEM_STATUS_FAILED = 4;
+}
+
+message DiagnosticsItemResult {
+  DiagnosticsItem item = 1;
+  DiagnosticsItemStatus status = 2;
+  // Set only with status OK. It names the bulk transfer that carries the payload.
+  optional uint64 transfer_id = 3;
+  bool truncated = 4;
+}
+
+message CollectDiagnosticsResult {
+  repeated DiagnosticsItemResult items = 1;
+}
+
+// Events of the Guest Agent (guest-protocol.md §8.1). SystemStateChanged uses SystemState
+// and the display and task events use DisplayInfo and TaskInfo, from common.proto.
+// NotificationRemoved, OpenUrlOnHost, and ExportFileOffered are in integration.proto.

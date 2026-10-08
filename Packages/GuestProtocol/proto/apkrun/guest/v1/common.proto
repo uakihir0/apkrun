@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Empty is the result of an operation that returns nothing.
+message Empty {}
+
+// GuestError is the failure answer to any request (guest-protocol.md §12.1).
+message GuestError {
+  GuestErrorCode code = 1;
+  // English, for developers and logs. Never user data.
+  string message = 2;
+  // Extra context, for example "android_exception" -> class name, "status" -> code.
+  map<string, string> detail = 3;
+}
+
+enum GuestErrorCode {
+  GUEST_ERROR_CODE_UNSPECIFIED = 0;
+  // Bad arguments. Also a request for a field that needs a capability that is not enabled.
+  GUEST_ERROR_CODE_INVALID_ARGUMENT = 1;
+  // A package, display, task, notification key, or transfer does not exist.
+  GUEST_ERROR_CODE_NOT_FOUND = 2;
+  GUEST_ERROR_CODE_ALREADY_EXISTS = 3;
+  // Android refused the call (SecurityException).
+  GUEST_ERROR_CODE_PERMISSION_DENIED = 4;
+  // For example, boot is not complete, or the display is being cleared.
+  GUEST_ERROR_CODE_FAILED_PRECONDITION = 5;
+  // A system service is not ready.
+  GUEST_ERROR_CODE_UNAVAILABLE = 6;
+  GUEST_ERROR_CODE_TIMEOUT = 7;
+  GUEST_ERROR_CODE_CANCELLED = 8;
+  // The capability is not enabled, or the operation is not possible in this AgentMode.
+  GUEST_ERROR_CODE_UNSUPPORTED = 9;
+  // Too many requests or sessions in flight.
+  GUEST_ERROR_CODE_RESOURCE_EXHAUSTED = 10;
+  GUEST_ERROR_CODE_INTERNAL = 11;
+}
+
+// AgentMode says how the agent process was started (guest-protocol.md §5.1).
+enum AgentMode {
+  AGENT_MODE_UNSPECIFIED = 0;
+  // app_process under the shell uid, on a stock development image.
+  AGENT_MODE_DEVELOPMENT_SHELL = 1;
+  // A persistent privileged app on a custom image.
+  AGENT_MODE_PRIVILEGED_APP = 2;
+}
+
+// SystemState is the boot and user state of Android (guest-protocol.md §7.2).
+message SystemState {
+  bool boot_completed = 1;
+  bool user_unlocked = 2;
+  uint64 android_uptime_ms = 3;
+}
+
+// Rect is a rectangle in display pixels.
+message Rect {
+  int32 left = 1;
+  int32 top = 2;
+  int32 right = 3;
+  int32 bottom = 4;
+}
+
+message DisplayMode {
+  int32 width_px = 1;
+  int32 height_px = 2;
+  float refresh_hz = 3;
+}
+
+// DeviceProductInfo identifies the connector behind a display. DisplayPool uses it to
+// correlate Android displays with scanouts (display-and-windowing.md §3.3).
+message DeviceProductInfo {
+  // The EDID manufacturer PnP ID. APKRun uses "APK".
+  string manufacturer_pnp_id = 1;
+  // The scanout index.
+  int32 product_id = 2;
+  int32 model_year = 3;
+  string name = 4;
+}
+
+enum DisplayState {
+  DISPLAY_STATE_UNSPECIFIED = 0;
+  DISPLAY_STATE_ON = 1;
+  DISPLAY_STATE_OFF = 2;
+  DISPLAY_STATE_UNKNOWN = 3;
+}
+
+// DisplayInfo is what the agent reports about one display (guest-protocol.md §7.2).
+message DisplayInfo {
+  int32 display_id = 1;
+  // Display.getUniqueId. Stable per connector.
+  string unique_id = 2;
+  string name = 3;
+  DeviceProductInfo product = 4;
+  DisplayMode mode = 5;
+  // The current effective density.
+  int32 density_dpi = 6;
+  // Surface.ROTATION_*.
+  int32 rotation = 7;
+  DisplayState state = 8;
+  // Scroll factors, in dp per Android axis unit (input.md §4.4).
+  float vertical_scroll_factor_dp = 9;
+  float horizontal_scroll_factor_dp = 10;
+  // Display.FLAG_* as Android reports them.
+  uint32 flags = 11;
+}
+
+// TaskInfo describes one Android task (guest-protocol.md §7.2).
+message TaskInfo {
+  int32 task_id = 1;
+  int32 display_id = 2;
+  string package = 3;
+  string base_component = 4;
+  string top_component = 5;
+  // WindowConfiguration.getWindowingMode().
+  int32 windowing_mode = 6;
+  bool visible = 7;
+}

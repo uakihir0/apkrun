@@ -1,0 +1,12 @@
+# Lint and breaking-change rules for the guest protocol (guest-protocol.md §2;
+# coding-conventions.md §2). buf breaking runs against the last release tag from #062.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  enum_zero_value_suffix: _UNSPECIFIED
+breaking:
+  use:
+    - FILE

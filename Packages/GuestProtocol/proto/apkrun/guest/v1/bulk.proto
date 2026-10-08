@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package apkrun.guest.v1;
+
+option java_package = "io.apkrun.guest.protocol.v1";
+option java_multiple_files = true;
+option swift_prefix = "GP";
+
+// Bulk and artifact streams (guest-protocol.md §10). A transfer is announced on a
+// control connection, and its data flows on the bulk or artifact stream.
+
+// BulkFrame is one step of a transfer. Host-allocated transfer IDs are even, and
+// agent-allocated IDs are odd.
+message BulkFrame {
+  uint64 transfer_id = 1;
+
+  oneof kind {
+    BulkBegin begin = 10;
+    // At most 1 MiB, in order.
+    bytes chunk = 11;
+    BulkEnd end = 12;
+    // Receiver to sender, after end.
+    BulkAck ack = 13;
+    // Either side.
+    BulkAbort abort = 14;
+  }
+}
+
+message BulkBegin {
+  BulkKind kind = 1;
+  string name = 2;
+  string mime_type = 3;
+  // Total size in bytes. The limit is 2 GiB.
+  uint64 size = 4;
+  // Optional here. When unset, BulkEnd must carry the digest.
+  optional bytes sha256 = 5;
+  // What the transfer is for. Install artifacts carry the install ID, and inspection
+  // carries "inspect". Empty otherwise.
+  string context = 6;
+}
+
+message BulkEnd {
+  // Required when BulkBegin did not carry one. Empty otherwise.
+  bytes sha256 = 1;
+}
+
+message BulkAck {
+  BulkAckStatus status = 1;
+}
+
+message BulkAbort {
+  string reason = 1;
+}
+
+enum BulkKind {
+  BULK_KIND_UNSPECIFIED = 0;
+  // Host to Store Agent: an APK, split, or install artifact.
+  BULK_KIND_INSTALL_ARTIFACT = 1;
+  // Store Agent to host: one layer of an adaptive or legacy icon.
+  BULK_KIND_ICON_LAYER = 2;
+  // Guest to host: an image on the clipboard.
+  BULK_KIND_CLIPBOARD_IMAGE = 3;
+  // A file for ImportFiles or ExportFileOffered.
+  BULK_KIND_FILE = 4;
+  // A payload of CollectDiagnostics.
+  BULK_KIND_DIAGNOSTICS_ITEM = 5;
+}
+
+enum BulkAckStatus {
+  BULK_ACK_STATUS_UNSPECIFIED = 0;
+  BULK_ACK_STATUS_OK = 1;
+  BULK_ACK_STATUS_HASH_MISMATCH = 2;
+  BULK_ACK_STATUS_TOO_LARGE = 3;
+  BULK_ACK_STATUS_REJECTED = 4;
+}

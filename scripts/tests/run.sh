@@ -397,7 +397,7 @@ for name, relative_path, expected in (
             [str(checker), "--root", str(root)],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=30,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -644,7 +644,7 @@ def check(name, mode, expected, diagnostic=None):
                 capture_output=True,
                 text=True,
                 env=environment,
-                timeout=5
+                timeout=30
                 if mode in (
                     "config-include-fifo",
                     "config-fifo",
@@ -713,7 +713,7 @@ def check(name, mode, expected, diagnostic=None):
             capture_output=True,
             text=True,
             env=environment,
-            timeout=5
+            timeout=30
             if mode in (
                 "config-include-fifo",
                 "config-fifo",

@@ -9962,3 +9962,45 @@ counts, the per-poll adb and RSS record, and the cleanup result. Its paths are
 placeholders, and a scan found no host path, `/tmp` path, or `/var/tmp` path. The
 manual stop is recorded in the receipt's cleanup section, not hidden. The ladder
 receipt lists the lost first-run receipts (IR-298).
+
+## IR-303: Close the final attempt with #064 open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 (and #014) |
+| Affected files | `Images/reference/16373615/incomplete/final-step1-watchdog-dumps-20261009.txt`; `Images/reference/16373615/incomplete/final-step2-device-config-20261009.txt`; `Images/reference/16373615/incomplete/final-default-run-20261009.txt`; `Experiments/cuttlefish-boot-diagnosis/boot_variant.sh`; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Keep #064 open. No option reached `sys.boot_completed=1`, and no
+profile is publishable. Steps 1 and 2 of the final attempt are closed as
+refused, and step 3 was not applicable. #014 stays open too.
+
+1. The Watchdog's own dump files are not readable as the shell user. `/data/anr`
+   lists two files, both owned by `system` or `tombstoned` with no read for
+   `shell`. `cat` returns `Permission denied`. `/data/system/dropbox` returns
+   `Permission denied`, and `dumpsys dropbox` reports the service absent. The
+   logcat lines remain readable. No privilege was requested.
+2. `cmd device_config put system_performance system_server_watchdog_timeout_ms
+   600000` is refused for the shell user. The response is a
+   `SecurityException`: the flag is not on the DeviceConfig allowlist. The
+   `activity_manager` namespace gives the same refusal. The write was not made,
+   so `get` returns `null`.
+3. Not run, because (2) was not accepted.
+
+**Reason.** The allowlist is a platform restriction on the flag, not a
+permission the shell could obtain. Writing it through another route would be
+privilege escalation, which the brief rules out. The run itself showed three
+facts. `device_config` registered only after PackageManager (about 1840 s). The
+display wait took 29.7 s in `OnBootPhase_100`. Zygote started three times in the
+kernel log, which is consistent with system_server restarts, but no
+`WATCHDOG KILLING` line was in the kernel log. Those facts are not enough to
+close #064. The boot is still missing, and no Watchdog stack or dump was obtained.
+
+**Verification.** The receipts hold the exact commands, the responses, and the
+exit codes. The run's receipt is `final-default-run-20261009.txt`. Its cleanup
+records `cvd remove` exit 0, and two crosvm processes were still listed after the
+sweep. Both were gone by the next check, and no crosvm, `secure_env`, or
+`run_cvd` process remained. The runner's sweep was changed in this pass to stop
+`process_restarter` first and to verify the result. That change did not clear the
+group in time, so the next run must check that nothing remains. The VM was
+stopped afterwards.

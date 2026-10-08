@@ -753,7 +753,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Schemas compile for the host and the guest; a fake agent with major 2 is rejected with `incompatibleVersion` | #033 | pass, 2026-10-08, macOS 27.0.1 (26A434), host arm64. `swift build` and `./gradlew -p Guest :guestd:assemble` pass. `GuestProtocolTests` pass 29 tests, including the handshake matrix row "a fake agent sending major 2 is rejected with `incompatibleVersion`" and the numbering rule. `:protocol:testDebugUnitTest` passes 25 JUnit tests. Both codecs decode, re-encode, and reject the golden frames (§16) |
+| Schemas compile for the host and the guest; a fake agent with major 2 is rejected with `incompatibleVersion` | #033 | pass, 2026-10-08, macOS 27.0.1 (26A434), host arm64. `swift build` and `./gradlew -p Guest :guestd:assemble` pass. `GuestProtocolTests` pass 32 tests, including the handshake matrix row "a fake agent sending major 2 is rejected with `incompatibleVersion`" and the numbering rule. `:protocol:testDebugUnitTest` passes 35 JUnit tests. Both codecs decode, re-encode, and reject the golden frames (§16) |
 | `apkrun dev boot` connects to the agent within 5 s of `sys.boot_completed`; the supervisor reconnects after the agent is killed | #072 | pending (§15) |
 | vsock transport on the stock userdebug image with the bridge run as root, or the deferral to #035 | #034 | pending (§13.3) |
 | HelloText launches through GuestProtocol, and the `adb shell` counter does not change between runtime ready and the first frame | #034 | pending (§15) |

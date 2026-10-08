@@ -8658,7 +8658,7 @@ render errors from older peers.
 
 | Field | Value |
 |---|---|
-| Status | Resolved by [IR-258](#ir-258-bump-the-alpine-libcrypto3-and-libssl3-pins-to-3590-r0); the pin bump needs maintainer review |
+| Status | Resolved by [IR-258](#ir-258-bump-the-alpine-libcrypto3-and-libssl3-pins-to-359-r0); the pin bump needs maintainer review |
 | Task | #019; also #003 and the test artifacts of [environment-setup.md](../05-development/environment-setup.md) §4 |
 | Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`alpine-libcrypto3`, `alpine-libssl3`); [vm.md](../02-design/vm.md) §12 |
 
@@ -8795,7 +8795,7 @@ key before the bump is accepted.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #019 |
-| Affected documents | [graphics.md](../02-design/graphics.md) §6.4; [IR-252](#ir-252-edid-timing-and-range-choices) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.4; [IR-252](#ir-252-test-mode-edid-constants-and-the-cvt-reduced-blanking-parameters) |
 
 **Choice.** `DisplayMode.isSupported` now also requires that the CVT
 reduced-blanking timing of the mode fits the 16-bit detailed-timing clock

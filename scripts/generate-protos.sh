@@ -37,3 +37,43 @@ mkdir -p "$swift_out"
 
 printf 'generate-protos: wrote %s Swift files to Packages/GuestProtocol/Sources/GuestProtocol/Generated\n' \
     "$(find "$swift_out" -name '*.pb.swift' | wc -l | tr -d ' ')"
+
+# Golden frames (guest-protocol.md §16), shared by the Swift and Kotlin tests. Each
+# valid-*.txtpb is a text-format Envelope. protoc encodes it, and the length prefix is
+# added here. The invalid-*.bin frames are fixed byte sequences.
+frames_dir="$package_dir/testdata/frames"
+body="$(mktemp)"
+trap 'rm -f "$body"' EXIT
+rm -f "$frames_dir"/*.bin
+
+# write_frame <body file> <frame file>: 4-byte big-endian length, then the body.
+write_frame() {
+    local length
+    length="$(wc -c < "$1" | tr -d ' ')"
+    printf '%08x' "$length" | xxd -r -p > "$2"
+    cat "$1" >> "$2"
+}
+
+for source in "$frames_dir"/valid-*.txtpb; do
+    name="$(basename "$source" .txtpb)"
+    (
+        cd "$package_dir/proto"
+        "$protoc" -I . --encode=apkrun.guest.v1.Envelope apkrun/guest/v1/*.proto
+    ) < "$source" > "$body"
+    write_frame "$body" "$frames_dir/$name.bin"
+done
+
+# A length of 0 is invalid.
+printf '\000\000\000\000' > "$frames_dir/invalid-zero-length.bin"
+# 0x00400001 is one byte over the 4 MiB limit. The body is never read.
+printf '00400001' | xxd -r -p > "$frames_dir/invalid-oversize.bin"
+printf '\010\001' >> "$frames_dir/invalid-oversize.bin"
+# The prefix promises 32 bytes, and only 6 follow.
+printf '00000020' | xxd -r -p > "$frames_dir/invalid-truncated.bin"
+printf '\010\001\022\002\012\000' >> "$frames_dir/invalid-truncated.bin"
+# A 3-byte body that does not decode as an Envelope: a varint that never ends.
+printf '00000003' | xxd -r -p > "$frames_dir/invalid-malformed.bin"
+printf '\377\377\377' >> "$frames_dir/invalid-malformed.bin"
+
+printf 'generate-protos: wrote %s golden frames to Packages/GuestProtocol/testdata/frames\n' \
+    "$(find "$frames_dir" -name '*.bin' | wc -l | tr -d ' ')"

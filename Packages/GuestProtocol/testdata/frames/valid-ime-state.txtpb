@@ -1,0 +1,13 @@
+id: 1
+ime_state {
+  editor_focused: true
+  display_id: 2
+  package: "com.example.hello"
+  input_type: 1
+  ime_options: 0
+  selection_start: 0
+  selection_end: 0
+  composing_start: -1
+  composing_end: -1
+  cursor_rect_px { left: 10 top: 20 right: 30 bottom: 40 }
+}

@@ -1,0 +1,6 @@
+id: 1
+ime_command {
+  seq: 3
+  display_id: 2
+  set_composing { text: "ka" selection_start: 2 selection_end: 2 }
+}

@@ -1,0 +1,9 @@
+id: 2
+reply_to: 3
+response {
+  error {
+    code: GUEST_ERROR_CODE_NOT_FOUND
+    message: "package is not installed"
+    detail { key: "package" value: "com.example.hello" }
+  }
+}

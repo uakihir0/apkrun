@@ -1,0 +1,8 @@
+id: 1
+hello_ack {
+  accepted {}
+  host_protocol_version { major: 1 minor: 0 }
+  session_token: "0123456789abcdef"
+  enabled_capabilities: "core.v1"
+  host_version: "0.1.0"
+}

@@ -1,0 +1,15 @@
+id: 1
+input_batch {
+  batch_seq: 7
+  display_id: 2
+  host_send_nanos: 123456789
+  ack_requested: true
+  events {
+    host_time_nanos: 1000
+    touch { phase: TOUCH_PHASE_DOWN pointer_id: 0 x: 100.5 y: 200.25 }
+  }
+  events {
+    host_time_nanos: 2000
+    key { action: KEY_ACTION_DOWN key_code: 66 meta_state: 0 repeat_count: 0 }
+  }
+}

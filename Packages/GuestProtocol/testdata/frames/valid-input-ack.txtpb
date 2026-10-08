@@ -1,0 +1,2 @@
+id: 2
+input_ack { batch_seq: 7 receive_to_inject_micros: 350 rejected_events: 1 }

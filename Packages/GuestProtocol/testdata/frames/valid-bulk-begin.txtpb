@@ -1,0 +1,10 @@
+id: 1
+bulk {
+  transfer_id: 2
+  begin {
+    kind: BULK_KIND_FILE
+    name: "notes.txt"
+    mime_type: "text/plain"
+    size: 4
+  }
+}

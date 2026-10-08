@@ -1,0 +1,17 @@
+id: 2
+event {
+  seq: 1
+  display_added {
+    display_id: 0
+    unique_id: "apk-0"
+    name: "Built-in"
+    product { manufacturer_pnp_id: "APK" product_id: 0 model_year: 0 name: "Display 0" }
+    mode { width_px: 1080 height_px: 2400 refresh_hz: 60 }
+    density_dpi: 420
+    rotation: 0
+    state: DISPLAY_STATE_ON
+    vertical_scroll_factor_dp: 0.5
+    horizontal_scroll_factor_dp: 0.5
+    flags: 1
+  }
+}

@@ -1,0 +1,5 @@
+id: 2
+request {
+  timeout_ms: 5000
+  ping { nonce: 42 }
+}

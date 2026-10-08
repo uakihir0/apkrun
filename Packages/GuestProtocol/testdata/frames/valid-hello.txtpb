@@ -1,0 +1,21 @@
+id: 1
+hello {
+  protocol_version { major: 1 minor: 0 }
+  agent {
+    kind: AGENT_KIND_GUEST_AGENT
+    version_name: "1.0.0"
+    version_code: 1000000
+    build_id: "golden"
+  }
+  runtime_image_version: "16373615"
+  android {
+    sdk_int: 37
+    release: "17"
+    build_fingerprint: "google/aosp_cf_arm64_only_phone/cf_arm64_only_phone:17/test-keys"
+    build_type: "userdebug"
+  }
+  capabilities: "core.v1"
+  capabilities: "display.v1"
+  channel: CHANNEL_KIND_GUEST_CONTROL
+  mode: AGENT_MODE_DEVELOPMENT_SHELL
+}

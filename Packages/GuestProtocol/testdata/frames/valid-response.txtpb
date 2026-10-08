@@ -1,0 +1,9 @@
+id: 1
+reply_to: 2
+response {
+  launch_application {
+    task_id: 17
+    component: "com.example.hello/.MainActivity"
+    outcome: LAUNCH_OUTCOME_STARTED
+  }
+}

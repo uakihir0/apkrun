@@ -74,7 +74,11 @@ def wait_for(path: Path, needle: str, timeout: float, start: int = 0) -> float |
 def boot_once(args: argparse.Namespace, index: int) -> dict:
     run = REPO / "Images/work/16373615/vz-spike/runs" / args.name
     out = REPO / f"Images/work/16373615/vz-spike/{args.name}-boot{index}.out"
-    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "KEEP_DISKS": "0" if index == 1 else "1"}
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "KEEP_DISKS": "0" if index == 1 else "1",
+        "DISK_SET": args.disk_set,
+    }
     started = time.monotonic()
     with open(out, "w") as handle:
         process = subprocess.Popen(
@@ -151,6 +155,7 @@ def main() -> int:
     parser.add_argument("--name", required=True)
     parser.add_argument("--boots", type=int, default=5)
     parser.add_argument("--dwell", type=int, default=600)
+    parser.add_argument("--disk-set", default="disks", choices=["disks", "disks2"])
     args = parser.parse_args()
     args.boot = args.boot.resolve()
     records = []

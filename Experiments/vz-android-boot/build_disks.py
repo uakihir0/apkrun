@@ -58,6 +58,22 @@ PLAN = [
     ("userdata", [("userdata", None, "userdata")]),
 ]
 
+# Two-disk variant: the stock fstab hands /devices/*/block/vdc to vold as
+# sdcard1, so a third disk would be offered as removable storage. The writable
+# partitions share one disk instead, with userdata last so it can grow.
+PLAN_TWO_DISKS = [
+    PLAN[0],
+    (
+        "instance",
+        [
+            ("misc", None, "misc"),
+            ("metadata", None, "metadata"),
+            ("frp", None, "frp"),
+            ("userdata", None, "userdata"),
+        ],
+    ),
+]
+
 
 def align_up(value: int, alignment: int) -> int:
     return (value + alignment - 1) // alignment * alignment
@@ -245,6 +261,7 @@ def main() -> int:
     parser.add_argument("--zip", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--userdata-gib", type=int, default=16)
+    parser.add_argument("--two-disks", action="store_true")
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text())
@@ -264,7 +281,7 @@ def main() -> int:
                 raise SystemExit(f"{artifact['file']}: SHA-256 mismatch")
         print("verified", len(artifacts), "artifacts", flush=True)
 
-        for role, entries in PLAN:
+        for role, entries in PLAN_TWO_DISKS if args.two_disks else PLAN:
             layout = []
             cursor = ALIGN
             for label, artifact_id, blank in entries:

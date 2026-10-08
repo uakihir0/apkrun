@@ -1410,6 +1410,11 @@ assert policy.is_control_path("Packages/RuntimeCore/Tests/RuntimeCoreTests/Test.
 assert policy.is_control_path("Apps/APKRun/UITests/SmokeTests.swift")
 assert policy.is_control_path("project.yml")
 assert policy.is_control_path("docs/01-architecture/modules.md")
+assert policy.is_control_path("scripts/release/generate-notices.py")
+assert policy.is_control_path("Images/tools/tests/test_manifest.py")
+assert policy.is_control_path("Guest/guestd/src/test/kotlin/GuestTest.kt")
+assert not policy.is_control_path("Images/tools/apkrun_image/manifest.py")
+assert not policy.is_control_path("scripts/release/notes.md")
 print("PASS CI policy fixture protects generators, manifests, tests, and module policy")
 
 assert not authorized(

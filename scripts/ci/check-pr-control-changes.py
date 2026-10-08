@@ -36,6 +36,8 @@ CONTROL_FILES = {
     "scripts/generate-protos.sh",
     "scripts/smoke-products.sh",
     "scripts/release/check-release-build.sh",
+    # Generates ThirdPartyNotices.html; CI and the release check both run it.
+    "scripts/release/generate-notices.py",
     "scripts/tool-versions.env",
 }
 CONTROL_BASENAMES = {
@@ -63,7 +65,9 @@ CONTROL_BASENAMES = {
     "libs.versions.toml",
 }
 CONTROL_DIRECTORY_NAMES = {"buildSrc", "build-logic", ".cargo"}
-TEST_DIRECTORIES = {"Tests", "UITests"}
+# "tests" and "test" cover the test trees outside Swift targets, such as
+# Images/tools/tests (pytest in CI) and Gradle src/test.
+TEST_DIRECTORIES = {"Tests", "UITests", "tests", "test"}
 
 
 def pull_request_revision(

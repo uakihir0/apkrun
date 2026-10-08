@@ -8642,7 +8642,7 @@ render errors from older peers.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Needs maintainer review; partly resolved by the captured Linux trace (2026-10-08, `376bf4e`) |
 | Task | #019 |
 | Affected documents | [graphics.md](../02-design/graphics.md) §12 (#019 step 1), §14; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 deliverables |
 
@@ -8651,6 +8651,8 @@ render errors from older peers.
 **Reason.** Driver traces need a booted guest, which the current lock cannot build (IR-251). Layout vectors still test every field offset, every length rule, and the fence and context echo rules. They cannot show which flags Linux actually sets, so the captured traces are still required for the acceptance.
 
 **Verification.** T0 decodes and re-encodes every vector byte for byte. Truncation at every byte and one trailing byte are rejected. The EDID in the response vector is one of the golden blocks in IR-252.
+
+**Update (2026-10-08).** The `gpu` check of the T2 run captured 28 exchanges from the Linux driver (`Tests/Fixtures/graphics/virtio-gpu-linux-trace.json`). Every one decodes and re-encodes exactly. The device answers the 17 display and EDID requests as the driver received them (`deviceAnswersTheCapturedDisplayAndEDIDRequestsLikeTheLinuxDriverSaw`). The layout vectors remain the coverage set for the commands this guest does not send.
 
 ## IR-251: The test Linux guest cannot be built from the current lock file
 
@@ -8734,7 +8736,7 @@ render errors from older peers.
 
 **Reason.** §4.3 requires a runtime scanout change in a running guest, but it does not say how the host reaches the device. The device queue is owned by VZ and is not exposed to the model, so the device enables the scanout itself through its thread-safe lock. The option is off in every other build.
 
-**Verification.** T0 `theHotplugSpikeEnablesScanoutOneAfterTheFirstDriverOK` passes. The guest-side result is not recorded (IR-251).
+**Verification.** T0 `theHotplugSpikeEnablesScanoutOneAfterTheFirstDriverOK` passes. The T2 run on 2026-10-08 recorded the Linux result. The host enabled scanout 1 3.0 s after DRIVER_OK, and the guest's `gpu-hotplug` check reported `scanout1=connected` after about 4 s and 5 s in two runs. The R-01 Linux part is positive. Android stays with #028.
 
 ## IR-257: edid-decode is built outside the lock for fixture generation
 

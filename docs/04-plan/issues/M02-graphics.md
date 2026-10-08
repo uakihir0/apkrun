@@ -228,13 +228,13 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 
 ### Acceptance criteria
 
-- [ ] A Linux guest detects a virtio GPU device. There is no rendering requirement yet.
+- [x] A Linux guest detects a virtio GPU device. There is no rendering requirement yet.
 - [x] The device layer lives in GraphicsCore, is owned by APKRun, and has no Linux- or Android-specific code.
-- [ ] Device initialization and feature negotiation work: vendor 1af4 device 1050, 16 scanouts, and `Virtual-1` connected.
-- [ ] The EDID the guest reads equals the generated EDID.
+- [x] Device initialization and feature negotiation work: vendor 1af4 device 1050, 16 scanouts, and `Virtual-1` connected.
+- [x] The EDID the guest reads equals the generated EDID.
 - [x] Every command outside `GET_DISPLAY_INFO` and `GET_EDID` gets an error response, and no guest input crashes the device.
 - [x] Every file derived from RiftVM carries the notice of §2.3.
-- [ ] The R-01 spike result is recorded.
+- [x] The R-01 spike result is recorded.
 
 ### Notes
 
@@ -246,10 +246,13 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
   - GraphicsCore ownership: `rg -i 'linux|android|cuttlefish'` over `VirtioGPU/`, `Display/`, and `Resources/` finds only the `virtio_gpu.h` citation.
   - Error responses and crash safety: T0 `everyOtherControlCommandGetsAnErrorResponse` (22 control commands), the cursor-queue, oversized-request, short-request, and response-size tests, and the T1 fuzz smoke run (mutated golden requests and responses for up to 5 s).
   - RiftVM notice: no #019 file copies or adapts RiftVM code. RiftVM was read as a reference only (riftvm-analysis.md, IR-249).
-- **Open, blocked by IR-251:** the T2 criteria (detection, vendor 1af4 with device 1050, `Virtual-1` connected, EDID equality, and the R-01 result). The `gpu` and `gpu-hotplug` checks in `Tests/Fixtures/linux/init` pass `sh -n`, but no guest has run them. `scripts/fetch-test-linux.sh` fails on the pinned `libcrypto3` (HTTP 404), so no test guest can be built from this checkout.
+- **T2 evidence (2026-10-08, arm64, macOS 27.0.1 build 26A434, signed `IntegrationTests` host):** the libcrypto3 and libssl3 pins are bumped (`ce8a51b`, IR-258), so `scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh` now succeed. `xcodebuild test -scheme IntegrationTests -only-test-configuration LinuxGuest` passed 29 of 29 tests (`.build/task019/t2-final.log`, result bundle `.build/task019/t2-final.xcresult`, both gitignored). The `gpu` check passed: the guest found PCI 1af4:1050, reported 16 scanouts and 16 connectors, and `card0-Virtual-1` was connected. Its EDID SHA-256 equals `scanout-00-1024x768-60.edid`, checked by `GPUDeviceTests`.
+- **R-01 result (Linux part): positive.** The host enabled scanout 1 3.0 s after DRIVER_OK (device log: `R-01 spike enabled scanout 1 after 3.0 seconds`). The guest's `gpu-hotplug` check reported `scanout1=connected` after about 4 s in one run and 5 s in the final run. The driver re-reads display info only on a probe or a config-change event, so this shows that `updateDeviceSpecificConfiguration` raised the guest's event. The device log does not record each query, so the trigger is an inference from driver behaviour. §4.3 stays as written. Fallbacks A to C stay for Android (#028), and R-01 remains open for Android.
+- **Failed attempts, for the record:** the first T2 run failed the hotplug check in 0.6 s. The guest's `sleep 0.1` loop and `seq` do not work in the test busybox (`seq` is not an applet), so the 30-second wait returned at once. `fd8af1e` replaces both with whole-second waits, and the rerun passed.
+- **Golden driver trace:** the `gpu` check's exchanges were captured with the device's `traceObserver` (`GPUDeviceTests` writes `gpu-driver-trace.json` next to the guest artifacts). They hold 28 exchanges: one `GET_DISPLAY_INFO`, 16 `GET_EDID`, `RESOURCE_CREATE_2D`, `ATTACH_BACKING` with 184 entries, 3 `SET_SCANOUT`, 3 `RESOURCE_FLUSH`, and 3 `TRANSFER_TO_HOST_2D`. They are committed as `Tests/Fixtures/graphics/virtio-gpu-linux-trace.json` (`376bf4e`), and every exchange decodes and re-encodes exactly. The display and EDID answers match what the driver received. The layout vectors stay for the commands that this guest does not send (IR-250).
 - **Golden vectors:** the request and response vectors are written from the layouts, not captured (IR-250). Replace them with driver traces once the guest runs. The `traceObserver` of `VirtioGPUDevice` is the capture hook.
 - **Judgment calls:** IR-248 (start with #003's gate open), IR-249 (error policy; differs from the §4.6 acknowledgement), IR-252 (test mode, EDID, and CVT constants), IR-253 (display-event rules), IR-254 (ResourceTable not wired until #022), IR-255 (fuzz smoke as a Swift test), IR-256 (R-01 spike option), and IR-257 (edid-decode provenance).
-- **Follow-ups, not #019:** (a) an XCTest or Swift Testing suite wrapper in `Tests/IntegrationTests/LinuxGuestTests` for `gpu` and `gpu-hotplug`; the checks run through `apkrun dev linux --tests` until then; (b) connect `ResourceTable` and the renderer in #022; (c) cursor acknowledgement in #023; (d) the libFuzzer target in #091.
+- **Follow-ups, not #019:** (a) connect `ResourceTable` and the renderer in #022; (b) cursor acknowledgement in #023; (c) the libFuzzer target in #091; (d) capture the Android driver's exchanges with #021.
 
 ---
 

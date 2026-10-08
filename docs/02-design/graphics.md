@@ -277,6 +277,8 @@ Responses: `OK_NODATA` (0x1100), `OK_DISPLAY_INFO` (0x1101), `OK_CAPSET_INFO` (0
 
 Guest errors never crash apkrund. A malformed request gets an error response and a rate-limited log line (`io.apkrun.graphics`, category `device`, at most 10 per second, with a counter for the rest). An element whose writable part is too small for a response header is completed with zero bytes written.
 
+In #019, the device answers `GET_DISPLAY_INFO` and `GET_EDID` only. Every other command gets an error response, cursor commands included (IR-249). The v1 handling in the table above applies from #022 and #023.
+
 ### 4.3 Display change events without a config-write callback
 
 The Linux driver learns about display changes like this: the device sets `VIRTIO_GPU_EVENT_DISPLAY` in `events_read` and raises a config-change interrupt. The driver's config-changed work reads `events_read`, sends `GET_EDID` (if negotiated) and `GET_DISPLAY_INFO`, triggers a DRM hotplug event, and finally writes the handled bits to `events_clear`. The device is expected to clear `events_read` when it sees the `events_clear` write.
@@ -324,7 +326,7 @@ Rules:
 
 ### 4.6 Cursor queue
 
-The Android `drm_virgl` configuration composes in client mode (`hwcomposer.mode=client`) and does not use a hardware cursor plane. The host shows the macOS cursor, and pointer input is injected by the Guest Agent ([input.md](input.md)). `UPDATE_CURSOR` and `MOVE_CURSOR` are acknowledged immediately, and the last values are kept for diagnostics.
+The Android `drm_virgl` configuration composes in client mode (`hwcomposer.mode=client`) and does not use a hardware cursor plane. The host shows the macOS cursor, and pointer input is injected by the Guest Agent ([input.md](input.md)). `UPDATE_CURSOR` and `MOVE_CURSOR` are acknowledged immediately, and the last values are kept for diagnostics. In #019 the device answers cursor commands with an error response until the cursor path of #023 exists (IR-249).
 
 ### 4.7 Threading
 
@@ -753,8 +755,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 |---|---|---|
 | Custom virtio API with `EntropyTestDevice`: queue validity before DRIVER_OK, same-size config updates, reset and stop mapping invalidation, deferred completion, guest reboot | #063 | 2026-10-05, arm64 MacBook Pro, macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: VirtioDeviceCore and VirtualMachineCore T0 passed (26 and 71 tests); clean filtered-copy Xcode integration build passed; LinuxGuest T2 passed 10 XCTest cases and 6 observer tests. The forced-stop callback attachment records `DRIVER_OK → mapping creation → WillStop`; it contains no `WillReset` between mapping creation and stop. The live mapping is rejected and the old deferred-element completion is attempted after stop. Reboot evidence records the guest console order and VZ callback order independently. Full repository checks passed; the final hostile review's completion-token documentation finding was corrected and a regression test added. See IR-193. |
 | RiftVM source analysis: `riftvm-v0.6.1` commit `51f19193b1d3326b2e164d37a2a59e9970375170`, source/build flags, license and APKRun differences | #018 | 2026-10-07: analysis updated after hostile review with command responses, resource-estimate limits, scanout/mode behavior, GPU-profile and display-topology differences, and a patch-by-patch #020 crosswalk. The source-only lock check passed and its MIT copy was manually compared with the pinned source. #020's separate clean build, cache reuse, and tests are recorded below / IR-191; #018 did not repeat them. No RiftVM VM/Android/Metal presentation test; maintainer review pending (IR-188). |
-| The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | pending (§12) |
-| Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | pending (§4.3) |
+| The Linux test guest detects the virtio GPU: vendor 1af4 device 1050, 16 scanouts, `Virtual-1` connected, EDID equal to the generated one | #019 | Pending. 2026-10-08, arm64 MacBook Pro, macOS 27.0.1 build 26A434: GraphicsCore T0 (67 tests), protocol fuzz smoke (T1), and RuntimeCore T0 pass. The `gpu` check and the device attachment are implemented, but no guest has run them: the test artifacts cannot be fetched from the current pins (IR-251). The golden vectors are layout-derived (IR-250). |
+| Config-change interrupt from `updateDeviceSpecificConfiguration`: hotplug of scanout 1 on the Linux test guest | #019 | Pending. The `gpu-hotplug` check and the development-only spike (IR-256) are implemented. The result is not recorded because the guest did not run (IR-251). |
 | Clean build of the runtime libraries from the lock file; renderer create, `VIRGL2` capset, context lifecycle, and recreation on the host | #020 | 2026-10-05, arm64 macOS 27.0 build 26A428 / Xcode 27.0 build 27A266a: clean native build and verified cache hit (IR-191); GraphicsBridge T0 (3 tests), host T1 (2 tests) normal/ASan/UBSan, Release bundle check, and full repository checks passed. Hostile review found no actionable P1/P2; callers must quiesce before destroy (IR-192). Maintainer review pending. |
 | `kmscube` on the Linux test guest: `virgl` renderer and `hostReadbacks = 0` headless (#022), ≥ 55 fps in the development window (#023) | #022, #023 | pending (§12) |
 | Android binds `virtio_gpu`: `card0` with 16 `Virtual-N` connectors, only `Virtual-1` connected | #021 | pending (§12) |

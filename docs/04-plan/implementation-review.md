@@ -8609,3 +8609,143 @@ the per-item rule. A prior review caught an invalid health-check variant in the
 API example; it now uses a compiled catalog variant, with renderer coverage.
 The generator test confirms retired catalog entries remain available to
 render errors from older peers.
+
+## IR-248: Start #019 while the #003 gate is still open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md#003-boot-minimal-arm64-linux) #003; [README](issues/README.md) §3, §5; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 |
+
+**Choice.** #019 starts on the implementation evidence of #003 (the signed `LinuxGuest` run on commit `d31e7e3` passed 33 of 33) and does not wait for #003's formal G1 closure, its ten-boot gate run, or its task-closing review. #019 does not claim #003's acceptance, and its own T2 acceptance still needs a booted guest.
+
+**Reason.** [README](issues/README.md) §5 allows parallel tracks to advance while #003's clean `main` gate run stays open. #019 changes only the device model, the guest's `gpu` check, and the runner that attaches the device. Waiting for the gate would hold the M2 chain for a step that does not change the device contract.
+
+**Verification.** The #003 acceptance boxes remain unticked in M00. No #019 test depends on a gate run. The T2 part of #019 is blocked by IR-251, so the dependency choice does not change what #019 can prove today.
+
+## IR-249: Error policy for requests the device does not implement
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §4.6; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §2.1; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 steps 2 and acceptance |
+
+**Choice.** In #019 the device answers `GET_DISPLAY_INFO` and `GET_EDID`, and it answers every other command with an error. On the control queue an unsupported command gets `ERR_UNSPEC`. On the cursor queue, `UPDATE_CURSOR` and `MOVE_CURSOR` get `ERR_UNSPEC`, and any other command gets `ERR_INVALID_PARAMETER`, because it is on the wrong queue. Requests shorter than the 24-byte header get no response but are completed. Requests above 4 MiB plus 32 bytes get `ERR_INVALID_PARAMETER`. `GET_EDID` before EDID negotiation gets `ERR_UNSPEC`, and an out-of-range scanout gets `ERR_INVALID_SCANOUT_ID`. A response that does not fit gets an error header when the element can hold one, and otherwise nothing is written.
+
+**Reason.** The task's step 2 and its acceptance criterion ask for an error response to every command other than the two. Section 4.2 and §4.6 say cursor commands are acknowledged. The acceptance criterion is the contract for this task, and the acknowledgement depends on cursor-plane work that belongs to #022 and #023, so this task follows the criterion. The wrong-queue and unsupported-command split follows the mapping that RiftVM was observed to use. It is observed behavior, not an APKRun policy.
+
+**Verification.** T0 `everyOtherControlCommandGetsAnErrorResponse` covers all 22 other control-queue commands. `cursorQueueCommandsGetErrorResponses`, `aRequestLargerThanFourMebibytesGetsAnInvalidParameterError`, `aResponseThatDoesNotFitIsReplacedByAnErrorHeaderOrDropped`, and `aRequestShorterThanTheHeaderGetsNoResponseButIsCompleted` cover the rest. Each test checks that the element is completed exactly once.
+
+## IR-250: Golden virtio-gpu vectors are written from the layouts, not captured
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#019 step 1), §14; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 deliverables |
+
+**Choice.** `Tests/Fixtures/graphics/virtio-gpu-vectors.json` holds 28 request and 8 response vectors. An independent script writes them from the field layouts of `virtio_gpu.h`, with zero padding. The file's `provenance` field says so. When the T2 guest runs, bytes captured from the Linux driver replace these vectors, and the capture uses the device's `traceObserver`.
+
+**Reason.** Driver traces need a booted guest, which the current lock cannot build (IR-251). Layout vectors still test every field offset, every length rule, and the fence and context echo rules. They cannot show which flags Linux actually sets, so the captured traces are still required for the acceptance.
+
+**Verification.** T0 decodes and re-encodes every vector byte for byte. Truncation at every byte and one trailing byte are rejected. The EDID in the response vector is one of the golden blocks in IR-252.
+
+## IR-251: The test Linux guest cannot be built from the current lock file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review (blocker for the #019 T2 acceptance) |
+| Task | #019; also #003 and the test artifacts of [environment-setup.md](../05-development/environment-setup.md) §4 |
+| Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`alpine-libcrypto3`, `alpine-libssl3`); [vm.md](../02-design/vm.md) §12 |
+
+**Choice.** #019 does not change the lock. `scripts/fetch-test-linux.sh` downloads the kernel and the minirootfs, then fails on `alpine-libcrypto3` (`libcrypto3-3.5.8-r0.apk`), which returns HTTP 404. The Alpine v3.24 `main` index lists `libcrypto3` and `libssl3` at 3.5.9-r0. A maintainer needs to bump both pins with reviewed SHA-256 values. Until then the `gpu` and `gpu-hotplug` checks, the R-01 spike, the golden capture, and the T2 acceptance boxes of #019 stay unrun.
+
+**Reason.** The pins are the reproducibility contract of NFR-DEV-01. A bump changes the bits that every T2 suite boots, and it belongs to the #003 artifact pins, not to the graphics device task.
+
+**Verification.** The fetch log shows the 404 after the kernel and minirootfs succeed. `curl -I` on the pinned Alpine URLs returns 404 only for `libcrypto3-3.5.8-r0.apk`. The `APKINDEX.tar.gz` of v3.24/main, fetched on 2026-10-08, lists `libcrypto3` and `libssl3` at 3.5.9-r0.
+
+## IR-252: Test mode, EDID constants, and the CVT reduced-blanking parameters
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.1, §6.1, §6.4; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 step 3 |
+
+**Choice.** Scanout 0's fixed test mode is 1024×768 at 60 Hz and 160 dpi (`DisplayMode.testDefault`). The EDID uses manufacturer `APK`, week 0, model year 2026, digital 8-bit input, gamma 2.2, and sRGB chromaticity computed from the sRGB coordinates with 10-bit rounding. The range limits are 24–120 Hz vertical, 30–255 kHz horizontal, and 660 MHz maximum pixel clock. The detailed timing uses CVT reduced blanking with horizontal blank 160, sync 32, and front porch 48; vertical front porch 3, vertical sync 8, minimum back porch 6, and minimum vertical blank 460 µs; the pixel clock steps down to 0.25 MHz. Accepted modes have 1–4095 pixels, 24–120 Hz, and 1–1200 dpi.
+
+**Reason.** §6.4 names the rules but not the constants. The golden blocks decode in edid-decode 5332a3b with no failure or warning lines. They report the requested modes, sizes, and names. I did not verify CVT-RB conformance. The vertical sync width of 8 lines is my reading of CVT 1.2 for reduced blanking, and the 16:9 value may differ. A maintainer should confirm it, and check whether edid-decode's CVT-RB reporting agrees.
+
+**Verification.** T0 compares generated blocks with the golden files (scanouts 0, 1, and 15). An independent T0 decoder reads back the manufacturer, product code, serial, name, timing, and sizes. Accepted modes are checked for checksum and decoded width and height. edid-decode output is committed beside each block.
+
+## IR-253: Display-event rules that the design leaves open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §3.1, §4.3, §8 |
+
+**Choice.** (1) A scanout change that leaves the state as it was does not bump `displayGeneration`. (2) `events_read` is written by one writer task per DRIVER_OK generation. It always writes the newest wanted value and stops when that value matches the last successful write. Updates that complete out of order therefore cannot leave an old value behind. (3) A writer from an earlier generation exits without changing state. (4) Reset sets the wanted `events_read` to 0 and keeps the host's scanouts. The next DRIVER_OK writes the current value if it differs. (5) The device treats the last successful write as the configuration bytes that survive a reset.
+
+**Reason.** §4.3 gives the generation logic but not the ordering of asynchronous updates, the no-op rule, or reset. Rule (5) assumes that VZ keeps the configuration bytes across a reset. That assumption is not measured for the GPU device, so the R-01 spike should check it.
+
+**Verification.** T0 covers a change before DRIVER_OK, a GET_DISPLAY_INFO that clears the event, a change during an in-flight query that keeps it set, a reset that keeps scanout 1 enabled and clears the event, a rejected mode that sends nothing, and a disable that sends one. The VZ-side behavior is not verified (IR-251).
+
+## IR-254: ResourceTable is not connected to the device in #019
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §5.4, §8; [M02](issues/M02-graphics.md#019-virtio-gpu-device-layer) #019 scope |
+
+**Choice.** `ResourceTable` is a standalone type with its own T0 tests. `VirtioGPUDevice` does not hold one. Every resource command gets an error response (IR-249), so the table's reset and attach paths run only in tests until #022 connects them.
+
+**Reason.** The acceptance requires an error response for every command other than the two EDID and display commands. Connecting the table now would change those responses. The table's rules are specified in §4.4 and §5.4, so writing it now lets #022 connect it without redesign.
+
+**Verification.** 12 ResourceTable T0 tests cover IDs, format and dimension rules, the single-resource, total-memory, and live-resource limits, backing validation with no partial state, the entry limit, detach, unref, and reset.
+
+## IR-255: The fuzz smoke target is a time-boxed Swift test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [test-strategy.md](test-strategy.md) §7.2; [graphics.md](../02-design/graphics.md) §11 |
+
+**Choice.** The #019 "time-boxed fuzz smoke target" is a T1 Swift Testing test in `GraphicsCoreSystemTests`. It mutates the golden vectors with a fixed seed for up to 5 s (requests) and 2 s (responses). Each input must either decode with a typed error or re-encode to bytes that decode to the same value. The libFuzzer target and its CI schedule stay with #091.
+
+**Reason.** The docs do not define how libFuzzer runs on macOS in CI. A deterministic in-process smoke test gives CI a bounded check now without choosing that toolchain setup.
+
+**Verification.** `mutatedRequestsDecodeWithTypedErrorsOrRoundTrip` and `mutatedResponsesDecodeWithTypedErrorsOrRoundTrip` passed on macOS 27.0.1 (26A434).
+
+## IR-256: The R-01 spike is a development-only option selected by test name
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.3, §12 (#019 step 5), §15; [risks.md](risks.md) R-01 |
+
+**Choice.** `VirtioGPUDevice(hotplugSpikeDelay:)` enables scanout 1 once, 3 seconds after the first DRIVER_OK. `LinuxTestGuestRunner` sets the delay only when the `gpu-hotplug` test is requested. The guest's `gpu-hotplug` check waits up to 30 seconds for `card0-Virtual-2` to report `connected`. A failed wait is recorded as `fail`, which is the R-01 negative result.
+
+**Reason.** §4.3 requires a runtime scanout change in a running guest, but it does not say how the host reaches the device. The device queue is owned by VZ and is not exposed to the model, so the device enables the scanout itself through its thread-safe lock. The option is off in every other build.
+
+**Verification.** T0 `theHotplugSpikeEnablesScanoutOneAfterTheFirstDriverOK` passes. The guest-side result is not recorded (IR-251).
+
+## IR-257: edid-decode is built outside the lock for fixture generation
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 |
+| Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json); [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 |
+
+**Choice.** edid-decode was built with meson from upstream `git.linuxtv.org/edid-decode.git`, parent commit `5332a3b`, in a gitignored build directory. The upstream `HEAD` only points to v4l-utils, so the code comes from its parent. The tool is not in `ThirdParty.lock.json`. It does not ship and does not run in CI. Its output (SPDX `MIT`) is committed as text beside each golden EDID.
+
+**Reason.** Homebrew has no edid-decode formula, and the deliverable needs its output. Pinning a tool used only for fixture generation would add a lock entry that no build step reads.
+
+**Verification.** The three golden blocks decode with exit status 0 and no failure or warning lines. The decode output is in `Tests/Fixtures/graphics/edid/*.edid-decode.txt`. A maintainer may decide to pin the tool in the lock.

@@ -441,7 +441,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Does a config-space update raise a display event in Linux and Android? | #019, #028 | pending ([graphics.md](graphics.md) §4.3) |
+| Does a config-space update raise a display event in Linux and Android? | #019, #028 | pending: the #019 spike is implemented but has not run, see IR-251 and IR-256 ([graphics.md](graphics.md) §4.3) |
 | Does `Display.getDeviceProductInfo()` expose the EDID product code on pool displays? | #028 | pending |
 | Does a mode change keep the Android display ID? | #067 (display 0), #028 (pool displays) | pending (§7.1) |
 | Density: does the forced density replace the default density (display 0) and the fallback 213 (pool displays) without side effects? | #067 (display 0), #028 (pool displays) | pending (§4, OQ-39) |

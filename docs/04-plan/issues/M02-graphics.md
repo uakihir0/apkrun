@@ -229,11 +229,11 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 ### Acceptance criteria
 
 - [ ] A Linux guest detects a virtio GPU device. There is no rendering requirement yet.
-- [ ] The device layer lives in GraphicsCore, is owned by APKRun, and has no Linux- or Android-specific code.
+- [x] The device layer lives in GraphicsCore, is owned by APKRun, and has no Linux- or Android-specific code.
 - [ ] Device initialization and feature negotiation work: vendor 1af4 device 1050, 16 scanouts, and `Virtual-1` connected.
 - [ ] The EDID the guest reads equals the generated EDID.
-- [ ] Every command outside `GET_DISPLAY_INFO` and `GET_EDID` gets an error response, and no guest input crashes the device.
-- [ ] Every file derived from RiftVM carries the notice of §2.3.
+- [x] Every command outside `GET_DISPLAY_INFO` and `GET_EDID` gets an error response, and no guest input crashes the device.
+- [x] Every file derived from RiftVM carries the notice of §2.3.
 - [ ] The R-01 spike result is recorded.
 
 ### Notes
@@ -241,6 +241,15 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - **Record:** the detection result and the display event spike in the two #019 rows of [../../02-design/graphics.md](../../02-design/graphics.md) §16, the Linux part of [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §11 row 1, and R-01 in [../risks.md](../risks.md). The §4.3 text changes only if the spike changes the design.
 - **Pitfall:** the Linux fbdev emulation sends 2D commands (`RESOURCE_CREATE_2D`, `SET_SCANOUT`, `RESOURCE_FLUSH`). In this task they get error responses. The kernel logs errors, but the probe and the EDID read still pass. Do not implement 2D rendering here.
 - The device offers EDID only in this task. `VIRTIO_GPU_F_VIRGL` and `num_capsets` = 2 come with the renderer in #022.
+- **Status (2026-10-08):** The device layer, protocol codecs, scanout table, EDID generator, resource table, the RuntimeCore attachment, the `gpu` and `gpu-hotplug` checks, and the R-01 spike option are committed on `codex` (4781b50, 25d1da7, 893a367, fde4b4c, 392d889). On macOS 27.0.1 build 26A434 (arm64), `swift test --filter 'GraphicsCoreTests|GraphicsCoreSystemTests|RuntimeCoreTests'` passed: GraphicsCoreTests 67 tests, GraphicsCoreSystemTests 4 tests (2 protocol fuzz smoke, 2 renderer), RuntimeCoreTests 3 tests.
+- **Ticked with evidence:**
+  - GraphicsCore ownership: `rg -i 'linux|android|cuttlefish'` over `VirtioGPU/`, `Display/`, and `Resources/` finds only the `virtio_gpu.h` citation.
+  - Error responses and crash safety: T0 `everyOtherControlCommandGetsAnErrorResponse` (22 control commands), the cursor-queue, oversized-request, short-request, and response-size tests, and the T1 fuzz smoke run (mutated golden requests and responses for up to 5 s).
+  - RiftVM notice: no #019 file copies or adapts RiftVM code. RiftVM was read as a reference only (riftvm-analysis.md, IR-249).
+- **Open, blocked by IR-251:** the T2 criteria (detection, vendor 1af4 with device 1050, `Virtual-1` connected, EDID equality, and the R-01 result). The `gpu` and `gpu-hotplug` checks in `Tests/Fixtures/linux/init` pass `sh -n`, but no guest has run them. `scripts/fetch-test-linux.sh` fails on the pinned `libcrypto3` (HTTP 404), so no test guest can be built from this checkout.
+- **Golden vectors:** the request and response vectors are written from the layouts, not captured (IR-250). Replace them with driver traces once the guest runs. The `traceObserver` of `VirtioGPUDevice` is the capture hook.
+- **Judgment calls:** IR-248 (start with #003's gate open), IR-249 (error policy; differs from the §4.6 acknowledgement), IR-252 (test mode, EDID, and CVT constants), IR-253 (display-event rules), IR-254 (ResourceTable not wired until #022), IR-255 (fuzz smoke as a Swift test), IR-256 (R-01 spike option), and IR-257 (edid-decode provenance).
+- **Follow-ups, not #019:** (a) an XCTest or Swift Testing suite wrapper in `Tests/IntegrationTests/LinuxGuestTests` for `gpu` and `gpu-hotplug`; the checks run through `apkrun dev linux --tests` until then; (b) connect `ResourceTable` and the renderer in #022; (c) cursor acknowledgement in #023; (d) the libFuzzer target in #091.
 
 ---
 

@@ -121,7 +121,7 @@ elif mode == "experiments-nested-package":
         1,
     )
     guest_protocol_source = (
-        destination / "Packages/GuestProtocol/Sources/GuestProtocol/GuestProtocol.swift"
+        destination / "Packages/GuestProtocol/Sources/GuestProtocol/FrameCodec.swift"
     )
     guest_protocol_source.write_text(
         "import HiddenExperiment\n" + guest_protocol_source.read_text()

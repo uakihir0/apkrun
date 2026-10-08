@@ -59,10 +59,11 @@ jobs:
     timeout-minutes: 30
     env:
       APKRUN_CI: "1"
-      APKRUN_TEST_LINUX_DIR: ${{ runner.temp }}/apkrun-test-linux
       APKRUN_TEST_DEVELOPMENT_TEAM: ${{ vars.APKRUN_TEST_DEVELOPMENT_TEAM }}
       APKRUN_TEST_CODE_SIGN_IDENTITY: ${{ vars.APKRUN_TEST_CODE_SIGN_IDENTITY }}
     steps:
+      - name: Select the test Linux directory
+        run: echo "APKRUN_TEST_LINUX_DIR=$RUNNER_TEMP/apkrun-test-linux" >> "$GITHUB_ENV"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}

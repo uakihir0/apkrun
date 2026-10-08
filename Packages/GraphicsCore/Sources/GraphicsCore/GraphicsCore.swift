@@ -20,6 +20,10 @@ public enum GraphicsFailure: APKRunError, Equatable {
     case libraryMissing(name: String)
     /// A renderer operation failed. `operation` identifies the attempted API.
     case rendererOperationFailed(operation: String, detail: String)
+    /// A display mode is outside the EDID or size limits (graphics.md §6.4).
+    case modeUnsupported(mode: DisplayMode)
+    /// A configuration-space update failed for a reason other than a generation change.
+    case configUpdateFailed(detail: String)
 
     /// The registered error-catalog domain for graphics failures.
     public static let domain = ErrorDomain.graphics
@@ -33,6 +37,10 @@ public enum GraphicsFailure: APKRunError, Equatable {
             "libraryMissing"
         case .rendererOperationFailed:
             "rendererOperationFailed"
+        case .modeUnsupported:
+            "modeUnsupported"
+        case .configUpdateFailed:
+            "configUpdateFailed"
         }
     }
 
@@ -51,6 +59,10 @@ public enum GraphicsFailure: APKRunError, Equatable {
                 "operation": .text(operation),
                 "detail": .text(detail),
             ]
+        case .modeUnsupported(let mode):
+            ["mode": .text(mode.description)]
+        case .configUpdateFailed(let detail):
+            ["detail": .text(detail)]
         }
     }
 

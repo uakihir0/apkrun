@@ -621,11 +621,12 @@ change the `cargo fmt --check` run when Rust sources are present.
 - [x] Full Swift T0/T1 tests pass on a real Apple Silicon Mac before merge; hosted `test-swift` runs only T0.
 - [x] `build` runs `check-release-build.sh` on the Release APKRun.app, and a test hook or a test key in it fails the job.
 - [x] Local repository checks run with no arguments; the policy check fails closed without GitHub context and its decision logic is covered by offline fixtures.
-- [ ] The negative-test pull request failed as expected.
+- [x] The negative-test pull request failed as expected.
 
 ### Notes
 
 - **Record:** the required checks and the branch rules go into [../../05-development/workflow.md](../../05-development/workflow.md).
+- **GitHub verification (2026-10-08):** the repository is `uakihir0/apkrun` on GitHub. `main` was pushed at `c57ed9d` and later commits. CI run `37759856146` and the runs after it ran `lint`, `codegen`, `build`, `test-swift`, `test-graphics`, `test-images`, and `third-party`; the final run on `9fea59c` passed all seven jobs. Criterion 13 is ticked: draft pull request #1 changed `.github/workflows/ci.yml` without approval, `workflow-policy` failed with "a maintainer must review the current commit and add ci-policy-approved" (run `37771569527`), and the pull request was closed with its branch deleted. Criterion 1 is still open for branch protection: `main` has no required-check rule yet, and that setting needs a maintainer decision about which checks to require.
 - **Local verification:** `scripts/ci/run-checks.sh`, `swift test --skip 'SystemTests' -j 2`, full `swift test`, `scripts/smoke-products.sh` on Debug products, and `scripts/release/check-release-build.sh` on the Release app all passed on the Apple Silicon host. Debug and Release `xcodebuild` jobs also passed. The live GitHub Actions run, branch protection, and negative-test pull request remain unverified. `origin` is configured but has no branches, workflows, or `ci-policy-approved` label (IR-278), and this task does not push.
 - **Pitfall:** `swift package dump-package` does not show source imports. Without the import scan, the CLI could import RuntimeCore through RuntimeHost unnoticed.
 - **Pitfall:** GitHub keeps a required check "pending" forever when a workflow is skipped by a `paths:` filter. The current #003 `linux-guest` workflow is a trusted-main regression check, not a required PR check. If a future change enables PR runs, use a job that always reports a result and decides from the changed files.

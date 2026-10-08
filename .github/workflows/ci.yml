@@ -219,3 +219,5 @@ jobs:
         run: |
           Images/tools/.venv/bin/ruff check Images/tools
           Images/tools/.venv/bin/ruff format --check Images/tools
+
+# negative test: protected control change, closed without merge

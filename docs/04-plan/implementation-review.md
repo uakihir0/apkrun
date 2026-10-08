@@ -9285,3 +9285,77 @@ returned no branch names. `gh api repos/uakihir0/apkrun/actions/workflows` retur
 no workflows. `gh api repos/uakihir0/apkrun/labels` returned ten GitHub default
 labels and no `ci-policy-approved`. `gh api repos/uakihir0/apkrun/pulls?state=open`
 returned zero pull requests.
+
+## IR-279: Classify the default-profile stall as guest-side Watchdog kills
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064 Notes; [progress snapshot](issues/README.md) §5; `Images/reference/16373615/incomplete/default-20261008-diagnosis.txt` |
+
+**Choice.** Record the `default` profile's stall as a guest-side failure. Each
+`system_server` start was killed by its own Watchdog after the main thread
+stopped answering a handler check for about 185 seconds. The `swiftshader`
+profile has the same GPU mode and an identical bootconfig, so it is taken to
+stop the same way, but it was not re-run. #064 stays open. No profile is
+published, and the Android image and `capture.sh` are not changed.
+
+**Reason.** Two live runs, one with a 600-second deadline and one with 3000
+seconds, separate the candidate causes. The host did not stall: vCPU threads
+ran, and crosvm memory stayed near 4.2 GiB after its first minute. The
+SurfaceFlinger EGL abort seen in `target` did not occur: SurfaceFlinger
+initialized ANGLE on SwiftShader and started the boot animation. Zygote did not
+hang: its preload finished at guest uptime 863 seconds in the 3000-second run,
+and system_server was entered at 909 seconds. The 600-second run ended during
+preload, so its missing boot is explained by the deadline. The two Watchdog
+kills on the main thread were at different code paths: in cycle 1 the top
+annotated frame was `ArtManagerLocal$Injector.getDexoptHelper`, and in cycle 2
+it was `FakeSoundTriggerHal.createDefaultProperties`, after `StartAudioService`
+took 54,296 ms. A varying block location points to a slow main thread, not one
+deadlock. The root cause of the slowness is not established.
+
+**Verification.** The receipt lists the guest timeline (`boot_progress_*`,
+Watchdog kill lines, `SystemServerTiming`) for both runs, with SHA-256 values
+for their normalized files. The 2026-10-08 `default` records contain no host-path
+pattern (`/home/lima`, `/var/tmp/cvd`, `/tmp/apkrun`, `/Users/`). The
+observer's crosvm samples were checked directly: 118 in the 600-second run and
+about 120 in the 3000-second run. Its earlier apparent `candidateCount` of zero
+came from the first lines of the file, not from a failure of the observer. The
+guest debugging routes (`adb root`, `debuggerd`, `/data/anr` traces) were
+refused because `ro.secure=1`, so Java thread stacks were not obtained.
+
+## IR-280: Keep raw diagnostic records outside git and use instance 2
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/default-20261008-diagnosis.txt`; [M01](issues/M01-android-bring-up.md) #064 Notes |
+
+**Choice.** Three operational choices were made for the diagnostic runs.
+
+1. The raw records (3.2 MB and 15 MB, including host logcat up to 13.7 MB) stay
+   out of git. Only a receipt with hashes and timings is committed. The records
+   are kept in the local store named in the receipt's setup section.
+2. Instance 2 was used, and the stale instance-1 group
+   `apkrun_target_whuuql` (status `Starting`, left from the 2026-10-07 target
+   run) was not removed.
+3. The deadline was 3000 seconds, with the boot observer enabled. This matches
+   the earlier long unpaused run and covers three `system_server` cycles.
+
+The branch named in the brief, `codex`, no longer exists. The reflog shows it
+was renamed to `main` at `d98823f`, which this task did not do. The commits
+therefore land on `main`, with no new branch created.
+
+**Reason.** The brief and AGENTS.md §9 say large or raw captures stay out of
+git. The stale group is a registry entry that blocks instance 1
+(`cvd fleet` reports it), and removing it would change a shared host state the
+earlier reports chose to preserve. A 3000-second run is the comparison point
+for the earlier long run. Committing to `main` follows the brief's instruction
+not to create branches; the rename itself is not reverted.
+
+**Verification.** `cvd fleet` shows the stale group on instance 1 and nothing
+on instance 2 after each run. Both raw records and a `SHA256SUMS.txt` manifest
+are in the local store, and `git status` shows only the receipt and the
+entries recorded here.

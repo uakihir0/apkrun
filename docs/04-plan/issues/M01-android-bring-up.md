@@ -711,6 +711,7 @@ See [../test-strategy.md](../test-strategy.md).
 
   The privacy scan of the 62 incomplete records found no host path, MAC or EUI address, or PEM marker in any capture file. Step 6's `androidboot.*`, `ro.adb.secure`, by-name, and hvc-holder notes remain open, because they need guest-side data from a booted guest.
 
+- **Stall diagnosis (2026-10-08; see IR-279 and IR-280).** Two live `default` runs on the reference host separated the candidate causes. A 600-second run ended while zygote was still preloading. A 3000-second run reached the system server twice and then ended during a third start. In each start, the framework Watchdog killed `system_server` after its main thread stopped answering for about 185 seconds (`WATCHDOG KILLING SYSTEM PROCESS`), so `sys.boot_completed` never became 1. The host did not stall, the `target` SurfaceFlinger EGL abort did not occur, and zygote did not hang. The root cause of the guest-wide slowness is not established. The receipt, with the guest timeline and SHA-256 values of the retained raw records, is [default-20261008-diagnosis.txt](../../../Images/reference/16373615/incomplete/default-20261008-diagnosis.txt). The raw records are kept outside git. Criteria 1, 2, and 6 remain open, and no profile is published.
 ---
 
 ## #009 AndroidImageManifest

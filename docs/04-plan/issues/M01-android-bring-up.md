@@ -702,6 +702,15 @@ See [../test-strategy.md](../test-strategy.md).
 
   All 12 copied files matched their Lima-side SHA-256 values; per-file hashes and the post-capture verification receipt are in [`target-20261008T030306-2167.verification.txt`](../../../Images/reference/16373615/incomplete/target-20261008T030306-2167.verification.txt). A second normalization pass changed zero files. The tested scans found no host paths, loopback ADB endpoints, MAC addresses, unmasked serial/IMEI/MEID arrays, raw IMEI/MEID values, or private-key markers; all 16 guest serial-property occurrences are `<SERIAL>` placeholders. Per IR-122, 48 Cuttlefish virtual UART endpoint tokens in `launcher.log` remain intentionally visible to preserve the UART mapping. The JSON/JSONL artifacts parsed. After capture, its Cuttlefish group, private HOME, staging directory, and lock were removed; the pre-existing stale instance-1 registry entry remains untouched. The dedicated ADB server on port 5038 was stopped, and no listener remained on ports 5038 or 6521. Keep this record in `incomplete/`; it verifies the new live ELF-identity event but does not complete #064.
 
+- **Acceptance audit (2026-10-08; see IR-269 to IR-271).** This pass checked the remaining criteria against existing evidence and started no capture. `Images/tools/reference/boot_signals.py` summarizes the 62 incomplete records into `Images/reference/16373615/boot-signals.json` (T0 tests in `Images/tools/tests/test_boot_signals.py`). Of those records, 54 contain `kernel.log`, 13 contain a host-side `VIRTUAL_DEVICE_BOOT_FAILED` line, and none contains `VIRTUAL_DEVICE_BOOT_COMPLETED` or a positive `sys.boot_completed` value. Every `sysBootCompleted` field in the observer logs (2,524 entries) is null.
+
+  Criterion status:
+  - Criteria 1, 2, and 6 (profiles, normalization across profiles, per-profile `host.json`) remain open. No profile reached boot completion, and `capture.sh` collects guest items only after readiness. `target` is also blocked by the guest Mesa EGL load failure, which is outside #064 (IR-240, IR-244). The three profile directories do not exist.
+  - Criterion 4 (guest-command equivalence) remains open. Syntax parity under the pinned `/system/bin/sh` is recorded in IR-186. A live `adb shell` run needs a booted guest, and the plain-console channel is the serial shell of #014 (IR-271).
+  - Criterion 5 (boot signals) is partly done. §7.7 lists the observed exact strings, and §3.3 marks `.kernel`, `.init`, and `.systemServer` as confirmed or corrected (IR-270). `VIRTUAL_DEVICE_BOOT_COMPLETED` has no timing, so the criterion stays open.
+
+  The privacy scan of the 62 incomplete records found no host path, MAC or EUI address, or PEM marker in any capture file. Step 6's `androidboot.*`, `ro.adb.secure`, by-name, and hvc-holder notes remain open, because they need guest-side data from a booted guest.
+
 ---
 
 ## #009 AndroidImageManifest

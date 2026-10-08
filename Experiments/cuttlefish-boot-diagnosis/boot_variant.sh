@@ -239,10 +239,18 @@ cleanup() {
     HOME=$home TMPDIR=$work/t timeout 180 cvd "--group_name=$group" remove > "$work/remove.log" 2>&1
     printf 'cvd remove exit=%s\n' "$?" >> "$work/cleanup.txt"
   fi
+  # process_restarter respawns crosvm when it exits with code 32 (IR-302), so it
+  # is stopped first, then the rest of the group, then the sweep is verified.
+  pkill -KILL -f -- "process_restart.*$work" 2>/dev/null
   pkill -TERM -f -- "$work" 2>/dev/null
   sleep 5
   pkill -KILL -f -- "$work" 2>/dev/null
   sleep 1
+  for _ in 1 2 3 4 5 6; do
+    [ -z "$(pgrep -f -- "$work" 2>/dev/null)" ] && break
+    pkill -KILL -f -- "$work" 2>/dev/null
+    sleep 2
+  done
   left=$(pgrep -f -- "$work" 2>/dev/null | wc -l | tr -d ' ')
   printf 'processes referencing the private work directory after cleanup=%s\n' "$left" >> "$work/cleanup.txt"
   crosvm_left=$(pgrep -x crosvm 2>/dev/null | wc -l | tr -d ' ')

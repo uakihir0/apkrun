@@ -1,0 +1,2557 @@
+{
+  "recordCount": 62,
+  "records": [
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": null
+      },
+      "kernelLog": null,
+      "profile": "default",
+      "record": "default-20260930T184542Z-7609",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": null
+      },
+      "kernelLog": null,
+      "profile": "default",
+      "record": "default-20260930T190436Z-10435",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": null
+      },
+      "kernelLog": null,
+      "profile": "default",
+      "record": "default-20260930T201303Z-17984",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 158,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "default-20261001T001530Z-48053",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 405.995253,
+        "lineCount": 3662,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 11.299671
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2701,
+            "firstUptimeSeconds": 76.374588
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 241.123685,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261001T120904-49816",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 60.282727,
+        "lineCount": 1050,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 28.817067
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "default-20261002T224455-600285",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2240.956028,
+        "lineCount": 4996,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 51.442243
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2780,
+            "firstUptimeSeconds": 349.520136
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 965.816387,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T014646-643687",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2184.23844,
+        "lineCount": 6080,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 21.653651
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2742,
+            "firstUptimeSeconds": 189.737533
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 592.881085,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T024733-676851",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 924.246444,
+        "lineCount": 3591,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 22.343203
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2740,
+            "firstUptimeSeconds": 185.924388
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 589.083153,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T031842-703886",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": null,
+      "profile": "default",
+      "record": "default-20261003T052650-788232",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1613.023622,
+        "lineCount": 4444,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 34.833532
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2764,
+            "firstUptimeSeconds": 251.533637
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 758.892862,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T062208-792872",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2266.246757,
+        "lineCount": 6478,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 12.882088
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2729,
+            "firstUptimeSeconds": 142.693042
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 445.16588,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T115618-900776",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2029.730738,
+        "lineCount": 5380,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 39.841798
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2763,
+            "firstUptimeSeconds": 234.759202
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 713.515826,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T131605-949526",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2133.489738,
+        "lineCount": 7022,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 23.015113
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 2,
+            "firstLine": 2714,
+            "firstUptimeSeconds": 98.383808
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 292.432653,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T151738-1012957",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2291.200326,
+        "lineCount": 7135,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 26.997966
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 2,
+            "firstLine": 2712,
+            "firstUptimeSeconds": 111.14043
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 353.130169,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T165948-1083660",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2054.925289,
+        "lineCount": 5842,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 54.044255
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2738,
+            "firstUptimeSeconds": 202.176382
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 568.221309,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T183619-1148306",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2192.008872,
+        "lineCount": 6399,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 44.498167
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2721,
+            "firstUptimeSeconds": 167.870865
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 485.848786,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261003T195146-1175735",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1795.150814,
+        "lineCount": 3529,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 86.782974
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2827,
+            "firstUptimeSeconds": 635.664661
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "default-20261003T224217-1230017",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 3309.09414,
+        "lineCount": 8459,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 66.456043
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 3,
+            "firstLine": 2746,
+            "firstUptimeSeconds": 221.215117
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 582.081786,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261004T192056-1574666",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": null
+      },
+      "kernelLog": null,
+      "profile": "default",
+      "record": "default-20261007T154512-2416",
+      "schemaVersion": 3,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 549.563136,
+        "lineCount": 4180,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 5.955942
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2698,
+            "firstUptimeSeconds": 55.923883
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 200.54184,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "default-20261007T160227-2967",
+      "schemaVersion": 3,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 310.551169,
+        "lineCount": 3422,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 492,
+            "firstUptimeSeconds": 101.942861
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2697,
+            "firstUptimeSeconds": 198.640492
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 295.786549,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "default",
+      "record": "gpu-guest-swiftshader-console-off-memory-2g-20261002T231113Z-862770",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 158,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "gpu-guest-swiftshader-console-off-memory-4g-20261002T232950Z-874596",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "gpu-none-console-on-20261002T062002Z-375629",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "default",
+      "record": "gpu-none-console-on-20261002T070032Z-417640",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1787.081949,
+        "lineCount": 5300,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 41.57157
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2738,
+            "firstUptimeSeconds": 198.815534
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 582.191162,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T004040-1283934",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2204.695652,
+        "lineCount": 6008,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 22.41169
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2749,
+            "firstUptimeSeconds": 267.661375
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 700.202808,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T021050-1310893",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1959.599155,
+        "lineCount": 5640,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 25.867892
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2750,
+            "firstUptimeSeconds": 197.257826
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 619.250429,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T034715-1337678",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 157,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T065400-1398228",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2017.375334,
+        "lineCount": 5679,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 54.327041
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2745,
+            "firstUptimeSeconds": 246.459235
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 683.244183,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T081603-1401833",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 3298.702112,
+        "lineCount": 8388,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 42.457053
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 3,
+            "firstLine": 2720,
+            "firstUptimeSeconds": 163.192309
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 464.56583,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T093436-1428464",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1061.61942,
+        "lineCount": 4149,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 51.194635
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2737,
+            "firstUptimeSeconds": 199.254895
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 521.452992,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T102250-1468492",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 3403.546821,
+        "lineCount": 7769,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 47.496237
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 2,
+            "firstLine": 2746,
+            "firstUptimeSeconds": 209.251404
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 594.14406,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T114734-1483038",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 3455.209576,
+        "lineCount": 8652,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 57.672441
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 3,
+            "firstLine": 2745,
+            "firstUptimeSeconds": 206.265316
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 560.496598,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T133202-1522663",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 317.057761,
+        "lineCount": 3303,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 491,
+            "firstUptimeSeconds": 44.928331
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2719,
+            "firstUptimeSeconds": 148.757589
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261004T174319-1563170",
+      "schemaVersion": 1,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 158,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261005T055130-1716760",
+      "schemaVersion": 2,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 496.402553,
+        "lineCount": 4040,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 11.922172
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2701,
+            "firstUptimeSeconds": 64.705122
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 198.913041,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "swiftshader",
+      "record": "swiftshader-20261007T161446-10503",
+      "schemaVersion": 3,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1883.389196,
+        "lineCount": 5335,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 24.127484
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2749,
+            "firstUptimeSeconds": 200.623168
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 671.337662,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "target",
+      "record": "target-20261003T233118-1257055",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 157,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T043330-1364484",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1955.883367,
+        "lineCount": 5789,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 31.202871
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2743,
+            "firstUptimeSeconds": 197.720722
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 570.895943,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "target",
+      "record": "target-20261004T051544-1366201",
+      "schemaVersion": 1,
+      "selectedGpuMode": null
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": null,
+      "profile": "target",
+      "record": "target-20261004T060430-1393505",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": null,
+      "profile": "target",
+      "record": "target-20261004T061407-1394457",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": null,
+      "profile": "target",
+      "record": "target-20261004T061552-1395715",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T064521-1396609",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 988.503834,
+        "lineCount": 13947,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 46.215159
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 24,
+            "firstLine": 2725,
+            "firstUptimeSeconds": 184.486014
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T161206Z-1646389",
+      "schemaVersion": 2,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1070.061719,
+        "lineCount": 4587,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 50.53239
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2717,
+            "firstUptimeSeconds": 170.018111
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 418.577859,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "target",
+      "record": "target-20261004T165409Z-1660660",
+      "schemaVersion": 2,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1072.579866,
+        "lineCount": 4175,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 48.191078
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2736,
+            "firstUptimeSeconds": 178.791654
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 551.521828,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "target",
+      "record": "target-20261004T173358Z-1674431",
+      "schemaVersion": 2,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T180433-1573318",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 2048.461615,
+        "lineCount": 6018,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 61.568569
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2743,
+            "firstUptimeSeconds": 212.080676
+          }
+        },
+        "virtualDevice": {
+          "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED": {
+            "count": 2,
+            "firstUptimeSeconds": 571.62571,
+            "shapes": {
+              "VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON": 2
+            }
+          }
+        }
+      },
+      "profile": "target",
+      "record": "target-20261004T182603Z-1688586",
+      "schemaVersion": 2,
+      "selectedGpuMode": "guest_swiftshader"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T192939-1614388",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T211540-1617589",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T212141-1619115",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T212512-1620453",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 197.654222,
+        "lineCount": 1621,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 79.241875
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T232534-1622675",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 163.196804,
+        "lineCount": 2054,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 52.865945
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T233833-1630294",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 200.836095,
+        "lineCount": 2073,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 70.24158
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261004T235047-1637967",
+      "schemaVersion": 1,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 781.94122,
+        "lineCount": 3437,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 34.35751
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2780,
+            "firstUptimeSeconds": 293.858687
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261005T061754-1724643",
+      "schemaVersion": 2,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 1030.825037,
+        "lineCount": 3335,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 88.088511
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 1,
+            "firstLine": 2806,
+            "firstUptimeSeconds": 487.03052
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261005T082217-1740702",
+      "schemaVersion": 2,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        },
+        "launcher.log": {
+          "VIRTUAL_DEVICE_BOOT_FAILED": 1
+        }
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": null,
+        "lineCount": 0,
+        "markers": {
+          "initFirstStage": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "linuxBooting": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "uBootStartingKernel": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 0,
+            "firstLine": null,
+            "firstUptimeSeconds": null
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261007T164344-18219",
+      "schemaVersion": 3,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 512.642956,
+        "lineCount": 10217,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 6.37481
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 17,
+            "firstLine": 2703,
+            "firstUptimeSeconds": 55.801744
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261007T170221-19521",
+      "schemaVersion": 3,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 506.619589,
+        "lineCount": 5583,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 490,
+            "firstUptimeSeconds": 9.680866
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 6,
+            "firstLine": 2710,
+            "firstUptimeSeconds": 82.947406
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261007T193655-32887",
+      "schemaVersion": 3,
+      "selectedGpuMode": "drm_virgl"
+    },
+    {
+      "hostBootTokens": {
+        "cvd-create-console.log": {},
+        "launcher.log": {}
+      },
+      "kernelLog": {
+        "lastUptimeSeconds": 528.791572,
+        "lineCount": 6899,
+        "markers": {
+          "initFirstStage": {
+            "count": 1,
+            "firstLine": 489,
+            "firstUptimeSeconds": 9.076534
+          },
+          "linuxBooting": {
+            "count": 1,
+            "firstLine": 159,
+            "firstUptimeSeconds": 0.0
+          },
+          "uBootStartingKernel": {
+            "count": 1,
+            "firstLine": 157,
+            "firstUptimeSeconds": null
+          },
+          "zygoteServiceStart": {
+            "count": 9,
+            "firstLine": 2712,
+            "firstUptimeSeconds": 94.583122
+          }
+        },
+        "virtualDevice": {}
+      },
+      "profile": "target",
+      "record": "target-20261008T030306-2167",
+      "schemaVersion": 3,
+      "selectedGpuMode": "drm_virgl"
+    }
+  ],
+  "recordsWithBootCompleted": 0,
+  "recordsWithBootFailed": 13,
+  "schemaVersion": 1,
+  "scope": "incomplete diagnostic capture records; not reference profiles",
+  "summaryByProfileAndSelectedGpuMode": {
+    "default/guest_swiftshader": {
+      "initFirstStage": {
+        "maxSeconds": 66.456,
+        "medianSeconds": 36.206,
+        "minSeconds": 5.956,
+        "n": 2
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 2
+      },
+      "records": 2,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 582.082,
+        "medianSeconds": 391.312,
+        "minSeconds": 200.542,
+        "n": 2
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 221.215,
+        "medianSeconds": 138.57,
+        "minSeconds": 55.924,
+        "n": 2
+      }
+    },
+    "default/unknown": {
+      "initFirstStage": {
+        "maxSeconds": 101.943,
+        "medianSeconds": 31.825,
+        "minSeconds": 11.3,
+        "n": 14
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 14
+      },
+      "records": 23,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 965.816,
+        "medianSeconds": 527.035,
+        "minSeconds": 241.124,
+        "n": 12
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 635.665,
+        "medianSeconds": 189.738,
+        "minSeconds": 76.375,
+        "n": 13
+      }
+    },
+    "swiftshader/guest_swiftshader": {
+      "initFirstStage": {
+        "maxSeconds": 57.672,
+        "medianSeconds": 47.496,
+        "minSeconds": 11.922,
+        "n": 7
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 7
+      },
+      "records": 9,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 683.244,
+        "medianSeconds": 540.975,
+        "minSeconds": 198.913,
+        "n": 6
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 246.459,
+        "medianSeconds": 199.255,
+        "minSeconds": 64.705,
+        "n": 7
+      }
+    },
+    "swiftshader/unknown": {
+      "initFirstStage": {
+        "maxSeconds": 41.572,
+        "medianSeconds": 25.868,
+        "minSeconds": 22.412,
+        "n": 3
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 3
+      },
+      "records": 3,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 700.203,
+        "medianSeconds": 619.25,
+        "minSeconds": 582.191,
+        "n": 3
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 267.661,
+        "medianSeconds": 198.816,
+        "minSeconds": 197.258,
+        "n": 3
+      }
+    },
+    "target/drm_virgl": {
+      "initFirstStage": {
+        "maxSeconds": 88.089,
+        "medianSeconds": 46.215,
+        "minSeconds": 6.375,
+        "n": 9
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 9
+      },
+      "records": 19,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "n": 0
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 487.031,
+        "medianSeconds": 139.535,
+        "minSeconds": 55.802,
+        "n": 6
+      }
+    },
+    "target/guest_swiftshader": {
+      "initFirstStage": {
+        "maxSeconds": 61.569,
+        "medianSeconds": 50.532,
+        "minSeconds": 48.191,
+        "n": 3
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 3
+      },
+      "records": 3,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 571.626,
+        "medianSeconds": 551.522,
+        "minSeconds": 418.578,
+        "n": 3
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 212.081,
+        "medianSeconds": 178.792,
+        "minSeconds": 170.018,
+        "n": 3
+      }
+    },
+    "target/unknown": {
+      "initFirstStage": {
+        "maxSeconds": 31.203,
+        "medianSeconds": 27.665,
+        "minSeconds": 24.127,
+        "n": 2
+      },
+      "linuxBooting": {
+        "maxSeconds": 0.0,
+        "medianSeconds": 0.0,
+        "minSeconds": 0.0,
+        "n": 2
+      },
+      "records": 3,
+      "virtualDeviceDisplayPowerFirstUptime": {
+        "maxSeconds": 671.338,
+        "medianSeconds": 621.117,
+        "minSeconds": 570.896,
+        "n": 2
+      },
+      "zygoteServiceStart": {
+        "maxSeconds": 200.623,
+        "medianSeconds": 199.172,
+        "minSeconds": 197.721,
+        "n": 2
+      }
+    }
+  }
+}

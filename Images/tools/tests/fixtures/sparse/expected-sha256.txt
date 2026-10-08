@@ -1,0 +1,7 @@
+# SHA-256 of `simg2img <input> <output>` output (simg2img 1.1.5, Homebrew, 2026-10-09).
+# Fixture inputs are under tests/fixtures/images/. The `real:` line names the
+# manifest artifact SHA-256 of the pinned build's sparse input instead of a path.
+0b2da70e4b71e11e8d91259782c38ef1613882207d25640631bd772d151e25cb  super.img
+89d523ff67617953eff56a45d8c5d6282ba5114bef180809af20e6ccc7d0945b  userdata.img
+a7215658e7829e79a74681b7888bfefedd11045058168a56c99cd6b6c52e654c  sparse-all-chunks.img
+7dd80d27241c6b96de9cc3d732ffd8749a67cf080fb488c7d49d23278985e3b5  real:54052b9f2d0f463e995c90b9eecc4b3a8aad29d110044aac9c2170108feb5a05

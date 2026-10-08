@@ -1,4 +1,4 @@
-"""Streaming reader for the Android sparse image format."""
+"""Streaming reader and hole-preserving writer for the Android sparse image format."""
 
 from __future__ import annotations
 
@@ -268,6 +268,84 @@ def iter_chunks(stream: BinaryIO, header: SparseHeader | None = None) -> Iterato
             f"sparse image checksum mismatch "
             f"(expected {parsed_header.image_checksum:08x}, calculated {running_crc:08x})"
         )
+
+
+def expand_into(stream: BinaryIO, out: BinaryIO, offset: int) -> SparseHeader:
+    """Write the expanded image into `out` at `offset`, leaving zero ranges as holes.
+
+    RAW chunks and FILL chunks with a non-zero pattern are written. DONT_CARE
+    chunks and zero FILL chunks are skipped, so on a sparse-capable file
+    system they stay unallocated (android-image.md §4.3). The caller sizes
+    `out` beforehand. Both checksum forms are verified as the stream is read;
+    a mismatch raises after the bytes before it were written, so callers must
+    discard the output on error.
+    """
+    header = read_header(stream)
+    logical_offset = 0
+    running_crc = 0
+    zero_pattern = b"\0\0\0\0"
+    for index in range(header.total_chunks):
+        raw_header = _read_exact(stream, header.chunk_header_size, f"chunk {index} header")
+        chunk_type, reserved, block_count, total_size = struct.unpack_from("<HHII", raw_header)
+        if reserved != 0:
+            raise SparseImageError(f"sparse chunk {index} has nonzero reserved bits")
+        payload_size = total_size - header.chunk_header_size
+        if payload_size < 0:
+            raise SparseImageError(f"sparse chunk {index} has an invalid total size")
+        logical_size = block_count * header.block_size
+        if chunk_type != CHUNK_CRC32 and logical_offset + logical_size > header.logical_size:
+            raise SparseImageError(f"sparse chunk {index} exceeds the declared output block count")
+        if chunk_type == CHUNK_RAW:
+            if payload_size != logical_size:
+                raise SparseImageError(f"raw sparse chunk {index} has an invalid payload size")
+            out.seek(offset + logical_offset)
+            remaining = payload_size
+            while remaining:
+                data = _read_exact(stream, min(remaining, COPY_SIZE), f"raw chunk {index}")
+                running_crc = zlib.crc32(data, running_crc)
+                out.write(data)
+                remaining -= len(data)
+        elif chunk_type == CHUNK_FILL:
+            if block_count == 0 or payload_size != 4:
+                raise SparseImageError(f"fill sparse chunk {index} has an invalid size")
+            pattern = _read_exact(stream, 4, f"fill pattern for chunk {index}")
+            running_crc = _update_repeated(running_crc, pattern, logical_size)
+            if pattern != zero_pattern:
+                out.seek(offset + logical_offset)
+                block = pattern * (COPY_SIZE // 4)
+                remaining = logical_size
+                while remaining:
+                    piece = block[: min(remaining, COPY_SIZE)]
+                    out.write(piece)
+                    remaining -= len(piece)
+        elif chunk_type == CHUNK_DONT_CARE:
+            if payload_size != 0:
+                raise SparseImageError(f"don't-care sparse chunk {index} has a payload")
+            running_crc = _update_repeated(running_crc, b"\0", logical_size)
+        elif chunk_type == CHUNK_CRC32:
+            if block_count != 0 or payload_size != 4:
+                raise SparseImageError(f"CRC32 sparse chunk {index} has an invalid size")
+            expected_crc = struct.unpack("<I", _read_exact(stream, 4, f"CRC32 chunk {index}"))[0]
+            if expected_crc != running_crc:
+                raise SparseImageError(
+                    f"CRC32 sparse chunk {index} mismatch "
+                    f"(expected {expected_crc:08x}, calculated {running_crc:08x})"
+                )
+            continue
+        else:
+            raise SparseImageError(f"unsupported Android sparse chunk type 0x{chunk_type:04x}")
+        logical_offset += logical_size
+
+    if logical_offset != header.logical_size:
+        raise SparseImageError(
+            f"sparse chunks describe {logical_offset} bytes, expected {header.logical_size}"
+        )
+    if header.image_checksum and header.image_checksum != running_crc:
+        raise SparseImageError(
+            f"sparse image checksum mismatch "
+            f"(expected {header.image_checksum:08x}, calculated {running_crc:08x})"
+        )
+    return header
 
 
 def validate(stream: BinaryIO) -> SparseHeader:

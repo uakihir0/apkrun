@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import struct
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,7 @@ from apkrun_image.sparse import (
     SPARSE_MAGIC,
     SparseImageError,
     _update_repeated,
+    expand_into,
     iter_chunks,
     read_header,
     read_range,
@@ -200,3 +203,74 @@ def test_sparse_header_rejects_unbounded_declared_output() -> None:
 
     with pytest.raises(SparseImageError, match="64 GiB logical-size limit"):
         read_header(io.BytesIO(header))
+
+
+EXPECTED_SHA256 = Path(__file__).parent / "fixtures/sparse/expected-sha256.txt"
+FIXTURE_IMAGES = Path(__file__).parent / "fixtures/images"
+
+
+def _simg2img_hashes() -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for line in EXPECTED_SHA256.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#"):
+            digest, name = line.split()
+            hashes[name] = digest
+    return hashes
+
+
+def test_expand_into_writes_the_expanded_image_at_an_offset() -> None:
+    raw, expanded = sparse_fixture()
+    out = io.BytesIO(bytes(8 + len(expanded)))
+
+    header = expand_into(io.BytesIO(raw), out, 8)
+
+    assert header.logical_size == len(expanded)
+    assert out.getvalue() == bytes(8) + expanded
+
+
+@pytest.mark.parametrize("name", ["super.img", "userdata.img", "sparse-all-chunks.img"])
+def test_expand_into_matches_simg2img(name: str, tmp_path: Path) -> None:
+    source = FIXTURE_IMAGES / name
+    output = tmp_path / "expanded.raw"
+    with source.open("rb") as stream:
+        size = read_header(stream).logical_size
+    with source.open("rb") as stream, output.open("w+b") as out:
+        out.truncate(size)
+        expand_into(stream, out, 0)
+
+    assert hashlib.sha256(output.read_bytes()).hexdigest() == _simg2img_hashes()[name]
+
+
+def test_expand_into_leaves_dont_care_and_zero_fill_as_holes(tmp_path: Path) -> None:
+    block = 4096
+    blocks = 16384  # 64 MiB: APFS allocates small files in full instead of leaving holes
+    chunks = [
+        struct.pack("<HHII", CHUNK_RAW, 0, 1, 12 + block) + b"x" * block,
+        struct.pack("<HHII", CHUNK_DONT_CARE, 0, blocks // 2, 12),
+        struct.pack("<HHII", CHUNK_FILL, 0, blocks // 2 - 1, 16) + b"\0\0\0\0",
+    ]
+    header = struct.pack("<I4H4I", SPARSE_MAGIC, 1, 0, 28, 12, block, blocks, len(chunks), 0)
+    output = tmp_path / "holes.raw"
+    with output.open("w+b") as out:
+        out.truncate(block * blocks)
+        expand_into(io.BytesIO(header + b"".join(chunks)), out, 0)
+
+    assert output.stat().st_size == block * blocks
+    assert output.stat().st_blocks * 512 < block * blocks // 4
+    with output.open("rb") as stream:
+        assert stream.read(block) == b"x" * block
+        assert stream.read(block) == bytes(block)
+
+
+def test_expand_into_rejects_a_crc_mismatch() -> None:
+    raw, _expanded = sparse_fixture()
+    corrupted = bytearray(raw)
+    corrupted[-1] ^= 0xFF
+    with pytest.raises(SparseImageError, match="CRC32 sparse chunk 3 mismatch"):
+        expand_into(io.BytesIO(bytes(corrupted)), io.BytesIO(bytes(64)), 0)
+
+
+def test_expand_into_rejects_a_truncated_image() -> None:
+    raw, _expanded = sparse_fixture()
+    with pytest.raises(SparseImageError, match="truncated"):
+        expand_into(io.BytesIO(raw[:40]), io.BytesIO(bytes(64)), 0)

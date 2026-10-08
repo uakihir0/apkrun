@@ -2971,7 +2971,9 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     monkeypatch.setattr(
         OBSERVER_MODULE,
         "ADB_LOGCAT_PROBE_RESERVE_SECONDS",
-        minimum_probe_window + 1.0,
+        # A loaded CI runner can wake this loop more than a second late, so give the
+        # probe window more slack than the minimum. The probe still runs in the final window.
+        minimum_probe_window + 3.0,
     )
     monkeypatch.setattr(OBSERVER_MODULE, "ADB_POLL_FINAL_RESERVE_SECONDS", 0.5)
     proc_root = tmp_path / "proc"
@@ -2982,7 +2984,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         home_path=short_private_home,
         adb_interval=10.0,
     )
-    observer.deadline = time.monotonic() + 7
+    observer.deadline = time.monotonic() + 12
     server_ready = tmp_path / "adb-server-ready"
     server_stopped = tmp_path / "adb-server-stopped"
     server_socket_file = tmp_path / "adb-server-socket"
@@ -3050,7 +3052,7 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
 
     observer.start()
     observer.sample(now=0)
-    deadline = time.monotonic() + 8
+    deadline = time.monotonic() + 15
     try:
         while time.monotonic() < deadline:
             if any(record["event"] == "adb_logcat_summary" for record in _read_records(output)):

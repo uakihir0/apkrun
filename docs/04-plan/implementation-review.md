@@ -8975,3 +8975,121 @@ The `sdkmanager` script delegates to the Android CLI, which wrote `~/.android/bi
 **Verification.** `AgentHandshakeTest` pins the behavior. The host enables `display.v1` and `core.v1`, the agent implements only `core.v1`, and the enabled set is `[core.v1]`.
 
 **Limit.** The handshake does not tell the host that a capability was dropped, so the host's view can be wider than the agent's until the first `UNSUPPORTED` answer. A maintainer may prefer that the agent fail the handshake with a typed failure, or that the agent send its enabled set back. The first option needs only a new failure reason. The second needs a new message. Both should be reviewed before the field numbers freeze at merge.
+
+## IR-269: Keep #064 open after the 2026-10-08 reference-capture audit
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064; [progress snapshot](issues/README.md) §5; [android-image.md](../02-design/android-image.md) §7.7; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.3; `Images/reference/16373615/boot-signals.json`; `Images/tools/reference/boot_signals.py` |
+
+**Choice.** Keep #064 open, and start no new reference capture in this pass. The
+remaining blockers are recorded as follows.
+
+1. `target` (`drm_virgl`) is blocked by the guest's Mesa EGL load failure. The
+   pinned image selects `mesa`, but it has no Mesa EGL or GLES driver in the
+   vendor or system EGL paths (IR-185, IR-240). The 2026-10-08 live run
+   reproduced the failure: eight `libEGL` driver-load errors, eight SurfaceFlinger
+   aborts, and no boot completion (IR-244). The guest image correction is outside
+   #064, so it is not changed here.
+2. `default` and `swiftshader`, which both select `guest_swiftshader`, have never
+   reached boot completion. No record of the 62 incomplete captures contains a
+   `VIRTUAL_DEVICE_BOOT_COMPLETED` line, and every `sysBootCompleted` field in
+   the observer logs (2,524 entries) is null. The longest run was 3,600 seconds.
+   The cause is not established.
+3. `capture.sh` skips guest collection unless Android is ready, so no profile can
+   be published as complete. The items that need a booted guest stay open: the
+   §8.3 guest items, normalized publication under
+   `Images/reference/16373615/<profile>/`, per-profile schema-version-3
+   `host.json`, and the three-profile comparison. Guest collection is not moved
+   ahead of boot completion, because a reference is a booted guest, and pre-boot
+   data cannot satisfy §8.3.
+
+**Reason.** Each capture runs for 10 to 60 minutes and ends at its deadline. The
+entry notes say not to repeat the SwiftShader configuration without a material
+host or guest change, and no such change is in scope for #064. Another run
+would not produce a complete profile, so the effort went into the evidence that
+already exists.
+
+**Verification.** `boot_signals.py` summarized the 62 incomplete records; its 10
+T0 tests pass, and Ruff is clean. A privacy scan of the 62 records found no host
+path, MAC or EUI address, or PEM marker in any capture file. The one `/home/lima`
+match is a receipt line that names the scanned pattern. All 7 schema-version-3
+`host.json` files list path-free host-tool identities. The installed host
+package's token set was read with `grep` in the Lima VM (IR-270). The Lima VM was
+started from its stopped state and reached READY. No capture was run.
+
+## IR-270: Correct the boot-signal table from observed captures
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | [android-image.md](../02-design/android-image.md) §7.7; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.3; `Images/reference/16373615/boot-signals.json`; `Images/tools/reference/boot_signals.py` |
+
+**Choice.** Update the design text from the observed captures, and mark each
+candidate as confirmed or corrected.
+
+- `.kernel`: corrected. U-Boot prints its banner and `Starting kernel ...` before
+  Linux. The Linux line `Booting Linux on physical CPU` is at kernel uptime
+  0.000 s, which confirms it. U-Boot came first in all 40 records that contain
+  both lines.
+- `.init`: confirmed. `init: init first stage started!` first appears at median
+  kernel uptime 42.0 s (n = 40; range 6.0 to 101.9 s).
+- `.systemServer`: corrected. The console line `init: starting service 'zygote'`
+  marks zygote's start (median 197.5 s; n = 36; range 55.8 to 635.7 s). No
+  console line marks SystemServer's start in the 62 records. `system_server`
+  appears only in untracked-process exit lines and servicemanager caller lines.
+  The phase name and its ADB signal are kept. Whether the console signal should
+  change is a `BootPhaseDetector` decision, so the detector is not changed here.
+- `.bootCompleted`: unconfirmed. `VIRTUAL_DEVICE_BOOT_COMPLETED` is in the pinned
+  host binaries, but no captured record contains it, so no timing is recorded.
+- `VIRTUAL_DEVICE_BOOT_FAILED`: §7.7 said the guest writes it to the kernel log.
+  In the 13 records that contain it, it appears only in host `run_cvd` output
+  (`boot_state_machine.cc:211`), and no kernel log contains it. The guest path is
+  not excluded, because the host monitor binary matches the token.
+- `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON`: seen in 28 kernel
+  logs, with first-occurrence median 569.6 s (n = 28; range 198.9 to 965.8 s).
+
+All medians combine GPU modes and come from diagnostic records, so they are not
+reference timings.
+
+**Reason.** Entry step 6 and its acceptance criterion require the exact strings
+and their timing, with each §3.3 candidate confirmed or corrected. Two claims in
+the design text are contradicted by the captures: the Linux line is not the
+first console output, and `BOOT_FAILED` is not seen in the guest kernel log. The
+extractor reports n, minimum, and maximum, so the sample sizes are visible.
+
+**Verification.** `boot_signals.py` passes 10 synthetic T0 tests. Its JSON output
+was checked against per-record readings: the medians were recomputed from
+`boot-signals.json`, and U-Boot ordering was checked across records. The token
+set was read with `grep -a` from the installed 1.57.0 host package in the Lima
+VM, and only token names were printed. The "not observed" statements cover the
+62 incomplete records, not any reference boot. The acceptance criterion stays
+open because `VIRTUAL_DEVICE_BOOT_COMPLETED` has no timing.
+
+## IR-271: Assign the plain sh console clause to the serial shell
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064; the serial shell belongs to #014 |
+| Affected files | [M01](issues/M01-android-bring-up.md) #064 (step 2 and acceptance criterion 4); [M01](issues/M01-android-bring-up.md) #014 |
+
+**Choice.** Keep the acceptance criterion "`guest-capture.txt` runs unchanged over
+`adb shell` and over a plain `sh` console" open. Only syntax is checked: IR-186
+parsed the list with the pinned `/system/bin/sh`. A live `adb shell` run needs a
+booted guest (IR-269). The plain-console channel is the serial shell that step 2
+assigns to #014. The maintainer should choose one of two options. Either move the
+serial-console clause to #014, so #064 closes on the `adb shell` run once a boot
+completes, or accept `adb exec-out` as the second channel, which step 2 also
+names.
+
+**Reason.** Step 2 names `adb shell` for #064 and the serial shell for #014. The
+acceptance criterion names a plain `sh` console inside #064. Building the serial
+path here would widen #064 into #014's scope (AGENTS.md §11).
+
+**Verification.** Compared step 2 with the acceptance list in the entry. IR-186
+covers syntax only. No console run was attempted, because no guest reached boot
+completion (IR-269).

@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 
 COMMANDS = {
+    "disks": "Build the raw GPT disks of a device layout.",
     "extract": "Extract verified Android boot artifacts.",
     "fetch": "Fetch and verify Android build artifacts.",
     "inventory": "Classify every file in an Android build by content.",

@@ -1,10 +1,54 @@
 {
   "bootconfig": {
     "image": {
+      "androidboot.cuttlefish_service_bluetooth_checker": "false",
+      "androidboot.enable_bootanimation": "1",
+      "androidboot.enable_confirmationui": "1",
+      "androidboot.force_normal_boot": "1",
+      "androidboot.fstab_suffix": "cf.f2fs.hctr2",
+      "androidboot.hw_timeout_multiplier": "3",
       "androidboot.hypervisor.vm.supported": "0",
+      "androidboot.modem_simulator_ports": "9600",
+      "androidboot.openthread_node_id": "1",
+      "androidboot.setupwizard_mode": "DISABLED",
       "androidboot.slot_suffix": "_a",
       "androidboot.vbmeta.device_state": "unlocked",
-      "androidboot.verifiedbootstate": "orange"
+      "androidboot.vendor.apex.com.android.hardware.gatekeeper": "com.android.hardware.gatekeeper.nonsecure",
+      "androidboot.vendor.apex.com.android.hardware.keymint": "com.android.hardware.keymint.rust_nonsecure",
+      "androidboot.vendor.apex.com.android.hardware.secure_element": "com.android.hardware.secure_element",
+      "androidboot.vendor.apex.com.android.hardware.strongbox": "none",
+      "androidboot.vendor.apex.com.android.hardware.weaver": "none",
+      "androidboot.vendor.apex.com.google.emulated.camera.provider.hal": "com.google.emulated.camera.provider.hal",
+      "androidboot.vendor.audiocontrol.server.cid": "3",
+      "androidboot.vendor.audiocontrol.server.port": "9410",
+      "androidboot.verifiedbootstate": "orange",
+      "androidboot.vsock_lights_cid": "3",
+      "androidboot.vsock_lights_port": "6900",
+      "androidboot.wifi_impl": "virt_wifi",
+      "androidboot.wifi_mac_prefix": "5554"
+    },
+    "sources": {
+      "launcherCapture": "Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt: the Cuttlefish 1.57.0 launcher's bootconfig for build 16373615 (IR-305). Every key above not listed under 'decided' has the capture's value.",
+      "decided": {
+        "androidboot.cuttlefish_service_bluetooth_checker": "No rootcanal on VZ; the boot reporter must not wait for Bluetooth, as on Cuttlefish's automotive product (android-image.md §7.6, IR-309).",
+        "androidboot.force_normal_boot": "Set by U-Boot on Cuttlefish; direct boot sets it here (android-image.md §6.2).",
+        "androidboot.hypervisor.vm.supported": "arm64 default; no protected VMs (android-image.md §4.2).",
+        "androidboot.slot_suffix": "Slot _a only (ADR-0015).",
+        "androidboot.vbmeta.device_state": "Development images are unlocked (android-image.md §6.2).",
+        "androidboot.verifiedbootstate": "Development images are orange (android-image.md §6.2).",
+        "androidboot.wifi_impl": "virt_wifi on eth2 instead of the capture's mac80211_hwsim_virtio, which needs crosvm's virtio Wi-Fi and the OpenWRT VM (android-image.md §7.4)."
+      },
+      "omitted": {
+        "androidboot.auto_eth_guest_addr": "Automotive only.",
+        "androidboot.boot_devices": "Platform layer: VZPlatformProfile (android-image.md §5.3).",
+        "androidboot.ddr_size": "Instance layer: the VM memory size.",
+        "androidboot.lcd_density": "Instance layer: the density of display 0.",
+        "androidboot.serialconsole": "Instance layer: developer mode only.",
+        "androidboot.serialno": "Instance layer.",
+        "androidboot.vhal_proxy_server_port": "Host-side client with no host service (android-image.md §7.3).",
+        "androidboot.vsock_tombstone_port": "Host-side client with no host service (android-image.md §7.3).",
+        "graphics keys": "GPU-profile layer: gpuProfiles in this file."
+      }
     }
   },
   "cmdline": {
@@ -15,5 +59,39 @@
       }
     ]
   },
-  "deviceFamily": "cuttlefish-phone-arm64"
+  "deviceFamily": "cuttlefish-phone-arm64",
+  "disks": [
+    {
+      "comment": "Read-only system disk (android-image.md §4.2). Partition sizes equal the image sizes; super is the unsparsed logical size.",
+      "file": "os.img",
+      "identifier": "apkrun-os",
+      "partitions": [
+        { "label": "boot_a", "source": "boot" },
+        { "label": "init_boot_a", "source": "init_boot" },
+        { "label": "vendor_boot_a", "source": "vendor_boot" },
+        { "label": "vbmeta_a", "source": "vbmeta" },
+        { "label": "vbmeta_system_a", "source": "vbmeta_system" },
+        { "label": "vbmeta_system_dlkm_a", "source": "vbmeta_system_dlkm" },
+        { "label": "vbmeta_vendor_dlkm_a", "source": "vbmeta_vendor_dlkm" },
+        { "label": "super", "source": "super" },
+        { "label": "custom", "source": "custom" }
+      ],
+      "readOnly": true,
+      "role": "os"
+    },
+    {
+      "comment": "The one writable instance disk (android-image.md §4.2, IR-308): no third disk, because the stock fstab hands vdc to vold as sdcard1. userdata is last so provisioning can grow it (§5.2); the template's 14 MiB is replaced by runtime.userdataGiB.",
+      "file": "userdata.img",
+      "identifier": "apkrun-data",
+      "partitions": [
+        { "blank": true, "label": "misc", "source": "misc" },
+        { "blank": true, "label": "metadata", "source": "metadata" },
+        { "blank": true, "label": "frp", "source": "frp" },
+        { "blank": true, "label": "userdata", "size": 14680064, "source": "userdata" }
+      ],
+      "readOnly": false,
+      "role": "userdata",
+      "userdataStrategy": "blankFormattable"
+    }
+  ]
 }

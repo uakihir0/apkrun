@@ -7,7 +7,9 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import BinaryIO
 
+from apkrun_image.gpt import SECTOR_SIZE, GptError, read_gpt
 from apkrun_image.inventory import InventoryError, _classify
 
 
@@ -21,6 +23,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _gpt_summary(stream: BinaryIO, size: int) -> dict[str, object] | None:
+    """Return the verified partition table of a raw GPT disk, or None for other files."""
+    stream.seek(SECTOR_SIZE)
+    if stream.read(8) != b"EFI PART":
+        return None
+    try:
+        table = read_gpt(stream, size)
+    except GptError as error:
+        return {"error": str(error)}
+    return {
+        "diskGuid": str(table.disk_guid),
+        "partitions": [
+            {
+                "firstLBA": partition.first_lba,
+                "guid": str(partition.unique_guid),
+                "label": partition.label,
+                "lastLBA": partition.last_lba,
+                "size": partition.size,
+            }
+            for partition in table.partitions
+        ],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Inspect one file and print its content-based classification."""
     arguments = build_parser().parse_args(argv)
@@ -31,6 +57,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         size = path.stat().st_size
         with path.open("rb") as stream:
             classification = _classify(stream, size, path.name)
+            gpt = _gpt_summary(stream, size)
     except (InventoryError, OSError) as error:
         print(f"apkrun_image inspect: {error}", file=sys.stderr)
         return 2
@@ -43,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "probablePurpose": classification.probable_purpose,
         "size": size,
     }
+    if gpt is not None:
+        value["gpt"] = gpt
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
     return 0
 

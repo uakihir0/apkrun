@@ -114,7 +114,7 @@ public struct ErrorPresenter {
             ErrorCatalog.cliExit(for: error, entries: catalogEntries) == 0 ? "warning" : "error"
         var lines = ["\(heading): \(message)"]
 
-        let listItems = listItems(for: contentError)
+        let listItems = presentedListItems(for: contentError)
         if !listItems.isEmpty {
             lines.append(
                 contentsOf: listItems.map { item in
@@ -160,7 +160,7 @@ public struct ErrorPresenter {
         )
         let remediation = remediation(for: error, visited: [])
         let body = remediation.text ?? ""
-        let hints = listItems(for: contentError).map {
+        let hints = presentedListItems(for: contentError).map {
             PresentedErrorHint(code: $0.code, message: $0.message)
         }
         return PresentedError(
@@ -294,6 +294,28 @@ public struct ErrorPresenter {
         return RemediationPresentation(
             text: nil,
             action: variant?.action ?? source.entry.action
+        )
+    }
+
+    /// Returns the items a CLI or GUI surface shows: the presented error's own
+    /// items, or the first cause in the chain that carries items.
+    private func presentedListItems(
+        for error: any APKRunError,
+        visited: Set<String> = []
+    ) -> [(code: String, message: String)] {
+        guard !visited.contains(error.qualifiedCode) else {
+            return []
+        }
+        let own = listItems(for: error)
+        if !own.isEmpty {
+            return own
+        }
+        guard let cause = error.cause else {
+            return []
+        }
+        return presentedListItems(
+            for: cause,
+            visited: visited.union([error.qualifiedCode])
         )
     }
 

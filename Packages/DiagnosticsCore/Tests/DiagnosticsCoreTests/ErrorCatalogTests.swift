@@ -165,6 +165,20 @@ import Testing
     #expect(gui.copyDetails == details)
 }
 
+@Test func errorPresenterRendersCauseListItemsOnCLIAndGUI() throws {
+    let presenter = ErrorPresenter(locale: Locale(identifier: "en"))
+    let error = CatalogFixtureError.startFailedAfter(
+        CatalogFixtureError.configuration("kernelMissing,diskMissing")
+    )
+
+    let gui = presenter.gui(error)
+    #expect(gui.hints.map(\.code) == ["vm.kernelMissing", "vm.diskMissing"])
+
+    let cliOutput = presenter.cli(error)
+    #expect(cliOutput.contains("hint: vm.kernelMissing:"))
+    #expect(cliOutput.contains("hint: vm.diskMissing:"))
+}
+
 @Test func errorPresenterListsConfigurationItemsAndMarksWarnings() throws {
     let presenter = ErrorPresenter(locale: Locale(identifier: "en"))
     let listOutput = presenter.cli(
@@ -423,6 +437,7 @@ private func placeholders(in text: String) -> Set<String> {
 
 private indirect enum CatalogFixtureError: APKRunError {
     case startFailed
+    case startFailedAfter(any APKRunError)
     case configuration(String)
     case configurationList(names: String, items: [ErrorListItem])
 
@@ -432,7 +447,7 @@ private indirect enum CatalogFixtureError: APKRunError {
 
     var code: String {
         switch self {
-        case .startFailed:
+        case .startFailed, .startFailedAfter:
             "startFailed"
         case .configuration, .configurationList:
             "configurationInvalid"
@@ -445,9 +460,16 @@ private indirect enum CatalogFixtureError: APKRunError {
             ["items": .text(items)]
         case .configurationList(let names, _):
             ["items": .text(names)]
-        case .startFailed:
+        case .startFailed, .startFailedAfter:
             [:]
         }
+    }
+
+    var cause: (any APKRunError)? {
+        guard case .startFailedAfter(let cause) = self else {
+            return nil
+        }
+        return cause
     }
 
     var listItems: [ErrorListItem] {

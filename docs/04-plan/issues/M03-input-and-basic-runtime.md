@@ -156,10 +156,10 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Acceptance criteria
 
-- [ ] The schemas cover handshake, health, launch, stop, package query, input, display lifecycle, clipboard, and notifications, using Protocol Buffers.
-- [ ] The schemas compile for the host and guest environments: `swift build` and `./gradlew -p Guest :guestd:assemble`.
-- [ ] The version mismatch behavior is documented in §5.2, and a T0 test shows that a fake agent sending major 2 is rejected with `incompatibleVersion` (FR-RT-04, NFR-REL-04).
-- [ ] Both codecs decode every golden frame, reject every invalid one, and re-encode the valid ones byte for byte.
+- [x] The schemas cover handshake, health, launch, stop, package query, input, display lifecycle, clipboard, and notifications, using Protocol Buffers.
+- [x] The schemas compile for the host and guest environments: `swift build` and `./gradlew -p Guest :guestd:assemble`.
+- [x] The version mismatch behavior is documented in §5.2, and a T0 test shows that a fake agent sending major 2 is rejected with `incompatibleVersion` (FR-RT-04, NFR-REL-04).
+- [x] Both codecs decode every golden frame, reject every invalid one, and re-encode the valid ones byte for byte.
 - [ ] The CI regeneration check and `buf lint` pass.
 
 ### Notes
@@ -168,6 +168,19 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - The field numbers are frozen when this task merges. From then on, the evolution rules of §5.2 apply (§17).
 - **Pitfall:** the guest uses `protobuf-javalite` only ([../../02-design/guest-components.md](../../02-design/guest-components.md) §2). Do not use features that need the full runtime, such as reflection or JSON.
 - The `guestd` module is empty here so that the §15 acceptance command works. #072 fills it.
+- **Evidence (2026-10-08, macOS 27.0.1 build 26A434, arm64; Swift 6.4, Java 17, Gradle 9.6.1):**
+  - Schema: `scripts/check-protos.sh` (the pinned buf 1.55.1, `buf lint` with the STANDARD rules) passes, and protoc compiles all seven files. The numbering rule is checked by `NumberingRuleTests`: the 50 operations of §7.1, §7.5, and §11.1 pair with results of the same number and name, the number ranges hold, 71 is reserved, and every referenced message is defined. A temporary rename of a result made the pairing test fail, which confirms the test.
+  - Swift: `swift build` passes. `swift test --filter GuestProtocolTests` passes 29 tests: 10 codec tests (every golden frame decodes, re-encodes byte for byte, and each invalid frame fails with its typed error; the streaming reader; the length limits), 8 handshake rows (same major, higher minor, a fake agent with major 2 rejected with `incompatibleVersion`, an older major, wrong channel, unspecified channel, missing version), 6 version and capability tests, and 5 numbering tests.
+  - Kotlin: `./gradlew -p Guest :guestd:assemble` passes (exit 0). `./gradlew -p Guest :protocol:testDebugUnitTest` passes 25 JUnit tests (9 frame codec, 9 agent handshake, 7 control session) with no skips. The Kotlin codec re-encodes the same golden frames byte for byte. The build prints no Kotlin warnings.
+  - Golden frames and sources: `scripts/generate-protos.sh` regenerates the Swift sources and the 17 golden frames with no diff, and two runs are byte-identical.
+  - Format and repository checks: `scripts/check-format.sh` (swift-format strict and `ktfmtCheck`) passes. `scripts/tests/run.sh` passes. Full `scripts/ci/run-checks.sh` results are recorded in the progress table.
+  - Decisions that a maintainer should review before the field numbers freeze: IR-260 to IR-267 (schema shapes, enum prefixes and placement, the handshake split, golden frame generation, tool pins, the Android SDK, the Gradle build, and CI wiring).
+- **Remaining:**
+  - The hosted CI jobs cannot run here, because the repository has no remote. The `lint` job runs `check-format.sh`, which runs `ktfmtCheck` and needs the Android SDK. Bootstrap installs the SDK only with #015 (IR-267). So the CI acceptance box stays open until a runner passes both `lint` and `codegen`.
+  - `buf breaking` against the last release tag is #062. Fuzzing of both decoders is #091.
+  - The paired `GuestOperation` types (guest-protocol.md §13.1) are implemented with #072. This task checks the schema side of the numbering rule.
+  - `allWarningsAsErrors` is not set for the Kotlin modules (IR-266). Warnings are zero today.
+- **Scope note:** the codec, the version rules, and the handshake live in the `GuestProtocol` target, in `GuestProtocolFailure.swift`, `FrameDecoder.swift`, and `Handshake.swift`, which the Modules list does not name. They add no target and no dependency.
 
 ---
 

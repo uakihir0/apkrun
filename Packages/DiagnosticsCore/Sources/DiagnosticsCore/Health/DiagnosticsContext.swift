@@ -45,7 +45,7 @@ public struct DiagnosticsContext: Sendable {
     /// Creates the production diagnostics dependencies for a process.
     public static func live(paths: APKRunPaths) -> Self {
         Self(
-            logSink: OSLogSink(subsystem: .diagnostics, category: "health"),
+            logSink: RoutingOSLogSink(),
             healthChecks: HealthCheckRegistry(checks: HostChecks.all),
             perfTimeline: Perf.timeline,
             paths: paths,

@@ -14,6 +14,14 @@ package enum FrameworkConfigurationFailure: Sendable {
 
 struct VZFrameworkConfigurationValidator: FrameworkConfigurationValidator {
     func validate(_ definition: VMDefinition) -> FrameworkConfigurationFailure? {
+        // VZ configuration objects are created and validated only on a VM queue,
+        // as Virtualization.framework requires. No controller exists yet here.
+        VMQueue().performSynchronously {
+            validateOnVMQueue(definition)
+        }
+    }
+
+    private func validateOnVMQueue(_ definition: VMDefinition) -> FrameworkConfigurationFailure? {
         do {
             let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(
                 count: definition.consolePorts.count

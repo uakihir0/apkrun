@@ -5,11 +5,15 @@ import Virtualization
 public enum MachineIdentity {
     /// Generates the serialized identity used by `VZGenericPlatformConfiguration`.
     public static func newMachineIdentifier() -> Data {
-        VZGenericMachineIdentifier().dataRepresentation
+        VMQueue().performSynchronously {
+            VZGenericMachineIdentifier().dataRepresentation
+        }
     }
 
     /// Generates a valid locally administered unicast MAC address.
     public static func newMACAddress() -> String {
-        VZMACAddress.randomLocallyAdministered().string
+        VMQueue().performSynchronously {
+            VZMACAddress.randomLocallyAdministered().string
+        }
     }
 }

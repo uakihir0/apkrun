@@ -202,7 +202,7 @@ public struct VMDefinitionValidator: Sendable {
         }
 
         if let machineIdentifier = definition.machineIdentifier,
-            VZGenericMachineIdentifier(dataRepresentation: machineIdentifier) == nil
+            !Self.isValidMachineIdentifier(machineIdentifier)
         {
             failures.append(.machineIdentifierInvalid)
         }
@@ -238,6 +238,13 @@ public struct VMDefinitionValidator: Sendable {
 
     private static func isAndroidSparse(_ bytes: Data) -> Bool {
         bytes.count >= 4 && Array(bytes.prefix(4)) == [0x3A, 0xFF, 0x26, 0xED]
+    }
+
+    /// Checks the identifier with a VZ object, which is created on a VM queue.
+    private static func isValidMachineIdentifier(_ data: Data) -> Bool {
+        VMQueue().performSynchronously {
+            VZGenericMachineIdentifier(dataRepresentation: data) != nil
+        }
     }
 
     private static func isValidLocallyAdministeredMAC(_ address: String) -> Bool {

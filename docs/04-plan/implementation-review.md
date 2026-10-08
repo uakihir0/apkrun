@@ -9672,3 +9672,29 @@ test then reports the runner's scheduling as a host failure.
 **Verification.** The test passes locally. With the quick budget forced to 1 ms,
 it fails at line 9 with the same expectation as CI run 37754807446, job
 `test-swift`. The three other host-check tests in the file use the same helper.
+
+## IR-292: Stamp the unseen-rows log fixture ahead of the clock
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (CI) |
+| Affected files | `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/LogReaderTests.swift` |
+
+**Choice.** `logReaderAcceptsUnseenRowsAtTheExistingTimestampBoundary` stamps its
+boundary and catch-up rows one minute after the test starts. The reader and its
+window rules are unchanged. The one-minute offset is a fixture value, not a log
+timestamp a real `log show` would return.
+
+**Reason.** The hosted run delivered 1 entry where the test expects 5001. The fake
+catch-up runner ignores `--start`, but `LogRecordAccumulator` applies the
+`startingAt` filter to every row. That start is `floor(lastCoverageTime) - 1`, and
+`lastCoverageTime` is set when the fake stream returns. A row stamped at test start
+is dropped once that checkpoint reaches two seconds past the row's whole-second
+stamp. The hosted process ran this test for 24.7 seconds, which allowed that gap.
+Local runs finish the stream within a second, so the window never excluded the rows.
+
+**Verification.** With the rows stamped 5 seconds in the past, the test fails with
+`recorder.entries.count → 1`, the count reported by CI. With the offset in place it
+passes locally. The other boundary tests in this file use the same wall-clock stamp.
+They passed on the hosted run and are not changed.

@@ -724,9 +724,13 @@ import Testing
 }
 
 @Test func logReaderAcceptsUnseenRowsAtTheExistingTimestampBoundary() async {
+    // The fake catch-up ignores `--start`, so the reader's own window check drops rows
+    // older than the catch-up start. That start is taken from a checkpoint set after the
+    // fake stream returns. On a slow runner the checkpoint can pass a row stamped at test
+    // start, so stamp the boundary ahead of the clock to keep every row inside the window.
     let runner = UnseenBoundaryReplayLogCommandRunner(
         recordCount: 5_000,
-        timestamp: ISO8601DateFormatter().string(from: .now)
+        timestamp: ISO8601DateFormatter().string(from: .now.addingTimeInterval(60))
     )
     let reader = LogReader(
         paths: APKRunPaths(homeDirectory: FileManager.default.temporaryDirectory),

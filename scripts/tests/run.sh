@@ -17,6 +17,7 @@ python3 "$script_dir/test_errorgen.py"
 python3 "$script_dir/test_embed_virgl_runtime.py"
 "$script_dir/test_make_test_disks.sh"
 "$script_dir/test_network_error_classification.sh"
+"$script_dir/test_codegen.sh"
 
 expect_pass() {
     local name="$1"

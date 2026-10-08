@@ -26,4 +26,18 @@ fi
 
 git diff --exit-code
 git diff --cached --exit-code
+
+# git diff cannot see an output that no commit tracks, so a generator output
+# that was never committed would pass. Fail on any untracked output instead.
+generated_outputs=(
+    "Packages/DiagnosticsCore/Sources/DiagnosticsCore/Errors/ErrorCatalog.generated.swift"
+    "docs/03-reference/error-catalog.md"
+    "Packages/GuestProtocol/Sources/GuestProtocol/Generated"
+)
+uncommitted_outputs="$(git ls-files --others --exclude-standard -- "${generated_outputs[@]}")"
+if [[ -n "$uncommitted_outputs" ]]; then
+    printf 'codegen: generated files are not committed; commit these outputs:\n%s\n' \
+        "$uncommitted_outputs" >&2
+    exit 1
+fi
 printf 'codegen: generated files are up to date\n'

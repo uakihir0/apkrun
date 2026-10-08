@@ -285,7 +285,7 @@ let package = Package(
         ),
         .testTarget(
             name: "GraphicsCoreTests",
-            dependencies: ["GraphicsCore"],
+            dependencies: ["GraphicsCore", "VirtioDeviceCore", "VirtioDeviceCoreTestSupport"],
             path: "Packages/GraphicsCore/Tests/GraphicsCoreTests"
         ),
         .testTarget(

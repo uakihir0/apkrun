@@ -126,6 +126,7 @@ A client newer than the server in minor only (for example client `1.3`, server `
 | Change | Kind |
 |---|---|
 | new operation, new optional request field, new reply field, new event, new topic | minor |
+| optional `WireError.listItems` field with ordered item selectors and parameters | minor |
 | new case of a reply or event enum, new error code | minor. Reply and event enums are open: an unknown case decodes as `.unknown` and the client shows a generic state |
 | new case of a request enum | minor. The server rejects an unknown request case with `runtime.malformedRequest`, so a client uses the case only when `HelloReply.apiVersion` shows the server has it |
 | making an optional request field required, removing or renaming a field, a case, or an operation, changing a field's type or meaning, changing the encoding | major |
@@ -428,9 +429,20 @@ public struct WireError: Error, Codable, Sendable, Equatable {
     public var domain: String                             // "runtime", "store", … (error-catalog.md §2)
     public var code: String                               // qualified code "store.downgradeRefused"
     public var parameters: [String: WireErrorParameter]
+    public var listItems: [WireErrorListItem]?             // ordered per-item details; nil for older peers
     public var cause: WireErrorBox?                       // nested error, same shape
     public var underlying: WireUnderlyingError?           // { domain, code }, no userInfo
     public var context: ErrorContext?
+}
+
+public enum WireErrorListItemSelector: Codable, Sendable, Equatable {
+    case errorCode(String)
+    case variant(code: String, key: String)
+}
+
+public struct WireErrorListItem: Codable, Sendable, Equatable {
+    public var selector: WireErrorListItemSelector
+    public var parameters: [String: WireErrorParameter]
 }
 
 public enum WireErrorParameter: Codable, Sendable, Equatable {
@@ -443,6 +455,14 @@ public struct ErrorContext: Codable, Sendable, Equatable {
     public var displayID: DisplayID?
 }
 ```
+
+`listItems` is optional so a missing field from an older server decodes normally.
+When it is absent, the client parses the comma-separated case names in
+`parameters["items"]` and renders a known item message when its required values
+are available in the legacy error parameters. If an item message needs a value
+the old payload cannot provide, that item uses the aggregate error's generic
+message. Conversion to a frozen N−1 wrapper DTO omits `listItems` and retains
+the fallback parameter.
 
 - Codes, messages, remediations, actions, and CLI exit codes are in [error-catalog.md](error-catalog.md). This document names errors by code only.
 - A code the client does not know renders with the catalog's generic entry and keeps its code in Copy Details. Codes are never reused ([error-catalog.md](error-catalog.md) §2.2).

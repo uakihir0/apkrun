@@ -208,6 +208,7 @@ APKRun.app, APKRunLauncher, and the CLI reach apkrund through one versioned XPC 
 
 1. **DTOs and protocols** (§13 #032 step 1; [../../03-reference/runtime-api.md](../../03-reference/runtime-api.md)).
    - Define the DTOs and `@objc` protocols in RuntimeAPI. Every DTO is `Codable` and `NSSecureCoding`-safe, with the API version in the handshake.
+   - Add optional `WireError.listItems` to carry the ordered selectors and item-specific parameters from `APKRunError.listItems`; retain `parameters["items"]` as the fallback for older peers and omit the new field when converting to a frozen N−1 DTO.
    - Keep the #031 operations unchanged.
    - Check: T0 round-trip tests for every DTO. A T0 test fails when a DTO field is removed without a version bump.
 2. **Broker, endpoints, and request rules** (§8.1, §8.2).
@@ -234,7 +235,7 @@ APKRun.app, APKRunLauncher, and the CLI reach apkrund through one versioned XPC 
 
 By tier ([../test-strategy.md](../test-strategy.md) §6.5):
 
-- **T0** (`Packages/RuntimeAPI/Tests/RuntimeAPITests/`, `CLI/apkrun` test target): DTO round trips; CLI golden output and exit codes.
+- **T0** (`Packages/RuntimeAPI/Tests/RuntimeAPITests/`, `CLI/apkrun` test target): DTO round trips, including optional list details, missing-field decoding, and N−1 conversion; CLI golden output and exit codes.
 - **T1** (`Packages/RuntimeHost/Tests/RuntimeHostSystemTests/`, `Packages/RuntimeClient/Tests/RuntimeClientSystemTests/`): anonymous XPC in-process: version mismatch, authorization per endpoint, 65th request rejected, cancel of a long operation; `SessionRegistry` with a fake runtime; client reconnect.
 - **T2** (`Tests/IntegrationTests/CLITests/`, `Tests/IntegrationTests/SecurityTests/`, AndroidStock suite, stock image): `apkrun launch io.apkrun.fixture.hellotext` through XPC with `owner: apkrund`; a binary signed with another identity is rejected; a wrapper connection for another package gets `notAuthorized`.
 - **T3**: the G6 check with the warm-launch condition (`scripts/run-gate.sh G6`).

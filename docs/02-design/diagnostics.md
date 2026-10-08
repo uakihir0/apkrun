@@ -51,12 +51,14 @@ public protocol APKRunError: Error, Sendable {
     static var domain: ErrorDomain { get }
     var code: String { get }                          // the enum case name, stable: "downgradeRefused"
     var parameters: [String: ErrorParameter] { get }  // public-safe values for the message template
+    var listItems: [ErrorListItem] { get }             // ordered typed details for list cases
     var cause: (any APKRunError)? { get }             // a nested domain error, if any
     var underlying: UnderlyingError? { get }          // a system error: domain and code only
 }
 
 public extension APKRunError {
     var qualifiedCode: String { "\(Self.domain.rawValue).\(code)" }   // "store.downgradeRefused"
+    var listItems: [ErrorListItem] { [] }
 }
 
 public enum ErrorParameter: Sendable, Codable, Equatable {
@@ -67,11 +69,27 @@ public enum ErrorParameter: Sendable, Codable, Equatable {
     case fileName(String)        // last path component only. Full paths are never parameters
 }
 
+public enum ErrorListItemSelector: Codable, Sendable, Equatable {
+    case errorCode(String)                       // fully qualified catalog code
+    case variant(code: String, key: String)      // catalog code and variant key
+}
+
+public struct ErrorListItem: Codable, Sendable, Equatable {
+    public let selector: ErrorListItemSelector
+    public let parameters: [String: ErrorParameter]
+}
+
 public struct UnderlyingError: Sendable, Codable, Equatable {
     public var domain: String    // "VZErrorDomain", "NSPOSIXErrorDomain", "OSStatus"
     public var code: Int         // userInfo is dropped: it may contain paths (NSFilePathErrorKey)
 }
 ```
+
+In #061, `listItems` is populated by `VMConfigurationFailure.configurationInvalid`;
+the child selectors and parameters retain validation order, including repeated
+codes. Health findings such as `runtime.hostRequirementsNotMet` use `ErrorInfo`
+and localized text, not this `APKRunError` list payload. RuntimeAPI transport
+adds a compatible wire field and round-trip coverage in #032.
 
 | Domain (`ErrorDomain`) | Swift type | Code prefix | Owner |
 |---|---|---|---|
@@ -138,9 +156,9 @@ The catalog is the single source of user-facing error text for the GUI, the menu
   ```
 
 - Optional members ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.1):
-  - `variants`: texts and an action per sub-reason, for example per `InstallFailureKind` of `store.guestInstallFailed`. The keys are the case names of the sub-enum, or the fixed keys `hostNewer`, `guestNewer`, `sharedFolders`, `schemaVersion`, `restartPending`, and `androidRunning`. The error passes the key as the parameter `reason`. A variant may override `message`, `remediation`, and `action`. Code, parameters, and `cliExit` stay those of the entry. A list case (`vm.configurationInvalid`, `runtime.hostRequirementsNotMet`) passes the case names of its items in the parameter `items`, and each item renders its variant as one hint line ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.4).
+  - `variants`: texts and an action per sub-reason, for example per `InstallFailureKind` of `store.guestInstallFailed`. The keys are the case names of the sub-enum, or the fixed keys `hostNewer`, `guestNewer`, `sharedFolders`, `schemaVersion`, `restartPending`, and `androidRunning`. The error passes the key as the parameter `reason`. A variant may override `message`, `remediation`, and `action`. Code, parameters, and `cliExit` stay those of the entry. A list case keeps its comma-separated case names in the `items` text parameter for compatibility and carries an ordered `listItems` array with a selector and that item's own parameters. Each item renders as one hint line ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.4).
   - `transparent: true`: a pure container such as `runtime.image(ImageFailure)`. It has no text of its own. Message, remediation, action, and exit code come from the first non-transparent error in the cause chain. `"cliExit": "cause"` is allowed only on a transparent entry ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.5).
-  - `retired: true`: a removed case. Its entry keeps its last texts, so a code that an N−1 peer sends still renders. errorgen generates no Swift for it ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §2.2).
+  - `retired: true`: a removed case. Its entry keeps its last texts, so a code that an N−1 peer sends still renders. The generated Swift catalog retains retired entries; module fixture lists skip them ([../03-reference/error-catalog.md](../03-reference/error-catalog.md) §2.2).
   - `cliExitRule`: a named rule for list errors whose exit depends on their items. The entry's fixed `cliExit` is the fallback, and the catalog defines each supported rule.
 - A code that the receiving build doesn't know is treated as transparent when its cause chain contains a known code. Otherwise the generic entry of [../03-reference/error-catalog.md](../03-reference/error-catalog.md) §3.8 is shown, and the `code:` line keeps the original code.
 - `swift scripts/errorgen.swift` generates `ErrorCatalog.generated.swift` with every language compiled in as Swift literals. The generated file is checked in, and CI verifies that it is current. Compiling the strings in is required because the launcher carries no resource bundles ([wrapper.md](wrapper.md) §5.9).

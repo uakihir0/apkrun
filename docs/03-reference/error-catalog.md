@@ -7,7 +7,7 @@
 
 This document lists every typed error of APKRun: its stable code, when it is raised, its user text, its remediation, and its CLI exit code. It also lists the non-error enums that decide what users see (session end reasons, stop reasons, launcher screens) and the mapping from health checks to errors.
 
-The error model is defined in [../02-design/diagnostics.md](../02-design/diagnostics.md) §2: `APKRunError`, `ErrorParameter`, causes, presentation, and operation IDs. This document does not change that model. It uses two extensions of the `errors.json` format (§3.4, §3.5), which diagnostics.md §2.2 adopts.
+The error model is defined in [../02-design/diagnostics.md](../02-design/diagnostics.md) §2: `APKRunError`, `ErrorParameter`, causes, presentation, and operation IDs. The list payload in §3.4 extends that model for `vm.configurationInvalid`; host health findings use `ErrorInfo` and localized text. XPC serialization for typed list details is specified in RuntimeAPI task #032.
 
 This document is the design source of `Packages/DiagnosticsCore/ErrorCatalog/errors.json`. #061 creates the JSON from it. From then on the JSON is the source, and `swift scripts/errorgen.swift --markdown` regenerates the tables of §5–§16 and §20.3. CI fails if the two differ ([../02-design/diagnostics.md](../02-design/diagnostics.md) §2.2).
 
@@ -68,7 +68,7 @@ This document is the design source of `Packages/DiagnosticsCore/ErrorCatalog/err
 3. A code never changes meaning. If the meaning of a case changes, add a new case and retire the old one.
 4. Do not rename a case. A rename is a retirement plus a new code.
 5. A code is never reused. A removed case keeps its entry in `errors.json` with `"retired": true` and its last texts. Peers of an older build can still send it over XPC (the wrapper endpoint serves N−1, [../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.1), and the retired entry still renders.
-6. Deprecation: a case that the code no longer throws but that an N−1 peer can still send stays in the catalog unchanged. It is retired when no supported peer sends it. errorgen does not generate Swift for retired entries, and the per-module fixture lists skip them.
+6. Deprecation: a case that the code no longer throws but that an N−1 peer can still send stays in the catalog unchanged. It is retired when no supported peer sends it. The generated Swift catalog retains retired entries so older peer errors still render; per-module fixture lists skip them.
 7. Adding an associated value keeps the code when the meaning is the same. A new placeholder in the template must be declared in `parameters` (§3.2).
 
 ### 2.3 Namespaces
@@ -167,7 +167,7 @@ Some cases carry a sub-reason whose design texts or actions differ, for example 
 - Tests: every variant key is a case of the sub-enum (the fixture iterates the sub-enum), and every variant has `en` and `ja` in release builds.
 - For a container code, the variant key is the case name of the cause.
 - Version-direction variants use the keys `hostNewer` (APKRun is newer than what Android supports: update Android) and `guestNewer` (Android needs a newer APKRun: update APKRun).
-- A list case (§3.6) passes the case names of its items, separated by commas, in the parameter `items` (`.text`), and the item payloads as further parameters (for example `needed`). The renderer renders the variant of each item: one hint line per item.
+- `vm.configurationInvalid` keeps the item case names, separated by commas, in the `items` parameter (`.text`) as a fallback. It also carries an ordered `APKRunError.listItems` array. Each `ErrorListItem` selects either a fully qualified catalog code or a variant key and carries that item's own typed parameters. The renderer uses those parameters to produce one hint line per item; repeated codes remain distinct and ordered. If an older payload has no per-item value needed by a message, it uses the aggregate's generic message instead of showing a blank placeholder. RuntimeAPI task #032 transports these details as an optional field.
 
 ### 3.5 Nested errors and transparent containers
 
@@ -189,7 +189,7 @@ Some cases carry a sub-reason whose design texts or actions differ, for example 
 | Logs | `err=<code>` on the entry that records the failure | [../02-design/diagnostics.md](../02-design/diagnostics.md) §3 |
 
 - **Warnings.** Entries with `cliExit` 0 are warnings: the command succeeded. The CLI prints them as `warning:`, `hint:`, and `code:` lines, and the exit code stays 0. They are `wrapper.registrationFailed`, `store.alreadyInstalled`, and `cli.versionSkew`.
-- **Several problems.** `runtime.hostRequirementsNotMet` and `vm.configurationInvalid` carry a list. The GUI lists every item. The CLI prints one `hint:` line per item, so these two print more than three lines.
+- **Several problems.** `vm.configurationInvalid` carries typed `listItems`; the GUI and CLI render every item, including its own values. `runtime.hostRequirementsNotMet` is a health `ErrorInfo` with localized item text, not an `APKRunError.listItems` payload. The CLI prints one `hint:` line per item, so both presentations can exceed three lines.
 
 ### 3.7 Languages
 
@@ -300,9 +300,18 @@ Texts:
 
 | Entries | Message | Remediation · action |
 |---|---|---|
-| `vm.commandLineInvalid`, `vm.configurationInvalid`, `vm.cpuCountOutOfRange`, `vm.customDeviceInvalid`, `vm.diskIdentifierInvalid`, `vm.diskIsAndroidSparse`, `vm.diskSyncModeTestOnly`, `vm.duplicateDisk`, `vm.frameworkRejected`, `vm.initrdTooLarge`, `vm.invalidMACAddress`, `vm.kernelNotUncompressedImage`, `vm.machineIdentifierInvalid`, `vm.memoryOutOfRange`, `vm.microphoneUsageDescriptionMissing`, `vm.missingSystemConsole` | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
-| `vm.diskMissing`, `vm.diskNotReadable`, `vm.diskNotWritable`, `vm.initrdMissing`, `vm.kernelMissing` | "Files that Android needs are missing, or APKRun can't read or write them." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
-| `vm.memoryExceedsHostCap` | "The memory set for Android is more than this Mac allows." | "Choose less memory for Android in Settings → Runtime." `openRuntimeSettings` |
+| `vm.diskNotReadable` | "APKRun can't read the {role} disk." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
+| `vm.diskNotWritable` | "APKRun can't write to the {role} disk." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
+| `vm.cpuCountOutOfRange` | "Android can't use a CPU count of {requested}; the allowed range is {allowed}." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.commandLineInvalid`, `vm.configurationInvalid`, `vm.diskIdentifierInvalid`, `vm.frameworkRejected`, `vm.initrdTooLarge`, `vm.invalidMACAddress`, `vm.machineIdentifierInvalid`, `vm.memoryOutOfRange`, `vm.microphoneUsageDescriptionMissing`, `vm.missingSystemConsole` | "Android's configuration is not valid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.memoryExceedsHostCap` | "Android's memory allocation exceeds this Mac's {cap} limit." | "Choose less memory for Android in Settings → Runtime." `openRuntimeSettings` |
+| `vm.customDeviceInvalid` | "Custom device {name} is invalid." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.initrdMissing`, `vm.kernelMissing` | "Files that Android needs are missing, or APKRun can't read or write them." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
+| `vm.kernelNotUncompressedImage` | "The kernel image has an unsupported format ({detected})." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.diskMissing` | "The {role} disk file is missing." | "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting." `openTroubleshooting` |
+| `vm.duplicateDisk` | "The {role} disk is listed more than once." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.diskIsAndroidSparse` | "The {role} disk uses Android's unsupported sparse image format." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
+| `vm.diskSyncModeTestOnly` | "The {role} disk uses a test-only synchronization mode." | "Report the problem. The code identifies the rule that failed." `reportProblem` |
 <!-- errorgen:end vm -->
 
 - The validator of vm.md §3 collects all failures. One failure is thrown as itself. Several are thrown as `configurationInvalid`, whose items the GUI and the CLI list (§3.6). `apkrun doctor` prints all of them.
@@ -1048,7 +1057,7 @@ Owner: the CLI (`CLI/apkrun`). Design: [../02-design/cli.md](../02-design/cli.md
 | `confirmationRequired(flag)` | `cli.confirmationRequired` | a command that asks for confirmation runs without a TTY on stdin and without `--yes` | CLI | "This command needs a confirmation, but there is no terminal to ask." | "Run it again with {flag}." `none` | 1 | §3.4 |
 | `declined` | `cli.declined` | the user answered no to `Continue? [y/N]`, or did not type `Reset` | CLI | "Nothing was changed." | — `none` | 5 | §3.3, §3.4 |
 | `invalidPackageName(package)` | `cli.invalidPackageName` | a `<package>` argument fails the package-name grammar. No request is sent | CLI | "{package} isn't a valid Android package name." | "Use a package name such as com.example.app. apkrun list shows the installed apps." `none` | 64 | §3.1 |
-| `invalidSourceSpec(argument)` | `cli.invalidSourceSpec` | a `<spec>` argument doesn't match any update source form | CLI | "{argument} isn't a valid update source." | "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them." `none` | 64 | §3.1, [../02-design/update-system.md](../02-design/update-system.md) §11.3 |
+| `invalidSourceSpec(argument)` | `cli.invalidSourceSpec` | a `<spec>` argument doesn't match any update source form | CLI | "This update source isn't valid." | "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them." `none` | 64 | §3.1, [../02-design/update-system.md](../02-design/update-system.md) §11.3 |
 | `invalidArgument(argument, reason)` | `cli.invalidArgument` | another validation that the CLI does itself, after swift-argument-parser (for example a `--since` duration). `{reason}` is a stable key | CLI | "The value of {argument} isn't valid ({reason})." | "Run the command with --help to see the allowed values." `none` | 64 | §3.1 |
 | `fileNotAccessible(file, FileProblem)` | `cli.fileNotAccessible` | the CLI can't open a file argument, or can't create the `--output` file | CLI | "apkrun can't open {file}." | "Check the path and its permissions." `none` | 1 | §3.1, [../02-design/diagnostics.md](../02-design/diagnostics.md) §8.1 |
 | — | `cli.fileNotAccessible / isDirectory` | a folder where a file is needed | CLI | "{file} is a folder." | "Name a file. Unpacked image folders are for apkrun dev image install." `none` | 1 | §3.1, §4.7 |

@@ -8547,3 +8547,65 @@ remaining actionable findings. Maintainer review remains pending.
 `scripts/check-format.sh`, and `scripts/check-lock.sh`. The repository also
 passed `git diff --check`. #020's clean build and tests remain recorded in
 IR-191.
+
+## IR-246: Keep invalid update-source input out of rendered errors
+
+| Field | Value |
+|---|---|
+| Status | Implemented; hostile review passed; maintainer review pending |
+| Task | #061 |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) §16; [diagnostics.md](../02-design/diagnostics.md) §2; [#061](issues/M00-repository-and-vm-foundation.md#061-diagnostics-foundation) |
+
+**Choice.** Render `cli.invalidSourceSpec` with a fixed message and no
+interpolated argument. Keep the original value only in the typed failure for
+local control flow; do not expose it through CLI, JSON, or catalog parameters.
+
+**Reason.** Update-source specifications may contain credentials, tokens,
+private paths, or query values. A generic message avoids disclosing them while
+the remediation still lists the supported source forms and help command.
+
+**Verification.** The CLI regression test supplies a source with URL user-info,
+a private path, and a query token, then checks both human and JSON output for
+the absence of those values.
+
+## IR-247: Preserve typed parameters for ordered VM configuration findings
+
+| Field | Value |
+|---|---|
+| Status | Implemented; follow-up hostile review pending; maintainer review pending |
+| Task | #061 |
+| Affected documents | [diagnostics.md](../02-design/diagnostics.md) §2; [error-catalog.md](../03-reference/error-catalog.md) §§3.4, 3.6, 5; [runtime-api.md](../03-reference/runtime-api.md) §§2.3, 4.5; [#061](issues/M00-repository-and-vm-foundation.md#061-diagnostics-foundation); [#032](issues/M04-daemon-and-guest-protocol.md#032-xpc-runtime-api) |
+
+**Choice.** Add an ordered `APKRunError.listItems` payload whose items select a
+catalog code or variant and carry their own typed parameters. Use it for
+`VMConfigurationFailure.configurationInvalid` while retaining the existing
+comma-separated `items` parameter as a fallback. Render each item through the
+catalog on CLI, GUI, and JSON surfaces. Give parameterized VM messages
+placeholders for safe values such as requested CPU count, allowed range, and
+disk role. When either a typed item or an older flattened payload lacks a value
+required by a child message, use the aggregate's generic message for that item.
+Add an optional
+`WireError.listItems` field and old-peer conversion tests to RuntimeAPI task
+#032. Keep host requirement health findings in their existing
+`ErrorInfo`/localized-text representation.
+
+**Reason.** A list-wide parameter dictionary cannot associate values with
+repeated child codes, so it can lose which value belongs to which finding.
+Ordered typed records preserve association and display order. Keeping the
+existing `items` field provides a fallback during the transition; placing the
+wire representation in #032 keeps the XPC contract and its compatibility tests
+with the task that implements RuntimeAPI. Falling back per item preserves
+useful catalog text when its values are present while avoiding blank
+placeholders when a value is unavailable.
+
+**Verification.** T0 tests cover repeated error codes with distinct values on
+all three presentation surfaces and exercise actual VM catalog messages for
+CPU count and disk roles. A hostile follow-up caught blank placeholders for
+older flattened list payloads; those now fall back to the aggregate's generic
+message. A subsequent review found the same risk in typed items and noted the
+old-peer rule was underspecified; typed code and variant selectors now use the
+same fallback, covered on CLI, GUI, and JSON, and the RuntimeAPI text states
+the per-item rule. A prior review caught an invalid health-check variant in the
+API example; it now uses a compiled catalog variant, with renderer coverage.
+The generator test confirms retired catalog entries remain available to
+render errors from older peers.

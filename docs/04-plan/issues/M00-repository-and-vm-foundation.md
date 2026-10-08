@@ -261,8 +261,8 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 | Milestone | M0 (v0.1) |
 | Depends on | #001 |
 | Requirements | FR-CLI-02, FR-OPS-05, NFR-OBS-01, NFR-SEC-05, NFR-DEV-03 |
-| Design | [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §1–§4, §7.1–§7.3, §11 (#061), §12, §13; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §1–§5, §16; [../../02-design/cli.md](../../02-design/cli.md) §3.2, §3.3, §4.8, §6.2; [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1, §2; [../../05-development/build-system.md](../../05-development/build-system.md) §3, §4.2 |
-| Modules / paths | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/` (`Paths/`, `Build/`, `Logging/`, `Operations/`, `Errors/`, `Perf/`, `Health/`), `Packages/DiagnosticsCore/ErrorCatalog/errors.json`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTestSupport/`, `scripts/errorgen.swift`, `scripts/check-logging.sh`, `scripts/check-compile-fail.sh`, `scripts/build/stamp-commit.sh`, `Tests/Fixtures/compile-fail/`, `CLI/apkrun/` (`Support/`, `Commands/Logs.swift`), `project.yml` |
+| Design | [../../02-design/diagnostics.md](../../02-design/diagnostics.md) §1–§4, §7.1–§7.3, §11 (#061), §12, §13; [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §1–§5, §16; [../../03-reference/runtime-api.md](../../03-reference/runtime-api.md) §2.3, §4.5; [../../02-design/cli.md](../../02-design/cli.md) §3.2, §3.3, §4.8, §6.2; [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1, §2; [../../05-development/build-system.md](../../05-development/build-system.md) §3, §4.2 |
+| Modules / paths | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/` (`Paths/`, `Build/`, `Logging/`, `Operations/`, `Errors/`, `Perf/`, `Health/`), `Packages/DiagnosticsCore/ErrorCatalog/errors.json`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests/`, `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTestSupport/`, `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Validation/VMConfigurationFailure.swift`, `Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/`, `scripts/errorgen.swift`, `scripts/check-logging.sh`, `scripts/check-compile-fail.sh`, `scripts/build/stamp-commit.sh`, `Tests/Fixtures/compile-fail/`, `CLI/apkrun/` (`Support/`, `Commands/Logs.swift`), `project.yml` |
 | Risks / questions | OQ-04 (`log show` for non-admin users; partial result recorded, non-admin account unavailable here) |
 
 ### Goal
@@ -347,7 +347,7 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
 
    Check: T0 shows that a child task inherits the context and that `withChild` records the parent.
 4. **Error model and catalog (§2).**
-   - Add `APKRunError`, `ErrorDomain`, `ErrorParameter`, `UnderlyingError`, and `RemediationAction` exactly as declared in §2.1 and §2.3.
+   - Add `APKRunError`, `ErrorDomain`, `ErrorParameter`, ordered `ErrorListItem` payloads, `UnderlyingError`, and `RemediationAction` as declared in §2.1 and §2.3.
    - Write `errors.json` with the entry format of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.1, including `variants`, `transparent`, `retired`, and `"cliExit": "cause"`:
      - All `vm.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §5, including the proposed `vm.configurationInvalid`.
      - The `cli.*` entries of [../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §16, at least `cli.confirmationRequired`, `cli.versionSkew` (a warning, exit 0), and the usage error with exit 64. The usage error is `cli.invalidArguments`.
@@ -356,10 +356,11 @@ Steps 1–9 are the design steps of [../../02-design/diagnostics.md](../../02-de
    - Columns that the §3.1 entry format does not hold (When raised, Raised by, Ref) go into an optional `doc` member of the entry, which the Swift output ignores.
    - `ErrorPresenter` produces:
      - the three-line CLI format;
-     - one `hint:` line per item for list cases ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.6);
+     - one `hint:` line per item for list cases, rendered with that item's typed parameters and preserving order ([../../03-reference/error-catalog.md](../../03-reference/error-catalog.md) §3.6);
      - the JSON `error` object with its `cause` chain;
      - the GUI title, body, and action;
      - the Copy Details line (§2.3).
+   - For `vm.configurationInvalid`, keep typed list payloads local to `APKRunError` in this task. RuntimeAPI transport and old-peer round trips belong to #032.
    - Pick the language from `Locale.preferredLanguages`, falling back to English.
 
    Check: T1-4 and T1-5 pass. The generated file and the Markdown regions are current.
@@ -424,6 +425,7 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
   - `PerfTimeline` retention;
   - `BuildInfo` decoding;
   - the logging lint self-test.
+- **T0** (`Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/`): `VMConfigurationFailure.configurationInvalid` preserves each item's selector and typed parameters, including repeated error codes.
 - **T0** (`CLI/apkrun/Tests/`): the exit-code table against the catalog, the three-line usage error with exit 64 (golden), the `--json` error object, and `logs` output against a `FakeLogCommandRunner`.
 - **T1** (`Packages/DiagnosticsCore/Tests/DiagnosticsCoreSystemTests/`):
   - T1-3 `LogMirrorWriter` (rotation at 10 MiB, drop counting, mode 0600, no private values in the file);
@@ -438,6 +440,7 @@ By tier ([../test-strategy.md](../test-strategy.md)). The IDs are those of [../.
 - [ ] `apkrun version` logs one entry under `io.apkrun.cli` that `log show` finds ([../../02-design/diagnostics.md](../../02-design/diagnostics.md) §11 step 9).
 - [ ] A deliberately invalid CLI argument prints `error:`, `hint:`, and `code:` lines on stderr and exits 64.
 - [ ] `errors.json` holds every `vm.*` and `cli.*` entry of the catalog. `ErrorCatalog.generated.swift` and the marked catalog tables are current.
+- [ ] List errors preserve item order, repeated codes, and each item's typed parameters; CLI, GUI, and JSON hints render each item with its own values.
 - [ ] Logging a `Sensitive` value, or an interpolation without privacy, does not compile.
 - [ ] Every log entry made inside an `OperationContext` carries `op=` with the first 8 hex digits.
 - [ ] `apkrun logs` falls back to the mirrors and says so on stderr when `log` fails or returns nothing within 30 s.

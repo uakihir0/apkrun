@@ -19,6 +19,9 @@ SHA-256 values below identify the retained files.
   boot observer on (`APKRUN_CAPTURE_BOOT_OBSERVER=1`).
 - Instance 2 was used because a stale instance-1 group (from an earlier target
   run) still held instance 1 in the CVD registry; it was left untouched.
+- The raw records are kept outside the repository, in the local
+  Cuttlefish boot-diagnosis store of the maintainer's account, with a
+  SHA-256 manifest (`SHA256SUMS.txt`) that lists every retained file.
 
 ## Records
 
@@ -27,7 +30,7 @@ SHA-256 values below identify the retained files.
 | `default-20261008T150724-1970` (E0) | 600 s | Retained incomplete; deadline reached during zygote preload. |
 | `default-20261008T155958-10047` (E1) | 3000 s | Retained incomplete; deadline reached during the third system_server start. |
 | `default-20261008T165153-44806` (E2) | 3000 s | Retained incomplete; deadline reached before the first Watchdog kill. Intended as an 8-vCPU variant, but the configuration recorded 4 vCPUs (see the final section). |
-| `swiftshader-...` (E3) | 2100 s | See the final section. |
+| `swiftshader-20261008T172924-78365` (E3) | 2100 s | Retained incomplete; the first system_server was killed by its Watchdog, and the deadline ended the run during a second start. See the swiftshader section. |
 
 Records are retained outside git. `host-logcat.txt` is present in both, which
 the 2026-09-30 to 2026-10-07 `default` and `swiftshader` records lack; those
@@ -166,3 +169,40 @@ U-Boot-only stage (`Starting kernel ...`) for several minutes before Linux
 started, which the earlier 2026-10-02 records also showed under other flags.
 
 Retained at the local store described in the setup section.
+
+## swiftshader profile (E3)
+
+E3 used the `swiftshader` profile with the same unchanged tools, a 2100-second
+deadline, instance 2, and the boot observer. Its `host.json` records
+`selectedGpuMode=guest_swiftshader` and `gpuVhostUserEnabled=false`, and its
+`cuttlefish_config.json` records 4 vCPUs. The run had a shorter deadline than
+E1 so it finished within the session.
+
+Its timeline (uptime from `boot_progress_*`; UTC wall clock):
+
+| Event | Uptime (s) | UTC |
+|---|---|---|
+| zygote START | 217.3 | 08:02:14 |
+| `boot_progress_preload_start` | 471.6 | 08:06:28 |
+| `boot_progress_preload_end` | 717.8 | 08:10:34 |
+| system_server entered | 749.6 | 08:11:06 |
+| `boot_progress_pms_start` | 913.2 | 08:13:50 |
+| `boot_progress_pms_ready` | 1175.7 | 08:18:12 |
+| Watchdog `WAITED_UNTIL_PRE_WATCHDOG` | about 1264 | 08:19:41 |
+| sysrq "Show backtrace of all active CPUs" (Watchdog) | 1514.4 | 08:23:51 |
+| init SIGKILL to zygote (system_server killed) | 1528.9 | 08:24:05 |
+
+The retained `host-logcat.txt` ends at 08:20:37 UTC, before the kill, so the
+kill is evidenced by the kernel log (`kernel.log`), not by a
+`WATCHDOG KILLING SYSTEM PROCESS` line. A second system_server (pid 3951) was
+active by uptime 1788 s. The deadline (2100 s) ended the run during that
+second start, so E3 does not show a second kill.
+
+E3 reached PackageManager ready at 1,175.7 s, against 1,467.4 s in E1. Its
+Watchdog precursor came about 90 s after that point; in E1 it came about 350 s
+after. The failure pattern matches E1: system_server stops answering the
+Watchdog during its startup and is killed. The swiftshader profile does not
+boot in this configuration.
+
+Retained at the local store described in the setup section. Its hashes are in
+the `SHA256SUMS.txt` manifest there.

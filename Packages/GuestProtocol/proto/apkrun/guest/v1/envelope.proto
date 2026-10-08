@@ -178,6 +178,9 @@ message Response {
     Empty relinquish_update_ownership = 109;
     ConstraintsResult check_install_constraints = 110;
   }
+
+  // 71 is reserved on both sides, so that a result never takes the number of the unused operation.
+  reserved 71;
 }
 
 // Event is pushed by the agent on a control or store connection. seq is per

@@ -122,12 +122,18 @@ private let operationRanges: [ClosedRange<Int>] = [10...39, 40...59, 60...69, 70
     }
 }
 
-@Test func operationNumber71IsReservedAndNotUsed() throws {
+@Test func operationNumber71IsReservedOnRequestAndResponseAndNotUsed() throws {
     let files = try Schema.load()
     let operations = try Schema.oneOf("op", inMessage: "Request", in: files)
+    let results = try Schema.oneOf("result", inMessage: "Response", in: files)
     #expect(!operations.contains { $0.number == 71 })
-    let request = try #require(Schema.block(in: files.joined(separator: "\n"), startingWith: "message Request {"))
-    #expect(request.contains("reserved 71;"))
+    #expect(!results.contains { $0.number == 71 })
+
+    let schema = files.joined(separator: "\n")
+    for message in ["Request", "Response"] {
+        let body = try #require(Schema.block(in: schema, startingWith: "message \(message) {"))
+        #expect(body.contains("reserved 71;"), "message \(message) does not reserve 71")
+    }
 }
 
 @Test func everyEventNumberIsUniqueAndInItsRange() throws {

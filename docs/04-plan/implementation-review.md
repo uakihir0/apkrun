@@ -9698,3 +9698,117 @@ Local runs finish the stream within a second, so the window never excluded the r
 `recorder.entries.count → 1`, the count reported by CI. With the offset in place it
 passes locally. The other boundary tests in this file use the same wall-clock stamp.
 They passed on the hosted run and are not changed.
+
+## IR-293: Mirror tasks #001–#097 as issues #2–#98
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (repository process), all tasks |
+| Affected documents | [issues/README.md](issues/README.md) §4; [workflow.md](../05-development/workflow.md) §2.4; `.github/ISSUE_TEMPLATE/task.md` |
+
+**Choice.** The 97 task issues were created in number order, from the milestone
+files, with the `task` label and the title `#NNN Title`. Each body holds the
+field table and the Goal of its entry, with a link to the entry in the repository.
+GitHub numbered them #2 to #98, so task `#NNN` is issue `#(NNN+1)`. The title
+keeps the task number, so the mapping is visible.
+
+**Reason.** The workflow asks that issue numbers equal task numbers, and that
+#001–#097 come before any other issue or pull request. A closed negative-test pull
+request (#1) had already used number 1 before this step, so the offset cannot be
+removed. The milestone files stay the source of truth, and the title makes the
+mapping explicit. The offset is caused by my negative-test pull request, which
+was opened for #062 criterion 13.
+
+**Verification.** `gh issue list` returns 97 issues before any new issue. Issue #2
+is titled `#001 Bootstrap Xcode workspace`, and #98 is `#097 Google Play authority`.
+The G1 evidence is attached to issue #4, `#003 Boot minimal ARM64 Linux`.
+
+## IR-294: Branch protection on main requires the eight CI checks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (acceptance criterion 1) |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #062; [IR-273](#ir-273-require-every-ciyml-job-not-only-the-four-named-in-062) |
+
+**Choice.** Branch protection on `main` requires the eight checks of IR-273:
+`workflow-policy`, `lint`, `codegen`, `third-party`, `build`, `test-swift`,
+`test-graphics`, and `test-images`. Force pushes and branch deletion are
+disallowed. Administrators are not blocked (`enforce_admins` is false), and no
+pull-request review is required.
+
+**Reason.** The repository has one maintainer, who cannot approve their own
+pull request. Requiring reviews would stop all merges. Without the
+`enforce_admins` exception, the same protection would also stop the direct
+pushes this work uses. The control-file policy in `workflow-policy` still covers
+changes to CI files, through the `ci-policy-approved` label. A maintainer may
+prefer a required review once a second maintainer exists.
+
+**Verification.** `gh api PUT repos/uakihir0/apkrun/branches/main/protection`
+returned the eight contexts, `enforce_admins: false`, and `allow_force_pushes: false`.
+The protected-file policy fails as designed on pull request #1
+(run `37771569527`).
+
+## IR-295: Do not register a self-hosted runner on this Mac
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062; #003 (acceptance `linux-guest`); #064 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4; [build-system.md](../05-development/build-system.md) §15; `.github/workflows/integration.yml`, `nightly.yml` |
+
+**Choice.** The lab workflows (`Integration tests`, and the nightly gates
+`gates` and `network`) need self-hosted runners with the labels `apkrun-lab` and
+`apkrun-reference`. No such runner is registered. This Mac is not registered
+either. The queued `Integration tests` run is cancelled, so it does not stay
+queued for a day, and the nightly lab jobs are left as they are.
+
+**Reason.** The repository is public. A self-hosted runner executes the code of
+the workflow it is given, on a personal Mac that holds signing material and the
+lab certificate. Forked or changed workflows could reach it. The docs say
+persistent self-hosted runners stay disconnected until the owner can enforce
+workflow restrictions ([#062](issues/M00-repository-and-vm-foundation.md)
+Risks). A dedicated, isolated lab machine is the safer place for those runners.
+
+**Consequence.** #003's acceptance box for the `linux-guest` job stays open. The
+T2 result for the reviewed commit is linked from the #003 issue instead. The
+nightly `gates` job for G1 cannot run until a runner exists.
+
+## IR-296: Accept the Android SDK license on this Mac for the pinned packages
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (Kotlin guest modules); #015 (JDK and Android SDK in bootstrap) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2 |
+
+**Choice.** The `sdkmanager` license was accepted on this Mac, for
+`platforms;android-37.0` and `build-tools;37.0.0`. The SDK sits in the git-ignored
+`build/android-sdk`. Nothing else was installed, and the `~/.android` directories
+the tool created on its first run were removed.
+
+**Reason.** The Kotlin guest modules of #033 need the Android platform to compile.
+The license is the Android SDK's own, and the lab machine needs it for the
+Android tasks anyway. Accepting it is a consent given on the user's behalf, so it
+is recorded here for review. Deleting `build/android-sdk` withdraws the
+installation. The license is not re-accepted anywhere else.
+
+## IR-297: Close #002 and #003 with the maintainer review still open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #002, #003 |
+| Affected documents | [issues/README.md](issues/README.md) §5; [M00](issues/M00-repository-and-vm-foundation.md) #002, #003 |
+
+**Choice.** #002 is closed as implemented and accepted. Its one hard dependency,
+#061 step 4, is on `main`, because `main` is now the working line. #003 is closed
+as implemented, with the G1 gate passed, and its acceptance boxes are ticked except
+the `linux-guest` box (IR-295). The maintainer review items of each task remain
+open: IR-242 for #002, and IR-243 with IR-044 and IR-241 for #003.
+
+**Reason.** The hook's acceptance rule is met by the evidence. The reviews are
+judgment calls that a maintainer should confirm, and they do not block the next
+tasks. Keeping the tasks formally open would only hold back the Android chain,
+which depends on them.

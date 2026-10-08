@@ -160,7 +160,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - [x] The schemas compile for the host and guest environments: `swift build` and `./gradlew -p Guest :guestd:assemble`.
 - [x] The version mismatch behavior is documented in §5.2, and a T0 test shows that a fake agent sending major 2 is rejected with `incompatibleVersion` (FR-RT-04, NFR-REL-04).
 - [x] Both codecs decode every golden frame, reject every invalid one, and re-encode the valid ones byte for byte.
-- [ ] The CI regeneration check and `buf lint` pass.
+- [x] The CI regeneration check and `buf lint` pass.
 
 ### Notes
 

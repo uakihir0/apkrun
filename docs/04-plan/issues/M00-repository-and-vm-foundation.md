@@ -609,7 +609,7 @@ change the `cargo fmt --check` run when Rust sources are present.
 
 ### Acceptance criteria
 
-- [ ] `ci.yml` runs `lint`, `codegen`, `build`, and `test-swift` on every pull request and push to `main`; `workflow-policy` runs for PRs targeting `main`; all five checks are required on `main`.
+- [x] `ci.yml` runs `lint`, `codegen`, `build`, and `test-swift` on every pull request and push to `main`; `workflow-policy` runs for PRs targeting `main`; all five checks are required on `main`.
 - [x] A PR changing protected control files cannot skip required checks unless the same non-author human approved its current head and applied `ci-policy-approved`; a commit, reopen, edit, or later label event resets the check, and removing the label revokes `workflow-policy`.
 - [x] Fork pull request source runs only on a fresh GitHub-hosted macOS VM; no `pull_request` job can access a persistent self-hosted runner.
 - [x] A forbidden import edge, a forbidden trait edge, and a third-party import outside its allowed module each fail `lint` with a message that names the file and the rule.
@@ -1044,7 +1044,7 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - [x] The serial output on `hvc0` includes the known boot marker `APKRUN-TEST: boot ok`.
 - [x] `VMController` goes `stopped → starting → running` on start and `running → stopping → stopped` on stop, as recorded from `stateUpdates`.
 - [x] A failed start ends in `failed` with a typed `VMFailure` that carries a `VZErrorInfo`. `reset()` returns to `stopped`.
-- [ ] G1 passes on the reference Mac with a clean build from `main`: ten boots in a row, with the evidence attached to the gate issue.
+- [x] G1 passes on the reference Mac with a clean build from `main`: ten boots in a row, with the evidence attached to the gate issue.
 - [x] VZ objects are created and called only on `io.apkrun.vm.queue`.
 - [x] No state is inferred from a nil `VZVirtualMachine` ([../../../AGENTS.md](../../../AGENTS.md) §6.2).
 - [x] Every transition is logged with its operation ID under `io.apkrun.vm`, category `lifecycle`.

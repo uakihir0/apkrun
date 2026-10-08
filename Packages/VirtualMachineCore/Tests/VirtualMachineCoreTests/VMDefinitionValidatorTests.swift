@@ -35,6 +35,50 @@ import Virtualization
     )
 }
 
+@Test func configurationFailureListRetainsOrderedTypedItemParameters() {
+    let failures: [VMConfigurationFailure] = [
+        .cpuCountOutOfRange(requested: 6, allowed: 2...4),
+        .diskMissing(role: "system"),
+        .diskMissing(role: "userdata"),
+    ]
+    let aggregate = VMConfigurationFailure.configurationInvalid(failures)
+
+    #expect(aggregate.parameters["items"] == .text("cpuCountOutOfRange,diskMissing,diskMissing"))
+    #expect(
+        aggregate.listItems == [
+            ErrorListItem(
+                selector: .errorCode("vm.cpuCountOutOfRange"),
+                parameters: [
+                    "requested": .count(6),
+                    "allowed": .text("2…4"),
+                ]
+            ),
+            ErrorListItem(
+                selector: .errorCode("vm.diskMissing"),
+                parameters: ["role": .text("system")]
+            ),
+            ErrorListItem(
+                selector: .errorCode("vm.diskMissing"),
+                parameters: ["role": .text("userdata")]
+            ),
+        ]
+    )
+
+    let hints = ErrorPresenter(locale: Locale(identifier: "en")).gui(aggregate).hints
+    #expect(
+        hints.map(\.code) == [
+            "vm.cpuCountOutOfRange",
+            "vm.diskMissing",
+            "vm.diskMissing",
+        ])
+    #expect(
+        hints.map(\.message) == [
+            "Android can't use a CPU count of 6; the allowed range is 2…4.",
+            "The system disk file is missing.",
+            "The userdata disk file is missing.",
+        ])
+}
+
 @Test func memoryValidationChecksAlignmentFrameworkBoundsAndHostCap() {
     let builder = VMDefinitionBuilder()
     let host = makeHost(for: builder, physicalMemoryBytes: 6 * 1_024 * 1_024 * 1_024)

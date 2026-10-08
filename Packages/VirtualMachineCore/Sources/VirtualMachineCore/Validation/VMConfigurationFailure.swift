@@ -122,6 +122,19 @@ public enum VMConfigurationFailure: APKRunError, Equatable {
         }
     }
 
+    /// Ordered child failures with the safe parameters needed by each catalog entry.
+    public var listItems: [ErrorListItem] {
+        guard case .configurationInvalid(let failures) = self else {
+            return []
+        }
+        return failures.map { failure in
+            ErrorListItem(
+                selector: .errorCode("vm.\(failure.code)"),
+                parameters: failure.parameters
+            )
+        }
+    }
+
     /// The path-free Virtualization.framework error, when validation was rejected.
     public var underlying: UnderlyingError? {
         guard case .frameworkRejected(let underlying) = self else {

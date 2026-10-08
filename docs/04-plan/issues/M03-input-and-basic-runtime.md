@@ -176,9 +176,10 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
   - Format and repository checks: `scripts/check-format.sh` (swift-format strict and `ktfmtCheck`) passes. `scripts/tests/run.sh` passes. `scripts/ci/run-checks.sh` passes all seven of its checks, and `scripts/ci/codegen.sh` reports that the generated files are up to date. Both were run on the final tree on 2026-10-08.
   - Decisions that a maintainer should review before the field numbers freeze: IR-260 to IR-267 (schema shapes, enum prefixes and placement, the handshake split, golden frame generation, tool pins, the Android SDK, the Gradle build, and CI wiring).
 - **Remaining:**
+  - The regeneration check is wired. The `codegen` job in `.github/workflows/ci.yml` runs `scripts/ci/codegen.sh`, which runs `scripts/generate-protos.sh` and then fails on any diff. The local run of that script reports the generated files up to date. No hosted run has happened, so the acceptance box stays open.
   - The hosted CI jobs cannot run here, because the repository has no remote. The `lint` job runs `check-format.sh`, which runs `ktfmtCheck` and needs the Android SDK. Bootstrap installs the SDK only with #015 (IR-267). So the CI acceptance box stays open until a runner passes both `lint` and `codegen`.
   - `buf breaking` against the last release tag is #062. Fuzzing of both decoders is #091.
-  - The paired `GuestOperation` types (guest-protocol.md §13.1) are implemented with #072. This task checks the schema side of the numbering rule.
+  - Step 5 names a paired `GuestOperation`. That type is the host-side call interface of guest-protocol.md §13.1 (`GuestConnection`, in RuntimeCore), so it belongs to #072, and it does not exist in this package. #033 checks the schema side of the rule: each operation pairs with a result of the same number and field name (`NumberingRuleTests`). The §16 row that lists this test under #033 is satisfied on the schema side only.
   - `allWarningsAsErrors` is not set for the Kotlin modules (IR-266). Warnings are zero today.
 - **Scope note:** the codec, the version rules, and the handshake live in the `GuestProtocol` target, in `GuestProtocolFailure.swift`, `FrameDecoder.swift`, and `Handshake.swift`, which the Modules list does not name. They add no target and no dependency.
 

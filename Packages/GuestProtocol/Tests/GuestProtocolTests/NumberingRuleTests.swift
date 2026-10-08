@@ -4,8 +4,9 @@ import Testing
 /// The numbering rule of guest-protocol.md §4.1, checked against the schema source.
 ///
 /// The rule is a property of the .proto text: each operation in `Request.op` has a result in
-/// `Response.result` with the same number and the same field name. The paired GuestOperation
-/// types belong to RuntimeCore (#072), so this test checks the schema side only.
+/// `Response.result` with the same number and the same field name. The GuestOperation type of
+/// guest-protocol.md §13.1 is host code in RuntimeCore, and #072 implements it. It does not exist
+/// in this package, so this test checks the schema side only.
 private struct OneOfField {
     let type: String
     let name: String

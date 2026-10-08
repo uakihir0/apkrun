@@ -15,7 +15,7 @@ Every unit of implementation work is one numbered task. Each task becomes one Gi
 |---|---|---|---|
 | [M00-repository-and-vm-foundation.md](M00-repository-and-vm-foundation.md) | M0 Repository and VM foundation | v0.1 | #001–#007, #061, #062, #063 |
 | [M01-android-bring-up.md](M01-android-bring-up.md) | M1 Android bring-up | v0.1 | #008–#017, #064, #065, #095 |
-| [M02-graphics.md](M02-graphics.md) | M2 Graphics | v0.1 | #018–#023 |
+| [M02-graphics.md](M02-graphics.md) | M2 Graphics | v0.1 | #018–#023, #099 |
 | [M03-input-and-basic-runtime.md](M03-input-and-basic-runtime.md) | M3 Input and basic runtime | v0.1 / v0.2 | #033, #072, #024–#030, #067 |
 | [M04-daemon-and-guest-protocol.md](M04-daemon-and-guest-protocol.md) | M4 Daemon and guest protocol | v0.2 | #031, #032, #066, #068, #034, #053, #069, #070, #071 |
 | [M05-custom-android-image.md](M05-custom-android-image.md) | M5 Custom Android runtime image | v0.3 | #035, #036 |
@@ -110,6 +110,7 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #019 | virtio-gpu device layer | M2 | #018, #003, #063 | | [graphics.md](../../02-design/graphics.md) §4 |
 | #020 | Build graphics dependencies | M2 | #018 | | [graphics.md](../../02-design/graphics.md) §5 |
 | #021 | Android detects virtio-gpu | M2 | #019, #014 | | [graphics.md](../../02-design/graphics.md) §4 |
+| #099 | Mesa-enabled VirGL guest image | M2 | #020, #021 | | [graphics.md](../../02-design/graphics.md) §5 |
 | #022 | Android VirGL | M2 | #021, #020 | | [graphics.md](../../02-design/graphics.md) §5 |
 | #023 | Render SurfaceFlinger to Metal | M2 | #020, #022 | G3 | [graphics.md](../../02-design/graphics.md) §6 |
 | #033 | Define GuestProtocol | M3 | #007 | | [guest-protocol.md](../../02-design/guest-protocol.md) |

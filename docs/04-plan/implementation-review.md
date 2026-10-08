@@ -10004,3 +10004,26 @@ sweep. Both were gone by the next check, and no crosvm, `secure_env`, or
 `process_restarter` first and to verify the result. That change did not clear the
 group in time, so the next run must check that nothing remains. The VM was
 stopped afterwards.
+
+## IR-304: File the Mesa-enabled VirGL guest image as task #099
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (new), #064, #022 |
+| Affected documents | [M02](issues/M02-graphics.md) #099; [issues/README.md](issues/README.md) §1 and §3; [IR-240](#ir-240-plan-a-mesa-enabled-virgl-guest-image-without-changing-the-reference-pin) |
+
+**Choice.** IR-240 proposed a follow-up for the Mesa-enabled guest image, and it
+could not be numbered until GitHub issues existed. The issues now exist, so the
+follow-up is filed as task #099, as the next issue number. It sits in M2 between
+#021 and #022, and depends on #020 and #021, as IR-240 describes. Its entry is
+in M02, and its GitHub issue is #99. The reference build `16373615` is not
+changed, so #064 is unaffected.
+
+**Reason.** The workflow requires new tasks to take the number GitHub gives them,
+and the next free issue number is 99. Filing the task now keeps the guest
+packaging work visible and gives #022 an explicit dependency on it. The task
+cannot start yet, because #021 waits for #014 and #014 waits for the Android boot.
+
+**Verification.** `gh issue list` shows issue #99 with the title `#099 Mesa-enabled
+VirGL guest image`, and the entry is in M02 and in the task index.

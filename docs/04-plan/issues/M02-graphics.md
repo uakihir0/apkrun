@@ -415,6 +415,81 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 
 ---
 
+## #099 Mesa-enabled VirGL guest image
+
+| Field | Value |
+|---|---|
+| Milestone | M2 (v0.1) |
+| Depends on | #020, #021 |
+| Requirements | As for #022, which this task unblocks |
+| Design | [../../02-design/graphics.md](../../02-design/graphics.md) §5; [../../02-design/android-image.md](../../02-design/android-image.md) §3, §8, §11 |
+| Modules / paths | `ThirdParty/ThirdParty.lock.json`, `Images/tools/`, `Images/reference/`, `Packages/ImageCore/`, `Guest/` (product fragment) |
+| Risks / questions | The guest Mesa EGL load failure recorded in IR-240 and IR-244 |
+
+### Goal
+
+A corrected guest image whose Mesa EGL and VirGL libraries load inside the
+guest, with its own build identity, manifest, hashes, and provenance. The
+reference build `16373615` does not change, so #064 is unaffected.
+
+### Scope
+
+In scope:
+
+- A minimal product fragment that ships Mesa's VirGL EGL and GLES libraries and
+  their loader dependencies in the image.
+- Manifest entries, hashes, and provenance for the new artifacts.
+- A guest check that EGL initializes the VirGL display.
+
+Out of scope:
+
+- Changing the reference build or its pin (IR-240).
+- The Guest Agent and the other product services, which belong to #035.
+- Performance work, which belongs to #022 and #023.
+
+### Deliverables
+
+- The product fragment and its build script under `Images/tools/`.
+- A corrected image build with its own identity, recorded under `Images/reference/`.
+- The guest check `apkrun.test=egl`, which prints `APKRUN-TEST: egl ok` only
+  when `eglInitialize` succeeds on the VirGL display.
+
+### Implementation steps
+
+1. Compare the pinned Mesa sources with the Mesa libraries of build `16373615`.
+   Record the missing loader paths, ABI, and dependencies in a receipt.
+2. Build the minimal product fragment from the locked sources. Add every new
+   component to `ThirdParty/ThirdParty.lock.json` with its revision and hashes.
+3. Build the corrected image under its own identity. Record its manifest and
+   hashes.
+4. Boot the corrected image in the test guest and run `apkrun.test=egl`.
+
+### Tests
+
+- T0: manifest validation of the corrected identity.
+- T2: the guest EGL check on the corrected image, and the unchanged reference
+  check on build `16373615`.
+
+### Acceptance criteria
+
+- [ ] The corrected image has its own build identity, manifest, and hashes, and
+      build `16373615` is unchanged.
+- [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`).
+- [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock.
+- [ ] #064 is unaffected: its acceptance uses build `16373615`.
+
+### Notes
+
+- Placement and the reasons for it are in IR-240. This task sits between #021 and
+  #022, because #022 needs a working Mesa guest.
+- The task cannot start until #021 is done, and #021 depends on #014, which waits
+  for the Android boot in #064 (IR-298 to IR-302). It is recorded now so that the
+  dependency is visible.
+- Filed on 2026-10-09 as GitHub issue #99. A new task takes its GitHub issue number, so
+  the task number and the issue number are both #099 (IR-293 covers the earlier offset).
+
+---
+
 ## #022 Android VirGL
 
 | Field | Value |

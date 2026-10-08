@@ -9645,3 +9645,30 @@ virtualization support must not decide it.
 **Verification.** The test passes locally. With the probe forced to `false`, it
 fails at line 95 with `.hostUnsupported`, the same failure as CI run
 37754807446, job `test-swift`.
+
+## IR-291: Give the host-check tests a generous health-check budget
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (CI) |
+| Affected files | `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTestSupport/DiagnosticsContext+Testing.swift`; `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/HostChecksTests.swift` |
+
+**Choice.** `DiagnosticsContext.testing` takes a `healthTimeouts` parameter that
+defaults to `.standard`. The host-check helper `runHostChecks` passes quick and
+deep budgets of 30 and 60 seconds. The production budgets, and every other
+caller of `DiagnosticsContext.testing`, keep the 2-second quick budget.
+
+**Reason.** The hosted run failed `hostChecksProducePassingResultsFromInjectedProbe`
+at line 9. Every host check in that test reads only the injected probe and
+`BuildInfo.current`, which the test compares with itself. The only remaining
+way to get a non-pass result is the registry's timeout path, which reports a
+`warning` with "check timed out". That budget is 2 seconds of wall-clock time.
+During this batch the hosted test process stalled for about 11 seconds, as the
+other tests of the batch show (for example `operationContextPropagatesToChildTasks`
+took 11.3 seconds). A check can miss a 2-second budget in that state, and the
+test then reports the runner's scheduling as a host failure.
+
+**Verification.** The test passes locally. With the quick budget forced to 1 ms,
+it fails at line 9 with the same expectation as CI run 37754807446, job
+`test-swift`. The three other host-check tests in the file use the same helper.

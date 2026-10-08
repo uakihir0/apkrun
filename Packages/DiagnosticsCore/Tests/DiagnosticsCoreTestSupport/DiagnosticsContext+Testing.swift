@@ -11,7 +11,8 @@ extension DiagnosticsContext {
         logSink: any LogSink = RecordingLogSink(),
         clock: any DiagnosticsClock = ManualDiagnosticsClock(),
         buildInfo: BuildInfo = .current,
-        hostProbe: any HostProbe = FakeHostProbe()
+        hostProbe: any HostProbe = FakeHostProbe(),
+        healthTimeouts: HealthCheckTimeouts = .standard
     ) -> DiagnosticsContext {
         let paths = APKRunPaths(
             allowingHomeOverride: true,
@@ -19,7 +20,7 @@ extension DiagnosticsContext {
         )
         return DiagnosticsContext(
             logSink: logSink,
-            healthChecks: HealthCheckRegistry(checks: HostChecks.all),
+            healthChecks: HealthCheckRegistry(checks: HostChecks.all, timeouts: healthTimeouts),
             perfTimeline: PerfTimeline(),
             paths: paths,
             clock: clock,

@@ -110,6 +110,10 @@ import Testing
     #expect(BuildInfo(infoDictionary: ["APKRunBuildIdentity": "unexpected"]).launchAgentLabel == "io.apkrun.apkrund")
 }
 
+/// The fake probe answers at once. These budgets only keep a busy test process from
+/// turning a passing check into "check timed out" when its tasks run late.
+private let probeHealthTimeouts = HealthCheckTimeouts(quick: .seconds(30), deep: .seconds(60))
+
 private func runHostChecks(
     state: FakeHostProbe.State = .init(),
     deep: Bool = false,
@@ -120,7 +124,8 @@ private func runHostChecks(
     let context = DiagnosticsContext.testing(
         root: URL(fileURLWithPath: "/tmp/apkrun-host-check-tests", isDirectory: true),
         buildInfo: buildInfo,
-        hostProbe: hostProbe
+        hostProbe: hostProbe,
+        healthTimeouts: probeHealthTimeouts
     )
     return await context.healthChecks.run(
         deep: deep,

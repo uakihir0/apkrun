@@ -8656,7 +8656,7 @@ render errors from older peers.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review (blocker for the #019 T2 acceptance) |
+| Status | Resolved by [IR-258](#ir-258-bump-the-alpine-libcrypto3-and-libssl3-pins-to-3590-r0); the pin bump needs maintainer review |
 | Task | #019; also #003 and the test artifacts of [environment-setup.md](../05-development/environment-setup.md) §4 |
 | Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`alpine-libcrypto3`, `alpine-libssl3`); [vm.md](../02-design/vm.md) §12 |
 
@@ -8749,3 +8749,40 @@ render errors from older peers.
 **Reason.** Homebrew has no edid-decode formula, and the deliverable needs its output. Pinning a tool used only for fixture generation would add a lock entry that no build step reads.
 
 **Verification.** The three golden blocks decode with exit status 0 and no failure or warning lines. The decode output is in `Tests/Fixtures/graphics/edid/*.edid-decode.txt`. A maintainer may decide to pin the tool in the lock.
+
+## IR-258: Bump the Alpine libcrypto3 and libssl3 pins to 3.5.9-r0
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #019 (T2 acceptance); the test Linux artifacts of #003 |
+| Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`alpine-libcrypto3`, `alpine-libssl3`); [environment-setup.md](../05-development/environment-setup.md) §4; [IR-251](#ir-251-the-test-linux-guest-cannot-be-built-from-the-current-lock-file) |
+
+**Choice.** Replace the two pins with 3.5.9-r0 from the Alpine v3.24 `main`
+aarch64 index, with these values:
+
+- `libcrypto3-3.5.9-r0.apk`: 2,286,800 bytes, SHA-256
+  `2676a2b0b6e23ea2edccf3ee982b9842a665d52603d047de3d0a185dc316d983`.
+- `libssl3-3.5.9-r0.apk`: 373,023 bytes, SHA-256
+  `20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394af2082e`.
+
+The bump is made by the implementer instead of waiting for a separate review,
+because the old pins return HTTP 404 and block every test Linux guest run.
+IR-251 asked for this review; this entry is the maintainer's review item.
+
+**Reason.** The 3.5.8-r0 packages are no longer served, so
+`scripts/fetch-test-linux.sh` cannot complete. The new version stays on the same
+release line (v3.24), the same license (Apache-2.0), and the same `tooling`
+class. It is the smallest change that restores the pinned fetch.
+
+**Verification.** The `APKINDEX.tar.gz` of v3.24/main/aarch64, fetched on
+2026-10-08, lists both packages at 3.5.9-r0 with the sizes above. The downloaded
+files match those sizes. The SHA-1 of each file's control gzip member matches
+the index `C:` field (`Q1` plus base64). `scripts/check-lock.sh` passes, and
+`scripts/fetch-test-linux.sh` exits 0.
+
+**Limit.** The index does not carry SHA-256 values for the `.apk` files, and this
+checkout has no `apk` tool to check Alpine's package signature. The SHA-256 values
+are therefore trust-on-first-use over HTTPS, checked against the index for size
+and control checksum. A maintainer should confirm them against the Alpine signing
+key before the bump is accepted.

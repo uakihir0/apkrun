@@ -9843,7 +9843,8 @@ receipts were copied. Those raw receipts are lost. The summary receipt keeps onl
 the values printed in the session, and it says so. Two runner defects were found
 and fixed after the first run: the instance logs live under `/var/tmp/cvd`, not
 under `--base_directory`, and an unset `sys.boot_completed` was recorded as
-`none`. Cleanup after every run left no crosvm and no work directory.
+`none`. Cleanup after the first two runs left no crosvm and no work directory. The
+8-vCPU run did not (IR-302).
 
 ## IR-299: Record the 8 GiB, four-vCPU run as not booted within 2400 seconds
 
@@ -9928,3 +9929,36 @@ files of the extracted jar. The system partition extraction read one linear
 extent (959,066,112 bytes) from the pinned super image and wrote only to a private
 copy. Nothing was written into the repository, and no guest run was needed. The
 search is by string, not by call graph, so a missed reader cannot be excluded.
+
+## IR-302: Record the 8-vCPU run and the runner's cleanup gap
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected files | `Images/reference/16373615/incomplete/variant-cpus8-20261008T135241Z.txt`; `Images/reference/16373615/incomplete/ladder-064-20261008.txt` (step 1d); `Experiments/cuttlefish-boot-diagnosis/boot_variant.sh` |
+
+**Choice.** Record the eight-vCPU run (`--cpus 8` on create and start, 4096 MiB,
+1800 seconds) as a non-booting diagnostic variant. It answers IR-287's question
+for this runner: the saved configuration records eight CPUs, so the earlier E2
+result (IR-287) was not a CPU test, and this is one. The runner's launch path is
+unchanged. Its cleanup sweep is not fixed in this pass, so the next run must stop
+the group by its runtime path and verify that nothing remains.
+
+**Reason.** The E2 record failed to apply the CPU count, so the CPU hypothesis
+stayed open. This run applied it: the saved configuration records `cpus=8`. The
+kernel log reached `starting service 'zygote'` at 215.7 seconds, against 233.0
+seconds in E1 at 4 GiB and four vCPUs. The display marker appeared at 696.4
+seconds. adb answered from about 800 seconds, but `sys.boot_completed` stayed
+unset. The run ended at its deadline without a Watchdog kill. The cleanup gap is
+separate: `cvd remove` returned 0, while a crosvm process and `secure_env` of the
+group survived the runner's TERM and KILL sweep. The runner matched processes by
+the private work path. A likely cause, not verified, is that the `process_restarter`
+restarted crosvm after the kill. The two survivors were stopped by hand after the
+runner finished, and afterwards no crosvm or group process remained.
+
+**Verification.** The receipt holds the saved configuration, the kernel-log marker
+counts, the per-poll adb and RSS record, and the cleanup result. Its paths are
+placeholders, and a scan found no host path, `/tmp` path, or `/var/tmp` path. The
+manual stop is recorded in the receipt's cleanup section, not hidden. The ladder
+receipt lists the lost first-run receipts (IR-298).

@@ -1,0 +1,141 @@
+# Variant cpus8 (20261008T135241Z)
+
+Profile: `default` flags of android-image.md §8.2 plus the variant flags below. Build 16373615. Instance 2, ADB port 6521.
+
+Command (paths replaced by placeholders):
+
+    cvd create --host_path=<CVD_HOST_DIR> --product_path=<private product copy> --base_directory=<private runtime> --group_name=<group> --base_instance_num=2 --num_instances=1 --gpu_vhost_user_mode=off --nostart --cpus=8 --memory_mb=4096 
+    cvd --group_name=<group> start --boot_timeout_secs=1800 --cpus=8 --memory_mb=4096 --gpu_vhost_user_mode=off 
+
+Deadline: 1800 s. Dwell after sys.boot_completed=1: 120 s. Elapsed at poll end: 1817 s.
+Product verification: verified 10 artifacts against build 16373615
+cvd create exit: 0. cvd start exit: killed-at-1817s.
+sys.boot_completed=1 not seen.
+
+## Saved configuration
+
+saved cpus=8
+saved ddr_mem_mb=4915
+saved enable_gpu_vhost_user=False
+saved gpu_mode=guest_swiftshader
+saved memory_mb=4096
+
+## Launcher and guest markers (count; first guest uptime in seconds)
+
+init: init first stage started!	count=1	first_uptime_s=24.219994
+Booting Linux on physical CPU	count=1	first_uptime_s=0.000000
+starting service 'zygote'	count=1	first_uptime_s=215.651997
+boot_progress_preload_start	count=0	first_uptime_s=none
+boot_progress_pms_ready	count=0	first_uptime_s=none
+WATCHDOG KILLING SYSTEM PROCESS	count=0	first_uptime_s=none
+VIRTUAL_DEVICE_BOOT_COMPLETED	count=0	first_uptime_s=none
+VIRTUAL_DEVICE_BOOT_FAILED	count=0	first_uptime_s=none
+VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED	count=6	first_uptime_s=696.435741
+Out of memory	count=0	first_uptime_s=none
+lowmemorykiller	count=0	first_uptime_s=none
+
+## Logcat at the end (adb state device only; counts and first stamps)
+
+logcat: not captured (adb was not in state device at the last poll)
+
+## Poll (elapsed s; get-state; sys.boot_completed; start state; crosvm count; crosvm RSS KiB)
+
+0	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=0	rss_kib=0
+17	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=891660
+32	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=1164780
+47	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=1629300
+62	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=1923588
+77	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=2226016
+92	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=2505192
+107	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=2771796
+122	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=3035044
+137	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=3296584
+152	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=3518708
+167	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=3774648
+182	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4017420
+197	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4266416
+212	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4447228
+227	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4449300
+242	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450220
+257	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450236
+272	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450248
+287	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450256
+302	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450256
+317	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450556
+332	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450620
+347	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450620
+362	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450684
+377	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+392	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+407	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+422	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+437	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+452	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450688
+467	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+483	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+498	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+513	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+528	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+543	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+558	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+573	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+588	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+603	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+618	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+633	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+649	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+664	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+679	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+694	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+709	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+724	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+739	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+754	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+781	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+803	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+841	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+873	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4450696
+900	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456572
+934	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456572
+972	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456572
+999	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456580
+1036	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456584
+1061	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456596
+1091	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456600
+1117	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456612
+1137	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456616
+1172	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4456620
+1200	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460412
+1228	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1251	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1280	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1306	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1336	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1365	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1394	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1420	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1445	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1468	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4460436
+1490	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1513	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1532	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1552	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1569	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1593	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1615	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1640	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1659	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1681	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1700	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1724	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1745	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1763	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1779	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1797	state=device	boot_completed=unset	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4464232
+1817	state=none	boot_completed=none	kmsg_boot_marker=0	start=running	crosvm=2	rss_kib=4451720
+
+## Cleanup
+
+cvd remove exit=0
+processes referencing the private work directory after cleanup=1
+crosvm processes on the host after cleanup=2

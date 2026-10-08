@@ -25,9 +25,30 @@ polled. No run in this ladder showed either signal.
 | 1a memory | `--memory_mb 8192` (create and start), `--cpus 4` | 2400 s | Not booted. Stopped at its deadline (2679 s elapsed, cvd start killed). adb answered `device` from 866 s, and `getprop sys.boot_completed` was unset in every poll. crosvm RSS reached about 8.24 GiB at about 436 s and stayed there. Live kernel log: `starting service 'zygote'` at guest uptime 160.1 s, and no WATCHDOG or Watchdog line in the kernel log at the last check (elapsed 2393 s, guest uptime about 1950 s). The saved-configuration line was not recorded by this run. Cleanup: no crosvm left; work directory removed. |
 | 1b headless | `--gpu_mode=none` (create and start), `--cpus 4`, 4096 MiB | stopped at about 9 min | Not booted. The Android crosvm had one thread, slept in a tun-device read from 21:47:16, and used 16.6 MB RSS. The kernel log stayed at 0 bytes (no U-Boot output). Saved config: `gpu_mode=none`, `memory_mb=4096`, `enable_gpu_vhost_user=False`. The runner was stopped by SIGTERM, not by its deadline, so this is not a timed result. Cleanup: no crosvm left. |
 | 1c audio off | `--enable_audio=false`, `--cpus 4`, 4096 MiB | 2400 s | Not recovered. The run reached about 361 s, with the kernel log at U-Boot output (10,230 bytes) and crosvm RSS 4.4 GB. Its end state and receipt were lost with the guest `/tmp`. It is not counted as evidence either way. |
-| 1d vCPU | `--cpus 8` (create and start), 4096 MiB | 1800 s | See the final section. |
+| 1d vCPU | `--cpus 8` (create and start), 4096 MiB | 1800 s | Not booted. Saved configuration records 8 CPUs, so the flag reached the file. Stopped at its deadline. Full record: `variant-cpus8-20261008T135241Z.txt`. |
 | 2 bootconfig, cmdline, props | Analysis of `framework/services.jar` from the pinned system partition (read-only extraction and mount, no run) | none | Ruled out for the Watchdog path. The timeout comes from `system_server_watchdog_timeout_ms`, a DeviceConfig flag, not an `ro.*` or `androidboot.*` key. `ro.debuggable` and `ro.secure` are read in the same jar, but no link to the kill path was found. `persist.debug.framework_watchdog.*` belongs to PackageWatchdog. The `dalvik.vm.*` and `pm.dexopt` properties are not settable from host bootconfig or the kernel command line. |
 | 3 Watchdog evidence | Existing receipt `default-20261008-diagnosis.txt` (IR-279) | none | The two kills were in different code paths: `ArtManagerLocal$Injector.getDexoptHelper` (cycle 1) and `FakeSoundTriggerHal.createDefaultProperties` after `StartAudioService` took 54,296 ms (cycle 2). Other threads waited on `WindowManagerService.displayReady`, `ActivityManagerService`, and `SettingsProvider`. The `displayReady` wait points to display startup, which changes with the GPU mode. No host-side setting was tied to a lock with evidence. |
+
+## Final section: 8 vCPUs (step 1d)
+
+Flags: `--cpus 8` on create and start, `--memory_mb 4096`, otherwise the
+`default` flags, instance 2, 1800-second deadline. The full receipt is
+[`variant-cpus8-20261008T135241Z.txt`](variant-cpus8-20261008T135241Z.txt).
+
+- Saved configuration: `cpus=8`, `memory_mb=4096`, `ddr_mem_mb=4915`,
+  `gpu_mode=guest_swiftshader` (the `default` choice), `enable_gpu_vhost_user=False`.
+- Kernel log: `init: init second stage started!` at guest uptime 37.9 s,
+  `starting service 'zygote'` at 215.7 s (4 vCPUs at 8 GiB: 160.1 s; E1: 233.0 s).
+  The first `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` came at 696.4 s. No
+  `WATCHDOG KILLING SYSTEM PROCESS` line appeared before the deadline.
+- adb: state `device` from about 800 s. `sys.boot_completed` was unset in every
+  poll after that, and the kernel-log boot marker was absent.
+- Result: not booted at 1817 s elapsed (deadline 1800 s of boot wait).
+- Cleanup defect: `cvd remove` returned 0, but a crosvm process and `secure_env`
+  of the group survived the runner's TERM and KILL sweep. The runner left its work
+  directory. Those two processes were stopped by hand after the runner finished,
+  and then no crosvm and no group process remained. Recorded as IR-302. The runner
+  needs to stop the group's processes by their group path, then verify.
 
 ## Conclusion
 
@@ -36,9 +57,11 @@ no reference profile candidate was recorded.
 
 Narrowest cause established: the Watchdog timeout is not host-configurable
 through bootconfig or the launcher. The slow startup work (ART dexopt, audio
-startup, display wait) is in the guest. The single host-side variable not yet
-isolated is vCPU count (step 1d). The memory variant (1a) did not boot within
-2400 s.
+startup, display wait) is in the guest. None of the three launch variants
+(8 GiB, 8 vCPUs, audio off) reached boot inside its deadline, and the headless
+profile did not start its VM. The 8-vCPU run started zygote at 216 s, against 233 s for
+E1 (4 vCPUs, 4 GiB), so zygote timing did not change clearly. The launch
+variants do not establish a cause.
 
 Next step, in order: (1) a root-readable thread dump, which needs a diagnostic
 route that does not change the image, since `ro.secure=1` blocks `debuggerd`;

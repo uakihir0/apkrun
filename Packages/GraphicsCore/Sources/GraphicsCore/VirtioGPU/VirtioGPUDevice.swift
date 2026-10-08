@@ -53,6 +53,9 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     private var isWriterRunning = false
     private var writerTask: Task<Void, Never>?
     private var errorLimiter = GuestErrorRateLimiter()
+    /// The R-01 spike delay, or `nil`. It is set only for development guests.
+    private let hotplugSpikeDelay: Duration?
+    private var isHotplugSpikeScheduled = false
 
     /// Runs after the `GET_DISPLAY_INFO` snapshot and before the `events_read` decision.
     /// Tests use it to make a host change arrive while a query is in flight.
@@ -65,18 +68,22 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     ///   - logger: Logger for the `io.apkrun.graphics` `device` category.
     ///   - clock: A monotonic clock in nanoseconds, used by the guest-error rate limiter.
     ///   - traceObserver: Receives every request and response, for capturing golden vectors.
-    /// Creates the device.
+    ///   - hotplugSpikeDelay: For the R-01 spike only. After the first DRIVER_OK, scanout 1 is
+    ///     enabled after this delay, so a development guest can see whether `events_read`
+    ///     raises a config-change interrupt (graphics.md §4.3). `nil` in every other build.
     public init(
         scanouts: ScanoutTable = ScanoutTable(),
         logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
-        traceObserver: (@Sendable (TraceRecord) -> Void)? = nil
+        traceObserver: (@Sendable (TraceRecord) -> Void)? = nil,
+        hotplugSpikeDelay: Duration? = nil
     ) {
         self.scanouts = scanouts
         self.reportedGeneration = scanouts.displayGeneration
         self.logger = logger
         self.clock = clock
         self.traceObserver = traceObserver
+        self.hotplugSpikeDelay = hotplugSpikeDelay
         descriptor = VirtioDeviceDescriptor(
             name: "virtio-gpu",
             deviceID: VirtioGPUProtocol.deviceID,
@@ -107,12 +114,20 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         // The updater is taken on the device queue, as VirtioDeviceCore requires.
         let updater = context.configurationUpdater
         let edid = negotiatedFeatures & VirtioGPUProtocol.Feature.edid != 0
-        lock.withLock {
+        let spikeDelay: Duration? = lock.withLock {
             writerEpoch &+= 1
             isWriterRunning = false
             configurationUpdater = updater
             negotiatedEDID = edid
             startConfigurationWriterLocked()
+            guard let delay = hotplugSpikeDelay, !isHotplugSpikeScheduled else { return nil }
+            isHotplugSpikeScheduled = true
+            return delay
+        }
+        if let spikeDelay {
+            Task {
+                await self.runHotplugSpike(after: spikeDelay)
+            }
         }
         logger.info(
             "virtio-gpu DRIVER_OK features=\(negotiatedFeatures, .public) edid=\(edid, .public)"
@@ -378,6 +393,18 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
                 }
                 return
             }
+        }
+    }
+
+    /// Enables scanout 1 once, after `delay`. It is the R-01 spike, not a product path.
+    private func runHotplugSpike(after delay: Duration) async {
+        try? await Task.sleep(for: delay)
+        guard let scanout = ScanoutID(rawValue: 1) else { return }
+        do {
+            try enableScanout(scanout, mode: .testDefault)
+            logger.info("virtio-gpu R-01 spike enabled scanout 1 after \(delay, .public)")
+        } catch {
+            logger.error("virtio-gpu R-01 spike could not enable scanout 1")
         }
     }
 

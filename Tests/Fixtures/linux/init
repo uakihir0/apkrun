@@ -662,6 +662,82 @@ printf 'APKRUN-TEST: boot ok\n'
 if [ -n "$power_monitor_pid" ]; then
     printf 'APKRUN-TEST: powerinput ok PL061 offset 6 line request confirmed\n'
 fi
+wait_for_drm_path() {
+    drm_wait_path=$1
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do
+        if [ -e "$drm_wait_path" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+find_virtio_gpu_pci() {
+    for gpu_candidate in /sys/bus/pci/devices/*; do
+        [ -r "$gpu_candidate/vendor" ] || continue
+        if [ "$(cat "$gpu_candidate/vendor")" = 0x1af4 ] && [ "$(cat "$gpu_candidate/device")" = 0x1050 ]; then
+            printf '%s' "${gpu_candidate##*/}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+run_gpu_test() {
+    if ! wait_for_drm_path /sys/class/drm/card0-Virtual-1/status; then
+        printf 'APKRUN-TEST: gpu fail card0-Virtual-1 was not created\n'
+        return 1
+    fi
+    gpu_pci_address=$(find_virtio_gpu_pci)
+    if [ -z "$gpu_pci_address" ]; then
+        printf 'APKRUN-TEST: gpu fail no PCI device with vendor 1af4 and device 1050\n'
+        return 1
+    fi
+    if ! dmesg | grep -q 'number of scanouts: 16'; then
+        printf 'APKRUN-TEST: gpu fail virtio_gpu did not report 16 scanouts\n'
+        return 1
+    fi
+    gpu_connector_count=$(ls /sys/class/drm | grep -c '^card0-Virtual-')
+    if [ "$gpu_connector_count" -ne 16 ]; then
+        printf 'APKRUN-TEST: gpu fail expected 16 connectors, found %s\n' "$gpu_connector_count"
+        return 1
+    fi
+    gpu_status=$(cat /sys/class/drm/card0-Virtual-1/status)
+    if [ "$gpu_status" != connected ]; then
+        printf 'APKRUN-TEST: gpu fail card0-Virtual-1 status is %s\n' "$gpu_status"
+        return 1
+    fi
+    gpu_edid_path=/sys/class/drm/card0-Virtual-1/edid
+    gpu_edid_size=$(wc -c < "$gpu_edid_path" | tr -d ' \n')
+    if [ "$gpu_edid_size" -ne 128 ]; then
+        printf 'APKRUN-TEST: gpu fail EDID has %s bytes, expected 128\n' "$gpu_edid_size"
+        return 1
+    fi
+    gpu_edid_head=$(od -An -N8 -tx1 "$gpu_edid_path" | tr -d ' \n')
+    if [ "$gpu_edid_head" != 00ffffffffffff00 ]; then
+        printf 'APKRUN-TEST: gpu fail EDID header is %s\n' "$gpu_edid_head"
+        return 1
+    fi
+    gpu_edid_sha=$(sha256sum "$gpu_edid_path" | cut -d ' ' -f 1)
+    printf 'APKRUN-TEST: gpu ok pci=%s scanouts=16 connectors=16 virtual1=connected edid_sha256=%s\n' \
+        "$gpu_pci_address" "$gpu_edid_sha"
+}
+
+run_gpu_hotplug_test() {
+    for attempt in $(seq 1 300); do
+        gpu_hotplug_status=$(cat /sys/class/drm/card0-Virtual-2/status 2>/dev/null)
+        if [ "$gpu_hotplug_status" = connected ]; then
+            printf 'APKRUN-TEST: gpu-hotplug ok scanout1=connected after about %s tenths of a second\n' "$attempt"
+            return 0
+        fi
+        sleep 0.1
+    done
+    printf 'APKRUN-TEST: gpu-hotplug fail scanout1=%s after 30 seconds without a display event\n' \
+        "$gpu_hotplug_status"
+    return 1
+}
+
 if [ -n "$requested_tests" ]; then
     previous_ifs=$IFS
     IFS=,
@@ -672,6 +748,12 @@ if [ -n "$requested_tests" ]; then
                 ;;
             rng-pending)
                 run_rng_pending_test
+                ;;
+            gpu)
+                run_gpu_test
+                ;;
+            gpu-hotplug)
+                run_gpu_hotplug_test
                 ;;
             blk)
                 run_block_test

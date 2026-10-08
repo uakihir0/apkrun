@@ -382,3 +382,18 @@ private final class TraceBox: @unchecked Sendable {
     #expect(limiter.admit(at: 1_000_000_000) == .log(suppressedCount: 5))
     #expect(limiter.admit(at: 1_200_000_000) == .log(suppressedCount: 0))
 }
+
+@Test func theHotplugSpikeEnablesScanoutOneAfterTheFirstDriverOK() async throws {
+    let device = VirtioGPUDevice(hotplugSpikeDelay: .milliseconds(1))
+    #expect(device.scanoutTable.state(of: try scanout(1)).isEnabled == false)
+    let session = controlSession(device, requests: [])
+    await device.waitForConfigurationWrites()
+
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while !device.scanoutTable.state(of: try scanout(1)).isEnabled, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(device.scanoutTable.state(of: try scanout(1)).isEnabled)
+    await device.waitForConfigurationWrites()
+    #expect(eventsRead(session.fake) == VirtioGPUProtocol.Event.display)
+}

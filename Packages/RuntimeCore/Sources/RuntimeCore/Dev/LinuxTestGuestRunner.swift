@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import GraphicsCore
 import VirtualMachineCore
 
 /// Inputs for one small Linux development guest.
@@ -44,6 +45,17 @@ public struct LinuxTestGuestRunner: Sendable {
         self.diagnostics = diagnostics
     }
 
+    /// The devices that the requested checks need. `gpu` attaches the virtio-gpu device
+    /// (graphics.md §12, #019). `gpu-hotplug` also starts the R-01 spike, which enables
+    /// scanout 1 after a delay.
+    static func customDevices(for tests: [String]) -> [VirtioGPUDevice] {
+        guard tests.contains("gpu") || tests.contains("gpu-hotplug") else {
+            return []
+        }
+        let spikeDelay: Duration? = tests.contains("gpu-hotplug") ? .seconds(3) : nil
+        return [VirtioGPUDevice(hotplugSpikeDelay: spikeDelay)]
+    }
+
     /// Validates the guest definition and starts parsing its system console.
     public func makeSession(
         options: LinuxTestGuestOptions
@@ -52,6 +64,7 @@ public struct LinuxTestGuestRunner: Sendable {
             kernel: options.kernelURL,
             initrd: options.initrdURL,
             tests: options.tests,
+            customDevices: Self.customDevices(for: options.tests),
             powerOff: options.powerOff,
             extraCommandLine: options.extraCommandLine
         )

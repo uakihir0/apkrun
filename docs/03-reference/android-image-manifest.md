@@ -48,7 +48,7 @@ The tools are Python 3.12 in `Images/tools/` (package `apkrun_image`, pinned `lz
 | `python3 -m apkrun_image manifest --inventory Images/manifests/<buildId>/inventory.json --out Images/manifests/<buildId>/android-image.json` | the inventory, and the archive for the header checks | a draft manifest for review | #009 |
 | `python3 -m apkrun_image manifest --check Images/manifests/<buildId>/android-image.json [--no-files]` | the manifest, the inventory, the archive | nothing. Exit 0, or 1 with every failed check (§8) | #009 |
 | `python3 -m apkrun_image extract --manifest … --out Images/work/<buildId>/boot/` | manifest `roles` | kernel, ramdisk, cmdline, vendor bootconfig, `extraction.json` | #010 |
-| `python3 -m apkrun_image disks --manifest … --layout layouts/<deviceFamily>.json --out Images/work/<buildId>/disks/` | manifest `artifacts`, `blankPartitions`, `logicalPartitions` | `os.img`, `persistent.img`, `userdata.img`, `disks.json` | #011 |
+| `python3 -m apkrun_image disks --manifest … --layout layouts/<deviceFamily>.json --out Images/work/<buildId>/disks/` | manifest `artifacts`, `blankPartitions`, `logicalPartitions` | `os.img`, `userdata.img`, `disks.json` | #011 |
 | `python3 -m apkrun_image bundle --manifest … --layout … --reference … --image-version … --sign-key … --out …` | everything above | the runtime image bundle ([runtime-image-manifest.md](runtime-image-manifest.md) §3) | #065 |
 | `python3 -m apkrun_image inspect <file>` | any image file | a human-readable dump (headers, GPT, sparse chunks) | tooling |
 
@@ -734,7 +734,7 @@ The messages of M1–M7 are fixed by [../02-design/android-image.md](../02-desig
 | Consumer | Uses | Output |
 |---|---|---|
 | `extract` (#010) | `roles.kernel`, `roles.genericRamdisk`, `roles.vendorBoot` | `Images/work/<buildId>/boot/`: `kernel` (decompressed, `ARM\x64` at 0x38), `ramdisk.img` (vendor fragments in table order without `RECOVERY`, then `init_boot`), `vendor-bootconfig.txt`, `cmdline.txt`, `dtb`, `extraction.json` |
-| `disks` (#011) | `artifacts[].partition`, `roles.super` (unsparsed into `os.img`), `blankPartitions`, `roles.userdataTemplate` (fallback A only), and the layout | `os.img`, `persistent.img`, `userdata.img`, `disks.json` |
+| `disks` (#011) | `artifacts[].partition`, `roles.super` (unsparsed into `os.img`), `blankPartitions`, `roles.userdataTemplate` (fallback A only), and the layout | `os.img`, `userdata.img`, `disks.json` |
 | bootconfig baseline (#012/#013) | top-level vbmeta chain descriptors in order, with raw vbmeta artifacts checked against `roles.vbmeta` and footer-backed images resolved from their manifest artifacts | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` |
 | `bundle` (#065) | `source`, `android` | the runtime manifest `provenance` ([runtime-image-manifest.md](runtime-image-manifest.md) §4). The ImageVersion base is `cf` + `buildId` for `ci.android.com`, or `buildId` itself for `apkrun-builder` |
 | ImageCore `AndroidImageManifest` (Swift `Codable`) | `source`, `android` inside `provenance` | diagnostics and `apkrun image list`. ImageCore never reads `android-image.json` from the source tree at run time |

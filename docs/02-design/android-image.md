@@ -38,7 +38,7 @@ inventory (#008) ─────────────────────
 AndroidImageManifest (#009) ───────────────────▶ Images/manifests/<buildId>/android-image.json
   │
   ├─ boot extraction (#010): kernel, ramdisk, cmdline, vendor bootconfig
-  ├─ disk assembly (#011): os.img (GPT) + templates (persistent, userdata)
+  ├─ disk assembly (#011): os.img (GPT) + template (userdata)
   ├─ bootconfig baseline (#012/#013): image-level keys
   │
   ▼
@@ -327,17 +327,16 @@ Design rules:
 
 1. **Names mirror Cuttlefish's `os_composite`.** A/B partitions exist only as `_a` (slot `_a` is fixed by bootconfig). Single partitions keep their plain names.
 2. **Read-only system disk.** Everything Android never writes in normal operation goes into `os.img`, attached read-only. This is APKRun's read-only base disk.
-3. **Writable state split by lifetime.** `persistent.img` holds small writable partitions that belong to the instance (misc, metadata, frp). `userdata.img` holds `/data`. Both are per-instance clones (§5).
+3. **One writable disk.** `userdata.img` holds every partition Android writes: the small instance partitions (misc, metadata, frp) and `/data`, with `userdata` last so it can grow (§5.2). It is a per-instance clone (§5). There is no third disk: the stock fstab hands `/devices/*/block/vdc` to vold as `sdcard1`, so a third virtio-blk disk would be offered to the user as removable storage (verified 2026-10-08, IR-308).
 4. **Partition size = image size, exactly.** AVB hash footers sit in the last 64 bytes of a *partition*. A partition larger than its image would move the footer away from where libavb looks. `super` is sized to the unsparsed logical size recorded in its sparse header, because liblp checks the block device size.
 5. **Partitions not needed on VZ are left out.** `uboot_env`, the persistent `bootconfig` partition, and the persistent vbmeta (AVB persistent values) serve U-Boot only. `android_esp` serves EFI boot only. `pvmfw_a` and `vvmtruststore` serve protected VMs (`hypervisor.vm.supported=0`). `hibernation` is unused. Each omission is confirmed in #011 against the reference `ls -l /dev/block/by-name` and the fstab. If an omitted partition turns out to be required, it is added blank.
 
-Initial plan (confirmed or corrected by #011, and each correction is recorded in §13):
+Plan (corrected from three disks to two by the 2026-10-08 spike; #011 confirms it, and each correction is recorded in §13):
 
 | VZ disk (attach order) | File | Access | `blockDeviceIdentifier` | GPT partitions (label ← source) | Guest name |
 |---|---|---|---|---|---|
 | 0 | `Images/<v>/disks/os.img` | read-only | `apkrun-os` | `boot_a` ← boot.img · `init_boot_a` ← init_boot.img · `vendor_boot_a` ← vendor_boot.img · `vbmeta_a` ← vbmeta.img · `vbmeta_system_a` ← vbmeta_system.img · `vbmeta_system_dlkm_a` ← vbmeta_system_dlkm.img · `vbmeta_vendor_dlkm_a` ← vbmeta_vendor_dlkm.img · `super` ← super.img (unsparsed) · `custom` ← cuttlefish_example_custom.img | `/dev/block/by-name/<label>` |
-| 1 | `Runtime/instance/persistent.img` | read-write | `apkrun-persist` | `misc` ← blank · `metadata` ← blank · `frp` ← blank | same |
-| 2 | `Runtime/instance/userdata.img` | read-write | `apkrun-data` | `userdata` ← blank (primary) or template (§5.2) | same |
+| 1 | `Runtime/instance/userdata.img` | read-write | `apkrun-data` | `misc` ← blank · `metadata` ← blank · `frp` ← blank · `userdata` ← blank (primary) or template (§5.2), last | same |
 
 Notes:
 
@@ -367,12 +366,12 @@ Notes:
 
 ### 4.5 Assembly and verification
 
-`python3 -m apkrun_image disks --manifest … --layout layouts/cuttlefish-phone-arm64.json --out Images/work/<buildId>/disks/` produces `os.img`, `persistent.img`, `userdata.img` and `disks.json` (per partition: label, first LBA, size, source, SHA-256 of the partition contents).
+`python3 -m apkrun_image disks --manifest … --layout layouts/cuttlefish-phone-arm64.json --out Images/work/<buildId>/disks/` produces `os.img`, `userdata.img` and `disks.json` (per partition: label, first LBA, size, source, SHA-256 of the partition contents).
 
 #011 acceptance ("Android kernel detects expected virtio block devices") is checked twice:
 
-1. T2 with the Linux test guest ([vm.md](vm.md) §12): the three disks are attached, and `/init` prints `PARTNAME` from `/sys/class/block/vd*/uevent` and the size of each partition. The test compares them with `disks.json`.
-2. T2 with the Android kernel (#012): the console log shows `virtio_blk` detecting three disks with the expected partition counts.
+1. T2 with the Linux test guest ([vm.md](vm.md) §12): the two disks are attached, and `/init` prints `PARTNAME` from `/sys/class/block/vd*/uevent` and the size of each partition. The test compares them with `disks.json`.
+2. T2 with the Android kernel (#012): the console log shows `virtio_blk` detecting two disks with the expected partition counts (9 and 4).
 
 ---
 
@@ -383,8 +382,8 @@ Notes:
 The instance is created on first run (#066) or by "Reset Android" (FR-OPS). Steps, all inside `Runtime/instance/`:
 
 1. Create `instance.json` with a new instance UUID, `VZGenericMachineIdentifier`, a locally administered MAC, CPU/memory sizing ([vm.md](vm.md) §10), `imageVersion`, `userdataSchemaVersion` from the image manifest, and a new `userdataGeneration` UUID. APKStoreCore compares that generation with its package records to find packages that must be reinstalled ([package-store.md](package-store.md) §9.2). Restoring a recovery point (§12.2) also writes a new `userdataGeneration`.
-2. `clonefile(2)` `Images/<v>/templates/persistent.img` → `persistent.img`, and `templates/userdata.img` → `userdata.img`. Clones are instant on APFS and share blocks until written. If the Application Support volume is not APFS, provisioning fails with `ImageFailure.cloneUnsupported` (APKRun does not fall back to full copies of multi-GB files; NFR-RES).
-3. Give both disks new disk GUIDs and partition GUIDs (derived from the instance UUID) and rewrite the GPT CRCs.
+2. `clonefile(2)` `Images/<v>/templates/userdata.img` → `userdata.img`. Clones are instant on APFS and share blocks until written. If the Application Support volume is not APFS, provisioning fails with `ImageFailure.cloneUnsupported` (APKRun does not fall back to full copies of multi-GB files; NFR-RES).
+3. Give the disk a new disk GUID and new partition GUIDs (derived from the instance UUID) and rewrite the GPT CRCs.
 4. Grow `userdata.img` to the configured size (§5.2).
 5. `fsync` the files and the directory, then write `instance.json` last. An `instance.json` without its disks means an interrupted provisioning, and provisioning starts over.
 
@@ -392,9 +391,9 @@ The instance is created on first run (#066) or by "Reset Android" (FR-OPS). Step
 
 Primary approach: **blank userdata, formatted by Android on first boot.**
 
-- The template holds a GPT with one `userdata` partition and no data (the file is all holes).
+- The template holds a GPT with the blank `misc`, `metadata`, and `frp` partitions and a last `userdata` partition, and no data (the file is all holes).
 - At provisioning ImageCore extends the file with `ftruncate` to the configured size (sparse, so no physical space is used). It then moves the GPT backup header and entry array to the new last LBAs, updates `alternate_lba` and `last_usable_lba` in the primary header, extends the `userdata` partition's `ending_lba` to the new last usable LBA, and recomputes the CRCs.
-- Cuttlefish's fstab marks `/data` (and `/metadata`) `formattable`. On first boot, fs_mgr/vold format the empty partition at its full size. This must be confirmed in #011 from `/vendor/etc/fstab.*` in the reference capture, together with the metadata encryption path (`keydirectory=/metadata/vold/metadata_encryption`).
+- Cuttlefish's fstab marks `/data` (and `/metadata`) `formattable`. On first boot, fs_mgr/vold format the empty partition at its full size. Confirmed on VZ on 2026-10-08: `fstab.cf.f2fs.hctr2` has `formattable` and `keydirectory=/metadata/vold/metadata_encryption`, and the first boot formatted both blank partitions (IR-306).
 
 Fallbacks, used only if first-boot formatting fails under VZ:
 
@@ -415,16 +414,16 @@ Growing an existing, formatted userdata requires an offline `resize.f2fs`, which
 
 First-stage init creates `/dev/block/by-name/*` links only for block devices under a device named in `androidboot.boot_devices` (or `androidboot.boot_device`), read from bootconfig. The match is on the **platform device** that the block device hangs off, or on a PCI prefix for PCI-only paths. crosvm on arm64 uses `10000.pci`, its PCI host bridge's platform device.
 
-On VZ all virtio-blk devices sit behind the single `pci-host-ecam-generic` bridge at `0x40000000` ([vm.md](vm.md) §5), so one value covers all three disks.
+On VZ all virtio-blk devices sit behind the single `pci-host-ecam-generic` bridge at `0x40000000` ([vm.md](vm.md) §5), so one value covers both disks. Observed value (2026-10-08, macOS 27.0.1 26A434): **`40000000.pci`**; `/sys/block/vda` resolves to `/sys/devices/platform/40000000.pci/pci0000:00/0000:00:0f.0/virtio12/block/vda`, and `/dev/block/by-name/` holds every label of §4.2.
 
 Discovery (#011):
 
-1. Boot the Linux test guest with the three disks. `/init` prints `readlink -f /sys/block/vda` (expected shape: `/sys/devices/platform/<addr>.<node>/pci0000:00/0000:00:NN.0/virtioM/block/vda`).
+1. Boot the Linux test guest with the two disks. `/init` prints `readlink -f /sys/block/vda` (expected shape: `/sys/devices/platform/<addr>.<node>/pci0000:00/0000:00:NN.0/virtioM/block/vda`).
 2. The platform component (for example `40000000.pci` or `40000000.pcie`, depending on the DT node name) is the value.
 3. The value is stored with the topology capture in `Images/reference/vz/<macOS build>/topology.txt`, and compiled into ImageCore as `VZPlatformProfile.bootDevices` (host-platform data, not image data). The T2 suite re-checks it on every new macOS build (R-16).
 4. The Android boot (#013) confirms that `/dev/block/by-name/` contains every label from §4.2.
 
-Alternative if the path is not stable across macOS versions: `androidboot.boot_part_uuid`. It names one partition's unique GUID and makes that partition's *disk* the boot device, so it only works if all partitions are on one disk. The fallback layout would merge `persistent.img` into `userdata.img` (one read-write disk) and put `super` on the same disk. That is kept as a documented fallback, not built unless needed.
+Alternative if the path is not stable across macOS versions: `androidboot.boot_part_uuid`. It names one partition's unique GUID and makes that partition's *disk* the boot device, so it only works if all partitions are on one disk. The fallback layout would put `super` and the other `os.img` partitions on the read-write disk. That is kept as a documented fallback, not built unless needed.
 
 ---
 
@@ -458,25 +457,32 @@ Merge rules:
 | `androidboot.hardware` | `cutf_cvm` | 1 | verified (vendor_boot) |
 | `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size` | `16384` | 1 | verified |
 | `androidboot.slot_suffix` | `_a` | 2 | decided (ADR-0015) |
-| `androidboot.force_normal_boot` | `1` | 2 | reference |
+| `androidboot.force_normal_boot` | `1` | 2 | verified on VZ (2026-10-08) |
 | `androidboot.verifiedbootstate` | `orange` | 2 | decided for dev images; production in §11.4 |
 | `androidboot.vbmeta.device_state` | `unlocked` | 2 | same |
 | `androidboot.vbmeta.{digest,hash_alg,size,avb_version,invalidate_on_error}` | computed by `avb.py` from top-level vbmeta and every chained vbmeta blob | 2 | computed at build time |
-| `androidboot.fstab_suffix` | one of `cf.f2fs.hctr2`, `cf.f2fs.cts`, `cf.ext4.hctr2`, `cf.ext4.cts` | 2 | reference |
-| `androidboot.console`, `androidboot.serialconsole` | reference (the Android shell console is on hvc1) | 2 | reference |
-| `androidboot.hw_timeout_multiplier` | reference; may be raised while #095 investigates slow HALs | 2 | reference |
+| `androidboot.fstab_suffix` | `cf.f2fs.hctr2` (launcher capture) | 2 | verified on VZ |
+| `androidboot.console`, `androidboot.serialconsole` | `hvc1` and `1` in developer mode (the init `console` service runs `sh` on hvc1); omitted otherwise | 4 (developer mode) | verified on VZ |
+| `androidboot.hw_timeout_multiplier` | `3` (launcher capture) | 2 | verified on VZ |
 | `androidboot.hypervisor.vm.supported` | `0` | 2 | verified (arm64 default) |
-| `androidboot.vendor.apex.com.android.hardware.keymint` | in-guest non-secure KeyMint APEX (§7.2) | 2 | reference with `--secure_hals=guest_keymint_insecure` |
-| `androidboot.vendor.apex.com.android.hardware.gatekeeper` | in-guest non-secure Gatekeeper APEX (§7.2) | 2 | reference with `--secure_hals=guest_gatekeeper_insecure` |
-| `androidboot.vendor.apex.com.android.hardware.graphics.composer` | the ranchu HWC APEX used with `drm_virgl` | 2 (GPU profile) | reference |
+| `androidboot.vendor.apex.com.android.hardware.keymint` | `com.android.hardware.keymint.rust_nonsecure` (§7.2) | 2 | verified on VZ; the launcher's default selection |
+| `androidboot.vendor.apex.com.android.hardware.gatekeeper` | `com.android.hardware.gatekeeper.nonsecure` (§7.2) | 2 | verified on VZ; the launcher's default selection |
+| `androidboot.vendor.apex.com.android.hardware.{weaver,strongbox}` | `none` | 2 | verified on VZ (launcher capture) |
+| `androidboot.vendor.apex.com.android.hardware.secure_element`, `…com.google.emulated.camera.provider.hal` | the launcher's values | 2 | verified on VZ |
+| `androidboot.vendor.apex.com.android.hardware.graphics.composer` | `com.android.hardware.graphics.composer.ranchu` | 2 (GPU profile) | verified on VZ with the `headless` profile |
 | `androidboot.vendor.apex.com.google.cf.vulkan` | per GPU profile (none for `drm_virgl`) | 2 (GPU profile) | reference |
 | Graphics props (`androidboot.hardware.egl=mesa`, `…gralloc=minigbm`, `…hwcomposer=ranchu`, `…hwcomposer.mode=client`, `…hwcomposer.display_finder_mode=drm`, `androidboot.cpuvulkan.version=0`, `androidboot.opengles.version=196608`) | as listed for `drm_virgl`; the `guest_swiftshader` profile has its own set ([graphics.md](graphics.md) §9) | 2 (GPU profile) | verified names, exact keys from reference |
-| `androidboot.wifi_impl` | reference; see §7.4 | 2 | #095 |
-| `androidboot.modem_simulator_ports`, `androidboot.vsock_*_port`, `androidboot.vsock_*_cid` | omitted unless we provide the service (§7.3) | 2 | #095 |
-| `androidboot.boot_devices` | `VZPlatformProfile.bootDevices` (§5.3) | 3 | #011 |
+| `androidboot.wifi_impl` | `virt_wifi` (§7.4) | 2 | verified on VZ |
+| `androidboot.wifi_mac_prefix` | the launcher's `5554`; `setup_wifi` derives eth2's MAC from it (§7.4) | 2 | verified on VZ |
+| `androidboot.modem_simulator_ports` | `9600`. The RIL exits without it; with it, the RIL stays up without a modem (§7.3) | 2 | verified on VZ |
+| `androidboot.vsock_lights_{port,cid}`, `androidboot.vendor.audiocontrol.server.{port,cid}`, `androidboot.openthread_node_id` | the launcher's values: they configure guest-side servers, whose HALs abort without them (§7.3) | 2 | verified on VZ |
+| `androidboot.vsock_tombstone_port`, `androidboot.vhal_proxy_server_port`, `androidboot.auto_eth_guest_addr` | omitted: host services or automotive only (§7.3) | — | verified on VZ |
+| `androidboot.cuttlefish_service_bluetooth_checker` | `false`: the boot reporter does not wait for Bluetooth, as on Cuttlefish's automotive product (§7.6) | 2 | verified on VZ |
+| `androidboot.enable_bootanimation`, `androidboot.enable_confirmationui`, `androidboot.setupwizard_mode` | the launcher's `1`, `1`, `DISABLED` | 2 | verified on VZ |
+| `androidboot.boot_devices` | `VZPlatformProfile.bootDevices` = `40000000.pci` (§5.3) | 3 | verified on VZ; #011 records `topology.txt` |
 | `androidboot.serialno` | `APKRUN` + first 10 hex digits of the instance UUID, upper case | 4 | decided |
 | `androidboot.lcd_density` | density of display 0 = 160 × backing scale ([display-and-windowing.md](display-and-windowing.md)) | 4 | decided |
-| `androidboot.ddr_size` | VM memory size, in the reference's format | 4 | reference |
+| `androidboot.ddr_size` | VM memory size as `<MiB>MB` (the launcher writes `4915MB` for crosvm's 4096 MiB plus its overhead) | 4 | verified on VZ (`4096MB`) |
 | `androidboot.apkrun.instance` | instance UUID | 4 | decided |
 | `androidboot.apkrun.devmode` | `0` or `1` (custom image only, §11.3) | 4 | decided |
 | `androidboot.apkrun.image` | `imageVersion` | 4 | decided |
@@ -527,7 +533,7 @@ Cuttlefish's guest expects host processes (launcher, `secure_env`, `modem_simula
 
 ### 7.1 Console port plan
 
-Cuttlefish attaches 20 single-port virtio-console devices. Some HALs open fixed `/dev/hvcN` nodes, so the numbering must match. APKRun attaches all 20 ports in the same order, after the numbering check in [vm.md](vm.md) §6.2. The plan is data in the runtime manifest (`consolePorts`), turned into `ConsolePortDefinition`s by ImageCore.
+Cuttlefish attaches 20 single-port virtio-console devices. Some HALs open fixed `/dev/hvcN` nodes, so the numbering must match. APKRun attaches all 20 ports in the same order, after the numbering check in [vm.md](vm.md) §6.2. VZ accepts at most 10 single-port devices, so VirtualMachineCore attaches ports 0–9 that way and ports 10–19 as the console ports of one multiport device ([vm.md](vm.md) §6.1); the guest numbers them hvc10–hvc19 in array order (observed 2026-10-08: the sensors HAL's frames arrived on port 18). The plan is data in the runtime manifest (`consolePorts`), turned into `ConsolePortDefinition`s by ImageCore.
 
 | Port | Cuttlefish use | APKRun role (v1) | Notes |
 |---|---|---|---|
@@ -549,12 +555,19 @@ Cuttlefish attaches 20 single-port virtio-console devices. Some HALs open fixed 
 | hvc15 | MCU UART | `.silent` | |
 | hvc16 | Ti50 TPM | `.silent` | |
 | hvc17 | JCardSim | `.silent` | |
-| hvc18 | sensors control | `.silent` | no sensors in v1 |
-| hvc19 | sensors data | `.silent` | |
+| hvc18 | sensors control | `.service("sensors")`: the "no sensors" responder | the HAL waits for the reply to `list-sensors` before it registers, and `system_server` blocks on it (see below) |
+| hvc19 | sensors data | `.silent` | kept open; with mask 0 the host never writes |
 
-`.silent` ports are attached (so the device node exists and opens succeed) but the host never writes. A HAL that blocks reading a silent port just waits; a HAL that times out and crash-loops is recorded in #095 and handled in §7.6.
+`.silent` ports are attached (so the device node exists and opens succeed) but the host never writes. A HAL that blocks reading a silent port just waits; a HAL that times out and crash-loops is recorded in #095 and handled in §7.6. Leaving a port out is worse: oemlock (hvc10) and the sensors HAL abort with `No such device` and crash-loop. On the 2026-10-08 VZ boot, the holders were hvc1 (`sh`), hvc2 (`logcat`), hvc5 (Bluetooth), hvc8 (confirmationui), hvc9 (UWB), hvc10 (oemlock), hvc12 (NFC), and hvc18/hvc19 (sensors).
 
-If VZ turns out to limit the number of serial port devices below 20, the fallback is: attach ports 0–N in order, and the custom image (§11) points the affected HALs elsewhere or disables them.
+**Sensors responder.** The stock sensors HAL (`android.hardware.sensors@2.1-impl.cuttlefish.so`, `device/google/cuttlefish/shared/sensors/multihal/entry.cpp` on `android17-release`) opens the hard-coded `/dev/hvc18` and `/dev/hvc19`, sends `list-sensors` on hvc18, and blocks in `ReadExactBinary` for the reply, with no timeout. The multihal service registers `ISensors/default` only after that, so a silent hvc18 blocks `SensorService` and then the `system_server` main thread in `SystemSensorManager.nativeCreate`; the framework Watchdog kills `system_server` after 185 s, again on every restart. No bootconfig key selects another sensors implementation in this build. RuntimeCore therefore answers on hvc18, the minimal adapter of [AGENTS.md](../../AGENTS.md) §15:
+
+- Framing (`common/libs/transport/channel.h`): a little-endian `u32` of `command | is_response << 31`, a little-endian `u32` payload size, then the payload.
+- A payload that starts with `list-sensors` gets the frame the real `sensors_simulator` sends for an empty sensor mask: command 2 (`kUpdateHal`) with `is_response`, payload `"0\n"` (`02 00 00 80 02 00 00 00 30 0a`).
+- Everything else the HAL sends (`time:<ns>`, `set-delay:<ms>`, `set:<name>:<0|1>`) needs no answer and is discarded. The parser starts empty on every boot.
+- Android then reports no sensors (`host sensors mask=0`). Sensor data from the Mac is post-v1.
+
+If VZ ever limits console devices further, the fallback is: attach ports 0–N in order, and the custom image (§11) points the affected HALs elsewhere or disables them.
 
 ### 7.2 Security HALs (KeyMint, Gatekeeper)
 
@@ -570,21 +583,36 @@ KeyMint is boot-critical: vold needs it for metadata encryption and file-based e
 |---|---|---|
 | ADB | adbd listens on `vsock:5555` (because `persist.adb.tcp.port=5555`) and `tcp:5555`. The host's `socket_vsock_proxy` bridges host TCP 6520 → guest vsock 5555. | `VsockLoopbackForwarder` bridges `127.0.0.1:6520` → guest vsock 5555 (#015, [vm.md](vm.md) §8) in developer mode. Never bound to non-loopback addresses. On the stock image adbd always runs, and only the forwarder depends on developer mode. On custom images adbd itself runs only in developer mode (§11.3). |
 | Guest `socket_vsock_proxy` 6520 → tcp 5555 | started by `init.vendor.rc` | left running; unused |
-| Guest → host services (tombstone transmit, modem simulator, camera, audio control, …) | configured by `androidboot.vsock_*` and `modem_simulator_ports` keys | keys omitted, so the clients are not configured. #095 records the behaviour of each client when its key is absent. |
+| Guest → host clients (tombstone transmit, modem simulator, camera, vehicle HAL proxy) | configured by `androidboot.vsock_tombstone_port`, `modem_simulator_ports`, `vsock_camera_*`, and `vhal_proxy_server_port` | `vsock_tombstone_port` and `vhal_proxy_server_port` are omitted, and their clients stay unconfigured. `modem_simulator_ports=9600` stays: without it `radio-service.cf` exits at once and init restarts it every 5 s. With it, the RIL's connection to host vsock 9600 is reset (no listener), and the RIL stays up reporting `RADIO_NOT_AVAILABLE` (verified 2026-10-08). The camera keys are not in the launcher capture |
+| Guest-side servers (lights, audio control, OpenThread) | `androidboot.vsock_lights_{port,cid}`, `androidboot.vendor.audiocontrol.server.{port,cid}`, and `androidboot.openthread_node_id` configure servers that listen in the guest | the launcher's values stay. Without them `light-service.cuttlefish` aborts on `Permission denied`, the OpenThread HAL aborts on `node_id > 0`, and init restarts them in a loop (verified 2026-10-08) |
 | APKRun agents | — | vsock 6100–6111 via `apkrun_vsockd` on custom images ([../01-architecture/process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3) |
 | Reserved for substitutes | — | vsock 6120–6199. v1 is host-initiated only. A substitute that needs guest-initiated connections requires vsock listeners in `VMDefinition` and an ADR. |
 
 ### 7.4 Network
 
-Cuttlefish attaches several NICs (mobile, ethernet, Wi-Fi backends), and guest scripts rename interfaces and set up `virt_wifi` on top of one of them, chosen by `androidboot.wifi_impl`. APKRun starts with one NAT NIC ([vm.md](vm.md) §7).
+Cuttlefish attaches several NICs (mobile, ethernet, Wi-Fi backends), and guest scripts rename interfaces and set up `virt_wifi` on top of one of them, chosen by `androidboot.wifi_impl`. APKRun started with one NAT NIC ([vm.md](vm.md) §7).
 
-#095 establishes connectivity in this order and stops at the first option that works:
+#095 establishes connectivity in this order and stops at the first option that works. The 2026-10-08 spike showed that option 1 cannot work with the stock image, and that option 2 does:
 
 1. **Single NIC as Wi-Fi.** One NAT NIC, with bootconfig and properties arranged so the guest puts `virt_wifi` on it (apps see an unmetered Wi-Fi network, which is best for compatibility).
 2. **Cuttlefish NIC order.** Several NAT NICs in Cuttlefish's order so the stock scripts find what they expect. This changes `VMDefinition.network` from one optional NIC to an ordered list (a small VirtualMachineCore change, noted in [vm.md](vm.md) §7).
 3. **Ethernet.** Custom image only: add the ethernet feature and let `EthernetManager` run DHCP on `eth0`.
 
 Checks (T2): `ip addr`, a default route, DNS resolution, `generate_204` from inside Android, and `dumpsys connectivity` showing a validated network.
+
+**Verified configuration (option 2, 2026-10-08).** Three NAT NICs in Cuttlefish's order:
+
+| NIC | Guest name | Use | MAC |
+|---|---|---|---|
+| 0 | `eth0`, renamed `buried_eth0` by `rename_eth0` | Cuttlefish's mobile NIC; unused without a modem | per instance (`instance.json`) |
+| 1 | `eth1` | Cuttlefish's ethernet NIC. The OpenThread HAL forks `ot-rcp -Leth1` and exits with an I/O error if it is missing | per instance |
+| 2 | `eth2`, the `virt_wifi` backing NIC (`ro.vendor.virtwifi.port`) | Wi-Fi | `02:XX:YY:00:00:00`, where `XXYY` is `androidboot.wifi_mac_prefix` as a 16-bit number (`5554` → `02:15:b2:00:00:00`) |
+
+- `androidboot.wifi_impl=virt_wifi` makes `init.cutf_cvm.rc` start `setup_wifi`, which creates `wlan0` on `eth2`. The stock `mac80211_hwsim_virtio` path needs crosvm's virtio Wi-Fi device and an OpenWRT access-point VM, which VZ cannot provide.
+- `setup_wifi` first rewrites `eth2`'s MAC from `wifi_mac_prefix`. vmnet drops frames whose source MAC it did not assign, so the VZ NIC is created with that MAC already, and DHCP then works.
+- Wi-Fi is off on a fresh `/data`. The first boot turns it on and joins the open `VirtWifi` network (§7.6, first-boot settings); Cuttlefish's automotive product does the same in `wifi_on.sh`. The setting persists in `/data`.
+- Result: `wlan0` gets `192.168.64.x/24` from vmnet's DHCP, NetworkMonitor validates the network (`generate_204`), and DNS resolves. ICMP to the internet gets no reply through vmnet; TCP and UDP work.
+- Ethernet on `eth1` gets no network request while the Wi-Fi network is up, so it stays unconfigured.
 
 ### 7.5 Audio
 
@@ -598,13 +626,16 @@ Checks (T2): `ip addr`, a default route, DNS resolution, `generate_204` from ins
 | Area | Stock behaviour expected without host services | v1 handling |
 |---|---|---|
 | Input (vhost-user virtio-input from `cf_vhost_user_input`) | no touchscreen/keyboard devices from Cuttlefish | Not reproducible on VZ. Input goes through the Guest Agent ([input.md](input.md), ADR-0013). The USB keyboard/pointer are not attached to the Android VM. |
-| Telephony (RIL ↔ `modem_simulator`) | no service; RIL retries | Accept for stock. The custom image disables the RIL only if #095 measures crash-loops or CPU/log cost. |
-| Bluetooth, NFC, UWB, GNSS | HALs fail to reach the host | same rule |
-| Sensors | no sensors | same rule |
+| Telephony (RIL ↔ `modem_simulator`) | the RIL stays up and reports `RADIO_NOT_AVAILABLE` when `modem_simulator_ports` is set (§7.3) | Accept for stock. The custom image disables the RIL only if #095 measures crash-loops or CPU/log cost. |
+| Bluetooth | `bt_hci` opens hvc5 and stays up; the Bluetooth stack (`com.android.bluetooth`) aborts in `waitForInitialization: Can't start HAL` about every 25 s. BluetoothManagerService gives up after its sixth recovery: seven aborts in about 3.5 minutes on every boot while Bluetooth is on. `androidboot.vendor.apex.com.google.cf.bt=none` removes the HAL but not the aborts. The boot reporter waits for Bluetooth and reports `VIRTUAL_DEVICE_BOOT_FAILED: Dependencies not ready after 10 checks: Bluetooth` | `androidboot.cuttlefish_service_bluetooth_checker=false`, and Bluetooth is turned off by the first-boot settings. No Bluetooth in v1 |
+| NFC, UWB, GNSS, confirmationui, oemlock | HALs hold their silent ports and wait | same rule as telephony |
+| Sensors | the HAL blocks boot unless hvc18 answers (§7.1) | the "no sensors" responder |
 | Camera | none | post-v1 |
 | Battery, health, thermal | Cuttlefish HALs report fixed values (charging, full) | keep |
-| RTC | PL031 exists on VZ; the GKI driver must be present | #012 checks `/dev/rtc0`. Time sync is also done by the Guest Agent ([desktop-integration.md](desktop-integration.md) §9). |
+| RTC | PL031 exists on VZ; the GKI driver must be present | `/dev/rtc0` exists and `date` is correct (2026-10-08). Time sync is also done by the Guest Agent ([desktop-integration.md](desktop-integration.md) §9). |
 | Power button (PL061 + gpio-keys) | VZ `requestStop` presses it; Android treats it as a screen-off key | shutdown goes through the Guest Agent ([vm.md](vm.md) §9.3) |
+
+**First-boot settings.** Two stock defaults need a runtime setting that bootconfig cannot express: Wi-Fi is off, and Bluetooth is on. After the first `.bootCompleted` of a fresh instance, RuntimeCore applies them once through standard Android commands, the way Cuttlefish's automotive `wifi_on.sh` does: `cmd bluetooth_manager disable`, `cmd wifi set-wifi-enabled enabled`, and `cmd wifi connect-network VirtWifi open`. Each is persisted in `/data`, so later boots need nothing. In M1 the channel is the serial shell (developer mode); from #072 the Guest Agent applies them, and the custom image (#035) sets the defaults in its overlays instead. Turning Bluetooth off right after `.bootCompleted` lands before the first stack abort, so even the first boot has none (verified 2026-10-08).
 
 ### 7.7 Boot phase markers
 
@@ -635,9 +666,30 @@ by `Images/tools/reference/boot_signals.py`, summarizes 62 records; 54 contain a
 
 `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` lines carry `display=<n> mode=<state>`
 fields. Display-state lines and host failure lines are not boot-completion
-signals. No captured record reaches `sys.boot_completed=1`, so the
-`VIRTUAL_DEVICE_BOOT_COMPLETED` string and its timing remain unconfirmed. #064
-needs a complete reference boot to measure them ([IR-269](../04-plan/implementation-review.md#ir-269-keep-064-open-after-the-2026-10-08-reference-capture-audit)).
+signals. No #064 record reaches `sys.boot_completed=1`.
+
+**Observed on VZ (2026-10-08, IR-306).** The VZ direct boot confirms the strings.
+The guest's `GceEventReporter` writes them to the kernel log, so on hvc0 they
+appear as `GceEventReporter: VIRTUAL_DEVICE_<TOKEN>` after the kmsg prefix.
+Guest uptime over the five cold boots of `g2_spike.py` (boot 1 on a fresh
+instance; boots 2–5 on the same instance):
+
+| Token on hvc0 | Boot 1 | Boots 2–5 |
+|---|---|---|
+| `init: starting service 'zygote'...` | 1.48 s | 0.95–1.18 s |
+| `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON` | 1.90 s | 1.24–1.63 s |
+| `GceEventReporter: VIRTUAL_DEVICE_BOOT_STARTED` | 6.54 s | 3.00–3.73 s |
+| `GceEventReporter: VIRTUAL_DEVICE_BOOT_COMPLETED` | 7.49 s | 3.95–4.67 s |
+| `GceEventReporter: VIRTUAL_DEVICE_NETWORK_WIFI_CONNECTED` | 21.6 s (after the first-boot settings) | 8.0–8.7 s |
+| `GceEventReporter: VIRTUAL_DEVICE_BOOT_FAILED: Dependencies not ready after 10 checks: Bluetooth` | only without `cuttlefish_service_bluetooth_checker=false` | — |
+
+hvc0 output on VZ starts only when first-stage init has loaded `virtio_pci` and
+`virtio_console` (about 0.18 s of uptime), because VZ has no UART for an early
+console. The kernel's earlier lines, including `Booting Linux on physical CPU`
+and `init: init first stage started!`, are not replayed to hvc0. The first init
+line on hvc0 is `init: Loaded kernel module /lib/modules/virtio_pci.ko`. #012 and
+#013 base `.kernel` on the first console byte and `.init` on the first `init: `
+line ([runtime-daemon.md](runtime-daemon.md) §3.3).
 
 ---
 
@@ -649,11 +701,12 @@ The reference boot is ground truth for everything that U-Boot and the Cuttlefish
 
 In order of preference:
 
-1. An arm64 Linux VM with nested virtualization on an M3-or-later Mac (`VZGenericPlatformConfiguration.isNestedVirtualizationEnabled`, macOS 15+). `/dev/kvm` works inside it, so crosvm runs Cuttlefish at near-native speed.
-2. An arm64 Linux machine (bare metal or cloud).
-3. An x86-64 Linux host running the arm64 image under QEMU TCG. It is slow, but acceptable for a one-time capture.
+1. An arm64 Linux machine (bare metal or cloud), with `/dev/kvm`.
+2. An x86-64 Linux host running the arm64 image under QEMU TCG. It is slow, but acceptable for a one-time capture.
 
 The reference host installs the Cuttlefish host tools (`cvd`, from the android-cuttlefish packages for arm64) and the same image build (§2).
+
+**The nested-virtualization VM is not a usable reference host.** It was the first choice: an arm64 Linux VM with nested virtualization on an M3-or-later Mac (`VZGenericPlatformConfiguration.isNestedVirtualizationEnabled`). From 2026-09-30 to 2026-10-09, 62 captures on a Lima VM of that kind never reached `sys.boot_completed=1`. The guest ran about 100 times slower than the same image booted directly on VZ: `zygote` started at 233 s of uptime against 1.3 s, and `boot_progress_pms_ready` came at 1467 s against 3.6 s. `system_server` was then killed by its Watchdog during startup (IR-279, IR-305). The project has no arm64 Linux machine, so no complete reference boot exists. What the captures do provide is kept as the reference for launcher outputs: the `internal/bootconfig`, the kernel command line, the composite disk layout, `cuttlefish_config.json`, and the kernel log up to `system_server`. The `incomplete/` records under `Images/reference/16373615/` hold them. Behaviour that needs a booted reference comes from the Cuttlefish source at the pinned revision (`android17-release`) and from the VZ boot itself. #064 is re-scoped accordingly (IR-305).
 
 ### 8.2 Profiles
 
@@ -1295,7 +1348,7 @@ public struct AndroidBootPlan: Sendable {
 
 `ImageSource`, `InstanceConfiguration`, `InstanceSizing`, `RecoveryPoint`, and `VZPlatformProfile` are plain `Codable` values defined next to these types.
 
-`GPUProfileID.headless` is for bring-up only (#012–#017, `apkrun dev boot --gpu none`). Its layer-2 keys are Cuttlefish's no-GPU graphics set, copied in #014 from `bootconfig_args.cpp` at the revision of the pinned build. Only development bundles list it in `gpuProfiles`, and `bundle` refuses to write it into a release-signed bundle ([graphics.md](graphics.md) §9; [../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7, §7.3).
+`GPUProfileID.headless` is for bring-up only (#012–#017, `apkrun dev boot --gpu none`). "Headless" means nothing on the Mac shows Android; the guest still needs a DRM device. Its layer-2 keys are the launcher's `guest_swiftshader` graphics set (ANGLE on SwiftShader in the guest), and it adds `VMDefinition.builtInDisplay`, VZ's 2D virtio-gpu with one scanout ([vm.md](vm.md) §4). Cuttlefish's no-GPU set does not boot the stock image on VZ: without `ro.hardware.egl` zygote and SurfaceFlinger abort ("couldn't find an OpenGL ES implementation"), and `init.cutf_cvm.rc` waits for `/dev/dri/card0` (IR-307). Only development bundles list it in `gpuProfiles`, and `bundle` refuses to write it into a release-signed bundle ([graphics.md](graphics.md) §9; [../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7, §7.3).
 
 ### 9.2 Field mapping
 
@@ -1306,9 +1359,10 @@ public struct AndroidBootPlan: Sendable {
 | `machineIdentifier` | `instance.json` |
 | `boot` | `.linux(kernel:initialRamdisk:commandLine:)`. `kernel` is `Images/<v>/` + manifest `boot.kernel.path`. `initialRamdisk` is `Runtime/instance/boot/initrd.img`, built from `boot.ramdisk` and the merged bootconfig (§6.3). `commandLine` is the contents of the `boot.cmdline` file |
 | `disks` | manifest `disks`, then `templates`, each in array order (§4.2). The `os` disk is `Images/<v>/` + its `path`, read-only, with caching `.automatic`. Each template is its instance clone `Runtime/instance/<file name of path>`, read-write, with synchronization `.full`. `readOnly`, `identifier`, and `role` come from the manifest entry ([../03-reference/runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.5) |
-| `network` | `.nat(macAddress:)` from `instance.json` (§7.4 may make this a list) |
+| `network` | three `.nat(macAddress:)` entries in the order of §7.4: the mobile and ethernet MACs from `instance.json`, and the `virt_wifi` MAC derived from `androidboot.wifi_mac_prefix` |
 | `vsockEnabled` | `true` |
-| `consolePorts` | manifest `consolePorts` (§7.1), roles adjusted by `BootOptions` (logcat capture, developer mode), then ordered by `ConsolePortPlan` ([vm.md](vm.md) §6.2) |
+| `consolePorts` | manifest `consolePorts` (§7.1), roles adjusted by `BootOptions` (logcat capture, developer mode), then ordered by `ConsolePortPlan` ([vm.md](vm.md) §6.2). VirtualMachineCore puts ports 10–19 on one multiport device ([vm.md](vm.md) §6.1) |
+| `builtInDisplay` | set only for `GPUProfileID.headless` (§9.1) |
 | `entropy`, `memoryBalloon` | `true`, `true` |
 | `sound` | `SoundDefinition(output: options.soundOutput, input: options.microphone)` |
 | `customDevices` | empty here. RuntimeCore appends the virtio-gpu device from GraphicsCore ([graphics.md](graphics.md)). ImageCore cannot depend on GraphicsCore ([../01-architecture/modules.md](../01-architecture/modules.md) §3). |
@@ -1336,7 +1390,7 @@ The layout on disk is defined in [../01-architecture/filesystem-layout.md](../01
 | `guest` | `sdk`, `abis`, `targetSdkFloor`: guest facts for package checks before the first boot ([package-store.md](package-store.md) §4.6) |
 | `boot` | `kernel`, `ramdisk`, `bootconfig`, `cmdline` file entries (path, size, SHA-256), `kernelPageSize`, `bootconfigOverrides` (§6.1) |
 | `disks` | exactly one entry, `os.img`: role, path, `readOnly`, identifier, logical size, partitions (label, first LBA, size, SHA-256 of contents) |
-| `templates` | `persistent.img`, then `userdata.img`: the same fields. The `userdata` entry also has `userdataStrategy` (`blankFormattable` / `prebuiltTemplate`, §5.2) |
+| `templates` | `userdata.img`: the same fields, and `userdataStrategy` (`blankFormattable` / `prebuiltTemplate`, §5.2) |
 | `consolePorts` | 20 entries: index, role, name (§7.1) |
 | `gpuProfiles` | `drmVirgl`, `guestSwiftshader`, and in development bundles `headless` (§9.1): bootconfig fragments, the keys each may override, and required host capabilities |
 | `requirements` | `minimumRuntimeVersion` (APKRun host version), `guestProtocol` (min/max), agents (package, versionCode) built into the image. Empty for `stock` |
@@ -1470,7 +1524,7 @@ Proposed for release, and to be confirmed in #035: pass `orange`/`unlocked`, but
 
 ### 12.2 Recovery points
 
-`InstanceStore.createRecoveryPoint` writes `Runtime/instance/recovery-points/<timestamp>-<imageVersion>/` with `clonefile` copies of `persistent.img`, `userdata.img`, and `instance.json`. The VM must be stopped. Clones are instant and share blocks, so the cost is the blocks changed afterwards. After a successful migration, only the most recent recovery point is kept.
+`InstanceStore.createRecoveryPoint` writes `Runtime/instance/recovery-points/<timestamp>-<imageVersion>/` with `clonefile` copies of `userdata.img` and `instance.json`. The VM must be stopped. Clones are instant and share blocks, so the cost is the blocks changed afterwards. After a successful migration, only the most recent recovery point is kept.
 
 ### 12.3 Migration A → B
 
@@ -1483,7 +1537,7 @@ preconditions  B installed and fully verified; A → B allowed (compatibility, u
 2. ImageCore: recovery point R of the instance (image A)
 3. ImageCore: instance.json `migration` ← (A, B), which is `RuntimeImageState.migrating(A, B)`; then `previous` → A, `current` → B;
    instance.json imageVersion ← B
-4. RuntimeCore: boot B with the existing persistent/userdata (first-boot timeout 15 min: package scan and dexopt)
+4. RuntimeCore: boot B with the existing `userdata.img` (first-boot timeout 15 min: package scan and dexopt)
 5. RuntimeCore: health check
      - sys.boot_completed = 1
      - Guest Agent and Store Agent handshakes succeed, protocol in range
@@ -1523,15 +1577,18 @@ T2 test with two bundles built from the same base: A, and B = A with `androidboo
 | CF-01 | No U-Boot. Direct kernel boot with a pre-assembled initrd and bootconfig | VZ boot loaders; ADR-0015 | §4.1, §6 |
 | CF-02 | Slot `_a` only, no `_b` partitions | no OTA | §4.2 |
 | CF-03 | No `uboot_env`, persistent vbmeta, or `bootconfig` partitions | U-Boot only | §4.2 |
-| CF-04 | Raw GPT disk images instead of crosvm composite disks | VZ attaches files | §4.2 |
-| CF-05 | `boot_devices` is the VZ PCI host (not `10000.pci`) | platform difference | §5.3 |
+| CF-04 | Raw GPT disk images instead of crosvm composite disks: two disks (`os.img` read-only, `userdata.img` read-write with `misc`, `metadata`, `frp`, `userdata`), and no sdcard disk | VZ attaches files; a third disk is `vdc`, which the stock fstab gives vold as `sdcard1` | §4.2 |
+| CF-05 | `boot_devices` is `40000000.pci` (not `10000.pci`) | platform difference | §5.3 |
 | CF-06 | Blank userdata formatted at first boot | clean instances; no host-side f2fs tools on macOS | §5.2 |
 | CF-07 | In-guest non-secure KeyMint and Gatekeeper | no `secure_env` host process | §7.2 |
-| CF-08 | Most hvc ports are silent sinks | no host services | §7.1 |
+| CF-08 | Most hvc ports are silent sinks; hvc10–hvc19 are ports of one multiport device | no host services; VZ allows 10 single-port console devices | §7.1 |
 | CF-09 | No vhost-user input devices; input through the Guest Agent | not reproducible on VZ | §7.6 |
-| CF-10 | virtio-gpu is APKRun's custom virtio device (VirGL) instead of crosvm's | VZ custom virtio API | [graphics.md](graphics.md) |
-| CF-11 | Network: VZ NAT (one NIC initially) | VZ | §7.4 |
-| CF-12 | No modem simulator, rootcanal, GNSS, sensors, camera hosts | out of v1 scope | §7.6 |
+| CF-10 | virtio-gpu is APKRun's custom virtio device (VirGL) instead of crosvm's; the M1 `headless` profile uses VZ's 2D virtio-gpu with the `guest_swiftshader` keys | VZ custom virtio API; the stock image needs a DRM device to boot | [graphics.md](graphics.md) §9, §9.1 |
+| CF-11 | Network: three VZ NAT NICs in Cuttlefish's order, Wi-Fi through `virt_wifi` on `eth2` instead of `mac80211_hwsim_virtio` and the OpenWRT VM | VZ has no virtio Wi-Fi device; vmnet filters source MACs | §7.4 |
+| CF-12 | No modem simulator, rootcanal, GNSS, camera hosts; the sensors host is a "no sensors" responder on hvc18 | out of v1 scope; the sensors HAL blocks `system_server` without a reply | §7.1, §7.6 |
+| CF-13 | Launcher keys for host-side clients are dropped (`vsock_tombstone_port`, `vhal_proxy_server_port`, `auto_eth_guest_addr`); keys for guest-side servers and the RIL stay | no host services; their HALs abort without the guest-side keys | §6.2, §7.3 |
+| CF-14 | `androidboot.cuttlefish_service_bluetooth_checker=false`, and first-boot settings: Bluetooth off, Wi-Fi on and joined to `VirtWifi` | no rootcanal; Wi-Fi defaults off | §7.6 |
+| CF-15 | `androidboot.console=hvc1` and `serialconsole=1` in developer mode | the Android serial shell is the debug channel before ADB | §6.2 |
 
 New rows are added whenever #011–#014, #035, #083, or #095 find a difference. #035 adds the product changes of §11.2 that differ from Cuttlefish at runtime (for example the developer-mode gate of adbd, §11.3).
 
@@ -1587,11 +1644,11 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 | T0 | Swift: `ImageVersion` ordering and parsing, `AndroidImageManifest`/`RuntimeImageManifest` decoding over the shared fixtures, bootconfig merge conflicts, trailer golden vectors, GPT backup relocation, `VMDefinition` mapping (§9.2) | #009, #012, #065, #066 |
 | T1 | Pipeline end to end on synthetic fixture images (built with the vendored mkbootimg), twice, identical `SHA256SUMS` | #065 |
 | T1 | ImageCore install from a directory and from an `.aar`, hole punching, signature rejection, extra-file rejection, interrupted install cleanup, provisioning and `clonefile` on a temporary APFS volume, recovery point create/restore | #065, #066, #058 |
-| T2 | Linux test guest sees the three disks with the right partition names and sizes; `/proc/bootconfig` equals the golden trailer; `boot_devices` value discovered | #011, #012 |
+| T2 | Linux test guest sees the two disks with the right partition names and sizes; `/proc/bootconfig` equals the golden trailer; `boot_devices` value discovered | #011, #012 |
 | T2 | Stock image: kernel boot (#012), init (#013), `sys.boot_completed=1` and stable for 10 minutes (#014), ADB commands (#015) | #012–#015 |
 | T2 | Console port numbering with 20 ports; each hvc role behaves as planned | #095 |
 | T2 | Migration A → B, and a failed migration B → B′ that returns to B (§12.4) | #058 |
-| T3 | Gate G2: boot_completed + reference diff with no unexplained differences | #014, #064 |
+| T3 | Gate G2: boot_completed, and the reference diff over the categories the launcher captures provide (cmdline, bootconfig) with no unexplained differences | #014 |
 
 ---
 
@@ -1601,23 +1658,22 @@ Risks (R-NN) are in [../04-plan/risks.md](../04-plan/risks.md), open questions (
 
 | Item | Plan |
 |---|---|
-| Sizes of the blank partitions in the manifest (§3.2) | placeholders until #011 reads the real sizes from the reference capture (§8) |
+| Sizes of the blank partitions in the manifest (§3.2) | #011 reads the real sizes from the composite disk specs in the launcher captures (§8.1) |
 | Ramdisk fragment policy: every non-recovery fragment, in table order (§4.1) | #013 compares the first-stage module list (`lsmod` and the first-stage init log) with the reference capture |
 | Partitions left out on VZ: `uboot_env`, `bootconfig`, the persistent vbmeta, `android_esp`, `pvmfw_a`, `vvmtruststore`, `hibernation` (§4.2) | #011 checks each one against the reference `ls -l /dev/block/by-name` and the fstab. A partition that turns out to be required is added blank, and each correction is recorded in §13 |
 | Whether a component needs `_b` partitions (§4.2) | #013, #014. If one does, equal-sized zero-filled `_b` partitions are added (holes on APFS) |
 | The VZ virtio-blk logical sector size is 512 bytes (§4.4) | #005 and #011 check it with `blockdev --getss` |
 | Android formats the blank userdata on first boot: `formattable` on `/data` and `/metadata`, and the metadata encryption path (§5.2) | #011 reads `/vendor/etc/fstab.*` in the reference capture, #013 boots it. If first-boot formatting fails under VZ: fallback A (the zip's `userdata.img`) or fallback B (a `make_f2fs` template), both with a fixed size |
-| The `androidboot.boot_devices` value, and whether it is stable across macOS builds (§5.3, R-16) | #011 discovers it, #013 confirms the by-name labels, and the T2 suite re-checks it on every new macOS build. Alternative: `androidboot.boot_part_uuid` with a single-disk layout, not built unless needed |
-| Exact values of the "reference" bootconfig keys and the security HAL APEX names (§6.2, §7.2) | #064 records them from the target-profile reference capture (§8); #010 copies the bootconfig values into the initial layer-2 layout, and #013 compares the live VZ boot against the capture |
-| Layer-2 keys of the `headless` GPU profile (§9.1) | #014 copies Cuttlefish's no-GPU graphics set from `bootconfig_args.cpp` at the revision of the pinned build |
-| The stock image on the VZ topology (R-06) | #012–#014 (gate G2), diffed against the reference capture (#064). Fallback: adapt the custom image (#035): kernel config, fstab, init scripts |
-| Direct kernel boot misses something that U-Boot provides (R-11, §6) | #012–#014, with the U-Boot inputs listed by #064. Fallback: a U-Boot EFI build ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) |
-| Cuttlefish host services: 20 console ports, HALs on silent ports, Weaver, vsock clients without their keys (§7.1, §7.3, R-12) | #095, #014. Fallback: attach fewer ports, and the custom image points the affected HALs elsewhere or disables them (§7.1) |
-| Network on VZ's single NIC (§7.4, OQ-37) | #095. Working default: option 1, one NIC as `virt_wifi`. Otherwise options 2 and 3 |
+| Whether the `androidboot.boot_devices` value `40000000.pci` is stable across macOS builds (§5.3, R-16) | #011 records `topology.txt`, and the T2 suite re-checks it on every new macOS build. Alternative: `androidboot.boot_part_uuid` with a single-disk layout, not built unless needed |
+| `drm_virgl` graphics keys for the target profile (§6.2) | the launcher captures hold the `guest_swiftshader` set; #022 takes the `drm_virgl` set from `graphics-props-from-source.txt` and the Cuttlefish source |
+| The stock image on the VZ topology (R-06) | spike positive (IR-306); #012–#014 build it into the product and close G2. Fallback: adapt the custom image (#035): kernel config, fstab, init scripts |
+| Direct kernel boot misses something that U-Boot provides (R-11, §6) | spike positive: nothing was missing (IR-306). Fallback: a U-Boot EFI build ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) |
+| Cuttlefish host services: 20 console ports, HALs on silent ports, Weaver, vsock clients without their keys (§7.1, §7.3, R-12) | the spike found the handling of §7 (IR-306); #095 verifies the 20-port numbering with markers and builds the substitutes, #014 the stability check. Weaver is `none`; LockSettings is checked in #095 |
+| Network (§7.4, OQ-37) | the spike found option 2 with `virt_wifi` (IR-306); #095 builds and verifies it |
 | `virtio_snd` in the stock kernel (§7.5, OQ-38) | #083. If it is missing, the custom image adds it |
-| RIL, Bluetooth, GNSS, and sensors without host services (§7.6) | accepted on the stock image. The custom image disables a HAL only if #095 measures crash loops or CPU and log cost |
+| RIL, Bluetooth, GNSS, and sensors without host services (§7.6) | handled as in §7.6. The custom image disables a HAL only if #095 measures crash loops or CPU and log cost |
 | The PL031 RTC driver (§7.6) | #012 checks `/dev/rtc0` |
-| Boot phase marker strings and their timing (§7.7) | #064 confirms them |
+| Boot phase marker strings and their timing (§7.7) | observed on the VZ boot (§17); #014 records them in `BootSignals` |
 | AVB state and dm-verity of the release variant (§11.4, OQ-36) | decided in #035. Proposal: `orange`/`unlocked` with dm-verity on |
 | SELinux policy for `apkrun_vsockd` and the agents (R-13) | #035. Fallback: move the function into a system service of the product, or use the platform-signed priv-app path |
 | AOSP build infrastructure and release-drop changes (R-14) | #035. The stock image stays usable for development until the custom image passes the same pipeline (§11) |
@@ -1635,15 +1691,16 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 |---|---|---|
 | VZ virtio-blk logical sector size | #005, #011 | pending (§4.4) |
 | Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | 2026-10-01; rechecked 2026-10-06 on macOS 27.0 (26A428); build 16373615: uncompressed 42,031,616-byte kernel; one unnamed `PLATFORM` fragment of 18,816,072 bytes, included; current command line 157 bytes. Reference-derived command-line additions remain pending #064. |
-| Real sizes of the blank partitions; omitted partitions not needed | #011 | pending (§3.2, §4.2) |
-| fstab `formattable` flags and the metadata encryption path | #011 | pending (§5.2) |
-| Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5.3) |
-| Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | pending (§6, §7.6) |
-| First-stage modules match the reference; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | pending (§4.1, §5.2, §5.3) |
-| `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | pending (§4.2, §9.1) |
+| VZ direct-boot spike of the stock image (IR-306) | spike | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615, harness `Experiments/vz-android-boot/`: kernel, first-stage init, dynamic partitions, AVB (`orange`/`unlocked`, `avb.py` digest), and first-boot formatting of `/metadata` and `/data` all worked. `/proc/bootconfig` equalled the merged block (49 keys, 2574 bytes). `getenforce` was `Enforcing` with no AVC denials. `/dev/rtc0` existed with the correct date. `VIRTUAL_DEVICE_BOOT_COMPLETED` came at 7.5 s on a first boot. `g2_spike.py` passed five cold boots in a row, each stable for 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, no init service exiting three times, and no tombstone (three-disk layout); the two-disk layout passed two cold boots. The handling it needed is in §4.2, §7, and §9.1 |
+| Real sizes of the blank partitions; omitted partitions not needed | #011 | the manifest sizes (`misc` 1 MiB, `metadata` 64 MiB, `frp` 1 MiB) booted in the spike; `_b` slots, `uboot_env`, `bootconfig`, and the persistent vbmeta were not needed. #011 confirms them against the composite specs (§3.2, §4.2) |
+| fstab `formattable` flags and the metadata encryption path | #011 | confirmed in the spike: `formattable` on `/data` and `/metadata`, `keydirectory=/metadata/vold/metadata_encryption` (§5.2) |
+| Guest-visible topology and `androidboot.boot_devices` value | #011 | `40000000.pci` (spike); `topology.txt` pending (§5.3) |
+| Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike; the production path is pending (§6, §7.6) |
+| First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |
+| `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive in the spike; G2 with the production code is pending (§4.2, §9.1) |
 | AVB state of the release variant; SELinux denials on the custom image | #035 | pending (§11.4, OQ-36, R-13) |
-| Reference capture: U-Boot inputs, boot phase markers, diff against the VZ boot | #064 | pending (§7.7, §8) |
+| Reference capture: U-Boot inputs, boot phase markers, diff against the VZ boot | #064 | re-scoped (IR-305): no complete crosvm boot on the nested reference host; the launcher captures are kept, and the boot markers were observed on VZ (§7.7, §8.1) |
 | `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |
 | Archive extraction time and bytes written | #087 | pending (R-25) |
-| 20 console ports, silent-port HAL behaviour, Weaver, vsock clients, RIL cost | #095 | pending (§7.1, §7.3, §7.6) |
-| Network on the stock image | #095 | pending (§7.4, OQ-37) |
+| 20 console ports, silent-port HAL behaviour, Weaver, vsock clients, RIL cost | #095 | spike: VZ allows 10 single-port devices, ports 10–19 on one multiport device; hvc holders and client behaviour as in §7.1, §7.3, and §7.6; Weaver is `none`. Marker verification and the 10-minute RIL cost are pending |
+| Network on the stock image | #095 | spike: three NICs and `virt_wifi` gave a validated Wi-Fi network (§7.4); the production path is pending (OQ-37) |

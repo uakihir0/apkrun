@@ -102,8 +102,7 @@ Images/<imageVersion>/
 ├── disks/
 │   └── os.img               # read-only raw GPT disk: boot and vbmeta partitions, unsparsed super
 ├── templates/
-│   ├── persistent.img       # raw GPT template: misc, metadata, frp (blank)
-│   └── userdata.img         # raw GPT template: userdata (§4.5)
+│   └── userdata.img         # raw GPT template: misc, metadata, frp (blank) and userdata, last (§4.5)
 └── legal/
     └── notice.html          # notices and source offers; release bundles only (§4.2)
 ```
@@ -119,7 +118,7 @@ Images/<imageVersion>/
 | `Images/update-state.json` | `ImageUpdateCoordinator` only | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.3 |
 | `Runtime/instance/instance.json` | ImageCore (`InstanceStore`) | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
 | `Runtime/instance/boot/initrd.img` | ImageCore before every boot | `ramdisk.img` plus the merged bootconfig trailer ([../02-design/android-image.md](../02-design/android-image.md) §6.3) |
-| `Runtime/instance/persistent.img`, `userdata.img` | ImageCore at provisioning | APFS clones of the templates. The instance file name is the template's file name |
+| `Runtime/instance/userdata.img` | ImageCore at provisioning | APFS clone of the template. The instance file name is the template's file name |
 
 ### 3.2 `boot/bootconfig.txt`
 
@@ -234,26 +233,17 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
   ],
   "templates": [
     {
-      "role": "persistent",
-      "path": "templates/persistent.img",
-      "readOnly": false,
-      "identifier": "apkrun-persist",
-      "logicalSize": 71303168,
-      "partitions": [
-        { "label": "misc", "firstLBA": 2048, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" },
-        { "label": "metadata", "firstLBA": 4096, "size": 67108864, "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351" },
-        { "label": "frp", "firstLBA": 135168, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" }
-      ]
-    },
-    {
       "role": "userdata",
       "path": "templates/userdata.img",
       "readOnly": false,
       "identifier": "apkrun-data",
-      "logicalSize": 16777216,
+      "logicalSize": 85983232,
       "userdataStrategy": "blankFormattable",
       "partitions": [
-        { "label": "userdata", "firstLBA": 2048, "size": 14680064, "sha256": "e86bae8c0598c4ff83c695f467daa4a1e8fa01d57f9140372993366204022a4d" }
+        { "label": "misc", "firstLBA": 2048, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" },
+        { "label": "metadata", "firstLBA": 4096, "size": 67108864, "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351" },
+        { "label": "frp", "firstLBA": 135168, "size": 1048576, "sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58" },
+        { "label": "userdata", "firstLBA": 137216, "size": 14680064, "sha256": "e86bae8c0598c4ff83c695f467daa4a1e8fa01d57f9140372993366204022a4d" }
       ]
     }
   ],
@@ -276,7 +266,7 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
     { "index": 15, "role": "silent", "name": "mcu_uart" },
     { "index": 16, "role": "silent", "name": "ti50_tpm" },
     { "index": 17, "role": "silent", "name": "jcardsim" },
-    { "index": 18, "role": "silent", "name": "sensors_control" },
+    { "index": 18, "role": "service", "name": "sensors_control" },
     { "index": 19, "role": "silent", "name": "sensors_data" }
   ],
   "gpuProfiles": {
@@ -321,8 +311,7 @@ The file on disk has its keys sorted (§4.11). This example shows them in readin
     { "path": "boot/kernel", "size": 43581440, "sha256": "6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c" },
     { "path": "boot/ramdisk.img", "size": 23068672, "sha256": "b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b" },
     { "path": "disks/os.img", "size": 7669284864, "sha256": "840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6" },
-    { "path": "templates/persistent.img", "size": 71303168, "sha256": "1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e" },
-    { "path": "templates/userdata.img", "size": 16777216, "sha256": "374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b" }
+    { "path": "templates/userdata.img", "size": 85983232, "sha256": "374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b" }
   ]
 }
 ```
@@ -360,7 +349,7 @@ A product image (`kind: apkrun`, M5+) differs in these blocks. The fragment belo
 | `guest` | object | yes | §4.3 | guest facts for package checks before the first boot |
 | `boot` | object | yes | §4.4 | direct-boot files |
 | `disks` | array | yes | exactly one entry, role `os` (§4.5) | read-only disks, attached first |
-| `templates` | array | yes | exactly two entries, roles `persistent` then `userdata` (§4.5) | templates of the per-instance disks |
+| `templates` | array | yes | exactly one entry, role `userdata` (§4.5) | the template of the per-instance disk |
 | `consolePorts` | array | yes | 1 to 32 entries (§4.6). v1 layouts have 20 | the console port plan |
 | `gpuProfiles` | object | yes | §4.7 | GPU profile bootconfig fragments |
 | `requirements` | object | yes | §4.8 | what the host must provide |
@@ -417,7 +406,7 @@ Each entry describes one raw GPT disk image with 512-byte sectors ([../02-design
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `role` | string | yes | `os` in `disks`. `persistent`, then `userdata`, in `templates` | what the disk is for |
+| `role` | string | yes | `os` in `disks`. `userdata` in `templates` | what the disk is for |
 | `path` | string | yes | under `disks/` for `os`, under `templates/` for templates | the bundle file |
 | `readOnly` | boolean | yes | `true` for `os`, `false` for templates | how VZ attaches the disk (or its instance clone) |
 | `identifier` | string | yes | `[a-z0-9][a-z0-9-]{0,19}` (the virtio-blk serial limit is 20 bytes). Unique | `blockDeviceIdentifier`. For logs and host lookups only |
@@ -431,7 +420,7 @@ Each entry describes one raw GPT disk image with 512-byte sectors ([../02-design
 
 How ImageCore uses them ([../02-design/android-image.md](../02-design/android-image.md) §9.2):
 
-- VZ attach order is `disks` in array order, then `templates` in array order. In v1 that is `os`, `persistent`, `userdata`.
+- VZ attach order is `disks` in array order, then `templates` in array order. In v1 that is `os`, then `userdata`. There is no third disk: the stock fstab gives `/devices/*/block/vdc` to vold as removable storage ([../02-design/android-image.md](../02-design/android-image.md) §4.2).
 - `os` is attached from the bundle, read-only, with caching `.automatic`. Each template is cloned once at provisioning into `Runtime/instance/<file name of path>` and attached read-write with synchronization `.full`.
 - With `blankFormattable`, provisioning grows `userdata.img` to `runtime.userdataGiB` and moves the backup GPT ([../02-design/android-image.md](../02-design/android-image.md) §5.2). With `prebuiltTemplate`, the size stays `logicalSize` and Settings offers no size choice.
 - ImageCore does not hash partitions. The file hash covers them. `bundle` checks them against `disks.json`, and the T2 disk test uses them.
@@ -654,22 +643,9 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
     },
     "templates": {
       "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
+      "minItems": 1,
+      "maxItems": 1,
       "prefixItems": [
-        {
-          "allOf": [
-            { "$ref": "#/$defs/disk" },
-            {
-              "properties": {
-                "role": { "const": "persistent" },
-                "path": { "pattern": "^templates/" },
-                "readOnly": { "const": false }
-              },
-              "not": { "required": ["userdataStrategy"] }
-            }
-          ]
-        },
         {
           "allOf": [
             { "$ref": "#/$defs/disk" },
@@ -825,7 +801,7 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "additionalProperties": false,
       "required": ["role", "path", "readOnly", "identifier", "logicalSize", "partitions"],
       "properties": {
-        "role": { "enum": ["os", "persistent", "userdata"] },
+        "role": { "enum": ["os", "userdata"] },
         "path": { "$ref": "#/$defs/bundlePath" },
         "readOnly": { "type": "boolean" },
         "identifier": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,19}$" },
@@ -890,7 +866,6 @@ e158851fbebb402e1f18ea9372ea2f76b4dea23eceb5c4b92e5b27ade8537f5b  boot/bootconfi
 6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c  boot/kernel
 b522bcfff2ba6df0999d4772142b22165fff473d596d40915275f324f5c2322b  boot/ramdisk.img
 840a8dcfeae95966a870b0b5257997ce94cbc19dd979409d1671d2e93a9e0de6  disks/os.img
-1c61425b1ba94748e725edd6fbc902b80e08483116a8affb4b8829143e486f1e  templates/persistent.img
 374298ce07e00296d99b3db8860b6ec7002c54d1b83796799a2686fd5bb0851b  templates/userdata.img
 ```
 

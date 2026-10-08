@@ -28,8 +28,8 @@ APKRun/
 │   │   ├── disks/
 │   │   │   └── os.img                 # read-only raw GPT disk (boot/vbmeta partitions + unsparsed super)
 │   │   ├── templates/
-│   │   │   ├── persistent.img         # raw GPT template: misc, metadata, frp (blank)
-│   │   │   └── userdata.img           # raw GPT template: userdata (blank or pre-formatted, see android-image.md §5)
+│   │   │   └── userdata.img           # raw GPT template: misc, metadata, frp (blank) and userdata, last
+│   │   │                              # (blank or pre-formatted, see android-image.md §5)
 │   │   └── SHA256SUMS
 │   ├── current -> <imageVersion>      # symlink = A/B pointer
 │   ├── previous -> <imageVersion>
@@ -47,10 +47,9 @@ APKRun/
 │       │                              # migration (from, to) while an image migration runs (android-image.md §12.3)
 │       ├── boot/
 │       │   └── initrd.img             # regenerated before every boot: ramdisk.img + merged bootconfig trailer
-│       ├── persistent.img             # APFS clone of templates/persistent.img, read-write
-│       ├── userdata.img               # APFS clone of templates/userdata.img, grown sparse to the configured size
+│       ├── userdata.img               # APFS clone of templates/userdata.img, read-write, grown sparse to the configured size
 │       └── recovery-points/
-│           └── <timestamp>-<imageVersion>/   # APFS clones (clonefile) of persistent.img + userdata.img + instance.json
+│           └── <timestamp>-<imageVersion>/   # APFS clones (clonefile) of userdata.img + instance.json
 │
 ├── Packages/
 │   ├── journal.jsonl                  # transaction journal (append-only; recovered at startup)
@@ -86,9 +85,9 @@ APKRun/
 Rules:
 
 - Nothing under `Images/<version>/` is modified after installation. It is verified with `SHA256SUMS` on install and on `doctor --deep`.
-- `persistent.img` and `userdata.img` are created by `clonefile(2)` from the image templates, then `userdata.img` is extended with `ftruncate` (sparse) and its GPT backup header is moved to the new end ([../02-design/android-image.md](../02-design/android-image.md) §5). They are never copied with a non-clone copy.
+- `userdata.img` is created by `clonefile(2)` from the image template, then extended with `ftruncate` (sparse) and its GPT backup header is moved to the new end ([../02-design/android-image.md](../02-design/android-image.md) §5). They are never copied with a non-clone copy.
 - `boot/initrd.img` is derived data. It is rebuilt before every boot and may be deleted at any time.
-- The layout "read-only base + writable overlay + userdata" is realized as read-only `os.img` + writable `persistent.img` + `userdata.img`. Android never writes to its system partitions, so no overlay image is needed.
+- The layout "read-only base + writable overlay + userdata" is realized as read-only `os.img` + writable `userdata.img`, which holds the small instance partitions (misc, metadata, frp) and `/data`. Android never writes to its system partitions, so no overlay image is needed. There is no third disk, because the stock fstab hands the third virtio-blk disk (`vdc`) to vold as removable storage ([../02-design/android-image.md](../02-design/android-image.md) §4.2).
 - Recovery points use `clonefile(2)`. They are cheap on APFS and are deleted after the migration passes its health check, keeping only the last one.
 - `Packages/<id>/current|previous|staged` swaps are performed as journaled renames ([../02-design/package-store.md](../02-design/package-store.md) §5). Only apkrund (or `apkrun dev` in embedded mode) writes under `Packages/`.
 - `Images/update-state.json` and `Cache/images/` are written only by `ImageUpdateCoordinator` and `ImageDownloader` in apkrund. `Runtime/maintenance.json` is written only by apkrund's `MaintenanceService`. Neither APKRun updates nor Android system updates write under `Packages/`, except for schema migrations shipped in a release ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5).

@@ -212,13 +212,13 @@ Immediate failures during boot: the console shows `Kernel panic - not syncing` (
 
 | Phase entered | Signal (console, every image) | Signal (ADB, development) | Signal (agent) | Perf marker |
 |---|---|---|---|---|
-| `.kernel` | first console byte after `VM_START`. U-Boot prints its banner and `Starting kernel ...` first (corrected: Linux is not first). Linux's first line is `Booting Linux on physical CPU` at kernel uptime 0.000 s (confirmed) | — | — | `KERNEL_START` |
-| `.init` | `init: init first stage started!` (first-stage init; confirmed, median kernel uptime 42.0 s) | — | — | `ANDROID_INIT` |
-| `.systemServer` | `init: starting service 'zygote'` (corrected: this is zygote's start; no console line marks SystemServer's start in the observed records; median kernel uptime 197.5 s). Visibility of init's kmsg lines depends on the console log level | `getprop sys.system_server.start_count` non-empty (polled every 500 ms once `adb` connects) | — | `SYSTEM_SERVER_READY` |
-| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED` (unconfirmed: the token is in the pinned host binaries, but no captured record contains it) | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
+| `.kernel` | first console byte after `VM_START`. On VZ hvc0 starts when first-stage init loads `virtio_console` (about 0.18 s of uptime); the kernel's earlier lines, including `Booting Linux on physical CPU`, are not replayed (observed 2026-10-08). On crosvm, U-Boot's banner comes first | — | — | `KERNEL_START` |
+| `.init` | the first line from init, `init: ` after the kmsg prefix. On VZ that is `init: Loaded kernel module /lib/modules/virtio_pci.ko` (0.32 s). `init: init first stage started!` is printed before hvc0 exists on VZ, so it is not used | — | — | `ANDROID_INIT` |
+| `.systemServer` | `init: starting service 'zygote'` (this is zygote's start; no console line marks SystemServer's start; 0.95–1.48 s on VZ). Visibility of init's kmsg lines depends on the console log level | `getprop sys.system_server.start_count` non-empty (polled every 500 ms once `adb` connects) | — | `SYSTEM_SERVER_READY` |
+| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED`, written by the guest's `GceEventReporter` (confirmed on VZ: 7.5 s on a first boot, 3.9–4.7 s later) | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
 | `.agentsConnecting` | — | — | entered right after `.bootCompleted` | — |
 
-- The console strings are candidates. Their exact text and observed timing are in [android-image.md](android-image.md) §7.7. The timings are medians of the first kernel-log occurrence over the incomplete diagnostic records that contain each marker (`Images/reference/16373615/boot-signals.json` gives n, minimum, and maximum). They mix GPU modes and are not reference timings. The `.bootCompleted` console signal and its timing stay unconfirmed until #064 captures a complete reference boot. The detector's patterns live in one table (`BootSignals.swift`), with golden tests over the captured console logs.
+- The console strings and their timing on VZ are in [android-image.md](android-image.md) §7.7, observed in the 2026-10-08 direct-boot spike (IR-306). The crosvm records of `Images/reference/16373615/boot-signals.json` remain for comparison; their timings come from a nested-virtualization host that ran about 100 times slower (IR-305). The detector's patterns live in one table (`BootSignals.swift`), with golden tests over captured VZ console logs.
 - The first signal that arrives wins. For example, on the custom image with `adbd` stopped, `.bootCompleted` comes from the console marker or from the Guest Agent.
 - Progress for the placeholder window: `BootProgressEstimator` divides elapsed time by the median duration of each phase over the last 5 boots of the same kind (`daemon.json bootHistory`). Without history it uses fixed weights. Progress is never shown as a percentage above 95 % before `ready`.
 
@@ -613,7 +613,7 @@ Settings → Troubleshooting → **Reset Android…** (and `apkrun runtime reset
 
 1. `stop(.reset, force: true)`.
 2. Create a recovery point (kept for 7 days) unless the user unticks "Keep a backup for 7 days". No operation restores this recovery point in v1 ([../04-plan/open-questions.md](../04-plan/open-questions.md) OQ-41). Settings → Storage and `apkrun image recovery-points` list and delete it.
-3. Delete `persistent.img` and `userdata.img`, provision again ([android-image.md](android-image.md) §5.1), and run the first boot.
+3. Delete `userdata.img`, provision again ([android-image.md](android-image.md) §5.1), and run the first boot.
 4. Provisioning writes a new `userdataGeneration`. After `ready`, APKStoreCore's reconciliation finds every package missing from the new generation, marks it `installed` → `needsReinstall(.userdataReset)`, and reinstalls it from `Packages/<id>/current/` under a `storeOperation` assertion ([package-store.md](package-store.md) §9.2). App data is lost. Settings and wrappers stay valid. Adopted packages without an artifact cannot be restored, and they are listed as `broken(.removedInAndroid)` with the Remove action.
 
 ---

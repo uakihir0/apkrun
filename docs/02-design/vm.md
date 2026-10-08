@@ -148,14 +148,15 @@ covers the entitled path.
 | `boot` | `VZLinuxBootLoader(kernelURL:)`, `initialRamdiskURL`, `commandLine` | Direct kernel boot ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) |
 | `cpuCount`, `memorySize` | `cpuCount`, `memorySize` | |
 | `disks[i]` | `VZVirtioBlockDeviceConfiguration(attachment: VZDiskImageStorageDeviceAttachment(url:readOnly:cachingMode:synchronizationMode:))`, `blockDeviceIdentifier` | Order preserved in `storageDevices` |
-| `network` | `VZVirtioNetworkDeviceConfiguration` + `VZNATNetworkDeviceAttachment`, `macAddress` | No bridged networking (restricted entitlement) |
+| `network` | one `VZVirtioNetworkDeviceConfiguration` + `VZNATNetworkDeviceAttachment` per entry, with its `macAddress`, in array order | No bridged networking (restricted entitlement). The Android definition has three entries in Cuttlefish's order (§7) |
 | `vsockEnabled` | one `VZVirtioSocketDeviceConfiguration` | VZ allows one vsock device per VM |
-| `consolePorts[i]` | one `VZVirtioConsoleDeviceSerialPortConfiguration` each, with `VZFileHandleSerialPortAttachment` | See §6 for why single-port devices are used |
+| `consolePorts[i]` | ports 0–9: one `VZVirtioConsoleDeviceSerialPortConfiguration` each, with `VZFileHandleSerialPortAttachment`. Ports 10 and up: the ports of one `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true` | See §6.1 for the single-port devices and VZ's limit of 10 |
 | `entropy` | `VZVirtioEntropyDeviceConfiguration` | |
 | `memoryBalloon` | `VZVirtioTraditionalMemoryBalloonDeviceConfiguration` | Not driven in v1. Present so a later release can reclaim memory without an image change |
 | `sound` | `VZVirtioSoundDeviceConfiguration` with output and/or input streams | [desktop-integration.md](desktop-integration.md) §8 |
 | `customDevices` | `customVirtioDevices` (macOS 27) | Built by VirtioDeviceCore from each `VirtioDeviceModel` |
-| (not used) | `graphicsDevices`, `keyboards`, `pointingDevices`, `directorySharingDevices`, `usbControllers` | Graphics is our own virtio-gpu; input is guest-side injection ([ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)); file sharing goes through the Guest Agent ([desktop-integration.md](desktop-integration.md) §6) |
+| `builtInDisplay` (development only) | `VZVirtioGraphicsDeviceConfiguration` with one `VZVirtioGraphicsScanoutConfiguration`, and no view | Only the `headless` GPU profile of M1 bring-up sets it: the stock image cannot boot without a DRM device ([android-image.md](android-image.md) §9.1). Never set together with the GraphicsCore virtio-gpu device, and never in a release bundle |
+| (not used) | `keyboards`, `pointingDevices`, `directorySharingDevices`, `usbControllers`, and `graphicsDevices` outside `builtInDisplay` | Graphics is our own virtio-gpu; input is guest-side injection ([ADR-0013](../01-architecture/decisions/0013-input-via-guest-injection.md)); file sharing goes through the Guest Agent ([desktop-integration.md](desktop-integration.md) §6) |
 
 All VZ objects are created and called on the controller's private serial `DispatchQueue` (`io.apkrun.vm.queue`), as VZ requires. The actor hops onto that queue with `withCheckedThrowingContinuation`.
 
@@ -170,7 +171,7 @@ What the guest sees on VZ (from a captured VZ device tree; to be confirmed by #0
 
 Consequences for Android:
 
-- `androidboot.boot_devices` must name the PCI host bridge's platform device (crosvm uses `10000.pci`; the VZ value is discovered in #011 from `readlink -f /sys/block/vda`). All virtio-blk disks sit under that one bridge, so a single value covers `os.img`, `persistent.img`, and `userdata.img` ([android-image.md](android-image.md) §5.3).
+- `androidboot.boot_devices` must name the PCI host bridge's platform device (crosvm uses `10000.pci`; the VZ value is `40000000.pci`, observed on macOS 27.0.1 (26A434) from `readlink -f /sys/block/vda` and recorded by #011). All virtio-blk disks sit under that one bridge, so a single value covers `os.img` and `userdata.img` ([android-image.md](android-image.md) §5.3).
 - The signed #005 T2 test on arm64 macOS 27.0 (26A428) observed guest-visible block-device serial order following the configuration arrays for both `[ro, rw]` and `[rw, ro]`. This is a measured result for that OS build, not a product dependency: nothing in APKRun relies on `vdX` letters or PCI slot numbers. Android finds partitions by GPT name, and our code finds disks by `blockDeviceIdentifier` if it ever needs to.
 - The discovered topology (`lspci -nn`, `/sys/bus/pci/devices`, `/proc/device-tree` dump) is committed to `Images/reference/vz/<macOS build>/topology.txt` by #011 and re-checked by the T2 suite on each new macOS build (R-16).
 
@@ -181,6 +182,8 @@ Consequences for Android:
 Cuttlefish's HALs open fixed device nodes (`/dev/hvc3` for keymaster and so on; the full map is in [android-image.md](android-image.md) §7). crosvm creates one single-port virtio-console device per port. Linux numbers them `hvc0…hvcN` in probe order. We do the same with `VZVirtioConsoleDeviceSerialPortConfiguration`, one per entry of `consolePorts`.
 
 The alternative, one `VZVirtioConsoleDeviceConfiguration` with named multiport ports, gives `/dev/vportNpM` nodes, which the Cuttlefish HALs don't use. It stays available for our own future use (named ports would be self-describing).
+
+**VZ's limit.** `validate()` rejects more than 10 `VZVirtioConsoleDeviceSerialPortConfiguration`s ("Number of Virtio console serial port devices is greater than the maximum number supported"; macOS 27.0.1, 26A434). Android needs 20 ports. VirtualMachineCore therefore attaches ports 0–9 as single-port devices and ports 10 and up as the ports of one multiport `VZVirtioConsoleDeviceConfiguration`, each with `isConsole = true`. The guest's virtio-console driver turns every port the host marks as a console into an hvc device, so those ports become hvc10, hvc11, …, after the ten single-port devices. In the 2026-10-08 Android boot, the sensors HAL's frames on `/dev/hvc18` arrived on port 18, so the order matched the array order there; #095 verifies all 20 ports with markers (§6.2). The split is internal to `VZConfigurationBuilder`: `VMDefinition.consolePorts` stays one ordered list.
 
 ### 6.2 Port numbering must be verified, not assumed
 
@@ -253,11 +256,11 @@ attached again after detachment.
 
 ## 7. Networking (#006)
 
-- One virtio-net device with a NAT attachment. The guest gets an address from VZ's DHCP (typically `192.168.64.0/24`), and DNS is served by the host. No entitlement is needed.
-- The MAC address is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`, so the guest sees a stable interface across boots.
+- `VMDefinition.network` is an ordered list of NAT NICs, one virtio-net device each. The test Linux guest uses one. The Android definition uses three in Cuttlefish's order: the mobile NIC, the ethernet NIC, and the `virt_wifi` backing NIC ([android-image.md](android-image.md) §7.4). The guest gets an address from VZ's DHCP (typically `192.168.64.0/24`), and DNS is served by the host. No entitlement is needed.
+- Each MAC address is generated once (`VZMACAddress.randomLocallyAdministered()`) and stored in `instance.json`, so the guest sees stable interfaces across boots. The Android `virt_wifi` NIC is the exception: its MAC is derived from `androidboot.wifi_mac_prefix`, because the guest's `setup_wifi` rewrites the interface to that MAC and vmnet drops frames from a source MAC it did not assign (observed 2026-10-08).
 - `VMController.networkHealthUpdates` publishes the initial network state, each attachment loss, and recovery when a new start clears the failure. The live diagnostics service re-runs `vm.network` from these events and publishes the resulting `healthChanged` event ([diagnostics.md](diagnostics.md) §7.1, #059).
 - No inbound port forwarding exists or is needed. Host → guest traffic uses vsock (§8).
-- Cuttlefish expects particular interface names (for example, Wi-Fi via `virt_wifi` over a renamed ethernet interface). Whether the stock image brings up connectivity on VZ's single NIC is checked in #095 ([android-image.md](android-image.md) §7.4).
+- Cuttlefish expects particular interface names (for example, Wi-Fi via `virt_wifi` over `eth2`). One NIC is not enough for the stock image; the three-NIC plan above gave a validated Wi-Fi network in the 2026-10-08 spike, and #095 verifies it ([android-image.md](android-image.md) §7.4).
 - Test (#006): T0 uses the fake driver to verify that an attachment disconnect is logged, leaves the VM `running`, and degrades `vm.network`; the next start restores the check. T2 verifies that the Linux test guest gets a DHCP lease and fetches `http://<gateway>:<port>/generate_204` from a host HTTP server (204), while `vm.network` remains passing. T2 needs no Internet access. Resolving a public name and fetching `https://connectivitycheck.gstatic.com/generate_204` is a T3 network check ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.5).
 
 ## 8. vsock (#007)
@@ -480,8 +483,9 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Missing Linux test artifacts: skip without `APKRUN_CI`, fail with it | #003 | 2026-10-08 UTC, same host: with an empty `APKRUN_TEST_LINUX_DIR`, the `LinuxGuest` suite reported 29 tests with 24 skipped and 0 failures, and with `APKRUN_CI=1` the same 24 tests failed. Each message names `scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh` |
 | G1 acceptance test plan on the `codex` branch | #003 | 2026-10-08 UTC, same host, commit `ef9b729`: 5 tests, 1 configuration-scoped skip (the Network case), 0 failures. `testTenBootsStopThroughTheGuestPowerButton` passed in 3.079 s and `testFailedStartCanBeReset` passed. This run does not close G1, which needs the reference Mac and a clean `main` (IR-283) |
 | `apkrun dev linux` live exits and instance lock | #003 | 2026-10-08 UTC, same host, embedded CLI built with `EmbeddedRuntime` and signed with `apkrun-dev.entitlements`, at `ef9b729`: smoke exit 0 with `boot ok`, `powerinput ok`, `done`; `--tests rng` exit 0 with `rng ok`; a second instance started while the first held the lock exited 75 (`runtime.instanceLocked`); `--tests nosuchcheck` exited 1 (`runtime.devLinuxCheckFailed`), with the failing line on stdout only (IR-286) |
-| Guest-visible topology and `androidboot.boot_devices` value | #011 | pending (§5) |
-| Serial port numbering with 20 ports; network on the stock image | #095 | pending (§6.2, §7) |
+| VZ console device limit; Android on 10 + 10 ports; `boot_devices`; three NICs on the stock image | spike (IR-306) | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615: `validate()` accepts 10 single-port console devices and rejects 11; 10 single-port devices plus one multiport device with 10 console ports validate and boot. Android saw hvc0–hvc19, and the sensors HAL's `/dev/hvc18` frames arrived on port 18. `/sys/block/vda` is under `40000000.pci`. With three NAT NICs and `virt_wifi`, `wlan0` got a DHCP lease and a validated network. Guest `reboot` restarts inside the same `VZVirtualMachine`; `reboot -p` ends in `guestDidStop`. Harness: `Experiments/vz-android-boot/` |
+| Guest-visible topology and `androidboot.boot_devices` value | #011 | `40000000.pci` observed (row above); `topology.txt` pending (§5) |
+| Serial port numbering with 20 ports, verified with markers; network on the stock image | #095 | pending (§6.2, §7). The spike observation is in the first row |
 | Pause and resume across host sleep | #069 | pending (§9.4) |
 | `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |
 | Microphone prompt timing | #084 | pending (OQ-29) |

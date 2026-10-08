@@ -490,7 +490,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #064 | `compare_boot.py` normalization and categories over fixture captures | — | — | reference diff in the G2 check |
 | #009 | manifest schema and semantic checks (Python); manifest decoding over the shared fixtures (Swift) | — | — | — |
 | #010 | kernel decompression and header checks; boot image extraction | — | — | — |
-| #011 | sparse decoder, GPT writer and reader round trip, backup relocation | — | Linux guest sees three disks with the right names and sizes | — |
+| #011 | sparse decoder, GPT writer and reader round trip, backup relocation | — | Linux guest sees two disks with the right names and sizes | — |
 | #012 | bootconfig serialize, merge, and trailer vectors (Python and Swift); `VMDefinition` mapping | — | `/proc/bootconfig` equals the golden trailer; `boot_devices` discovered; stock kernel boots | — |
 | #013 | — | — | stock image reaches init | — |
 | #095 | — | — | 20 console ports; each `hvc` role behaves as planned | — |

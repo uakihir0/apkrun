@@ -304,6 +304,23 @@ private final class CLIOutputRecorder: @unchecked Sendable {
     #expect(ExitCodes.code(for: error) == 64)
 }
 
+@Test func invalidSourceSpecDoesNotExposeTheSuppliedURL() throws {
+    let suppliedSpec = "https://user:credential@example.invalid/private/path?token=private-token"
+    let error = CLIFailure.invalidSourceSpec(argument: suppliedSpec)
+    let humanOutput = ErrorOutput.render(error, json: false)
+    let jsonOutput = ErrorOutput.render(error, json: true)
+
+    #expect(humanOutput.contains("This update source isn't valid."))
+    #expect(jsonOutput.contains("This update source isn't valid."))
+    #expect(!humanOutput.contains(suppliedSpec))
+    #expect(!jsonOutput.contains(suppliedSpec))
+    #expect(!humanOutput.contains("credential"))
+    #expect(!jsonOutput.contains("credential"))
+    #expect(!humanOutput.contains("private-token"))
+    #expect(!jsonOutput.contains("private-token"))
+    #expect(ErrorCatalog.entry(for: "cli.invalidSourceSpec")?.parameters.isEmpty == true)
+}
+
 @Test func cliExitTableMatchesGeneratedCatalog() {
     for entry in ErrorCatalog.entries.values where entry.code.hasPrefix("cli.") {
         guard case .code(let expected) = entry.cliExit else {

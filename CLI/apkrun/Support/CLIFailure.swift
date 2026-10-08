@@ -54,8 +54,8 @@ enum CLIFailure: APKRunError {
             [:]
         case .invalidPackageName(let package):
             ["package": .text(package)]
-        case .invalidSourceSpec(let argument):
-            ["argument": .text(argument)]
+        case .invalidSourceSpec:
+            [:]
         case .invalidArgument(let argument, let reason):
             ["argument": .text(argument), "reason": .text(reason)]
         case .fileNotAccessible(let file, let problem):

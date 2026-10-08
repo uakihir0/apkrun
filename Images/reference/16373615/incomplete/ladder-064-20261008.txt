@@ -1,0 +1,47 @@
+# Boot ladder for #064 and #014 (2026-10-08)
+
+Scope: options 1 to 3 of the #064/#014 boot-blocker brief, tried in order with
+the pinned build 16373615 unchanged. Every run used the `default` flags of
+android-image.md §8.2 (4 guest CPUs, 4096 MiB, `--gpu_vhost_user_mode=off`, no
+`--gpu_mode`) with only the variant flag changed. The variant flag was passed
+to both `cvd create` and `cvd start`. Instance 2 was used (instance 1 has a
+stale registry entry). Each run copied the product directory and verified the
+copy against the checked-in manifest (10 artifacts) before launch. The runner
+is `Experiments/cuttlefish-boot-diagnosis/boot_variant.sh`.
+
+Provenance: the runner writes its receipt inside the guest. The guest rebooted
+at 22:50 and cleared its `/tmp` before those receipts were copied to the
+repository. Values below are the runner outputs shown in the session. Raw
+receipt files were not retained. Lines marked "not recovered" have no record.
+
+Boot signal: `sys.boot_completed` is read with `adb shell getprop`. Empty output
+means unset. The kernel-log marker `VIRTUAL_DEVICE_BOOT_COMPLETED` is also
+polled. No run in this ladder showed either signal.
+
+## Results
+
+| Step | Variant | Deadline | Outcome |
+|---|---|---|---|
+| 1a memory | `--memory_mb 8192` (create and start), `--cpus 4` | 2400 s | Not booted. Stopped at its deadline (2679 s elapsed, cvd start killed). adb answered `device` from 866 s, and `getprop sys.boot_completed` was unset in every poll. crosvm RSS reached about 8.24 GiB at about 436 s and stayed there. Live kernel log: `starting service 'zygote'` at guest uptime 160.1 s, and no WATCHDOG or Watchdog line in the kernel log at the last check (elapsed 2393 s, guest uptime about 1950 s). The saved-configuration line was not recorded by this run. Cleanup: no crosvm left; work directory removed. |
+| 1b headless | `--gpu_mode=none` (create and start), `--cpus 4`, 4096 MiB | stopped at about 9 min | Not booted. The Android crosvm had one thread, slept in a tun-device read from 21:47:16, and used 16.6 MB RSS. The kernel log stayed at 0 bytes (no U-Boot output). Saved config: `gpu_mode=none`, `memory_mb=4096`, `enable_gpu_vhost_user=False`. The runner was stopped by SIGTERM, not by its deadline, so this is not a timed result. Cleanup: no crosvm left. |
+| 1c audio off | `--enable_audio=false`, `--cpus 4`, 4096 MiB | 2400 s | Not recovered. The run reached about 361 s, with the kernel log at U-Boot output (10,230 bytes) and crosvm RSS 4.4 GB. Its end state and receipt were lost with the guest `/tmp`. It is not counted as evidence either way. |
+| 1d vCPU | `--cpus 8` (create and start), 4096 MiB | 1800 s | See the final section. |
+| 2 bootconfig, cmdline, props | Analysis of `framework/services.jar` from the pinned system partition (read-only extraction and mount, no run) | none | Ruled out for the Watchdog path. The timeout comes from `system_server_watchdog_timeout_ms`, a DeviceConfig flag, not an `ro.*` or `androidboot.*` key. `ro.debuggable` and `ro.secure` are read in the same jar, but no link to the kill path was found. `persist.debug.framework_watchdog.*` belongs to PackageWatchdog. The `dalvik.vm.*` and `pm.dexopt` properties are not settable from host bootconfig or the kernel command line. |
+| 3 Watchdog evidence | Existing receipt `default-20261008-diagnosis.txt` (IR-279) | none | The two kills were in different code paths: `ArtManagerLocal$Injector.getDexoptHelper` (cycle 1) and `FakeSoundTriggerHal.createDefaultProperties` after `StartAudioService` took 54,296 ms (cycle 2). Other threads waited on `WindowManagerService.displayReady`, `ActivityManagerService`, and `SettingsProvider`. The `displayReady` wait points to display startup, which changes with the GPU mode. No host-side setting was tied to a lock with evidence. |
+
+## Conclusion
+
+No option reached `sys.boot_completed=1`, so no option was run three times and
+no reference profile candidate was recorded.
+
+Narrowest cause established: the Watchdog timeout is not host-configurable
+through bootconfig or the launcher. The slow startup work (ART dexopt, audio
+startup, display wait) is in the guest. The single host-side variable not yet
+isolated is vCPU count (step 1d). The memory variant (1a) did not boot within
+2400 s.
+
+Next step, in order: (1) a root-readable thread dump, which needs a diagnostic
+route that does not change the image, since `ro.secure=1` blocks `debuggerd`;
+(2) a bare-metal arm64 reference host (android-image.md §8.1, option 2), which
+removes nested-virtualization overhead; (3) a longer audio-off repeat with its
+receipt retained in the repository before the guest stops.

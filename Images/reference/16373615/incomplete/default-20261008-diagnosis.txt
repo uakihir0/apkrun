@@ -26,7 +26,8 @@ SHA-256 values below identify the retained files.
 |---|---|---|
 | `default-20261008T150724-1970` (E0) | 600 s | Retained incomplete; deadline reached during zygote preload. |
 | `default-20261008T155958-10047` (E1) | 3000 s | Retained incomplete; deadline reached during the third system_server start. |
-| 8-vCPU variant (E2) | 3000 s | See the final section. Not a canonical profile. |
+| `default-20261008T165153-44806` (E2) | 3000 s | Retained incomplete; deadline reached before the first Watchdog kill. Intended as an 8-vCPU variant, but the configuration recorded 4 vCPUs (see the final section). |
+| `swiftshader-...` (E3) | 2100 s | See the final section. |
 
 Records are retained outside git. `host-logcat.txt` is present in both, which
 the 2026-09-30 to 2026-10-07 `default` and `swiftshader` records lack; those
@@ -136,3 +137,32 @@ the Watchdog window, through a diagnostic-only route that does not change the
 pinned image, and compare a second boot on warm caches. Failing that, the
 reference-host choice in android-image.md §8.1 (bare-metal arm64 Linux) is the
 path that removes the nested-virtualization overhead.
+
+## Repeat run with the intended 8-vCPU change (E2)
+
+The E2 scratch copy changed `launch_profile` for `default` from `--cpus 4` to
+`--cpus 8` on `cvd create`. The retained configuration and launcher log both
+record 4 vCPUs (`"cpus" : 4`, `--cpus=4`), so the change did not reach the
+guest. E2 is therefore a repeat of the 4-vCPU `default` profile, not a test of
+vCPU count. The CPU-count hypothesis stays open; a retry must pass the count to
+`cvd start` as well and confirm `cpus` in the saved configuration.
+
+Its timeline, however, differs from E1 under the same flags:
+
+| Event | E1 uptime (s) | E2 uptime (s) |
+|---|---|---|
+| zygote START | 233.0 | 466.1 |
+| `boot_progress_preload_start` | 492.6 | 975.5 |
+| `BeginPreload` (zygote, before preload) | 27.6 s | 98.5 s |
+| `boot_progress_preload_end` | 863.4 | 1601.6 |
+| system_server entered | 908.9 | 1656.7 |
+| `boot_progress_pms_ready` | 1467.4 | 2473.5 |
+
+The first `system_server` in E2 was still in PackageManager when its 3000-second
+deadline expired, so E2 shows no Watchdog kill. It also shows that run-to-run
+variance under identical flags is large: the same boot path took about 1.7
+times longer here than in E1. The `kernel.log` of E2 was at a 10,308-byte
+U-Boot-only stage (`Starting kernel ...`) for several minutes before Linux
+started, which the earlier 2026-10-02 records also showed under other flags.
+
+Retained at the local store described in the setup section.

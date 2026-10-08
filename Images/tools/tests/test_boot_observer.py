@@ -5150,7 +5150,9 @@ def test_boot_observer_samples_on_a_background_monotonic_schedule(
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         try:
-            recorded = [record for record in _read_records(output) if record["event"] == "crosvm_memory"]
+            recorded = [
+                record for record in _read_records(output) if record["event"] == "crosvm_memory"
+            ]
         except ValueError:
             # The sampler may be part-way through a line.
             recorded = []

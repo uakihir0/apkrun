@@ -9621,3 +9621,27 @@ Its kernel log shows the Watchdog sysrq dump at uptime 1512 to 1514 seconds and
 zygote's SIGKILL at 1528.9 seconds. A second system_server was active by 1788
 seconds. The retained `host-logcat.txt` ends before the kill, so the kill is
 evidenced by the kernel log. Cleanup left no crosvm, run_cvd, or ADB device.
+
+## IR-290: Inject the virtualization probe in the network health test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (CI) |
+| Affected files | `Packages/VirtualMachineCore/Tests/VirtualMachineCoreTests/VMHealthChecksTests.swift` |
+
+**Choice.** `vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart` passes
+`virtualizationSupported: { true }` to `VMHealthChecks.register`, as the sibling
+test `vmStateHealthCheckReportsCataloguedFailure` already does. The production
+default, `VZVirtualMachine.isSupported`, is unchanged.
+
+**Reason.** The hosted `test-swift` job failed at line 95, where
+`HealthVerdict.evaluate` returned `.hostUnsupported` instead of `.degraded`. The
+test registers only the VM checks, so that verdict needs a failed
+`vm.virtualizationSupported` check. The real probe therefore returned false on
+the hosted runner. The assertion is about the network verdict, so the runner's
+virtualization support must not decide it.
+
+**Verification.** The test passes locally. With the probe forced to `false`, it
+fails at line 95 with `.hostUnsupported`, the same failure as CI run
+37754807446, job `test-swift`.

@@ -58,7 +58,13 @@ func vmNetworkHealthWarnsOnDisconnectAndResetsAfterRestart() async throws {
         )
     )
     let registry = HealthCheckRegistry()
-    try await VMHealthChecks.register(in: registry, controller: controller)
+    // Inject the capability probe. The real VZVirtualMachine.isSupported is false on
+    // hosted CI runners, which would turn every verdict into hostUnsupported.
+    try await VMHealthChecks.register(
+        in: registry,
+        controller: controller,
+        virtualizationSupported: { true }
+    )
     let paths = APKRunPaths(
         allowingHomeOverride: true,
         environment: ["APKRUN_HOME": FileManager.default.temporaryDirectory.path]

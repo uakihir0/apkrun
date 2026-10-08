@@ -26,10 +26,10 @@ This guide holds the rules for writing code in APKRun: Swift, the C/Objective-C 
 |---|---|---|---|---|
 | Swift | `swift format` from the pinned Xcode toolchain | `swift format lint --strict` | `.swift-format` (production code), `.swift-format-tests` (test targets), both at the root | `lint` job |
 | C and Objective-C (GraphicsBridge only) | none | compiler warnings, as errors in CI | `Package.swift` C settings, `GCC_TREAT_WARNINGS_AS_ERRORS` ([build-system.md](build-system.md) §2.5) | `build` job |
-| Kotlin | ktfmt, `--kotlinlang-style`, through the ktfmt Gradle plugin | the Kotlin compiler with `allWarningsAsErrors = true` in CI | `Guest/build.gradle.kts`; plugin version in `Guest/gradle/libs.versions.toml` | `./gradlew -p Guest ktfmtCheck` in the `lint` job |
+| Kotlin | ktfmt, `--kotlinlang-style`, through the `ktfmtCheck` and `ktfmtFormat` tasks in `Guest/build.gradle.kts` (the pinned `com.facebook:ktfmt` library) | the Kotlin compiler with `allWarningsAsErrors = true` in CI | `Guest/build.gradle.kts`; the ktfmt version is in `Guest/gradle/libs.versions.toml` | `./gradlew -p Guest ktfmtCheck` in the `lint` job |
 | Rust | `cargo fmt` (rustfmt from the pinned toolchain) | `cargo clippy --all-targets -- -D warnings` | `Guest/vsockd/rustfmt.toml` (defaults, edition 2021) | `cargo fmt --check` in `lint`; clippy in `test-linux` |
 | Python | `ruff format` | `ruff check` | `ruff.toml` at the root: `target-version = "py312"`, line length 100, rule sets `E`, `F`, `W`, `I`, `B`, `UP`, `ANN` | `ruff format --check` in `lint`; `ruff check` in `test-linux` |
-| Protobuf | none | `buf lint` (DEFAULT, `ENUM_ZERO_VALUE_SUFFIX = _UNSPECIFIED`), `buf breaking` | `Packages/GuestProtocol/proto/buf.yaml` | `lint` job (§6.1) |
+| Protobuf | none | `buf lint` (STANDARD rules, `enum_zero_value_suffix: _UNSPECIFIED`), `buf breaking` | `Packages/GuestProtocol/buf.yaml` | `lint` job (§6.1), through `scripts/check-protos.sh` |
 | JSON files with a schema | none | JSON Schema validation | the `*.schema.json` next to each file | `test-linux` job |
 
 Swift formatting settings:

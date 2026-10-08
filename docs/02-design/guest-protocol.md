@@ -41,7 +41,8 @@ Packages/GuestProtocol/
 │   ├── ProtocolVersion.swift # §5
 │   └── Capabilities.swift    # §5.3
 ├── Tests/GuestProtocolTests/
-└── testdata/frames/*.bin     # golden frames shared with the Kotlin tests (§16)
+└── testdata/frames/          # golden frames shared with the Kotlin tests (§16): valid-*.txtpb sources,
+                              # valid-*.bin and invalid-*.bin written by scripts/generate-protos.sh
 ```
 
 - proto3 syntax, `package apkrun.guest.v1`, `option java_package = "io.apkrun.guest.protocol.v1"`, `option java_multiple_files = true`, `option swift_prefix = "GP"`.
@@ -180,6 +181,8 @@ Timeouts: the host waits 5 s for `Hello` after connecting and closes the connect
 - Runtime images declare the agent protocol range in the manifest (`requirements.guestProtocol`, [android-image.md](android-image.md) §12.1). ImageCore refuses to activate an image whose range does not intersect the host's range, so the incompatibility is caught before boot. The handshake check is the second line of defense.
 - Development (stock image): the host carries the matching Guest Agent APK in its bundle (`APKRun.app/Contents/Resources/guest/apkrun-guest.apk`). It reinstalls it when the installed `versionCode` differs ([guest-components.md](guest-components.md) §3), so development mismatches are corrected automatically.
 
+Implementation (#033): the host side is `GuestHandshake` in `Packages/GuestProtocol`, and the agent side is `AgentHandshake` in `Guest/protocol`. The version and channel rules of this table have T0 tests in `HandshakeTests.swift` and `AgentHandshakeTest.kt`. The unknown-op and unknown-event rules are tested with the agent and the connection (#072, #034). The host's major version is checked by the agent too, so a host with major 2 fails the handshake on the agent side with the same typed `incompatibleVersion`.
+
 Evolution rules (checked in review and by `buf breaking`):
 
 - Never change or reuse a field number or a oneof case. Removed fields become `reserved`.
@@ -223,6 +226,7 @@ Capabilities are strings `<area>.<feature>.v<n>`. The agent lists what it implem
 - The secondary connections of the same agent (input, bulk, artifacts, development IME) receive the same token in their `HelloAck`. The agent rejects a secondary connection with `BAD_TOKEN` when the token does not match its current control session.
 - When the control connection closes, the agent closes that session's secondary connections. It resets input state ([input.md](input.md) §7.3) and aborts bulk transfers. Android-side settings (density, IME policy) stay as they are. The host re-applies them after the next snapshot.
 - A second control connection while one is open is rejected with `DUPLICATE_SESSION`, unless the old one has been silent for more than 15 s. In that case the agent closes the old one and accepts the new one (this covers a crashed apkrund whose socket was not closed cleanly).
+- Who enforces each rule (#033, [implementation-review.md](../04-plan/implementation-review.md) IR-262). The agent sends `Hello` first, and `Hello` has no token field. A `Rejected` reason can only be sent by the host, inside `HelloAck`. So the host enforces the major version and the channel, and it answers with `Rejected`. The agent enforces `BAD_TOKEN` and `DUPLICATE_SESSION` on its own control session. It refuses the connection by closing it and logs the reason, and it does not send a `Rejected`.
 
 ---
 
@@ -749,7 +753,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Schemas compile for the host and the guest; a fake agent with major 2 is rejected with `incompatibleVersion` | #033 | pending (§5.2) |
+| Schemas compile for the host and the guest; a fake agent with major 2 is rejected with `incompatibleVersion` | #033 | pass, 2026-10-08, macOS 27.0.1 (26A434), host arm64. `swift build` and `./gradlew -p Guest :guestd:assemble` pass. `GuestProtocolTests` pass 29 tests, including the handshake matrix row "a fake agent sending major 2 is rejected with `incompatibleVersion`" and the numbering rule. `:protocol:testDebugUnitTest` passes 25 JUnit tests. Both codecs decode, re-encode, and reject the golden frames (§16) |
 | `apkrun dev boot` connects to the agent within 5 s of `sys.boot_completed`; the supervisor reconnects after the agent is killed | #072 | pending (§15) |
 | vsock transport on the stock userdebug image with the bridge run as root, or the deferral to #035 | #034 | pending (§13.3) |
 | HelloText launches through GuestProtocol, and the `adb shell` counter does not change between runtime ready and the first frame | #034 | pending (§15) |

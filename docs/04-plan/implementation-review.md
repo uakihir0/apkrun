@@ -8819,3 +8819,143 @@ files.
 
 **Verification.** `ScanoutTableTests` checks the four cases above. `GraphicsCoreTests`
 passes 69 tests, including the golden EDID tests, which are unchanged.
+
+## IR-260: Shape the schema where the design leaves messages and field numbers open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §4.1, §5.1, §7–§12; [Packages/GuestProtocol/proto/apkrun/guest/v1/](../../Packages/GuestProtocol/proto/apkrun/guest/v1/) |
+
+**Choice.** Where the design names an operation's result or a payload but gives no fields, or only prose, the schema defines the smallest message that carries the design's fields. Fields are numbered from 1 in declaration order. The choices a reviewer is most likely to overturn are:
+
+- A result that is a list is a message with one `repeated` field: `TaskList`, `PackageList`, `PackageSummary`, `RootList`, `DocPage`, `StorePackageList`, and `ReadRangeResult` (for `bytes data`).
+- `ResolveExport` returns `ExportStart`, whose `transfer_id` is `optional`. The design's "Empty" on decline is an unset `transfer_id`, because the operation has one result type.
+- `install_id` is a `string` everywhere, because `BulkBegin.context` carries `"inspect"` as well as install IDs.
+- `CollectDiagnostics` has a `properties` field for the allowlisted `GETPROP` keys. `DiagnosticsItemResult.transfer_id` is `optional`, so an unset ID means the item is not `OK`.
+- The fields the design marks "optional" are `optional` in proto3: `LaunchApplication.component`, `data_uri`, and `action`; `ListTasks.display_id`; `ActivateNotification.action_index`; and `ImportFiles.package`.
+- The design's "constraints (GENTLE_UPDATE)" is one `InstallConstraint` value in `CheckInstallConstraints.constraint`, not a list.
+- The design does not list these enums, so the schema defines them, each with `UNSPECIFIED = 0`: `NotificationRemovalReason`, `UninstallStatus`, `RollbackStatus`, `IconKind`, `IconRole`, `UrlAction`, `ExportDecision`, `ClockFormat`, `OpenMode`, `AccessLevel`, `ImportDisposition`, `ImportTarget`, `ManagedPackageFilter`, `BulkKind`, `BulkAckStatus`, `ContextMenuAction`, `ClipOrigin`, `DiagnosticsItemStatus`, `InstallMode`, `InstallStage`, `InstallStatus`, `TouchPhase`, `MouseAction`, `KeyAction`, `PackageFilter`, `PackageChangeKind`, `HealthWarningKind`, and `AppProcessEventKind`.
+- Messages the design names in prose only are defined with the fields that the prose gives: `ArchiveInfo`, `PackageSummary`, `MemoryInfo`, `InputCounters`, `AgentInfo`, `AndroidInfo`, `SigningInfo`, `IconLayer`, `PackageConstraint`, `ArtifactRef`, and `ArtifactSpec`.
+- `PackageRef`, listed in guest-protocol.md §2 for `common.proto`, is not defined, because no operation takes it. Every operation carries `package` as a string.
+
+**Reason.** The field numbers are frozen when #033 merges (guest-protocol.md §17), and §8–§11 leave these shapes open. The smallest shape that carries the design's fields keeps every choice visible in the schema and in one place. The alternative is to let #072 and #034 add these shapes later. That would allocate numbers after the merge, which the design does not allow without a major change.
+
+**Verification.** `buf lint` passes on every file. `NumberingRuleTests` checks the 50 operations of §7.1, §7.5, and §11.1: each has a result with the same number and name, every referenced message is defined, and each event number is in its range. The golden frames cover every envelope body kind, and the Swift and Kotlin codecs decode and re-encode them.
+
+**Limit.** A maintainer should review the list above before the field numbers freeze at merge. A change before the merge is free. After it, a change to a field meaning or number is a major change (guest-protocol.md §5.2).
+
+## IR-261: Name enum values with their enum prefix, and keep GuestError in common.proto
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §2, §4.1, §12.1; [coding-conventions.md](../05-development/coding-conventions.md) §2, §6.1; `Packages/GuestProtocol/buf.yaml` |
+
+**Choice.** Every enum value carries its enum's name as a prefix, in upper snake case. `GuestErrorCode.INVALID_ARGUMENT` is `GUEST_ERROR_CODE_INVALID_ARGUMENT` in the .proto, and it is `.invalidArgument` in the generated Swift. The design's shorthand values, such as `INVALID_ARGUMENT` and `FINISH_TASKS`, are not used as schema names. `GuestError`, `GuestErrorCode`, and `AgentMode` are in `common.proto`, not `envelope.proto` as §2 lists. The buf configuration is `Packages/GuestProtocol/buf.yaml`, the location that §2 and the #033 entry name, not `proto/buf.yaml` as coding-conventions §2 said. The rule set is `STANDARD`, the name buf 1.55.1 gives to the rule set that the docs call `DEFAULT`. The old name is deprecated and only prints a warning.
+
+**Reason.** buf's `STANDARD` rules include `ENUM_VALUE_PREFIX`, so `buf lint` fails on `INVALID_ARGUMENT` and on every other shorthand. The prefix is also needed because protobuf scopes enum values to the package. `envelope.proto` imports `control.proto`, and `control.proto` needs `GuestError` for `Health.last_error` and `AgentMode` for `Health.mode`. Keeping those types in the envelope would make an import cycle, which protoc rejects.
+
+**Verification.** `scripts/check-protos.sh` passes with the pinned buf, and protoc compiles the package without errors. The generated Swift is `GPGuestErrorCode.invalidArgument`, and the tests use it.
+
+**Limit.** The design still shows the shorthand names. Their meaning is the same, but a search for `INVALID_ARGUMENT` in the schema finds nothing. The conventions document was corrected in the same change to name `Packages/GuestProtocol/buf.yaml` and `STANDARD`.
+
+## IR-262: Split the handshake rules between host and agent, and close a refused agent connection
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (handshake matrix); #072 and #034 implement the connections |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §5.1, §5.2, §5.4, §12.3; [process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §3.3 |
+
+**Choice.** The host enforces the major-version rule and the channel rule on the agent's Hello. It answers with `HelloAck.rejected(INCOMPATIBLE_VERSION)` or `rejected(WRONG_CHANNEL)` and then closes. This is `GuestHandshake`, in Swift. The agent enforces `BAD_TOKEN` and `DUPLICATE_SESSION` on its own control session (`ControlSessions`, in Kotlin). It refuses a connection by closing it and logging the reason, and it sends no `Rejected`. The agent also checks the host's major version in the HelloAck that it receives (`AgentHandshake`).
+
+**Reason.** §5.1 makes the agent speak first, with Hello, and the host answer with HelloAck. `Rejected` is part of HelloAck, so only the host can send it. Two rules in §5.4 are therefore decisions of the agent: a secondary connection with the wrong token, and a second control connection while one is open. The agent sends no HelloAck, so it cannot send `Rejected` for either. Hello also has no token field, so the agent cannot check a token before the host's HelloAck arrives. For a secondary connection, the agent compares the token in the host's HelloAck with the token of its control session. The alternatives were a token field in Hello, or a new agent-to-host rejection message. Both change the wire format, and the design asks for neither.
+
+**Verification.** `HandshakeTests` (Swift) covers the same major, a higher minor, a different major (a fake agent with major 2 is rejected with `incompatibleVersion`), an older major, a wrong channel, an unspecified channel, and a Hello without a version. `AgentHandshakeTest` and `ControlSessionsTest` (Kotlin) cover the host's rejections, a host with major 2, a bad token, a duplicate session, the exact 15 s boundary, and a session that is silent for more than 15 s.
+
+**Limit.** A refused agent connection ends without a reason on the wire. The host therefore sees a disconnect (`guestProtocol.disconnected`), not `handshakeFailed`, when the agent refuses. The agent logs the reason. A maintainer may prefer an agent-side rejection message, which would change the message set or the HelloAck direction. #072 implements the host side against this split.
+
+## IR-263: Generate the golden frames from text sources with protoc, and keep each map to one entry
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §4, §16; [coding-conventions.md](../05-development/coding-conventions.md) §6.1 |
+
+**Choice.** Each valid golden frame is a text-format `Envelope` in `Packages/GuestProtocol/testdata/frames/valid-*.txtpb`. `scripts/generate-protos.sh` encodes it with the pinned protoc (`--encode`) and adds the 4-byte length prefix. The invalid frames (`invalid-zero-length`, `invalid-oversize`, `invalid-truncated`, and `invalid-malformed`) are fixed byte sequences that the script writes. The set has 13 valid frames and 4 invalid ones. The only map in any golden frame has one entry.
+
+**Reason.** Text sources make each frame reviewable. The CI codegen job then covers the binary files too, because it regenerates them and fails on any diff. Swift and Java serialize a `map` in different orders, so a multi-entry map would make the byte-for-byte re-encode check depend on the implementation. A one-entry map keeps the check exact. The rule is recorded here so that later golden frames, such as the #072 frames, follow it.
+
+**Verification.** Regeneration is deterministic. Two runs produce identical Swift sources and identical frame bytes, which were compared by SHA-256 (17 frames). `GoldenFrames` in Swift and `FrameCodecTest` in Kotlin decode every valid frame, re-encode it byte for byte, and reject each invalid frame with its typed error. A test also fails if an invalid frame has no expected error.
+
+**Limit.** The text sources depend on protoc's text format. A protoc upgrade could change how a text value is read, and the pin in `scripts/tool-versions.env` is the control for that.
+
+## IR-264: Pin protoc, buf, and protoc-gen-swift in bootstrap
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (bootstrap line "protoc and buf — added by #033") |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.7, §2.9; `scripts/tool-versions.env`; `scripts/bootstrap` |
+
+**Choice.** `scripts/tool-versions.env` pins protoc 31.1 and buf 1.55.1 with the SHA-256 of each release archive. `scripts/bootstrap` downloads both, checks the digest before extracting, and installs them under `build/tools`. protoc-gen-swift is built from the `swift-protobuf` revision that `Package.resolved` pins (`55d7a1cc`). The build's revision is recorded in `build/tools/protoc-gen-swift/REVISION`, and bootstrap checks the checkout against it. The archive digests are protoc `4aeea0a3…` (the zip) and buf `d8a71a9f…` (the tar.gz).
+
+**Reason.** environment-setup.md §2.7 requires these pins and says bootstrap installs them. The protoc digest came from the GitHub release. It was cross-checked against Maven Central: the `bin/protoc` in the archive has SHA-1 `23f9cbc6…`, which is the SHA-1 of `com.google.protobuf:protoc:4.31.1:osx-aarch_64.exe`. The buf digest matches the one that GitHub publishes for the asset. `swift package resolve` alone does not guarantee the checkout is the pinned revision, so the revision is checked.
+
+**Verification.** The install functions ran in isolation. protoc 31.1 and buf 1.55.1 installed, and protoc-gen-swift built in 26 s, with 0 failures. `scripts/bootstrap --check` reports all three as `ok`. The full bootstrap was not run, because it also runs `brew bundle` and `pip install`, which change the host beyond this task.
+
+**Limit.** bootstrap still skips the JDK and the Android SDK, as its own line says (#015). See IR-265.
+
+## IR-265: Install the Android SDK inside the repository, and name the platform package android-37.0
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (`./gradlew -p Guest :guestd:assemble`) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5 (corrected in this change); [IR-264](#ir-264-pin-protoc-buf-and-protoc-gen-swift-in-bootstrap) |
+
+**Choice.** The SDK is in `build/android-sdk`, which is git-ignored, not in `~/Library/Android/sdk`. `Guest/local.properties`, also git-ignored, points at it. The platform package is `platforms;android-37.0`. The SDK repository lists API 37 under that name and has no `platforms;android-37`, so §2.5 is corrected. `build-tools;37.0.0` is installed as §2.5 says. `platform-tools` and the NDK are not installed, because #033 uses neither. The license terms were accepted through `sdkmanager`, which is the step §2.5 gives. This is the one acceptance in this task that a maintainer should know about.
+
+The `sdkmanager` script delegates to the Android CLI, which wrote `~/.android/bin` and `~/.android/cli` outside the repository during the first run. Those two directories were created by that run and were removed. The install then ran the classic `SdkManagerCli` from `cmdline-tools/latest/lib/sdklib/tools.sdklib.jar`, with `ANDROID_SDK_HOME` set to `build/android-sdk/home`, so no more files reached the home directory.
+
+**Reason.** `./gradlew -p Guest :guestd:assemble` needs a compile platform, and §2.5 is the documented way to provide one. The repository keeps changes outside it to a minimum, so the SDK goes in the repository's `build/`. #015 owns the bootstrap step that installs the JDK and the SDK, as the bootstrap line says.
+
+**Verification.** `sdkmanager --list_installed` lists both packages. `:guestd:assembleDebug` and `:guestd:assemble` pass with exit 0.
+
+**Limit.** The hosted lint job runs `ktfmtCheck`, which configures the Android modules and needs the SDK. Until #015 adds the SDK to bootstrap, that job cannot pass on a clean runner (see IR-267). A maintainer should decide whether the SDK location in §2.5 should stay under `$HOME`.
+
+## IR-266: Build the Gradle modules with AGP 9 built-in Kotlin, protobuf plugin 0.10.0, and ktfmt as a pinned library
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §2; [coding-conventions.md](../05-development/coding-conventions.md) §2, §8; [environment-setup.md](../05-development/environment-setup.md) §2.5 |
+
+**Choice.** The build uses AGP 9.4.1 with its built-in Kotlin, Gradle 9.6.1 (the wrapper is at the repository root and is pinned by SHA-256), protobuf-javalite and the protoc artifact at 4.31.1, the protobuf Gradle plugin 0.10.0, kotlinx-coroutines 1.11.0 (pinned, not yet used), and JUnit 4.13.2. ktfmt 0.64 runs from the shadowed `com.facebook:ktfmt` jar, through the `ktfmtCheck` and `ktfmtFormat` tasks in `Guest/build.gradle.kts`, not through the ktfmt Gradle plugin. Kotlin is not set to `allWarningsAsErrors`.
+
+**Reason.** The ktfmt Gradle plugin (0.27.0) needs the classic Kotlin Gradle plugin, which AGP 9 does not provide. The classic Kotlin plugin (2.4.20), even with `android.builtInKotlin=false`, references `BaseExtension`, which AGP 9 removed. The protobuf plugin 0.9.6 has the same cast, and 0.10.0 loads. It does not expose the `proto` source set in the usual way, so the module configures that extension directly, which reads the schema from `Packages/GuestProtocol/proto`. The task names `ktfmtCheck`, so `check-format.sh` is unchanged.
+
+**Verification.** `ktfmtCheck` passes after `ktfmtFormat`. `:protocol:testDebugUnitTest` runs 25 JUnit tests with no failures or skips. The build prints no Kotlin compiler warnings.
+
+**Limit.** `allWarningsAsErrors` is not set. AGP's built-in Kotlin has no hook I could find for it, so CI does not enforce warning-free Kotlin. Warnings are zero today. The ktfmt task should move back to the plugin when the plugin supports built-in Kotlin. The kotlinx-coroutines pin is unused until #072.
+
+## IR-267: Lint the schema through run-checks, and record the gap in the hosted lint job
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #033 (CI jobs) |
+| Affected documents | [workflow.md](../05-development/workflow.md); [build-system.md](../05-development/build-system.md) §4; `.github/workflows/ci.yml` (`lint`, `codegen`) |
+
+**Choice.** `buf lint` runs as `scripts/check-protos.sh`, and `scripts/ci/run-checks.sh` calls that script. The `lint` job therefore runs the schema lint without a change to `ci.yml`. The regeneration check is the existing `codegen` job, which runs `scripts/ci/codegen.sh`. That script runs `scripts/generate-protos.sh` and then fails on any diff, so it covers the Swift sources and the golden frames.
+
+**Reason.** The `lint` job already runs `run-checks.sh`, so a separate job would only repeat the bootstrap and the tool install.
+
+**Verification.** `scripts/check-protos.sh` passes with the pinned buf. `scripts/generate-protos.sh` regenerates the Swift sources and the golden frames with no change. The `codegen` script was run locally. The hosted jobs were not run, because this repository has no remote.
+
+**Limit.** The `lint` job also runs `check-format.sh`, which runs `./gradlew -p Guest ktfmtCheck`. That needs the Android SDK, which bootstrap does not install until #015, so a clean hosted runner would fail there. The task entry therefore keeps the CI acceptance box open.

@@ -90,9 +90,9 @@ pytest Images/tools/tests
 | Tool | Pin | Notes |
 |---|---|---|
 | JDK | Temurin 17 | `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`. Kotlin compiles to JVM target 17 ([../02-design/guest-components.md](../02-design/guest-components.md) §2). |
-| Gradle | the wrapper in `Guest/gradle/wrapper/` (with `distributionSha256Sum`) | Never install Gradle globally. `Tests/Fixtures/AndroidApps/` has its own wrapper with the same version. |
+| Gradle | the wrapper at the repository root, `gradle/wrapper/` (with `distributionSha256Sum`), invoked as `./gradlew -p Guest` | Never install Gradle globally. `Tests/Fixtures/AndroidApps/` has its own wrapper with the same version. |
 | AGP, Kotlin, coroutines, protobuf-javalite, the ktfmt Gradle plugin | `Guest/gradle/libs.versions.toml` | chosen in #033 ([coding-conventions.md](coding-conventions.md) §2) |
-| Android SDK platform | `platforms;android-37` | compileSdk and targetSdk 37 |
+| Android SDK platform | `platforms;android-37.0` (the SDK publishes API 37 under this name) | compileSdk and targetSdk 37 |
 | Build tools | `build-tools;37.0.0` | `apksigner`, `zipalign`; `apksigner` is also the reference for `scripts/dev/verify-corpus.sh` |
 | Platform tools | `platform-tools` (latest) | `adb`, used by `ADBForwardGuestTransport` ([../02-design/guest-protocol.md](../02-design/guest-protocol.md) §13.2) and by the M1–M4 ADB control channel |
 | NDK | `ndk;28.2.13676358` (r28c) | the NDK pin for `apkrun_vsockd` and native fixtures (§2.6). r28 is the first NDK that links 16 KB-aligned ELF by default, which the 16K-page product needs. |
@@ -100,7 +100,7 @@ pytest Images/tools/tests
 ```bash
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 sdkmanager --sdk_root="$ANDROID_HOME" --install \
-  "platform-tools" "platforms;android-37" "build-tools;37.0.0" "ndk;28.2.13676358"
+  "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "ndk;28.2.13676358"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 ```
@@ -156,7 +156,7 @@ Put the exports in `~/.zprofile`. Nothing in this table is committed to the repo
 | Xcode | `.xcode-version` |
 | Swift packages | swift-protobuf and swift-argument-parser: exact versions in `Package.swift`, resolved in `Package.resolved`. Sparkle: exact version in `project.yml` ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §3.2) |
 | protoc, buf, XcodeGen, cargo-ndk, and their hashes | `scripts/tool-versions.env` |
-| Gradle, AGP, Kotlin, Android libraries | `Guest/gradle/wrapper/gradle-wrapper.properties`, `Guest/gradle/libs.versions.toml` |
+| Gradle, AGP, Kotlin, Android libraries | `gradle/wrapper/gradle-wrapper.properties` (repository root), `Guest/gradle/libs.versions.toml` |
 | Android SDK, build tools, NDK | this document and `scripts/bootstrap` |
 | Rust | `Guest/vsockd/rust-toolchain.toml`, `Guest/vsockd/Cargo.lock` |
 | Python packages | `Images/tools/pyproject.toml` |

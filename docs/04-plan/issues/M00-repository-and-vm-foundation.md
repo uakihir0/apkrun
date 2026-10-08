@@ -1039,17 +1039,17 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 
 ### Acceptance criteria
 
-- [ ] A minimal ARM64 Linux kernel reaches userspace through `VZLinuxBootLoader`, `VZVirtualMachineConfiguration`, and a minimal initramfs.
-- [ ] The serial output on `hvc0` includes the known boot marker `APKRUN-TEST: boot ok`.
-- [ ] `VMController` goes `stopped → starting → running` on start and `running → stopping → stopped` on stop, as recorded from `stateUpdates`.
-- [ ] A failed start ends in `failed` with a typed `VMFailure` that carries a `VZErrorInfo`. `reset()` returns to `stopped`.
+- [x] A minimal ARM64 Linux kernel reaches userspace through `VZLinuxBootLoader`, `VZVirtualMachineConfiguration`, and a minimal initramfs.
+- [x] The serial output on `hvc0` includes the known boot marker `APKRUN-TEST: boot ok`.
+- [x] `VMController` goes `stopped → starting → running` on start and `running → stopping → stopped` on stop, as recorded from `stateUpdates`.
+- [x] A failed start ends in `failed` with a typed `VMFailure` that carries a `VZErrorInfo`. `reset()` returns to `stopped`.
 - [ ] G1 passes on the reference Mac with a clean build from `main`: ten boots in a row, with the evidence attached to the gate issue.
-- [ ] VZ objects are created and called only on `io.apkrun.vm.queue`.
-- [ ] No state is inferred from a nil `VZVirtualMachine` ([../../../AGENTS.md](../../../AGENTS.md) §6.2).
-- [ ] Every transition is logged with its operation ID under `io.apkrun.vm`, category `lifecycle`.
-- [ ] `apkrun-dev dev linux` prints the boot output live and exits 0 only when every requested check printed `ok`. It refuses to run while another owner holds the instance lock (exit 75).
-- [ ] The test kernel, minirootfs, and packages are pinned by SHA-256 in `ThirdParty/ThirdParty.lock.json` (NFR-DEV-01). The fetch and build scripts produce the same artifacts on a clean clone.
-- [ ] Without the artifacts, the T2 tests skip with a message that names both scripts. With `APKRUN_CI=1`, they fail.
+- [x] VZ objects are created and called only on `io.apkrun.vm.queue`.
+- [x] No state is inferred from a nil `VZVirtualMachine` ([../../../AGENTS.md](../../../AGENTS.md) §6.2).
+- [x] Every transition is logged with its operation ID under `io.apkrun.vm`, category `lifecycle`.
+- [x] `apkrun-dev dev linux` prints the boot output live and exits 0 only when every requested check printed `ok`. It refuses to run while another owner holds the instance lock (exit 75).
+- [x] The test kernel, minirootfs, and packages are pinned by SHA-256 in `ThirdParty/ThirdParty.lock.json` (NFR-DEV-01). The fetch and build scripts produce the same artifacts on a clean clone.
+- [x] Without the artifacts, the T2 tests skip with a message that names both scripts. With `APKRUN_CI=1`, they fail.
 - [ ] `linux-guest` runs on matching pushes to `main` and by manual dispatch from `main`; a maintainer-run T2 result for the reviewed commit is linked before the task-closing PR merges until disposable lab capacity enables PR runs. `gates` runs G1 nightly.
 
 ### Notes
@@ -1074,6 +1074,17 @@ By tier ([../test-strategy.md](../test-strategy.md)):
 - **Review before merge (IR-241):** proposes `GPL-2.0-only` as the `socat` lock's conservative policy basis, explicitly not as Alpine's full `GPL-2.0-only WITH OpenSSL-Exception` metadata. No claim is made about whether the binary links to OpenSSL. It also proposes adding SPDX `X11` only to the tooling allowlist for ncurses. Both choices need maintainer approval before #003 can close; see IR-044 and IR-241.
 - **Review before merge:** `linux-guest` currently runs only on trusted `main` pushes or manual dispatch. PR execution stays disabled until disposable lab runner capacity is available; meanwhile the task-closing PR must link a maintainer-run result for its reviewed commit, per [../../05-development/build-system.md](../../05-development/build-system.md) §15.1.
 - **Local T2 setup:** place guest artifacts under `${TMPDIR}/apkrun-test-linux` when running the signed test host from a checkout under `~/Documents`; reading the kernel from the checkout can trigger macOS file-access approval. `scripts/run-gate.sh` and `integration.yml` select a temporary artifact directory automatically.
+- **2026-10-08 acceptance pass on `codex`:** the ten boxes ticked above are backed by the runs below. Each signed `xcodebuild` ran from the repository root with `DEVELOPMENT_TEAM=QTXBTFA8BQ`, `CODE_SIGN_STYLE=Manual`, and the lab test identity, on Mac17,9 (macOS 26A434).
+  - Baseline T2 at `d98823f`: `xcodebuild test -scheme IntegrationTests -only-test-configuration LinuxGuest` with `APKRUN_TEST_LINUX_DIR=/tmp/apkrun-test-linux APKRUN_CI=1`. 29 tests, 0 failures, 0 skipped. The unified log showed `[health]` for VM transitions, so they were not filed under `io.apkrun.vm` / `lifecycle`. `VZFrameworkConfigurationValidator` also built VZ objects off the VM queue. Both were fixed: `7b8600d` (IR-281) and `ef9b729` (IR-282).
+  - Final T2 at `ef9b729`: the same command. 29 tests, 0 failures, 0 skipped, `TEST SUCCEEDED`, and 87 `[lifecycle] VM state changed` lines. Result `/tmp/apkrun-003-linuxguest-2.xcresult`.
+  - Missing artifacts: the same command with an empty `APKRUN_TEST_LINUX_DIR` and no `APKRUN_CI`: 29 tests, 24 skipped, 0 failures. With `APKRUN_CI=1`: 24 failures and `TEST FAILED`. Both messages name `scripts/fetch-test-linux.sh` and `scripts/build-test-initramfs.sh`.
+  - G1 test plan at `ef9b729` (`-scheme AcceptanceTests -testPlan AcceptanceTests -only-test-configuration G1`): 5 tests, 1 configuration-scoped skip, 0 failures. The ten-boot test passed in 3.079 s. This does not satisfy the G1 box, which needs the reference Mac and a clean `main` (IR-283).
+  - Live `apkrun dev linux`: the embedded CLI (`swift build --product apkrun --traits EmbeddedRuntime`, re-signed with `CLI/apkrun/apkrun-dev.entitlements`) run with `APKRUN_HOME=/tmp/apkrun-003-home`. The smoke run exited 0 with `boot ok`, `powerinput ok`, and `done`. `--tests rng` exited 0 with `rng ok`. A second instance started while the first held the lock exited 75 (`runtime.instanceLocked`). `--tests nosuchcheck` exited 1 (`runtime.devLinuxCheckFailed`), with the failing line on stdout only, which is the step-8 gap in IR-286.
+  - Live unified log: `log stream --predicate 'subsystem == "io.apkrun.vm"'` during the smoke run showed `[io.apkrun.vm:lifecycle]` lines with operation IDs. The start and its running transition shared one ID, and the forced stop had another.
+  - `swift test --filter InstanceLock` passed one T1 test. `swift test --filter VirtualMachineCore` passed 114 and 25 tests. `swift test --filter DiagnosticsCore` passed. `scripts/ci/run-checks.sh` passed all seven checks at `ef9b729`.
+  - Reproducibility: a fresh clone of `d98823f` ran both fetch and build scripts twice into an empty directory. `Image` and `initramfs.cpio.gz` hashed the same in both runs and matched the artifacts the T2 runs used (IR-285).
+  - Each run left only the two `com.apple.Virtualization.VirtualMachine` processes that were already running on the host, which belong to another workload.
+  - Count: the entry had 12 open boxes at the start of this pass, 11 before the `linux-guest` box, not ten. Ticked: 10. Open: the G1 box, which needs the reference-Mac decision (OQ-02) and a gate issue, and the `linux-guest` box, which needs GitHub.
 
 ---
 

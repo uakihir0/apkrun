@@ -212,13 +212,13 @@ Immediate failures during boot: the console shows `Kernel panic - not syncing` (
 
 | Phase entered | Signal (console, every image) | Signal (ADB, development) | Signal (agent) | Perf marker |
 |---|---|---|---|---|
-| `.kernel` | first console byte after `VM_START` (Linux prints `Booting Linux on physical CPU` first) | — | — | `KERNEL_START` |
-| `.init` | `init: init first stage started!` (first-stage init) | — | — | `ANDROID_INIT` |
-| `.systemServer` | `init: starting service 'zygote'` (visibility of init's kmsg lines depends on the console log level) | `getprop sys.system_server.start_count` non-empty (polled every 500 ms once `adb` connects) | — | `SYSTEM_SERVER_READY` |
-| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED` | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
+| `.kernel` | first console byte after `VM_START`. U-Boot prints its banner and `Starting kernel ...` first (corrected: Linux is not first). Linux's first line is `Booting Linux on physical CPU` at kernel uptime 0.000 s (confirmed) | — | — | `KERNEL_START` |
+| `.init` | `init: init first stage started!` (first-stage init; confirmed, median kernel uptime 42.0 s) | — | — | `ANDROID_INIT` |
+| `.systemServer` | `init: starting service 'zygote'` (corrected: this is zygote's start; no console line marks SystemServer's start in the observed records; median kernel uptime 197.5 s). Visibility of init's kmsg lines depends on the console log level | `getprop sys.system_server.start_count` non-empty (polled every 500 ms once `adb` connects) | — | `SYSTEM_SERVER_READY` |
+| `.bootCompleted` | `VIRTUAL_DEVICE_BOOT_COMPLETED` (unconfirmed: the token is in the pinned host binaries, but no captured record contains it) | `getprop sys.boot_completed` = `1` | `Hello.android` / `SystemState.boot_completed` ([guest-protocol.md](guest-protocol.md) §7.2) | `BOOT_COMPLETED` |
 | `.agentsConnecting` | — | — | entered right after `.bootCompleted` | — |
 
-- The console strings are candidates. #064 records the exact strings and their timing from the reference boot ([android-image.md](android-image.md) §7.7, §8). The detector's patterns live in one table (`BootSignals.swift`), with golden tests over the captured console logs.
+- The console strings are candidates. Their exact text and observed timing are in [android-image.md](android-image.md) §7.7. The timings are medians of the first kernel-log occurrence over the incomplete diagnostic records that contain each marker (`Images/reference/16373615/boot-signals.json` gives n, minimum, and maximum). They mix GPU modes and are not reference timings. The `.bootCompleted` console signal and its timing stay unconfirmed until #064 captures a complete reference boot. The detector's patterns live in one table (`BootSignals.swift`), with golden tests over the captured console logs.
 - The first signal that arrives wins. For example, on the custom image with `adbd` stopped, `.bootCompleted` comes from the console marker or from the Guest Agent.
 - Progress for the placeholder window: `BootProgressEstimator` divides elapsed time by the median duration of each phase over the last 5 boots of the same kind (`daemon.json bootHistory`). Without history it uses fixed weights. Progress is never shown as a percentage above 95 % before `ready`.
 

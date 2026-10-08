@@ -608,13 +608,36 @@ Checks (T2): `ip addr`, a default route, DNS resolution, `generate_204` from ins
 
 ### 7.7 Boot phase markers
 
-The Cuttlefish guest writes status lines to the kernel log, which reaches hvc0: `VIRTUAL_DEVICE_BOOT_STARTED`, `VIRTUAL_DEVICE_BOOT_COMPLETED`, `VIRTUAL_DEVICE_BOOT_FAILED`, and others. RuntimeCore's `BootPhaseDetector` uses them as boot-phase signals alongside `sys.boot_completed` read over ADB (M1) or reported by the Guest Agent (M3+) ([runtime-daemon.md](runtime-daemon.md)). #064 confirms the exact strings and their timing.
+The pinned Cuttlefish 1.57.0 host package contains these `VIRTUAL_DEVICE_*`
+tokens: `VIRTUAL_DEVICE_BOOT_STARTED`, `VIRTUAL_DEVICE_BOOT_PENDING`,
+`VIRTUAL_DEVICE_BOOT_COMPLETED`, `VIRTUAL_DEVICE_BOOT_FAILED`,
+`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED`, `VIRTUAL_DEVICE_SCREEN_CHANGED`,
+`VIRTUAL_DEVICE_NETWORK_ETHERNET_CONNECTED`,
+`VIRTUAL_DEVICE_NETWORK_MOBILE_CONNECTED`, and
+`VIRTUAL_DEVICE_NETWORK_WIFI_CONNECTED`. The `kernel_log_monitor` binary
+contains all nine. The `run_cvd` binary contains only
+`VIRTUAL_DEVICE_BOOT_COMPLETED` and `VIRTUAL_DEVICE_BOOT_FAILED`. RuntimeCore's
+`BootPhaseDetector` uses the boot tokens alongside `sys.boot_completed` read
+over ADB (M1) or reported by the Guest Agent (M3+)
+([runtime-daemon.md](runtime-daemon.md)).
 
-An incomplete `default` capture on 2026-10-03 recorded
-`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON` at guest
-uptimes 485.849 and 547.700 seconds. This is a display-state event, not a
-boot-completion signal. A complete reference boot is still required to
-confirm the boot-phase strings and their timing.
+The observed strings and timings come from incomplete diagnostic records, not
+from a reference boot. `Images/reference/16373615/boot-signals.json`, generated
+by `Images/tools/reference/boot_signals.py`, summarizes 62 records; 54 contain a
+`kernel.log`.
+
+| Token (exact text) | Where it was observed | Timing |
+|---|---|---|
+| `VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED display=0 mode=ON` | guest `kernel.log`, 28 records | guest uptime of the first occurrence: median 569.6 s (min 198.9 s, max 965.8 s) |
+| `VIRTUAL_DEVICE_BOOT_FAILED` | host `run_cvd` lines in `launcher.log` (`boot_state_machine.cc:211`) and `cvd-create-console.log`, 13 records; not in any guest `kernel.log` | host wall-clock only; no guest uptime |
+| `VIRTUAL_DEVICE_BOOT_COMPLETED` | not observed; the text appears only in prose in the records | unknown |
+| `VIRTUAL_DEVICE_BOOT_STARTED`, `VIRTUAL_DEVICE_BOOT_PENDING`, `VIRTUAL_DEVICE_SCREEN_CHANGED`, `VIRTUAL_DEVICE_NETWORK_*` | not observed | unknown |
+
+`VIRTUAL_DEVICE_DISPLAY_POWER_MODE_CHANGED` lines carry `display=<n> mode=<state>`
+fields. Display-state lines and host failure lines are not boot-completion
+signals. No captured record reaches `sys.boot_completed=1`, so the
+`VIRTUAL_DEVICE_BOOT_COMPLETED` string and its timing remain unconfirmed. #064
+needs a complete reference boot to measure them ([IR-269](../04-plan/implementation-review.md#ir-269-keep-064-open-after-the-2026-10-08-reference-capture-audit)).
 
 ---
 

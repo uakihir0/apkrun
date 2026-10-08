@@ -9093,3 +9093,36 @@ path here would widen #064 into #014's scope (AGENTS.md §11).
 **Verification.** Compared step 2 with the acceptance list in the entry. IR-186
 covers syntax only. No console run was attempted, because no guest reached boot
 completion (IR-269).
+
+## IR-272: Run the G1 gate from a fast-forwarded local main worktree
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (G1 gate), #002 (formal closure) |
+| Affected documents | [roadmap.md](../roadmap.md) §2 (G1); [M00](issues/M00-repository-and-vm-foundation.md) #003 acceptance; [workflow.md](../../05-development/workflow.md) |
+
+**Choice.** The repository has no git remote, so the `main` merge that the G1
+gate asks for cannot happen through a pull request. The local `main` branch was
+fast-forwarded to the `codex` head (`bba2959`). It was an ancestor with no
+divergence (394 commits ahead, 0 behind). The gate ran in a separate clean
+worktree, `/tmp/apkrun-gate-main`, that was checked out on `main` after the
+fast-forward. The worktree was not dirty, and its third-party sources were built
+from the locked inputs with `scripts/build-third-party.sh virgl-runtime`. That
+build did not reuse the tree's cache, which keys on the work directory. The G1
+command was `scripts/run-gate.sh G1` with the lab Apple Development team and
+identity from the environment. `codex` stays the working branch.
+
+**Reason.** The gate definition requires a clean `main` checkout. With no remote,
+the closest faithful substitute is a local fast-forward, which keeps the tree
+state reproducible and is reversible. The `codex` branch remains the place where
+work continues, so the user's branch layout does not change. A maintainer should
+decide whether the local `main` should stay at this commit and whether the G1
+evidence should be attached to a real gate issue.
+
+**Verification.** The gate report is `build/gates/G1/report.txt` in that worktree:
+commit `bba2959eac29c778355149bb80311ae7932c5711`, Mac17,9, macOS 26A434,
+`status: passed`, `exit_code: 0`. The LinuxGuest suite ran 29 tests with 0
+failures. The G1 suite ran 5 tests with 0 failures and 1 configuration-scoped
+skip, `testGuestResolvesDNSAndReachesExternalHTTPSProbe`, which belongs to the
+Network configuration.

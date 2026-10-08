@@ -3066,7 +3066,8 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     polls = [record for record in records if record["event"] == "adb_poll"]
     assert len(summaries) == 1
     assert len(polls) == 1
-    assert summaries[0]["attempted"]
+    # The reason names the early exit that skipped the probe, so a CI failure says which one.
+    assert summaries[0]["attempted"], summaries[0]["reason"]
     assert summaries[0]["summary"]["processStartEvents"] == 1
     assert summaries[0]["summary"]["systemServerMentionEvents"] == 1
     assert summaries[0]["androidLogcat"]["summary"]["watchdogMentionLines"] == 1

@@ -318,7 +318,7 @@ Rules:
 
 All of these hold:
 
-1. Every required CI check passes. The initial required checks are `workflow-policy`, `lint`, `codegen`, `build`, and `test-swift`; later tasks add their jobs and make them required ([build-system.md](build-system.md) §15.1).
+1. Every required CI check passes. The required checks are `workflow-policy` and every job of `ci.yml`, as [build-system.md](build-system.md) §15.1 requires: `lint`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, and `test-images` at present. A later task that adds a job to `ci.yml` makes it required too ([implementation-review.md](../04-plan/implementation-review.md#ir-273-require-every-ciyml-job-not-only-the-four-named-in-062), IR-273).
 2. Until a disposable lab runner is provisioned, `linux-guest` is not a pull-request status check; the task-closing PR links a maintainer-run result for its reviewed commit (§5.1, [build-system.md](build-system.md) §15.1).
 3. The pull request that closes a task has passed every T2 suite that the task lists, and the result is linked (§5.1).
 4. Host-dependent T1 suites that cannot run on the hosted VM pass on a real Apple Silicon Mac, and their result is linked in the pull request.
@@ -348,7 +348,7 @@ T2 suites are not a merge check for other pull requests. T3 runs nightly and gat
 |---|---|
 | Require a pull request before merging | on, 1 approval |
 | Dismiss stale approvals when new commits are pushed | on |
-| Required status checks | `workflow-policy`, `lint`, `codegen`, `build`, and `test-swift`; the branch must be up to date |
+| Required status checks | `workflow-policy` and every `ci.yml` job: `lint`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, and `test-images` (IR-273); the branch must be up to date |
 | Require linear history | on |
 | Require conversation resolution | on |
 | Force pushes and deletion | blocked |

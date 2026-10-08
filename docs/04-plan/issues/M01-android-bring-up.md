@@ -41,9 +41,9 @@ M1 delivers the "Android ARM64 boot" item of the v0.1 Definition of Done ([../ro
 ## Task order
 
 1. #008 Acquire and inventory ARM64 Cuttlefish artifacts.
-2. In parallel: #009 AndroidImageManifest and #064 Reference boot capture. Both need only #008. #064 runs on a Linux reference host.
+2. In parallel: #009 AndroidImageManifest and #064 Reference boot capture. Both need only #008. #064 runs on a Linux reference host; since IR-305 it keeps the launcher captures as the reference and no longer blocks #010, #011, or #013.
 3. #010 Extract Android kernel and ramdisk.
-4. #011 GPT disks and partition mapping. It needs #005 from M0 and reads the #064 captures for blank partition sizes and the by-name list.
+4. #011 GPT disks and partition mapping. It needs #005 from M0 and reads the #064 launcher captures (composite disk specs) and the VZ spike evidence for the blank partition sizes and the by-name list.
 5. #012 Boot the Android kernel.
 6. #013 Reach Android init.
 7. #095 Cuttlefish host-service substitution.
@@ -332,15 +332,18 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The `default`, `target`, and `swiftshader` profiles are captured and committed with every item of §8.3, or with a recorded reason for each missing item.
-- [ ] The captures are normalized and contain no serial numbers, MAC addresses, host paths, or keys.
+Re-scoped on 2026-10-08 (IR-305). The criteria marked *deferred* need a complete crosvm boot, which needs a non-nested arm64 Linux host (§8.1); the project has none, and they no longer block #010, #011, #013, or G2.
+
+- [ ] *Deferred.* The `default`, `target`, and `swiftshader` profiles are captured and committed with every item of §8.3, or with a recorded reason for each missing item.
+- [ ] The captures are normalized and contain no serial numbers, MAC addresses, host paths, or keys. This applies to the retained launcher captures under `incomplete/` now, and to any later complete capture.
 - [x] `compare_boot.py` reports by the ten categories, fails on unexplained differences, and passes its T0 tests.
-- [ ] `guest-capture.txt` runs unchanged over `adb shell` and over a plain `sh` console.
-- [ ] The exact `VIRTUAL_DEVICE_*` strings and their timing are in [android-image.md](../../02-design/android-image.md) §7.7. The boot signals in [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 are confirmed or corrected.
-- [ ] Each profile has a schema-version-3 `host.json` with path-free host-tool identities.
+- [ ] `guest-capture.txt` runs unchanged over `adb shell` and over a plain `sh` console. (2026-10-08: it ran unchanged over `adb exec-out` against the VZ boot; the serial-shell run is part of #014 step 5.)
+- [x] The exact `VIRTUAL_DEVICE_*` strings and their timing are in [android-image.md](../../02-design/android-image.md) §7.7. The boot signals in [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 are confirmed or corrected. (Observed on the VZ direct boot, IR-306.)
+- [ ] *Deferred.* Each profile has a schema-version-3 `host.json` with path-free host-tool identities.
 
 ### Notes
 
+- **Re-scope (2026-10-08; IR-305).** The nested-virtualization reference host never produced a complete boot: across 62 records the guest ran about 100 times slower than the same image on VZ, and `system_server` was killed by its Watchdog during startup. The VZ direct-boot spike (`Experiments/vz-android-boot/`, IR-306) booted the same image to `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s. QEMU with HVF on macOS was considered as another reference host and rejected: the Cuttlefish host tools do not run on macOS, so it would need the same hand-built boot as VZ, and macOS QEMU has no vsock. What #064 keeps: the launcher captures under `Images/reference/16373615/incomplete/` (bootconfig, command line, composite disk specs, `cuttlefish_config.json`, kernel log up to `system_server`), `compare_boot.py`, and the boot markers observed on VZ. A complete capture remains possible on an arm64 Linux machine (option 1 of §8.1) and would then complete the deferred criteria.
 - A TCG capture takes hours. Record its duration in `host.json` so that timing comparisons skip it.
 - #012 copies each profile's normalized `kernel.log` into the BootSignals golden fixtures.
 - **Reference-host verification (2026-09-30).** The nested-virtualization Ubuntu 24.04 arm64 VM has Cuttlefish 1.57.0 (VCS `9bb9c723`) and `adb`. The Lima project mount is read-only, so the capture script and manifest were copied to the VM's writable home; product images passed the pinned manifest's size and SHA-256 checks. Cuttlefish logged `Logical partition metadata has invalid geometry magic signature` twice, but continued through `simg2img` and Android service startup. Inspection of the converted `super.img` found the expected little-endian geometry magic at offset 4096. The guest became visible to ADB but stayed in Cuttlefish `Starting`; after 1,029 seconds, `cvd start` reported `VIRTUAL_DEVICE_BOOT_FAILED`, `run_cvd returned 10`, and exit status 255. No `sys.boot_completed=1` was observed. The evidence does not establish whether the geometry warning contributed to the later boot failure.
@@ -816,7 +819,7 @@ See [../test-strategy.md](../test-strategy.md).
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #008, #009, #064 |
+| Depends on | #008, #009 |
 | Requirements | FR-IMG-03 |
 | Design | [../../02-design/android-image.md](../../02-design/android-image.md) §4.1, §6.1–§6.4; [../../03-reference/android-image-manifest.md](../../03-reference/android-image-manifest.md) §9; [../../01-architecture/decisions/0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
 | Modules / paths | `Images/tools/apkrun_image/{bootimg,kernel,bootconfig,avb}.py`, the `extract` subcommand, `Images/tools/layouts/cuttlefish-phone-arm64.json`, `Images/tools/tests/fixtures/bootconfig/`, `Images/work/<buildId>/boot/` |
@@ -908,7 +911,7 @@ See [../test-strategy.md](../test-strategy.md).
 - [x] The output contains the kernel, the ramdisk (the initrd input), the extraction metadata, and hashes.
 - [x] The kernel is an uncompressed arm64 `Image` that meets the VM validation rules ([../../02-design/vm.md](../../02-design/vm.md) §3).
 - [x] The bootconfig merge and the trailer golden vectors pass. Conflicting keys produce the `bootconfigConflict` message.
-- [ ] The layout file is committed. Every "(reference)" value traces to the #064 `target` capture.
+- [ ] The layout file is committed. Every "(reference)" value traces to the launcher capture `Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt` or to a VZ observation recorded in [android-image.md](../../02-design/android-image.md) §6.2 (IR-305).
 
 ### Notes
 
@@ -922,6 +925,7 @@ See [../test-strategy.md](../test-strategy.md).
 - **Step 6 partial (2026-09-30):** Added the default phone layout with only the ADR-decided or source-verified image bootconfig keys and the mandatory `console=hvc0` argument. Reference-only keys remain omitted until #064 provides evidence; AVB values remain computed by `avb.py`. The default CLI extraction is covered against the pinned archive. This layout is intentionally incomplete for Android boot, and #010 remains open. See [implementation-review.md](../implementation-review.md) IR-074.
 - **Partial acceptance verification (2026-10-01):** On macOS 27.0 (build 26A428), re-running extraction against the pinned 16373615 archive produced the same six outputs and SHA-256 values as before; the archive SHA-256 remained `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The kernel bytes at offset `0x38` are `ARM\x64`, the kernel is uncompressed, and the current 157-byte command line contains no `androidboot.*` key and is below 2048 bytes. The non-ASCII extraction rejection and exact 2048-byte acceptance are tested. The reference-derived layer-2 values and final command line remain blocked on #064's target capture; #010 stays open.
 - **Final verification (2026-10-01):** `pytest Images/tools/tests -q` passed 343 tests with 3 platform skips (the reference-capture tests require GNU `timeout` on Linux). `manifest --check` and the default real-archive extraction passed; the six output hashes were unchanged and the pinned archive hash still matched. Ruff, format, `sh -n`, `git diff --check`, all six repository checks, and hostile review passed. The extraction implementation now rejects non-ASCII layout and source command lines and accepts an exact 2048-byte ASCII command line. #010 remains open for the reference-derived layout values and final command-line verification from #064's `target` capture.
+- **Reference source changed (2026-10-08; IR-305).** No #064 capture reached a complete boot, and none will on the nested reference host. The layer-2 "(reference)" values come from the `default` launcher capture (`internal-bootconfig.txt`) and are confirmed by the VZ direct-boot spike (IR-306), whose bootconfig is listed key by key in [android-image.md](../../02-design/android-image.md) §6.2. The 157-byte command line needed no addition beyond `console=hvc0`: the crosvm-only `earlycon` and `ramoops` parameters do not apply on VZ.
 - **Supplemental T1 verification (2026-10-06; see IR-234):** On macOS 27.0 (build 26A428), the real-archive `extract` command and `manifest --check` passed. `Images/tools/tests/test_extract.py` passed all 19 tests, and the archive SHA-256 remained `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`. The real-archive test parses the extracted vendor bootconfig, computes the five AVB bootconfig values, merges both with the committed layer-2 layout through `bootconfig.py`, and asserts the complete serialized layer 1 + 2 block stays within 16 KiB. The full `Images/tools/tests` suite passed 597 tests with four platform-specific skips in 301.48 seconds. The reference-derived layout values and 157-byte command line remain provisional pending #064's `target` capture.
 
 ---
@@ -931,7 +935,7 @@ See [../test-strategy.md](../test-strategy.md).
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #005, #009, #010, #064 |
+| Depends on | #005, #009, #010 |
 | Requirements | FR-IMG-04, FR-VM-03 ([../traceability.md](../traceability.md) §2.1), NFR-RES-02 |
 | Design | [../../02-design/android-image.md](../../02-design/android-image.md) §4.2–§4.5, §5; [../../02-design/vm.md](../../02-design/vm.md) §4, §12; [../../01-architecture/filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1 |
 | Modules / paths | `Images/tools/apkrun_image/{sparse,gpt,layout}.py`, the `disks` and `inspect` subcommands, the layout `disks` section, `Packages/ImageCore/Sources/ImageCore/Disks/{GPTDisk,InstanceDiskProvisioner}.swift`, `Tests/Fixtures/linux/init`, `Tests/IntegrationTests/LinuxGuestTests/`, `Images/reference/vz/<macOS build>/topology.txt` |
@@ -939,12 +943,12 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Goal
 
-Three raw GPT disks are built from the manifest and the layout. They attach to a VZ guest in a fixed order, and the guest sees the expected partition names and sizes. The VZ block topology that `androidboot.boot_devices` needs is recorded.
+Two raw GPT disks are built from the manifest and the layout. They attach to a VZ guest in a fixed order, and the guest sees the expected partition names and sizes. The VZ block topology that `androidboot.boot_devices` needs is recorded.
 
 ### Scope
 
 - Sparse to raw conversion, the GPT writer, the disk plan in the layout, the `disks` command, and `disks.json`.
-- Confirming the blank sizes, omissions, and fstab flags from the #064 captures.
+- Confirming the blank sizes, omissions, and fstab flags from the #064 launcher captures and the VZ spike (IR-305, IR-306).
 - The Swift minimal GPT support and clone-based instance disk provisioning, with userdata growth.
 - Discovering the topology with the Linux test guest.
 - The verified mapping table in [android-image.md](../../02-design/android-image.md) §4.2.
@@ -958,7 +962,7 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
 
 - `sparse.py` (writer path), `gpt.py`, `layout.py`, and the `disks` and `inspect` subcommands.
 - The layout `disks` section, from the §4.2 table.
-- `Images/work/16373615/disks/{os.img,persistent.img,userdata.img,disks.json}` produced locally.
+- `Images/work/16373615/disks/{os.img,userdata.img,disks.json}` produced locally.
 - ImageCore `GPTDisk` and `InstanceDiskProvisioner`, which is internal to ImageCore and wrapped by `InstanceStore` in #012.
 - The `apkrun.test=parts` check in `Tests/Fixtures/linux/init`.
 - `Images/reference/vz/<macOS build>/topology.txt`.
@@ -984,15 +988,14 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
 3. **Disk plan and `disks`.**
    - Add the §4.2 plan to the layout:
      - disk 0 `os`, read-only, with its nine partitions;
-     - disk 1 `persistent`, read-write, with misc, metadata, and frp;
-     - disk 2 `userdata`, read-write.
-   - Replace the `blankPartitions` placeholders in `android-image.json` with the sizes from the #064 `target` sysfs capture.
-   - `python3 -m apkrun_image disks --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --out Images/work/16373615/disks/` writes `os.img`, `persistent.img`, the blank formattable `userdata.img`, and `disks.json`.
+     - disk 1 `userdata`, read-write, with misc, metadata, frp, and a last `userdata` partition (IR-308).
+   - Confirm the `blankPartitions` sizes in `android-image.json` against the composite disk specs of the #064 launcher captures; the VZ spike booted with the current values.
+   - `python3 -m apkrun_image disks --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --out Images/work/16373615/disks/` writes `os.img`, the blank formattable `userdata.img` template, and `disks.json`.
    - `disks.json` has, per disk: the file, role, access, identifier, and sector size. Per partition it has the name, GUID, first and last LBA, size, and source SHA-256.
    - Check: `du -h` shows that `os.img` is allocated well below its logical size. The layout-check messages of reference §8 appear for a broken layout.
 4. **Linux guest check.**
-   - Add `apkrun.test=parts` to `Tests/Fixtures/linux/init`. It prints, per `/sys/class/block/vd*`, the `PARTNAME` from `uevent`, the size in sectors, and `blockdev --getss`. It also prints `readlink -f /sys/block/vda` (and `vdb`, `vdc`).
-   - `LinuxGuestTests.testAndroidDiskLayout` attaches the three disks with the access and synchronization modes of [android-image.md](../../02-design/android-image.md) §9.2, then compares the output with `disks.json`.
+   - Add `apkrun.test=parts` to `Tests/Fixtures/linux/init`. It prints, per `/sys/class/block/vd*`, the `PARTNAME` from `uevent`, the size in sectors, and `blockdev --getss`. It also prints `readlink -f /sys/block/vda` (and `vdb`).
+   - `LinuxGuestTests.testAndroidDiskLayout` attaches the two disks with the access and synchronization modes of [android-image.md](../../02-design/android-image.md) §9.2, then compares the output with `disks.json`.
    - The same run writes the topology capture of [../../02-design/vm.md](../../02-design/vm.md) §5 to `Images/reference/vz/<macOS build>/topology.txt`: `lspci -nn`, the `/sys/bus/pci/devices` listing, a `/proc/device-tree` dump, and the `/sys/block/vd*` paths. Derive the `boot_devices` value from the platform component (for example `40000000.pci`, [android-image.md](../../02-design/android-image.md) §5.3).
    - Check: the T2 test passes, and `topology.txt` is committed.
 5. **Swift instance disks.**
@@ -1005,8 +1008,8 @@ Three raw GPT disks are built from the manifest and the layout. They attach to a
    - Errors: `ImageFailure.cloneUnsupported(volume)`, `cloneFailed(errno)`, and `insufficientSpace(required, available)`.
    - Check: T0 tests against the Python GPT fixtures in `Images/tools/tests/fixtures/gpt/` pass. The T1 tests pass.
 6. **Documentation.**
-   - Fill [android-image.md](../../02-design/android-image.md) §4.2 with the verified table: virtual device index, backing image, read-only or read-write, the guest name (`vda`–`vdc`), the partition labels, and the sizes.
-   - Confirm the omitted partitions against `Images/reference/16373615/target/` (`by-name`, fstab): `uboot_env`, the persistent vbmeta, `bootconfig`, and the `_b` slots.
+   - Fill [android-image.md](../../02-design/android-image.md) §4.2 with the verified table: virtual device index, backing image, read-only or read-write, the guest name (`vda`, `vdb`), the partition labels, and the sizes.
+   - Confirm the omitted partitions against the #064 launcher captures (composite disk specs) and the VZ boot's `by-name` list and fstab: `uboot_env`, the persistent vbmeta, `bootconfig`, and the `_b` slots.
    - Confirm `formattable` and `keydirectory=/metadata/vold/metadata_encryption` in the fstab (§5.2).
    - Put the discovered `boot_devices` value in §5.3, and add a §13 row for every new difference.
    - Check: the review of the document pull request.
@@ -1026,18 +1029,19 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The minimum disk mapping needed to boot is defined: the three disks of [android-image.md](../../02-design/android-image.md) §4.2.
+- [ ] The minimum disk mapping needed to boot is defined: the two disks of [android-image.md](../../02-design/android-image.md) §4.2.
 - [ ] Each virtual device is documented with its backing image, read-only or read-write access, and the name the guest expects (the verified table in §4.2).
 - [ ] The mapping is data-driven. It lives in the layout and the manifest, and no partition or file name appears in Python or Swift code.
-- [ ] The Linux test guest sees three virtio block devices with the partition names and sizes of `disks.json`.
+- [ ] The Linux test guest sees two virtio block devices with the partition names and sizes of `disks.json`.
 - [ ] The Android kernel detects the expected virtio block devices. The design moves this check to #012.
-- [ ] `os.img` is read-only and `persistent.img` and `userdata.img` are read-write. Instance disks are APFS clones, and `userdata.img` grows sparse (NFR-RES-02).
+- [ ] `os.img` is read-only and `userdata.img` is read-write. The instance disk is an APFS clone, and `userdata.img` grows sparse (NFR-RES-02).
 - [ ] The `boot_devices` value is recorded in `topology.txt` and in [android-image.md](../../02-design/android-image.md) §5.3.
 
 ### Notes
 
 - `clonefile` needs the source and the destination on the same volume. Tests and `apkrun-dev` must keep `APKRUN_HOME` on the volume of the bundle, or they get `cloneFailed(EXDEV)`.
-- #064 is not listed as a dependency in [README.md](README.md) §3, but steps 3 and 6 read its captures. Plan #064 to finish before this task.
+- Steps 3 and 6 read the #064 launcher captures under `Images/reference/16373615/incomplete/` (composite disk specs, `cuttlefish_config.json`) and the VZ spike capture; a complete #064 reference is not needed (IR-305).
+- The disk count changed from three to two after the VZ spike: the stock fstab has `/devices/*/block/vdc auto auto defaults voldmanaged=sdcard1:auto`, and vold scanned the third disk (the userdata disk, mounted as `/data`) as removable storage `disk:253,32` (IR-308).
 
 ---
 
@@ -1054,7 +1058,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Goal
 
-`apkrun-dev dev boot` starts a VM from four inputs: the Android kernel, the per-boot initrd with the merged bootconfig, the kernel command line, and the three disks. The captured serial log shows the kernel getting past early init and detecting the configured virtio devices.
+`apkrun-dev dev boot` starts a VM from four inputs: the Android kernel, the per-boot initrd with the merged bootconfig, the kernel command line, and the two disks. The captured serial log shows the kernel getting past early init and detecting the configured virtio devices.
 
 ### Scope
 
@@ -1065,6 +1069,7 @@ See [../test-strategy.md](../test-strategy.md).
 - A first cut of `RuntimeSupervisor`: the `.kernel` phase and the immediate kernel-panic failure.
 - Complete serial capture through the `ConsoleLogWriter` of #004.
 - A provisional console port plan that attaches the §7.1 table as given, in array order.
+- The VirtualMachineCore changes the Android definition needs ([../../02-design/vm.md](../../02-design/vm.md) §4, §6.1, §7): ports 10 and up on one multiport console device, `network` as an ordered list of NAT NICs, and the development-only `builtInDisplay`.
 - The `headless` GPU profile placeholder for `--gpu none`.
 - Out of scope:
   - Reaching init (#013).
@@ -1085,15 +1090,16 @@ See [../test-strategy.md](../test-strategy.md).
 - RuntimeCore:
   - A first cut of `RuntimeSupervisor`, which takes `Runtime/instance.lock`.
   - `BootPhaseDetector` and `BootSignals.swift`.
-  - Golden fixtures in `Packages/RuntimeCore/Tests/RuntimeCoreTests/Fixtures/console/cuttlefish-<profile>.log`, copied from #064.
+  - Golden fixtures in `Packages/RuntimeCore/Tests/RuntimeCoreTests/Fixtures/console/`: VZ console logs from the direct-boot spike (IR-306), plus one #064 crosvm `kernel.log` for the U-Boot banner case.
 - RuntimeHost: the embedded composition that `apkrun-dev` uses.
 - CLI: `apkrun dev boot --bundle <dir> [--gpu none]`.
 - The `apkrun.test=bootconfig` check in `Tests/Fixtures/linux/init`.
+- VirtualMachineCore: `VZConfigurationBuilder` splits `consolePorts` at the 10-device limit, `VMDefinition.network` becomes `[NetworkDefinition]`, and `VMDefinition.builtInDisplay` maps to `VZVirtioGraphicsDeviceConfiguration`, with T0 tests in `VZConfigurationBuilderTests`.
 
 ### Implementation steps
 
 1. **Unsigned bundle.**
-   - Run `python3 -m apkrun_image bundle --unsigned --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --reference Images/reference/16373615/target --image-version 2026.10.0 --out Images/work/16373615/bundle/`.
+   - Run `python3 -m apkrun_image bundle --unsigned --manifest Images/manifests/16373615/android-image.json --layout Images/tools/layouts/cuttlefish-phone-arm64.json --reference Images/reference/16373615/incomplete/default-20261001T120904-49816 --image-version 2026.10.0 --out Images/work/16373615/bundle/`.
    - It runs `extract` and `disks`, then writes:
      - `boot/{kernel,ramdisk.img,bootconfig.txt,cmdline.txt}`;
      - `disks/os.img`;
@@ -1129,21 +1135,20 @@ See [../test-strategy.md](../test-strategy.md).
      - `.kernel` is entered on the first console byte after `VM_START`, with PerfMarker `KERNEL_START`;
      - `Kernel panic - not syncing` gives `failed(.kernelPanic)` at once.
    - `apkrun dev boot --bundle <dir> [--gpu none]` runs in the embedded runtime (`APKRUN_EMBEDDED_RUNTIME`, [runtime-daemon.md](../../02-design/runtime-daemon.md) §10). It provisions the instance when there is none, streams the phases, and stops the VM on Ctrl-C with `VMController.stop()`.
-   - Check: T0 golden tests pass over the #064 kernel logs. `apkrun-dev dev boot --bundle Images/work/16373615/bundle/ --gpu none` prints `.kernel`.
+   - Check: T0 golden tests pass over the captured console logs. `apkrun-dev dev boot --bundle Images/work/16373615/bundle/ --gpu none` prints `.kernel`.
 5. **Bootconfig on the Linux guest.**
    - Add `apkrun.test=bootconfig`, which prints `/proc/bootconfig`.
    - `LinuxGuestTests.testBootconfigTrailer` boots the test kernel with an initrd that `BootconfigWriter` built from a golden input, then compares the output with the golden text.
    - If the pinned test kernel lacks `CONFIG_BOOT_CONFIG`, the test skips with that message, and #013 verifies `/proc/bootconfig` on Android.
    - Check: the T2 test passes or skips with the reason.
 6. **Android kernel boot.**
-   - `AndroidBootTests.testKernelBoot` boots the unsigned bundle with `--gpu none`. It waits up to 120 s for `init: init first stage started!`, then force-stops the VM.
+   - `AndroidBootTests.testKernelBoot` boots the unsigned bundle with `--gpu none`. It waits up to 120 s for the first `init: ` line on hvc0, then force-stops the VM.
    - It asserts these lines in `boot-<timestamp>.log`:
-     - `Booting Linux on physical CPU`;
-     - `Kernel command line:` with a value equal to `cmdline.txt`;
-     - `virtio_blk` lines for `vda`, `vdb`, and `vdc` with 9, 3, and 1 partitions;
-     - `rtc-pl031` registered as `rtc0`;
-     - the virtio console, virtio-net, vsock, rng, and balloon devices probed;
+     - `virtio_blk` lines for `vda` and `vdb` with 9 and 4 partitions;
+     - the virtio-gpu probe (`[drm] pci: virtio-gpu-pci detected`) of the `headless` profile;
+     - the first-stage module loads of `virtio_console`, `virtio_net`, and `vmw_vsock_virtio_transport`;
      - no panic.
+   - On VZ, hvc0 starts only when first-stage init has loaded `virtio_console` (about 0.18 s of uptime), and the earlier kernel lines are not replayed (IR-306). `Booting Linux on physical CPU`, `Kernel command line:`, the PL031 RTC, and the rng and balloon probes are therefore checked in #013 over the serial shell (`su 0 dmesg`, `/proc/cmdline`, `/dev/rtc0`, `/sys/bus/virtio/drivers/`).
    - A second test boots a deliberately truncated ramdisk and expects `failed(.kernelPanic)`.
    - Record in [android-image.md](../../02-design/android-image.md) §6: the kernel version, the time to each line, and any missing device.
    - Check: both T2 tests pass.
@@ -1165,7 +1170,7 @@ See [../test-strategy.md](../test-strategy.md).
 - [ ] The kernel command line is passed: the `Kernel command line:` log line equals `cmdline.txt`.
 - [ ] The bootconfig is passed as the initrd trailer, and `/proc/bootconfig` equals the merged block. The check runs on the Linux guest, or on Android in #013.
 - [ ] The complete serial output is captured in `~/Library/Logs/APKRun-Dev/vm/console.log` and in `boot-<timestamp>.log`.
-- [ ] The kernel boots past early init and detects the configured virtio devices, including three virtio block devices with the expected partition counts (the #011 Android check).
+- [ ] The kernel boots past early init and detects the configured virtio devices, including two virtio block devices with the expected partition counts (the #011 Android check).
 - [ ] Successful init is not required.
 - [ ] A kernel panic ends the boot at once with `.kernelPanic`.
 - [ ] Every boot logs the image version, the bootconfig hash, and the disk identifiers (subsystem `io.apkrun.image`, category `boot`, §14.2).
@@ -1185,7 +1190,7 @@ See [../test-strategy.md](../test-strategy.md).
 | Field | Value |
 |---|---|
 | Milestone | M1 (v0.1) |
-| Depends on | #012, #064 |
+| Depends on | #012 |
 | Requirements | FR-VM-08, NFR-DEV-04 |
 | Design | [../../02-design/android-image.md](../../02-design/android-image.md) §4.1, §5.2, §5.3, §6, §7.1, §13; [../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3; [../../01-architecture/decisions/0015-direct-kernel-boot.md](../../01-architecture/decisions/0015-direct-kernel-boot.md) |
 | Modules / paths | `Images/tools/layouts/cuttlefish-phone-arm64.json`, `Images/tools/apkrun_image/{bootconfig,avb}.py`, ImageCore `Boot/VZPlatformProfile.swift`, RuntimeCore `Boot/BootSignals.swift`, `Tests/IntegrationTests/Support/AndroidShellConsole.swift`, `Tests/IntegrationTests/AndroidBootTests/`, `Images/reference/16373615/expected-differences.yaml` |
@@ -1217,8 +1222,9 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
 ### Implementation steps
 
 1. **`.init` phase.**
-   - `init: init first stage started!` enters `.init` and emits `ANDROID_INIT`.
-   - If init's kmsg lines do not reach hvc0 at the default log level, add a command-line addition (for example a log-level setting). Record it in the layout with a comment and as a §13 row.
+   - The first `init: ` line on hvc0 enters `.init` and emits `ANDROID_INIT`. `init: init first stage started!` is printed before hvc0 exists on VZ ([../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3).
+   - If init's kmsg lines do not reach hvc0 at the default log level, add a command-line addition (for example a log-level setting). Record it in the layout with a comment and as a §13 row. (On the spike they did reach hvc0 without one.)
+   - Over the serial shell, check what #012 cannot see on hvc0: `su 0 dmesg` contains `Booting Linux on physical CPU` and `Kernel command line:` equal to `cmdline.txt`, `/dev/rtc0` exists, and the console, net, vsock, rng, and balloon drivers are bound under `/sys/bus/virtio/drivers/`.
    - Check: T0 golden test, and a T2 assertion.
 2. **Serial shell.**
    - hvc1 becomes `.service("serial")` in developer mode. `apkrun-dev dev boot` always boots with `BootOptions.developerMode = true`.
@@ -1233,7 +1239,7 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
 4. **AVB and bootconfig.**
    - Verify that first-stage init accepts `verifiedbootstate=orange`, `vbmeta.device_state=unlocked`, and the `avb.py` digest values.
    - Verify that `cat /proc/bootconfig` over the serial shell equals the merged block of #012.
-   - Compare with `Images/reference/16373615/target/`.
+   - Compare with the launcher capture `Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt` plus the vendor and U-Boot keys of [android-image.md](../../02-design/android-image.md) §6.2.
    - If live VZ evidence shows that direct boot needs a different layer-2 value, update the VZ layout to the observed value and record the key and reason in `expected-differences.yaml`; the original value remains in the #064 capture.
    - Check: no `libfs_avb` error lines. The bootconfig matches, or each difference has an `expected-differences.yaml` entry.
 5. **Debug ramdisk and SELinux.**
@@ -1250,7 +1256,7 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
 
 See [../test-strategy.md](../test-strategy.md).
 
-- **T0 Swift:** the `.init` golden test over the #064 logs.
+- **T0 Swift:** the `.init` golden test over the captured VZ console logs.
 - **T2** (`AndroidBootTests.testReachesInit`):
   - The console log contains `init: init first stage started!`, `init: init second stage started!`, and at least one `init: starting service` line.
   - Over `AndroidShellConsole`, the test runs `getprop ro.build.fingerprint`, `cat /proc/bootconfig`, `ls -l /dev/block/by-name`, `cat /proc/mounts`, `getenforce`, and `lsmod`, and compares the output with the reference where a category exists.
@@ -1266,7 +1272,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Notes
 
-- The candidate strings come from [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3 as confirmed by #064. Update `BootSignals.swift` and the document together.
+- The strings come from [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3, observed on VZ (IR-306). Update `BootSignals.swift` and the document together.
 - `/data` does not mount until #095 provides KeyMint. Failures after `post-fs-data` belong to #095 and #014.
 
 ---
@@ -1288,12 +1294,12 @@ Every Cuttlefish host dependency has a decided and verified substitute. Android 
 
 ### Scope
 
-- The 20-port numbering check and `ConsolePortPlan`.
-- The final port roles of §7.1.
+- The 20-port numbering check and `ConsolePortPlan`, with ports 10–19 on one multiport device ([../../02-design/vm.md](../../02-design/vm.md) §6.1).
+- The final port roles of §7.1, including the "no sensors" responder on hvc18.
 - In-guest KeyMint and Gatekeeper.
 - The vsock service decisions of §7.3.
 - Networking in the order of §7.4.
-- The other guest expectations of §7.6.
+- The other guest expectations of §7.6, including the first-boot settings (Bluetooth off, Wi-Fi joined to `VirtWifi`).
 - The Weaver and LockSettings check.
 - Out of scope:
   - The ADB forwarder (#015).
@@ -1307,6 +1313,8 @@ Every Cuttlefish host dependency has a decided and verified substitute. Android 
 
 - The `apkrun.test=ports` check with `apkrun.test.portcount=20` in `Tests/Fixtures/linux/init`.
 - `ConsolePortPlan`, as a data table in RuntimeCore.
+- The sensors responder in RuntimeCore, attached to the `.service("sensors")` port (§7.1).
+- The first-boot settings step in RuntimeCore (§7.6).
 - The final layout `consolePorts`.
 - The `androidboot.vendor.apex.*` keys for KeyMint and Gatekeeper, and the `androidboot.wifi_impl` value, in the layout.
 - The [android-image.md](../../02-design/android-image.md) §7 verification: one decision per port and per service, and the client behaviour when a host service is missing.
@@ -1318,26 +1326,26 @@ Every Cuttlefish host dependency has a decided and verified substitute. Android 
 1. **20-port numbering.**
    - Boot the Linux test guest with `apkrun.test=ports apkrun.test.portcount=20`. The host writes `APKRUN-PORT-<i>\n` into port *i*, and the guest prints which `/dev/hvcN` received which marker ([../../02-design/vm.md](../../02-design/vm.md) §6.2).
    - If the mapping is not the identity, `ConsolePortPlan` reorders the array so that the guest numbering matches the Cuttlefish map.
-   - If VZ refuses 20 ports, apply the fallback of §7.1 and record R-12 as realized.
+   - VZ refuses more than 10 single-port devices (observed 2026-10-08), so ports 10–19 are the console ports of one multiport device ([../../02-design/vm.md](../../02-design/vm.md) §6.1). The check covers all 20 ports across both device kinds.
    - Check: `LinuxGuestTests.testTwentyConsolePorts` passes.
 2. **Port roles.**
-   - Finalize the layout `consolePorts` from the §7.1 table: hvc0 `.systemConsole`, hvc1 `.service("serial")` in developer mode, hvc2 `.log("logcat")`, and hvc3–hvc19 `.silent`.
+   - Finalize the layout `consolePorts` from the §7.1 table: hvc0 `.systemConsole`, hvc1 `.service("serial")` in developer mode, hvc2 `.log("logcat")`, hvc18 `.service("sensors")` with the responder of §7.1, and the other ports `.silent`.
    - On Android, list the holder of each `/dev/hvc*` through the serial shell and compare with the reference "hvc users" category.
    - Check: no HAL crash-loops on a silent port in the hvc2 logcat capture. A crash loop means the same service exits and restarts three or more times within 10 minutes.
 3. **Security HALs.**
-   - Set the `androidboot.vendor.apex.*` keys that select the in-guest insecure KeyMint and Gatekeeper. Copy the APEX names from `Images/reference/16373615/target/` (§7.2).
+   - Set the `androidboot.vendor.apex.*` keys that select the in-guest insecure KeyMint and Gatekeeper: `com.android.hardware.keymint.rust_nonsecure` and `com.android.hardware.gatekeeper.nonsecure`, as in the launcher capture (§7.2).
    - Check:
      - `service list` shows the KeyMint (`IKeyMintDevice/default`) and Gatekeeper services;
      - vold mounts `/data` with metadata encryption (`/proc/mounts` shows `/data`);
      - the first boot formats `userdata` (the `formattable` path of §5.2).
 4. **vsock services and absent host services.**
-   - Leave out the `androidboot.vsock_*` and `modem_simulator_ports` keys.
+   - Leave out the keys of host-side clients (`vsock_tombstone_port`, `vhal_proxy_server_port`) and the automotive `auto_eth_guest_addr`. Keep `modem_simulator_ports` and the keys of guest-side servers (`vsock_lights_*`, `vendor.audiocontrol.server.*`, `openthread_node_id`): the spike showed their HALs abort without them (§7.3).
    - For each client that the reference bootconfig configures, record in [android-image.md](../../02-design/android-image.md) §7.3 whether it stays idle, exits once, or crash-loops. The clients include tombstone transmit, the RIL and modem simulator, camera, and audio control.
    - Do the same for RIL, Bluetooth, NFC, UWB, GNSS, and sensors (§7.6). Keep them unless they crash-loop, and record the findings for #035.
    - Check: `/dev/rtc0` exists and `date` is sane (§7.6, from #012).
 5. **Network.**
-   - Try option 1 of §7.4 first: one NAT NIC as Wi-Fi through `androidboot.wifi_impl` and the reference properties.
-   - If it fails, use option 2: several NICs in Cuttlefish order. This makes `VMDefinition.network` an ordered list, a VirtualMachineCore change noted in [../../02-design/vm.md](../../02-design/vm.md) §7.
+   - Option 1 of §7.4 (one NAT NIC as Wi-Fi) cannot work with the stock image: `setup_wifi` uses `eth2`, and the OpenThread HAL needs `eth1` (spike, IR-306).
+   - Use option 2: three NICs in Cuttlefish order, `androidboot.wifi_impl=virt_wifi`, and the `eth2` MAC derived from `wifi_mac_prefix` (§7.4). This makes `VMDefinition.network` an ordered list, a VirtualMachineCore change noted in [../../02-design/vm.md](../../02-design/vm.md) §7.
    - Option 3 (Ethernet) exists only on the custom image. Record it and do not implement it here.
    - Check: `ip addr` shows an address, a default route exists, and `ping -c 1 connectivitycheck.gstatic.com` resolves the name. `dumpsys connectivity` shows a VALIDATED network, which means NetworkMonitor's `generate_204` probe passed.
 6. **Checks that need system_server.**
@@ -1370,6 +1378,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 - Prefer in-guest implementations selected by configuration over host-side re-implementations (§7). Do not remove guest services unless they are shown to break boot, stability, or resource use.
 - vsock ports 6120–6199 are reserved for future substitutes. v1 substitutes are host-initiated only (§7.3).
+- **Spike findings (2026-10-08; IR-306).** The direct-boot spike settled most decisions of this task before the production code exists: the 10-port limit and the multiport device, the sensors wait and its responder, the keys that must stay, three NICs with `virt_wifi`, and Bluetooth. The handling is in [android-image.md](../../02-design/android-image.md) §7. This task builds it into RuntimeCore, the layout, and VirtualMachineCore, and verifies it with the tests above. The sensors responder is a host-side substitute: no configuration selects another sensors implementation in this build (§7.1).
 
 ---
 
@@ -1421,9 +1430,9 @@ The stock image reaches `sys.boot_completed=1`, the host detects it, and Android
    - Add the whole-boot timeouts of 180 s and 900 s (`runtime.bootTimeoutSeconds`, `runtime.firstBootTimeoutSeconds`) and the stall limits of 90 s and 600 s, which give `.bootTimedOut(phase)` and `.bootStalled(phase)`.
    - Write one record per boot to `perf/boots.jsonl`.
    - In M1, `ready` is entered at `.bootCompleted`, because steps 3 and 7–9 of [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.2 do not exist yet.
-   - Check: T0 golden tests over the #064 logs, and timeout and stall tests with a test clock.
+   - Check: T0 golden tests over the captured console logs, and timeout and stall tests with a test clock.
 2. **Headless GPU profile.**
-   - Fill `gpuProfiles.headless` with the graphics fragment that Cuttlefish's `bootconfig_args.cpp` produces for its no-GPU mode, at the revision of build 16373615. Record the file and the revision in the layout comment.
+   - Fill `gpuProfiles.headless` with the launcher's `guest_swiftshader` graphics keys from the `default` capture, and set `VMDefinition.builtInDisplay` for it ([../../02-design/android-image.md](../../02-design/android-image.md) §9.1). Cuttlefish's no-GPU set does not boot the stock image: zygote and SurfaceFlinger abort without EGL, and `init.cutf_cvm.rc` waits for `/dev/dri/card0` (IR-307).
    - Add `.headless` to `GPUProfileID`. `apkrun-dev dev boot --gpu none` selects it. It is never written into a release bundle.
    - Check: SurfaceFlinger does not crash-loop, and the boot animation exits.
 3. **Resolve failures.**
@@ -1437,7 +1446,7 @@ The stock image reaches `sys.boot_completed=1`, the host detects it, and Android
    - Check: `apkrun-dev dev console --android-shell`, then `getprop sys.boot_completed`, prints `1`.
 5. **VZ capture and diff.**
    - `python3 Images/tools/reference/compare_boot.py capture-vz --shell $APKRUN_HOME/Runtime/dev-console/hvc1.sock --out Images/work/16373615/vz-capture/` runs `guest-capture.txt` over the serial shell.
-   - Then `python3 Images/tools/reference/compare_boot.py Images/reference/16373615/target Images/work/16373615/vz-capture/` compares the captures.
+   - Then `python3 Images/tools/reference/compare_boot.py Images/reference/16373615/incomplete/default-20261001T120904-49816 Images/work/16373615/vz-capture/` compares the categories the launcher capture holds (cmdline and bootconfig); the other categories have no booted reference (IR-305) and are recorded, not compared.
    - Explain every difference in `expected-differences.yaml`. Graphics differences get the reason "M1 headless; GPU from #021".
    - Check: exit 0 with no unexplained difference.
 6. **G2 acceptance.**
@@ -1476,6 +1485,7 @@ See [../test-strategy.md](../test-strategy.md).
 - If no headless configuration reaches `boot_completed`, stop and follow [../roadmap.md](../roadmap.md) §2, "When a gate does not pass". Record it in R-06 and R-12, and file a follow-up task (#098 or the next free number) that attaches the #019 virtio-gpu device for M1.
 - A gate failure is recorded in the design document's verification log and in [../risks.md](../risks.md) (status `realized` if a fallback is taken).
 - The console strings for `.systemServer` depend on the console log level ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3). If `starting service 'zygote'` is not visible, the ADB signal of #015 or the serial-shell reading covers it.
+- **VZ direct-boot spike (2026-10-08; IR-306).** The stock image reached `VIRTUAL_DEVICE_BOOT_COMPLETED` on VZ in 7.5 s on a first boot, and `Experiments/vz-android-boot/g2_spike.py` passed the G2 conditions over five cold boots (each stable for 10 minutes, no `system_server` restart, no Watchdog kill, no crash loop). The one framework failure was the sensors wait of [android-image.md](../../02-design/android-image.md) §7.1: `system_server` blocked in `SystemSensorManager.nativeCreate` and its Watchdog killed it after 185 s. The headless profile needs VZ's 2D virtio-gpu (step 2). This task builds the same result into the product code and runs the gate.
 - **Launch-option ladder (2026-10-08; see IR-298 to IR-301).** In this host configuration `--gpu_mode=none`, the design's headless profile, did not start the Android VM (IR-300), so `gpuProfiles.headless` has no boot evidence yet. The `system_server` Watchdog timeout is a DeviceConfig key, not a host bootconfig key (IR-301). This task stays open.
 
 ---
@@ -1520,7 +1530,7 @@ In developer mode, `adb -s 127.0.0.1:6520` reaches the guest's adbd through vsoc
 
 1. **Guest side.**
    - Confirm that adbd listens on vsock 5555 (`persist.adb.tcp.port=5555`). `VMController.connect(vsockPort: 5555)` must succeed after `.bootCompleted`; before that it returns `.vsockPortNotListening`.
-   - Record `ro.adb.secure` from the VZ boot and from the #064 capture.
+   - Record `ro.adb.secure` from the VZ boot. (Spike, 2026-10-08: `ro.adb.secure` is unset on build 16373615, `persist.adb.tcp.port` is `5555`, adbd accepted a connection through a loopback → vsock 5555 forwarder without a key prompt, and `adb root` worked.)
    - If `ro.adb.secure=1`, developer mode appends the developer's `~/.android/adbkey.pub` to `/data/misc/adb/adb_keys` over the serial shell before the first connect.
    - Check: T2 connect succeeds.
 2. **Forwarder.**

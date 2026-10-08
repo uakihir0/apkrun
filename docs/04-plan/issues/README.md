@@ -96,10 +96,10 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #008 | Acquire and inventory ARM64 Cuttlefish artifacts | M1 | #001 | | [android-image.md](../../02-design/android-image.md) §2–§3.1 |
 | #064 | Reference boot capture | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §8 |
 | #009 | AndroidImageManifest | M1 | #008 | | [android-image.md](../../02-design/android-image.md) §3.2 |
-| #010 | Extract Android kernel and ramdisk | M1 | #008, #009, #064 | | [android-image.md](../../02-design/android-image.md) §4.1, §6 |
-| #011 | GPT disks and partition mapping | M1 | #005, #009, #010, #064 | | [android-image.md](../../02-design/android-image.md) §4.2, §5 |
+| #010 | Extract Android kernel and ramdisk | M1 | #008, #009 | | [android-image.md](../../02-design/android-image.md) §4.1, §6 |
+| #011 | GPT disks and partition mapping | M1 | #005, #009, #010 | | [android-image.md](../../02-design/android-image.md) §4.2, §5 |
 | #012 | Boot the Android kernel | M1 | #010, #011 | | [android-image.md](../../02-design/android-image.md) §6 |
-| #013 | Reach Android init | M1 | #012, #064 | | [android-image.md](../../02-design/android-image.md) §6 |
+| #013 | Reach Android init | M1 | #012 | | [android-image.md](../../02-design/android-image.md) §6 |
 | #095 | Cuttlefish host-service substitution | M1 | #013 | | [android-image.md](../../02-design/android-image.md) §7 |
 | #014 | Reach system_server and boot_completed | M1 | #013, #095 | G2 | [android-image.md](../../02-design/android-image.md) §6–§8 |
 | #015 | ADB debugging over vsock | M1 | #014, #007 | | [android-image.md](../../02-design/android-image.md) §7, [runtime-daemon.md](../../02-design/runtime-daemon.md) |
@@ -198,8 +198,8 @@ Gates G1–G9 are the project checkpoints. Their pass conditions are in [../road
 
 ## 5. Current progress
 
-**Updated:** 2026-10-08 UTC
-**Working branch:** `codex`
+**Updated:** 2026-10-09 UTC
+**Working branch:** `main` (this update: `task/064-vz-direct-boot`)
 
 Task entries remain the source of truth for scope and acceptance. This snapshot
 summarizes active work and review dependencies; acceptance checkboxes and
@@ -215,9 +215,12 @@ working and default branch. Its CI runs are green (run `37759856146` onward; the
 task issues #001–#097 are mirrored as issues #2–#98 (IR-293). G1 passed from a clean `main`
 worktree (IR-272), and its evidence is on issue #4. #002 and #003 are closed as implemented with
 maintainer reviews open (IR-297). #062 criteria 1 and 13 are ticked. #061 waits only for OQ-04,
-which needs a standard account this host does not have. The Android chain (#010 onward) is
-blocked by #064: the guest's Watchdog kills `system_server` during startup, and the root cause
-is not yet established.
+which needs a standard account this host does not have. The Android chain is unblocked: the
+#064 stall was the nested-virtualization reference host, and the stock image boots directly on
+VZ. The 2026-10-08 spike (`Experiments/vz-android-boot/`) reached `VIRTUAL_DEVICE_BOOT_COMPLETED`
+in 7.5 s and passed the G2 conditions over five cold boots (IR-305, IR-306). #064 is re-scoped
+and no longer blocks #010, #011, or #013; #010–#015 now build the spike's result into the
+product code.
 
 | Task | Status | Verified | Remaining |
 |---|---|---|---|
@@ -235,13 +238,14 @@ is not yet established.
 | Task | Current evidence | Still open |
 |---|---|---|
 | #008 Acquire and inventory ARM64 Cuttlefish artifacts; #009 AndroidImageManifest | Acceptance criteria are marked 7/7 and 6/6 on `codex`; the pinned build 16373615 manifest and inventory are present. | Workflow completion still requires reviewed integration to `main` and issue closure. |
-| #064 Reference boot capture | Active; 1/6 acceptance criteria marked. The 2026-10-08 audit summarized the 62 incomplete records in [boot-signals.json](../../../Images/reference/16373615/boot-signals.json); none reached boot completion. IR-244 verified one live crosvm ELF identity and reproduced the guest Mesa EGL load failure. Record: [#064 notes](M01-android-bring-up.md#064-reference-boot-capture), [IR-269](../implementation-review.md#ir-269-keep-064-open-after-the-2026-10-08-reference-capture-audit), [2026-10-08 stall diagnosis](../../../Images/reference/16373615/incomplete/default-20261008-diagnosis.txt) ([IR-279](../implementation-review.md#ir-279-classify-the-default-profile-stall-as-guest-side-watchdog-kills)), [IR-270](../implementation-review.md#ir-270-correct-the-boot-signal-table-from-observed-captures), [IR-271](../implementation-review.md#ir-271-assign-the-plain-sh-console-clause-to-the-serial-shell), [IR-244](../implementation-review.md#ir-244-verify-live-crosvm-identity-and-repeat-mesa-egl-diagnosis), [hash/privacy/cleanup receipt](../../../Images/reference/16373615/incomplete/target-20261008T030306-2167.verification.txt). | The three profiles, normalization and privacy across them, guest-command equivalence, the `VIRTUAL_DEVICE_BOOT_COMPLETED` timing, and per-profile `host.json` remain open. No profile can be published until a reference boot completes (IR-269). The `target` profile is blocked by the guest Mesa EGL failure, which is outside #064. The plain-console clause awaits a maintainer decision (IR-271). |
-| #010 Extract Android kernel and ramdisk | 6/7 acceptance criteria are marked; implementation and tests are recorded. | The final reference-derived values still depend on #064. |
+| #064 Reference boot capture | Re-scoped (IR-305): 2/6 acceptance criteria marked, 2 deferred until a non-nested arm64 Linux host exists. The nested reference host never completed a boot (62 records, about 100 times slower than VZ). The launcher captures under `Images/reference/16373615/incomplete/` are the reference for launcher outputs, and the boot markers were observed on VZ (IR-306). Record: [#064 notes](M01-android-bring-up.md#064-reference-boot-capture), [IR-305](../implementation-review.md#ir-305-re-scope-064-and-keep-virtualizationframework-instead-of-qemu). | Normalization of the retained captures, and the serial-shell run of `guest-capture.txt` (#014). No longer blocks #010, #011, #013, or G2. |
+| VZ direct-boot spike (`Experiments/vz-android-boot/`) | 2026-10-08: the stock image reached `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s, and `g2_spike.py` passed five cold boots with 10 minutes of stability each. Findings: [IR-306](../implementation-review.md#ir-306-record-the-vz-direct-boot-spike-and-the-substitutes-it-needs) to IR-309, [android-image.md](../../02-design/android-image.md) §7 and §17. | Experiment only. #011–#015 build it into the product code; G2 needs that code and a clean `main`. |
+| #010 Extract Android kernel and ramdisk | 6/7 acceptance criteria are marked; implementation and tests are recorded. The layer-2 values are now confirmed by the launcher capture and the VZ spike (IR-305). | Commit the confirmed layer-2 values in the layout file. |
 | #018 Analyze the RiftVM GPU prototype | The analysis now records command responses, the renderer-budget estimate limits, scanout behavior, profile/topology differences, and the current patch crosswalk. Final hostile review passed on 2026-10-07. | Maintainer review of the v0.6.1 source substitution remains open under IR-188; the #019/#020 dependency is not formally closed. |
 
-The #064 run is diagnostic evidence only: the crosvm build is uncertified for
-Virgl and the capture is retained under `Images/reference/16373615/incomplete/`.
-It does not change the pinned Android image or close #064. The guest Mesa
+The #064 runs are diagnostic evidence only: the crosvm build is uncertified for
+Virgl and the captures are retained under `Images/reference/16373615/incomplete/`.
+They do not change the pinned Android image. The guest Mesa
 payload correction is explicitly outside #064; the proposed reusable-image
 follow-up is documented in IR-240, but cannot enter the numbered task index
 until GitHub initializes the required #001–#097 task sequence.

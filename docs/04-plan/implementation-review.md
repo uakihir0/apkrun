@@ -10027,3 +10027,193 @@ cannot start yet, because #021 waits for #014 and #014 waits for the Android boo
 
 **Verification.** `gh issue list` shows issue #99 with the title `#099 Mesa-enabled
 VirGL guest image`, and the entry is in M02 and in the task index.
+
+## IR-305: Re-scope #064 and keep Virtualization.framework instead of QEMU
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064, #010, #011, #013, #014 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, #010, #011, #013, #014; [issues/README.md](issues/README.md) §3 and §5; [android-image.md](../02-design/android-image.md) §8.1, §7.7, §15–§17; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.3; [risks.md](risks.md) R-06 |
+
+**Choice.** Stop trying to complete a crosvm reference boot on the nested
+reference host, and remove #064 as a hard dependency of #010, #011, and #013.
+The launcher captures under `Images/reference/16373615/incomplete/` are the
+reference for what the Cuttlefish launcher and U-Boot produce. Behaviour that
+needs a booted reference comes from the Cuttlefish source at the pinned
+revision (`android17-release`) and from the VZ boot itself. #064 keeps its
+completed criteria, and the criteria that need a complete crosvm boot are
+deferred until a non-nested arm64 Linux host exists. QEMU is not adopted,
+either as the product VMM or as the reference host.
+
+**Reason.** The nested host was the cause of the stall. Across 62 records the
+guest there ran about 100 times slower than the same image, kernel command line,
+and launcher bootconfig on VZ: `zygote` started at 233 s of uptime against
+1.3 s, and `boot_progress_pms_ready` came at 1467 s against 3.6 s (IR-306).
+`system_server`'s Watchdog then killed it during startup, with a different
+blocked frame in each cycle, which fits guest-wide slowness rather than one
+defect. No arm64 Linux machine is available.
+
+QEMU with HVF on macOS avoids the nesting, but it does not help here. The
+Cuttlefish host tools (`launch_cvd`, `run_cvd`, `secure_env`, the simulators)
+are Linux binaries, so a QEMU reference would need the same hand-built direct
+boot (kernel, initrd with bootconfig, GPT disks) as VZ, and it would no longer
+be the standard Cuttlefish stack that #064 wanted. macOS QEMU also has no
+vsock device (vhost-vsock is Linux-only), which ADB and the guest protocol use.
+As the product VMM, QEMU was already rejected in [ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md), and
+the VZ result removes the reason to revisit that.
+
+**Verification.** `Experiments/vz-android-boot/README.md` holds the timing
+table and the commands. The deferred criteria are marked in the #064 entry.
+
+## IR-306: Record the VZ direct-boot spike and the substitutes it needs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #011, #012, #013, #095, #014, #015 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.2, §5, §6.2, §7, §9, §13, §17; [vm.md](../02-design/vm.md) §4, §5, §6.1, §7, §17; [graphics.md](../02-design/graphics.md) §9; [risks.md](risks.md) R-06, R-11, R-12; [M01](issues/M01-android-bring-up.md) |
+
+**Choice.** Boot the pinned stock image directly on Virtualization.framework in
+an experiment before the #011–#015 production code, and write what it needed
+into the design. The experiment is `Experiments/vz-android-boot/`: a disk
+builder, a bootconfig and initrd builder that reuses `bootconfig.py` and
+`avb.py`, a small signed VZ harness, and `g2_spike.py`, which runs the G2 pass
+conditions.
+
+**Reason.** #064 could not produce a known-good boot (IR-305), and every M1 task
+after #010 depended on one. The product boots VZ directly, so the quickest way
+to learn whether the stock image works on the VZ topology was to try it with
+the smallest harness possible, without committing to production APIs first.
+
+**Verification.** 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1
+(26A434), build 16373615:
+
+- The image reached `VIRTUAL_DEVICE_BOOT_COMPLETED` at 7.5 s of uptime on a
+  first boot and at 3.9–4.7 s on later cold boots. `g2_spike.py` passed five
+  cold boots in a row; each stayed up 10 minutes with
+  `sys.system_server.start_count` 1, no Watchdog kill, no init service exiting
+  three times, and no tombstone. With the two-disk layout of IR-308 it passed
+  two cold boots.
+- Kernel, first-stage init, dynamic partitions, AVB, and first-boot formatting
+  worked without image changes. `boot_devices` is `40000000.pci`.
+  `/proc/bootconfig` equalled the merged block. SELinux was enforcing with no
+  AVC denials.
+- What it needed: ports 10–19 on one multiport console device (VZ allows 10
+  single-port devices), the sensors responder (IR-310), the keys of guest-side
+  servers and `modem_simulator_ports`, three NAT NICs with `virt_wifi` and a
+  matching `eth2` MAC, VZ's 2D virtio-gpu for the headless profile (IR-307), two
+  disks (IR-308), and the first-boot settings (IR-309).
+- ADB works through a loopback forwarder to guest vsock 5555, and `adb root`
+  works on this userdebug build.
+
+The harness is not production code and is not imported by any target. G2 still
+needs the product code and a clean `main`.
+
+## IR-307: Give the M1 headless profile VZ's 2D virtio-gpu
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012, #014 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §9.1, §9.2; [graphics.md](../02-design/graphics.md) §9; [vm.md](../02-design/vm.md) §4; [M01](issues/M01-android-bring-up.md) #012, #014 |
+
+**Choice.** The development-only `headless` GPU profile attaches VZ's own 2D
+`VZVirtioGraphicsDeviceConfiguration` (one 720×1280 scanout, no view), through
+a new development-only `VMDefinition.builtInDisplay`, and uses the launcher's
+`guest_swiftshader` graphics keys. It replaces the planned "no GPU device and
+Cuttlefish's no-GPU keys".
+
+**Reason.** The planned profile cannot boot the stock image. Without
+`ro.hardware.egl`, zygote and SurfaceFlinger abort ("couldn't find an OpenGL ES
+implementation"), and `init.cutf_cvm.rc` waits for `/dev/dri/card0` in
+`early-init`. #014's notes foresaw a follow-up that attaches the #019 device
+instead, but that device answers only `GET_DISPLAY_INFO` and `GET_EDID` until
+#022 and #023. VZ's 2D device needs no code, and ADR-0002 already keeps it as a
+debugging fallback. It is never set together with the GraphicsCore device and
+never in a release bundle; G3 is unaffected.
+
+**Verification.** With it, SurfaceFlinger found HWC display 0 (720×1280,
+60 Hz) over DRM, the boot animation ran and exited, and boot completed.
+
+## IR-308: Use two disks instead of three
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #011, #012, #066 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.2, §4.5, §5, §10.1, §12.2; [filesystem-layout.md](../01-architecture/filesystem-layout.md) §1; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §3, §4.5, the schema, and §6.2; [android-image-manifest.md](../03-reference/android-image-manifest.md); [vm.md](../02-design/vm.md) §5; [runtime-daemon.md](../02-design/runtime-daemon.md); [M01](issues/M01-android-bring-up.md) #011, #012 |
+
+**Choice.** The instance has one writable disk, `userdata.img`, with the
+partitions `misc`, `metadata`, `frp`, and a last `userdata`. `persistent.img`
+is gone, and the bundle has one template.
+
+**Reason.** The stock fstab contains `/devices/*/block/vdc auto auto defaults
+voldmanaged=sdcard1:auto`. In the three-disk layout `vdc` is the userdata disk,
+mounted as `/data`, and vold scanned it as removable storage (`disk:253,32`,
+`sgdisk`, then "failed to identify, giving up"). The scan failed this time, but
+a disk that holds `/data` must never be offered for formatting as an SD card.
+Keeping the name `userdata.img` leaves the documents that mean "Android user
+data" correct; the small partitions belong to the same instance lifetime.
+`userdata` stays last, so growth (§5.2) is unchanged.
+
+**Verification.** With two disks the kernel found `vda` with 9 partitions and
+`vdb` with 4, every by-name label existed, vold reported no disk, and
+`g2_spike.py --disk-set disks2` passed two cold boots.
+
+## IR-309: Apply Bluetooth and Wi-Fi first-boot settings over the serial shell
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095, #014 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.2, §7.4, §7.6, §13 |
+
+**Choice.** Set `androidboot.cuttlefish_service_bluetooth_checker=false`. After
+the first `.bootCompleted` of a fresh instance, RuntimeCore runs
+`cmd bluetooth_manager disable`, `cmd wifi set-wifi-enabled enabled`, and
+`cmd wifi connect-network VirtWifi open` once, over the serial shell in M1 and
+through the Guest Agent from #072. The custom image (#035) moves the defaults
+into its overlays.
+
+**Reason.** Without rootcanal on hvc5, `com.android.bluetooth` aborts in
+`waitForInitialization` seven times in about 3.5 minutes on every boot, until
+BluetoothManagerService's recovery limit. Disabling the HAL APEX with
+`androidboot.vendor.apex.com.google.cf.bt=none` made it worse, and the boot
+reporter waits for Bluetooth and reports `VIRTUAL_DEVICE_BOOT_FAILED`. The
+checker key is what Cuttlefish's automotive product sets. Wi-Fi is off on a
+fresh `/data`; Cuttlefish's automotive `wifi_on.sh` runs the same two `cmd
+wifi` commands. Both settings are standard Android commands, persist in
+`/data`, and need no image change.
+
+**Verification.** Turning Bluetooth off right after `.bootCompleted` prevented
+every abort on the first boot, and later boots had none. Wi-Fi joined
+`VirtWifi`, and NetworkMonitor validated the network.
+
+## IR-310: Answer the sensors HAL from the host
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.1, §7.6, §13 |
+
+**Choice.** RuntimeCore attaches a "no sensors" responder to hvc18. It answers
+the HAL's `list-sensors` with the frame the real `sensors_simulator` sends for
+an empty mask (`02 00 00 80 02 00 00 00 30 0a`) and discards everything else.
+hvc19 stays silent.
+
+**Reason.** This is a host-side substitute, which §7 prefers to avoid. No
+configuration avoids it in this build: the HAL hard-codes `/dev/hvc18` and
+`/dev/hvc19`, it is a plain vendor package rather than a selectable APEX, and
+`HalProxy` loads `/vendor/etc/sensors/hals.conf` unconditionally. A silent port
+blocks the HAL forever in `ReadExactBinary`, which blocks `SensorService` and
+then the `system_server` main thread; its Watchdog killed `system_server` after
+185 s on every restart. A missing port makes the HAL abort in a loop. The
+responder is the smallest adapter that lets the stock HAL finish, and it
+exposes no host data to the guest.
+
+**Verification.** With the responder, the HAL logged `host sensors mask=0,
+available sensors mask=0`, registered `ISensors/default`, and boot completed.
+The framing comes from `common/libs/transport/channel.h` and
+`host/commands/sensors_simulator/sensors_hal_proxy.cpp` on `android17-release`.

@@ -132,7 +132,19 @@ setup_homebrew_tools() {
     fi
 }
 
+metal_tools_present() {
+    local metal metallib
+    metal="$(xcrun --find metal 2>/dev/null || true)"
+    metallib="$(xcrun --find metallib 2>/dev/null || true)"
+    [[ -n "$metal" && -x "$metal" && -n "$metallib" && -x "$metallib" ]]
+}
+
 check_metal_toolchain() {
+    # Xcode ships the Metal compiler as a separate component. Hosted images may not
+    # have it, so download it once when it is missing, then check again.
+    if ! metal_tools_present; then
+        xcodebuild -downloadComponent MetalToolchain >/dev/null 2>&1 || true
+    fi
     local metal metallib
     metal="$(xcrun --find metal 2>/dev/null || true)"
     metallib="$(xcrun --find metallib 2>/dev/null || true)"

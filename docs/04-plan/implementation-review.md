@@ -9570,3 +9570,28 @@ were read directly: `"cpus" : 4` at line 103, and `--cpus=4` at launcher lines
 (`boot_progress_*` and `SystemServer` lines). E2 reached PackageManager scanning
 at the 3000-second deadline, so it recorded no Watchdog kill. The record's
 SHA-256 values are in the local store manifest described in the receipt.
+
+## IR-288: Download the Metal toolchain in bootstrap when it is missing
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #062 (hosted `lint`, `codegen`, and `third-party` jobs); #001 (bootstrap) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2; [build-system.md](../05-development/build-system.md) §15 |
+
+**Choice.** `scripts/bootstrap` now runs `xcodebuild -downloadComponent MetalToolchain`
+when `xcrun --find metal` and `metallib` are missing, and then checks again. The
+download is attempted only when a tool is absent, so a machine that already has
+the toolchain sees no change. The download is not a CI-only step. It runs for
+local developers too, because the same script defines their setup.
+
+**Reason.** The first hosted run of CI on `main` failed the `Install pinned repository
+tools` step in `lint`, `codegen`, and `third-party`. The hosted `xcode-27` image does
+not ship the Metal toolchain, which Xcode 27 installs as a separate component.
+Putting the fix in the shared bootstrap covers every job at once. A CI-only step
+would leave local setup able to fail the same way.
+
+**Verification.** On this Mac, `scripts/bootstrap` exits 0 with
+`ok Metal toolchain: Apple metal version 32023.921`. The hosted result is in the
+next CI run on `main` after this commit. The earlier failure is run
+37748879197, jobs `lint`, `codegen`, and `third-party`.

@@ -4,17 +4,33 @@ import GraphicsCore
 import VirtualMachineCore
 import XCTest
 
+private final class TraceRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [VirtioGPUDevice.TraceRecord] = []
+
+    func append(_ record: VirtioGPUDevice.TraceRecord) {
+        lock.withLock { stored.append(record) }
+    }
+
+    var records: [VirtioGPUDevice.TraceRecord] {
+        lock.withLock { stored }
+    }
+}
+
 /// T2 checks of the virtio-gpu device: the probe and EDID, and the R-01 hotplug spike
 /// (graphics.md §12, #019).
 final class GPUDeviceTests: XCTestCase {
     func testLinuxGuestDetectsTheVirtioGPUAndReadsTheGeneratedEDID() async throws {
+        let trace = TraceRecorder()
         let result = try await LinuxGuestHarness.run(
             testCase: self,
             stopBehavior: .guestPowerOff,
             powerOff: true,
             tests: ["gpu"],
-            customDevices: [VirtioGPUDevice()]
+            customDevices: [VirtioGPUDevice(traceObserver: { trace.append($0) })]
         )
+        // The exchanged bytes become the golden driver trace of graphics.md §12 (#019 step 1).
+        try writeDriverTrace(trace.records)
 
         XCTAssertEqual(result.records.first, .bootOK)
         XCTAssertEqual(result.records.last, .done)
@@ -45,6 +61,28 @@ final class GPUDeviceTests: XCTestCase {
             // R-01 negative result: a config-space update did not raise a guest display event.
             XCTFail("R-01: scanout 1 did not reach the guest DRM connector: \(detail)")
         }
+    }
+
+    /// Writes the captured exchanges next to the guest artifacts, outside the repository.
+    private func writeDriverTrace(_ records: [VirtioGPUDevice.TraceRecord]) throws {
+        let directory = try LinuxGuestHarness.artifactURLs().kernel.deletingLastPathComponent()
+        let entries: [[String: Any]] = records.map { record in
+            [
+                "queue": record.queueIndex == 0 ? "control" : "cursor",
+                "request": hexString(record.request),
+                "response": record.response.map(hexString) ?? NSNull(),
+            ]
+        }
+        let document: [String: Any] = [
+            "provenance": "Captured by GPUDeviceTests from the test Linux guest (gpu check) with virtio_gpu.",
+            "records": entries,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: directory.appendingPathComponent("gpu-driver-trace.json"))
+    }
+
+    private func hexString(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     private func okDetail(named name: String, in records: [TestGuestRecord]) throws -> String {

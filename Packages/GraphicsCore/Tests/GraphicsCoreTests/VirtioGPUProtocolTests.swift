@@ -207,3 +207,20 @@ extension UInt32 {
         (0..<4).map { UInt8(truncatingIfNeeded: self >> (8 * $0)) }
     }
 }
+
+@Test func capturedLinuxDriverExchangesDecodeAndReencodeExactly() throws {
+    let records = try GraphicsFixtures.linuxDriverTrace()
+    #expect(!records.isEmpty)
+    for record in records {
+        let request = try GraphicsFixtures.hexBytes(record.request)
+        let decoded = try VirtioGPUProtocol.decodeRequest(request)
+        #expect(VirtioGPUProtocol.encodeRequest(decoded) == request, "\(record.request.prefix(16))")
+        if let response = record.response {
+            let bytes = try GraphicsFixtures.hexBytes(response)
+            let decodedResponse = try VirtioGPUProtocol.decodeResponse(bytes)
+            #expect(
+                VirtioGPUProtocol.encodeResponse(decodedResponse.body, answering: decodedResponse.header) == bytes
+            )
+        }
+    }
+}

@@ -397,3 +397,20 @@ private final class TraceBox: @unchecked Sendable {
     await device.waitForConfigurationWrites()
     #expect(eventsRead(session.fake) == VirtioGPUProtocol.Event.display)
 }
+
+@Test func deviceAnswersTheCapturedDisplayAndEDIDRequestsLikeTheLinuxDriverSaw() async throws {
+    var replayed = 0
+    for record in try GraphicsFixtures.linuxDriverTrace() {
+        guard let response = record.response else { continue }
+        let request = try GraphicsFixtures.hexBytes(record.request)
+        let header = try VirtioGPUControlHeader(decodingFrom: request)
+        guard
+            header.type == VirtioGPUCommand.getDisplayInfo.rawValue || header.type == VirtioGPUCommand.getEDID.rawValue
+        else { continue }
+        let expected = try GraphicsFixtures.hexBytes(response)
+        let result = await exchange(VirtioGPUDevice(), request: request, writableByteCount: expected.count)
+        #expect(result.written == expected, "\(record.request.prefix(16))")
+        replayed += 1
+    }
+    #expect(replayed == 17)
+}

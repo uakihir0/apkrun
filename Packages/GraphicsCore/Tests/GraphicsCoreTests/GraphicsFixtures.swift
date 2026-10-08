@@ -20,6 +20,22 @@ enum GraphicsFixtures {
         let vectors: [Vector]
     }
 
+    /// One exchange captured from the Linux driver. `response` is `nil` when the element got none.
+    struct TraceRecord: Decodable {
+        let queue: String
+        let request: String
+        let response: String?
+    }
+
+    private struct TraceFile: Decodable {
+        let records: [TraceRecord]
+    }
+
+    static func linuxDriverTrace() throws -> [TraceRecord] {
+        let data = try Data(contentsOf: url("virtio-gpu-linux-trace.json"))
+        return try JSONDecoder().decode(TraceFile.self, from: data).records
+    }
+
     static func url(_ relativePath: String) -> URL {
         // This file is Packages/GraphicsCore/Tests/GraphicsCoreTests/GraphicsFixtures.swift.
         var root = URL(fileURLWithPath: #filePath)

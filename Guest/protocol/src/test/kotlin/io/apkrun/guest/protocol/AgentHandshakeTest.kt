@@ -85,6 +85,21 @@ class AgentHandshakeTest {
     }
 
     @Test
+    fun `a host major version of 2^31 is newer than supported, not older`() {
+        // The wire value 0x80000000 arrives as a negative Int, and it must not be read as older.
+        val failure =
+            assertFailsWith(GuestProtocolFailure.IncompatibleVersion::class) {
+                AgentHandshake.evaluate(acceptedAck(major = Int.MIN_VALUE))
+            }
+                as GuestProtocolFailure.IncompatibleVersion
+        assertEquals(2_147_483_648L, failure.host.major)
+        assertEquals(
+            ProtocolCompatibility.ABOVE_SUPPORTED,
+            ProtocolVersion.compatibility(failure.host),
+        )
+    }
+
+    @Test
     fun `a rejection for an incompatible version is reported as an incompatible version`() {
         assertFailsWith(GuestProtocolFailure.IncompatibleVersion::class) {
             AgentHandshake.evaluate(

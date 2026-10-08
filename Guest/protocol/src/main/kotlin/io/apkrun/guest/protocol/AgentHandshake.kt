@@ -48,7 +48,8 @@ object AgentHandshake {
         if (!ack.hasHostProtocolVersion()) {
             throw GuestProtocolFailure.MalformedFrame("the HelloAck has no host version")
         }
-        val host = ProtocolVersion(ack.hostProtocolVersion.major, ack.hostProtocolVersion.minor)
+        val host =
+            ProtocolVersion.fromWire(ack.hostProtocolVersion.major, ack.hostProtocolVersion.minor)
         if (ProtocolVersion.compatibility(host) != ProtocolCompatibility.COMPATIBLE) {
             throw GuestProtocolFailure.IncompatibleVersion(host, agentVersion)
         }
@@ -67,7 +68,10 @@ object AgentHandshake {
         when (reason) {
             RejectReason.REJECT_REASON_INCOMPATIBLE_VERSION ->
                 GuestProtocolFailure.IncompatibleVersion(
-                    ProtocolVersion(ack.hostProtocolVersion.major, ack.hostProtocolVersion.minor),
+                    ProtocolVersion.fromWire(
+                        ack.hostProtocolVersion.major,
+                        ack.hostProtocolVersion.minor,
+                    ),
                     agentVersion,
                 )
             RejectReason.REJECT_REASON_WRONG_CHANNEL ->

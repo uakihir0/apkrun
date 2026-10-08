@@ -10,6 +10,12 @@ import Testing
     #expect(ProtocolVersion.compatibility(of: ProtocolVersion(major: 2, minor: 0)) == .agentNewer)
 }
 
+@Test func versionMajorsAboveTwoToThe31AreUnsignedAndNewer() {
+    // The wire field is uint32. The Kotlin codec must agree with this value for the same bytes.
+    #expect(ProtocolVersion.compatibility(of: ProtocolVersion(major: 0x8000_0000, minor: 0)) == .agentNewer)
+    #expect(ProtocolVersion.compatibility(of: ProtocolVersion(major: UInt32.max, minor: 0)) == .agentNewer)
+}
+
 @Test func versionsOrderByMajorThenMinor() {
     let oneZero = ProtocolVersion(major: 1, minor: 0)
     let oneOne = ProtocolVersion(major: 1, minor: 1)

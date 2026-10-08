@@ -129,4 +129,17 @@ class AgentHandshakeTest {
         assertFalse(ack.hasHostProtocolVersion())
         assertFailsWith(GuestProtocolFailure.MalformedFrame::class) { AgentHandshake.evaluate(ack) }
     }
+
+    @Test
+    fun `a HelloAck with neither accepted nor rejected is malformed`() {
+        // The version and the token are present, so only the missing outcome can cause the failure.
+        val ack =
+            HelloAck.newBuilder()
+                .setHostProtocolVersion(WireProtocolVersion.newBuilder().setMajor(1).setMinor(0))
+                .setSessionToken(ByteString.copyFrom(sessionToken))
+                .addAllEnabledCapabilities(listOf("core.v1"))
+                .build()
+        assertEquals(HelloAck.OutcomeCase.OUTCOME_NOT_SET, ack.outcomeCase)
+        assertFailsWith(GuestProtocolFailure.MalformedFrame::class) { AgentHandshake.evaluate(ack) }
+    }
 }

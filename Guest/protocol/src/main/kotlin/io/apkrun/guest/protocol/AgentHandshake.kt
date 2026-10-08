@@ -35,6 +35,13 @@ object AgentHandshake {
         agentVersion: ProtocolVersion = ProtocolVersion.HOST,
         implemented: Set<GuestCapability> = GuestCapability.entries.toSet(),
     ): AcceptedHandshake {
+        // HelloAck carries either accepted or rejected. A HelloAck with neither is a protocol
+        // violation (§12.2), so it fails before any of its fields are trusted.
+        if (ack.outcomeCase == HelloAck.OutcomeCase.OUTCOME_NOT_SET) {
+            throw GuestProtocolFailure.MalformedFrame(
+                "the HelloAck has neither accepted nor rejected"
+            )
+        }
         if (ack.hasRejected()) {
             throw failure(ack, agentVersion, ack.rejected.reason)
         }

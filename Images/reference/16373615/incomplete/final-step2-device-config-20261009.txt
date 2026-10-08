@@ -1,0 +1,19 @@
+# Final attempt, step 2: DeviceConfig key `system_server_watchdog_timeout_ms` (#064, #014)
+
+Same run as final-step1-watchdog-dumps-20261009.txt. The DeviceConfig service
+was not registered until the run was about 1840 seconds old, while
+system_server was in PackageManager (`packagemanagermain` pause).
+
+| Command (run through `adb shell`) | Response | Result |
+|---|---|---|
+| `service check device_config` | `Service device_config: not found` until about 1840 s, then `Service device_config: found` | service appears after PackageManager |
+| `cmd device_config list` | 3119 lines; no line for `system_server_watchdog_timeout_ms` | the key has no value set; the code default applies |
+| `cmd device_config put system_performance system_server_watchdog_timeout_ms 600000` | exit 255; `java.lang.SecurityException: Permission denial for flag 'system_performance/system_server_watchdog_timeout_ms'; allowlist permission granted, but must add flag to the allowlist` | refused |
+| `cmd device_config get system_performance system_server_watchdog_timeout_ms` | `null`, exit 0 | no value written |
+| `cmd device_config put activity_manager system_server_watchdog_timeout_ms 600000` | `Exception occurred while executing 'put'` (same permission failure) | refused |
+
+Result: the shell user cannot write this flag on this user build. The flag is
+not on the DeviceConfig allowlist, so the write is refused in both namespaces
+tried. No value was written, so step 3 (whether the next system_server start
+honours the value) was not applicable and was not run. The image was not
+changed.

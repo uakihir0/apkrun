@@ -1,0 +1,28 @@
+# Final attempt, step 1: Watchdog dump files as the shell user (#064, #014)
+
+Run: default profile (4 guest CPUs, 4096 MiB, `--gpu_vhost_user_mode=off`, no
+`--gpu_mode`), instance 2, build 16373615, deadline 3000 s. The runner is
+`Experiments/cuttlefish-boot-diagnosis/boot_variant.sh` (default-final). The
+commands ran as the adb shell user. No privilege was requested or used.
+
+Identity of the shell user, from `id`:
+    uid=2000(shell) gid=2000(shell), SELinux context shell
+
+| Command (run through `adb shell`) | Response | Result |
+|---|---|---|
+| `ls -la /data/anr` | lists `anr_2026-10-08-14-51-54-337` (system, mode 0600, 10310 bytes) and `trace_00` (tombstoned, mode 0660, 78887 bytes) | directory listable, files named |
+| `cat /data/anr/anr_2026-10-08-14-51-54-337` | `Permission denied` | not readable |
+| `cat /data/anr/trace_00` | `Permission denied` | not readable |
+| `ls /data/system/dropbox` | `Permission denied` | not readable |
+| `dumpsys dropbox` | `Can't find service: dropbox` | service absent on this build |
+| `logcat -d` (filtered for Watchdog) | `Watchdog: WAITED_UNTIL_PRE_WATCHDOG` (pid 1461, 14:50:58 UTC); `Pausing HandlerChecker: main thread for reason: packagemanagermain` (14:52:08 UTC) | readable: the Watchdog's own lines |
+| `logcat -d` (SystemServerTiming) | `OnBootPhase_100 DisplayManagerService ... 29474ms`; `WaitForDisplay ... 29705ms` | readable: the display wait |
+
+Result: the Watchdog's dump files (`/data/anr` traces and the dropbox entries
+for `system_server_watchdog`) are not readable by the shell user. The shell user
+can read the Watchdog's logcat lines, which show the pre-watchdog state and the
+29.7 s display wait during `OnBootPhase_100`. No stack trace was obtained. Whether the Watchdog killed system_server is not
+established from these reads: the logcat buffer read showed no kill line, and the
+system_server pid observed later was not stable (1461, 1470, then 1461), so it is
+not evidence of a restart. The ANR file time (14:51:54 UTC) is before the
+packagemanagermain pause and its cause is not established.

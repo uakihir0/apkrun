@@ -158,6 +158,7 @@ enum LinuxGuestHarness {
         tests: [String] = [],
         blockDisks: LinuxTestGuest.BlockDisks? = nil,
         blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
+        customDevices: [any VirtioDeviceModel] = [],
         entropyTestDevice: EntropyTestDevice? = nil,
         recordObserver: (@Sendable (TestGuestRecord) -> Void)? = nil,
         hostAction: (@Sendable (VMController) async throws -> Void)? = nil,
@@ -184,6 +185,7 @@ enum LinuxGuestHarness {
             tests: tests,
             blockDisks: blockDisks,
             blockDiskOrder: blockDiskOrder,
+            customDevices: customDevices,
             entropyTestDevice: entropyTestDevice,
             powerOff: powerOff,
             extraCommandLine: extraCommandLine

@@ -253,6 +253,8 @@ targets:
         product: DiagnosticsCore
       - package: APKRun
         product: VirtioDeviceCore
+      - package: APKRun
+        product: GraphicsCore
     scheme:
       testTargets:
         - IntegrationTests

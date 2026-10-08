@@ -1,0 +1,69 @@
+import CryptoKit
+import Foundation
+import GraphicsCore
+import VirtualMachineCore
+import XCTest
+
+/// T2 checks of the virtio-gpu device: the probe and EDID, and the R-01 hotplug spike
+/// (graphics.md §12, #019).
+final class GPUDeviceTests: XCTestCase {
+    func testLinuxGuestDetectsTheVirtioGPUAndReadsTheGeneratedEDID() async throws {
+        let result = try await LinuxGuestHarness.run(
+            testCase: self,
+            stopBehavior: .guestPowerOff,
+            powerOff: true,
+            tests: ["gpu"],
+            customDevices: [VirtioGPUDevice()]
+        )
+
+        XCTAssertEqual(result.records.first, .bootOK)
+        XCTAssertEqual(result.records.last, .done)
+        let detail = try okDetail(named: "gpu", in: result.records)
+        XCTAssertTrue(detail.contains("scanouts=16"), detail)
+        XCTAssertTrue(detail.contains("connectors=16"), detail)
+        XCTAssertTrue(detail.contains("virtual1=connected"), detail)
+
+        // Scanout 0 is the test mode, so the guest's EDID must equal the golden block of that mode.
+        let golden = try Data(contentsOf: goldenEDIDURL(named: "scanout-00-1024x768-60.edid"))
+        let expectedSHA = SHA256.hash(data: golden).map { String(format: "%02x", $0) }.joined()
+        XCTAssertTrue(detail.contains("edid_sha256=\(expectedSHA)"), detail)
+    }
+
+    func testHotplugSpikeShowsScanoutOneInTheGuestDRMConnector() async throws {
+        do {
+            let result = try await LinuxGuestHarness.run(
+                testCase: self,
+                stopBehavior: .guestPowerOff,
+                powerOff: true,
+                tests: ["gpu", "gpu-hotplug"],
+                customDevices: [VirtioGPUDevice(hotplugSpikeDelay: .seconds(3))]
+            )
+            XCTAssertEqual(result.records.last, .done)
+            // The guest's own timing shows when the DRM connector reported the change (R-01).
+            print("R-01 gpu-hotplug: \(try okDetail(named: "gpu-hotplug", in: result.records))")
+        } catch LinuxGuestHarness.HarnessFailure.guestCheckFailed(let name, let detail) where name == "gpu-hotplug" {
+            // R-01 negative result: a config-space update did not raise a guest display event.
+            XCTFail("R-01: scanout 1 did not reach the guest DRM connector: \(detail)")
+        }
+    }
+
+    private func okDetail(named name: String, in records: [TestGuestRecord]) throws -> String {
+        let detail = records.lazy.compactMap { record -> String? in
+            if case .check(name: name, result: .ok, detail: let detail) = record {
+                return detail
+            }
+            return nil
+        }.first
+        return try XCTUnwrap(detail, "no ok record for \(name)")
+    }
+
+    /// The golden EDID lives under `Tests/Fixtures/graphics/edid/` at the repository root.
+    private func goldenEDIDURL(named name: String) -> URL {
+        // This file is Tests/IntegrationTests/LinuxGuestTests/GPUDeviceTests.swift.
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 {
+            root.deleteLastPathComponent()
+        }
+        return root.appendingPathComponent("Tests/Fixtures/graphics/edid").appendingPathComponent(name)
+    }
+}

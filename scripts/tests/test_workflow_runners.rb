@@ -99,6 +99,45 @@ def expect_rejected(name, pattern, document)
   abort("FAIL workflow runner fixture #{name}: expected a rejection matching #{pattern}, got #{errors.inspect}")
 end
 
+# Required jobs must run for every pull request and every push to main. A path
+# filter or an if: condition would leave a required check pending or skipped.
+def required_job_errors(document)
+  errors = []
+  triggers = triggers_of(document)
+  unless triggers.key?("pull_request") && [nil, {}].include?(triggers["pull_request"])
+    errors << "pull_request must not filter by branch or path"
+  end
+  unless triggers["push"] == { "branches" => ["main"] }
+    errors << "push must run only for main without path filters"
+  end
+  %w[lint codegen build test-swift].each do |job_name|
+    job = document.fetch("jobs").fetch(job_name)
+    errors << "#{job_name} must run unconditionally" if job.key?("if") || job.key?("paths")
+  end
+  errors
+end
+
+required_errors = required_job_errors(ci)
+unless required_errors.empty?
+  abort("FAIL workflow required jobs:\n#{required_errors.map { |error| "  #{error}" }.join("\n")}")
+end
+puts("PASS workflow required jobs run for every pull request and push to main")
+
+mutated = copy(ci)
+mutated["jobs"]["build"]["if"] = "github.event_name == 'push'"
+unless required_job_errors(mutated).any? { |error| error.include?("build must run unconditionally") }
+  abort("FAIL workflow required jobs fixture: accepted a conditional required job")
+end
+puts("PASS workflow required jobs fixture rejects a conditional required job")
+
+mutated = copy(ci)
+mutated["on"] = mutated.fetch("on", {}).merge("pull_request" => { "branches" => ["release"] })
+mutated.delete(true)
+unless required_job_errors(mutated).any? { |error| error.include?("pull_request must not filter") }
+  abort("FAIL workflow required jobs fixture: accepted a branch-filtered pull request trigger")
+end
+puts("PASS workflow required jobs fixture rejects a filtered pull request trigger")
+
 mutated = copy(ci)
 mutated["jobs"]["lint"]["runs-on"] = ["self-hosted", "apkrun-ci"]
 expect_rejected("self-hosted lint job", /lint.*self-hosted/, mutated)

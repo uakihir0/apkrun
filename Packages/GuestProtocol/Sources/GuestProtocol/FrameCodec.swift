@@ -13,8 +13,12 @@ public enum FrameCodec {
     /// The largest body that a frame can carry: 4 MiB.
     public static let maximumBodySize = 4_194_304
 
-    /// Encodes one envelope as a complete frame.
+    /// Encodes one envelope as a complete frame. An envelope without a body is
+    /// ``GuestProtocolFailure/malformedFrame``, the same as the decoder's rule.
     public static func encode(_ envelope: GPEnvelope) throws(GuestProtocolFailure) -> Data {
+        guard envelope.body != nil else {
+            throw .malformedFrame
+        }
         let body: Data
         do {
             body = try envelope.serializedData()
@@ -61,13 +65,19 @@ public enum FrameCodec {
         return length
     }
 
-    /// Parses a serialized body. Bytes that do not decode are ``GuestProtocolFailure/malformedFrame``.
+    /// Parses a serialized body. Bytes that do not decode are ``GuestProtocolFailure/malformedFrame``,
+    /// and so is an envelope that has no body (guest-protocol.md §4.1), because a frame must carry one.
     public static func decodeBody(_ body: Data) throws(GuestProtocolFailure) -> GPEnvelope {
+        let envelope: GPEnvelope
         do {
-            return try GPEnvelope(serializedBytes: body)
+            envelope = try GPEnvelope(serializedBytes: body)
         } catch {
             throw .malformedFrame
         }
+        guard envelope.body != nil else {
+            throw .malformedFrame
+        }
+        return envelope
     }
 
     /// Checks a body length against the limits of §4.

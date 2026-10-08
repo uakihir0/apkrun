@@ -15,6 +15,7 @@ private let expectedFailures: [String: GuestProtocolFailure] = [
     "invalid-oversize": .frameTooLarge,
     "invalid-truncated": .malformedFrame,
     "invalid-malformed": .malformedFrame,
+    "invalid-no-body": .malformedFrame,
 ]
 
 private func bodyKind(of envelope: GPEnvelope) -> String? {
@@ -92,6 +93,18 @@ private func bodyKind(of envelope: GPEnvelope) -> String? {
     do {
         _ = try FrameCodec.encode(GPEnvelope())
         Issue.record("an empty envelope must not produce a frame")
+    } catch {
+        #expect(error == .malformedFrame)
+    }
+}
+
+@Test func encodingRejectsAnEnvelopeWithoutABody() throws {
+    // The envelope has an id, so its serialized form is not empty. Only the missing body fails.
+    var envelope = GPEnvelope()
+    envelope.id = 1
+    do {
+        _ = try FrameCodec.encode(envelope)
+        Issue.record("an envelope without a body must not produce a frame")
     } catch {
         #expect(error == .malformedFrame)
     }

@@ -15,8 +15,14 @@ object FrameCodec {
     /** The largest body that a frame can carry: 4 MiB. */
     const val MAXIMUM_BODY_SIZE = 4_194_304
 
-    /** Encodes one envelope as a complete frame. */
-    fun encode(envelope: Envelope): ByteArray = frame(envelope.toByteArray())
+    /**
+     * Encodes one envelope as a complete frame. An envelope without a body is a
+     * [GuestProtocolFailure.MalformedFrame], the same rule that the decoder applies.
+     */
+    fun encode(envelope: Envelope): ByteArray {
+        requireBody(envelope)
+        return frame(envelope.toByteArray())
+    }
 
     /**
      * Wraps a serialized body in a frame. The body must be between 1 and [MAXIMUM_BODY_SIZE] bytes.
@@ -63,14 +69,25 @@ object FrameCodec {
 
     /**
      * Parses a serialized body. Bytes that do not decode are a
-     * [GuestProtocolFailure.MalformedFrame].
+     * [GuestProtocolFailure.MalformedFrame], and so is an envelope with no body (§4.1), because a
+     * frame must carry one.
      */
-    fun decodeBody(body: ByteArray): Envelope =
-        try {
-            Envelope.parseFrom(body)
-        } catch (error: InvalidProtocolBufferException) {
-            throw GuestProtocolFailure.MalformedFrame("the body does not decode as an Envelope")
+    fun decodeBody(body: ByteArray): Envelope {
+        val envelope =
+            try {
+                Envelope.parseFrom(body)
+            } catch (error: InvalidProtocolBufferException) {
+                throw GuestProtocolFailure.MalformedFrame("the body does not decode as an Envelope")
+            }
+        requireBody(envelope)
+        return envelope
+    }
+
+    private fun requireBody(envelope: Envelope) {
+        if (envelope.bodyCase == Envelope.BodyCase.BODY_NOT_SET) {
+            throw GuestProtocolFailure.MalformedFrame("the envelope has no body")
         }
+    }
 
     private fun validateBodyLength(length: Long) {
         if (length == 0L) {

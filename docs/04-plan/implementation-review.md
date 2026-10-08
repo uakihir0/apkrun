@@ -8886,11 +8886,11 @@ passes 69 tests, including the golden EDID tests, which are unchanged.
 | Task | #033 |
 | Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §4, §16; [coding-conventions.md](../05-development/coding-conventions.md) §6.1 |
 
-**Choice.** Each valid golden frame is a text-format `Envelope` in `Packages/GuestProtocol/testdata/frames/valid-*.txtpb`. `scripts/generate-protos.sh` encodes it with the pinned protoc (`--encode`) and adds the 4-byte length prefix. The invalid frames (`invalid-zero-length`, `invalid-oversize`, `invalid-truncated`, and `invalid-malformed`) are fixed byte sequences that the script writes. The set has 13 valid frames and 4 invalid ones. The only map in any golden frame has one entry.
+**Choice.** Each valid golden frame is a text-format `Envelope` in `Packages/GuestProtocol/testdata/frames/valid-*.txtpb`. `scripts/generate-protos.sh` encodes it with the pinned protoc (`--encode`) and adds the 4-byte length prefix. The invalid frames (`invalid-zero-length`, `invalid-oversize`, `invalid-truncated`, and `invalid-malformed`) are fixed byte sequences that the script writes. The set has 13 valid frames and 5 invalid ones. The fifth, `invalid-no-body`, is an envelope with an id and no body, which both decoders reject. The only map in any golden frame has one entry.
 
 **Reason.** Text sources make each frame reviewable. The CI codegen job then covers the binary files too, because it regenerates them and fails on any diff. Swift and Java serialize a `map` in different orders, so a multi-entry map would make the byte-for-byte re-encode check depend on the implementation. A one-entry map keeps the check exact. The rule is recorded here so that later golden frames, such as the #072 frames, follow it.
 
-**Verification.** Regeneration is deterministic. Two runs produce identical Swift sources and identical frame bytes, which were compared by SHA-256 (17 frames). `GoldenFrames` in Swift and `FrameCodecTest` in Kotlin decode every valid frame, re-encode it byte for byte, and reject each invalid frame with its typed error. A test also fails if an invalid frame has no expected error.
+**Verification.** Regeneration is deterministic. Two runs produce identical Swift sources and identical frame bytes, which were compared by SHA-256 (18 frames). `GoldenFrames` in Swift and `FrameCodecTest` in Kotlin decode every valid frame, re-encode it byte for byte, and reject each invalid frame with its typed error. A test also fails if an invalid frame has no expected error.
 
 **Limit.** The text sources depend on protoc's text format. A protoc upgrade could change how a text value is read, and the pin in `scripts/tool-versions.env` is the control for that.
 

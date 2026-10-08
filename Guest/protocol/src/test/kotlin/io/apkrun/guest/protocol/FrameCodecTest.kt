@@ -42,6 +42,7 @@ private val requiredBodyKinds =
 private val expectedFailures: Map<String, KClass<out GuestProtocolFailure>> =
     mapOf(
         "invalid-zero-length" to GuestProtocolFailure.MalformedFrame::class,
+        "invalid-no-body" to GuestProtocolFailure.MalformedFrame::class,
         "invalid-oversize" to GuestProtocolFailure.FrameTooLarge::class,
         "invalid-truncated" to GuestProtocolFailure.MalformedFrame::class,
         "invalid-malformed" to GuestProtocolFailure.MalformedFrame::class,
@@ -117,6 +118,14 @@ class FrameCodecTest {
         // An envelope with no fields serializes to zero bytes, which is not a valid body.
         failureOf<GuestProtocolFailure.MalformedFrame> {
             FrameCodec.encode(Envelope.getDefaultInstance())
+        }
+    }
+
+    @Test
+    fun `encoding rejects an envelope without a body`() {
+        // The envelope has an id, so its serialized form is not empty. Only the missing body fails.
+        failureOf<GuestProtocolFailure.MalformedFrame> {
+            FrameCodec.encode(Envelope.newBuilder().setId(1).build())
         }
     }
 

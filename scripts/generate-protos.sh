@@ -74,6 +74,9 @@ printf '\010\001\022\002\012\000' >> "$frames_dir/invalid-truncated.bin"
 # A 3-byte body that does not decode as an Envelope: a varint that never ends.
 printf '00000003' | xxd -r -p > "$frames_dir/invalid-malformed.bin"
 printf '\377\377\377' >> "$frames_dir/invalid-malformed.bin"
+# An envelope with an id (field 1 = 1) and no body. Decoding rejects it, as encoding does.
+printf '00000002' | xxd -r -p > "$frames_dir/invalid-no-body.bin"
+printf '\010\001' >> "$frames_dir/invalid-no-body.bin"
 
 printf 'generate-protos: wrote %s golden frames to Packages/GuestProtocol/testdata/frames\n' \
     "$(find "$frames_dir" -name '*.bin' | wc -l | tr -d ' ')"

@@ -1148,7 +1148,7 @@ See [../test-strategy.md](../test-strategy.md).
    - Add `apkrun.test=bootconfig`, which prints `/proc/bootconfig`.
    - `LinuxGuestTests.testBootconfigTrailer` boots the test kernel with an initrd that `BootconfigWriter` built from a golden input, then compares the output with the golden text.
    - If the pinned test kernel lacks `CONFIG_BOOT_CONFIG`, the test skips with that message, and #013 verifies `/proc/bootconfig` on Android.
-   - Check: the T2 test passes or skips with the reason.
+   - Check: the T2 test passes or skips with the reason. It skips on the pinned test kernel, which is built without `CONFIG_BOOT_CONFIG`; the reason carries the kernel's warning (IR-362).
 6. **Android kernel boot.**
    - `AndroidBootTests.testKernelBoot` boots the unsigned bundle with `--gpu none`. It waits up to 120 s for the first `init: ` line on hvc0, then force-stops the VM.
    - It asserts these lines in `boot-<timestamp>.log`:
@@ -1159,7 +1159,7 @@ See [../test-strategy.md](../test-strategy.md).
    - On VZ, hvc0 starts only when first-stage init has loaded `virtio_console` (about 0.18 s of uptime), and the earlier kernel lines are not replayed (IR-306). `Booting Linux on physical CPU`, `Kernel command line:`, the PL031 RTC, and the rng and balloon probes are therefore checked in #013 over the serial shell (`su 0 dmesg`, `/proc/cmdline`, `/dev/rtc0`, `/sys/bus/virtio/drivers/`).
    - A second test boots a deliberately truncated ramdisk and expects `failed(.kernelPanic)`.
    - Record in [android-image.md](../../02-design/android-image.md) §6: the kernel version, the time to each line, and any missing device.
-   - Check: both T2 tests pass.
+   - Check: both T2 tests pass (`AndroidBootTests`, `AndroidBoot` configuration).
 
 ### Tests
 
@@ -1196,7 +1196,11 @@ See [../test-strategy.md](../test-strategy.md).
   - Each boot logs `Prepared boot <id> of image 2026.10.0-cf16373615-arm64 bootconfig sha256 <hash> disks apkrun-os,apkrun-data gpu headless` (category `boot`).
   - T0: `BootPhaseDetectorTests` covers the panic and the boot-failed detail over a captured VZ console log; `AndroidBootPlannerTests` covers the definition, the initrd trailer, the shared bootconfig golden vectors, and `bootconfigConflict`. The 16 KiB build limit is `bootconfig.MAX_BUILD_BOOTCONFIG_SIZE` in `apkrun_image`.
   - Command-line criterion (IR-360): on VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The criterion now compares `/proc/cmdline`, read over the serial shell, with `cmdline.txt`. The shell check is written in #013 (`testReachesInit`), so the criterion stays open here until that task runs it.
-  - Open: (1) `/proc/bootconfig` against the merged block on the Linux guest (step 5, `LinuxGuestBootTests.testBootconfigTrailer`). (2) The T2 `AndroidBootTests` (`testKernelBoot`, `testKernelPanicDetected`) are written in this task. `testReachesInit`, `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell` belong to #013 and #014; the G2 acceptance test covers the boot path in the meantime.
+  - Bootconfig criterion (IR-362): `LinuxGuestBootconfigTests.testBootconfigTrailer` is written. The pinned test kernel has no `CONFIG_BOOT_CONFIG`, so it skips with the kernel's warning. The criterion stays open until `/proc/bootconfig` is read over the Android serial shell in #013 (`testReachesInit`).
+  - T2 `AndroidBootTests` (2026-10-09, branch `task/012-android-kernel-boot-closure`): `testKernelBoot` passes in 1.1 s (nine partitions on `vda`, four on `vdb`, the virtio-gpu probe, the vsock module load, no panic). `testKernelPanicDetected` passes with the outcome of IR-361: `failed(.bootStalled(phase: .kernel))` after 30 s, with no init line, because the unpacking failure happens before hvc0 exists.
+  - Still open for #013 and #014: `testReachesInit`, `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell`. The G2 acceptance test covers the boot path until then.
+  - A forced stop about one second into the boot can leave VZ in `failed` and the stop does not return (IR-363). The T2 stops are bounded at 60 s.
+
 
 ---
 

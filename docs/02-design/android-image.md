@@ -525,6 +525,15 @@ The Python `bootconfig.py` and Swift `BootconfigWriter` share golden test vector
 
 `androidboot.*` parameters are never put on the cmdline. The total length must fit the VM validation limit of 2048 bytes ([vm.md](vm.md) §3).
 
+### 6.5 Verification on VZ (#012)
+
+Checked on macOS 27.0.1 (26A434), build 16373615, with the Android kernel `6.12.74-android16-6-g3ec022196c4e-ab15076761-4k` (`boot/kernel`).
+
+- **Kernel path and timing.** From `apkrun dev boot` on the product code (`boot-20261009T015535Z.log`), with kernel uptime: the first console line at 0.20 s; `vda` and `vdb` probed at 0.28 s and 0.29 s with nine and four partitions; `[drm] pci: virtio-gpu-pci detected` at 0.31 s; the first `init:` line at 0.34 s; `init: init second stage started!` at 0.43 s; `starting service 'zygote'` at 1.32 s; `VIRTUAL_DEVICE_BOOT_COMPLETED` at 5.18 s.
+- **Missing from hvc0.** `Booting Linux on physical CPU`, `Kernel command line:`, and the first-stage loads of `virtio_console` and `virtio_net` are written before hvc0 exists, so the console never shows them (IR-306, IR-360). #013 reads them over the serial shell (`su 0 dmesg`, `/proc/cmdline`, `/dev/rtc0`, `/sys/bus/virtio/drivers/`). Among the devices the console can show, none is missing.
+- **Bootconfig.** The Linux test kernel (Alpine `linux-virt` 6.18.54) has no `CONFIG_BOOT_CONFIG`, so `/proc/bootconfig` does not exist there. The Android check of `/proc/bootconfig` against the merged block is in #013 (IR-362).
+- **Truncated ramdisk.** The ramdisk is LZ4 (legacy). A cut ramdisk fails while the kernel unpacks it, before `virtio_console` exists, so no panic text reaches hvc0. The boot then ends with `bootStalled(kernel)` (IR-361).
+
 ---
 
 ## 7. Cuttlefish host-service substitution (#095)
@@ -1699,7 +1708,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | fstab `formattable` flags and the metadata encryption path | #011 | confirmed in the spike: `formattable` on `/data` and `/metadata`, `keydirectory=/metadata/vold/metadata_encryption` (§5.2) |
 | Signed stock bundle, install, and boot (#065) | #065 | 2026-10-09, macOS 27.0.1 (26A434), build 16373615. `scripts/build-test-android-bundle.sh` built the signed bundle twice from the same inputs, and `manifest.json`, `manifest.sig`, and `SHA256SUMS` were byte-identical. `os.img` allocates 1.8 GB for 8.7 GB logical after the zero-block fix (§4.3). `apkrun dev image install` made the image current, and `apkrun dev boot` reached `ready` in 13.7 s. `G2AndroidBootTests` passed five cold boots from the installed bundle, each with `sys.boot_completed=1`, with a 60-second dwell instead of 600 seconds. |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09, macOS 27.0.1 (26A434): `40000000.pci`; the disks, PCI functions, and device-tree nodes are in `Images/reference/vz/26A434/topology.txt` (§5.3) |
-| Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `apkrun dev boot` boots through `AndroidBootPlanner` and `RuntimeSupervisor`, and the console shows `[vda]` with nine partitions and `[vdb]` with four. `/dev/rtc0`, `/proc/cmdline`, and `/proc/bootconfig` are not yet checked on the production path (§6, §7.6) |
+| Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `apkrun dev boot` boots through `AndroidBootPlanner` and `RuntimeSupervisor`, and the console shows `[vda]` with nine partitions and `[vdb]` with four. `AndroidBootTests.testKernelBoot` passes in 1.1 s. `AndroidBootTests.testKernelPanicDetected` passes with `bootStalled(kernel)` (IR-361). `/dev/rtc0`, `/proc/cmdline`, and `/proc/bootconfig` are checked over the serial shell in #013 (§6.5) |
 | First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |
 | `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive. 2026-10-09, arm64 Mac17,9, macOS 27.0.1 (26A434), build 16373615, two-disk layout, branch `task/012-android-kernel-boot` at `ec72fa2`: `G2AndroidBootTests` passed five cold boots after an instance reset. `BOOT_COMPLETED` came at 12.4 s on the first boot and 5.2–6.0 s later. Each boot stayed 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, and no init service exiting more than twice. The gate is recorded when the run is repeated from a clean `main` (§4.2, §9.1) |
 | AVB state of the release variant; SELinux denials on the custom image | #035 | pending (§11.4, OQ-36, R-13) |

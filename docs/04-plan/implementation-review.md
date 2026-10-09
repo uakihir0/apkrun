@@ -11094,3 +11094,79 @@ change.
 **Consequence.** `testKernelBoot` (#012) does not check the command line. Its
 `Kernel command line:` assertion is not written, and `dmesg` over the shell
 (#013) carries the same line.
+
+## IR-361: Expect bootStalled for a truncated ramdisk, not kernelPanic
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #012 step 6; [android-image.md](../02-design/android-image.md) §6.5; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.3 |
+
+**Choice.** `AndroidBootTests.testKernelPanicDetected` asserts
+`failed(.bootStalled(phase: .kernel))` for a ramdisk cut to half its size, and
+that no init line appears. The entry expected `failed(.kernelPanic)`. The
+panic path stays covered by `BootPhaseDetectorTests` over captured console logs.
+
+**Reason.** The ramdisk is legacy LZ4, and the kernel unpacks it before
+first-stage init runs. `virtio_console` is a module in that ramdisk, so hvc0
+does not exist yet when the unpacking fails, and the panic text reaches no
+console the host can read. The boot then makes no progress, and the stall
+limit ends it. A cut that lets first-stage init start would need a chosen
+archive offset, and it would test a different failure. The stall outcome was
+observed: the first run stopped at `bootStalled(kernel)` after 30 s with no
+init line.
+
+**Consequence.** `Kernel panic - not syncing` on hvc0 remains the detector's
+signal for panics after `virtio_console` is loaded. A reviewer can accept the
+stall as the observed outcome, or ask for a deliberately chosen cut point as a
+follow-up.
+
+## IR-362: Check /proc/bootconfig on Android, because the test kernel has no CONFIG_BOOT_CONFIG
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012, #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #012 step 5 and criteria, #013; [android-image.md](../02-design/android-image.md) §6.3, §6.5 |
+
+**Choice.** `LinuxGuestBootconfigTests.testBootconfigTrailer` is written. It
+merges a golden input with `BootconfigWriter`, appends the trailer, and compares
+the kernel's listing with the merged block by key. On the pinned test kernel it
+skips, and the skip reason carries the kernel's dmesg line. The #012 criterion
+"`/proc/bootconfig` equals the merged block" stays open on this branch. #013
+checks `/proc/bootconfig` over the Android serial shell (`testReachesInit`).
+
+**Reason.** The test kernel is Alpine `linux-virt` 6.18.54. Its dmesg reports
+`WARNING: 'bootconfig' found on the kernel command line but CONFIG_BOOT_CONFIG
+is not set.`, and `/proc/bootconfig` is absent. Step 5 of #012 allows a skip
+with the reason and places the check on Android in #013. Changing the pinned
+kernel's configuration is a ThirdParty change and out of scope for #012.
+
+**Consequence.** The #012 criterion is not ticked by this branch, and the
+Android check decides it. The listing parser has a test that runs without a
+VM, so the comparison logic is exercised on every kernel.
+
+## IR-363: Record the forced-stop hang after a VZ stop error
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012, #014 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #012, #014; [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** The T2 Android tests bound each stop at 60 s with
+`ConsoleBuffer.completes(within:)` and fail with "the forced stop returns within
+60 s" when it does not return. `VMController` is not changed by #012.
+
+**Reason.** `AndroidBootTests.testKernelBoot` stops the VM about one second
+after `init`. In one of three runs, VZ returned `vm.stoppedWithError`
+("Internal Virtualization error"), the controller moved to `failed`, and the
+stop did not return. The run printed no further lines, so the hang was not
+traced past `RuntimeSupervisor.stop()`, `fail()`, and
+`VMController.waitForConsoleLogDrain()`. The other two runs stopped cleanly in
+0.3 s. The stop after a VZ error is outside #012's changes.
+
+**Consequence.** #014 owns the readiness monitor's stop and failure path. It
+should make a stop that follows a VZ error return with a typed result. Until
+then the bound makes the failure visible in the test instead of a hang.

@@ -11421,3 +11421,123 @@ Android's Wi-Fi state.
 **Consequence.** `testNetwork` fails until the follow-up lands, and #095's
 network criterion, DNS and the validated network, stays unchecked. The follow-up
 owns the first-boot Wi-Fi state, with `testNetwork` as its check.
+
+## IR-375: Record categories the launcher capture lacks as not compared, and read the reference command line from kernel.log
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (step 5) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #014 step 5; [android-image.md](../02-design/android-image.md) §8.4; [IR-305](#ir-305-re-scope-064-and-keep-virtualizationframework-instead-of-qemu); [IR-367](#ir-367-derive-the-reference-differences-from-the-launchers-bootconfig-and-command-line) |
+
+**Choice.** `compare_boot.py` lists a category as not compared when the reference
+holds no data for it and the candidate does, and the category is not bootconfig
+or cmdline. The report lists those categories (`notComparedCategories`). A
+category with data on one side only stays a difference, and so does a
+candidate-only bootconfig or cmdline. The reference command line comes from the
+`Kernel command line:` line of `kernel.log`, which the launcher capture holds.
+
+**Reason.** The launcher capture has no booted data for props, block devices,
+mounts, modules, HALs, hvc users, network, and SELinux (IR-305), and the step 5
+text says those are recorded, not compared. Bootconfig and cmdline are the two
+categories the launcher does hold, so skipping them would hide a real change.
+
+**Consequence.** The G2 diff compares bootconfig and cmdline and records the
+other eight categories. The VZ capture of 2026-10-09 gives 30 differences, all
+explained (25 bootconfig, 5 cmdline), and exit 0.
+
+## IR-376: Run the G2 gate from a task branch with the same commands as run-gate.sh
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (step 6) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #014 step 6 and its criteria; [build-system.md](../05-development/build-system.md) §15 |
+
+**Choice.** The G2 gate ran from commit `940376c` on `task/014-system-server-boot`
+with the same `xcodebuild` steps as `scripts/run-gate.sh` (the LinuxGuest suite,
+then G2 with the default 600 s dwell), under `lockf -k /tmp/apkrun-vm.lock`.
+The artifacts and the bundle came from `/tmp/apkrun-m1-linux`, which this task
+built with `scripts/build-test-initramfs.sh` and `scripts/build-test-android-bundle.sh`.
+
+**Reason.** `run-gate.sh` refuses to run unless the branch is `main`, and it
+refuses unless the tree is clean. Neither holds on a task branch: `Images/work`
+and the other ignored artifacts are symlinks into the main checkout, which Git
+lists as untracked. The gate's evidence rule is `main`; running it here is the
+only way to measure the stack before it merges.
+
+**Consequence.** The #014 entry records the result as evidence from the task
+branch, not from `main`. The G2 result must be repeated from a clean `main`
+after the branches merge, as the #014 entry requires.
+
+## IR-377: Keep dmesg and logcat out of the G2 capture, because the serial shell is slow
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (step 5) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §8.3, §8.4; `Images/tools/reference/guest-capture-compare.txt` |
+
+**Choice.** The G2 capture runs `guest-capture-compare.txt`, which has the
+fourteen cheap commands of `guest-capture.txt`. It leaves out `dmesg`,
+`logcat -d`, `lshal`, `dumpsys connectivity`, and the AVC greps. The full list
+stays for the launcher-style capture (`capture-vz --commands guest-capture.txt`).
+
+**Reason.** Over hvc1 the `dmesg` capture (about 4,000 lines) and `logcat` did not
+finish within five minutes, and `properties` (28 KB) took about a minute. The
+comparison reads only bootconfig and cmdline (IR-375), so the slow commands add
+no evidence to the gate. The full capture is still available for a manual run.
+
+**Consequence.** The VZ boot's dmesg and logcat are not in the G2 record. Their
+checks (AVC, the first-stage lines, LockSettings) are in T2 (`testReachesInit`,
+`testHostServiceSubstitutes`), which read the kernel log through a file.
+
+## IR-378: The developer console serves one client, and a socket closes with its VM
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (step 4) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #014 step 4; [cli.md](../02-design/cli.md) §5 |
+
+**Choice.** `apkrun dev boot` serves hvc0 and, in developer mode, hvc1 on
+sockets under `Runtime/dev-console/`. One client is attached at a time, and a
+second client is closed at once. A socket file exists only while its VM runs,
+and `stop()` removes it. A `serve` after `stop()` fails with
+`devConsoleSocketUnavailable`. A client whose socket path is too long is told
+`devConsoleNotRunning`, because such a path cannot be a running owner's socket.
+
+**Reason.** Two clients would interleave shell commands and their sentinels, and
+the shell has one prompt. Keeping the socket only while the VM runs gives the
+"no owner" error a single meaning. The bounded path length follows
+`sockaddr_un`.
+
+**Consequence.** A second `apkrun dev console --android-shell` waits for the
+first to exit (it is refused at once). A future multi-client console needs a
+protocol for the sentinels first.
+
+## IR-379: Follow-ups from the #014 review that this task does not fix
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (follow-ups) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #014; [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** Recorded, not fixed here:
+
+- `VMController.stop()` during `starting` is rejected (`VMController.swift`, the
+  `stopWithinOperation` allow-list), and `waitForConsoleLogDrain()` waits on a
+  console task that starts before the driver does. A VM stopped while it starts
+  keeps running, and `stop()` never returns. The dev boot does not stop during
+  boot, so this is not reachable from `apkrun dev boot`.
+- The Linux guest's CLI path (`apkrun dev console`, not `--android-shell`) has
+  the same EOF behaviour the attach command had, and it is not part of #014.
+- `apkrun dev console --android-shell` reports a too-long socket path as "not
+  running" rather than as an unavailable socket (IR-378).
+
+**Reason.** The first item is a VM lifecycle defect that the dev boot cannot
+reach, and fixing it needs a change to the controller's start path that is not
+part of #014's readiness work. The rest are noted for the owner tasks.
+
+**Consequence.** #014 does not claim that a stop during VM start works.

@@ -56,6 +56,39 @@ func bootconfigWriterRejectsConflictsAndHonoursOverrides() throws {
 }
 
 @Test
+func theInitrdIsWritableWhenTheRamdiskIsReadOnly() throws {
+    let bundle = try FixtureBundle.make()
+    defer { bundle.remove() }
+    // The ramdisk of an installed image is read-only. The planner appends the trailer to a copy of it.
+    let ramdisk = bundle.image.url(of: "boot/ramdisk.img")
+    try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: ramdisk.path)
+    let instance = InstanceConfiguration(
+        instanceID: try #require(UUID(uuidString: "3F2504E0-4F89-41D3-9A0C-0305E82C3302")),
+        machineIdentifier: MachineIdentity.newMachineIdentifier(),
+        macAddresses: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
+        sizing: InstanceSizing(cpuCount: 4, memoryBytes: 4 * 1024 * 1024 * 1024, userdataBytes: 1 << 30),
+        imageVersion: bundle.image.version,
+        userdataSchemaVersion: 1,
+        userdataGeneration: UUID()
+    )
+
+    _ = try AndroidBootPlanner(paths: bundle.paths).prepareBoot(
+        image: bundle.image,
+        instance: instance,
+        options: BootOptions(gpuProfile: .headless, developerMode: true)
+    )
+
+    let initrd = bundle.paths.instanceInitrdFile
+    var status = stat()
+    #expect(stat(initrd.path, &status) == 0)
+    #expect(status.st_mode & 0o200 != 0, "the initrd must be writable")
+    #expect(status.st_size > Int64(FixtureBundle.ramdisk.count))
+    var ramdiskStatus = stat()
+    #expect(stat(ramdisk.path, &ramdiskStatus) == 0)
+    #expect(ramdiskStatus.st_mode & 0o222 == 0, "the installed ramdisk must stay read-only")
+}
+
+@Test
 func androidBootPlannerBuildsTheHeadlessDefinitionAndInitrd() throws {
     let bundle = try FixtureBundle.make()
     defer { bundle.remove() }

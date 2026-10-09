@@ -510,19 +510,3 @@ public actor ImageStore {
         return .cloneFailed(underlying: UnderlyingError(domain: nsError.domain, code: nsError.code))
     }
 }
-
-/// `clonefile(2)`: a copy-on-write copy, which keeps the holes of sparse files (§10.3).
-enum FileCloner {
-    static func clone(_ source: URL, _ destination: URL) throws {
-        guard clonefile(source.path, destination.path, 0) == 0 else {
-            let code = errno
-            switch code {
-            case EXDEV, ENOTSUP, EOPNOTSUPP:
-                throw ImageFailure.cloneUnsupported(volume: destination.deletingLastPathComponent().path)
-            default:
-                throw ImageFailure.cloneFailed(
-                    underlying: UnderlyingError(domain: "NSPOSIXErrorDomain", code: Int(code)))
-            }
-        }
-    }
-}

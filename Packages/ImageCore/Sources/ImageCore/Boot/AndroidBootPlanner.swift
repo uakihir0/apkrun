@@ -197,7 +197,7 @@ public struct AndroidBootPlanner: Sendable {
         return text
     }
 
-    /// `clonefile`s the ramdisk, appends the trailer, syncs, and renames (§6.3 steps 2-3).
+    /// Clones the ramdisk writable, appends the trailer, syncs, and renames (§6.3 steps 2-3).
     private func writeInitrd(ramdisk: URL, trailer: Data) throws(ImageFailure) -> URL {
         let directory = paths.bootDirectory
         let final = paths.instanceInitrdFile
@@ -208,13 +208,18 @@ public struct AndroidBootPlanner: Sendable {
             throw .cloneFailed(underlying: UnderlyingError(domain: "NSCocoaErrorDomain", code: (error as NSError).code))
         }
         unlink(temporary.path)
-        if clonefile(ramdisk.path, temporary.path, 0) != 0 {
-            // Not APFS, or a different volume: a copy is fine for a 20 MB file.
+        do {
+            // The ramdisk is installed read-only, and the trailer is appended to this copy.
+            try FileCloner.cloneWritable(ramdisk, temporary)
+        } catch {
+            // Not APFS, or a different volume: a copy is fine for a 20 MB file. A copy keeps the
+            // read-only mode of the ramdisk too, so it is made writable as well.
             do {
                 try FileManager.default.copyItem(at: ramdisk, to: temporary)
             } catch {
                 throw .cloneFailed(underlying: UnderlyingError(domain: NSPOSIXErrorDomain, code: Int(errno)))
             }
+            try FileCloner.makeOwnerWritable(temporary)
         }
         let descriptor = open(temporary.path, O_WRONLY | O_APPEND | O_CLOEXEC)
         guard descriptor >= 0 else {

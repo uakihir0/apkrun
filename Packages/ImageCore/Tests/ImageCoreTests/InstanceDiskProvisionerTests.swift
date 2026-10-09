@@ -54,6 +54,43 @@ func instanceDiskProvisionerClonesGrowsSparseAndRewritesGUIDs() throws {
 }
 
 @Test
+func instanceDiskProvisionerWritesTheInstanceFromAReadOnlyTemplate() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let template = try writeTemplate(in: directory)
+    // An installed template is read-only, and a clone of it inherits that mode (IR-337).
+    try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: template.path)
+    let destination = directory.appendingPathComponent("userdata.img")
+    let instance = try #require(UUID(uuidString: "3f2504e0-4f89-41d3-9a0c-0305e82c3302"))
+    let size: UInt64 = 2 * 1024 * 1024 * 1024
+    var provisioner = InstanceDiskProvisioner()
+    provisioner.volumeInfo = { url in
+        var info = InstanceDiskProvisioner.VolumeInfo.current(for: url)
+        info.availableBytes = Int64.max
+        return info
+    }
+    guard InstanceDiskProvisioner.VolumeInfo.current(for: directory).fileSystemType == "apfs" else {
+        return
+    }
+
+    try provisioner.provision(
+        template: template,
+        destination: destination,
+        role: "userdata",
+        instance: instance,
+        growTo: size
+    )
+
+    var status = stat()
+    #expect(stat(destination.path, &status) == 0)
+    #expect(UInt64(status.st_size) == size)
+    #expect(status.st_mode & 0o200 != 0, "the instance disk must be writable")
+    var templateStatus = stat()
+    #expect(stat(template.path, &templateStatus) == 0)
+    #expect(templateStatus.st_mode & 0o222 == 0, "the template must stay read-only")
+}
+
+@Test
 func instanceDiskProvisionerRefusesAVolumeThatIsNotAPFS() throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

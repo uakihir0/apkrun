@@ -72,9 +72,8 @@ struct InstanceDiskProvisioner: Sendable {
             throw .insufficientSpace(required: required, available: volume.availableBytes)
         }
 
-        guard clonefile(template.path, destination.path, 0) == 0 else {
-            throw .cloneFailed(underlying: UnderlyingError(domain: NSPOSIXErrorDomain, code: Int(errno)))
-        }
+        // The template is read-only, and the instance disk is written: the clone must be writable.
+        try FileCloner.cloneWritable(template, destination)
         do throws(ImageFailure) {
             try grow(destination, from: templateSize, to: newSize, role: role, instance: instance)
             try Self.syncDirectory(directory)

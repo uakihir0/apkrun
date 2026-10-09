@@ -30,6 +30,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import zipfile
 
 repository = pathlib.Path(sys.argv[1])
 app = pathlib.Path(sys.argv[2]).resolve()
@@ -143,29 +144,54 @@ def add_material_tokens(tokens, binary_tokens, material):
     tokens.add(":".join(fingerprint[index : index + 2] for index in range(0, 64, 2)))
     binary_tokens.add(material)
 
-def is_test_keystore(path, data):
-    """A keystore of the test fixtures: `test-*.jks`, in the JKS or the PKCS#12 format (IR-338)."""
-    if path.suffix.lower() != ".jks" or not path.name.startswith("test-"):
-        return False
-    # JKS: the magic, then version 2. PKCS#12: one DER structure of exactly the file's length, version 3.
-    is_jks = data[:8] == b"\xfe\xed\xfe\xed\x00\x00\x00\x02"
-    is_pkcs12 = (
-        len(data) >= 7
-        and data[:2] == b"\x30\x82"
-        and int.from_bytes(data[2:4], "big") + 4 == len(data)
-        and data[4:7] == b"\x02\x01\x03"
-    )
-    return is_jks or is_pkcs12
+KEYSTORE_WINDOW = 16
+KEYSTORE_WINDOWS = 16
+
+def load_keystore_pins():
+    """The pinned test keystores in scripts/release/test-keystore-pins.json (IR-338).
+
+    Returns {name: (full-file SHA-256, certificate DER, public key DER)}, or None when the file cannot be read.
+    """
+    pins_path = repository / "scripts/release/test-keystore-pins.json"
+    try:
+        document = json.loads(pins_path.read_text(encoding="utf-8"))
+        pins = {}
+        for entry in document["keystores"]:
+            pins[entry["name"]] = (
+                entry["file_sha256"],
+                base64.b64decode(entry["certificate_der"], validate=True),
+                base64.b64decode(entry["public_key_der"], validate=True),
+            )
+        return pins
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        failures.append(f"{pins_path}: could not read the test keystore pins: {error}")
+        return None
+
+def add_keystore_tokens(path, data, pins):
+    """Tokens of a pinned test keystore. The name and the magic are not enough: the full-file digest must match."""
+    entry = pins.get(path.name) if pins is not None else None
+    if entry is None or hashlib.sha256(data).hexdigest() != entry[0]:
+        return (
+            set(),
+            set(),
+            f"{path}: unsupported binary or certificate signing fixture format: not a pinned test keystore",
+        )
+    _, certificate, public_key = entry
+    tokens = set()
+    binary_tokens = {data}
+    # The certificate and the public key are not visible in the keystore itself, but a bundle that
+    # exports them carries them. Their digests and key ID are matched in the same forms as other keys.
+    add_material_tokens(tokens, binary_tokens, certificate)
+    add_material_tokens(tokens, binary_tokens, public_key)
+    # Fragments of the keystore: a truncated or split copy still contains some of them.
+    span = max(len(data) - KEYSTORE_WINDOW, 1)
+    for index in range(KEYSTORE_WINDOWS):
+        offset = index * span // max(KEYSTORE_WINDOWS - 1, 1)
+        binary_tokens.add(data[offset : offset + KEYSTORE_WINDOW])
+    return tokens, binary_tokens, None
 
 def add_key_tokens(path):
     data = path.read_bytes()
-    if is_test_keystore(path, data):
-        # The keystore is matched by its exact bytes and their digests only. Its printable
-        # text (alias, subject) is common in ordinary files, so it is not a token.
-        tokens = set()
-        binary_tokens = set()
-        add_material_tokens(tokens, binary_tokens, data)
-        return tokens, binary_tokens, None
     tokens = set()
     for match in re.finditer(rb"[\x20-\x7e]{8,}", data):
         token = match.group().decode("ascii", "ignore").strip()
@@ -199,16 +225,26 @@ def add_key_tokens(path):
 key_tokens = set()
 key_binary_tokens = set()
 if signing_fixtures.is_dir():
-    for key_file in signing_fixtures.rglob("*"):
-        if key_file.is_file():
-            try:
+    keystore_pins = load_keystore_pins()
+    for key_file in sorted(signing_fixtures.iterdir()):
+        if key_file.is_dir():
+            failures.append(f"{key_file}: unexpected directory in the test signing folder")
+            continue
+        if not key_file.is_file():
+            continue
+        try:
+            if key_file.suffix.lower() == ".jks" and key_file.name.startswith("test-"):
+                tokens, binary_tokens, unsupported = add_keystore_tokens(
+                    key_file, key_file.read_bytes(), keystore_pins
+                )
+            else:
                 tokens, binary_tokens, unsupported = add_key_tokens(key_file)
-                key_tokens.update(tokens)
-                key_binary_tokens.update(binary_tokens)
-                if unsupported:
-                    failures.append(unsupported)
-            except OSError as error:
-                failures.append(f"{key_file}: could not read test signing fixture: {error}")
+            key_tokens.update(tokens)
+            key_binary_tokens.update(binary_tokens)
+            if unsupported:
+                failures.append(unsupported)
+        except OSError as error:
+            failures.append(f"{key_file}: could not read test signing fixture: {error}")
 
 if not (app / "Contents/Info.plist").is_file():
     failures.append(f"{app}: missing Contents/Info.plist")
@@ -244,23 +280,39 @@ for binary in macho_files:
         if match:
             failures.append(f"{binary}: Release binary contains forbidden test marker {match.group()}")
 
-def scan_tokens(path, text_tokens, binary_tokens):
+def scan_stream(stream, text_tokens, binary_tokens):
     tokens = [token.encode("ascii").lower() for token in text_tokens if token]
     raw_tokens = [token for token in binary_tokens if token]
     maximum_length = max((len(token) for token in tokens + raw_tokens), default=1)
     carry = b""
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            combined = carry + chunk
-            lowered = combined.lower()
-            if any(token in lowered for token in tokens):
-                return "key"
-            if any(token in combined for token in raw_tokens):
-                return "key"
-            if b"releaseupdatetest" in lowered:
-                return "identity"
-            carry = combined[-(maximum_length - 1) :] if maximum_length > 1 else b""
+    while chunk := stream.read(1024 * 1024):
+        combined = carry + chunk
+        lowered = combined.lower()
+        if any(token in lowered for token in tokens):
+            return "key"
+        if any(token in combined for token in raw_tokens):
+            return "key"
+        if b"releaseupdatetest" in lowered:
+            return "identity"
+        carry = combined[-(maximum_length - 1) :] if maximum_length > 1 else b""
     return None
+
+def scan_tokens(path, text_tokens, binary_tokens):
+    """Scans a file, and the members of a zip archive, since a deflated copy of a keystore has no raw bytes (IR-338)."""
+    if zipfile.is_zipfile(path):
+        try:
+            with zipfile.ZipFile(path) as archive:
+                for member in archive.infolist():
+                    if member.is_dir():
+                        continue
+                    with archive.open(member) as stream:
+                        match = scan_stream(stream, text_tokens, binary_tokens)
+                    if match:
+                        return match
+        except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as error:
+            raise OSError(f"could not read the archive: {error}") from error
+    with path.open("rb") as stream:
+        return scan_stream(stream, text_tokens, binary_tokens)
 
 def embedded_info_plist(binary):
     result = subprocess.run(
@@ -348,6 +400,19 @@ for file in app.rglob("*"):
         failures.append(f"{file}: bundle file contains test signing material from Tests/Fixtures/signing")
     elif match == "identity":
         failures.append(f"{file}: Release bundle contains the ReleaseUpdateTest setting")
+
+if image_bundle is not None:
+    image_files = [image_bundle] if image_bundle.is_file() else [item for item in image_bundle.rglob("*") if item.is_file()]
+    for file in image_files:
+        try:
+            match = scan_tokens(file, key_tokens, key_binary_tokens)
+        except OSError as error:
+            failures.append(f"{file}: could not scan image bundle file: {error}")
+            continue
+        if match == "key":
+            failures.append(f"{file}: image bundle file contains test signing material from Tests/Fixtures/signing")
+        elif match == "identity":
+            failures.append(f"{file}: image bundle contains the ReleaseUpdateTest setting")
 
 runtime_directory = app / "Contents/Frameworks/VirGLRuntime"
 runtime_libraries = (

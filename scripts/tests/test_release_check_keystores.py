@@ -1,87 +1,234 @@
 #!/usr/bin/env python3
-"""Tests the release check's rule for keystores in Tests/Fixtures/signing (IR-338).
+"""Tests the release check's rules for the test keystores (IR-338).
 
-The checker finds its signing folder from its own location, so each case copies the checker into a
-temporary repository layout with its own signing folder. A test keystore (`test-*.jks`, JKS or PKCS#12)
-is accepted. Any other keystore is still rejected as an unsupported format, so a real release key that
-is not named as a test fixture still fails the check.
+The checker takes its signing folder, its pins, and its image bundle from its own location and from its
+arguments, so every case copies the checker and its pins into a temporary repository layout. A test
+keystore is accepted only when its name and full-file SHA-256 match scripts/release/test-keystore-pins.json.
+Any other keystore is refused, and so is a bundle file that carries the keystore's bytes, its fragments,
+its certificate, its certificate fingerprint, or its public key.
 """
 
+import base64
+import hashlib
+import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
+from io import BytesIO
 
 UNSUPPORTED = "unsupported binary or certificate signing fixture format"
+TEST_MATERIAL = "test signing material"
 
 repository = pathlib.Path(sys.argv[1]).resolve()
 checker = repository / "scripts/release/check-release-build.sh"
-test_keystore = (repository / "Tests/Fixtures/signing/test-fixture-a.jks").read_bytes()
+pins_file = repository / "scripts/release/test-keystore-pins.json"
+signing_folder = repository / "Tests/Fixtures/signing"
+committed = signing_folder / "test-fixture-a.jks"
+keystore = committed.read_bytes()
+pins = {entry["name"]: entry for entry in json.loads(pins_file.read_text(encoding="utf-8"))["keystores"]}
+certificate_der = base64.b64decode(pins["test-fixture-a.jks"]["certificate_der"], validate=True)
+public_key_der = base64.b64decode(pins["test-fixture-a.jks"]["public_key_der"], validate=True)
 
 
-def check(signing_files):
-    """Runs the checker on a temporary repository whose signing folder holds `signing_files`."""
+def openssl(*arguments, stdin=None):
+    return subprocess.run(
+        ["openssl", *arguments], input=stdin, capture_output=True, check=True
+    ).stdout
+
+
+def check(signing_files, app_files=None, image_files=None, signing_directories=()):
+    """Runs the checker on a temporary repository with the given signing folder, app, and image bundle."""
     with tempfile.TemporaryDirectory(prefix="apkrun-release-keystores-") as directory:
         root = pathlib.Path(directory)
         release = root / "scripts/release"
         release.mkdir(parents=True)
-        shutil.copy2(checker, release / "check-release-build.sh")
-        shutil.copy2(repository / "scripts/release/generate-notices.py", release / "generate-notices.py")
+        for name in ("check-release-build.sh", "generate-notices.py"):
+            shutil.copy2(repository / "scripts/release" / name, release / name)
+        shutil.copy2(pins_file, release / "test-keystore-pins.json")
         (root / "ThirdParty").mkdir()
         shutil.copy2(repository / "ThirdParty/ThirdParty.lock.json", root / "ThirdParty/ThirdParty.lock.json")
         signing = root / "Tests/Fixtures/signing"
         signing.mkdir(parents=True)
         for name, data in signing_files.items():
             (signing / name).write_bytes(data)
+        for name in signing_directories:
+            (signing / name).mkdir()
+            (signing / name / "test-fixture-a.jks").write_bytes(keystore)
         app = root / "APKRun.app"
         (app / "Contents").mkdir(parents=True)
-        result = subprocess.run(
-            [str(release / "check-release-build.sh"), str(app)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        for relative, data in (app_files or {}).items():
+            path = app / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        arguments = [str(release / "check-release-build.sh"), str(app)]
+        if image_files is not None:
+            image = root / "image"
+            image.mkdir()
+            for relative, data in image_files.items():
+                path = image / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            arguments.append(str(image))
+        result = subprocess.run(arguments, capture_output=True, text=True, check=False)
         return result.stdout + result.stderr
 
 
-def expect(name, output, *, mentioning):
-    """The keystore must be rejected as unsupported, and the message must name the file."""
-    if UNSUPPORTED not in output or mentioning not in output:
-        raise SystemExit(f"FAIL keystore {name}: expected the unsupported-format rejection of {mentioning}\n{output}")
+def passed(name):
     print(f"PASS keystore {name}")
 
 
-# A test keystore is accepted: the checker reports nothing about it.
-output = check({"test-fixture-a.jks": test_keystore})
-if UNSUPPORTED in output or "could not read" in output:
-    raise SystemExit(f"FAIL keystore test-keystore-accepted: the test keystore was rejected\n{output}")
-print("PASS keystore test-keystore-accepted")
+def fail(name, output):
+    raise SystemExit(f"FAIL keystore {name}\n{output}")
 
-# A keystore without the test- prefix stays unsupported, whatever its bytes are.
-expect(
-    "keystore-without-test-prefix",
-    check({"release-signing.jks": test_keystore}),
-    mentioning="release-signing.jks",
+
+def expect_refused(name, output, mentioning):
+    if UNSUPPORTED not in output or mentioning not in output:
+        fail(name, output)
+    passed(name)
+
+
+def expect_bundle_refused(name, output):
+    if TEST_MATERIAL not in output:
+        fail(name, output)
+    passed(name)
+
+
+def expect_accepted(name, output):
+    if UNSUPPORTED in output or "could not read" in output or TEST_MATERIAL in output:
+        fail(name, output)
+    passed(name)
+
+
+# 1. The pins match the committed files, and the pinned certificate and key are the committed keystore's.
+committed_names = sorted(
+    path.name for path in signing_folder.iterdir() if path.suffix == ".jks" and path.name.startswith("test-")
+)
+if committed_names != sorted(pins):
+    raise SystemExit(f"FAIL keystore pins: committed {committed_names}, pinned {sorted(pins)}")
+for name, entry in pins.items():
+    data = (signing_folder / name).read_bytes()
+    if hashlib.sha256(data).hexdigest() != entry["file_sha256"]:
+        raise SystemExit(f"FAIL keystore pins: {name} does not match its pinned digest")
+password = re.search(r'storePassword = "([^"]+)"', (repository / "Tests/Fixtures/AndroidApps/HelloText/build.gradle.kts").read_text(encoding="utf-8")).group(1)
+pem = openssl("pkcs12", "-in", str(committed), "-passin", f"pass:{password}", "-nokeys", "-clcerts")
+certificate_pem = pem[pem.index(b"-----BEGIN CERTIFICATE-----") :]
+if openssl("x509", "-outform", "DER", stdin=certificate_pem) != certificate_der:
+    raise SystemExit("FAIL keystore pins: the pinned certificate differs from the committed keystore")
+spki_pem = openssl("x509", "-noout", "-pubkey", stdin=certificate_pem)
+if openssl("pkey", "-pubin", "-outform", "DER", stdin=spki_pem) != public_key_der:
+    raise SystemExit("FAIL keystore pins: the pinned public key differs from the committed keystore")
+passed("pins-match-committed-keystore")
+
+# 2. The committed keystore is accepted: this is the regression case for a wrong refusal.
+expect_accepted("committed-keystore-accepted", check({"test-fixture-a.jks": keystore}))
+
+# 3. Name and magic are not enough: every other keystore is refused.
+expect_refused(
+    "renamed-copy-refused",
+    check({"test-renamed.jks": keystore}),
+    "test-renamed.jks",
+)
+expect_refused(
+    "release-named-copy-refused",
+    check({"release-signing.jks": keystore}),
+    "release-signing.jks",
+)
+fake_jks = b"\xfe\xed\xfe\xed\x00\x00\x00\x02" + b"\x00" * 64
+expect_refused("jks-magic-named-test-refused", check({"test-prod.jks": fake_jks}), "test-prod.jks")
+expect_refused(
+    "test-garbage-refused",
+    check({"test-garbage.jks": b"not a keystore at all"}),
+    "test-garbage.jks",
+)
+expect_refused(
+    "truncated-committed-keystore-refused",
+    check({"test-fixture-a.jks": keystore[:-100]}),
+    "test-fixture-a.jks",
+)
+tampered = bytearray(keystore)
+tampered[len(tampered) // 2] ^= 0x01
+expect_refused(
+    "tampered-committed-keystore-refused",
+    check({"test-fixture-a.jks": bytes(tampered)}),
+    "test-fixture-a.jks",
+)
+expect_refused(
+    "other-suffix-refused",
+    check({"test-fixture-a.p12": keystore}),
+    "test-fixture-a.p12",
 )
 
-# A test- keystore whose bytes are neither JKS nor PKCS#12 stays unsupported.
-expect(
-    "test-keystore-with-unknown-bytes",
-    check({"test-unknown.jks": b"not a keystore at all"}),
-    mentioning="test-unknown.jks",
+# 4. A subdirectory in the signing folder is refused. A keystore inside it is never searched for and never
+# silently skipped: the folder must contain only its own test-*.jks files.
+output = check({"test-fixture-a.jks": keystore}, signing_directories=("nested",))
+if "nested: unexpected directory in the test signing folder" not in output:
+    fail("directory-in-signing-folder-refused", output)
+passed("directory-in-signing-folder-refused")
+
+# 5. The app bundle: a copy of the keystore in any form is refused.
+bundle_file = "Contents/Resources/copy"
+expect_bundle_refused(
+    "bundle-full-keystore-refused",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: keystore}),
+)
+expect_bundle_refused(
+    "bundle-truncated-keystore-refused",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: keystore[:300]}),
+)
+archive = BytesIO()
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+    zipped.writestr("keystore.jks", keystore)
+expect_bundle_refused(
+    "bundle-deflated-zip-refused",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: archive.getvalue()}),
+)
+half = len(keystore) // 2
+expect_bundle_refused(
+    "bundle-split-keystore-refused",
+    check(
+        {"test-fixture-a.jks": keystore},
+        app_files={"Contents/Resources/first": keystore[:half], "Contents/Resources/second": keystore[half:]},
+    ),
+)
+# The certificate embeds its public key, so this DER copy is matched through the public-key token as well as
+# the certificate token; the fingerprint case below covers the certificate token by itself.
+expect_bundle_refused(
+    "bundle-certificate-der-refused",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: certificate_der}),
+)
+expect_bundle_refused(
+    "bundle-certificate-fingerprint-refused",
+    check(
+        {"test-fixture-a.jks": keystore},
+        app_files={bundle_file: hashlib.sha256(certificate_der).hexdigest().encode("ascii")},
+    ),
+)
+expect_bundle_refused(
+    "bundle-public-key-refused",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: public_key_der}),
+)
+expect_bundle_refused(
+    "bundle-public-key-identity-refused",
+    check(
+        {"test-fixture-a.jks": keystore},
+        app_files={bundle_file: hashlib.sha256(public_key_der).hexdigest().encode("ascii")},
+    ),
+)
+expect_accepted(
+    "clean-app-accepted",
+    check({"test-fixture-a.jks": keystore}, app_files={bundle_file: b"an ordinary resource"}),
 )
 
-# A test- keystore that starts like PKCS#12 but is cut short is not one DER structure: unsupported.
-expect(
-    "test-keystore-truncated",
-    check({"test-fixture-a.jks": test_keystore[:-100]}),
-    mentioning="test-fixture-a.jks",
+# 6. The image bundle, the second argument, is scanned the same way.
+expect_bundle_refused(
+    "image-bundle-keystore-refused",
+    check({"test-fixture-a.jks": keystore}, image_files={"disks/os.img": keystore}),
 )
-
-# Only the .jks suffix gets the test-keystore rule: the same bytes under .p12 stay unsupported.
-expect(
-    "test-keystore-with-other-suffix",
-    check({"test-fixture-a.p12": test_keystore}),
-    mentioning="test-fixture-a.p12",
+expect_accepted(
+    "clean-image-bundle-accepted",
+    check({"test-fixture-a.jks": keystore}, image_files={"manifest.json": b"{}\n", "boot/kernel": b"kernel"}),
 )

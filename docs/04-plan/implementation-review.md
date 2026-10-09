@@ -10794,33 +10794,36 @@ suite pass 4 of 4 and the AndroidADB suite pass 2 of 2 on the rebased tip.
 **Consequence.** The T2 suites of #015 to #017 cannot pass on main without a writable clone. With
 cbaaf36 they pass without any local change, and the T2 check is the one that confirms it.
 
-## IR-338: Accept the test keystore in the release check by its bytes, and keep rejecting other keystores
+## IR-338: Pin the test keystore by its digest in the release check, and scan bundles for its material
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #016 (the HelloText fixture), #062 (the release checks) |
-| Affected documents | [build-system.md](../05-development/build-system.md) §3.1; [coding-conventions.md](../05-development/coding-conventions.md) §11 (test key naming); [test-strategy.md](test-strategy.md) §4.4 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §3.1 (updated); [coding-conventions.md](../05-development/coding-conventions.md) §11 (test key naming, unchanged); [test-strategy.md](test-strategy.md) §4.4 (unchanged) |
 
-**Choice.** `scripts/release/check-release-build.sh` treats a file `Tests/Fixtures/signing/test-*.jks`
-in one of two formats as test material: JKS (the magic, then version 2) or PKCS#12 (one DER structure
-whose outer length is exactly the file's length, version 3). The check matches that file's exact bytes
-and their digests in the bundle, not its printable text. Every other `.jks` fails as an unsupported
-format: a name without the `test-` prefix, `test-` with bytes that are not one of the two structures
-(for example a cut-off copy), and every other keystore suffix. `scripts/tests/test_release_check_keystores.py` covers both sides, and a
-bundle case in `scripts/tests/run.sh` embeds the test keystore and must fail.
+**Choice.** `scripts/release/check-release-build.sh` accepts a test keystore only when its file name and the SHA-256 of its full bytes both match an entry in `scripts/release/test-keystore-pins.json`. That file is the one place that lists the committed test keystores; today it holds `test-fixture-a.jks`. Each entry also records the keystore's certificate and public key as DER, so the bundle scan can match them. The search covers the regular files directly in `Tests/Fixtures/signing/` and nothing below them: a subdirectory fails the check as an unexpected directory. A `.jks` file that lacks the `test-` prefix, or that is not pinned, fails as an unsupported format, whatever its bytes look like.
 
-**Reason.** #016 committed `test-fixture-a.jks`, and the check rejected every `.jks` as unsupported.
-That failed the clean release fixture, and so main's `run.sh`. The check cannot read a PKCS#12 store,
-because its key is inside a password-protected container, so the rule for PEM and raw keys (matching
-their printable tokens) does not apply. Matching the exact bytes is the strongest leak test that works
-without parsing: a bundle that carries a copy of the test keystore fails, and one that does not passes.
-The `test-` prefix is the naming rule for test keys already in the repository. The check was not relaxed
-for any other format.
+For each pinned keystore, the app bundle and the image bundle (the second argument) are refused when they contain any of:
 
-**Consequence.** A real release keystore is refused as long as it is not named `test-*`, which the
-script cannot verify and the review rule must. A real key committed under a `test-` name would pass
-only if its bytes were absent from the bundle, the same protection the other test keys have.
+- the full keystore bytes;
+- 16 fragments of 16 bytes spread across the file, so a truncated copy still matches;
+- the certificate DER and the public key DER, and their hex, base64, and SHA-256 forms (full digest, first 16 hex digits, and colon-separated);
+- the same bytes inside a zip member: a zip archive is opened, and each member is scanned as stored or deflated.
+
+**Reason.** The first version of this rule (commit 7b49f4e) accepted a file by its name, magic, and structure, so a forged or renamed JKS passed as test material. It also searched the signing folder recursively and scanned only the app bundle. An independent review against 7b49f4e found these problems. A pinned digest closes the first. The scan additions close the bundle gaps (the certificate, the public key, the fragments, deflated members, and the image bundle), and the search is limited to the folder's own `test-*.jks` files.
+
+**Tests.** `scripts/tests/test_release_check_keystores.py` runs 21 cases on a temporary repository. They check that the pins match the committed file, its certificate, and its public key (with `openssl`). The committed keystore is accepted: this is the regression case for a wrong refusal of a real JKS. A renamed copy, a release-named copy, a JKS-magic file named `test-prod.jks`, a garbage `test-garbage.jks`, a truncated and a tampered committed copy, and a `.p12` copy are refused. A subdirectory in the signing folder is refused. The app bundle refuses the full, truncated, deflated, split, certificate-DER, certificate-fingerprint, public-key, and public-key-identity forms, and accepts a clean bundle. The image bundle refuses the keystore and accepts a clean one. `scripts/tests/run.sh` also embeds the keystore in a bundle, and that case must fail. Three mutants were run against the test file (the digest check removed, the certificate token removed, the fragments removed), and each mutant was caught by at least one case.
+
+**Limitations.** The rule does not cover these cases, and the consequences are stated here, not hidden:
+
+- A copy split into pieces of about 180 bytes or less can fall between the fragments. The fragments of the 2702-byte keystore are 179 bytes apart. Halves of the file are caught.
+- Only zip archives are opened. A keystore inside another compressed container (tar.gz, 7z, a raw deflate stream) is not decoded and is not caught.
+- The keystore keeps its certificate and key in encrypted containers, so the certificate and public key are matched only where a bundle exports them. The DER case is matched through the public key that the certificate embeds; the fingerprint case through the certificate's own token.
+
+**Follow-up.** The two open gaps (pieces of about 180 bytes or less, and compressed containers other than zip) are not closed by this change. They need a task. No task number exists for them yet, so the coordinator should assign one (AGENTS.md §11: a new task takes the number GitHub gives its issue, #098 and up).
+
+**Consequence.** A keystore that is not pinned fails the release check, whatever its name. A new test keystore is added by committing it under `Tests/Fixtures/signing/` as `test-*.jks` and adding its entry to the pins file in the same change. The pins test fails until both match.
 
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 

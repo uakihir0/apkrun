@@ -10,7 +10,7 @@
             abstract: "Run development-only APKRun commands.",
             subcommands: [
                 DevLinuxCommand.self, DevConsoleCommand.self, DevBootCommand.self,
-                DevImageCommand.self, DevAdbCommand.self,
+                DevImageCommand.self, DevAdbCommand.self, DevLaunchCommand.self,
             ]
         )
     }

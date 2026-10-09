@@ -34,6 +34,9 @@
         @Option(name: .long, help: "Logical userdata size in GiB for a new instance (8-256).")
         var userdataGib = 32
 
+        @Option(name: .long, help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
+        var guestDir: String?
+
         mutating func run() async throws {
             guard let profile = DevGPUProfile(rawValue: gpu) else {
                 throw CLIFailure.invalidArgument(argument: "--gpu", reason: "profile")
@@ -54,7 +57,12 @@
                 memoryBytes: UInt64(memoryGib) * gibibyte,
                 userdataBytes: UInt64(userdataGib) * gibibyte,
                 resetInstance: reset,
-                stopWhenReady: stopWhenReady
+                stopWhenReady: stopWhenReady,
+                guestAgentDirectory: DevGuestAgentLocation.directory(
+                    guestDir: guestDir,
+                    environment: ProcessInfo.processInfo.environment,
+                    executable: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+                )
             )
 
             let stops = AsyncStream.makeStream(of: Void.self)

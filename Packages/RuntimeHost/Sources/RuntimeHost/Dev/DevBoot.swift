@@ -35,6 +35,11 @@ public struct DevBootOptions: Sendable {
     public var resetInstance: Bool
     /// Stop the VM once Android is ready, instead of waiting for a stop request.
     public var stopWhenReady: Bool
+    /// The directory of the Guest Agent bundle (`apkrun-guest.apk` and `apkrun-guest.json`), which the boot installs
+    /// and starts (guest-components.md §3). Nil boots without the agent.
+    public var guestAgentDirectory: URL?
+    /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #072). Nil launches nothing.
+    public var launchPackage: String?
 
     /// Creates options for one development boot.
     public init(
@@ -43,7 +48,9 @@ public struct DevBootOptions: Sendable {
         memoryBytes: UInt64 = InstanceSizing.default.memoryBytes,
         userdataBytes: UInt64 = InstanceSizing.default.userdataBytes,
         resetInstance: Bool = false,
-        stopWhenReady: Bool = false
+        stopWhenReady: Bool = false,
+        guestAgentDirectory: URL? = nil,
+        launchPackage: String? = nil
     ) {
         self.gpu = gpu
         self.cpuCount = cpuCount
@@ -51,6 +58,8 @@ public struct DevBootOptions: Sendable {
         self.userdataBytes = userdataBytes
         self.resetInstance = resetInstance
         self.stopWhenReady = stopWhenReady
+        self.guestAgentDirectory = guestAgentDirectory
+        self.launchPackage = launchPackage
     }
 }
 
@@ -129,6 +138,7 @@ public struct DevBoot: Sendable {
             onEvent(.message("provisioned a new Android instance"))
         }
 
+        let guestAgentBundle = try options.guestAgentDirectory.map { try GuestAgentBundle.load(directory: $0) }
         let supervisor = RuntimeSupervisor(
             image: image,
             instanceStore: store,
@@ -137,7 +147,8 @@ public struct DevBoot: Sendable {
                 developerMode: true,
                 captureLogcat: true
             ),
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            guestAgentBundle: guestAgentBundle
         )
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
@@ -173,6 +184,17 @@ public struct DevBoot: Sendable {
         let started = ContinuousClock.now
         try await supervisor.ensureReady(.cli)
         onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
+        if let package = options.launchPackage {
+            guard let agent = await supervisor.developmentGuestAgent else {
+                throw GuestAgentFailure.startFailed
+            }
+            let report = try await agent.launch(package: package, displayID: 0)
+            onEvent(
+                .message(
+                    "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                )
+            )
+        }
         if !options.stopWhenReady {
             onEvent(.message("press Ctrl-C to stop Android"))
             for await _ in stopRequests {
@@ -191,6 +213,29 @@ public struct DevBoot: Sendable {
         case .stopping: "stopping"
         case .failed(let failure): "failed(\(failure.qualifiedCode))"
         }
+    }
+}
+
+/// Where the development Guest Agent bundle is (guest-components.md §7.1, build-system.md §7.1). The order is the
+/// `--guest-dir` value, then `APKRUN_GUEST_DIR`, then `Resources/guest` of the app bundle that holds the executable.
+public enum DevGuestAgentLocation {
+    /// The bundle directory for `guestDir` (the flag value, or nil), `environment`, and `executable`.
+    public static func directory(
+        guestDir: String?,
+        environment: [String: String],
+        executable: URL
+    ) -> URL {
+        if let guestDir, !guestDir.isEmpty {
+            return URL(fileURLWithPath: guestDir, isDirectory: true)
+        }
+        if let fromEnvironment = environment["APKRUN_GUEST_DIR"], !fromEnvironment.isEmpty {
+            return URL(fileURLWithPath: fromEnvironment, isDirectory: true)
+        }
+        return executable
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/guest", isDirectory: true)
     }
 }
 

@@ -26,6 +26,10 @@ if sys.version_info < (3, 12):  # noqa: UP036
     sys.exit(2)
 
 RULES_PATH = Path(__file__).with_name("normalize.yaml")
+# The launcher capture holds these categories. A candidate with data where the reference has none
+# is a
+# difference, not a category to skip (#014 step 5).
+REFERENCE_HELD_CATEGORIES = frozenset({"bootconfig", "cmdline"})
 CATEGORIES = (
     "cmdline",
     "bootconfig",
@@ -903,7 +907,7 @@ def _compare(
         after = _category_records(
             candidate, category, substitutions, candidate_budget, candidate_paths[category]
         )
-        if not before and after:
+        if not before and after and category not in REFERENCE_HELD_CATEGORIES:
             # The launcher capture holds no booted data for this category (IR-305, IR-367).
             not_compared.append(category)
             continue
@@ -1080,16 +1084,22 @@ def _read_guest_commands(path: Path) -> list[tuple[str, str]]:
     return commands
 
 
-def _without_shell_echo(body: str) -> str:
-    """Drop the shell's echo of the command (and its prompt) from a reply.
+_SHELL_PROMPT = "console:/ $ "
 
-    The echo line carries the sentinel text or the prompt, and command output never does.
+
+def _without_shell_echo(body: str) -> str:
+    """Drop the shell's echo of the command from a reply, and the prompt in front of the output.
+
+    The echo line carries the sentinel text, and command output never does. The prompt is only text
+    in front of the first output line, so the output after it is kept.
     """
-    kept = [
-        line
-        for line in body.split("\n")
-        if "__APKRUN_END_" not in line and not line.startswith("console:")
-    ]
+    kept: list[str] = []
+    for line in body.split("\n"):
+        if line.startswith(_SHELL_PROMPT):
+            line = line[len(_SHELL_PROMPT) :]
+        if "__APKRUN_END_" in line:
+            continue
+        kept.append(line)
     return "\n".join(kept)
 
 
@@ -1108,17 +1118,18 @@ class _ShellSession:
             raise CaptureToolError(
                 f"cannot send `{command}` to the serial shell: {error}"
             ) from None
-        pattern = re.compile(rf"^{re.escape(sentinel)} (-?\d+)\r?$", re.MULTILINE)
+        # The status line ends in a newline, so a status split across reads (127 as 12) never
+        # matches.
+        pattern = re.compile(
+            rb"^" + re.escape(sentinel.encode()) + rb" (-?\d+)\r?\n", re.MULTILINE
+        )
         deadline = time.monotonic() + timeout
         while True:
-            text = self._pending.decode("utf-8", errors="replace")
-            match = pattern.search(text)
+            match = pattern.search(self._pending)
             if match:
-                # Keep what follows the sentinel line, without its newline, for the next command.
-                end = text.find("\n", match.end())
-                self._pending = text[end + 1 :].encode("utf-8") if end >= 0 else b""
-
-                return _without_shell_echo(text[: match.start()]), int(match.group(1))
+                body = self._pending[: match.start()].decode("utf-8", errors="replace")
+                self._pending = self._pending[match.end() :]
+                return _without_shell_echo(body), int(match.group(1))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise CaptureToolError(
@@ -1134,7 +1145,9 @@ class _ShellSession:
                     f"the serial shell failed during `{command}`: {error}"
                 ) from None
             if not chunk:
-                raise CaptureToolError(f"the serial shell closed the connection during `{command}`")
+                raise CaptureToolError(
+                    f"the serial shell closed the connection during `{command}`"
+                )
             self._pending += chunk
             if len(self._pending) > MAX_SHELL_CAPTURE_BYTES:
                 raise CaptureToolError(
@@ -1195,7 +1208,11 @@ def capture_vz(
                 f"cannot connect to the serial shell {shell}: {error.strerror}"
             ) from None
         session = _ShellSession(connection)
-        session.run("stty -echo", 0, timeout)
+        _, echo_status = session.run("stty -echo", 0, timeout)
+        if echo_status != 0:
+            raise CaptureToolError(
+                "the serial shell would not turn its echo off; the capture is not clean"
+            )
         try:
             for index, (name, command) in enumerate(commands, start=1):
                 body, status = session.run(command, index, timeout)

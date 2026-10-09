@@ -9,6 +9,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -245,13 +246,58 @@ def test_a_category_the_reference_lacks_is_recorded_not_compared(tmp_path: Path)
     candidate = tmp_path / "candidate"
     reference.mkdir()
     candidate.mkdir()
-    (candidate / "bootconfig.txt").write_text('androidboot.slot_suffix = "_a";\n', encoding="utf-8")
+    (candidate / "properties.txt").write_text("[ro.build.version.sdk]: [37]\n", encoding="utf-8")
 
     differences, stale, not_compared = compare_boot._compare(reference, candidate, [], [])
 
-    assert "bootconfig" in not_compared
-    assert all(item["category"] != "bootconfig" for item in differences)
+    assert "props" in not_compared
+    assert all(item["category"] != "props" for item in differences)
     assert stale == []
+
+
+def test_a_bootconfig_the_reference_lacks_is_a_difference_not_a_skip(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    candidate = tmp_path / "candidate"
+    reference.mkdir()
+    candidate.mkdir()
+    (candidate / "bootconfig.txt").write_text('androidboot.slot_suffix = "_a";\n', encoding="utf-8")
+
+    differences, _, not_compared = compare_boot._compare(reference, candidate, [], [])
+
+    assert "bootconfig" not in not_compared
+    assert any(
+        item["category"] == "bootconfig" and item["expected"] is None for item in differences
+    )
+
+
+def test_a_status_split_across_reads_is_read_whole(tmp_path: Path) -> None:
+    ours, theirs = socket.socketpair()
+    try:
+        session = compare_boot._ShellSession(ours)
+
+        def guest() -> None:
+            theirs.recv(4096)
+            theirs.sendall(b"hello\n__APKRUN_END_1__ 12")
+            time.sleep(0.2)
+            theirs.sendall(b"7\r\nnext\n")
+
+        thread = threading.Thread(target=guest)
+        thread.start()
+        body, status = session.run("cat /x", 1, 5)
+        thread.join()
+    finally:
+        ours.close()
+        theirs.close()
+
+    assert (body, status) == ("hello\n", 127)
+
+
+def test_the_prompt_in_front_of_the_first_output_line_is_removed_not_the_line(
+    tmp_path: Path,
+) -> None:
+    body = "console:/ $ console:/ $ __APKRUN_END_1__ x\nfirst output line\nsecond\n"
+
+    assert compare_boot._without_shell_echo(body) == "first output line\nsecond\n"
 
 
 def test_the_reference_command_line_comes_from_its_kernel_log(tmp_path: Path) -> None:

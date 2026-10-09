@@ -239,6 +239,7 @@ targets:
       - path: Tests/IntegrationTests/AndroidPackageTests
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
+      - path: Tests/IntegrationTests/Support
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:

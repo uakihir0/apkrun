@@ -64,7 +64,7 @@ final class LinuxGuestBootconfigTests: XCTestCase {
             XCTFail("the guest did not print /proc/bootconfig between the markers")
             return
         }
-        let kernelView = Self.keyValues(in: printed)
+        let kernelView = BootconfigListing.keyValues(in: printed)
         XCTAssertEqual(kernelView, golden, "/proc/bootconfig equals the merged block")
         XCTAssertEqual(result.records.last, .done)
         XCTAssertTrue(
@@ -86,7 +86,7 @@ final class LinuxGuestBootconfigTests: XCTestCase {
 
             """
         XCTAssertEqual(
-            Self.keyValues(in: flat),
+            BootconfigListing.keyValues(in: flat),
             ["androidboot.hardware": "cutf_cvm", "androidboot.slot_suffix": "_a"]
         )
         let nested = """
@@ -102,7 +102,7 @@ final class LinuxGuestBootconfigTests: XCTestCase {
 
             """
         XCTAssertEqual(
-            Self.keyValues(in: nested),
+            BootconfigListing.keyValues(in: nested),
             [
                 "androidboot.hardware": "cutf_cvm",
                 "androidboot.slot_suffix": "_a",
@@ -120,41 +120,5 @@ final class LinuxGuestBootconfigTests: XCTestCase {
             return nil
         }
         return String(console[begin.upperBound..<end.lowerBound])
-    }
-
-    /// Flattens the kernel's listing into dotted keys. It accepts `key = "value";` lines and
-    /// `name {` ... `}` blocks, so it does not depend on whether the kernel nests the keys.
-    static func keyValues(in listing: String) -> [String: String] {
-        var values: [String: String] = [:]
-        var prefix: [String] = []
-        for rawLine in listing.split(separator: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") {
-                continue
-            }
-            if line.hasPrefix("}") {
-                _ = prefix.popLast()
-                continue
-            }
-            if line.hasSuffix("{") {
-                prefix.append(line.dropLast().trimmingCharacters(in: .whitespaces))
-                continue
-            }
-            guard let equals = line.firstIndex(of: "=") else {
-                continue
-            }
-            let name = line[..<equals].trimmingCharacters(in: .whitespaces)
-            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-            if value.hasSuffix(";") {
-                value.removeLast()
-            }
-            value = value.trimmingCharacters(in: .whitespaces)
-            if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
-                value = String(value.dropFirst().dropLast())
-            }
-            let key = (prefix + [name]).joined(separator: ".")
-            values[key] = value
-        }
-        return values
     }
 }

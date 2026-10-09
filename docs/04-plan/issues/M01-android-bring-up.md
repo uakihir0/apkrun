@@ -1763,12 +1763,12 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The Activity is launched explicitly by component name.
-- [ ] The process and task state are inspected through ADB.
-- [ ] No rendering is required: the tests pass with `--gpu none`.
-- [ ] The process starts, and ActivityManager reports the Activity as active (resumed).
-- [ ] `am force-stop` stops HelloText, and its process is gone.
-- [ ] Install, launch, stop, and uninstall pass end to end in one T2 test.
+- [x] The Activity is launched explicitly by component name. (`am start -W -n io.apkrun.fixture.hellotext/.MainActivity`; T2 `testLaunchHelloText`, `testInstallLaunchStopUninstall`.)
+- [x] The process and task state are inspected through ADB. (`pidof`, `ps -A`, and `dumpsys activity activities`; the same tests.)
+- [x] No rendering is required: the tests pass with `--gpu none`. (The headless profile runs both tests; `am start -W` reported `Status: ok` and `LaunchState: COLD`.)
+- [x] The process starts, and ActivityManager reports the Activity as active (resumed). (`dumpsysActivities().resumedComponent` equals the component after `am start`.)
+- [x] `am force-stop` stops HelloText, and its process is gone. (After `forceStop`, `pidof` returns nil, and the resumed activity is the launcher.)
+- [x] Install, launch, stop, and uninstall pass end to end in one T2 test. (`testInstallLaunchStopUninstall`.)
 
 ### Notes
 
@@ -1776,6 +1776,10 @@ See [../test-strategy.md](../test-strategy.md).
 - "CLI launch" in the v0.1 Definition of Done is complete only with #027.
 
 ---
+- Verification (2026-10-09): T0 `AdbLaunchParserTests` (6 tests) and the `AdbClientTests` launch cases passed; T2 `AndroidPackageTests` passed 4 of 4 (`xcodebuild`, AndroidPackage configuration, under `lockf -k /tmp/apkrun-vm.lock`). The T2 run covers the whole package suite, which includes the install and uninstall checks of #016.
+- The headless default display of #014 did not block `am start`. No display error was seen, so the note in the entry did not apply.
+- Resumed-activity forms and the `pidof` reply are recorded as IR-334 and IR-335.
+- `apkrun dev launch` (the CLI launch) belongs to #027, and no CLI command was added here.
 
 ## #065 Runtime image bundle
 

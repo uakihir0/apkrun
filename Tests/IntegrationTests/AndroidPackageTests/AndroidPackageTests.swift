@@ -9,6 +9,7 @@ import XCTest
 /// fixture APK of `scripts/build-fixtures.sh` at Tests/Fixtures/AndroidApps/out/HelloText.apk.
 final class AndroidPackageTests: XCTestCase {
     private static let packageName = "io.apkrun.fixture.hellotext"
+    private static let mainActivity = "io.apkrun.fixture.hellotext/.MainActivity"
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -54,6 +55,53 @@ final class AndroidPackageTests: XCTestCase {
             try await adb.install(apk: apk)
             let reinstalled = try await adb.listPackages(matching: Self.packageName)
             XCTAssertEqual(reinstalled, [AdbPackageListing(name: Self.packageName, versionCode: 1)])
+        }
+    }
+
+    /// `am start -W -n` starts MainActivity by its component name, and ADB then sees the process and the
+    /// resumed activity (#017). The headless profile draws no window, so no rendering is needed.
+    func testLaunchHelloText() async throws {
+        let apk = try Self.fixtureAPK()
+        try await AndroidBootSession.withBoot(developerMode: true) { _ in
+            let adb = try await Self.connectedClient()
+            try await adb.install(apk: apk)
+
+            try await adb.startActivity(component: Self.mainActivity)
+
+            let pid = try await adb.pidof(Self.packageName)
+            XCTAssertNotNil(pid, "pidof finds no process for \(Self.packageName)")
+            let processes = try await adb.shell("ps -A")
+            let listed = processes.output.split(whereSeparator: \.isNewline).contains {
+                $0.trimmingCharacters(in: .whitespaces).hasSuffix(Self.packageName)
+            }
+            XCTAssertTrue(listed, "ps -A does not list \(Self.packageName)")
+            let activities = try await adb.dumpsysActivities()
+            XCTAssertEqual(activities.resumedComponent, Self.mainActivity)
+        }
+    }
+
+    /// Install, launch, stop, and uninstall on one boot (#017 end to end).
+    func testInstallLaunchStopUninstall() async throws {
+        let apk = try Self.fixtureAPK()
+        try await AndroidBootSession.withBoot(developerMode: true) { _ in
+            let adb = try await Self.connectedClient()
+            try await adb.install(apk: apk)
+            try await adb.startActivity(component: Self.mainActivity)
+            let launchedPid = try await adb.pidof(Self.packageName)
+            XCTAssertNotNil(launchedPid)
+            let launched = try await adb.dumpsysActivities()
+            XCTAssertEqual(launched.resumedComponent, Self.mainActivity)
+
+            try await adb.forceStop(Self.packageName)
+
+            let stoppedPid = try await adb.pidof(Self.packageName)
+            XCTAssertNil(stoppedPid, "the process survives am force-stop")
+            let stopped = try await adb.dumpsysActivities()
+            XCTAssertNotEqual(stopped.resumedComponent, Self.mainActivity)
+
+            try await adb.uninstall(packageName: Self.packageName)
+            let remaining = try await adb.listPackages(matching: Self.packageName)
+            XCTAssertTrue(remaining.isEmpty)
         }
     }
 

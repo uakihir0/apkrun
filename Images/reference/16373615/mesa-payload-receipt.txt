@@ -63,9 +63,13 @@ are IR-440 to IR-446 in docs/04-plan/implementation-review.md.
 
 Searching all eight non-empty slot-A partitions and system_b for "mesa",
 "gallium", "virgl", "virtio_gpu", "/dri/", "libEGL", "libGLES", "egl/", and
-"libgbm" finds no Mesa library. The libEGL and libGLES names it finds are the
-ANGLE and emulation libraries listed above. The only "Gallium" name is the audio
-file product_a:/media/audio/notifications/Gallium.ogg.
+"libgbm" finds no Mesa library. Besides the loader, ANGLE, and emulation
+libraries in the table, the names that match libEGL, libGLES, or egl are
+vendor_a:/lib64/libGLESv1_enc.so and libGLESv2_enc.so (gfxstream encoders),
+system_a:/system/lib64/libegl_flags.so, and product_a:/lib64/libjni_eglfence.so
+(also in product_a:/app/Gallery2/lib/arm64/). None of them is a Mesa library.
+The only "Gallium" name is the audio file
+product_a:/media/audio/notifications/Gallium.ogg.
 
 4. ABI
 
@@ -82,17 +86,32 @@ file product_a:/media/audio/notifications/Gallium.ogg.
   are in vendor_a /lib64. liblog.so, libnativewindow.so, libsync.so, and libc++.so
   are in system_a /system/lib64. libc.so, libm.so, and libdl.so there are symbolic
   links, which dump.erofs lists as type 7.
-- The pinned source declares its virtgpu platform library as needing libdrm and
-  (on Android) libsync, and its guest iostream library as needing liblog. Those
-  three are present in the image.
-- Result: no dependency of a Mesa EGL, GLES, or virgl module is missing from the
-  image. The missing item is the Mesa module itself.
+- The pinned root Android.bp defines mesa_platform_virtgpu, which whole-links
+  platform_virtgpu_drm (src/gfxstream/guest/platform/drm/Android.bp). That module
+  declares the shared libraries libdrm and libzstd, and on Android also libcutils,
+  libhardware, liblog, libnativewindow, and libsync. mesa_platform_virtgpu itself
+  declares libdrm, and on Android libsync. mesa_gfxstream_guest_iostream declares
+  liblog. The tree also names libzstd in its util and loader modules
+  (src/util/Android.bp, src/loader/Android.bp).
+- Present in the image: libdrm.so, libcutils.so, and libhardware.so (vendor_a
+  /lib64); liblog.so, libnativewindow.so, and libsync.so (system_a).
+- Missing from the image: libzstd. No partition contains a zstd library; the
+  listings have no entry that matches "zstd".
+- Result: the mesa_platform_virtgpu closure of this tree needs libzstd, which the
+  image does not contain. That closure is the gfxstream and virtgpu platform path,
+  not the virgl gallium driver, which has no Android.bp in this tree (IR-440). So
+  whether a virgl EGL build needs libzstd is not established. The other
+  whole-static members of mesa_platform_virtgpu (for example platform_virtgpu,
+  vulkan_util, and libvirtgpu_kumquat_ffi) were not traced, so the dependency list
+  is incomplete.
 
 6. Result
 
 - Build 16373615 contains no Mesa EGL, GLES, gallium, or Mesa gbm library. Its
-  EGL and GLES modules are ANGLE in system_a and the emulation libraries in
-  vendor_a. This agrees with IR-185 and IR-244 for the loader paths.
+  system EGL and GLES set includes the ANGLE builds libEGL_angle.so and
+  libGLESv2_angle.so (libEGL_angle.so needs libGLESv2_angle.so). The vendor set
+  has the emulation libraries. This agrees with IR-185 and IR-244 for the loader
+  paths.
 - The pinned source defines no module that would install a Mesa EGL, GLES, or
   virgl library. Pinning it therefore does not supply the libraries that
   ro.hardware.egl=mesa loads.

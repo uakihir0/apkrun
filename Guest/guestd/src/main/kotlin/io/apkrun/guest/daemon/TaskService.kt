@@ -82,10 +82,10 @@ class TaskService(
 
     /**
      * Publishes the differences between the last list of tasks and the list that Android reports
-     * now.
+     * now. It returns the list that it read, so that a caller answers with the tasks it published.
      */
     @Synchronized
-    fun refresh() {
+    fun refresh(): List<TaskInfo> {
         val current = readTasks().associateBy { it.getTaskId() }
         for ((id, task) in current) {
             val before = known[id]
@@ -118,6 +118,7 @@ class TaskService(
         }
         known.clear()
         known.putAll(current)
+        return current.values.toList()
     }
 
     private fun readTasks(): List<TaskInfo> {

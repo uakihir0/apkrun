@@ -104,11 +104,10 @@ class LaunchService(
                         )
                 Intent(Intent.ACTION_MAIN).setComponent(component)
             } else {
-                // The launcher activity comes from PackageManager, as getLaunchIntentForPackage
-                // resolves it, and the
-                // start names the explicit component. A package-only intent is resolved against the
-                // caller's
-                // visibility, which the shell uid does not have for every package.
+                // The launcher activity comes from PackageManager, and the start names the explicit
+                // component. A package-only intent is resolved against the caller's visibility,
+                // which
+                // the shell uid does not have for every package.
                 system().packageManager.getLaunchIntentForPackage(request.getPackage())
                     ?: throw GuestFailure(
                         GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
@@ -205,11 +204,16 @@ class LaunchService(
         return options.toBundle()
     }
 
+    /**
+     * Waits for the task on the display. Each check is a refresh, which publishes the tasks that
+     * appeared (guest-protocol.md §6): the host has the event before the answer that follows the
+     * launch.
+     */
     private fun awaitTask(pkg: String, displayId: Int): TaskInfo? {
         val deadline = System.currentTimeMillis() + TASK_APPEARANCE_MILLIS
         while (true) {
             val task =
-                tasks.list().firstOrNull {
+                tasks.refresh().firstOrNull {
                     it.getPackage() == pkg && it.getDisplayId() == displayId
                 }
             if (task != null) {

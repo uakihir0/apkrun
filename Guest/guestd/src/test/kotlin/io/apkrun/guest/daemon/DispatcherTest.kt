@@ -19,7 +19,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -197,12 +196,5 @@ class DispatcherTest {
             pending.await()
         }
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_CANCELLED, response.getError().getCode())
-    }
-
-    @Test
-    fun withContextIsUsedForTheDisplayExecutor() = runBlocking {
-        // A plain call proves the executor path runs the body on a coroutine thread.
-        val value = withContext(Dispatchers.Default) { 3 }
-        assertEquals(3, value)
     }
 }

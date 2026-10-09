@@ -54,11 +54,64 @@ class Connection(
 
     private fun serve() {
         if (channel == ChannelKind.CHANNEL_KIND_GUEST_CONTROL) {
-            daemon.sessions.admitControl()?.let { reason ->
-                AgentLog.warning("refused a control connection: ${reason.name}")
+            serveControl()
+        } else {
+            serveSecondary()
+        }
+    }
+
+    /**
+     * The control connection. It holds the handshake from its admission until it ends, so that a
+     * second handshake is refused while this one runs, and a taken-over session is closed
+     * (guest-protocol.md §5.4). The end of this connection releases only its own claim on the
+     * session.
+     */
+    private fun serveControl() {
+        daemon.sessions.admitControl(socket)?.let { reason ->
+            AgentLog.warning("refused a control connection: ${reason.name}")
+            return
+        }
+        try {
+            val negotiated = handshake()
+            if (!daemon.sessions.openControl(socket, negotiated.token)) {
                 return
             }
+            daemon.events.attach(writer)
+            try {
+                controlLoop(negotiated.enabled)
+            } finally {
+                daemon.events.detach(writer)
+            }
+        } finally {
+            if (daemon.sessions.endControl(socket)) {
+                daemon.input.resetState()
+            }
         }
+    }
+
+    private fun serveSecondary() {
+        val negotiated = handshake()
+        daemon.sessions.admitSecondary(negotiated.token)?.let { reason ->
+            AgentLog.warning("refused a ${channel.name} connection: ${reason.name}")
+            return
+        }
+        daemon.sessions.track(socket)
+        try {
+            secondaryLoop()
+        } finally {
+            daemon.sessions.untrack(socket)
+        }
+    }
+
+    /**
+     * What the handshake established: the capabilities that both sides use, and the session token.
+     */
+    private class Negotiated(val enabled: Set<GuestCapability>, val token: ByteArray)
+
+    /**
+     * Sends the Hello, and reads the HelloAck that the host answers with (guest-protocol.md §5.1).
+     */
+    private fun handshake(): Negotiated {
         writer.send { it.setHello(hello()) }
         socket.soTimeout = HANDSHAKE_TIMEOUT_MILLIS
         val ack = reader.next()
@@ -71,28 +124,7 @@ class Connection(
         val accepted = AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, IMPLEMENTED)
         val enabled =
             GuestCapability.entries.filter { it.wireName in accepted.enabledCapabilities }.toSet()
-        if (channel == ChannelKind.CHANNEL_KIND_GUEST_CONTROL) {
-            daemon.sessions.openControl(accepted.sessionToken)
-            daemon.events.attach(writer)
-            try {
-                controlLoop(enabled)
-            } finally {
-                daemon.events.detach(writer)
-                daemon.sessions.closeControl()
-                daemon.input.resetState()
-            }
-        } else {
-            daemon.sessions.admitSecondary(accepted.sessionToken)?.let { reason ->
-                AgentLog.warning("refused a ${channel.name} connection: ${reason.name}")
-                return
-            }
-            daemon.sessions.track(socket)
-            try {
-                secondaryLoop()
-            } finally {
-                daemon.sessions.untrack(socket)
-            }
-        }
+        return Negotiated(enabled, accepted.sessionToken)
     }
 
     /**
@@ -112,8 +144,17 @@ class Connection(
                     val id = envelope.id
                     val request = envelope.request
                     daemon.scope.launch {
-                        val response = daemon.dispatcher.dispatch(id, request, enabled)
-                        writer.send(replyTo = id) { it.setResponse(response) }
+                        try {
+                            val response = daemon.dispatcher.dispatch(id, request, enabled)
+                            writer.send(replyTo = id) { it.setResponse(response) }
+                        } catch (error: IOException) {
+                            // The host closed the connection while the request ran, so nothing
+                            // reads the answer.
+                            // The agent keeps running (guest-protocol.md §4.1).
+                            AgentLog.info(
+                                "the answer to request $id was not sent: ${error.javaClass.simpleName}"
+                            )
+                        }
                     }
                 }
                 Envelope.BodyCase.CANCEL -> daemon.dispatcher.cancel(envelope.cancel.targetId)
@@ -135,7 +176,17 @@ class Connection(
             when (channel) {
                 ChannelKind.CHANNEL_KIND_GUEST_INPUT ->
                     if (envelope.bodyCase == Envelope.BodyCase.INPUT_BATCH) {
-                        val ack = daemon.input.submit(envelope.inputBatch)
+                        // A batch that the framework cannot apply is logged and dropped, and the
+                        // stream stays
+                        // open (guest-protocol.md §9). Only a frame that breaks the protocol closes
+                        // it.
+                        val ack =
+                            try {
+                                daemon.input.submit(envelope.inputBatch)
+                            } catch (error: Exception) {
+                                AgentLog.error("an input batch could not be applied", error)
+                                null
+                            }
                         if (ack != null) {
                             writer.send { it.setInputAck(ack) }
                         }

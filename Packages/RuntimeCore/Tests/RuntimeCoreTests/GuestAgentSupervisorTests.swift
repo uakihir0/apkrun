@@ -218,6 +218,125 @@ func aConnectionThatNeverComesUpTimesOut() async throws {
     }
 }
 
+private func displayRemovedEvent(_ id: Int32) -> GPEvent.OneOf_Kind {
+    var removed = GPDisplayRemoved()
+    removed.displayID = id
+    return .displayRemoved(removed)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRefusedVersionFailsTheStartAtOnce() async throws {
+    let transport = InMemoryTransport { _, agent, _ in agent.sendHello(major: 2) }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in true }
+    )
+    let started = ContinuousClock.now
+    do {
+        try await supervisor.start(connectTimeout: .seconds(10))
+        Issue.record("the supervisor started with an agent of another major version")
+    } catch {
+        #expect(error == .handshakeFailed(reason: "incompatibleVersion"))
+    }
+    #expect(ContinuousClock.now - started < .seconds(3))
+    #expect(transport.agents.count == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aTransportThatNeverOpensFailsTheStartAtTheConnectDeadline() async throws {
+    let supervisor = GuestAgentSupervisor(
+        transport: StalledTransport(),
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+    let started = ContinuousClock.now
+    do {
+        try await supervisor.start(connectTimeout: .milliseconds(300))
+        Issue.record("the supervisor connected through a transport that never opened")
+    } catch {
+        #expect(error == .connectTimedOut)
+    }
+    #expect(ContinuousClock.now - started < .seconds(3))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aStopDuringTheStartEndsTheStartAsStopped() async throws {
+    let inner = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: DelayedTransport(inner: inner, delay: .milliseconds(200)),
+        keepaliveInterval: .seconds(60),
+        restartAgent: { _ in false }
+    )
+    let start = Task { try await supervisor.start(connectTimeout: .seconds(5)) }
+    try await Task.sleep(for: .milliseconds(50))
+    await supervisor.stop()
+    do {
+        try await start.value
+        Issue.record("the start finished after the supervisor was stopped")
+    } catch let failure as GuestAgentFailure {
+        #expect(failure == .stopped)
+    }
+    let state = await supervisor.state
+    #expect(state == .stopped)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRestartedAgentThatDiesBeforeItConnectsIsRestartedAgain() async throws {
+    let losses = LossLog()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { loss in
+            losses.record(loss)
+            return true
+        }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    // The restarted agent does not come up for two attempts, so each failed attempt asks for a restart again.
+    transport.refuseNext(2)
+    transport.agents[0].hangUp()
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 2 }
+    #expect(losses.all == [.disconnected, .disconnected, .disconnected])
+    await supervisor.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func fiveProtocolViolationsStopTheReconnection() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        // A gap in the event sequence is a protocol violation (guest-protocol.md §12.2).
+        agent.sendEvent(seq: 5, displayRemovedEvent(3))
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { _ in true }
+    )
+    do {
+        try await supervisor.start(connectTimeout: .seconds(10))
+        Issue.record("the supervisor connected to an agent that broke the protocol")
+    } catch {
+        #expect(error == .requiredAgentUnavailable)
+    }
+    #expect(transport.agents.count == GuestAgentSupervisor.violationLimit)
+}
+
 // MARK: - The restart budget, the snapshot state, and the bundle
 
 @Test func theFourthDeathWithinAMinuteIsNotRestarted() {

@@ -38,7 +38,7 @@ import Testing
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
                 "bootTimedOut", "bootStalled", "gpuProfileUnavailable",
                 "bootTimedOut", "bootStalled", "guestAgent", "adb",
-                "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed",
+                "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
                 "guestAgentOperationFailed",
             ].map { "runtime.\($0)" }

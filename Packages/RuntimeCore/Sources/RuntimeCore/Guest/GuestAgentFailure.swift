@@ -13,8 +13,10 @@ public enum GuestAgentFailure: APKRunError, Equatable {
     case installFailed(reason: String)
     /// The agent process did not start.
     case startFailed
-    /// The agent did not answer its Hello within 5 seconds after `sys.boot_completed`.
+    /// The agent did not answer its Hello within the connect deadline.
     case connectTimedOut
+    /// The start was stopped before the agent answered, so the boot that asked for it has ended.
+    case stopped
     /// The handshake failed with the named protocol failure (guest-protocol.md §12.3).
     case handshakeFailed(reason: String)
     /// The agent died more often than the restart budget allows, so the host stops restarting it.
@@ -34,6 +36,7 @@ public enum GuestAgentFailure: APKRunError, Equatable {
         case .installFailed: "guestAgentInstallFailed"
         case .startFailed: "guestAgentStartFailed"
         case .connectTimedOut: "guestAgentConnectTimedOut"
+        case .stopped: "guestAgentStopped"
         case .handshakeFailed: "guestAgentHandshakeFailed"
         case .requiredAgentUnavailable: "requiredAgentUnavailable"
         case .adb: "adb"

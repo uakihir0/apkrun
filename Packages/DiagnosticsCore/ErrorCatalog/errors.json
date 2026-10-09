@@ -2262,9 +2262,27 @@
       "cliExit": 1,
       "doc": {
         "case": "startFailed",
-        "when": "the agent is started but no agent process runs, or the device shell refused the start",
-        "raisedBy": "GuestAgentProvisioner",
+        "when": "the connection failed and no agent process runs, or the device shell refused the start",
+        "raisedBy": "DevelopmentGuestAgent",
         "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.2"
+      }
+    },
+    {
+      "code": "runtime.guestAgentStopped",
+      "parameters": [],
+      "message": {
+        "en": "The Guest Agent start was stopped before the agent answered."
+      },
+      "remediation": {
+        "en": "Start Android again with apkrun dev boot."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "stopped",
+        "when": "Android is stopped while the agent is starting, so the start ends without a connection",
+        "raisedBy": "DevelopmentGuestAgent",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) \u00a73.3"
       }
     },
     {
@@ -2280,7 +2298,7 @@
       "cliExit": 75,
       "doc": {
         "case": "connectTimedOut",
-        "when": "the Hello of the agent does not arrive within 5 seconds after boot completion",
+        "when": "no handshake completes before the connect deadline, and no refusal that would repeat was received",
         "raisedBy": "GuestAgentSupervisor",
         "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15 (#072)"
       }

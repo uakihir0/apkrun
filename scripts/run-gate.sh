@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -29,12 +29,12 @@ cd "$repo_root"
 
 branch="$(git branch --show-current)"
 if [[ "$branch" != main ]]; then
-    printf 'run-gate: G1 evidence must be recorded from a clean main checkout (found %s)\n' "$branch" >&2
+    printf 'run-gate: %s evidence must be recorded from a clean main checkout (found %s)\n' "$gate" "$branch" >&2
     exit 1
 fi
 
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-    printf 'run-gate: the working tree must be clean before running G1\n' >&2
+    printf 'run-gate: the working tree must be clean before running %s\n' "$gate" >&2
     exit 1
 fi
 
@@ -45,7 +45,7 @@ APKRUN_TEST_LINUX_DIR="$(
 )"
 export APKRUN_TEST_LINUX_DIR
 mkdir -p "$gate_dir"
-rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/G1.xcresult"
+rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/$gate.xcresult"
 report="$gate_dir/report.txt"
 started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 commit="$(git rev-parse HEAD)"
@@ -80,6 +80,10 @@ trap finish_report EXIT
 
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh
+if [[ "$gate" == G2 ]]; then
+    # G2 boots the stock image from an unsigned bundle outside ~/Documents (#014).
+    scripts/build-test-android-bundle.sh
+fi
 xcodebuild test \
     -project APKRun.xcodeproj \
     -scheme IntegrationTests \
@@ -100,7 +104,7 @@ xcodebuild test \
     -only-test-configuration "$gate" \
     -jobs 1 \
     -derivedDataPath "$gate_dir/DerivedData" \
-    -resultBundlePath "$gate_dir/G1.xcresult" \
+    -resultBundlePath "$gate_dir/$gate.xcresult" \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"

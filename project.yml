@@ -283,6 +283,10 @@ targets:
         product: VirtualMachineCore
       - package: APKRun
         product: DiagnosticsCore
+      - package: APKRun
+        product: ImageCore
+      - package: APKRun
+        product: RuntimeCore
     scheme:
       testTargets:
         - AcceptanceTests

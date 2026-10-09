@@ -25,6 +25,20 @@
           }
         ]
       }
+    },
+    {
+      "id" : "00300001-0000-4000-8000-000000000002",
+      "name" : "G2",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_ACCEPTANCE_SUITE",
+            "value" : "g2",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 5400
+      }
     }
   ],
   "defaultOptions" : {

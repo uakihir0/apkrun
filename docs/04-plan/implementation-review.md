@@ -12044,7 +12044,7 @@ the real manifest.
 
 **Consequence.** The step depends on the framework's shell command set, which can change between releases. A failed step is logged with the framework's cause, and the other steps still run.
 
-## IR-423: A development rebuild with the same versionCode is not reinstalled
+## IR-423: The agent is installed on every start, so a rebuild with the same versionCode takes effect
 
 | Field | Value |
 |---|---|
@@ -12052,11 +12052,11 @@ the real manifest.
 | Task | #072 |
 | Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 |
 
-**Choice.** The provisioner reinstalls the bundled agent when its versionCode differs from the installed one, as §3.1 says. It does not compare file contents. A developer who changes the agent without changing `MARKETING_VERSION` must uninstall `io.apkrun.guest` or change the version.
+**Choice.** The provisioner runs `install -r -t` on every start, whatever the installed versionCode. It does not skip an install whose versionCode matches the bundle, so the skip in §3.1 step 1 is not used.
 
-**Reason.** The design defines the rule by versionCode, and a content check would need the installed APK's hash from the device on every boot. The cost is paid in boot time.
+**Reason.** A development rebuild keeps its versionCode, and a skipped install would leave the old agent on the device. A skip would also hide a signer change at the same versionCode, which Android's refusal reports (IR-425). The install takes a few seconds, and the start waits for the device anyway (IR-435).
 
-**Consequence.** During development, a stale agent can run until the version changes. The T2 suite uses two versionCodes for that reason.
+**Consequence.** A boot is longer by the install time. A developer does not need to uninstall the agent to pick up a rebuild. The T2 suite still uses two versionCodes, to test the replacement in both directions.
 
 ## IR-424: The provisioner replaces a newer agent by removing it first
 
@@ -12080,11 +12080,11 @@ the real manifest.
 | Task | #072 |
 | Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 |
 
-**Choice.** The provisioner does not compare signers with `dumpsys package`. It installs the bundled APK, and when Android refuses with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, it uninstalls the installed copy and installs again.
+**Choice.** The provisioner does not compare signers with `dumpsys package`. It installs the bundled APK on every start (IR-423). When Android refuses with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, it uninstalls the installed copy and installs again. A refusal that the second install does not clear is `installFailed`, with Android's reason.
 
-**Reason.** Android's own check is the authority on whether an update can replace a package. A host-side comparison could disagree with it, for example for a rotated signing lineage.
+**Reason.** Android's own check is the authority on whether an update can replace a package. A host-side comparison could disagree with it, for example for a rotated signing lineage. An install that is skipped for a matching versionCode would never reach that check, which is why the install runs on every start.
 
-**Consequence.** The signer path is covered by T0 with a fake adb. It has not been run on the device, because the mismatch needs a second signing key on the device.
+**Consequence.** The signer path is covered by T0 with a fake adb. The test checks that the uninstall comes between the refused install and the retry, and that an unrecovered refusal is reported with Android's reason. It has not been run on the device, because the mismatch needs a second signing key on the device.
 
 ## IR-426: The agent is stopped by its PID, not by pkill
 
@@ -12218,13 +12218,13 @@ the real manifest.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #072 |
-| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §13.2, §15 (#072); [guest-components.md](../02-design/guest-components.md) §3 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §12.2, §13.2, §15 (#072); [guest-components.md](../02-design/guest-components.md) §3 |
 
-**Choice.** The agent start runs in this order. It waits up to 30 s until `adb get-state` reports `device`. It removes the stale `localabstract:apkrun-` forwards, best effort. It installs the bundle, starts the agent, and then waits up to 5 s for the Hello and the handshake. Each stage logs its name when it fails. A forward is removed when its stream closes.
+**Choice.** The agent start runs in this order. It waits up to 30 s until `adb get-state` reports `device`. It removes the stale `localabstract:apkrun-` forwards, best effort. It installs the bundle (IR-423), starts the agent, and then waits up to 5 s for the Hello and the HelloAck. The 5 s covers the transport's open as well as the Hello and the HelloAck. A refused version or Hello ends the wait at once as `handshakeFailed`, and a loopback connection that the device refuses fails at once. A start whose process is not running when its connection fails is `startFailed`. A `stop()` during the start ends it as `stopped`, and a connection that completes after a stop is closed. Each stage logs its name when it fails. A forward is removed when its stream closes. After the connection, five protocol violations within 10 minutes stop the reconnection, and the agent is `requiredAgentUnavailable` (guest-protocol.md §12.2).
 
-**Reason.** The design's "within 5 s of sys.boot_completed" cannot include an install on the first boot, which takes several seconds by itself, so the deadline starts with the connection. On the first run after boot, adb reported the device offline for several seconds, and the forward listing then failed the start, so the device is awaited first. A forward that cannot be listed should not stop the agent from starting, and each new forward gets its own port.
+**Reason.** The design's "within 5 s of sys.boot_completed" cannot include an install on the first boot, which takes several seconds by itself, so the deadline starts with the connection. On the first run after boot, adb reported the device offline for several seconds, and the forward listing then failed the start, so the device is awaited first. A forward that cannot be listed should not stop the agent from starting, and each new forward gets its own port. A start that could hang in the transport, or that kept a connection after a stop, is not acceptable for the boot that waits on it.
 
-**Consequence.** A first boot can take longer than 5 s from `sys.boot_completed` to the connection. A steady-state boot does not. A stale forward can remain until the next start, without blocking it. The T2 suite measures neither interval separately.
+**Consequence.** A first boot can take longer than 5 s from `sys.boot_completed` to the connection. A steady-state boot does not. A stale forward can remain until the next start, without blocking it. The new `runtime.guestAgentStopped` code is in the catalog. The T2 suite measures neither interval separately.
 
 ## IR-436: The development boot fails when no agent bundle is found
 

@@ -61,7 +61,7 @@ The host app bundle carries the development-mode APK at `APKRun.app/Contents/Res
 1. `adb shell pm list packages --show-versioncode io.apkrun.guest`. If the package is missing or the version code differs from the bundled APK, run `adb install -r -t <bundle>/guest/apkrun-guest.apk`.
 2. If the installed package has a different signer (for example after switching between development machines), uninstall it first. The agent keeps no user data in development mode, so this is safe.
 
-**As built (#072).** The bundle's version record `apkrun-guest.json` is read before the install (IR-420). The install is `install -r -t`. An installed copy with a higher versionCode is removed first, because `install -r` cannot downgrade (IR-424). Android's refusal `INSTALL_FAILED_UPDATE_INCOMPATIBLE` triggers the same removal for a signer change, so no signer comparison is made (IR-425). The start waits for the device before these steps (IR-435).
+**As built (#072).** The bundle's version record `apkrun-guest.json` is read before the install (IR-420). The install is `install -r -t`, and it runs on every start even when the versionCode matches, so a rebuild with the same versionCode takes effect (IR-423). An installed copy with a higher versionCode is removed first, because `install -r` cannot downgrade (IR-424). Android's refusal `INSTALL_FAILED_UPDATE_INCOMPATIBLE` triggers the same removal for a signer change, so no signer comparison is made (IR-425). The start waits for the device before these steps (IR-435).
 
 ### 3.2 Start
 

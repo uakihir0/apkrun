@@ -611,6 +611,8 @@ These close the connection and are logged with the Envelope id (never the payloa
 
 The host reports `GuestProtocolFailure.malformedFrame` and reconnects with backoff. Five violations within 10 minutes stop reconnecting, and health `agent.guest` or `agent.store` fails with `runtime.requiredAgentUnavailable` ([runtime-daemon.md](runtime-daemon.md) §12). This keeps a looping failure from filling the logs.
 
+**As built (#072).** The host counts the closes that are protocol violations (`malformedFrame` and `frameTooLarge`) in `GuestAgentSupervisor`, and the fifth within ten minutes ends the reconnection in `unavailable`, which the boot reports as `runtime.requiredAgentUnavailable` (IR-435). Other closes reconnect with the backoff, and a dead agent is restarted within the budget of guest-components.md §3.3.
+
 ### 12.3 Host error domain
 
 `GuestProtocolFailure` cases: `incompatibleVersion(host, guest)`, `handshakeFailed(reason)`, `handshakeTimedOut`, `disconnected`, `timeout(operation)`, `remote(code, message, operation)`, `frameTooLarge`, `malformedFrame`, `capabilityMissing(capability)`, `agentUnavailable(kind)`. Codes and remediations are in [../03-reference/error-catalog.md](../03-reference/error-catalog.md).

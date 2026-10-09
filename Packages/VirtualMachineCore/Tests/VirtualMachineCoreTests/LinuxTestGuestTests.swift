@@ -26,7 +26,7 @@ func linuxTestGuestBuildsTheDocumentedMinimalDefinition() {
             == "console=hvc0 apkrun.test=ports apkrun.test.poweroff=1 loglevel=7"
     )
     #expect(definition.disks.isEmpty)
-    #expect(definition.network == nil)
+    #expect(definition.networks.isEmpty)
     #expect(!definition.vsockEnabled)
     #expect(
         definition.consolePorts
@@ -49,7 +49,7 @@ func linuxTestGuestAddsNATOnlyForTheNetworkCheck() {
         extraCommandLine: ["apkrun.test.net.port=43210"]
     )
 
-    guard case .nat(let macAddress)? = definition.network else {
+    guard case .nat(let macAddress)? = definition.networks.first, definition.networks.count == 1 else {
         Issue.record("the net check must attach a NAT network")
         return
     }

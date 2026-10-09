@@ -3,6 +3,9 @@ import VirtioDeviceCore
 import Virtualization
 
 enum VZConfigurationBuilder {
+    /// The most `VZVirtioConsoleDeviceSerialPortConfiguration`s VZ accepts (vm.md §6.1).
+    static let maximumSingleConsolePorts = 10
+
     static func nullDeviceConsoleAttachments(
         count: Int
     ) throws -> [VZSerialPortAttachment] {
@@ -60,27 +63,43 @@ enum VZConfigurationBuilder {
             return device
         }
 
-        if case .nat(let macAddress)? = definition.network {
-            guard let address = VZMACAddress(string: macAddress) else {
+        configuration.networkDevices = try definition.networks.map { network in
+            guard case .nat(let macAddress) = network, let address = VZMACAddress(string: macAddress)
+            else {
                 throw VZConfigurationBuilderError.invalidMACAddress
             }
             let device = VZVirtioNetworkDeviceConfiguration()
             device.attachment = VZNATNetworkDeviceAttachment()
             device.macAddress = address
-            configuration.networkDevices = [device]
+            return device
         }
 
         configuration.socketDevices =
             definition.vsockEnabled
             ? [VZVirtioSocketDeviceConfiguration()]
             : []
-        configuration.serialPorts = zip(
-            definition.consolePorts,
+        // Ports 0-9 are single-port devices. Later ports are the console ports of one
+        // multiport device, which the guest numbers after them (vm.md §6.1).
+        configuration.serialPorts =
             consolePortAttachments
-        ).map { _, attachment in
-            let port = VZVirtioConsoleDeviceSerialPortConfiguration()
-            port.attachment = attachment
-            return port
+            .prefix(maximumSingleConsolePorts)
+            .map { attachment in
+                let port = VZVirtioConsoleDeviceSerialPortConfiguration()
+                port.attachment = attachment
+                return port
+            }
+        let extraAttachments = consolePortAttachments.dropFirst(maximumSingleConsolePorts)
+        if extraAttachments.isEmpty {
+            configuration.consoleDevices = []
+        } else {
+            let console = VZVirtioConsoleDeviceConfiguration()
+            for (index, attachment) in extraAttachments.enumerated() {
+                let port = VZVirtioConsolePortConfiguration()
+                port.isConsole = true
+                port.attachment = attachment
+                console.ports[index] = port
+            }
+            configuration.consoleDevices = [console]
         }
         configuration.entropyDevices =
             definition.entropy
@@ -114,7 +133,18 @@ enum VZConfigurationBuilder {
             try VZCustomVirtioDeviceAdapter(model: model, index: index)
         }
         configuration.customVirtioDevices = customDeviceAdapters.map(\.configuration)
-        configuration.graphicsDevices = []
+        if let display = definition.builtInDisplay {
+            let graphics = VZVirtioGraphicsDeviceConfiguration()
+            graphics.scanouts = [
+                VZVirtioGraphicsScanoutConfiguration(
+                    widthInPixels: display.widthPixels,
+                    heightInPixels: display.heightPixels
+                )
+            ]
+            configuration.graphicsDevices = [graphics]
+        } else {
+            configuration.graphicsDevices = []
+        }
         configuration.keyboards = []
         configuration.pointingDevices = []
         configuration.directorySharingDevices = []

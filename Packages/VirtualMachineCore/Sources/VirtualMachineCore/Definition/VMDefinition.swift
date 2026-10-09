@@ -21,8 +21,8 @@ public struct VMDefinition: Sendable {
     /// Attached disk images, in guest device order.
     public var disks: [DiskDefinition]
 
-    /// Optional NAT network configuration.
-    public var network: NetworkDefinition?
+    /// NAT network adapters in guest device order (`eth0`, `eth1`, …).
+    public var networks: [NetworkDefinition]
 
     /// Whether to attach the VM's virtio-vsock device.
     public var vsockEnabled: Bool
@@ -42,6 +42,12 @@ public struct VMDefinition: Sendable {
     /// Custom virtio devices supplied by their owning modules.
     public var customDevices: [any VirtioDeviceModel]
 
+    /// VZ's own 2D virtio-gpu, for the development-only Android `headless` profile.
+    ///
+    /// The stock Android image cannot boot without a DRM device (android-image.md §9.1).
+    /// Never set together with a GraphicsCore virtio-gpu device or in a release bundle.
+    public var builtInDisplay: BuiltInDisplayDefinition?
+
     /// A path-reduced, device-free projection suitable for diagnostics and logs.
     public var summary: VMDefinitionSummary {
         VMDefinitionSummary(definition: self)
@@ -55,13 +61,14 @@ public struct VMDefinition: Sendable {
         machineIdentifier: Data? = nil,
         boot: BootDefinition,
         disks: [DiskDefinition],
-        network: NetworkDefinition? = nil,
+        networks: [NetworkDefinition] = [],
         vsockEnabled: Bool = false,
         consolePorts: [ConsolePortDefinition],
         entropy: Bool = true,
         memoryBalloon: Bool = true,
         sound: SoundDefinition? = nil,
-        customDevices: [any VirtioDeviceModel] = []
+        customDevices: [any VirtioDeviceModel] = [],
+        builtInDisplay: BuiltInDisplayDefinition? = nil
     ) {
         self.label = label
         self.cpuCount = cpuCount
@@ -69,13 +76,14 @@ public struct VMDefinition: Sendable {
         self.machineIdentifier = machineIdentifier
         self.boot = boot
         self.disks = disks
-        self.network = network
+        self.networks = networks
         self.vsockEnabled = vsockEnabled
         self.consolePorts = consolePorts
         self.entropy = entropy
         self.memoryBalloon = memoryBalloon
         self.sound = sound
         self.customDevices = customDevices
+        self.builtInDisplay = builtInDisplay
     }
 }
 
@@ -177,6 +185,21 @@ public enum ConsoleRole: Codable, Equatable, Sendable {
 
     /// A port connected to a host-side service.
     case service(name: String)
+}
+
+/// The single scanout of VZ's built-in 2D virtio-gpu (development only).
+public struct BuiltInDisplayDefinition: Codable, Equatable, Sendable {
+    /// Scanout width in pixels.
+    public var widthPixels: Int
+
+    /// Scanout height in pixels.
+    public var heightPixels: Int
+
+    /// Creates a built-in display definition.
+    public init(widthPixels: Int, heightPixels: Int) {
+        self.widthPixels = widthPixels
+        self.heightPixels = heightPixels
+    }
 }
 
 /// Audio stream selection for a virtio sound device.

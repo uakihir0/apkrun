@@ -242,7 +242,7 @@ private func makeController(
 private func makeValidatedDefinition(networkEnabled: Bool = false) throws -> ValidatedVMDefinition {
     var builder = VMDefinitionBuilder()
     if networkEnabled {
-        builder.network = .nat(macAddress: "02:00:00:00:00:01")
+        builder.networks = [.nat(macAddress: "02:00:00:00:00:01")]
     }
     var header = Data(repeating: 0, count: 64)
     header.replaceSubrange(0x38..<0x3C, with: [0x41, 0x52, 0x4D, 0x64])

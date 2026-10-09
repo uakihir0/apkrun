@@ -12,13 +12,14 @@ package struct VMDefinitionBuilder {
     package var initialRamdiskURL: URL?
     package var commandLine = "console=hvc0"
     package var disks: [DiskDefinition] = []
-    package var network: NetworkDefinition?
+    package var networks: [NetworkDefinition] = []
     package var vsockEnabled = false
     package var consolePorts = [ConsolePortDefinition(role: .systemConsole)]
     package var entropy = true
     package var memoryBalloon = true
     package var sound: SoundDefinition?
     package var customDevices: [any VirtioDeviceModel] = []
+    package var builtInDisplay: BuiltInDisplayDefinition?
 
     package init() {}
 
@@ -35,13 +36,14 @@ package struct VMDefinitionBuilder {
                 commandLine: commandLine
             ),
             disks: disks,
-            network: network,
+            networks: networks,
             vsockEnabled: vsockEnabled,
             consolePorts: consolePorts,
             entropy: entropy,
             memoryBalloon: memoryBalloon,
             sound: sound,
-            customDevices: customDevices
+            customDevices: customDevices,
+            builtInDisplay: builtInDisplay
         )
     }
 }

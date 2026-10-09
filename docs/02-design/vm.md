@@ -28,13 +28,14 @@ public struct VMDefinition: Sendable {
     public var machineIdentifier: Data?           // VZGenericMachineIdentifier.dataRepresentation; nil = create new
     public var boot: BootDefinition
     public var disks: [DiskDefinition]            // attached in array order
-    public var network: NetworkDefinition?        // nil = no NIC
+    public var networks: [NetworkDefinition]      // NAT NICs in guest order; empty = no NIC
     public var vsockEnabled: Bool
     public var consolePorts: [ConsolePortDefinition]  // attached in array order; index 0 must be the system console
     public var entropy: Bool                      // virtio-rng, default true
     public var memoryBalloon: Bool                // default true (device present, not driven in v1)
     public var sound: SoundDefinition?            // nil = no virtio-snd
     public var customDevices: [any VirtioDeviceModel]  // from VirtioDeviceCore / GraphicsCore
+    public var builtInDisplay: BuiltInDisplayDefinition?  // development only: VZ 2D virtio-gpu (§4)
 }
 
 public enum BootDefinition: Sendable {

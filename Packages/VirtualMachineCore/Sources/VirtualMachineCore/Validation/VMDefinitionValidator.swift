@@ -197,7 +197,14 @@ public struct VMDefinitionValidator: Sendable {
             failures.append(.missingSystemConsole)
         }
 
-        if case .nat(let macAddress)? = definition.network, !Self.isValidLocallyAdministeredMAC(macAddress) {
+        let macAddresses = definition.networks.map { network in
+            switch network {
+            case .nat(let macAddress): macAddress
+            }
+        }
+        if macAddresses.contains(where: { !Self.isValidLocallyAdministeredMAC($0) })
+            || Set(macAddresses.map { $0.lowercased() }).count != macAddresses.count
+        {
             failures.append(.invalidMACAddress)
         }
 

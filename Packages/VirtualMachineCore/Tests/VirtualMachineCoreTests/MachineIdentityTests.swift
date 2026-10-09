@@ -26,7 +26,7 @@ import VirtualMachineCoreTestSupport
     )
     for _ in 0..<1_000 {
         var definition = builder.build()
-        definition.network = .nat(macAddress: MachineIdentity.newMACAddress())
+        definition.networks = [.nat(macAddress: MachineIdentity.newMACAddress())]
         #expect(validator.findings(definition).isEmpty)
     }
 }

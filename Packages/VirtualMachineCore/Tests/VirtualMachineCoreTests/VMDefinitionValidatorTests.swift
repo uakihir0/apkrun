@@ -353,12 +353,29 @@ import Virtualization
     let builder = VMDefinitionBuilder()
     var definition = builder.build()
     for address in ["00:00:00:00:00:01", "03:00:00:00:00:01", "not-a-mac"] {
-        definition.network = .nat(macAddress: address)
+        definition.networks = [.nat(macAddress: address)]
         #expect(makeValidator(for: builder).findings(definition) == [.invalidMACAddress])
     }
 
-    definition.network = .nat(macAddress: "02:00:00:00:00:01")
+    definition.networks = [.nat(macAddress: "02:00:00:00:00:01")]
     #expect(makeValidator(for: builder).findings(definition).isEmpty)
+}
+
+@Test func everyNetworkMACIsCheckedAndMustBeUnique() {
+    let builder = VMDefinitionBuilder()
+    var definition = builder.build()
+    definition.networks = [
+        .nat(macAddress: "02:00:00:00:00:01"),
+        .nat(macAddress: "02:00:00:00:00:02"),
+        .nat(macAddress: "02:15:b2:00:00:00"),
+    ]
+    #expect(makeValidator(for: builder).findings(definition).isEmpty)
+
+    definition.networks.append(.nat(macAddress: "02:00:00:00:00:01"))
+    #expect(makeValidator(for: builder).findings(definition) == [.invalidMACAddress])
+
+    definition.networks = [.nat(macAddress: "02:00:00:00:00:01"), .nat(macAddress: "not-a-mac")]
+    #expect(makeValidator(for: builder).findings(definition) == [.invalidMACAddress])
 }
 
 @Test func machineIdentifierMustDecodeInVirtualizationFramework() {

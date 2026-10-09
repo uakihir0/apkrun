@@ -99,7 +99,7 @@ public enum LinuxTestGuest {
                 commandLine: commandLine
             ),
             disks: diskDefinitions,
-            network: networkDefinition,
+            networks: networkDefinition.map { [$0] } ?? [],
             vsockEnabled: tests.contains("vsock"),
             consolePorts: consolePorts,
             entropy: !usesEntropyDevice,

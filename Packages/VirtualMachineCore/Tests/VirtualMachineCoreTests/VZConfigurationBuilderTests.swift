@@ -37,7 +37,7 @@ import Virtualization
         ),
     ]
     let macAddress = "02:00:00:00:00:01"
-    builder.network = .nat(macAddress: macAddress)
+    builder.networks = [.nat(macAddress: macAddress)]
     builder.vsockEnabled = true
     builder.consolePorts = [
         ConsolePortDefinition(role: .systemConsole),
@@ -87,6 +87,7 @@ import Virtualization
     #expect(configuration.socketDevices.count == 1)
     #expect(configuration.socketDevices[0] is VZVirtioSocketDeviceConfiguration)
     #expect(configuration.serialPorts.count == 2)
+    #expect(configuration.consoleDevices.isEmpty)
     #expect(configuration.entropyDevices.count == 1)
     #expect(configuration.memoryBalloonDevices.count == 1)
     #expect(configuration.audioDevices.count == 1)
@@ -163,4 +164,52 @@ private final class BuilderVirtioDevice: VirtioDeviceModel, Sendable {
     init(descriptor: VirtioDeviceDescriptor) {
         self.descriptor = descriptor
     }
+}
+
+@Test func vzBuilderPutsConsolePortsBeyondTenOnOneMultiportDevice() throws {
+    var builder = VMDefinitionBuilder()
+    builder.consolePorts =
+        [ConsolePortDefinition(role: .systemConsole)]
+        + (1..<20).map { ConsolePortDefinition(role: .silent(name: "port\($0)")) }
+    let definition = builder.build()
+    let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(count: 20)
+
+    let configuration = try VZConfigurationBuilder.build(
+        definition,
+        consolePortAttachments: attachments
+    ).configuration
+
+    #expect(configuration.serialPorts.count == 10)
+    for (index, port) in configuration.serialPorts.enumerated() {
+        #expect(port.attachment === attachments[index])
+    }
+    let console = try #require(
+        configuration.consoleDevices.first as? VZVirtioConsoleDeviceConfiguration
+    )
+    #expect(configuration.consoleDevices.count == 1)
+    for index in 0..<10 {
+        let port = try #require(console.ports[index])
+        #expect(port.isConsole)
+        #expect(port.attachment === attachments[10 + index])
+    }
+}
+
+@Test func vzBuilderAttachesNetworksInOrderAndTheBuiltInDisplay() throws {
+    var builder = VMDefinitionBuilder()
+    let macAddresses = ["02:00:00:00:00:01", "02:00:00:00:00:02", "02:15:b2:00:00:00"]
+    builder.networks = macAddresses.map { .nat(macAddress: $0) }
+    builder.builtInDisplay = BuiltInDisplayDefinition(widthPixels: 720, heightPixels: 1280)
+    let definition = builder.build()
+
+    let configuration = try VZConfigurationBuilder.build(
+        definition,
+        consolePortAttachments: VZConfigurationBuilder.nullDeviceConsoleAttachments(count: 1)
+    ).configuration
+
+    #expect(configuration.networkDevices.map(\.macAddress.string) == macAddresses)
+    let graphics = try #require(
+        configuration.graphicsDevices.first as? VZVirtioGraphicsDeviceConfiguration
+    )
+    #expect(graphics.scanouts.map(\.widthInPixels) == [720])
+    #expect(graphics.scanouts.map(\.heightInPixels) == [1280])
 }

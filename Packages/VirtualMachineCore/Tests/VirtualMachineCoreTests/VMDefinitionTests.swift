@@ -28,7 +28,7 @@ import VirtioDeviceCore
                 role: "userdata"
             )
         ],
-        network: .nat(macAddress: macAddress),
+        networks: [.nat(macAddress: macAddress)],
         vsockEnabled: true,
         consolePorts: [
             ConsolePortDefinition(role: .systemConsole),
@@ -138,7 +138,8 @@ import VirtioDeviceCore
     #expect(definition.entropy)
     #expect(definition.memoryBalloon)
     #expect(!definition.vsockEnabled)
-    #expect(definition.network == nil)
+    #expect(definition.networks.isEmpty)
+    #expect(definition.builtInDisplay == nil)
     #expect(definition.sound == nil)
     #expect(definition.customDevices.isEmpty)
     #expect(DiskDefinition(url: URL(fileURLWithPath: "/tmp/os.img"), readOnly: true, role: "os").caching == .automatic)

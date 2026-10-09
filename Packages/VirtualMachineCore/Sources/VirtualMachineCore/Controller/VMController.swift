@@ -49,7 +49,7 @@ public actor VMController {
     private var isVsockConnectAvailable = false
 
     package var hasNetworkAttachment: Bool {
-        validatedDefinition.definition.network != nil
+        !validatedDefinition.definition.networks.isEmpty
     }
     private var stopCompletion: (id: UUID, gate: VMStopCompletionGate)?
     private var stopTimeoutTask: Task<Void, Never>?
@@ -240,7 +240,7 @@ public actor VMController {
             throw failure
         }
 
-        if case .nat(let macAddress)? = validatedDefinition.definition.network {
+        for case .nat(let macAddress) in validatedDefinition.definition.networks {
             configLogger.info(
                 "Configured VM NAT network with MAC \(macAddress, .public)"
             )

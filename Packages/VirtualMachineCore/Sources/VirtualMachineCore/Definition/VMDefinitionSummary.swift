@@ -61,7 +61,7 @@ public struct VMDefinitionSummary: Codable, Equatable, Sendable {
                 synchronization: $0.synchronization
             )
         }
-        networkEnabled = definition.network != nil
+        networkEnabled = !definition.networks.isEmpty
         vsockEnabled = definition.vsockEnabled
         consolePorts = definition.consolePorts.map(ConsolePortSummary.init)
         entropyEnabled = definition.entropy

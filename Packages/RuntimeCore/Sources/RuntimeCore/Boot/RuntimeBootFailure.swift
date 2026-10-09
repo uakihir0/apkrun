@@ -23,6 +23,8 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
     case bootTimedOut(phase: BootPhase)
     /// No phase progress within the stall limit.
     case bootStalled(phase: BootPhase)
+    /// The boot profile needs a virtio-gpu feature that the device does not offer (graphics.md §9, #021).
+    case gpuProfileUnavailable(profile: String)
 
     /// The `runtime` error domain.
     public static let domain: ErrorDomain = .runtime
@@ -37,6 +39,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .androidBootFailed: "androidBootFailed"
         case .bootTimedOut: "bootTimedOut"
         case .bootStalled: "bootStalled"
+        case .gpuProfileUnavailable: "gpuProfileUnavailable"
         }
     }
 
@@ -45,6 +48,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         switch self {
         case .androidBootFailed(let detail): ["detail": .text(detail)]
         case .bootTimedOut(let phase), .bootStalled(let phase): ["phase": .text(phase.description)]
+        case .gpuProfileUnavailable(let profile): ["profile": .text(profile)]
         default: [:]
         }
     }

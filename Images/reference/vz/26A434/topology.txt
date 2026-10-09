@@ -1,0 +1,41 @@
+# VZ guest-visible topology (android-image.md §5.3, vm.md §5; #011 step 4)
+# Captured by LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout on 2026-10-09 UTC,
+# arm64 Mac17,9, macOS 27.0.1 (26A434), with the two Android disks of build 16373615
+# (os.img read-only, userdata.img read-write) attached to the Linux test guest.
+# androidboot.boot_devices = 40000000.pci (the platform device of /sys/block/vda).
+APKRUN-DISK vda sectors=17070080 logical_block_size=512 serial=apkrun-ro path=/sys/devices/platform/40000000.pci/pci0000:00/0000:00:06.0/virtio1/block/vda
+APKRUN-PART vda1 partname=boot_a start=2048 sectors=131072
+APKRUN-PART vda2 partname=init_boot_a start=133120 sectors=16384
+APKRUN-PART vda3 partname=vendor_boot_a start=149504 sectors=131072
+APKRUN-PART vda4 partname=vbmeta_a start=280576 sectors=24
+APKRUN-PART vda5 partname=vbmeta_system_a start=282624 sectors=8
+APKRUN-PART vda6 partname=vbmeta_system_dlkm_a start=284672 sectors=8
+APKRUN-PART vda7 partname=vbmeta_vendor_dlkm_a start=286720 sectors=8
+APKRUN-PART vda8 partname=super start=288768 sectors=16777216
+APKRUN-PART vda9 partname=custom start=17065984 sectors=2048
+APKRUN-DISK vdb sectors=167936 logical_block_size=512 serial=apkrun-rw path=/sys/devices/platform/40000000.pci/pci0000:00/0000:00:07.0/virtio2/block/vdb
+APKRUN-PART vdb1 partname=misc start=2048 sectors=2048
+APKRUN-PART vdb2 partname=metadata start=4096 sectors=131072
+APKRUN-PART vdb3 partname=frp start=135168 sectors=2048
+APKRUN-PART vdb4 partname=userdata start=137216 sectors=28672
+APKRUN-PCI 0000:00:00.0 vendor=0x106b device=0x1a05 class=0x060000 driver=
+APKRUN-PCI 0000:00:05.0 vendor=0x1af4 device=0x1043 class=0x078000 driver=virtio-pci
+APKRUN-PCI 0000:00:06.0 vendor=0x1af4 device=0x1042 class=0x018000 driver=virtio-pci
+APKRUN-PCI 0000:00:07.0 vendor=0x1af4 device=0x1042 class=0x018000 driver=virtio-pci
+APKRUN-PCI 0000:00:08.0 vendor=0x1af4 device=0x1044 class=0x100000 driver=virtio-pci
+APKRUN-PCI 0000:00:09.0 vendor=0x1af4 device=0x1045 class=0x058000 driver=virtio-pci
+APKRUN-DT chosen
+APKRUN-DT clock
+APKRUN-DT cpus
+APKRUN-DT gic
+APKRUN-DT gpio-keys
+APKRUN-DT hypervisor
+APKRUN-DT memory
+APKRUN-DT pci
+APKRUN-DT pl031
+APKRUN-DT pl061
+APKRUN-DT psci
+APKRUN-DT timer
+APKRUN-DT cpus/cpu@0
+APKRUN-DT cpus/cpu@1
+APKRUN-DT gpio-keys/power

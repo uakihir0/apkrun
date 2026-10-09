@@ -415,6 +415,40 @@ run_ports_test() {
     printf 'APKRUN-TEST: ports ok hvc1=%s hvc2=%s\n' "$hvc1_marker" "$hvc2_marker"
 }
 
+run_parts_test() {
+    disks=0
+    for path in /sys/class/block/vd*; do
+        [ -e "$path" ] || continue
+        name=${path##*/}
+        sectors=$(cat "$path/size")
+        if [ -e "$path/partition" ]; then
+            partname=$(sed -n 's/^PARTNAME=//p' "$path/uevent")
+            printf 'APKRUN-PART %s partname=%s start=%s sectors=%s\n' \
+                "$name" "$partname" "$(cat "$path/start")" "$sectors"
+        else
+            disks=$((disks + 1))
+            printf 'APKRUN-DISK %s sectors=%s logical_block_size=%s serial=%s path=%s\n' \
+                "$name" "$sectors" "$(cat "$path/queue/logical_block_size")" \
+                "$(cat "$path/serial" 2>/dev/null)" "$(readlink -f "/sys/block/$name")"
+        fi
+    done
+    for device in /sys/bus/pci/devices/*; do
+        [ -e "$device" ] || continue
+        printf 'APKRUN-PCI %s vendor=%s device=%s class=%s driver=%s\n' "${device##*/}" \
+            "$(cat "$device/vendor")" "$(cat "$device/device")" "$(cat "$device/class")" \
+            "$(basename "$(readlink "$device/driver" 2>/dev/null)" 2>/dev/null)"
+    done
+    for node in /proc/device-tree/* /proc/device-tree/*/*; do
+        [ -d "$node" ] || continue
+        printf 'APKRUN-DT %s\n' "${node#/proc/device-tree/}"
+    done
+    if [ "$disks" -eq 0 ]; then
+        printf 'APKRUN-TEST: parts fail no virtio block device\n'
+        return 1
+    fi
+    printf 'APKRUN-TEST: parts ok disks=%s\n' "$disks"
+}
+
 run_flood_test() {
     case "$flood_line_count" in
         ""|*[!0-9]*)
@@ -761,6 +795,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             ports)
                 run_ports_test
+                ;;
+            parts)
+                run_parts_test
                 ;;
             flood)
                 run_flood_test

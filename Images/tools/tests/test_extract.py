@@ -479,11 +479,11 @@ def test_real_archive_extraction_uses_committed_default_layout(tmp_path: Path) -
     assert (output / "cmdline.txt").read_text(encoding="utf-8") == (
         "printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 "
         "firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig "
-        "console=hvc0"
+        "console=hvc0 log_buf_len=2M"
     )
     metadata = json.loads((output / "extraction.json").read_text(encoding="utf-8"))
     assert metadata["kernel"]["compression"] == "none"
-    assert metadata["cmdlineLength"] == 157
+    assert metadata["cmdlineLength"] == 172
     for name, details in metadata["outputs"].items():
         assert (output / name).stat().st_size == details["size"]
         assert _sha256(output / name) == details["sha256"]

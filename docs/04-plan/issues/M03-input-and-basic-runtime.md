@@ -270,19 +270,25 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Acceptance criteria
 
-- [ ] `apkrun dev boot` connects to the agent within 5 s of `sys.boot_completed` (§15).
-- [ ] `apkrun dev launch` launches HelloText on display 0 through `LaunchApplication` (§15).
-- [ ] After the agent process is killed, the host restarts it and the supervisor reconnects and resyncs. A fourth death within a minute gives `runtime.requiredAgentUnavailable`.
-- [ ] An installed agent with another version or signer is replaced by the bundled one.
-- [ ] Every `SystemServices` wrapper resolves on the stock image, and a missing method fails only its capability.
-- [ ] The ADB forward listens on host loopback only.
-- [ ] A protocol violation or an incompatible agent fails with a typed `GuestProtocolFailure` (§12.3).
+- [ ] `apkrun dev boot` connects to the agent within 5 s of `sys.boot_completed` (§15). Not met as written: the deadline starts at the connection, after the install and the start (IR-435). The boots reach `ready` with the agent connected.
+- [x] `apkrun dev launch` launches HelloText on display 0 through `LaunchApplication` (§15). Verified 2026-10-10: `task 8 io.apkrun.fixture.hellotext/.MainActivity (started)`.
+- [ ] After the agent process is killed, the host restarts it and the supervisor reconnects and resyncs. A fourth death within a minute gives `runtime.requiredAgentUnavailable`. Verified on the device: a killed agent gets a new PID, and after the fourth death within a minute the host does not restart it. The reconnect and resync are T0 only, and the error code is not shown by the CLI.
+- [ ] An installed agent with another version or signer is replaced by the bundled one. Verified on the device for the version, in both directions. The signer case is T0 only (IR-425).
+- [ ] Every `SystemServices` wrapper resolves on the stock image, and a missing method fails only its capability. The wrappers resolve on build 16373615. The isolation of a missing method is T0 only.
+- [x] The ADB forward listens on host loopback only. Verified 2026-10-10: `127.0.0.1:<port>` is the only listening address.
+- [x] A protocol violation or an incompatible agent fails with a typed `GuestProtocolFailure` (§12.3). T0 (`GuestConnectionTests`, `GuestOperationTests`, `GuestProtocolTests`).
 
 ### Notes
 
 - **Record:** the connection result in the #072 row of [../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §18, the two #072 rows of [../../02-design/guest-components.md](../../02-design/guest-components.md) §14, and the hidden-API result for these four services in R-18.
+- **Verification (2026-10-10, build 16373615, macOS 27, the CLI path):** the production code ran through `apkrun dev boot` and `apkrun dev launch` with the debug CLI. Each item of the acceptance criteria above says what was observed. The commands of the device battery were: install, start, `ServiceCheck`, `settings get` and `cmd lock_settings get-disabled`, `adb forward` with `lsof`, `kill` of the agent PID four times, and a boot with a second bundle at versionCode 1001, then with the bundle at 1000. The changes that the device runs found are the decisions IR-420 to IR-437.
+- **Not done (open):**
+  - The T2 suite `GuestAgentTests` compiles and is selected by the `AndroidGuestAgent` configuration, but it has not passed in the Xcode test host. In that host, adb does not return (IR-438). The suite needs its inputs in /tmp (IR-439): `scripts/build-guest.sh --out /tmp/apkrun-test-guest`, `scripts/build-guest.sh --version-code 1001 --out /tmp/apkrun-test-guest-1001`, and the HelloText fixture copied to `/tmp/apkrun-test-fixtures/HelloText.apk`.
+  - The M03 T2 gate and the C01 manual checks are not run, and this task does not claim them. The G2 gate was not run.
+  - The stop by PID and the device wait are in `4fff20c` (IR-426, IR-435). The late-answer rule is IR-437.
 - **Pitfall:** the agent exits with code 3 when its socket name is in use (`EADDRINUSE`), which means an old agent still runs. The provisioner stops it before a restart.
 - **Pitfall:** remove the forwards when the VM stops (`forwardRemove`). A stale forward makes the next boot's forward fail.
+- **As built:** the host stops a running agent with `kill` on the PID that `pidof` reports, because `pkill -x` did not match the daemon on build 16373615 (IR-426).
 - The transport is `ADBForwardGuestTransport` only. The M3 and M4 stock-image setup uses it ([../../02-design/guest-protocol.md](../../02-design/guest-protocol.md) §13.3).
 
 ---

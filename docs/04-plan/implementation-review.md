@@ -12002,3 +12002,282 @@ the pinned build. Regenerating them by hand would invent values, and #065 writes
 the real manifest.
 
 **Consequence.** Until then, a reader can take the sample sizes as measured.
+## IR-420: The development agent's version record is apkrun-guest.json
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §7.1; [guest-components.md](../02-design/guest-components.md) §3.1 |
+
+**Choice.** `scripts/build-guest.sh` writes `apkrun-guest.json` next to `apkrun-guest.apk`, with the package name, the versionCode, and the versionName. The host reads that record before it installs. The versionCode of `components.json` (`devGuestAgentVersionCode`) is not written, because `components.json` is the release component manifest, and #072 does not produce it.
+
+**Reason.** The host has to know the bundled versionCode without parsing a binary manifest. A record written by the same script that builds the APK cannot disagree with it.
+
+**Consequence.** `components.json` gains the agent's version when the release manifest is built (#058 or the release task).
+
+## IR-421: A test-only key signs the development agent
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §2; [build-system.md](../05-development/build-system.md) §7.1 |
+
+**Choice.** `Tests/Fixtures/signing/test-guest-dev.jks` is a JKS keystore with the alias `apkrun-test-guest-dev`. Its certificate's SHA-256 is pinned in `scripts/build-guest.sh`, and the script fails unless the APK is signed by that certificate. The keystore password is the test password in `Guest/guestd/build.gradle.kts` and in the script's comment. The key is not a production key.
+
+**Reason.** The design names the key and requires that no other signer reach a device. Pinning the digest makes a changed key fail the build, not a device install.
+
+**Consequence.** Anyone who changes the test key must update the digest in the script, and the APK changes with it.
+
+## IR-422: Device setup uses the framework's shell entry points
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.4; [R-18](risks.md) |
+
+**Choice.** The agent applies stay awake and no keyguard by calling each service's shell entry point, `IBinder.shellCommand`, with the same arguments that `cmd settings put global stay_on_while_plugged_in 7`, `cmd settings put system screen_off_timeout 2147483647`, and `cmd lock_settings set-disabled true` take. The agent starts no process. The keyguard is stored under `lockscreen.disabled`.
+
+**Reason.** On build 16373615 the settings provider refuses a write whose package is not the caller's uid, and `ILockSettings.setBoolean` needs `ACCESS_KEYGUARD_SECURE_STORAGE`, which the shell uid does not hold. The design's "one service call" is the same class of call that `cmd` makes, so the shell entry point is the least-privileged path that the image allows.
+
+**Consequence.** The step depends on the framework's shell command set, which can change between releases. A failed step is logged with the framework's cause, and the other steps still run.
+
+## IR-423: A development rebuild with the same versionCode is not reinstalled
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 |
+
+**Choice.** The provisioner reinstalls the bundled agent when its versionCode differs from the installed one, as §3.1 says. It does not compare file contents. A developer who changes the agent without changing `MARKETING_VERSION` must uninstall `io.apkrun.guest` or change the version.
+
+**Reason.** The design defines the rule by versionCode, and a content check would need the installed APK's hash from the device on every boot. The cost is paid in boot time.
+
+**Consequence.** During development, a stale agent can run until the version changes. The T2 suite uses two versionCodes for that reason.
+
+## IR-424: The provisioner replaces a newer agent by removing it first
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 |
+
+**Choice.** When the installed versionCode is higher than the bundled one, the provisioner uninstalls the installed agent before it installs the bundled one. `install -r` cannot downgrade, and Android refuses it with `INSTALL_FAILED_VERSION_DOWNGRADE`. The uninstall is safe because the development agent keeps no user data.
+
+**Reason.** "An installed agent with another version … is replaced by the bundled one" (#072 acceptance) covers a downgrade. The alternative, `install -r -d`, needs a debuggable image, which the custom path does not have.
+
+**Consequence.** The downgrade removes the agent for a moment. The agent is restarted by the same start.
+
+## IR-425: A signer mismatch is detected by Android's refusal
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 |
+
+**Choice.** The provisioner does not compare signers with `dumpsys package`. It installs the bundled APK, and when Android refuses with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, it uninstalls the installed copy and installs again.
+
+**Reason.** Android's own check is the authority on whether an update can replace a package. A host-side comparison could disagree with it, for example for a rotated signing lineage.
+
+**Consequence.** The signer path is covered by T0 with a fake adb. It has not been run on the device, because the mismatch needs a second signing key on the device.
+
+## IR-426: The agent is stopped by its PID, not by pkill
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.3 |
+
+**Choice.** The host finds the agent with `pidof apkrun_guestd` and sends `kill` to that PID. The design's `pkill -f apkrun_guestd` is not used.
+
+**Reason.** On build 16373615 `pkill -x apkrun_guestd` did not stop the daemon, although `pidof` finds it. `pkill -f` would match the device shell's own command line, which contains the pattern, and so could stop the shell that runs it.
+
+**Consequence.** A second agent process cannot be stopped by name. The host only ever stops the one that `pidof` reports.
+
+## IR-427: The service check runs through app_process, not am instrument
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §12, §14 |
+
+**Choice.** The "SystemServicesTest" check runs `io.apkrun.guest.daemon.ServiceCheck` through `app_process`, the same process type as the daemon, and the T2 suite reads its output. The design's `am instrument` run is not used.
+
+**Reason.** `am instrument` runs the test in an app process, where hidden-API restrictions apply to the app's own calls. The check would then test a different path from the one the daemon takes. `app_process` is the daemon's path.
+
+**Consequence.** The check needs no instrumentation APK. Its output lists the five wrappers, with their missing methods.
+
+## IR-428: The launch starts the activity as the shell package, through PackageManager
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §6.4; [R-18](risks.md) |
+
+**Choice.** The launcher component comes from `PackageManager.getLaunchIntentForPackage` on the system context. The start is `IActivityTaskManager.startActivityAsUser` with the calling package `com.android.shell` and the display in `ActivityOptions`. The start through the system context is not used.
+
+**Reason.** The context start was refused on build 16373615: `Permission Denial: package=android does not belong to uid=2000`. A package-only intent was refused as not resolved for the shell's visibility, while the explicit component resolves.
+
+**Consequence.** The start depends on the 12-parameter signature of `startActivityAsUser`, which is recorded in R-18 for the image.
+
+## IR-429: The start result codes are read from the framework at run time
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [R-18](risks.md) |
+
+**Choice.** `START_SUCCESS`, `START_INTENT_NOT_RESOLVED`, `START_CLASS_NOT_FOUND`, and `START_PERMISSION_DENIED` are read from `android.app.ActivityManager` on each call, not written into the agent. The image's values are `START_INTENT_NOT_RESOLVED = -91`, `START_CLASS_NOT_FOUND = -92`, and `START_PERMISSION_DENIED = -94`.
+
+**Reason.** Android renumbers these between releases. The first device run used the values of an older release and reported a different failure than the one that occurred. Reading them keeps the mapping true on each image.
+
+**Consequence.** A result code that the image does not define maps to `internal`, with the code in the detail.
+
+## IR-430: The display and task callbacks are Binder listeners
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §6.1; [R-18](risks.md) |
+
+**Choice.** The listeners of `IDisplayManagerCallback` and `ITaskStackListener` are Binder objects. Each call on one triggers a refresh of the display or task list, which is compared with the last list. The agent does not use a Java proxy.
+
+**Reason.** The framework reads the listener through `asBinder()`, and a proxy returned null, so the registration failed with "listener must not be null". The refresh-and-diff keeps the design's "listener and getTasks" model.
+
+**Consequence.** Callback arguments are not read. The state is read again after each notification, which is correct for the events that the agent sends.
+
+## IR-431: Two framework signatures differ from the design on build 16373615
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [R-18](risks.md); [guest-components.md](../02-design/guest-components.md) §6.2 |
+
+**Choice.** The task list uses `IActivityTaskManager.getTasks(int, boolean, boolean, int)` when the 4-parameter form exists, and `getTasks(int)` otherwise. The keyguard switch is `setBoolean(String, boolean, int)` on `ILockSettings`, because `setLockScreenDisabled` is absent. Both variants are resolved by `MethodRequirement`, and the choice is in the wrapper's record.
+
+**Reason.** The design's §6.2 requires variants for hidden signatures. Both signatures were read from the device with `ServiceCheck --methods`.
+
+**Consequence.** A future image can change either signature. The wrapper then reports the method as missing, and only the capability fails.
+
+## IR-432: The GuestOperation set is the five operations that #072 uses
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §4.1, §13.1 |
+
+**Choice.** The typed `GuestOperation` structs are `GuestPing`, `GuestGetSnapshot`, `GuestSetDisplayPolicy`, `GuestLaunchApplication`, and `GuestFocusDisplay`. A test checks that each one's number and name match the `Request` and `Response` fields of `envelope.proto`. The other operations get their structs with their tasks.
+
+**Reason.** The design asks for the pairing "of every operation" (step 5). Writing structs for operations that no code calls would add untested surface. The schema-level pairing of all operations is already tested by #033.
+
+**Consequence.** A task that adds an operation must add its struct and its pairing check.
+
+## IR-433: The input stream validates and acknowledges, and does not inject
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §9; [guest-components.md](../02-design/guest-components.md) §11 |
+
+**Choice.** The agent decodes the input batches, drops the events that fail validation (coordinates outside the display, non-finite values, unknown kinds, pointers outside 0–9, key codes outside 1–65535), counts them, and answers `InputAck` when asked. It does not inject an event, and `events_injected` stays 0.
+
+**Reason.** The design puts injection in #024 and #025. Validation belongs with the stream, so the stream's contract is complete before the injector exists.
+
+**Consequence.** The T0 tests of the validation are the only coverage of the input path in #072.
+
+## IR-434: Capabilities are advertised whole, and unimplemented operations answer UNSUPPORTED
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §5.3, §5.2 |
+
+**Choice.** The agent advertises `core.v1`, `display.v1`, `launch.v1`, and `input.v1`. Operations of these capabilities that #072 does not implement, such as `ClearDisplay`, `StopApplication`, and `ListTasks`, answer `UNSUPPORTED` with "this agent build has no such operation".
+
+**Reason.** The §5.3 table lists the capabilities by task, and `display.v1` spans #072 and #028. Advertising only the operations that exist would split the capability across releases, which the design does not allow.
+
+**Consequence.** A host that enables `display.v1` must still handle `UNSUPPORTED` for `ClearDisplay` until #028. The dispatcher and the connection both do.
+
+## IR-435: The agent start waits for the device, and the connect deadline follows the install and the start
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §13.2, §15 (#072); [guest-components.md](../02-design/guest-components.md) §3 |
+
+**Choice.** The agent start runs in this order. It waits up to 30 s until `adb get-state` reports `device`. It removes the stale `localabstract:apkrun-` forwards, best effort. It installs the bundle, starts the agent, and then waits up to 5 s for the Hello and the handshake. Each stage logs its name when it fails. A forward is removed when its stream closes.
+
+**Reason.** The design's "within 5 s of sys.boot_completed" cannot include an install on the first boot, which takes several seconds by itself, so the deadline starts with the connection. On the first run after boot, adb reported the device offline for several seconds, and the forward listing then failed the start, so the device is awaited first. A forward that cannot be listed should not stop the agent from starting, and each new forward gets its own port.
+
+**Consequence.** A first boot can take longer than 5 s from `sys.boot_completed` to the connection. A steady-state boot does not. A stale forward can remain until the next start, without blocking it. The T2 suite measures neither interval separately.
+
+## IR-436: The development boot fails when no agent bundle is found
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [guest-components.md](../02-design/guest-components.md) §3 |
+
+**Choice.** `apkrun dev boot` and `apkrun dev launch` load the agent bundle from `--guest-dir`, then from `APKRUN_GUEST_DIR`, then from `Resources/guest` of the app bundle that holds the executable. A missing bundle fails the boot with `runtime.guestAgentBundleMissing`. The boot does not continue without the agent.
+
+**Reason.** The entry says `apkrun dev boot` installs and starts the agent, and input (#024) needs it. A boot that silently lacks the agent would look successful and fail later.
+
+**Consequence.** The embedded tests that do not need the agent pass no bundle, and they boot as before.
+
+## IR-437: An answer that arrives after its deadline is discarded
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-protocol.md](../02-design/guest-protocol.md) §6, §12.2 |
+
+**Choice.** A request with no answer by its deadline fails with `timeout(operation:)`, and its id is kept. An answer that arrives later with that id is discarded, and the connection stays open. An answer whose id the host never sent is still a protocol violation.
+
+**Reason.** §12.2 makes a response whose `reply_to` matches no outstanding request a violation. A late answer after a timeout is that case, but §6 says a timeout "produces a failure. The connection stays open". Closing the connection on a late answer would turn one slow operation into a reconnect and a resync.
+
+**Consequence.** The kept ids are released when their answers arrive. An agent that never answers keeps one id per timed-out request, and the host sends only a bounded number of requests.
+
+## IR-438: The T2 suite cannot drive adb from the Xcode test host on this machine
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [test-strategy.md](test-strategy.md) §6.4; [M03](issues/M03-input-and-basic-runtime.md) #072 |
+
+**Choice.** `GuestAgentTests` is committed, compiles, and skips without its inputs. It has not passed in the Xcode test host. In that host, every `adb` process (including `adb start-server`) runs until it is stopped, with or without the injected `DYLD_*` and `XCTest*` variables. The same code passes from the CLI (`apkrun dev boot` and `dev launch`), and the device checks listed in the #072 Notes were run through the CLI. This is recorded as an open item, not as a T2 pass.
+
+**Reason.** The cause has not been isolated. Removing the injected variables did not change the stall, so the test host's child processes appear to block in adb itself. Isolating it needs a session on the test host with a debugger. The CLI path runs the same production code.
+
+**Consequence.** The T2 acceptance boxes that need the test host stay open, and the milestone's T2 gate cannot close until the test host runs adb.
+
+## IR-439: The test inputs are read from /tmp, and the entry's path is stale
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [M03](issues/M03-input-and-basic-runtime.md) #072, Conventions; [test-strategy.md](test-strategy.md) §4 |
+
+**Choice.** The T2 suite reads the agent bundles and the HelloText fixture from `/tmp` paths that the test plan names (`APKRUN_GUEST_DIR`, `APKRUN_GUEST_OTHER_DIR`, `APKRUN_FIXTURE_APK`). The Android bundle is `/tmp/apkrun-test-linux/android-bundle`, as `AndroidBootSession` already uses, not `Images/work/16373615`, which the entry's conventions name.
+
+**Reason.** macOS privacy protection stops the test host from reading the repository's `Documents` folder, while a terminal can read it. The existing helper already reads `/tmp`. The entry's path predates that helper.
+
+**Consequence.** The suite needs a shell step before the run, which the entry's notes describe.

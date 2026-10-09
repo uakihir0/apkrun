@@ -61,6 +61,8 @@ The host app bundle carries the development-mode APK at `APKRun.app/Contents/Res
 1. `adb shell pm list packages --show-versioncode io.apkrun.guest`. If the package is missing or the version code differs from the bundled APK, run `adb install -r -t <bundle>/guest/apkrun-guest.apk`.
 2. If the installed package has a different signer (for example after switching between development machines), uninstall it first. The agent keeps no user data in development mode, so this is safe.
 
+**As built (#072).** The bundle's version record `apkrun-guest.json` is read before the install (IR-420). The install is `install -r -t`. An installed copy with a higher versionCode is removed first, because `install -r` cannot downgrade (IR-424). Android's refusal `INSTALL_FAILED_UPDATE_INCOMPATIBLE` triggers the same removal for a signer change, so no signer comparison is made (IR-425). The start waits for the device before these steps (IR-435).
+
 ### 3.2 Start
 
 `AdbClient.startGuestAgent` runs:
@@ -80,7 +82,7 @@ adb shell 'CLASSPATH=$(pm path io.apkrun.guest | sed "s/^package://") \
 
 - The host's `GuestAgentSupervisor` connects through the ADB forward ([guest-protocol.md](guest-protocol.md) §13.2). If the connection fails, and `adb shell pidof apkrun_guestd` finds no process, the provisioner starts it again (§3.2). It tries up to 3 times per minute. After that, health `agent.guest` fails with `runtime.requiredAgentUnavailable` ([runtime-daemon.md](runtime-daemon.md) §12).
 - The daemon installs an uncaught-exception handler. It logs the stack trace (logcat tag `ApkRunGuest`, and the agent log file, §9) and exits with status 70, so the host sees a clean restart.
-- In development mode, the host kills the daemon (`adb shell pkill -f apkrun_guestd`) before reinstalling the APK.
+- In development mode, the host kills the daemon before reinstalling the APK. As built (#072), it finds the daemon with `pidof` and sends `kill` to that PID. `pkill -f` would match the device shell's own command line, and `pkill -x` did not match the daemon on build 16373615 (IR-426).
 
 ### 3.4 Device setup applied at start
 
@@ -97,6 +99,8 @@ The daemon applies these once per start. They are idempotent, and each one is on
 The two IME rows (APKRun IME enabled and default, and show IME with a hardware keyboard) are the IME steps. #072 applies the other rows, and #071 adds the IME rows together with the IME. Before #071, `SHOW_IME_WITH_HARD_KEYBOARD` keeps its default, and Android's own IME stays the default one; key mode needs neither ([input.md](input.md) §5.2).
 
 The original values are not restored when the agent stops. The stock image is a development runtime.
+
+**As built (#072).** The four steps run through each service's shell entry point (`IBinder.shellCommand`, the entry that `cmd settings` and `cmd lock_settings` use), because the settings provider and the keyguard switch refuse the shell uid's direct calls on build 16373615. The keyguard switch is the `lockscreen.disabled` key (IR-422, R-18).
 
 ---
 
@@ -269,6 +273,7 @@ Hidden API restrictions do not apply to `app_process` or to platform-signed syst
 ### 6.4 Launch details
 
 - `LaunchApplication` resolves the component (`getLaunchIntentForPackage`, or the given component) and builds the intent with `FLAG_ACTIVITY_NEW_TASK` (plus `FLAG_ACTIVITY_CLEAR_TASK` for `CLEAR_TASK`).
+- **As built (#072).** The activity starts through `startActivityAsUser` with `com.android.shell` as the calling package. A start through the system context is refused on build 16373615 (`Permission Denial: package=android`). The result codes are read from `ActivityManager` on the image (IR-428, IR-429).
 - If the package already has a root task, the agent moves it to the requested display (`moveRootTaskToDisplay`) and brings it to the front instead of starting a second task ([guest-protocol.md](guest-protocol.md) §7.1).
 - The result is returned when `ITaskStackListener` reports the task on the target display, or after `startActivity` returned `START_SUCCESS`/`START_TASK_TO_FRONT` and the task appears in `getTasks` within 2 s. Otherwise the agent answers `TIMEOUT` with the start result in `detail`.
 
@@ -470,8 +475,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Every `SystemServices` wrapper resolves on the stock image; a missing method fails only its capability | #072 | pending (§6.2) |
-| Development mode: install, start, kill, restart, and reinstall with a different version | #072 | pending (§3) |
+| Every `SystemServices` wrapper resolves on the stock image; a missing method fails only its capability | #072 | the wrappers resolve on build 16373615 (2026-10-10, `app_process` check, all five available), and the signatures that differ are in R-18. The capability isolation is covered by T0 (`aMissingFrameworkMethodFailsOnlyItsRequest`), not by a device run |
+| Development mode: install, start, kill, restart, and reinstall with a different version | #072 | install, start, kill and restart, the fourth-death stop, and replacement in both directions (1000 to 1001 and back) pass on 2026-10-10 through the CLI (IR-424, IR-426). The signer replacement is T0 only (IR-425) |
 | vsock with `apkrun_vsockd` run as root on the stock image | #034 | pending (§11) |
 | Custom image: SELinux rules from the denials, attribute and permission names, boot with the domains enforcing and the privapp allowlist complete (R-13) | #035 | pending (§4.2, §4.3, §10.2) |
 | Custom image: the Guest Agent is reachable over vsock with ADB disabled; HelloProbe fails to connect to the agents' sockets | #035 | pending (§11, §12) |

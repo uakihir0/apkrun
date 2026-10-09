@@ -177,18 +177,39 @@ final class AndroidBootTests: XCTestCase {
             let android = AndroidShellConsole(shell: try XCTUnwrap(shellOrNil))
             // The design (android-image.md §7.4) puts the guest on wlan0 (virt_wifi on eth2) with vmnet's DHCP.
             // ICMP gets no reply through vmnet, so name resolution is checked with getent, not ping.
-            let wlan = try await android.run("ip addr show wlan0 | grep 'inet '").output
-            XCTAssertTrue(wlan.contains("inet 192.168."), "wlan0 has the vmnet IPv4 address: \(wlan)")
-            let routes = try await android.run("ip route show table all | grep 'default via'").output
-            XCTAssertTrue(routes.contains("default via 192.168."), "the default route goes through vmnet")
-            let resolved = try await android.run("getent hosts connectivitycheck.gstatic.com").output
-            XCTAssertFalse(resolved.isEmpty, "connectivitycheck.gstatic.com resolves: \(resolved)")
-            let validated = try await android.value("dumpsys connectivity | grep -c VALIDATED")
-            XCTAssertNotEqual(validated, "0", "a network is validated")
+            // DHCP and the first Wi-Fi join finish after `ready`, so the stages are polled for a bounded time.
+            // Each stage is judged by its last value: the reply the poll stopped on.
+            var address = ""
+            var route = ""
+            var resolved = ""
+            var validated = ""
+            let deadline = ContinuousClock.now + .seconds(120)
+            repeat {
+                address = (try? await android.value("ip addr show wlan0 | grep 'inet '")) ?? ""
+                route = (try? await android.value("ip route show table all | grep 'default via'")) ?? ""
+                resolved = (try? await android.value("getent hosts connectivitycheck.gstatic.com")) ?? ""
+                validated =
+                    (try? await android.value(
+                        "dumpsys connectivity | grep NetworkAgentInfo | grep WIFI | grep VALIDATED | tail -n 1"
+                    )) ?? ""
+                if address.contains("inet 192.168."), route.contains("default via 192.168."),
+                    !resolved.isEmpty, validated.contains("VALIDATED")
+                {
+                    break
+                }
+                try await Task.sleep(for: .seconds(2))
+            } while ContinuousClock.now < deadline
+            XCTAssertTrue(address.contains("inet 192.168."), "wlan0 has the vmnet IPv4 address: \(address)")
+            XCTAssertTrue(route.contains("default via 192.168."), "the default route goes through vmnet: \(route)")
+            XCTAssertFalse(resolved.isEmpty, "connectivitycheck.gstatic.com resolves")
+            XCTAssertTrue(
+                validated.contains("WIFI") && validated.contains("VALIDATED"),
+                "the WIFI NetworkAgentInfo line is VALIDATED: \(validated)"
+            )
             // Diagnostics for the record: the Wi-Fi state, the links, and the join's log lines.
             let record = [
-                "wlan0:\n\(wlan)",
-                "routes:\n\(routes)",
+                "wlan0:\n\(address)",
+                "routes:\n\(route)",
                 "wifi:\n\(try await android.run("cmd wifi status | head -n 8").output)",
                 "links:\n\(try await android.run("ip -o link | cut -c1-90").output)",
                 "wifi log:\n\(try await android.run("logcat -d | grep -i virtwifi | tail -n 8").output)",

@@ -16,6 +16,17 @@ public struct DevImage: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
+        // Every log line of the install carries one operation ID (AGENTS §8).
+        try await OperationContext.withNew {
+            try await execute(bundleURL: bundleURL, environment: environment, onEvent: onEvent)
+        }
+    }
+
+    private func execute(
+        bundleURL: URL,
+        environment: [String: String],
+        onEvent: @escaping @Sendable (DevBootEvent) -> Void
+    ) async throws {
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
         let lock = try InstanceLock.acquire(paths: paths, owner: .apkrunDev)
         defer { lock.close() }

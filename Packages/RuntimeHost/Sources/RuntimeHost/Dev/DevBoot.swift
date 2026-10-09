@@ -66,6 +66,20 @@ public struct DevBoot: Sendable {
         stopRequests: AsyncStream<Void>,
         onEvent: @escaping @Sendable (DevBootEvent) -> Void
     ) async throws {
+        // Every log line of the boot carries one operation ID (AGENTS §8).
+        try await OperationContext.withNew {
+            try await execute(
+                options: options, environment: environment, stopRequests: stopRequests, onEvent: onEvent
+            )
+        }
+    }
+
+    private func execute(
+        options: DevBootOptions,
+        environment: [String: String],
+        stopRequests: AsyncStream<Void>,
+        onEvent: @escaping @Sendable (DevBootEvent) -> Void
+    ) async throws {
         let paths = APKRunPaths(allowingHomeOverride: true, environment: environment)
         let lock = try InstanceLock.acquire(paths: paths, owner: .apkrunDev)
         defer { lock.close() }

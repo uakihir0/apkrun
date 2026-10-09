@@ -58,6 +58,8 @@ final class G2AndroidBootTests: XCTestCase {
             )
             let capture = OutputCapture()
             let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
+            // Stops the socket on every exit from this boot, including a thrown boot failure.
+            defer { consoles.stop() }
             let captureTask = Task {
                 for await event in supervisor.events {
                     switch event {

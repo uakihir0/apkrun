@@ -75,12 +75,13 @@ final class AndroidBootTests: XCTestCase {
 
     /// #012 step 6, with the observed outcome (IR-361).
     ///
-    /// A truncated ramdisk fails while the kernel unpacks it, before first-stage init has loaded
-    /// `virtio_console`. The panic text cannot reach hvc0 at that point, so `.kernelPanic` never
-    /// fires. The boot then produces no phase progress and ends with `.bootStalled(kernel)` once
-    /// the stall limit passes. The `.kernelPanic` path itself is covered by the T0 detector tests
-    /// over captured console logs (`BootPhaseDetectorTests`).
-    func testKernelPanicDetected() async throws {
+    /// The test is named for what it checks: a truncated ramdisk stalls the boot in the kernel. It does not
+    /// check panic detection. A truncated ramdisk fails while the kernel unpacks it, before first-stage init has
+    /// loaded `virtio_console`. The panic text cannot reach hvc0 at that point, so `.kernelPanic` never fires. The
+    /// boot then produces no phase progress and ends with `.bootStalled(kernel)` once the stall limit passes. The
+    /// `.kernelPanic` path itself is covered by the T0 detector tests over captured console logs
+    /// (`BootPhaseDetectorTests`); no T2 check produces a live panic.
+    func testTruncatedRamdiskStallsBoot() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { removeTestHome(home) }
         let bundle = try AndroidBootFixture.bundleDirectory()
@@ -109,6 +110,41 @@ final class AndroidBootTests: XCTestCase {
         XCTAssertEqual(state, .failed(.bootStalled(phase: .kernel)), "a truncated ramdisk must not boot")
         let lines = try fixture.newestBootLog().components(separatedBy: "\n")
         XCTAssertFalse(lines.contains { $0.contains("] init: ") }, "the truncated boot never reaches init")
+    }
+
+    /// A stop that arrives while the VM is starting ends the boot and returns. The VM controller refuses a stop
+    /// while it is starting, so the boot must stop the VM itself once the start returns (`RuntimeSupervisor`).
+    /// A second `ensureReady` during the boot is refused, and it does not cancel the stop.
+    func testStopDuringStartReturnsAndStopsTheVM() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { removeTestHome(home) }
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: false)
+        let collector = Task {
+            for await _ in supervisor.events {}
+        }
+        let boot = Task { try await supervisor.ensureReady(.cli) }
+        try await Task.sleep(for: .milliseconds(100))
+        do {
+            try await supervisor.ensureReady(.cli)
+            XCTFail("a second ensureReady must be refused while a boot is in progress")
+        } catch {
+            XCTAssertEqual(error.qualifiedCode, "runtime.androidBootFailed")
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        XCTAssertTrue(stopped, "stop() returns within 90 s while the VM is starting")
+        switch await boot.result {
+        case .failure:
+            break
+        case .success:
+            XCTFail("the boot must end with a failure when it is stopped during start")
+        }
+        let state = await supervisor.state
+        XCTAssertEqual(state, .stopped)
+        collector.cancel()
     }
 
     /// #013 step 1-6: init runs, and the serial shell shows what hvc0 cannot (`AndroidShellConsole`).

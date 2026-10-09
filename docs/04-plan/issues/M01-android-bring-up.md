@@ -1527,6 +1527,7 @@ See [../test-strategy.md](../test-strategy.md).
     - The clean-`main` G2 run after the merge: `scripts/run-gate.sh G2` in the main checkout. The gate closes only from `main` (IR-376).
     - The network's validated stage (IR-374, #095; run with `-only-test-configuration AndroidNetwork`, not part of this task).
     - The 20-port marker check: the test kernel exposes eight `hvc` nodes (IR-372).
+- **DevConsoleSocket flake (2026-10-10, #072 review).** `devConsoleSocketRelaysBothWaysAndRefusesASecondClient()` failed in 2 of 5 full `swift test` runs (the root package, 621 tests each): the first RuntimeCore run and the first RuntimeHost run. The assertion was `Expectation failed: readUntil(client, containing: "guest output").contains("guest output")` at `DevConsoleSocketTests.swift:90:5`. The test passed in the other three full runs and alone (3 of 3). The #072 change does not touch the dev console, and the test is unchanged. Its wait is the likely source; a fix belongs to a separate task.
 - **Launch-option ladder (2026-10-08; see IR-298 to IR-301).** In this host configuration `--gpu_mode=none`, the design's headless profile, did not start the Android VM (IR-300), so `gpuProfiles.headless` has no boot evidence yet. The `system_server` Watchdog timeout is a DeviceConfig key, not a host bootconfig key (IR-301). This task stays open.
 
 ---

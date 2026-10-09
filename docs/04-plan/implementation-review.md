@@ -11628,7 +11628,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #018, #020 |
-| Affected files | `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/ThirdParty.lock.json` (`riftvm`, `virglrenderer`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4, §5; [graphics.md](../02-design/graphics.md) §5.1; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §3.2, §4.1 |
+| Affected documents | `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/ThirdParty.lock.json` (`riftvm`, `virglrenderer`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4, §5; [graphics.md](../02-design/graphics.md) §5.1; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §3.2, §4.1 |
 
 **Choice.** Treat `virglrenderer/0002` as copied RiftVM MIT code. Reclassify the `riftvm` lock entry from `ships: reference` to `ships: derived`, and add the RiftVM MIT text and the marked file list to the generated notices, as [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 requires. The patch header keeps the `f615e16` origin and also cites the pinned commit `51f19193`. The rule as written requires this change, so this entry records it as the choice. The alternative is an independent rewrite of the downgrade, which would keep the `reference` pin. That needs new code and review, so it is not chosen here. #018 does not make the change, because its acceptance criteria require the pin to stay source-only and IR-188 chose `reference`. Release artifacts that contain the runtime wait for the change.
 
@@ -11642,7 +11642,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #020; follow-up to the Vulkan track (#096) |
-| Affected files | `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+| Affected documents | `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
 
 **Choice.** Keep `angle/0001` without the recipe's `VertexArrayVk.cpp` hunk for v1. Record that the hunk, or an equivalent fix, must be applied before the ANGLE Vulkan backend is enabled, and that the Vulkan track (#096) owns that step. #018 changes no patch.
 
@@ -11656,7 +11656,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #020 |
-| Affected files | `ThirdParty/patches/virglrenderer/0001-add-macos-metal-support.patch`; `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; `ThirdParty/patches/libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, `0003-enable-egl-platform-display.patch`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 |
+| Affected documents | `ThirdParty/patches/virglrenderer/0001-add-macos-metal-support.patch`; `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; `ThirdParty/patches/libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, `0003-enable-egl-platform-display.patch`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 |
 
 **Choice.** Each carried patch header gets one line that states whether the patch was sent upstream, and where. This is a follow-up to the #020 patch set. #018 does not edit patch files.
 
@@ -11670,7 +11670,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 |---|---|
 | Status | Needs maintainer review |
 | Task | #020 |
-| Affected files | `ThirdParty/ThirdParty.lock.json` (`buildFlags` of `virglrenderer`, `libepoxy`, and `angle`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+| Affected documents | `ThirdParty/ThirdParty.lock.json` (`buildFlags` of `virglrenderer`, `libepoxy`, and `angle`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
 
 **Choice.** Keep the three flags that RiftVM does not pass: virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`. The maintainer confirms them at the next #020 build review. #018 changes no build input.
 

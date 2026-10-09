@@ -309,3 +309,58 @@ func closingFailsThePendingRequests() async throws {
         #expect((error as? GuestProtocolFailure) == .disconnected)
     }
 }
+
+@Test(.timeLimit(.minutes(1)))
+func aTransportThatNeverOpensFailsTheHandshakeAtTheTimeout() async throws {
+    let connection = GuestConnection(
+        endpoint: .guestControl,
+        transport: StalledTransport(),
+        handshakeTimeout: .milliseconds(50)
+    )
+    let started = ContinuousClock.now
+    do {
+        _ = try await connection.open()
+        Issue.record("a transport that never opened produced a session")
+    } catch {
+        #expect(error == .handshakeTimedOut)
+    }
+    #expect(ContinuousClock.now - started < .seconds(3))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aCapabilityTheAgentDidNotEnableIsAnErrorBeforeTheRequestIsSent() async throws {
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: ["core.v1"])
+    }
+    let connection = GuestConnection(endpoint: .guestControl, transport: transport)
+    _ = try await connection.open()
+    do {
+        _ = try await connection.send(GuestLaunchApplication(package: "io.apkrun.example", displayID: 0))
+        Issue.record("a launch went out although the agent did not enable launch.v1")
+    } catch {
+        #expect(error == .capabilityMissing(capability: "launch.v1"))
+    }
+    let sent = transport.agents[0].requests
+    #expect(
+        !sent.contains { request in
+            if case .launchApplication? = request.op { return true }
+            return false
+        })
+}
+
+@Test(.timeLimit(.minutes(1)))
+func anInputAckOnTheControlChannelIsAViolation() async throws {
+    let transport = InMemoryTransport { _, agent, _ in agent.sendHello() }
+    let connection = GuestConnection(endpoint: .guestControl, transport: transport)
+    _ = try await connection.open()
+    transport.agents[0].sendInputAck()
+    var reason: GuestProtocolFailure?
+    for _ in 0..<500 {
+        reason = await connection.closeReason
+        if reason != nil {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(reason == .malformedFrame)
+}

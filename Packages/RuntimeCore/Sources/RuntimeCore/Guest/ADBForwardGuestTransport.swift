@@ -96,6 +96,13 @@ private final class LoopbackSocket: @unchecked Sendable {
                     socket.logger.warning(
                         "The loopback connection to the guest failed: \(error.localizedDescription, .public)")
                     gate.fail(error)
+                case .waiting(let error):
+                    // A refused loopback connection waits instead of failing, and it would wait for the agent forever.
+                    socket.connection.stateUpdateHandler = nil
+                    socket.logger.warning(
+                        "The loopback connection to the guest is refused: \(error.localizedDescription, .public)")
+                    socket.connection.cancel()
+                    gate.fail(error)
                 case .cancelled:
                     gate.fail(GuestTransportFailure.notServedByDevelopmentTransport)
                 default:

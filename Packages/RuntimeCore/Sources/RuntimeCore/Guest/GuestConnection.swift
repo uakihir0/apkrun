@@ -52,7 +52,7 @@ public actor GuestConnection {
     /// How long the agent has to answer Hello, and then HelloAck (guest-protocol.md §5.1).
     public static let defaultHandshakeTimeout: Duration = .seconds(5)
     /// How long after the agent's own timeout the host gives up on a request (guest-protocol.md §4.1 and §6).
-    static let responseGrace: Duration = .seconds(1)
+    public static let responseGrace: Duration = .seconds(1)
 
     private let transport: any GuestTransport
     private let presentedToken: Data?
@@ -109,8 +109,15 @@ public actor GuestConnection {
         sessionInfo != nil && failure == nil
     }
 
+    /// Why the connection ended, or nil while it is open. A protocol violation is one of the cases that the
+    /// supervisor counts (guest-protocol.md §12.2).
+    public var closeReason: GuestProtocolFailure? {
+        failure
+    }
+
     /// Opens the stream, reads the agent's Hello, and answers with HelloAck (guest-protocol.md §5.1). It fails with
-    /// the typed failure of the handshake, and within ``handshakeTimeout`` at most.
+    /// the typed failure of the handshake, and within ``handshakeTimeout`` at most. That limit covers the transport's
+    /// open as well as the Hello and the HelloAck.
     public func open() async throws(GuestProtocolFailure) -> GuestSessionInfo {
         guard !isStarted, failure == nil else {
             throw failure ?? .disconnected
@@ -119,12 +126,9 @@ public actor GuestConnection {
         if endpoint.isSecondary && presentedToken == nil {
             throw .handshakeFailed(.badToken)
         }
-        let opened: any GuestByteStream
-        do {
-            opened = try await transport.open(endpoint)
-        } catch {
-            throw .disconnected
-        }
+        let deadline = ContinuousClock.now + handshakeTimeout
+        let opened = try await openStream(within: handshakeTimeout)
+        let remaining = max(.zero, deadline - ContinuousClock.now)
         let result: Result<GuestSessionInfo, GuestProtocolFailure> = await withCheckedContinuation { continuation in
             if failure != nil {
                 continuation.resume(returning: .failure(failure ?? .disconnected))
@@ -152,7 +156,7 @@ public actor GuestConnection {
             )
             tasks.append(Task { await self.readLoop(opened) })
             handshakeTimer = Task {
-                try? await Task.sleep(for: self.handshakeTimeout)
+                try? await Task.sleep(for: remaining)
                 self.handshakeTimedOut()
             }
         }
@@ -164,14 +168,49 @@ public actor GuestConnection {
         }
     }
 
+    /// Opens the stream, and gives up after `limit` with `handshakeTimedOut`. A transport that does not return is left
+    /// running, and a stream that it opens after the limit is closed, so that nothing leaks.
+    private func openStream(within limit: Duration) async throws(GuestProtocolFailure) -> any GuestByteStream {
+        let transport = transport
+        let endpoint = endpoint
+        let outcome: Result<any GuestByteStream, GuestProtocolFailure> = await withCheckedContinuation { continuation in
+            let race = OpenRace(continuation)
+            Task {
+                do {
+                    let stream = try await transport.open(endpoint)
+                    if !race.finish(.success(stream)) {
+                        await stream.close()
+                    }
+                } catch {
+                    _ = race.finish(.failure(.disconnected))
+                }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                _ = race.finish(.failure(.handshakeTimedOut))
+            }
+        }
+        switch outcome {
+        case .success(let stream):
+            return stream
+        case .failure(let reason):
+            throw reason
+        }
+    }
+
     /// Sends one operation and waits for its result (guest-protocol.md §6). Cancelling the calling task sends a
     /// `Cancel` to the agent, and the answer that comes back is returned as usual.
     public func send<Operation: GuestOperation>(
         _ operation: Operation,
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        grace: Duration = GuestConnection.responseGrace
     ) async throws(GuestProtocolFailure) -> Operation.Result {
-        guard isUsable else {
+        guard let session = sessionInfo, failure == nil else {
             throw failure ?? .disconnected
+        }
+        // The host treats a capability the agent did not enable as an error before it sends (guest-protocol.md §5.2).
+        guard session.enabledCapabilities.contains(operation.capability.rawValue) else {
+            throw .capabilityMissing(capability: operation.capability.rawValue)
         }
         await acquireSlot()
         if let failure {
@@ -190,7 +229,7 @@ public actor GuestConnection {
             await withCheckedContinuation { continuation in
                 pending[id] = PendingCall(operationName: operation.operationName, continuation: continuation)
                 deadlines[id] = Task {
-                    try? await Task.sleep(for: limit + Self.responseGrace)
+                    try? await Task.sleep(for: limit + grace)
                     self.expire(id)
                 }
                 outbound?.yield(frame)
@@ -277,8 +316,11 @@ public actor GuestConnection {
         case .event(let event):
             try deliver(event)
         case .inputAck:
-            // The input acks belong to the input stream, which #024 uses.
-            break
+            // The input acks belong to the input stream, which #024 uses. On any other channel they are a violation
+            // (guest-protocol.md §3).
+            guard endpoint == .guestInput else {
+                throw .malformedFrame
+            }
         default:
             throw .malformedFrame
         }
@@ -443,6 +485,28 @@ public actor GuestConnection {
 
     private static func randomToken() -> Data {
         Data((0..<16).map { _ in UInt8.random(in: UInt8.min...UInt8.max) })
+    }
+}
+
+/// Decides one open: the transport's result or the deadline, whichever comes first. The other one is discarded.
+private final class OpenRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Result<any GuestByteStream, GuestProtocolFailure>, Never>?
+
+    init(_ continuation: CheckedContinuation<Result<any GuestByteStream, GuestProtocolFailure>, Never>) {
+        self.continuation = continuation
+    }
+
+    /// Resumes the open with `result` when it is the first. Returns false when the other side decided first.
+    func finish(_ result: Result<any GuestByteStream, GuestProtocolFailure>) -> Bool {
+        let taken = lock.withLock {
+            () -> CheckedContinuation<Result<any GuestByteStream, GuestProtocolFailure>, Never>? in
+            let current = continuation
+            continuation = nil
+            return current
+        }
+        taken?.resume(returning: result)
+        return taken != nil
     }
 }
 

@@ -78,6 +78,11 @@ final class InMemoryAgent: @unchecked Sendable {
         send(body: .event(event))
     }
 
+    /// Sends an InputAck. On the control channel it is a protocol violation (guest-protocol.md §3).
+    func sendInputAck() {
+        send(body: .inputAck(GPInputAck()))
+    }
+
     /// Sends a response to the request with `id`.
     func respond(to id: UInt64, with result: GPResponse.OneOf_Result) {
         var response = GPResponse()

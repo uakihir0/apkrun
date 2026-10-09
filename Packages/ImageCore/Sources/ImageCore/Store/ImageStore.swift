@@ -171,6 +171,8 @@ public actor ImageStore {
                 throw ImageFailure.unexpectedFile(file: "manifest.json")
             }
             try checkFiles(in: staging, bundle: copy, depth: .full)
+            // Nothing under Images/<version>/ changes after installation (filesystem-layout.md §1).
+            try setWritable(staging, false)
         } catch let failure as ImageFailure {
             try? remove(staging)
             throw failure
@@ -466,10 +468,40 @@ public actor ImageStore {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return
         }
+        // An installed image is read-only, so its owner write bits come back before it is removed.
+        try? setWritable(url, true)
         do {
             try FileManager.default.removeItem(at: url)
         } catch {
             throw storageFailure(error)
+        }
+    }
+
+    /// Clears the write bits of `root` and of everything under it, or restores the owner's write bit.
+    /// Read and search bits stay, so the tree can still be verified and listed. Symbolic links are
+    /// left alone, although the file check has already refused any.
+    private func setWritable(_ root: URL, _ writable: Bool) throws(ImageFailure) {
+        var urls = [root]
+        if let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: []) {
+            for case let url as URL in walker {
+                urls.append(url)
+            }
+        }
+        for url in urls {
+            var status = stat()
+            guard lstat(url.path, &status) == 0 else {
+                throw .missingFile(file: url.lastPathComponent)
+            }
+            if status.st_mode & S_IFMT == S_IFLNK {
+                continue
+            }
+            let mode =
+                writable
+                ? status.st_mode | S_IWUSR
+                : status.st_mode & ~(S_IWUSR | S_IWGRP | S_IWOTH)
+            guard chmod(url.path, mode) == 0 else {
+                throw .cloneFailed(underlying: UnderlyingError(domain: "NSPOSIXErrorDomain", code: Int(errno)))
+            }
         }
     }
 

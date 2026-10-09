@@ -5,6 +5,18 @@ import Testing
 
 @testable import ImageCore
 
+/// Every entry under `root`, including `root` itself. Synchronous, because enumerators are not
+/// iterable from an async context.
+private func treeEntries(_ root: URL) -> [URL] {
+    var entries = [root]
+    if let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: []) {
+        for case let url as URL in walker {
+            entries.append(url)
+        }
+    }
+    return entries
+}
+
 /// A temporary APKRUN_HOME on the volume of the temporary directory, which must be APFS (§10.3).
 private struct StoreSandbox {
     let root: URL
@@ -18,6 +30,13 @@ private struct StoreSandbox {
     }
 
     func remove() {
+        // Installed images are read-only, so the owner's write bits come back before deletion.
+        for url in treeEntries(root) {
+            let mode = (try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]) as? NSNumber
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: (mode?.intValue ?? 0o644) | 0o200], ofItemAtPath: url.path
+            )
+        }
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -331,7 +350,10 @@ func verifyCatchesAFileChangedAfterInstall() async throws {
     let installed = try await store.install(from: .directory(try sandbox.bundle("a")))
     try await store.verify(installed, depth: .full)
 
-    let handle = try FileHandle(forWritingTo: installed.root.appendingPathComponent("boot/ramdisk.img"))
+    // An installed file is read-only, so the tampering first restores the owner's write bit.
+    let tampered = installed.root.appendingPathComponent("boot/ramdisk.img")
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tampered.path)
+    let handle = try FileHandle(forWritingTo: tampered)
     try handle.write(contentsOf: Data("fixture-ramdisX".utf8))
     try handle.close()
     await #expect(throws: ImageFailure.hashMismatch(file: "boot/ramdisk.img")) {
@@ -479,4 +501,37 @@ func aSymlinkedPayloadFileIsRefused() async throws {
     await #expect(throws: ImageFailure.unexpectedFile(file: "boot/kernel")) {
         _ = try await sandbox.store().install(from: .directory(source))
     }
+}
+
+@Test
+func anInstalledImageIsReadOnlyAndStillRemovable() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let store = sandbox.store()
+    let first = try await store.install(from: .directory(try sandbox.bundle("a", version: "2026.10.0-cf1-arm64")))
+    _ = try await store.install(from: .directory(try sandbox.bundle("b", version: "2026.10.1-cf1-arm64")))
+    _ = try await store.install(from: .directory(try sandbox.bundle("c", version: "2026.10.2-cf1-arm64")))
+
+    var checked: [String] = []
+    for url in treeEntries(first.root) {
+        let mode = try #require(
+            (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]) as? NSNumber
+        )
+        #expect(mode.intValue & 0o222 == 0, "\(url.lastPathComponent) is writable: \(String(mode.intValue, radix: 8))")
+        checked.append(url.lastPathComponent)
+    }
+    #expect(checked.contains("kernel") && checked.contains("os.img"))
+    let mode = try #require(
+        (try FileManager.default.attributesOfItem(atPath: first.root.path)[.posixPermissions]) as? NSNumber
+    )
+    #expect(mode.intValue & 0o222 == 0, "the image directory is writable")
+
+    let kernel = first.root.appendingPathComponent("boot/kernel")
+    #expect(throws: (any Error).self) {
+        _ = try FileHandle(forWritingTo: kernel)
+    }
+
+    // Garbage collection keeps the current and the previous image, and removes the oldest.
+    try await store.garbageCollect()
+    #expect(!FileManager.default.fileExists(atPath: first.root.path))
 }

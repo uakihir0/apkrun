@@ -35,6 +35,12 @@ public enum ImageFailure: APKRunError, Equatable {
     /// The kernel command line exceeds 2048 bytes (§6.4).
     case cmdlineTooLong(length: Int)
 
+    /// The key ID in `manifest.sig` is not in the trust list (runtime-image-manifest.md §6.1).
+    case untrustedKey(keyID: String)
+
+    /// The signature does not verify under the trusted key with that ID (§6.1).
+    case signatureInvalid(keyID: String)
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -52,6 +58,8 @@ public enum ImageFailure: APKRunError, Equatable {
         case .bootconfigConflict: "bootconfigConflict"
         case .bootconfigTooLarge: "bootconfigTooLarge"
         case .cmdlineTooLong: "cmdlineTooLong"
+        case .untrustedKey: "untrustedKey"
+        case .signatureInvalid: "signatureInvalid"
         }
     }
 
@@ -78,6 +86,8 @@ public enum ImageFailure: APKRunError, Equatable {
             ["size": .bytes(Int64(size))]
         case .cmdlineTooLong(let length):
             ["length": .count(length)]
+        case .untrustedKey(let keyID), .signatureInvalid(let keyID):
+            ["keyID": .text(keyID)]
         }
     }
 

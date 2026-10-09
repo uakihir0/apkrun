@@ -1676,6 +1676,50 @@
       }
     },
     {
+      "code": "image.untrustedKey",
+      "parameters": [
+        "keyID"
+      ],
+      "message": {
+        "en": "This Android system is signed by a key this Mac does not trust.",
+        "ja": "この Android システムは、この Mac が信頼していない鍵で署名されています。"
+      },
+      "remediation": {
+        "en": "Install Android again from the official source. In development, sign the bundle with a key this Mac trusts: python3 -m apkrun_image keygen, then bundle again.",
+        "ja": "正式な配布元から Android をもう一度インストールしてください。開発中は、この Mac が信頼する鍵で bundle に署名してください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "untrustedKey(keyID:)",
+        "when": "manifest.sig names a key ID that is not in ImageTrustStore",
+        "raisedBy": "ImageSignature, ImageStore",
+        "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §6.1"
+      }
+    },
+    {
+      "code": "image.signatureInvalid",
+      "parameters": [
+        "keyID"
+      ],
+      "message": {
+        "en": "The signature of this Android system does not match its contents.",
+        "ja": "この Android システムの署名が内容と一致しません。"
+      },
+      "remediation": {
+        "en": "Install Android again from the official source. The files may have been changed after they were signed.",
+        "ja": "正式な配布元から Android をもう一度インストールしてください。署名後にファイルが変更された可能性があります。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "signatureInvalid(keyID:)",
+        "when": "the Ed25519 signature over manifest.json does not verify under the trusted key",
+        "raisedBy": "ImageSignature, ImageStore",
+        "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §6.1"
+      }
+    },
+    {
       "code": "runtime.image",
       "parameters": [],
       "transparent": true,

@@ -110,6 +110,8 @@ public actor GuestAgentSupervisor {
     private let backoffMinimum: Duration
     private let backoffMaximum: Duration
     private let hostVersion: String
+    private let logger: APKLogger
+    private let logSink: (any LogSink)?
     private let updateContinuation: AsyncStream<GPEvent>.Continuation
     private var connection: GuestConnection?
     private var consumer: Task<Void, Never>?
@@ -129,8 +131,11 @@ public actor GuestAgentSupervisor {
         missLimit: Int = 3,
         backoffMinimum: Duration = .milliseconds(100),
         backoffMaximum: Duration = .seconds(2),
+        logSink: (any LogSink)? = nil,
         restartAgent: @escaping @Sendable (GuestAgentLoss) async -> Bool
     ) {
+        self.logSink = logSink
+        logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         self.transport = transport
         self.hostVersion = hostVersion
         self.keepaliveInterval = keepaliveInterval
@@ -202,7 +207,12 @@ public actor GuestAgentSupervisor {
 
     /// Opens a connection, reads its handshake, and resynchronises with `GetSnapshot` before anything else.
     private func establish() async throws(GuestProtocolFailure) {
-        let next = GuestConnection(endpoint: .guestControl, transport: transport, hostVersion: hostVersion)
+        let next = GuestConnection(
+            endpoint: .guestControl,
+            transport: transport,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
         awaitingSnapshot = true
         buffered = []
         let info = try await next.open()
@@ -280,6 +290,7 @@ public actor GuestAgentSupervisor {
     /// Restarts the agent when the owner allows it, then reconnects with the backoff. A refused restart ends the
     /// supervisor in `unavailable`.
     private func lost(_ reason: GuestAgentLoss) async {
+        logger.warning("The Guest Agent connection was lost: \(String(describing: reason), .public)")
         let closing = connection
         connection = nil
         session = nil
@@ -288,6 +299,7 @@ public actor GuestAgentSupervisor {
         await closing?.close()
         state = .connecting
         guard await restartAgent(reason) else {
+            logger.error("The Guest Agent restart budget is spent, so the agent stays down", errorCode: "runtime.requiredAgentUnavailable")
             state = .unavailable
             return
         }

@@ -475,7 +475,11 @@ public actor RuntimeSupervisor {
             )
             adbClient = client
             if let bundle = guestAgentBundle {
-                developmentGuestAgent = DevelopmentGuestAgent(adb: client, bundle: bundle)
+                developmentGuestAgent = DevelopmentGuestAgent(
+                    adb: client,
+                    bundle: bundle,
+                    logSink: diagnostics.logSink
+                )
             }
             let task = Task {
                 await self.pollADB(client, tracker: tracker, progress: progress)

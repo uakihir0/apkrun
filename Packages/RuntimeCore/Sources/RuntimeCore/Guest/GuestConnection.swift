@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 
@@ -57,6 +58,7 @@ public actor GuestConnection {
     private let presentedToken: Data?
     private let hostVersion: String
     private let handshakeTimeout: Duration
+    private let logger: APKLogger
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
     private var decoder = FrameDecoder()
@@ -88,9 +90,11 @@ public actor GuestConnection {
         transport: any GuestTransport,
         presentedToken: Data? = nil,
         hostVersion: String = "dev",
-        handshakeTimeout: Duration = GuestConnection.defaultHandshakeTimeout
+        handshakeTimeout: Duration = GuestConnection.defaultHandshakeTimeout,
+        logSink: (any LogSink)? = nil
     ) {
         self.endpoint = endpoint
+        logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         self.transport = transport
         self.presentedToken = presentedToken
         self.hostVersion = hostVersion
@@ -136,6 +140,9 @@ public actor GuestConnection {
                         do {
                             try await opened.write(frame)
                         } catch {
+                            // A write that fails ends the connection, and the requests that wait on it get the reason.
+                            self.logger.warning("A frame could not be written to the guest: \(error.localizedDescription, .public)")
+                            self.connectionLost(.disconnected)
                             break
                         }
                     }
@@ -408,6 +415,7 @@ public actor GuestConnection {
             return
         }
         failure = reason
+        logger.info("The \(endpoint.developmentSocketName ?? "guest", .public) connection ended: \(reason.catalogName, .public)")
         handshakeTimer?.cancel()
         if let continuation = handshakeContinuation {
             handshakeContinuation = nil

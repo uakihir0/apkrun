@@ -8,10 +8,12 @@ import Network
 /// the host's loopback address (NFR-SEC-06).
 public actor ADBForwardGuestTransport: GuestTransport {
     private let adb: AdbClient
+    private let logger: APKLogger
 
     /// Creates the transport over the developer's ADB client.
-    public init(adb: AdbClient) {
+    public init(adb: AdbClient, logSink: (any LogSink)? = nil) {
         self.adb = adb
+        logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
     }
 
     public func open(_ endpoint: GuestEndpoint) async throws -> any GuestByteStream {
@@ -20,7 +22,7 @@ public actor ADBForwardGuestTransport: GuestTransport {
         }
         let port = try await adb.forward(remote: "localabstract:\(name)")
         do {
-            let socket = try await LoopbackSocket.connect(port: port)
+            let socket = try await LoopbackSocket.connect(port: port, logger: logger)
             return ForwardedGuestStream(socket: socket, port: port, adb: adb)
         } catch {
             try? await adb.forwardRemove(port: port)
@@ -65,17 +67,20 @@ private final class ForwardedGuestStream: GuestByteStream, @unchecked Sendable {
 private final class LoopbackSocket: @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "io.apkrun.guest.loopback")
+    private let logger: APKLogger
 
-    private init(connection: NWConnection) {
+    private init(connection: NWConnection, logger: APKLogger) {
         self.connection = connection
+        self.logger = logger
     }
 
-    static func connect(port: UInt16) async throws -> LoopbackSocket {
+    static func connect(port: UInt16, logger: APKLogger) async throws -> LoopbackSocket {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw GuestTransportFailure.notServedByDevelopmentTransport
         }
         let socket = LoopbackSocket(
-            connection: NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp)
+            connection: NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp),
+            logger: logger
         )
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = ResumeOnce(continuation)
@@ -86,6 +91,7 @@ private final class LoopbackSocket: @unchecked Sendable {
                     gate.resume()
                 case .failed(let error):
                     socket.connection.stateUpdateHandler = nil
+                    socket.logger.warning("The loopback connection to the guest failed: \(error.localizedDescription, .public)")
                     gate.fail(error)
                 case .cancelled:
                     gate.fail(GuestTransportFailure.notServedByDevelopmentTransport)
@@ -103,6 +109,7 @@ private final class LoopbackSocket: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { content, _, isComplete, error in
                 if let error {
+                    self.logger.warning("The guest closed the loopback connection with an error: \(error.localizedDescription, .public)")
                     continuation.resume(throwing: error)
                 } else if let content, !content.isEmpty {
                     continuation.resume(returning: content)
@@ -121,6 +128,7 @@ private final class LoopbackSocket: @unchecked Sendable {
                 content: bytes,
                 completion: .contentProcessed { error in
                     if let error {
+                        self.logger.warning("A write to the guest failed: \(error.localizedDescription, .public)")
                         continuation.resume(throwing: error)
                     } else {
                         continuation.resume()

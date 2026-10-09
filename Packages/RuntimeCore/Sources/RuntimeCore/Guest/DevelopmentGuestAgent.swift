@@ -46,6 +46,7 @@ public actor DevelopmentGuestAgent {
 
     private let adb: AdbClient
     private let provisioner: GuestAgentProvisioner
+    private let logger: APKLogger
     private let clock: @Sendable () -> ContinuousClock.Instant
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
@@ -55,15 +56,18 @@ public actor DevelopmentGuestAgent {
         adb: AdbClient,
         bundle: GuestAgentBundle,
         hostVersion: String = "dev",
+        logSink: (any LogSink)? = nil,
         clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.adb = adb
         self.clock = clock
+        logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         provisioner = GuestAgentProvisioner(adb: adb, bundle: bundle)
         let relay = RestartRelay()
         supervisor = GuestAgentSupervisor(
-            transport: ADBForwardGuestTransport(adb: adb),
+            transport: ADBForwardGuestTransport(adb: adb, logSink: logSink),
             hostVersion: hostVersion,
+            logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
         )
         relay.set { [weak self] loss in
@@ -125,11 +129,13 @@ public actor DevelopmentGuestAgent {
             restartsRefused = true
             return false
         }
+        logger.notice("Restarting the Guest Agent after a \(String(describing: loss), .public) loss")
         do {
             try await provisioner.startAgent()
             return true
         } catch {
             restartsRefused = true
+            logger.error("The Guest Agent did not restart", errorCode: "runtime.guestAgentStartFailed")
             return false
         }
     }

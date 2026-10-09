@@ -97,6 +97,7 @@ final class AndroidPackageTests: XCTestCase {
             let stoppedPid = try await adb.pidof(Self.packageName)
             XCTAssertNil(stoppedPid, "the process survives am force-stop")
             let stopped = try await adb.dumpsysActivities()
+            XCTAssertNotNil(stopped.resumedComponent, "no activity is resumed after am force-stop")
             XCTAssertNotEqual(stopped.resumedComponent, Self.mainActivity)
 
             try await adb.uninstall(packageName: Self.packageName)

@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:apkrun:schema:runtime-image-manifest:1",
+  "title": "APKRun RuntimeImageManifest, schema version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "imageVersion", "kind", "provenance", "guest", "boot", "disks", "templates", "consolePorts", "gpuProfiles", "requirements", "userdata", "compatibility", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "imageVersion": { "type": "string", "pattern": "^([0-9]{4})\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})-(cf[0-9]{1,20}|ar[0-9]{6})-(arm64)$" },
+    "kind": { "enum": ["stock", "apkrun"] },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "android", "deviceFamily", "layout", "reference", "tools", "revisions", "pinnedManifestSHA256", "builderImageDigest"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin", "branch", "target", "buildId", "archives"],
+          "properties": {
+            "origin": { "enum": ["ci.android.com", "apkrun-builder"] },
+            "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+            "target": { "type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*-(user|userdebug|eng)$" },
+            "buildId": { "type": "string", "pattern": "^([0-9]{1,20}|ar[0-9]{6})$" },
+            "archives": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "size", "sha256"],
+                "properties": {
+                  "name": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,255}$" },
+                  "size": { "type": "integer", "minimum": 1 },
+                  "sha256": { "$ref": "#/$defs/sha256" }
+                }
+              }
+            }
+          }
+        },
+        "android": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release", "sdk", "variant", "securityPatch"],
+          "properties": {
+            "release": { "type": "string", "pattern": "^[1-9][0-9]*(\\.[0-9]+){0,2}$" },
+            "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "variant": { "enum": ["user", "userdebug", "eng"] },
+            "securityPatch": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" }
+          }
+        },
+        "deviceFamily": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "$ref": "#/$defs/repoPath" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "reference": { "anyOf": [{ "$ref": "#/$defs/repoPath" }, { "type": "null" }] },
+        "tools": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["apkrunImage", "mkbootimg", "avbtool"],
+          "properties": {
+            "apkrunImage": { "$ref": "#/$defs/semver" },
+            "mkbootimg": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "avbtool": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+          }
+        },
+        "revisions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["imagesTools", "guest"],
+          "properties": {
+            "imagesTools": { "$ref": "#/$defs/treeRevision" },
+            "guest": { "anyOf": [{ "$ref": "#/$defs/treeRevision" }, { "type": "null" }] }
+          }
+        },
+        "pinnedManifestSHA256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "builderImageDigest": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] }
+      }
+    },
+    "guest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdk", "abis", "targetSdkFloor"],
+      "properties": {
+        "sdk": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "abis": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "contains": { "const": "arm64-v8a" },
+          "items": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" }
+        },
+        "targetSdkFloor": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "boot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel", "ramdisk", "bootconfig", "cmdline", "kernelPageSize", "bootconfigOverrides"],
+      "properties": {
+        "kernel": { "$ref": "#/$defs/bootFile" },
+        "ramdisk": { "$ref": "#/$defs/bootFile" },
+        "bootconfig": { "$ref": "#/$defs/bootFile" },
+        "cmdline": { "$ref": "#/$defs/bootFile" },
+        "kernelPageSize": { "enum": [4096, 16384, 65536] },
+        "bootconfigOverrides": { "$ref": "#/$defs/keyList" }
+      }
+    },
+    "disks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disk" },
+            {
+              "properties": {
+                "role": { "const": "os" },
+                "path": { "pattern": "^disks/" },
+                "readOnly": { "const": true }
+              },
+              "not": { "required": ["userdataStrategy"] }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "templates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disk" },
+            {
+              "properties": {
+                "role": { "const": "userdata" },
+                "path": { "pattern": "^templates/" },
+                "readOnly": { "const": false }
+              },
+              "required": ["userdataStrategy"]
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "consolePorts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "role", "name"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0, "maximum": 31 },
+          "role": { "enum": ["systemConsole", "log", "silent", "service"] },
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+        }
+      }
+    },
+    "gpuProfiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drmVirgl", "guestSwiftshader"],
+      "properties": {
+        "drmVirgl": { "$ref": "#/$defs/gpuProfile" },
+        "guestSwiftshader": { "$ref": "#/$defs/gpuProfile" },
+        "headless": { "$ref": "#/$defs/gpuProfile" }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumRuntimeVersion", "guestProtocol", "agents"],
+      "properties": {
+        "minimumRuntimeVersion": { "$ref": "#/$defs/semver" },
+        "guestProtocol": { "$ref": "#/$defs/protocolRange" },
+        "agents": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["package", "versionCode"],
+            "properties": {
+              "package": { "type": "string", "maxLength": 255, "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$" },
+              "versionCode": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 }
+            }
+          }
+        }
+      }
+    },
+    "userdata": { "$ref": "#/$defs/userdataCompatibility" },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upgradeFrom"],
+      "properties": {
+        "upgradeFrom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimumImageVersion"],
+          "properties": {
+            "minimumImageVersion": { "$ref": "#/$defs/shortImageVersion" }
+          }
+        }
+      }
+    },
+    "legal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["notice"],
+      "properties": {
+        "notice": { "allOf": [ { "$ref": "#/$defs/fileEntry" }, { "properties": { "path": { "pattern": "^legal/" } } } ] }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/fileEntry" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "shortImageVersion": { "type": "string", "pattern": "^[0-9]{4}\\.(0[1-9]|1[0-2])\\.(0|[1-9][0-9]{0,2})$" },
+    "treeRevision": { "type": "string", "pattern": "^[0-9a-f]{40}(-dirty)?$" },
+    "repoPath": {
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
+    },
+    "bundlePath": { "type": "string", "pattern": "^(boot|disks|templates|legal)/[a-z0-9][a-z0-9._-]{0,63}$" },
+    "fileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/bundlePath" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 1099511627776 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "bootFile": {
+      "allOf": [
+        { "$ref": "#/$defs/fileEntry" },
+        { "properties": { "path": { "pattern": "^boot/" } } }
+      ]
+    },
+    "bootconfigKey": { "type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9_.-]+$" },
+    "keyList": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/bootconfigKey" } },
+    "gpuProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bootconfig", "overrides", "requiredHostCapabilities"],
+      "properties": {
+        "bootconfig": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": { "$ref": "#/$defs/bootconfigKey" },
+          "additionalProperties": { "type": "string", "maxLength": 1024, "pattern": "^[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]*$" }
+        },
+        "overrides": { "$ref": "#/$defs/keyList" },
+        "requiredHostCapabilities": { "type": "array", "uniqueItems": true, "items": { "enum": ["virgl", "edid"] } }
+      }
+    },
+    "partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "firstLBA", "size", "sha256"],
+      "properties": {
+        "label": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,35}$" },
+        "firstLBA": { "type": "integer", "minimum": 2048, "multipleOf": 2048 },
+        "size": { "type": "integer", "minimum": 512, "multipleOf": 512 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "readOnly", "identifier", "logicalSize", "partitions"],
+      "properties": {
+        "role": { "enum": ["os", "userdata"] },
+        "path": { "$ref": "#/$defs/bundlePath" },
+        "readOnly": { "type": "boolean" },
+        "identifier": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,19}$" },
+        "logicalSize": { "type": "integer", "minimum": 2097152, "maximum": 1099511627776, "multipleOf": 1048576 },
+        "userdataStrategy": { "enum": ["blankFormattable", "prebuiltTemplate"] },
+        "partitions": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/partition" } }
+      }
+    },
+    "protocolRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "userdataCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "upgradableFrom"],
+      "properties": {
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "upgradableFrom": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } }
+      }
+    }
+  }
+}

@@ -5,6 +5,25 @@
       "name" : "LinuxGuest",
       "options" : {
       }
+    },
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003004",
+      "name" : "AndroidADB",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "android-adb",
+            "enabled" : true
+          },
+          {
+            "key" : "ANDROID_ADB_SERVER_PORT",
+            "value" : "15037",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 1200
+      }
     }
   ],
   "defaultOptions" : {

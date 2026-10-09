@@ -18,6 +18,8 @@
     <string>$(APKRUN_CI)</string>
     <key>APKRUN_TEST_LINUX_DIR</key>
     <string>$(APKRUN_TEST_LINUX_DIR)</string>
+    <key>APKRUN_ANDROID_HOME</key>
+    <string>$(APKRUN_ANDROID_HOME)</string>
     <key>LSMinimumSystemVersion</key>
     <string>27.0</string>
     <key>NSPrincipalClass</key>

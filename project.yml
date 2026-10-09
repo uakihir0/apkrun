@@ -235,6 +235,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/IntegrationTests/LinuxGuestTests
+      - path: Tests/IntegrationTests/AndroidADBTests
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:
@@ -255,6 +256,10 @@ targets:
         product: VirtioDeviceCore
       - package: APKRun
         product: GraphicsCore
+      - package: APKRun
+        product: RuntimeCore
+      - package: APKRun
+        product: ImageCore
     scheme:
       testTargets:
         - IntegrationTests

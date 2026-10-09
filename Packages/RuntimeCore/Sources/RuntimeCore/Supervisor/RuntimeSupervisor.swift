@@ -539,6 +539,9 @@ public actor RuntimeSupervisor {
             whole: firstBoot ? timeouts.firstBoot : timeouts.whole,
             stall: firstBoot ? timeouts.firstBootStall : timeouts.stall
         )
+        // VMController yields its initial `.stopped` before the VM starts. That update is not a stop,
+        // so a stop counts only after the VM has reported starting.
+        var vmStarted = false
         for await item in progress {
             try throwIfStopped()
             let input: BootWatch.Input
@@ -549,8 +552,11 @@ public actor RuntimeSupervisor {
                 input = .detectorFailed(failure)
             case .vmState(.failed(let failure)):
                 input = .vmFailed(failure)
+            case .vmState(.starting), .vmState(.running):
+                vmStarted = true
+                input = .tick
             case .vmState(.stopped):
-                if case .booting = state {
+                if vmStarted, case .booting = state {
                     input = .guestStopped
                 } else {
                     input = .tick

@@ -39,7 +39,9 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
 fi
 
 gate_dir="$repo_root/build/gates/$gate"
-APKRUN_TEST_LINUX_DIR="${APKRUN_TEST_LINUX_DIR:-${TMPDIR:-/tmp}/apkrun-test-linux}"
+# The default is the directory every producer script and the test harness use. $TMPDIR is a per-user directory
+# on macOS: a gate that used it built its artifacts where the shared test directory was never read (IR-376).
+APKRUN_TEST_LINUX_DIR="${APKRUN_TEST_LINUX_DIR:-/tmp/apkrun-test-linux}"
 APKRUN_TEST_LINUX_DIR="$(
     python3 "$script_dir/tools/validate-test-linux-dir.py" "$APKRUN_TEST_LINUX_DIR"
 )"
@@ -62,6 +64,7 @@ macos_build="$(sw_vers -buildVersion)"
     printf 'started: %s\n' "$started_at"
     printf 'mac_model: %s\n' "$mac_model"
     printf 'macos_build: %s\n' "$macos_build"
+    printf 'artifact_directory: %s\n' "$APKRUN_TEST_LINUX_DIR"
     if [[ "$gate" == G2 ]]; then
         printf 'dwell_seconds: %s\n' "$gate_dwell_seconds"
     fi
@@ -91,6 +94,23 @@ if [[ "$gate" == G2 ]]; then
     # G2 boots the stock image from a signed bundle outside ~/Documents (#014, #065).
     scripts/build-test-android-bundle.sh
 fi
+# Both gates run the LinuxGuest suite, whose layout test reads the Android disks. Every gate rebuilds them, so no
+# run depends on disks left by an earlier build.
+scripts/build-test-android-disks.sh
+scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
+# Build the test host before any test runs, then check the directory it will read (IR-376).
+xcodebuild build-for-testing \
+    -project APKRun.xcodeproj \
+    -scheme IntegrationTests \
+    -testPlan IntegrationTests \
+    -configuration Debug \
+    -jobs 1 \
+    -derivedDataPath "$gate_dir/DerivedData" \
+    "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+    "APKRUN_CI=1" \
+    "${signing_arguments[@]}"
+scripts/tools/verify-test-host-directory.sh \
+    "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" "$APKRUN_TEST_LINUX_DIR"
 xcodebuild test \
     -project APKRun.xcodeproj \
     -scheme IntegrationTests \

@@ -23,6 +23,7 @@ ruby "$script_dir/test_workflow_runners.rb" "$repo_root"
 "$script_dir/test_codegen.sh"
 "$script_dir/test_check_format.sh"
 "$script_dir/test_run_gate_dwell.sh"
+"$script_dir/test_gate_artifacts.sh"
 "$script_dir/test_run_checks_coverage.sh"
 
 expect_pass() {

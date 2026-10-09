@@ -1,6 +1,9 @@
-// The Guest Agent application, io.apkrun.guest (guest-components.md §2). In development mode the daemon
-// runs from this APK's class path, started by app_process under the shell uid (guest-components.md §3.2).
-// The APK has no launcher activity. The release build is signed with the test-only development key of
+// The Guest Agent application, io.apkrun.guest (guest-components.md §2). In development mode the
+// daemon
+// runs from this APK's class path, started by app_process under the shell uid (guest-components.md
+// §3.2).
+// The APK has no launcher activity. The release build is signed with the test-only development key
+// of
 // Tests/Fixtures/signing/test-guest-dev.jks (guest-components.md §2).
 plugins {
     alias(libs.plugins.android.application)
@@ -58,5 +61,6 @@ dependencies {
     implementation(project(":protocol"))
     implementation(project(":agentruntime"))
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.protobuf.javalite)
     testImplementation(libs.junit)
 }

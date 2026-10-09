@@ -148,11 +148,6 @@ public actor InstanceStore {
     }
 
     private static func userdataSchemaVersion(of image: InstalledImage) -> Int {
-        guard case .object(let userdata) = image.manifest.userdata,
-            case .number(let version)? = userdata["schemaVersion"]
-        else {
-            return 1
-        }
-        return Int(version)
+        image.manifest.userdata.schemaVersion
     }
 }

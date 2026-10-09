@@ -156,18 +156,6 @@ func instanceStoreProvisionsLoadsAndDetectsAMissingDisk() async throws {
     }
 }
 
-@Test
-func developmentImageChecksFileSizes() throws {
-    let bundle = try FixtureBundle.make()
-    defer { bundle.remove() }
-    #expect(try DevelopmentImage.load(directory: bundle.image.root) == bundle.image)
-
-    try Data([1, 2, 3]).write(to: bundle.image.root.appendingPathComponent("boot/cmdline.txt"))
-    #expect(throws: ImageFailure.hashMismatch(file: "boot/cmdline.txt")) {
-        _ = try DevelopmentImage.load(directory: bundle.image.root)
-    }
-}
-
 private var repositoryRoot: URL {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {
@@ -176,7 +164,9 @@ private var repositoryRoot: URL {
     return url
 }
 
-/// A small unsigned bundle with the layout's console ports and GPU profiles.
+/// A small bundle with the layout's console ports and GPU profiles. It is not signed and
+/// not verified: these tests exercise the planner, not `ImageStore`. The manifest is the
+/// shared §4.1 example, with this bundle's file entries.
 private struct FixtureBundle {
     static let commandLine = "console=hvc0 bootconfig"
     static let ramdisk = Data("fixture-ramdisk".utf8)
@@ -213,54 +203,49 @@ private struct FixtureBundle {
             ("disks/os.img", Data(repeating: 0, count: 4096)),
             ("templates/userdata.img", template),
         ]
-        var entries: [String: RuntimeImageManifest.FileEntry] = [:]
+        var entries: [[String: Any]] = []
+        var byPath: [String: [String: Any]] = [:]
         for (path, data) in files {
             try data.write(to: root.appendingPathComponent(path))
-            entries[path] = .init(path: path, size: UInt64(data.count), sha256: "")
+            let entry: [String: Any] = ["path": path, "size": data.count, "sha256": String(repeating: "0", count: 64)]
+            entries.append(entry)
+            byPath[path] = entry
         }
-        let version = try #require(ImageVersion("2026.10.0-cf16373615-arm64"))
-        let manifest = RuntimeImageManifest(
-            schemaVersion: 1,
-            imageVersion: version,
-            kind: .stock,
-            provenance: .object([:]),
-            guest: .object([:]),
-            boot: .init(
-                kernel: try #require(entries["boot/kernel"]),
-                ramdisk: try #require(entries["boot/ramdisk.img"]),
-                bootconfig: try #require(entries["boot/bootconfig.txt"]),
-                cmdline: try #require(entries["boot/cmdline.txt"]),
-                kernelPageSize: 4096,
-                bootconfigOverrides: []
-            ),
-            disks: [
-                .init(
-                    role: "os", path: "disks/os.img", readOnly: true, identifier: "apkrun-os",
-                    logicalSize: 4096, userdataStrategy: nil, partitions: []
-                )
-            ],
-            templates: [
-                .init(
-                    role: "userdata", path: "templates/userdata.img", readOnly: false,
-                    identifier: "apkrun-data", logicalSize: UInt64(template.count),
-                    userdataStrategy: .blankFormattable, partitions: []
-                )
-            ],
-            consolePorts: layout.consolePorts,
-            gpuProfiles: layout.gpuProfiles,
-            requirements: .object([:]),
-            userdata: .object(["schemaVersion": .number(1)]),
-            compatibility: .object([:]),
-            legal: nil,
-            files: files.compactMap { entries[$0.0] }
+        let example = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: repositoryRoot.appendingPathComponent(
+                "Images/tools/tests/fixtures/runtime-manifests/valid/stock-cf16373615.json"
+            ))
         )
-        try JSONEncoder().encode(manifest).write(to: root.appendingPathComponent("manifest.json"))
+        var document = try #require(example as? [String: Any])
+        var boot = try #require(document["boot"] as? [String: Any])
+        for (key, path) in [("kernel", "boot/kernel"), ("ramdisk", "boot/ramdisk.img"),
+                            ("bootconfig", "boot/bootconfig.txt"), ("cmdline", "boot/cmdline.txt")] {
+            boot[key] = byPath[path]
+        }
+        document["boot"] = boot
+        var disks = try #require(document["disks"] as? [[String: Any]])
+        disks[0]["logicalSize"] = 4096
+        document["disks"] = disks
+        var templates = try #require(document["templates"] as? [[String: Any]])
+        templates[0]["logicalSize"] = template.count
+        document["templates"] = templates
+        document["consolePorts"] = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(layout.consolePorts)
+        )
+        document["gpuProfiles"] = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(layout.gpuProfiles)
+        )
+        document["files"] = entries
+        let manifest = try JSONDecoder().decode(
+            RuntimeImageManifest.self,
+            from: JSONSerialization.data(withJSONObject: document)
+        )
         let paths = APKRunPaths(
             allowingHomeOverride: true,
             environment: ["APKRUN_HOME": directory.appendingPathComponent("home").path]
         )
         return FixtureBundle(
-            image: InstalledImage(version: version, root: root, manifest: manifest),
+            image: InstalledImage(version: manifest.imageVersion, root: root, manifest: manifest),
             paths: paths,
             directory: directory
         )
@@ -299,9 +284,11 @@ private struct FixtureBundle {
 
 private let builtBundle = repositoryRoot.appendingPathComponent("Images/work/16373615/bundle")
 
-@Test(.enabled(if: FileManager.default.fileExists(atPath: builtBundle.appendingPathComponent("manifest.json").path)))
+@Test(.enabled(if: FileManager.default.fileExists(atPath: builtBundle.appendingPathComponent("manifest.sig").path)))
 func theBuiltStockBundleLoadsAndPlansAHeadlessBoot() throws {
-    let image = try DevelopmentImage.load(directory: builtBundle)
+    let manifestData = try Data(contentsOf: builtBundle.appendingPathComponent("manifest.json"))
+    let manifest = try RuntimeImageManifest.load(manifestData)
+    let image = InstalledImage(version: manifest.imageVersion, root: builtBundle, manifest: manifest)
     #expect(image.version.description == "2026.10.0-cf16373615-arm64")
     #expect(image.manifest.consolePorts.count == 20)
     let home = FileManager.default.temporaryDirectory

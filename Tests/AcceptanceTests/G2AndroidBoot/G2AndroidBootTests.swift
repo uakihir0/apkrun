@@ -34,6 +34,8 @@ final class G2AndroidBootTests: XCTestCase {
         let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
         _ = try await store.resetAndroid(image: image, sizing: .default)
         let dwell = Self.dwell()
+        // XCTest's default allowance is 10 minutes; the plan's maximum (90 minutes) only caps this.
+        executionTimeAllowance = TimeInterval(5 * (dwell.components.seconds + 300))
 
         for boot in 1...5 {
             let timeline = PerfTimeline()

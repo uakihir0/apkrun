@@ -696,6 +696,9 @@ scripts/check-module-deps.sh
 | `generate-protos.sh` produces a diff on a clean checkout | a protoc or protoc-gen-swift that is not the pinned one | run `scripts/bootstrap`; never use Homebrew `protobuf` for codegen |
 | `apkrun_image fetch` returns HTTP 403 | missing or wrong API key | §3.1; or use the manual download fallback |
 | `adb: device offline` or no device at `127.0.0.1:6520` | the runtime is not up, or a second adb server of another SDK is running | `adb kill-server`, use only `$ANDROID_HOME/platform-tools/adb` |
+| `apkrun dev adb` fails with `runtime.adbExecutableMissing` | neither `$ANDROID_HOME/platform-tools/adb` nor `adb` on `PATH` exists | §2.5: install the platform-tools, then set `ANDROID_HOME` |
+| Developer boot logs `vm.loopbackPortInUse` (port 6520) and runs without ADB | another program listens on `127.0.0.1:6520`, or on any address of that port | quit the other program (`lsof -nP -iTCP:6520 -sTCP:LISTEN` shows it), then boot again. The ADB bridge is off for that boot, and the console signals still decide the boot phases |
+| `apkrun dev adb` reports `device '127.0.0.1:6520' not found` | the developer boot is not running, so nothing listens on 6520 | start `apkrun dev boot` in developer mode first; `apkrun dev adb` connects the endpoint itself |
 | Gradle: "SDK location not found" | `local.properties` missing | `scripts/bootstrap` |
 | `cargo ndk`: "Could not find any NDK" | `ANDROID_NDK_HOME` unset or another version | §2.5 |
 | Soong rejects Rust code that builds with cargo | the host Rust pin is newer than `prebuilts/rust` | §2.6 |

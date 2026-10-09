@@ -1602,17 +1602,21 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] ADB is enabled for the development image in developer mode. With developer mode off, nothing listens on 6520.
-- [ ] The connection is documented: `adb -s 127.0.0.1:6520`, `apkrun dev adb`, and the troubleshooting entry.
-- [ ] ADB is not exposed beyond the host: it listens on `127.0.0.1` only, and connections to other addresses are refused (NFR-SEC-06).
-- [ ] `adb shell getprop`, `adb shell ps -A`, `adb shell pm list packages`, and `adb logcat` succeed. `adb shell getprop sys.boot_completed` prints `1`.
-- [ ] The ADB readiness signals feed `BootPhaseDetector`.
-- [ ] Ctrl-C stops Android with `reboot -p` and falls back to a forced stop after 20 s.
+- [x] ADB is enabled for the development image in developer mode. With developer mode off, nothing listens on 6520. (T2 `AndroidADBTests`: `testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully` and `testDeveloperModeOffListensOnNoPort`, passed on 2026-10-09.)
+- [x] The connection is documented: `adb -s 127.0.0.1:6520`, `apkrun dev adb`, and the troubleshooting entry. ([cli.md](../../02-design/cli.md) §5, [android-image.md](../../02-design/android-image.md) §7.3, [environment-setup.md](../../05-development/environment-setup.md) §8.)
+- [x] ADB is not exposed beyond the host: it listens on `127.0.0.1` only, and connections to other addresses are refused (NFR-SEC-06). The T2 check reads `lsof` and tries every non-loopback IPv4 address; T1 `VsockLoopbackForwarderSystemTests` checks the same `lsof` result.
+- [x] `adb shell getprop`, `adb shell ps -A`, `adb shell pm list packages`, and `adb logcat` succeed. `adb shell getprop sys.boot_completed` prints `1`. (T2, and `apkrun dev adb shell getprop sys.boot_completed` printed `1` on a live boot.)
+- [x] The ADB readiness signals feed `BootPhaseDetector` (`BootPhaseDetectorTests`: ADB-only, mixed, and never-reentering sequences).
+- [ ] Ctrl-C stops Android with `reboot -p` and falls back to a forced stop after 20 s. The graceful path is verified: the stop took 2 s, the guest logged `reboot: Power down`, and the T2 check asserts that the stop takes under 20 s. The forced fallback is not exercised by any test, because no check makes the guest ignore `reboot -p`. Follow-up: a test or fault hook that keeps Android running.
 
 ### Notes
 
 - The guest's own `socket_vsock_proxy` (6520 → tcp 5555) keeps running and is unused (§7.3).
-- Use only `$ANDROID_HOME/platform-tools/adb`. A second adb server from another SDK causes `device offline` ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §8).
+- Use only `$ANDROID_HOME/platform-tools/adb`. A second adb server from another SDK causes `device offline` ([../../05-development/environment-setup.md](../../05-development/environment-setup.md) §8). On this host the default adb server on port 5037 was started by the Homebrew cask, so the T2 configuration uses its own server on port 15037 ([IR-323](../implementation-review.md#ir-323-give-the-adb-tests-a-private-adb-server-and-drop-stale-transports-before-connecting)).
+- `ro.adb.secure` is unset on build 16373615 (checked 2026-10-09), so the key-append branch of step 1 is not implemented ([IR-322](../implementation-review.md#ir-322-do-not-implement-the-adb-key-append-on-the-stock-image)).
+- The forwarder is a POSIX socket, not `NWListener` ([IR-315](../implementation-review.md#ir-315-bind-the-adb-loopback-forwarder-with-a-posix-socket-not-nwlistener)). The port-in-use and listen-failure paths are IR-316 and IR-321.
+- Step 5 writes `apkrun-dev`. The embedded CLI is the `apkrun` binary built with `--traits EmbeddedRuntime`, so the check runs as `apkrun dev adb shell getprop sys.boot_completed`.
+- Verification (2026-10-09): T0 `AdbClientTests` (15 tests with the stale-transport case), `BootPhaseDetectorTests`, and `DevAdbTests` (3) passed; T1 `VsockLoopbackForwarderSystemTests` (6) passed; T2 `AndroidADBTests` passed 2 of 2 (`xcodebuild`, AndroidADB configuration, under `lockf -k /tmp/apkrun-vm.lock`).
 
 ---
 

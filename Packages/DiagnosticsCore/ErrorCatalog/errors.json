@@ -1720,6 +1720,93 @@
       }
     },
     {
+      "code": "image.unexpectedFile",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "Some files in this Android system are not part of it.",
+        "ja": "この Android システムに含まれていないファイルがあります。"
+      },
+      "remediation": {
+        "en": "Install Android again from the official source. To check every file, run: apkrun doctor --deep",
+        "ja": "正式な配布元から Android をもう一度インストールしてください。すべてのファイルを確認するには apkrun doctor --deep を実行してください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "unexpectedFile(file:)",
+        "when": "a bundle holds a file that its manifest does not list, or an installed image has the same name and a different manifest",
+        "raisedBy": "ImageStore",
+        "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §7.1"
+      }
+    },
+    {
+      "code": "image.downgradeRejected",
+      "parameters": [
+        "from",
+        "to"
+      ],
+      "message": {
+        "en": "Android {to} is older than the installed Android {from}, so it was not installed.",
+        "ja": "Android {to} は、インストール済みの Android {from} より古いため、インストールしませんでした。"
+      },
+      "remediation": {
+        "en": "Install a newer Android system.",
+        "ja": "より新しい Android システムをインストールしてください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "downgradeRejected(from:to:)",
+        "when": "an install or activation would move the current image back to an older version",
+        "raisedBy": "ImageStore",
+        "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §2.3"
+      }
+    },
+    {
+      "code": "image.imageNotInstalled",
+      "parameters": [
+        "version"
+      ],
+      "message": {
+        "en": "Android {version} is not installed.",
+        "ja": "Android {version} はインストールされていません。"
+      },
+      "remediation": {
+        "en": "Install that Android system first, or choose one that is installed.",
+        "ja": "先にその Android システムをインストールするか、インストール済みのものを選んでください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageNotInstalled(version:)",
+        "when": "an activation names a version that has no directory under Images/",
+        "raisedBy": "ImageStore",
+        "ref": "[android-image.md](../02-design/android-image.md) §10.3"
+      }
+    },
+    {
+      "code": "image.noCurrentImage",
+      "parameters": [],
+      "message": {
+        "en": "No Android system is installed yet.",
+        "ja": "Android システムはまだインストールされていません。"
+      },
+      "remediation": {
+        "en": "Install an Android system from Settings → Storage. Developers run: apkrun dev image install <bundle>",
+        "ja": "設定 → ストレージから Android システムをインストールしてください。開発者は apkrun dev image install <bundle> を実行してください。"
+      },
+      "action": "openStorageSettings",
+      "cliExit": 1,
+      "doc": {
+        "case": "noCurrentImage",
+        "when": "a boot or a verification needs the current image, and Images/current does not exist",
+        "raisedBy": "ImageStore",
+        "ref": "[android-image.md](../02-design/android-image.md) §9.3"
+      }
+    },
+    {
       "code": "runtime.image",
       "parameters": [],
       "transparent": true,

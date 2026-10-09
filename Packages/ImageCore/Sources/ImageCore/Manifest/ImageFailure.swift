@@ -41,6 +41,19 @@ public enum ImageFailure: APKRunError, Equatable {
     /// The signature does not verify under the trusted key with that ID (§6.1).
     case signatureInvalid(keyID: String)
 
+    /// The bundle holds a file its manifest does not list, or an installed image of the same
+    /// name has a different manifest (runtime-image-manifest.md §7.1 step 7, §8.3 step 5).
+    case unexpectedFile(file: String)
+
+    /// An install or activation would move back to an older image version (§2.3).
+    case downgradeRejected(from: String, to: String)
+
+    /// The named image version is not installed (android-image.md §10.3).
+    case imageNotInstalled(version: String)
+
+    /// No image is current yet, so there is nothing to boot (android-image.md §9.3).
+    case noCurrentImage
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -60,6 +73,10 @@ public enum ImageFailure: APKRunError, Equatable {
         case .cmdlineTooLong: "cmdlineTooLong"
         case .untrustedKey: "untrustedKey"
         case .signatureInvalid: "signatureInvalid"
+        case .unexpectedFile: "unexpectedFile"
+        case .downgradeRejected: "downgradeRejected"
+        case .imageNotInstalled: "imageNotInstalled"
+        case .noCurrentImage: "noCurrentImage"
         }
     }
 
@@ -88,6 +105,14 @@ public enum ImageFailure: APKRunError, Equatable {
             ["length": .count(length)]
         case .untrustedKey(let keyID), .signatureInvalid(let keyID):
             ["keyID": .text(keyID)]
+        case .unexpectedFile(let file):
+            ["file": .fileName(file)]
+        case .downgradeRejected(let from, let to):
+            ["from": .text(from), "to": .text(to)]
+        case .imageNotInstalled(let version):
+            ["version": .text(version)]
+        case .noCurrentImage:
+            [:]
         }
     }
 

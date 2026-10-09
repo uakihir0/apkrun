@@ -208,7 +208,7 @@ The requirement text, priority, and target version are in [../00-product/require
 | NFR-OBS-01 | #061; later: #060 | [diagnostics.md](../02-design/diagnostics.md) §3 | T0 facade; code review |
 | NFR-OBS-02 | #059 | [diagnostics.md](../02-design/diagnostics.md) §7 | T0 health verdict table ([diagnostics.md](../02-design/diagnostics.md) §12 T1-6); each owner module's T0 tests of its checks; T2 fault injection (T2-4) |
 | NFR-OBS-03 | #059 | [diagnostics.md](../02-design/diagnostics.md) §7.2 | T2 fault injection |
-| NFR-DEV-01 | #020, #062; later: #093 | [build-system.md](../05-development/build-system.md) | CI lock check |
+| NFR-DEV-01 | #018, #020, #062; later: #093 | [build-system.md](../05-development/build-system.md); [riftvm-analysis.md](../02-design/riftvm-analysis.md) (the source-only `riftvm` pin) | CI lock check |
 | NFR-DEV-02 | #001, #062 | [build-system.md](../05-development/build-system.md) | CI clean build |
 | NFR-DEV-03 | #061 | [diagnostics.md](../02-design/diagnostics.md) §2; [coding-conventions.md](../05-development/coding-conventions.md) | code review |
 | NFR-DEV-04 | every task | [coding-conventions.md](../05-development/coding-conventions.md) | CI lint for `TODO` without an issue number |

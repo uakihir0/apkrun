@@ -403,15 +403,18 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 
 ### Acceptance criteria
 
-- [ ] The Android kernel binds the expected DRM and virtio GPU driver.
-- [ ] `dmesg`, `/sys/class/drm`, and `/sys/bus/virtio/devices` are inspected and saved.
-- [ ] `card0` has 16 `Virtual-N` connectors, and only `Virtual-1` is connected.
+- [x] The Android kernel binds the expected DRM and virtio GPU driver.
+- [x] `dmesg`, `/sys/class/drm`, and `/sys/bus/virtio/devices` are inspected and saved.
+- [x] `card0` has 16 `Virtual-N` connectors, and only `Virtual-1` is connected.
 
 ### Notes
 
-- **Record:** the binding result in the #021 row of [../../02-design/graphics.md](../../02-design/graphics.md) §16.
-- `boot_completed` is not required here. The 2D commands that SwiftShader's composition path sends get error responses until #022 adds the 2D renderer.
-- `--gpu swiftshader` is in [../../02-design/cli.md](../../02-design/cli.md) §5 and `DevBootRequest.gpu` ([../../03-reference/runtime-api.md](../../03-reference/runtime-api.md) §15).
+- **Record:** the binding result in the #021 row of [../../02-design/graphics.md](../../02-design/graphics.md) §16. `AndroidGraphicsTests.testVirtioGPUBinds` passed on 2026-10-10 with the `AndroidGraphics` configuration.
+- **Decisions:** IR-380 to IR-390 in [../implementation-review.md](../implementation-review.md). The main ones: the refusal of a profile the device does not offer (IR-380), the sysfs reads as root through `adb root` (IR-384), and scanout 0 keeping the test mode until #023 (IR-383).
+- **Running the check:** the `AndroidGraphics` run needs adb outside `~/Documents`. A child of the test host blocks in dyld on a file under `~/Documents`, so `APKRUN_ANDROID_HOME` points to a copy of `build/android-sdk/platform-tools` under `/tmp` (IR-388).
+- `boot_completed` is not required here. The 2D commands that SwiftShader's composition path sends get error responses until #022 adds the 2D renderer. This host reaches `boot_completed` in the first seconds anyway (IR-390).
+- `--gpu swiftshader` is in [../../02-design/cli.md](../../02-design/cli.md) §5 and `DevGPUProfile` ([../../03-reference/runtime-api.md](../../03-reference/runtime-api.md) §15). `--gpu virgl` waits for #022.
+- **Follow-ups, not built here:** (a) `virgl` in `--gpu` and the `drmVirgl` boot, with the removal of the refusal of IR-380 (#022); (b) the image's default display mode on scanout 0 (#023, IR-383); (c) the DRM connector state through a guest-protocol query instead of `adb root` (IR-384).
 
 ---
 

@@ -11205,12 +11205,12 @@ these messages. #035 must check AVB without this allowance.
 
 **Choice.** The #012 criterion "`/proc/cmdline` equals `cmdline.txt`" (IR-360)
 is reworded to "`/proc/cmdline` ends with `cmdline.txt` unchanged, and the
-tokens before it are the kernel's built-in command line and the bootconfig
-`kernel.*` key". `AndroidBootTests.testReachesInit` asserts the exact value: the
-built-in prefix `console=ttynull stack_depot_disable=on cgroup_disable=pressure
-kasan.stacktrace=off kvm-arm.mode=protected bootconfig` (present in the Android
-kernel image), then `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384`
-from bootconfig, then `cmdline.txt`.
+tokens before it are the bootconfig `kernel.*` key and the kernel's built-in
+command line, in that order. `AndroidBootTests.testReachesInit` asserts the exact
+value: `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384`
+from bootconfig, then the built-in `console=ttynull stack_depot_disable=on
+cgroup_disable=pressure kasan.stacktrace=off kvm-arm.mode=protected bootconfig`
+(present in the Android kernel image), then `cmdline.txt`.
 
 **Reason.** The kernel appends the bootconfig `kernel.*` keys to its command
 line, and it starts from its built-in `CONFIG_CMDLINE`. The reference kernel

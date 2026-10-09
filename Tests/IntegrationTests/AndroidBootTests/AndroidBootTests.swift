@@ -185,6 +185,17 @@ final class AndroidBootTests: XCTestCase {
         let booting = try await Self.grep(android, "Booting Linux on physical C[P]U")
         let kernelCommandLineLines = try await Self.grep(android, "Kernel command [l]ine")
         let avcLines = try await Self.grep(android, "avc: [d]enied")
+        let logicalPartitions = try await Self.grep(android, "Created logical partition sy[s]tem_a")
+        let dmesgLines = try await android.output("wc -l < /dev/apkrun-dmesg.txt", root: true)
+
+        XCTAssertTrue(
+            (Int(dmesgLines.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 100,
+            "the dmesg copy holds the boot: \(dmesgLines) lines"
+        )
+        XCTAssertTrue(
+            logicalPartitions.contains("Created logical partition system_a"),
+            "first-stage init created the logical partitions of slot _a"
+        )
         XCTAssertTrue(firstStage.contains("init: init first stage started!"), "first-stage init is in dmesg (\(probe))")
         XCTAssertTrue(secondStage.contains("init: init second stage started!"), "second-stage init is in dmesg")
         XCTAssertTrue(booting.contains("Booting Linux on physical CPU"), "the kernel booted on the CPU")
@@ -234,6 +245,11 @@ final class AndroidBootTests: XCTestCase {
 
         let fstab = try await android.output("ls /vendor/etc/", root: true)
         XCTAssertTrue(fstab.contains("fstab.cf.f2fs.hctr2"), "the fstab_suffix selects the fstab")
+        let mounts = try await android.output("cat /proc/mounts", root: true)
+        XCTAssertTrue(
+            mounts.contains("/dev/block/dm-") && mounts.contains(" / erofs "), "the root is a dm-verity erofs")
+        XCTAssertTrue(mounts.contains(" /data f2fs "), "/data is mounted as f2fs")
+        XCTAssertTrue(mounts.contains(" /metadata ext4 "), "/metadata is mounted as ext4")
 
         for (property, expectedValue) in [
             ("ro.boot.verifiedbootstate", "orange"),
@@ -284,9 +300,9 @@ final class AndroidBootTests: XCTestCase {
         try await android.run("grep '\(pattern)' /dev/apkrun-dmesg.txt", root: true).output
     }
 
-    /// What `/proc/cmdline` and the kernel's log show: the kernel's built-in command line
-    /// (`CONFIG_CMDLINE`, visible in the boot/kernel image) and the bootconfig `kernel.*` key, then
-    /// `cmdline.txt` unchanged (IR-365). The reference kernel prints the same built-in part.
+    /// What `/proc/cmdline` and the kernel's log show: the bootconfig `kernel.*` key is appended first,
+    /// then the kernel's built-in command line (`CONFIG_CMDLINE`, visible in the boot/kernel image), and
+    /// then `cmdline.txt` unchanged (IR-365). The reference kernel prints the same order.
     static func kernelCommandLine(_ commandLine: String) -> String {
         "vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384 console=ttynull "
             + "stack_depot_disable=on cgroup_disable=pressure kasan.stacktrace=off kvm-arm.mode=protected bootconfig "

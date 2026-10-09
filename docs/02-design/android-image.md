@@ -314,10 +314,11 @@ The ramdisk fragment policy (all non-recovery fragments, table order) is what a 
 
 For build 16373615, extraction produced an uncompressed 42,031,616-byte
 kernel and one unnamed `PLATFORM` fragment of 18,816,072 bytes, included in
-the ramdisk. The current layout emits a 157-byte command line from the vendor
-command line, the empty boot command line, and `console=hvc0`. This length is
-provisional until #064's `target` capture confirms whether additional
-non-`androidboot` parameters are needed.
+the ramdisk. The vendor_boot table has no `RECOVERY` fragment. The current
+layout emits a 172-byte command line: the 144-byte vendor command line, the
+empty boot command line, `console=hvc0`, and `log_buf_len=2M` (IR-366). The
+#064 `target` capture will not be produced (IR-305), so these two additions are
+the ones verified on VZ (§6.6), not provisional values from that capture.
 
 ### 4.2 Disk plan (#011)
 
@@ -471,7 +472,7 @@ Merge rules:
 | `androidboot.vendor.apex.com.android.hardware.secure_element`, `…com.google.emulated.camera.provider.hal` | the launcher's values | 2 | verified on VZ |
 | `androidboot.vendor.apex.com.android.hardware.graphics.composer` | `com.android.hardware.graphics.composer.ranchu` | 2 (GPU profile) | verified on VZ with the `headless` profile |
 | `androidboot.vendor.apex.com.google.cf.vulkan` | per GPU profile (none for `drm_virgl`) | 2 (GPU profile) | reference |
-| Graphics props (`androidboot.hardware.egl=mesa`, `…gralloc=minigbm`, `…hwcomposer=ranchu`, `…hwcomposer.mode=client`, `…hwcomposer.display_finder_mode=drm`, `androidboot.cpuvulkan.version=0`, `androidboot.opengles.version=196608`) | as listed for `drm_virgl`; the `guest_swiftshader` profile has its own set ([graphics.md](graphics.md) §9) | 2 (GPU profile) | verified names, exact keys from reference |
+| Graphics props (`androidboot.hardware.egl=mesa`, `…gralloc=minigbm`, `…hwcomposer=ranchu`, `…hwcomposer.mode=client`, `…hwcomposer.display_finder_mode=drm`, `androidboot.cpuvulkan.version=0`, `androidboot.opengles.version=196608`) | as listed for `drm_virgl`; the `guest_swiftshader` profile has its own set ([graphics.md](graphics.md) §9) | 2 (GPU profile) | `guest_swiftshader` and `headless` keys verified against the launcher capture (IR-305). The `drm_virgl` set is source-derived (`graphics-props-from-source.txt`); no capture or VZ run confirms it, and #022 does (IR-400, IR-401) |
 | `androidboot.wifi_impl` | `virt_wifi` (§7.4) | 2 | verified on VZ |
 | `androidboot.wifi_mac_prefix` | the launcher's `5554`; `setup_wifi` derives eth2's MAC from it (§7.4) | 2 | verified on VZ |
 | `androidboot.modem_simulator_ports` | `9600`. The RIL exits without it; with it, the RIL stays up without a modem (§7.3) | 2 | verified on VZ |

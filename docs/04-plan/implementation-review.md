@@ -10594,6 +10594,124 @@ the logs. Making this a clean `stopped` needs `stop()` to wait for the start, wh
 belongs to the state-machine work of #031 (`RuntimeSupervisor`). The race is
 recorded here, not fixed in #015.
 
+## IR-328: Commit one test-only fixture keystore, with its password in the Gradle file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §8; [security-model.md](../01-architecture/security-model.md) §7; [test-strategy.md](test-strategy.md) §4.4 |
+
+**Choice.** `Tests/Fixtures/signing/test-fixture-a.jks` is a new keystore for the fixture
+apps. It holds one RSA 2048 key with alias `fixture-a`, valid for 36500 days, with the
+subject `CN=APKRun test fixture A, OU=test only, O=APKRun, C=US`. It is a PKCS12 store
+under the `.jks` name, which the spec requires and which avoids keytool's JKS warning.
+`HelloText/build.gradle.kts` holds the store and key passwords, and the release variant is
+signed through AGP's `signingConfig`. `scripts/build-fixtures.sh` checks that the APK's
+signer SHA-256 is the pinned certificate digest, and it does not sign a second time.
+
+**Reason.** The entry requires a committed test-only key, and no key existed. A test key
+signs nothing that a user installs, and security-model.md §7 and AGENTS.md §9 allow it in
+`Tests/Fixtures/signing/`. A password in a test build file is the only way AGP can read it
+without a secret store, and the password protects nothing.
+
+**Consequence.** Every fixture APK is signed with this key, so a T2 test can tell the
+fixture's signature from a real one. A second test key, `test-fixture-b.jks`, comes with the
+HelloUpdate variants (#056), not with this task.
+
+## IR-329: Run the fixture unit tests on the release variant
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 step 1 |
+
+**Choice.** `HelloText/build.gradle.kts` sets `testBuildType = "release"`, so the JVM unit
+tests run as `:HelloText:testReleaseUnitTest`, which the entry names.
+
+**Reason.** AGP creates only debug unit-test tasks by default. The release variant is the
+one that ships, so the counter logic is tested in the form that is installed.
+
+## IR-330: Define the fixture reproducibility check by badging, dex hashes, and archive listing
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §14 |
+
+**Choice.** `scripts/build-fixtures.sh --check-reproducible` builds twice from `clean`.
+It compares the `aapt2 dump badging` output, the SHA-256 of the concatenated `classes*.dex`
+files, and the listing of the archive entries. The APK bytes are not compared.
+
+**Reason.** build-system.md §14 defines reproducibility for guest APKs as the same
+`versionCode`, content, and dex, and the entry names the badging and the dex hashes. The
+APK also carries a signature and zip metadata, which the check does not need to match. A
+byte comparison can be added later if the signature scheme becomes deterministic.
+
+## IR-331: Copy the Gradle wrapper into the fixture project
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5 |
+
+**Choice.** `Tests/Fixtures/AndroidApps/` has its own `gradlew`, wrapper jar, and wrapper
+properties, copied from the repository root (Gradle 9.6.1, with the same distribution
+checksum). Its AGP version (9.4.1) is copied from `Guest/gradle/libs.versions.toml` into
+`gradle/libs.versions.toml`.
+
+**Reason.** environment-setup.md §2.5 asks for a separate wrapper with the same version.
+A shared include would make the fixture build depend on the Guest build's layout. A
+version change has to be made in both places, and the check that compares them is
+out of scope for #016.
+
+## IR-332: Take the PackageInstaller path of FR-PKG-01 from adb's install command and the device's metadata
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [package-store.md](../02-design/package-store.md) §6.1; [traceability.md](traceability.md) FR-PKG-01 |
+
+**Choice.** The T2 suite checks that `adb install -r` prints `Success`, and that
+`dumpsys package` reports the fixture's `versionCode`, `versionName`, `minSdkVersion`, and
+`targetSdkVersion`. It does not assert the PackageInstaller session itself. The recorded
+guest metadata shows `initiatingPackageName=com.android.shell` and `packageSource=1` (a local
+file), and `installerPackageName=null`, because a shell install has no installer app.
+
+**Reason.** Android 17 exposes no shell command that reports the session of an install
+after it commits. `adb install` runs `cmd package install`, which creates a PackageInstaller
+session, as package-store.md §6.1 requires. The check that APKRun controls is that the
+install goes through adb and nowhere else: the host never copies an APK, and the
+`AdbClient` has no code path that writes into `/data/app`.
+
+**Consequence.** FR-PKG-01 is verified by the design's own mapping plus this evidence. A
+PackageInstaller-level check, for example through the Store Agent, belongs to #036, which
+does not use adb install. The traceability row names the T2 suite, which stays accurate.
+
+## IR-333: Leave the SharedPreferences path of the counter without a JVM test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 step 1 and acceptance criterion 1 |
+
+**Choice.** The counter's persistence contract is tested on the JVM with an in-memory
+`KeyValueStore`. `PreferencesKeyValueStore`, which wraps `SharedPreferences`, has no test.
+The on-device counter check waits for rendering and input (#026).
+
+**Reason.** The fixture's JVM tests run without Robolectric, so `SharedPreferences`
+cannot be created there. Adding Robolectric would add a runtime dependency to the
+fixture for one adapter of two lines. The adapter does one call, `commit()`, and its
+result is checked by `CounterStore`.
+
+**Consequence.** Criterion 1 stays open until the device check. The adapter has no
+automated test until then.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 | Field | Value |

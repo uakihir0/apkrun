@@ -300,6 +300,8 @@ targets:
         product: ImageCore
       - package: APKRun
         product: RuntimeCore
+      - package: APKRun
+        product: RuntimeHost
     scheme:
       testTargets:
         - AcceptanceTests

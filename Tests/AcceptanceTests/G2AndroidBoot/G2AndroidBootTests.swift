@@ -2,6 +2,7 @@ import DiagnosticsCore
 import Foundation
 import ImageCore
 import RuntimeCore
+import RuntimeHost
 import XCTest
 
 /// Gate G2 (roadmap.md §2): the stock image reaches `sys.boot_completed=1` on VZ with
@@ -26,8 +27,8 @@ final class G2AndroidBootTests: XCTestCase {
 
     func testFiveColdBootsReachBootCompletedAndStayStable() async throws {
         let bundle = try Self.bundleDirectory()
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apkrun-g2-\(UUID().uuidString)", isDirectory: true)
+        // A short path under /tmp: the developer console socket path must fit in sockaddr_un.
+        let home = URL(fileURLWithPath: "/tmp/apkrun-g2-\(UUID().uuidString.prefix(8))", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
         let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
         // The signed bundle goes through the install path of `apkrun dev image install`.
@@ -56,11 +57,18 @@ final class G2AndroidBootTests: XCTestCase {
                 diagnostics: diagnostics
             )
             let capture = OutputCapture()
+            let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
             let captureTask = Task {
                 for await event in supervisor.events {
                     switch event {
                     case .console(let bytes): capture.appendConsole(bytes)
                     case .logcat(let bytes): capture.appendLogcat(bytes)
+                    case .devConsole(let endpoint) where endpoint.name == "hvc1":
+                        do throws(RuntimeFailure) {
+                            try consoles.serve(endpoint)
+                        } catch {
+                            XCTFail("the developer console socket could not be created: \(error)")
+                        }
                     default: break
                     }
                 }
@@ -95,9 +103,67 @@ final class G2AndroidBootTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
 
+            if boot == 5 {
+                // The reference diff after the last boot (android-image.md §8.4): capture the boot over
+                // the developer console and compare it with the launcher capture while Android is up.
+                let comparison = try Self.compareWithReference(
+                    socket: paths.devConsoleDirectory.appendingPathComponent("hvc1.sock"),
+                    output: FileManager.default.temporaryDirectory
+                        .appendingPathComponent("apkrun-g2-capture-\(UUID().uuidString.prefix(8))", isDirectory: true)
+                )
+                let report = XCTAttachment(string: comparison.report)
+                report.lifetime = .keepAlways
+                add(report)
+                XCTAssertEqual(comparison.status, 0, "the reference diff has no unexplained difference")
+            }
+
             await supervisor.stop()
+            consoles.stop()
             captureTask.cancel()
         }
+        // The boot records of the run, for the gate evidence (diagnostics.md §4.3).
+        let records = XCTAttachment(string: (try? String(contentsOf: paths.bootPerformanceFile, encoding: .utf8)) ?? "")
+        records.lifetime = .keepAlways
+        add(records)
+    }
+
+    /// Runs `compare_boot.py capture-vz` on the hvc1 socket, then compares the capture with the launcher's
+    /// reference boot. Returns the comparison's exit status and its text report.
+    static func compareWithReference(socket: URL, output: URL) throws -> (status: Int32, report: String) {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let python = root.appendingPathComponent("Images/tools/.venv/bin/python")
+        let tool = root.appendingPathComponent("Images/tools/reference/compare_boot.py")
+        let reference = root.appendingPathComponent(
+            "Images/reference/16373615/incomplete/default-20261001T120904-49816")
+        let commands = root.appendingPathComponent("Images/tools/reference/guest-capture-compare.txt")
+        let capture = try run(
+            python,
+            [
+                tool.path, "capture-vz", "--shell", socket.path, "--out", output.path,
+                "--commands", commands.path, "--timeout", "300",
+            ])
+        guard capture.status == 0 else {
+            throw G2Failure.captureFailed(capture.output)
+        }
+        let comparison = try run(python, [tool.path, reference.path, output.path])
+        let report = (try? String(contentsOf: output.appendingPathComponent("report.txt"), encoding: .utf8)) ?? ""
+        return (comparison.status, comparison.output + report)
+    }
+
+    private static func run(_ executable: URL, _ arguments: [String]) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(decoding: data, as: UTF8.self)
+        return (process.terminationStatus, output)
     }
 
     /// Services that exited three or more times (the #095 crash-loop definition).
@@ -141,6 +207,17 @@ final class G2AndroidBootTests: XCTestCase {
             throw XCTSkip(message)
         }
         return bundle
+    }
+}
+
+/// A G2 step that could not produce its evidence.
+enum G2Failure: Error, CustomStringConvertible {
+    case captureFailed(String)
+
+    var description: String {
+        switch self {
+        case .captureFailed(let output): "the VZ capture failed: \(output)"
+        }
     }
 }
 

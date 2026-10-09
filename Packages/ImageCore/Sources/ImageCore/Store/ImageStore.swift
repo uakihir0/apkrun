@@ -349,26 +349,41 @@ public actor ImageStore {
         return found
     }
 
-    private func fileSize(_ url: URL, name: String) throws(ImageFailure) -> UInt64 {
-        guard
-            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-            let size = (attributes[.size] as? NSNumber)?.uint64Value
-        else {
+    /// The `stat` of a regular file, taken without following a symbolic link. A missing file is
+    /// `missingFile`. A link, or any other entry that is not a regular file, is `unexpectedFile`:
+    /// the bundle may hold nothing but its listed regular files (§7.1 step 7, AGENTS §9).
+    private func regularFileStatus(_ url: URL, name: String) throws(ImageFailure) -> stat {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
             throw .missingFile(file: name)
         }
-        return size
+        guard status.st_mode & S_IFMT == S_IFREG else {
+            throw .unexpectedFile(file: name)
+        }
+        return status
+    }
+
+    /// Opens a regular file without following a link at its last component.
+    private func openRegularFile(_ url: URL, name: String) throws(ImageFailure) -> FileHandle {
+        _ = try regularFileStatus(url, name: name)
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw .unexpectedFile(file: name)
+        }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    private func fileSize(_ url: URL, name: String) throws(ImageFailure) -> UInt64 {
+        UInt64(try regularFileStatus(url, name: name).st_size)
     }
 
     private func identityOf(_ url: URL) throws(ImageFailure) -> [String] {
-        guard
-            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-            let number = attributes[.systemFileNumber],
-            let size = attributes[.size],
-            let modified = attributes[.modificationDate] as? Date
-        else {
-            throw .missingFile(file: url.lastPathComponent)
-        }
-        return ["\(number)", "\(size)", "\(modified.timeIntervalSince1970)"]
+        let status = try regularFileStatus(url, name: url.lastPathComponent)
+        return [
+            "\(status.st_ino)",
+            "\(status.st_size)",
+            "\(status.st_mtimespec.tv_sec).\(status.st_mtimespec.tv_nsec)",
+        ]
     }
 
     private func readFile(_ url: URL, limit: Int, name: String) throws(ImageFailure) -> Data {
@@ -376,16 +391,23 @@ public actor ImageStore {
         guard size <= limit else {
             throw .manifestInvalid(path: name, reason: "larger than the limit")
         }
-        guard let data = try? Data(contentsOf: url) else {
-            throw .missingFile(file: name)
+        let handle = try openRegularFile(url, name: name)
+        defer { try? handle.close() }
+        let data: Data
+        do {
+            // One byte past the limit, so that a file that grew since it was measured is caught.
+            data = try handle.read(upToCount: limit + 1) ?? Data()
+        } catch {
+            throw storageFailure(error)
+        }
+        guard data.count <= limit else {
+            throw .manifestInvalid(path: name, reason: "larger than the limit")
         }
         return data
     }
 
     private func sha256(of url: URL, name: String) throws(ImageFailure) -> String {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            throw .missingFile(file: name)
-        }
+        let handle = try openRegularFile(url, name: name)
         defer { try? handle.close() }
         var hasher = SHA256()
         do {

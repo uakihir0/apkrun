@@ -444,3 +444,39 @@ func aSameTripleImageWithAnotherBaseIsNotNewer() async throws {
     }
     #expect(try await store.current().version.description == "2026.10.0-cf16373615-arm64")
 }
+
+@Test
+func aSymlinkedManifestIsRefusedBeforeItIsRead() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let source = try sandbox.bundle("a")
+    // The manifest is a link to a copy outside the bundle. The link is refused before any size or byte is read.
+    let elsewhere = sandbox.root.appendingPathComponent("elsewhere.json")
+    try FileManager.default.copyItem(at: source.appendingPathComponent("manifest.json"), to: elsewhere)
+    try FileManager.default.removeItem(at: source.appendingPathComponent("manifest.json"))
+    try FileManager.default.createSymbolicLink(
+        at: source.appendingPathComponent("manifest.json"), withDestinationURL: elsewhere
+    )
+    let store = sandbox.store()
+    await #expect(throws: ImageFailure.unexpectedFile(file: "manifest.json")) {
+        _ = try await store.install(from: .directory(source))
+    }
+    let remaining = (try? FileManager.default.contentsOfDirectory(atPath: sandbox.images.path)) ?? []
+    #expect(remaining.isEmpty, "\(remaining)")
+}
+
+@Test
+func aSymlinkedPayloadFileIsRefused() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let source = try sandbox.bundle("a")
+    let elsewhere = sandbox.root.appendingPathComponent("elsewhere-kernel")
+    try FileManager.default.copyItem(at: source.appendingPathComponent("boot/kernel"), to: elsewhere)
+    try FileManager.default.removeItem(at: source.appendingPathComponent("boot/kernel"))
+    try FileManager.default.createSymbolicLink(
+        at: source.appendingPathComponent("boot/kernel"), withDestinationURL: elsewhere
+    )
+    await #expect(throws: ImageFailure.unexpectedFile(file: "boot/kernel")) {
+        _ = try await sandbox.store().install(from: .directory(source))
+    }
+}

@@ -11822,11 +11822,11 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 | Task | #099 (step 2) |
 | Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1, §4.3; [AGENTS.md](../../AGENTS.md) §6.6; `ThirdParty/ThirdParty.lock.json` (`aosp-mesa3d`) |
 
-**Choice.** Keep the `aosp-mesa3d` lock entry with `ships: image`, `kind: source`, and the vendored `LICENSE`. Leave its classification open. The entry is not in any notice list, because `generate-notices.py` lists only `app` and `derived` entries.
+**Choice.** Keep the `aosp-mesa3d` lock entry as a candidate, with `ships: image`, `kind: source`, and the vendored `LICENSE`. It must not merge until a maintainer either accepts an ADR for this pin or confirms that ADR-0004 covers it. No ADR was written in this task, because accepting one is the maintainer's decision. Leave the classification open. The entry is not in any notice list, because `generate-notices.py` lists only `app` and `derived` entries.
 
-**Reason.** The task asked for the pin, and AGENTS §6.6 requires every third-party dependency to be pinned in the lock. But legal-and-licensing §4.3 says that AOSP components are not individual lock entries, since `Guest/product/manifest/pinned.xml` pins them. §4.1 puts an `image` component either under the image rules (from AOSP) or under the app list (added by us). The `ships` field does not say which. `scripts/check-licenses.sh` does not exist yet. Under the app list, GPL-2.0-only is forbidden, so the classification decides the result.
+**Reason.** The task asked for the pin, and AGENTS §6.6 requires every third-party dependency to be pinned in the lock. That same rule and legal-and-licensing §4.6 require an ADR first for a new third-party component with runtime impact. Mesa in the image has runtime impact, and the pin is new. ADR-0004 accepts the VirGL route for the guest, but it does not name this source. Legal-and-licensing §4.3 also says that AOSP components are not individual lock entries, since `Guest/product/manifest/pinned.xml` pins them. §4.1 puts an `image` component either under the image rules (from AOSP) or under the app list (added by us). The `ships` field does not say which. `scripts/check-licenses.sh` does not exist yet. Under the app list, GPL-2.0-only is forbidden, so the classification decides the result.
 
-**Consequence.** Before any image contains Mesa, the maintainer chooses one of two options. Either the lock entry stays and §4.1 gets a rule for AOSP source that APKRun builds, or the pin moves to `pinned.xml` and the lock has no entry. The entry is not a release approval.
+**Consequence.** The pin stays a candidate until the ADR question is answered. Before any image contains Mesa, the maintainer chooses one of two options. Either the lock entry stays and §4.1 gets a rule for AOSP source that APKRun builds, or the pin moves to `pinned.xml` and the lock has no entry. The entry is not a release approval.
 
 ## IR-445: The Mesa tree is BY_EXCEPTION_ONLY, which blocks an image release
 
@@ -11866,7 +11866,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 | Task | #099 (step 1) |
 | Affected documents | [receipt](../../Images/reference/16373615/mesa-payload-receipt.txt) §1; [environment-setup.md](../05-development/environment-setup.md) §3.3 |
 
-**Choice.** Commit the receipt text, not the scripts. The receipt lists the inputs, the tools, and the commands. The tools ran from scratch directories outside the repository. They were the `lp.py` reader of this worktree, `dump.erofs` 1.9.4 from the Homebrew bottle, and two short scripts that walk the EROFS tree and read ELF headers.
+**Choice.** Commit the receipt text, not the scripts. The receipt lists the inputs, the tools, and the commands. The tools ran from scratch directories outside the repository. They were the `lp.py` reader of this worktree, `dump.erofs` 1.9.4 from the Homebrew bottle, and three short scripts: `extract_lp.py` (it reads `lp.py` and writes the logical partitions), `erofs_walk.py` (it walks the EROFS tree with `dump.erofs --ls`), and `elf_summary.py` (it reads ELF headers and `DT_NEEDED`).
 
 **Reason.** The receipt is a one-time comparison, and a committed walker would have no consumer or tests. `dump.erofs` was not installed with Homebrew. The bottle's copy had its lz4 and xz references pointed at the installed Homebrew libraries and was re-signed, so the Homebrew installation is unchanged. `scripts/Brewfile` still does not list erofs-utils.
 
@@ -11894,8 +11894,36 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 | Task | #099 |
 | Affected documents | [M02](issues/M02-graphics.md) #099; [M01](issues/M01-android-bring-up.md) #064 |
 
-**Choice.** Check "#064 is unaffected" and leave the other three criteria unchecked. Criterion 3 is not checked, because the Mesa build components are not pinned and no artifact exists yet.
+**Choice.** Check "#064 is unaffected" and leave the other three criteria unchecked. Criterion 3 is not checked, because the inputs of a Mesa build are not pinned and no artifact exists yet. Those inputs are libdrm, libzstd, zlib, expat, and the Android headers that IR-443 lists. The Mesa source is pinned, but that is not enough.
 
 **Reason.** `git diff task/021-android-detects-virtio-gpu...HEAD` shows no change to `Images/manifests/16373615/`, to the captures under `Images/reference/16373615/incomplete/`, or to the M01 #064 entry. The only new file under `Images/reference/16373615/` is the receipt. Criterion 4 names build 16373615 and asks for nothing more.
 
 **Consequence.** Criterion 1 asks that build 16373615 stay unchanged. A maintainer may ask whether a new file in its directory counts as a change. The receipt changes no manifest, artifact, or capture.
+
+## IR-450: The commit scope `plan` is not in the scope table
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [workflow.md](../05-development/workflow.md) §4.2 (scope table) |
+
+**Choice.** Commit `5699cfb` uses the scope `docs(plan)`, which the scope table of §4.2 does not list. The table gives `docs` for `docs/`, `AGENTS.md`, and `README.md`. The branch does not change the table.
+
+**Reason.** `docs(plan)` is common on `main`: 52 of its last 200 commits use it, and 64 use some `docs(...)` scope. Changing the table or the commit scope is a convention question for the maintainer, not a choice this task should make.
+
+**Consequence.** The maintainer decides whether `plan` joins the table, or whether `docs(plan)` commits are rewritten as `docs`. Until then, the branch follows `main`.
+
+## IR-451: The commit body of `5699cfb` overstates the unchanged reference build
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | commit `5699cfb`; [IR-449](#ir-449-criterion-4-of-099-is-checked-and-criteria-1-to-3-stay-open); [receipt](../../Images/reference/16373615/mesa-payload-receipt.txt) |
+
+**Choice.** Do not rewrite `5699cfb` or `8244d78`. The statement in the body of `5699cfb`, that the diff leaves "build 16373615, its captures, and the #064 entry unchanged", is correct only in part. The receipt adds one file under `Images/reference/16373615/`. The build's manifest, artifacts, and captures under `incomplete/` are unchanged. The body of `8244d78` says that the name search "missed" files. The search found them, and the receipt text left them out. The pull request description should state both points.
+
+**Reason.** Both defects are in commit messages, and fixing them needs a history rewrite of this branch. IR-449 already states the exact change.
+
+**Consequence.** The maintainer reads IR-449 and this entry for the reference-directory question, and the pull request description repeats the exact scope.

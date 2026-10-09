@@ -213,6 +213,8 @@ public actor RuntimeSupervisor {
     }
 
     private func boot() async throws(RuntimeBootFailure) {
+        // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
+        let bootStarted = ContinuousClock.now
         let instance: InstanceConfiguration
         do throws(ImageFailure) {
             guard let loaded = try await instanceStore.load(image: image) else {
@@ -279,7 +281,9 @@ public actor RuntimeSupervisor {
         if options.developerMode {
             startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
-        try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot)
+        try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot, started: bootStarted)
+        // The boot is complete: finish the progress stream so that the periodic ticks stop accumulating.
+        bootProgress?.finish()
         adbPollTask?.cancel()
         bootProgress = nil
 
@@ -527,9 +531,9 @@ public actor RuntimeSupervisor {
 
     private func waitForBootCompletion(
         _ progress: AsyncStream<Progress>,
-        firstBoot: Bool
+        firstBoot: Bool,
+        started: ContinuousClock.Instant
     ) async throws(RuntimeBootFailure) {
-        let started = ContinuousClock.now
         var watch = BootWatch(
             started: started,
             whole: firstBoot ? timeouts.firstBoot : timeouts.whole,
@@ -662,6 +666,7 @@ public actor RuntimeSupervisor {
     ]
 
     private func fail(_ failure: RuntimeBootFailure) async {
+        bootProgress?.finish()
         bootProgress = nil
         if stopRequested {
             // A stop ended this boot. `stop()` shuts the VM down (gracefully in developer mode) and

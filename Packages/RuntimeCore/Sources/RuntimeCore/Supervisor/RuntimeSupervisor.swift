@@ -82,7 +82,7 @@ private struct BootDraft: Sendable {
 /// boot timeouts and the stall limit. In M1, `ready` is entered at
 /// `.bootCompleted`, because the agents (#072) and the post-boot setup do not
 /// exist yet. Developer mode adds the ADB bridge (#015): the loopback forwarder, and the ADB
-/// boot signals. The GraphicsCore device (#021) is added later.
+/// boot signals. The GraphicsCore device of the GPU profile is appended to each boot's definition (#021).
 public actor RuntimeSupervisor {
     /// The current state.
     public private(set) var state: RuntimeState = .stopped
@@ -223,6 +223,11 @@ public actor RuntimeSupervisor {
     private func boot() async throws(RuntimeBootFailure) {
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
+        // The GPU device is decided before anything is written, so a profile this build cannot run fails here (#021).
+        let gpuDevices = try AndroidGraphicsDevices.devices(
+            for: options.gpuProfile,
+            requiredHostCapabilities: image.manifest.gpuProfiles[options.gpuProfile.rawValue]?.requiredHostCapabilities
+        )
         let instance: InstanceConfiguration
         do throws(ImageFailure) {
             guard let loaded = try await instanceStore.load(image: image) else {
@@ -245,9 +250,12 @@ public actor RuntimeSupervisor {
         bootLogger.info(
             "Prepared boot \(plan.bootRecordID.uuidString, .public) of image \(image.version.description, .public) bootconfig sha256 \(plan.bootconfigSHA256, .public) disks \(plan.definition.disks.compactMap(\.identifier).joined(separator: ","), .public) gpu \(options.gpuProfile.rawValue, .public)"
         )
+        // The planner leaves `customDevices` empty, so the GPU device is the boot's only custom device (android-image.md §9.2).
+        var definition = plan.definition
+        definition.customDevices = gpuDevices
         let validated: ValidatedVMDefinition
         do {
-            validated = try VMDefinitionValidator().validate(plan.definition)
+            validated = try VMDefinitionValidator().validate(definition)
         } catch {
             throw .vmConfiguration(error)
         }

@@ -142,6 +142,9 @@ public struct APKRunPaths: Sendable {
     /// The current instance's generated boot files directory.
     public var bootDirectory: URL { instanceDirectory.appendingPathComponent("boot", isDirectory: true) }
 
+    /// The developer console sockets of a running `apkrun dev boot` (android-image.md §7.1, #014).
+    public var devConsoleDirectory: URL { runtimeDirectory.appendingPathComponent("dev-console", isDirectory: true) }
+
     /// The current instance's generated initrd.
     public var instanceInitrdFile: URL { bootDirectory.appendingPathComponent("initrd.img") }
 

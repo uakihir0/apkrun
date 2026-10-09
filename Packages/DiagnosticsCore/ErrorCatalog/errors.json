@@ -1098,6 +1098,44 @@
       }
     },
     {
+      "code": "runtime.devConsoleNotRunning",
+      "parameters": [
+        "console"
+      ],
+      "message": {
+        "en": "No Android {console} console is open, because no `apkrun dev boot` is running."
+      },
+      "remediation": {
+        "en": "Start Android with `apkrun dev boot --bundle <dir>` in another terminal, then run this command again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "devConsoleNotRunning(console:)",
+        "when": "`apkrun dev console --android-shell` finds no socket under `Runtime/dev-console/`, so no `apkrun dev boot` owns the instance",
+        "raisedBy": "`apkrun dev console`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.devConsoleSocketUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun could not open the developer console socket for Android."
+      },
+      "remediation": {
+        "en": "Check permissions for APKRun's data folder, then start `apkrun dev boot` again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "devConsoleSocketUnavailable",
+        "when": "`apkrun dev boot` cannot create or bind `Runtime/dev-console/<name>.sock` (the path is too long, or the folder cannot be created)",
+        "raisedBy": "RuntimeHost, `apkrun dev boot`",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
       "code": "runtime.devLinuxTimedOut",
       "parameters": [
         "seconds"

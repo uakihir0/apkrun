@@ -223,7 +223,8 @@ final class AndroidBootTests: XCTestCase {
             XCTAssertNotEqual(gatekeeper, "0", "Gatekeeper is registered")
             let data = try await android.value("grep -c ' /data ' /proc/mounts")
             XCTAssertNotEqual(data, "0", "/data is mounted")
-            let weaverStalls = try await android.value("logcat -d | grep -i weaver | grep -ci -e timed -e fail")
+            let weaverStalls = try await android.value(
+                "logcat -d -s LockSettingsService | grep -ci -e weaver -e timed -e fail")
             XCTAssertEqual(weaverStalls, "0", "LockSettings does not stall on Weaver")
         } catch {
             failure = error

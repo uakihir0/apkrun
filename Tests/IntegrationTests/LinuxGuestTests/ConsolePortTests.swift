@@ -49,12 +49,36 @@ final class LinuxGuestConsolePortTests: XCTestCase {
                 )
             }
         } catch LinuxGuestHarness.HarnessFailure.guestCheckFailed(let name, let detail)
-            where name.hasPrefix("port-") && detail.contains("could not configure /dev/hvc")
+            where name.hasPrefix("port-") && Self.isMissingConsoleNode(detail)
         {
             throw XCTSkip(
                 "The pinned test kernel creates only /dev/hvc0 through /dev/hvc7 (\(detail)); "
                     + "the Android kernel creates hvc0 through hvc19 (IR-372)."
             )
         }
+    }
+
+    /// Whether the guest reported a console node that does not exist (`/dev/hvc<n>` is absent from its
+    /// device list), rather than a node that exists but could not be configured.
+    static func isMissingConsoleNode(_ detail: String) -> Bool {
+        guard let range = detail.range(of: #"could not configure /dev/hvc(\d+)"#, options: .regularExpression),
+            let number = detail[range].split(separator: "hvc").last
+        else {
+            return false
+        }
+        let devices =
+            detail.components(separatedBy: "devices: ").last?
+            .components(separatedBy: ";").first ?? ""
+        return !devices.split(separator: " ").contains("hvc\(number)")
+    }
+
+    /// The skip is only for a node the guest does not have; a node that exists and fails stays a failure.
+    func testMissingNodeDetectionSkipsOnlyAbsentNodes() {
+        let absent =
+            "could not configure /dev/hvc8; devices: hvc0 hvc1 hvc2 hvc3 hvc4 hvc5 hvc6 hvc7 ; kernel: [x]"
+        let present = "could not configure /dev/hvc3; devices: hvc0 hvc1 hvc2 hvc3 hvc4 ; kernel: [x]"
+        XCTAssertTrue(Self.isMissingConsoleNode(absent))
+        XCTAssertFalse(Self.isMissingConsoleNode(present))
+        XCTAssertFalse(Self.isMissingConsoleNode("no host marker arrived on /dev/hvc8"))
     }
 }

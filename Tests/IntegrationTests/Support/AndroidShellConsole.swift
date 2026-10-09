@@ -48,6 +48,9 @@ struct AndroidShellConsole {
         let lines = text.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && !$0.contains("__APK") && !$0.hasPrefix("console:") }
-        return lines.last ?? ""
+        guard let last = lines.last else {
+            throw CheckFailure(command: command, detail: "the command printed no result")
+        }
+        return last
     }
 }

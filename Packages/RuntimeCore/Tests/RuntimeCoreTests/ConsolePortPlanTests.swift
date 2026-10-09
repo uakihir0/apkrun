@@ -32,4 +32,5 @@ func consolePortPlanRejectsAMappingThatIsNotAPermutation() {
     #expect(ConsolePortPlan.reordered(ports, observedDevice: [0: 0, 1: 1]) == nil)
     #expect(ConsolePortPlan.reordered(ports, observedDevice: [0: 0, 1: 1, 2: 1]) == nil)
     #expect(ConsolePortPlan.reordered(ports, observedDevice: [0: 0, 1: 1, 2: 5]) == nil)
+    #expect(ConsolePortPlan.reordered(ports, observedDevice: [0: 0, 1: 1, 5: 2]) == nil)
 }

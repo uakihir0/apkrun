@@ -19,7 +19,9 @@ public enum ConsolePortPlan {
         guard observedDevice.count == ports.count else {
             return nil
         }
-        guard Set(observedDevice.values) == Set(0..<ports.count) else {
+        guard Set(observedDevice.keys) == Set(0..<ports.count),
+            Set(observedDevice.values) == Set(0..<ports.count)
+        else {
             return nil
         }
         var ordered = ports

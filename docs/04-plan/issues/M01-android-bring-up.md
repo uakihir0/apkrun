@@ -1841,14 +1841,21 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The bundle contains every block of §10.1 and the files of [filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1.
-- [ ] Two builds from the same inputs give identical `SHA256SUMS`.
-- [ ] The bundle is signed. A bad or untrusted signature, an extra file, and a hash mismatch are each rejected with the matching `ImageFailure`.
-- [ ] `apkrun dev image install` installs atomically, and an interrupted install is cleaned up.
-- [ ] The installed stock bundle boots to `boot_completed` (§10.3).
-- [ ] No private key is committed, and no stock bundle is published (R-10).
-- [ ] The unsigned development path is removed.
+- [x] The bundle contains every block of §10.1 and the files of [filesystem-layout.md](../../01-architecture/filesystem-layout.md) §1. The real stock bundle validates, with no `legal` block (optional, and absent from stock bundles).
+- [x] Two builds from the same inputs give identical `SHA256SUMS`. Verified on the real stock image (two builds, same `SHA256SUMS`, `manifest.json`, and `manifest.sig`) and in `test_two_builds_are_identical`.
+- [x] The bundle is signed. A bad or untrusted signature, an extra file, and a hash mismatch are each rejected with the matching `ImageFailure` (`ImageStoreTests`, T1).
+- [x] `apkrun dev image install` installs atomically, and an interrupted install is cleaned up (`anInterruptedInstallLeavesNothingBehind`, `anInstallLeftBehindByACrashIsRemovedAtStartup`).
+- [x] The installed stock bundle boots to `boot_completed` (§10.3): `apkrun dev boot` from `current` reached `ready` in 13.7 s, and `G2AndroidBootTests` passed five cold boots from the installed bundle, each with `sys.boot_completed=1`. The dwell was 60 s, not the gate's 600 s (IR-350).
+- [x] No private key is committed, and no stock bundle is published (R-10). The only private key in the repository is the test key `Tests/Fixtures/signing/test-image-ed25519`. Release builds refuse image test and developer keys (`check-release-build.sh` rows).
+- [x] The unsigned development path is removed.
 
 ### Notes
 
 - #066, #058, and #087 build on `ImageStore`. Keep `install(from:)` open for `.archive`, which #058 adds.
+- Implemented: `RuntimeImageManifest` (typed, strict), `RuntimeImageManifestRules` (schema value rules and S1–S14), `ImageSignature`, `ImageTrustStore`, `ImageStore`, `keygen`, `sign.py`, `runtime_manifest.py`, `apkrun dev image install`, the release-check image rows, and the T0, T1, and T2 tests. The shared fixtures are in `Images/tools/tests/fixtures/runtime-manifests/` and `…/signing/`.
+- Verified on 2026-10-09, macOS 27.0.1 (26A434), stock build 16373615: the installed image of `apkrun dev boot` booted to `ready`; `os.img` allocates 1.8 GB for 8.7 GB logical (after the sparse fix, IR-348); the two builds are identical. The Python suite (761 passed, 4 skipped), `scripts/tests/run.sh`, and the Swift ImageCore tests passed. The full 600-second G2 gate is for the maintainer to run from clean `main` (IR-350).
+- Not done, with the reason:
+  - Compatibility checks (`incompatibleRuntime`, `incompatibleProtocol`) are not checked at install or boot (IR-352). Follow-up: #066 and #058.
+  - Release image keys do not exist, so Release builds refuse every bundle (IR-341). Follow-up: #093.
+  - `ReleaseUpdateTest` builds do not trust the developer key (IR-342). Follow-up: the maintenance tests that need a lab-signed image.
+  - Archive install (`.aar`) is #058. Rollback to an older image has no command yet (IR-347).

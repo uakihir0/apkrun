@@ -10310,3 +10310,195 @@ were; the maintainer has now asked for them to be stopped as well.
 schedule. Gate checks run locally with `scripts/run-gate.sh G<n>`, and their
 results are recorded by hand. When the lab runners are registered, the daily
 schedule (`cron: "15 3 * * *"`) comes back.
+
+## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §6.1; [build-system.md](../05-development/build-system.md) §10.1 |
+
+**Choice.** `keygen` writes the private key as an unencrypted PKCS#8 PEM with mode 0600, and the public key as the base64 of the raw 32 bytes on one line, in `<name>.pub`. It refuses to overwrite either file.
+
+**Reason.** The spec fixes the `.pub` format and the key ID, but not the private key's format. PKCS#8 is what `openssl genpkey -algorithm ed25519` writes, so the key can be checked with standard tools, and the release checker reads the same format. A passphrase would need a prompt inside a build step, and the file stays in the developer's home with mode 0600. The Python tests check the modes, the round trip, and the refusal to overwrite.
+
+## IR-341: Release builds trust no image key until the release key ceremony
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 (acceptance: no stock bundle is published, R-10); #093 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §6.1; [android-image.md](../02-design/android-image.md) §10.1 |
+
+**Choice.** `ImageTrustStore.release` is an empty list. A Release build refuses every bundle with `untrustedKey`. No placeholder release key is compiled in.
+
+**Reason.** No release key exists yet, and R-10 keeps stock bundles out of publication. A placeholder key would be a trust anchor nobody controls. Failing closed keeps a Release build from trusting a development key. Product images (`kind: apkrun`) cannot be installed in a Release build until #093 adds the release key IDs. `check-release-build.sh` already refuses the test key and the developer key.
+
+## IR-342: Read the developer key under `#if DEBUG`, not under the ReleaseUpdateTest configuration
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065; the maintenance tests (M10) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §2.4; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §6.1 |
+
+**Choice.** `ImageTrustStore.standard()` reads `~/.config/apkrun/dev-image-key.pub` only in Debug builds. `ReleaseUpdateTest` builds do not trust the developer key yet.
+
+**Reason.** build-system.md §2.4 says package code must not use compilation conditions for ReleaseUpdateTest, because Xcode builds packages only in Debug and Release. A runtime switch on the build identity would put the developer key path into Release binaries, and the release check forbids that string. The maintenance tests that need a lab-signed image should inject the developer key from the app target, the composition root. That belongs to the task that first needs it.
+
+## IR-343: Commit the test image key as PKCS#8 Ed25519, and make the release checker read it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §3.1; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §13 |
+
+**Choice.** The test key is `Tests/Fixtures/signing/test-image-ed25519`, a PKCS#8 PEM Ed25519 key, with its `.pub`. `check-release-build.sh` now reads PKCS#8 Ed25519 files as well as RSA ones, and it reads a PEM file whatever its extension.
+
+**Reason.** AGENTS §9 puts test keystores in `Tests/Fixtures/signing`, and the spec names the file without its format. The checker fails closed on a format it does not know, so it must recognise this key. Without that recognition, a Release app that carried the test key would pass, because the scan would not know the key exists.
+
+## IR-344: Refuse a kernel that declares no page size, and let the test fixture declare 4 KiB
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.1, §10.2; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.4, §7.3 |
+
+**Choice.** `bundle` stops when the arm64 Image header's flags bits 1-2 are 0, because the schema has no value for an undeclared page size. The synthetic fixture kernel declares none, so `test_bundle.py` records 4096 for it through a test shim. A test checks the refusal with the real extraction.
+
+**Reason.** §4.4 requires `kernelPageSize` to be 4096, 16384, or 65536, and §7.3 says the build checks it. Guessing would make the field mean nothing. Regenerating the pinned fixture archive would change checksums in several suites, which is more than this task should touch. The real stock kernel declares 4096, so the product path is unaffected. The alternative is to pin `kernel.pageSize` in the layout, for the maintainer to choose.
+
+## IR-345: Add four ImageFailure cases that §14.1 does not list
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §14.1; [error-catalog.md](../03-reference/error-catalog.md) |
+
+**Choice.** `ImageFailure` gains `unexpectedFile(file:)`, `imageNotInstalled(version:)`, `noCurrentImage`, and `downgradeRejected(from:to:)`. Each has an `image.*` catalog entry, and the first three have rows in §14.1 (the last already had one).
+
+**Reason.** The store needs its own errors for a manifest that differs under the same version, an activation of an image that is not installed, and a boot with no current image. Reusing `missingFile` or `manifestInvalid` would hide what the user has to do.
+
+## IR-346: Check the staged clone in full, and the source only quickly
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §8.3; [android-image.md](../02-design/android-image.md) §10.3 |
+
+**Choice.** A directory install verifies the source quickly (signature, schema, rules, file set, sizes), clones the files, runs the full check on the clone, renames it into place, and makes it current. Reinstalling an identical image clones nothing and runs the full check on the installed copy.
+
+**Reason.** The clone is the snapshot that gets activated, so hashing it closes the window between verification and copying. Hashing the source as well would double the cost of a 1.8 GB data image. §8.3 describes the steps for an archive, and the directory path follows the same order.
+
+## IR-347: Refuse an install of a lower version, and offer no rollback command yet
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §2.3; [android-image.md](../02-design/android-image.md) §10.3 |
+
+**Choice.** `install(from: .directory)` throws `downgradeRejected` for a version below `current`, ordered by year, month, and sequence. `setCurrent` can move back to `previous`, but no command or API exposes that as a rollback.
+
+**Reason.** §2.3 says APKRun never activates a lower version automatically. A developer install is manual, but a monotonic rule that holds for every path is safer than a manual exception. A rollback command belongs with the activation commands of #058 and #066. For now, a developer who needs an older stock bundle has to choose a higher `--image-version`.
+
+## IR-348: Keep the zero blocks of RAW data as holes in the disk writer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #011 (writer), #065 (acceptance: sparse `os.img`) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §10.2 |
+
+**Choice.** `write_skipping_zeros` writes only the 4 KiB blocks of RAW chunks and raw partitions that hold a non-zero byte. The writer used to write every zero byte, so the stock `os.img` took about 8.3 GB where its data is 1.8 GB.
+
+**Reason.** §10.2 requires a sparse `os.img` whose physical size is about the data. The file contents read back the same, because a hole reads as zeros. The disk tests check that a zero run stays unallocated, and the real build allocates 1.8 GB. This changes #011's writer, so the maintainer should confirm it.
+
+## IR-349: Keep the Python tests inside the worktree, and link the XcodeGen tool into it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065; the test environment |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) |
+
+**Choice.** The bundle tests write their layouts under `build/apkrun-image-tests` instead of `Images/work`. `scripts/tests/run.sh` needs `build/tools` linked into a worktree for its XcodeGen check.
+
+**Reason.** In a worktree `Images/work` and `build/tools` are git-ignored symlinks to the main checkout. `Path.resolve()` took the layout outside the repository, and `bundle` refused it, so three tests failed in a worktree before this change. The other test helpers that write under `Images/work` have the same problem and are not changed here.
+
+## IR-350: Run G2 with a 60-second dwell in this task
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #014 (G2), #065 (acceptance: boot from the installed bundle) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §17; [run-gate.sh](../../scripts/run-gate.sh) |
+
+**Choice.** The five-cold-boot G2 test ran with `TEST_RUNNER_APKRUN_G2_DWELL_SECONDS=60` instead of the 600-second default. All five boots reached `sys.boot_completed=1` from the installed bundle, and the test passed.
+
+**Reason.** The full run holds the shared VM lock for about 55 minutes, and two other agents were queued for it. The gate itself keeps its 600-second default. The 10-minute stability of the installed image is therefore not re-verified here. The maintainer should run `scripts/run-gate.sh G2` from a clean `main`.
+
+## IR-351: Refuse to boot an instance that was made from another image version
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065; migration is #058 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §9.3, §12.3, §14.1 |
+
+**Choice.** `apkrun dev boot` throws `instanceCorrupt` with the remedy `--reset` when `instance.json` names another image version. `apkrun dev image install` reports the mismatch and leaves the instance as it is.
+
+**Reason.** Migrating an instance's data from one image to another is #058 (§12.3). Booting an instance whose data another image made would fail in unknown ways, so the refusal names the remedy instead.
+
+## IR-352: Leave boot-time compatibility checks out of #065
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065; #066, #058 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §9.3 step 3; [runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1 |
+
+**Choice.** `incompatibleRuntime` and `incompatibleProtocol` are not checked at install or boot. The manifest's `requirements` block is decoded and validated, but not compared with APKRun's version or `components.json`.
+
+**Reason.** The entry's deliverables do not name these checks, and they need `components.json`, which the development CLI does not read. They belong with the first-run provisioning of #066 and the activation of #058. The follow-up is recorded in the M01 notes.
+
+## IR-353: Check that the image version equals the directory name in ImageStore
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.2, §7.2 |
+
+**Choice.** `ImageStore` rejects an installed image whose `imageVersion` differs from its directory name, as `manifestInvalid` at `imageVersion`. The Python validator cannot check this, because it does not know the directory.
+
+**Reason.** §4.2 says the version equals the directory name, which is a property of the installed layout, not of the document. It belongs with the store, which knows the layout.
+
+## IR-354: Fail on a non-APFS volume instead of falling back to a copy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §14.1 (`cloneUnsupported`) |
+
+**Choice.** A directory install needs `clonefile(2)`. Where it is not supported, the install fails with `cloneUnsupported`, and no copy fallback is written.
+
+**Reason.** A copy of a 1.8 GB data image would not keep the holes, and the fallback would hide a volume that is not APFS. §14.1 gives `cloneUnsupported` for this case. The store's tests run on the APFS temporary directory and fail elsewhere.
+
+## IR-355: Note: the quick verification cache is keyed by the identity of manifest.json and manifest.sig
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §7.1 |
+
+**Choice.** `ImageStore` caches steps 1–6 of the quick check. The key is the inode, size, and modification time of `manifest.json` and `manifest.sig`, as §7.1 says. Step 7 always runs.
+
+**Reason.** This follows §7.1. A file rewritten in place with the same size and modification time would pass the cache. Install never reads the cache, and `verify(.full)` always hashes the files. Recorded so that a reviewer knows the trade-off.

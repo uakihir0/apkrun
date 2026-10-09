@@ -10267,3 +10267,24 @@ through the catalog. They merge when the full `RuntimeSupervisor` arrives with
 
 **Verification.** The catalog test lists the new codes, and `apkrun dev boot`
 prints them through `ErrorOutput`.
+
+## IR-313: Run Integration tests on manual dispatch only until a lab runner exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (acceptance `linux-guest`); #062 |
+| Affected files | `.github/workflows/integration.yml`; `scripts/tests/test_workflow_runners.rb`; [build-system.md](../05-development/build-system.md) §15.1; [test-strategy.md](test-strategy.md) §2.4 |
+
+**Choice.** `integration.yml` has no push trigger, only `workflow_dispatch`. The
+`linux-guest` job is unchanged.
+
+**Reason.** No `apkrun-lab` runner is registered (IR-295). The push to `main` on
+2026-10-09 (`87ee2c0`) started a `linux-guest` run that could only stay queued,
+like the run IR-295 cancelled. With the trigger off, pushes start nothing. A
+maintainer can still dispatch the job by hand.
+
+**Consequence.** #003's `linux-guest` acceptance box stays open, as in IR-295.
+When a lab runner is registered, the push trigger comes back with the path
+filter of build-system.md §15.1. The nightly lab jobs (`nightly.yml`) are not
+changed by this entry.

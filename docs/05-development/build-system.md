@@ -664,7 +664,7 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | | | `test-linux` | T0, T1 | `ubuntu-latest` | `cargo test`, `cargo clippy`, the T1 `vsock_loopback` test (§7.2), `ruff check`, JSON schema checks, the F-Droid test repository build (`fdroid update`) |
 | | | `third-party` | — | `xcode-27` | compute the composite key with `scripts/build-third-party.sh --print-cache-key virgl-runtime`, restore that exact cache directory, then build and verify shipped-source license copies |
 | | | `fuzz-short` | T1 | disposable T1 runner for PRs; `apkrun-ci` on `main` | 60 s per fuzz target whose code the pull request changes (§15.2) |
-| `integration.yml` | matching pushes to `main`; manual dispatch from `main` | `linux-guest` | T2 | persistent `apkrun-lab`, trusted `main` only | suite LinuxGuest; exact path filter below; ≤ 15 min. Pull-request runs remain disabled until disposable lab capacity is provisioned |
+| `integration.yml` | manual dispatch from `main` (the push trigger is off until an `apkrun-lab` runner exists, IR-313) | `linux-guest` | T2 | persistent `apkrun-lab`, trusted `main` only | suite LinuxGuest; exact path filter below; ≤ 15 min. Pull-request runs remain disabled until disposable lab capacity is provisioned |
 | | label `t2-android` or `run-t2` | `android-stock` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidStock, ≤ 60 min |
 | | label `t2-android` or `run-t2` | `android-custom` | T2 | disposable `apkrun-lab` for PRs; `apkrun-lab` on `main` | suite AndroidCustom, ≤ 90 min, with the latest custom `userdebug` image from `nightly.yml` `aosp-build` |
 | | label `t2-maintenance` or `run-t2` | `maintenance` | T2 | reviewed local run for PRs; `apkrun-lab` on `main`, environment `signing` | suite Maintenance, ≤ 120 min: builds `ReleaseUpdateTest` 9000 and 9001, writes the local appcast, runs N → N+1 and its variants |
@@ -685,9 +685,11 @@ The table describes the planned workflow as its inputs arrive. #062 creates the 
 | `image-feed-resign.yml` | weekly (Monday 03:00 UTC) | `resign` | — | `ubuntu-latest`, environment `release` | re-signs both channels' feeds ([workflow.md](workflow.md) §10) |
 | `third-party-security.yml` | daily | `upstream` | — | `ubuntu-latest` | §6.7 |
 
-The current `linux-guest` trigger uses this path filter for pushes to `main`.
-Enable the same filter for pull requests only after a disposable lab runner is
-available ([test-strategy.md](../04-plan/test-strategy.md) §2.4):
+When an `apkrun-lab` runner is registered, the `linux-guest` push trigger to
+`main` comes back with this path filter. It was removed while no runner exists,
+because every run stayed queued (IR-313). Enable the same filter for pull
+requests only after a disposable lab runner is available
+([test-strategy.md](../04-plan/test-strategy.md) §2.4):
 
 ```yaml
 paths:

@@ -1,21 +1,9 @@
 name: Integration tests
 
+# Manual dispatch only: no apkrun-lab runner is registered (IR-295), and a push
+# trigger left every run queued (IR-313). Restore the push trigger with the path
+# filter of build-system.md §15.1 once a lab runner exists.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/integration.yml"
-      - "Packages/VirtualMachineCore/**"
-      - "Packages/RuntimeCore/**"
-      - "Packages/RuntimeHost/**"
-      - "Tests/Fixtures/linux/**"
-      - "Tests/IntegrationTests/**"
-      - "ThirdParty/ThirdParty.lock.json"
-      - "project.yml"
-      - "scripts/build-test-initramfs.sh"
-      - "scripts/fetch-test-linux.sh"
-      - "scripts/tools/with-file-lock.py"
   workflow_dispatch:
 
 permissions:

@@ -148,7 +148,7 @@ mutated["jobs"]["workflow-policy"]["runs-on"] = "self-hosted"
 expect_rejected("self-hosted policy job", /workflow-policy.*self-hosted/, mutated)
 puts("PASS workflow runner fixture rejects a self-hosted policy job")
 
-# integration.yml runs only on push and manual dispatch today. If a later task
+# integration.yml runs only on manual dispatch today. If a later task
 # enables pull requests for it, the lab runner must be rejected.
 mutated = copy(integration)
 mutated["on"] = { "pull_request" => {} }

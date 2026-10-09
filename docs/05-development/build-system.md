@@ -140,7 +140,7 @@ The rules behind these checks are in [coding-conventions.md](coding-conventions.
 | Check | How |
 |---|---|
 | no test hooks in Release binaries | `strings` over every Mach-O file finds no `APKRUN_*_FAULT`, no `APKRUN_TEST_*` (such as `APKRUN_TEST_HEADLESS_LAUNCH`), no `APKRUN_LAUNCHER_TEST_NO_RUNTIME`, and no `ReleaseUpdateTest` setting ([../03-reference/configuration.md](../03-reference/configuration.md) §5.1) |
-| no test keys | no public key, key ID, or certificate fingerprint of `Tests/Fixtures/signing/` in the bundle |
+| no test keys | no public key, key ID, or certificate fingerprint of `Tests/Fixtures/signing/` in the bundle. A test keystore (`test-*.jks`, JKS or PKCS#12) is matched by its exact bytes. Any other keystore or certificate file in that folder fails the check as an unsupported format ([IR-338](../04-plan/implementation-review.md#ir-338-accept-the-test-keystore-in-the-release-check-by-its-bytes-and-keep-rejecting-other-keystores)) |
 | image trust | `ImageTrustStore` of the Release build holds only release key IDs: no ID of `test-image-ed25519` and no per-developer key ([../02-design/android-image.md](../02-design/android-image.md) §10.1) |
 | image manifest | a release image manifest has no `androidboot.apkrun.test.*` key ([../02-design/android-image.md](../02-design/android-image.md) §6.2) |
 | notices | `Contents/Resources/ThirdPartyNotices.html` has a section for every lock entry with `ships: app` or `ships: derived`; reference-only entries are excluded ([legal-and-licensing.md](legal-and-licensing.md) §6, #093) |

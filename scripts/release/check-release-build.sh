@@ -143,8 +143,29 @@ def add_material_tokens(tokens, binary_tokens, material):
     tokens.add(":".join(fingerprint[index : index + 2] for index in range(0, 64, 2)))
     binary_tokens.add(material)
 
+def is_test_keystore(path, data):
+    """A keystore of the test fixtures: `test-*.jks`, in the JKS or the PKCS#12 format (IR-338)."""
+    if path.suffix.lower() != ".jks" or not path.name.startswith("test-"):
+        return False
+    # JKS: the magic, then version 2. PKCS#12: one DER structure of exactly the file's length, version 3.
+    is_jks = data[:8] == b"\xfe\xed\xfe\xed\x00\x00\x00\x02"
+    is_pkcs12 = (
+        len(data) >= 7
+        and data[:2] == b"\x30\x82"
+        and int.from_bytes(data[2:4], "big") + 4 == len(data)
+        and data[4:7] == b"\x02\x01\x03"
+    )
+    return is_jks or is_pkcs12
+
 def add_key_tokens(path):
     data = path.read_bytes()
+    if is_test_keystore(path, data):
+        # The keystore is matched by its exact bytes and their digests only. Its printable
+        # text (alias, subject) is common in ordinary files, so it is not a token.
+        tokens = set()
+        binary_tokens = set()
+        add_material_tokens(tokens, binary_tokens, data)
+        return tokens, binary_tokens, None
     tokens = set()
     for match in re.finditer(rb"[\x20-\x7e]{8,}", data):
         token = match.group().decode("ascii", "ignore").strip()

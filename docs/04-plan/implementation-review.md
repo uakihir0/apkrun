@@ -10794,6 +10794,34 @@ suite pass 4 of 4 and the AndroidADB suite pass 2 of 2 on the rebased tip.
 **Consequence.** The T2 suites of #015 to #017 cannot pass on main without a writable clone. With
 cbaaf36 they pass without any local change, and the T2 check is the one that confirms it.
 
+## IR-338: Accept the test keystore in the release check by its bytes, and keep rejecting other keystores
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (the HelloText fixture), #062 (the release checks) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §3.1; [coding-conventions.md](../05-development/coding-conventions.md) §11 (test key naming); [test-strategy.md](test-strategy.md) §4.4 |
+
+**Choice.** `scripts/release/check-release-build.sh` treats a file `Tests/Fixtures/signing/test-*.jks`
+in one of two formats as test material: JKS (the magic, then version 2) or PKCS#12 (one DER structure
+whose outer length is exactly the file's length, version 3). The check matches that file's exact bytes
+and their digests in the bundle, not its printable text. Every other `.jks` fails as an unsupported
+format: a name without the `test-` prefix, `test-` with bytes that are not one of the two structures
+(for example a cut-off copy), and every other keystore suffix. `scripts/tests/test_release_check_keystores.py` covers both sides, and a
+bundle case in `scripts/tests/run.sh` embeds the test keystore and must fail.
+
+**Reason.** #016 committed `test-fixture-a.jks`, and the check rejected every `.jks` as unsupported.
+That failed the clean release fixture, and so main's `run.sh`. The check cannot read a PKCS#12 store,
+because its key is inside a password-protected container, so the rule for PEM and raw keys (matching
+their printable tokens) does not apply. Matching the exact bytes is the strongest leak test that works
+without parsing: a bundle that carries a copy of the test keystore fails, and one that does not passes.
+The `test-` prefix is the naming rule for test keys already in the repository. The check was not relaxed
+for any other format.
+
+**Consequence.** A real release keystore is refused as long as it is not named `test-*`, which the
+script cannot verify and the review rule must. A real key committed under a `test-` name would pass
+only if its bytes were absent from the bundle, the same protection the other test keys have.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 | Field | Value |

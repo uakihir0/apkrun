@@ -14,6 +14,7 @@ python3 "$script_dir/test_test_linux_directory.py"
 python3 "$script_dir/test_third_party_build.py"
 python3 "$script_dir/test_third_party_notices.py"
 python3 "$script_dir/test_errorgen.py"
+python3 "$script_dir/test_release_check_keystores.py" "$repo_root"
 python3 "$script_dir/test_embed_virgl_runtime.py"
 python3 "$script_dir/test_check_pr_control_context.py" "$repo_root"
 ruby "$script_dir/test_workflow_runners.rb" "$repo_root"
@@ -1920,6 +1921,7 @@ fixture_root = repository / "scripts/tests/fixtures/release"
 checker = repository / "scripts/release/check-release-build.sh"
 source = fixture_root / "release-check.c"
 public_key = (repository / "Tests/Fixtures/signing/test-release-check-ed25519.pub").read_text().strip()
+keystore = (repository / "Tests/Fixtures/signing/test-fixture-a.jks").read_bytes()
 image_public_key = (repository / "Tests/Fixtures/signing/test-image-ed25519.pub").read_text().strip()
 avb_public_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture.avbpubkey").read_bytes()
 avb_private_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem").read_bytes()
@@ -1981,6 +1983,7 @@ cases = (
     ("test-key-der-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".der", False, "test signing material"),
     ("test-avb-public-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".avbpubkey", False, "test signing material"),
     ("test-avb-private-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".rsa.pem", False, "test signing material"),
+    ("test-keystore-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".jks", False, "test signing material"),
     ("development-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "dev", None, False, "APKRunBuildIdentity"),
     ("release-update-identity", "APKRUN_RELEASE_FIXTURE_CLEAN", "updatetest", None, False, "updatetest"),
 )
@@ -2022,6 +2025,7 @@ for name, marker, identity, resource_suffix, should_pass, expected in cases:
             ".der": bytes.fromhex(public_key),
             ".avbpubkey": avb_public_key,
             ".rsa.pem": avb_private_key,
+            ".jks": keystore,
         }[resource_suffix]
         (resources / f"test-key{resource_suffix}").write_bytes(resource_bytes)
     result = subprocess.run(

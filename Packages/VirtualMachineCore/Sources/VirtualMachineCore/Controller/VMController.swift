@@ -190,6 +190,11 @@ public actor VMController {
 
     /// Waits for VM release and for persisted console output to reach its final sync.
     public func waitForConsoleLogDrain() async {
+        // A failed VM may not have released its resources (for example after a framework stop error),
+        // and the console log task cannot end until it does.
+        if case .failed = state {
+            await releaseResources()
+        }
         await waitForResourceReleaseIfNeeded()
         await consoleLogTask?.value
     }
@@ -444,6 +449,9 @@ public actor VMController {
             if state == .stopping {
                 let failure = VMFailure.stoppedWithError(underlying: error)
                 try await transition(to: .failed(failure), source: .internalEvent)
+                // A failed VM never reaches .stopped, so release its resources here as the
+                // success path does. The console log task ends only when the channels close.
+                await releaseResources()
                 logFailure(failure, description: error.description)
                 throw failure
             }

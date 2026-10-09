@@ -11103,10 +11103,12 @@ change.
 | Task | #012 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #012 step 6; [android-image.md](../02-design/android-image.md) §6.5; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.3 |
 
-**Choice.** `AndroidBootTests.testKernelPanicDetected` asserts
-`failed(.bootStalled(phase: .kernel))` for a ramdisk cut to half its size, and
-that no init line appears. The entry expected `failed(.kernelPanic)`. The
-panic path stays covered by `BootPhaseDetectorTests` over captured console logs.
+**Choice.** `AndroidBootTests.testTruncatedRamdiskStallsBoot` (renamed from
+`testKernelPanicDetected` in `29eedb2`, because the old name claimed a panic check
+it did not make) asserts `failed(.bootStalled(phase: .kernel))` for a ramdisk cut
+to half its size, and that no init line appears. The entry expected
+`failed(.kernelPanic)`. The panic path stays covered by `BootPhaseDetectorTests`
+over captured console logs, and no T2 check produces a live panic.
 
 **Reason.** The ramdisk is legacy LZ4, and the kernel unpacks it before
 first-stage init runs. `virtio_console` is a module in that ramdisk, so hvc0
@@ -11406,11 +11408,21 @@ port test fails first. The plan then gets its mapping from that test's output.
 | Task | #095 (follow-up for the first boot's Wi-Fi join) |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 criteria and notes; [android-image.md](../02-design/android-image.md) §7.4, §7.6, §7.8 |
 
-**Choice.** `AndroidBootTests.testNetwork` checks the design's configuration: an
-IPv4 address on `wlan0`, a default route through vmnet, name resolution with
-`getent`, and the validated WIFI network. Each stage is polled for up to 120 s,
-and each assertion reads the stage's last value. The stage that fails
-intermittently is the validated one. #095's network criterion stays open.
+**Choice.** The network check is #095's open T2 check, not a condition of #014. It
+is `AndroidNetworkTests.testNetwork` (moved from `AndroidBootTests` in `3099d9a`),
+and it runs only in the `AndroidNetwork` configuration of `IntegrationTests`. It
+checks the design's configuration: an IPv4 address on `wlan0`, a default route
+through vmnet, name resolution with `getent`, and the validated WIFI network. Each
+stage is polled for up to 120 s, and each assertion reads the stage's last value.
+The stage that fails intermittently is the validated one. #095's network criterion
+stays open.
+
+**Why it moved.** The check stayed in the AndroidBoot configuration, which is the
+#014 T2 set. There it failed the configuration on a stage that the G2 conditions do
+not include. CI (`integration.yml`) and the gate (`scripts/run-gate.sh`) select only
+the LinuxGuest and G2 configurations, so a separate configuration keeps the check
+out of both, and it stays runnable by hand with `-only-test-configuration
+AndroidNetwork`. The test is kept, not deleted.
 
 **Reason.** The 21:13 run (`/tmp/apkrun-m1-ab-final`) failed because the check
 ran once, right after `ready`. Its `wifi:` record says `Wifi is disabled`, and
@@ -11425,10 +11437,11 @@ polled runs, one validated (27 s) and four did not within 120 s. The probe needs
 test host's NAT to reach the internet, which this lab does not guarantee; the
 cause was not traced further.
 
-**Consequence.** `testNetwork` can fail on the validated stage. The network is
-#095's T2 test, not part of the G2 conditions, so the #014 gate evidence does not
-depend on it. #095's criterion for the validated network stays unchecked until a
-run validates reliably or the probe's dependence on the host is ruled out.
+**Consequence.** `testNetwork` can fail on the validated stage, and that failure is
+#095's open network check, not a #014 failure. The #014 gate evidence (G2) does
+not depend on it, and the AndroidBoot configuration does not run it. #095's
+criterion for the validated network stays unchecked until a run validates
+reliably or the probe's dependence on the host is ruled out.
 
 ## IR-375: Record categories the launcher capture lacks as not compared, and read the reference command line from kernel.log
 
@@ -11496,6 +11509,22 @@ only way to measure the stack before it merges.
 **Consequence.** The #014 entry records the result as evidence from the task
 branch, not from `main`. The G2 result must be repeated from a clean `main`
 after the branches merge, as the #014 entry requires.
+
+**Review decisions on the gate's integrity (2026-10-09).** An independent review
+of `0c5ad6c` raised two points on the gate's evidence. Both are recorded here for
+maintainer review; the first is changed, the second is not.
+
+- *Retries (changed, `57a3d5f`).* The IntegrationTests plan retried each failing
+  test once (`retryOnFailure`, one repetition). A LinuxGuest test that failed once
+  and passed on retry was green in the gate. The retry is removed from the plan's
+  defaults, so each failure counts. The AcceptanceTests plan never had a retry.
+- *Skips count as passes (recorded, not changed).* The gate counts a skipped test
+  as a pass, because `xcodebuild` reports a skip as success. `BootconfigTests`
+  (`LinuxGuestBootconfigTests.testBootconfigTrailer`) skips under LinuxGuest on the
+  pinned kernel, and the AndroidPackage tests skip when the HelloText fixture is
+  missing. The gate report records the status of the run, not the skip count; the
+  counts are in the result bundles. Changing the gate to count skips as failures is
+  a maintainer decision.
 
 ## IR-377: Keep dmesg and logcat out of the G2 capture, because the serial shell is slow
 

@@ -186,7 +186,8 @@ final class AndroidBootTests: XCTestCase {
             let deadline = ContinuousClock.now + .seconds(120)
             repeat {
                 address = (try? await android.value("ip addr show wlan0 | grep 'inet '")) ?? ""
-                route = (try? await android.value("ip route show table all | grep 'default via'")) ?? ""
+                // IPv4 only: the router advertisement also gives an IPv6 default route on wlan0.
+                route = (try? await android.value("ip route show table all | grep 'default via 192'")) ?? ""
                 resolved = (try? await android.value("getent hosts connectivitycheck.gstatic.com")) ?? ""
                 validated =
                     (try? await android.value(
@@ -206,10 +207,13 @@ final class AndroidBootTests: XCTestCase {
                 validated.contains("WIFI") && validated.contains("VALIDATED"),
                 "the WIFI NetworkAgentInfo line is VALIDATED: \(validated)"
             )
-            // Diagnostics for the record: the Wi-Fi state, the links, and the join's log lines.
+            // Diagnostics for the record: the Wi-Fi state, the links, the connectivity service's network
+            // agents, and the join's log lines.
             let record = [
                 "wlan0:\n\(address)",
                 "routes:\n\(route)",
+                "validated: \(validated)",
+                "wifi agent:\n\(try await android.run("dumpsys connectivity | grep NetworkAgentInfo | grep WIFI | tail -n 1").output)",
                 "wifi:\n\(try await android.run("cmd wifi status | head -n 8").output)",
                 "links:\n\(try await android.run("ip -o link | cut -c1-90").output)",
                 "wifi log:\n\(try await android.run("logcat -d | grep -i virtwifi | tail -n 8").output)",

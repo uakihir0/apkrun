@@ -1492,14 +1492,14 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The framework and service failures that blocked boot are resolved. Each fix is recorded in [android-image.md](../../02-design/android-image.md) §13 and in `expected-differences.yaml`.
-- [ ] A host-side readiness monitor (`BootPhaseDetector`) emits `.kernel`, `.init`, `.systemServer`, and `.bootCompleted` with their PerfMarkers. It fails boots with typed errors on panic, boot failure, timeout, and stall.
+- [x] The framework and service failures that blocked boot are resolved. Each fix is recorded in [android-image.md](../../02-design/android-image.md) §13 (CF-16 to CF-19 and the bootconfig and command-line rows) and in `expected-differences.yaml`.
+- [x] A host-side readiness monitor (`BootPhaseDetector`) emits `.kernel`, `.init`, `.systemServer`, and `.bootCompleted` with their PerfMarkers. It fails boots with typed errors on panic, boot failure, timeout, and stall. `BootWatch` decides the timeouts and stalls with a test clock (8 T0 tests), and `BootPhaseDetector` has 6 T0 tests over the console log.
 - [x] `sys.boot_completed` is read through an available debug channel, the Android serial shell, and its value is `1`.
 - [x] Android stays stable for 10 minutes: no `system_server` restart, no watchdog, and no HAL crash loop.
-- [ ] `BOOT_COMPLETED` is logged as a boot phase marker, and each boot has a `perf/boots.jsonl` record.
+- [x] `BOOT_COMPLETED` is logged as a boot phase marker, and each boot has a `perf/boots.jsonl` record (the five G2 boots each wrote one, with `BOOT_COMPLETED` and `outcome` `ready`).
 - [x] Five cold boots in a row pass.
-- [ ] The reference diff has no unexplained difference.
-- [ ] Gate G2 passes on the reference Mac with a clean build from `main`. The result is recorded in [android-image.md](../../02-design/android-image.md) §8 and in [../risks.md](../risks.md) (R-06, R-11, R-12).
+- [x] The reference diff has no unexplained difference: 30 differences, all explained, exit 0 (the G2 run at `691e114`; `expected-differences.yaml` is read beside `Images/reference/16373615/`).
+- [ ] Gate G2 passes on the reference Mac with a clean build from `main`. The result is recorded in [android-image.md](../../02-design/android-image.md) §8 and in [../risks.md](../risks.md) (R-06, R-11, R-12). Passed from the task branch at `691e114` (IR-376); the clean-`main` run waits for the merge and runs with `scripts/run-gate.sh G2` in the main checkout.
 
 ### Notes
 
@@ -1513,13 +1513,18 @@ See [../test-strategy.md](../test-strategy.md).
   - On every boot, `getprop sys.boot_completed` over the serial shell was `1`. After 10 minutes `sys.system_server.start_count` was still `1`, neither logcat nor the console had `WATCHDOG KILLING SYSTEM PROCESS`, and no init service exited more than twice (`apexd` twice per boot; `artd` and `media.codeclist.generator` twice on the first boot only).
   - The first attempt was stopped by XCTest's default 10-minute execution time allowance during boot 2. The plan's `maximumTestExecutionTimeAllowance` only caps the allowance, so the test now sets its own (`ec72fa2`).
   - Ticked from this run: the serial-shell reading, the 10-minute stability, and the five cold boots.
-  - Still open:
-    - A clean-`main` G2 run after the branches merge. Use `scripts/run-gate.sh G2`, which builds the bundle with `scripts/build-test-android-bundle.sh`.
-    - `perf/boots.jsonl`.
-    - T0 tests of the timeout and stall paths of `RuntimeSupervisor.waitForBootCompletion`; the panic and boot-failed paths are tested.
-    - The `compare_boot.py capture-vz` diff and `expected-differences.yaml`.
-    - The dev console sockets with `apkrun dev console --android-shell`.
-    - The T2 `AndroidBootTests`.
+  - Closed since the 2026-10-09 run above (the branch is rebased onto `main` at `0770318`):
+    - `perf/boots.jsonl`: each boot writes a record with its markers and outcome.
+    - The `compare_boot.py capture-vz` diff: 30 explained, 0 unexplained (`expected-differences.yaml` beside `Images/reference/16373615/`).
+    - The dev console sockets: `DevConsoleSocketTests` (mode 0600 in a 0700 directory, removal at stop, a second client refused, `devConsoleNotRunning` without an owner) and `testDevConsoleShell`.
+    - The T0 timeout and stall decisions: `BootWatch` (8 tests with a test clock). The `waitForBootCompletion` loop itself has no T0 test; the stale `.stopped` replay that ended every boot was found by `testBootCompleted` and the gate (`b2aa305`).
+  - **G2 at the rebased tip (2026-10-09, `691e114`, default dwell).** LinuxGuest: 49 run, 16 skipped, 0 failed. G2: passed in 3063 s, 6 run, 3 skipped, 0 failed. The five cold boots: `BOOT_COMPLETED` at 11.65 s (first boot), then 6.35, 7.41, 5.36, and 5.35 s; ready at 12.8, 6.4, 7.4, 5.4, and 5.4 s; `sys.boot_completed` read as `1` on each; ten minutes stable each (`sys.system_server.start_count` 1, no watchdog, no crash loop). The reference diff: 30 explained, 0 unexplained, exit 0.
+  - **The T2 suites on the rebased tip.** `AndroidBoot`: 49 run, 8 skipped, 0 failed in the run with the network poll; `testBootCompleted`, `testPhasesInOrder`, `testReachesInit`, `testKernelBoot`, `testKernelPanicDetected`, `testHostServiceSubstitutes`, and `testDevConsoleShell` pass. `AndroidADB` (with `APKRUN_ANDROID_HOME` set): 49 run, 14 skipped, 0 failed; `testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully` passes. `testNetwork` is #095's and is intermittent on the validated stage (IR-374).
+  - **Gate bugs found by re-runs, fixed on the branch:** the VM controller's initial `.stopped` ended every boot (`b2aa305`); the reference diff did not find the expected-differences file (`6da60d7`); the test homes of read-only images were left behind (`bd3845c`); the dmesg count read a root-only file as the shell user (`365dc0a`); two catalog and extraction expectations were stale (`3275171`, `00fa1a2`).
+  - **Still open:**
+    - The clean-`main` G2 run after the merge: `scripts/run-gate.sh G2` in the main checkout. The gate closes only from `main` (IR-376).
+    - The network's validated stage (IR-374, #095).
+    - The 20-port marker check: the test kernel exposes eight `hvc` nodes (IR-372).
 - **Launch-option ladder (2026-10-08; see IR-298 to IR-301).** In this host configuration `--gpu_mode=none`, the design's headless profile, did not start the Android VM (IR-300), so `gpuProfiles.headless` has no boot evidence yet. The `system_server` Watchdog timeout is a DeviceConfig key, not a host bootconfig key (IR-301). This task stays open.
 
 ---

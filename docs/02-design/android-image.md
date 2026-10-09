@@ -1320,6 +1320,23 @@ and phase timings.
 
 Every difference must be listed in `Images/reference/<buildId>/expected-differences.yaml` with a reason (for example "slot_suffix: no U-Boot, fixed `_a`"). An unexplained difference fails the T3 check that belongs to gate G2. This is the verification in [ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md).
 
+
+### 8.5 Gate G2 verification (#014)
+
+The G2 gate ran from `691e114` on `task/014-system-server-boot` (rebased onto `main`), on arm64 Mac17,9, macOS 27.0.1 (26A434), build 16373615, with the default 600 s dwell (`dwell_seconds` 600 in the report from `30446a0` on; the earlier report carries `dwell: 600 (default)`). The run used `scripts/run-gate.sh`'s `xcodebuild` steps under `lockf -k /tmp/apkrun-vm.lock`.
+
+| Check | Result |
+|---|---|
+| LinuxGuest suite | 49 run, 16 skipped, 0 failed |
+| Five cold boots after an instance reset | each `sys.boot_completed` `1`; `ready` at 12.8 s (first boot), then 6.4, 7.4, 5.4, 5.4 s |
+| `BOOT_COMPLETED` marker (`perf/boots.jsonl`) | 11.65 s (first boot), then 6.35, 7.41, 5.36, 5.35 s after `VM_START` |
+| Stability, 10 minutes per boot | `sys.system_server.start_count` 1; no watchdog kill; no service outside the expected set that exited three or more times (the #095 crash-loop rule) |
+| Reference diff after boot 5 (`compare_boot.py capture-vz`) | 30 differences, all explained (cmdline 5, bootconfig 25), exit 0 |
+| Run time | 3063 s for the G2 target |
+
+The run exposed two gate-path defects, both fixed on the branch: `expected-differences.yaml` is read beside the reference directory, so the test passes it explicitly; and the initial `.stopped` state of the VM controller counted as a guest stop during boot.
+
+The gate closes from a clean `main` (IR-376). The network stages of the Android image are #095's checks and are not part of this table (IR-374).
 ---
 
 ## 9. Translation to VMDefinition
@@ -1742,7 +1759,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `apkrun dev boot` boots through `AndroidBootPlanner` and `RuntimeSupervisor`, and the console shows `[vda]` with nine partitions and `[vdb]` with four. `AndroidBootTests.testKernelBoot` passes in 1.1 s. `AndroidBootTests.testKernelPanicDetected` passes with `bootStalled(kernel)` (IR-361). `/dev/rtc0`, `/proc/cmdline`, and `/proc/bootconfig` are checked over the serial shell in #013 (§6.5) |
 | Init checks on the product path (#013): debug ramdisk, fstab, dynamic partitions, boot device names, AVB, bootconfig, SELinux, `/proc/cmdline`, devices | #013 | positive. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `AndroidBootTests.testReachesInit` passed in 15.3 s, with the results of §6.6 and the `log_buf_len=2M` addition |
 | First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |
-| `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive. 2026-10-09, arm64 Mac17,9, macOS 27.0.1 (26A434), build 16373615, two-disk layout, branch `task/012-android-kernel-boot` at `ec72fa2`: `G2AndroidBootTests` passed five cold boots after an instance reset. `BOOT_COMPLETED` came at 12.4 s on the first boot and 5.2–6.0 s later. Each boot stayed 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, and no init service exiting more than twice. The gate is recorded when the run is repeated from a clean `main` (§4.2, §9.1) |
+| `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive. 2026-10-09, arm64 Mac17,9, macOS 27.0.1 (26A434), build 16373615: the gate ran from `691e114` on `task/014-system-server-boot` (rebased onto `main`) and passed five cold boots with a 600 s dwell each, the reference diff having 30 explained and no unexplained difference (§8.5). The gate is repeated from a clean `main` after the merge |
 | AVB state of the release variant; SELinux denials on the custom image | #035 | pending (§11.4, OQ-36, R-13) |
 | Reference capture: U-Boot inputs, boot phase markers, diff against the VZ boot | #064 | re-scoped (IR-305): no complete crosvm boot on the nested reference host; the launcher captures are kept, and the boot markers were observed on VZ (§7.7, §8.1) |
 | `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |

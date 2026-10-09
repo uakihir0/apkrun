@@ -11406,24 +11406,29 @@ port test fails first. The plan then gets its mapping from that test's output.
 | Task | #095 (follow-up for the first boot's Wi-Fi join) |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 criteria and notes; [android-image.md](../02-design/android-image.md) §7.4, §7.6, §7.8 |
 
-**Choice.** The network criterion stays open. `AndroidBootTests.testNetwork`
-checks the design's configuration (an IPv4 address on `wlan0`, a default route
-through vmnet, name resolution with `getent`, and a validated network). It
-fails on the first boot of build 16373615 and records the state. The fix is a
-follow-up, not part of #095.
+**Choice.** `AndroidBootTests.testNetwork` checks the design's configuration: an
+IPv4 address on `wlan0`, a default route through vmnet, name resolution with
+`getent`, and the validated WIFI network. Each stage is polled for up to 120 s,
+and each assertion reads the stage's last value. The stage that fails
+intermittently is the validated one. #095's network criterion stays open.
 
-**Reason.** The first-boot settings run `cmd wifi connect-network VirtWifi open`,
-and WifiConfigManager logs the network as enabled. `cmd wifi status` then
-reports `Wifi is disabled`, `wlan0` has no carrier, and no DHCP runs. The
-design (§7.4) describes the result the spike had: `wlan0` on vmnet's
-`192.168.64.x`, DNS resolving, and a validated network. The difference is
-whether Wi-Fi stays enabled after the first boot; the cause was not traced
-further. Changing `FirstBootSettings` without a traced cause would guess at
-Android's Wi-Fi state.
+**Reason.** The 21:13 run (`/tmp/apkrun-m1-ab-final`) failed because the check
+ran once, right after `ready`. Its `wifi:` record says `Wifi is disabled`, and
+`wlan0` has no carrier. The first join finishes later: in the later runs the
+same boot reports `Wifi is connected to "VirtWifi"` with `192.168.64.25`, and
+the address, the route, and DNS pass within the poll. So the first-boot Wi-Fi
+state is a timing problem, not a permanent disable, and the earlier description
+of a network that stays down is withdrawn. The remaining failure is the
+validated stage: the WIFI `NetworkAgentInfo` line carries `INTERNET` and not
+`VALIDATED`, because the captive-portal probe has not succeeded. Of the five
+polled runs, one validated (27 s) and four did not within 120 s. The probe needs the
+test host's NAT to reach the internet, which this lab does not guarantee; the
+cause was not traced further.
 
-**Consequence.** `testNetwork` fails until the follow-up lands, and #095's
-network criterion, DNS and the validated network, stays unchecked. The follow-up
-owns the first-boot Wi-Fi state, with `testNetwork` as its check.
+**Consequence.** `testNetwork` can fail on the validated stage. The network is
+#095's T2 test, not part of the G2 conditions, so the #014 gate evidence does not
+depend on it. #095's criterion for the validated network stays unchecked until a
+run validates reliably or the probe's dependence on the host is ruled out.
 
 ## IR-375: Record categories the launcher capture lacks as not compared, and read the reference command line from kernel.log
 
@@ -11457,11 +11462,30 @@ explained (25 bootconfig, 5 cmdline), and exit 0.
 | Task | #014 (step 6) |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #014 step 6 and its criteria; [build-system.md](../05-development/build-system.md) §15 |
 
-**Choice.** The G2 gate ran from commit `940376c` on `task/014-system-server-boot`
-with the same `xcodebuild` steps as `scripts/run-gate.sh` (the LinuxGuest suite,
-then G2 with the default 600 s dwell), under `lockf -k /tmp/apkrun-vm.lock`.
-The artifacts and the bundle came from `/tmp/apkrun-m1-linux`, which this task
-built with `scripts/build-test-initramfs.sh` and `scripts/build-test-android-bundle.sh`.
+**Choice.** The G2 gate ran from commit `691e114` on `task/014-system-server-boot`
+(rebased onto `main` at `0770318`) with the same `xcodebuild` steps as
+`scripts/run-gate.sh` (the LinuxGuest suite, then G2 with the default 600 s dwell),
+under `lockf -k /tmp/apkrun-vm.lock`. Result: LinuxGuest 49 run, 16 skipped, 0
+failed; G2 passed, 6 run, 3 skipped (the other acceptance suites), 0 failed, in
+3063 s. The artifacts and the bundle came from `/tmp/apkrun-m1-linux`, which this
+task built with `scripts/build-test-initramfs.sh` and
+`scripts/build-test-android-bundle.sh`.
+
+**Reason.** `run-gate.sh` refuses to run unless the branch is `main`, and it
+refuses unless the tree is clean. Neither holds on a task branch: `Images/work`
+and the other ignored artifacts are symlinks into the main checkout, which Git
+lists as untracked. The gate's evidence rule is `main`; running it here is the
+only way to measure the stack before it merges.
+
+**Consequence.** The #014 entry records the result as evidence from the task
+branch, not from `main`. The G2 result must be repeated from a clean `main`
+after the branches merge, as the #014 entry requires. Two gate runs before
+`691e114` failed on bugs the gate exposed, and their fixes are on the branch:
+the stale `.stopped` state of the VM controller ended every boot (`b2aa305`),
+and the reference diff did not find `expected-differences.yaml` (`6da60d7`).
+`scripts/run-gate.sh` now removes the dwell overrides before any run and records
+`dwell_seconds` in the G2 report (`30446a0`), so a branch run cannot silently use a
+shorter dwell.
 
 **Reason.** `run-gate.sh` refuses to run unless the branch is `main`, and it
 refuses unless the tree is clean. Neither holds on a task branch: `Images/work`

@@ -19,7 +19,7 @@ if (($# == 2)) && [[ ! -e "$2" ]]; then
     exit 1
 fi
 
-python3 - "$repo_root" "$app_bundle" <<'PY'
+python3 - "$repo_root" "$app_bundle" "${2:-}" <<'PY'
 import base64
 import binascii
 import hashlib
@@ -33,6 +33,7 @@ import sys
 
 repository = pathlib.Path(sys.argv[1])
 app = pathlib.Path(sys.argv[2]).resolve()
+image_bundle = pathlib.Path(sys.argv[3]).resolve() if len(sys.argv) > 3 and sys.argv[3] else None
 signing_fixtures = repository / "Tests/Fixtures/signing"
 failures = []
 
@@ -60,6 +61,8 @@ hook_patterns = (
     re.compile(r"APKRUN_TEST_[A-Z0-9_]+"),
     re.compile(r"APKRUN_LAUNCHER_TEST_NO_RUNTIME"),
     re.compile(r"ReleaseUpdateTest"),
+    # The developer image key is read only in Debug builds (ImageTrustStore.standard).
+    re.compile(r"dev-image-key"),
 )
 
 def parse_ed25519_public_key(data):
@@ -115,7 +118,9 @@ def parse_pkcs8_private_key(data):
         decoded = base64.b64decode("".join(lines[1:-1]), validate=True)
     except (ValueError, binascii.Error):
         return None
-    if len(decoded) < 16 or decoded[0] != 0x30 or b"\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01" not in decoded:
+    rsa_oid = b"\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01"
+    ed25519_oid = b"\x06\x03\x2b\x65\x70"
+    if len(decoded) < 16 or decoded[0] != 0x30 or (rsa_oid not in decoded and ed25519_oid not in decoded):
         return None
     return decoded
 
@@ -156,7 +161,7 @@ def add_key_tokens(path):
         unsupported = f"{path}: certificate signing fixture cannot be inspected"
     else:
         raw_public_key = parse_ed25519_public_key(data)
-        private_key = parse_pkcs8_private_key(data) if path.suffix.lower() == ".pem" else None
+        private_key = parse_pkcs8_private_key(data)
         avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None
 
     binary_tokens = set()
@@ -369,6 +374,54 @@ for name in runtime_libraries:
         or install_names[1].strip() != f"@rpath/{name}"
     ):
         failures.append(f"{library}: Release runtime library has an unexpected install name")
+
+if image_bundle is not None:
+    # Image rows (build-system.md §3.1; runtime-image-manifest.md §7.3). Only a product image
+    # may be published, so every bundle given to the release check is held to the release rules.
+    manifest_path = image_bundle / "manifest.json"
+    signature_path = image_bundle / "manifest.sig"
+    manifest = None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        failures.append(f"{manifest_path}: could not read the image manifest: {error}")
+    if isinstance(manifest, dict):
+        if manifest.get("kind") != "apkrun":
+            failures.append(
+                f"{manifest_path}: a stock image cannot be published (kind {manifest.get('kind')!r})"
+            )
+        revisions = manifest.get("provenance", {}).get("revisions", {})
+        for name in ("imagesTools", "guest"):
+            value = revisions.get(name) if isinstance(revisions, dict) else None
+            if isinstance(value, str) and value.endswith("-dirty"):
+                failures.append(f"{manifest_path}: release image revision {name} is dirty")
+        if "headless" in manifest.get("gpuProfiles", {}):
+            failures.append(f"{manifest_path}: a release image cannot list the headless GPU profile")
+    for name in ("boot/bootconfig.txt", "boot/cmdline.txt"):
+        path = image_bundle / name
+        if path.is_file() and b"androidboot.apkrun.test." in path.read_bytes():
+            failures.append(f"{path}: release image contains an androidboot.apkrun.test.* key")
+    if not signature_path.is_file():
+        failures.append(f"{signature_path}: missing manifest.sig")
+    else:
+        signed_by = next(
+            (
+                line[len("key-id: ") :]
+                for line in signature_path.read_text(encoding="ascii", errors="replace").splitlines()
+                if line.startswith("key-id: ")
+            ),
+            None,
+        )
+        test_public = signing_fixtures / "test-image-ed25519.pub"
+        if test_public.is_file():
+            test_key = parse_ed25519_public_key(test_public.read_bytes())
+            if test_key is not None and signed_by == hashlib.sha256(test_key).hexdigest()[:16]:
+                failures.append(f"{signature_path}: release image is signed with the test image key")
+        developer_public = pathlib.Path.home() / ".config/apkrun/dev-image-key.pub"
+        if developer_public.is_file():
+            developer_key = parse_ed25519_public_key(developer_public.read_bytes())
+            if developer_key is not None and signed_by == hashlib.sha256(developer_key).hexdigest()[:16]:
+                failures.append(f"{signature_path}: release image is signed with a developer key")
 
 if failures:
     for failure in failures:

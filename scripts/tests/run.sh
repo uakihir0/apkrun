@@ -1908,6 +1908,7 @@ PY
 
 python3 - "$repo_root" "$temporary_root/release" <<'PY'
 import hashlib
+import json
 import pathlib
 import plistlib
 import shutil
@@ -1919,6 +1920,7 @@ fixture_root = repository / "scripts/tests/fixtures/release"
 checker = repository / "scripts/release/check-release-build.sh"
 source = fixture_root / "release-check.c"
 public_key = (repository / "Tests/Fixtures/signing/test-release-check-ed25519.pub").read_text().strip()
+image_public_key = (repository / "Tests/Fixtures/signing/test-image-ed25519.pub").read_text().strip()
 avb_public_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture.avbpubkey").read_bytes()
 avb_private_key = (repository / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem").read_bytes()
 key_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
@@ -1973,6 +1975,8 @@ cases = (
     ("test-hook", "APKRUN_STORE_FAULT", "release", None, False, "APKRUN_STORE_FAULT"),
     ("test-key", public_key, "release", None, False, "test signing material"),
     ("test-key-id", key_id, "release", None, False, "test signing material"),
+    ("test-image-key", image_public_key, "release", None, False, "test signing material"),
+    ("developer-image-key-path", "dev-image-key.pub", "release", None, False, "dev-image-key"),
     ("test-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".pub", False, "test signing material"),
     ("test-key-der-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".der", False, "test signing material"),
     ("test-avb-public-key-resource", "APKRUN_RELEASE_FIXTURE_CLEAN", "release", ".avbpubkey", False, "test signing material"),
@@ -2113,6 +2117,78 @@ for name, embedded_identity, should_pass in (
         if result.returncode == 0 or "embedded Release APKRunBuildIdentity" not in output:
             raise SystemExit(f"FAIL release fixture {name}: expected missing embedded identity rejection\n{output}")
     print(f"PASS release fixture {name}")
+
+import base64
+import os
+import shutil
+import tempfile
+
+def write_image_bundle(root, *, kind="apkrun", bootconfig=b"", cmdline=b"console=hvc0 bootconfig",
+                       imagesTools="a" * 40, profiles=("drmVirgl", "guestSwiftshader"), signer="0123456789abcdef"):
+    (root / "boot").mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "kind": kind,
+        "provenance": {"revisions": {"imagesTools": imagesTools, "guest": "b" * 40}},
+        "gpuProfiles": {name: {} for name in profiles},
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (root / "boot/bootconfig.txt").write_bytes(bootconfig)
+    (root / "boot/cmdline.txt").write_bytes(cmdline)
+    (root / "manifest.sig").write_text(
+        f"apkrun-signature-v1\nkey-id: {signer}\nalgorithm: ed25519\nsignature: {'A' * 86}==\n",
+        encoding="ascii",
+    )
+    return root
+
+image_root = pathlib.Path(sys.argv[2]) / "image-bundles"
+clean_app = pathlib.Path(sys.argv[2]) / "embedded-release-identity.app"
+test_key_id = hashlib.sha256(base64.b64decode(image_public_key)).hexdigest()[:16]
+bundle_cases = (
+    ("clean", {}, None, None),
+    ("stock", {"kind": "stock"}, "a stock image cannot be published", None),
+    ("test-property", {"bootconfig": b'androidboot.apkrun.test.hook = "1"\n'}, "androidboot.apkrun.test.* key", None),
+    ("test-property-cmdline", {"cmdline": b"console=hvc0 androidboot.apkrun.test.x=1 bootconfig"}, "androidboot.apkrun.test.* key", None),
+    ("dirty-revision", {"imagesTools": "a" * 40 + "-dirty"}, "is dirty", None),
+    ("headless-profile", {"profiles": ("drmVirgl", "guestSwiftshader", "headless")}, "headless", None),
+    ("test-key-signed", {"signer": test_key_id}, "test image key", None),
+)
+for name, options, expected, _ in bundle_cases:
+    bundle = write_image_bundle(image_root / name, **options)
+    result = subprocess.run(
+        [str(checker), str(clean_app), str(bundle)], capture_output=True, text=True, check=False
+    )
+    output = result.stdout + result.stderr
+    if expected is None:
+        if result.returncode != 0:
+            raise SystemExit(f"FAIL image bundle {name}: expected pass\n{output}")
+    elif result.returncode == 0 or expected not in output:
+        raise SystemExit(f"FAIL image bundle {name}: expected {expected!r}\n{output}")
+    print(f"PASS image bundle {name}")
+
+developer_home = pathlib.Path(tempfile.mkdtemp(prefix="apkrun-dev-home-"))
+try:
+    developer_key = os.urandom(32)
+    (developer_home / ".config/apkrun").mkdir(parents=True)
+    (developer_home / ".config/apkrun/dev-image-key.pub").write_text(
+        base64.b64encode(developer_key).decode("ascii") + "\n", encoding="ascii"
+    )
+    signed_by_developer = write_image_bundle(
+        image_root / "developer-key-signed",
+        signer=hashlib.sha256(developer_key).hexdigest()[:16],
+    )
+    result = subprocess.run(
+        [str(checker), str(clean_app), str(signed_by_developer)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "HOME": str(developer_home)},
+    )
+    output = result.stdout + result.stderr
+    if result.returncode == 0 or "signed with a developer key" not in output:
+        raise SystemExit(f"FAIL image bundle developer-key-signed: expected rejection\n{output}")
+    print("PASS image bundle developer-key-signed")
+finally:
+    shutil.rmtree(developer_home, ignore_errors=True)
 
 unsupported_repo = pathlib.Path(sys.argv[2]).parent / "unsupported-signing-fixture-repo"
 unsupported_checker = unsupported_repo / "scripts/release/check-release-build.sh"

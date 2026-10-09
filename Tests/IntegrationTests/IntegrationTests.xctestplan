@@ -43,6 +43,20 @@
         ],
         "maximumTestExecutionTimeAllowance" : 1200
       }
+    },
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003006",
+      "name" : "AndroidBoot",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "android-boot",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 1800
+      }
     }
   ],
   "defaultOptions" : {

@@ -238,6 +238,7 @@ targets:
       - path: Tests/IntegrationTests/AndroidADBTests
       - path: Tests/IntegrationTests/AndroidPackageTests
       - path: Tests/IntegrationTests/AndroidSupport
+      - path: Tests/IntegrationTests/AndroidBootTests
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:
@@ -262,6 +263,8 @@ targets:
         product: RuntimeCore
       - package: APKRun
         product: ImageCore
+      - package: APKRun
+        product: RuntimeCore
     scheme:
       testTargets:
         - IntegrationTests

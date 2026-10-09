@@ -1316,26 +1316,6 @@
       }
     },
     {
-      "code": "runtime.adbUnexpectedOutput",
-      "parameters": [
-        "command"
-      ],
-      "message": {
-        "en": "Android answered the debug command {command} in an unexpected way."
-      },
-      "remediation": {
-        "en": "Try again. If it happens again, report the problem."
-      },
-      "action": "reportProblem",
-      "cliExit": 70,
-      "doc": {
-        "case": "unexpectedOutput(command:)",
-        "when": "the output of an adb command has no shape the parser knows",
-        "raisedBy": "AdbClient",
-        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
-      }
-    },
-    {
       "code": "cli.confirmationRequired",
       "parameters": [
         "flag"

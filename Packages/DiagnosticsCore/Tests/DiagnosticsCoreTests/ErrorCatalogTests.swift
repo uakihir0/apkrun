@@ -30,7 +30,7 @@ import Testing
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
-                "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument", "adbUnexpectedOutput",
+                "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument",
                 "devConsoleGuestFailed", "devConsoleInputFailed",
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",

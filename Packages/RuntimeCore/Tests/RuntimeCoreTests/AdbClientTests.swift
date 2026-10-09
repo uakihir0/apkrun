@@ -118,9 +118,23 @@ func adbClientTerminatesACommandThatRunsPastItsTimeout() async throws {
         _ = try await client.shell("sleep-forever", timeout: .milliseconds(300))
         Issue.record("A command past its timeout must throw.")
     } catch {
-        #expect(error == .commandTimedOut(command: "shell", seconds: 0))
+        #expect(error == .commandTimedOut(command: "shell", seconds: 1))
         #expect(error.qualifiedCode == "runtime.adbCommandTimedOut")
     }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientNamesTheHelperThatTimedOut() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.getprop("sleep.prop", timeout: .milliseconds(300))
+        Issue.record("A getprop past its timeout must throw.")
+    } catch {
+        #expect(error == .commandTimedOut(command: "getprop", seconds: 1))
+    }
+    #expect(await client.shellInvocationCount == 1)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -235,6 +249,7 @@ private final class FakeADB: @unchecked Sendable {
                 exit 0 ;;
               "-s 127.0.0.1:6520 shell getprop unset.prop") echo ""; exit 0 ;;
               "-s 127.0.0.1:6520 shell getprop broken.prop") echo "error text"; exit 3 ;;
+              "-s 127.0.0.1:6520 shell getprop sleep.prop") exec sleep 30 ;;
               "-s 127.0.0.1:6520 shell getprop "*) echo "1"; exit 0 ;;
               "-s 127.0.0.1:6520 shell logcat -d")
                 yes "APKRUN-TEST line of logcat output that is long enough to fill a pipe" | head -c 300000

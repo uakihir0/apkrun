@@ -121,19 +121,17 @@ func adbSignalsNeverReenterOrSkipBackwards() {
 func consoleAndAdbSignalsMixIntoOneOrderedPhaseSequence() {
     let tracker = BootPhaseTracker()
     var entered: [BootPhase] = []
-    func record(_ events: [BootPhaseDetector.Event]) {
-        for event in events {
-            if case .entered(let phase, _) = event {
-                entered.append(phase)
-            }
+    func record(_ event: BootPhaseDetector.Event) {
+        if case .entered(let phase, _) = event {
+            entered.append(phase)
         }
     }
     // The console sees the kernel and init first; ADB reports system_server and then boot completion.
-    record(tracker.consume(console: Data("] init: Loaded kernel module virtio_pci.ko\n".utf8)))
-    record(tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false)))
+    tracker.consume(console: Data("] init: Loaded kernel module virtio_pci.ko\n".utf8)) { record($0) }
+    tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false)) { record($0) }
     // The console's own boot-completed line arrives after ADB already reported it: no second entry.
-    record(tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: true)))
-    record(tracker.consume(console: Data("VIRTUAL_DEVICE_BOOT_COMPLETED\n".utf8)))
+    tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: true)) { record($0) }
+    tracker.consume(console: Data("VIRTUAL_DEVICE_BOOT_COMPLETED\n".utf8)) { record($0) }
 
     #expect(entered == [.kernel, .`init`, .systemServer, .bootCompleted])
 }

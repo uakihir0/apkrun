@@ -74,14 +74,14 @@ public actor AdbClient {
 
     /// Connects to the endpoint and waits until the device is in the `device` state.
     ///
-    /// Each attempt runs `adb connect` and then `adb get-state`. Attempts are spaced by a backoff
-    /// that starts at 250 ms and doubles up to 2 s. A TCP connection alone is not enough: adbd may
-    /// still be starting, which leaves the device `offline`.
+    /// Each attempt runs `adb disconnect`, `adb connect`, and `adb get-state`, and none of them may run past
+    /// the deadline. Attempts are spaced by a backoff that starts at 250 ms and doubles up to 2 s. A TCP
+    /// connection alone is not enough: adbd may still be starting, which leaves the device `offline`.
     public func connect(timeout: Duration = .seconds(30)) async throws(AdbFailure) {
         let deadline = ContinuousClock.now + timeout
         var delay = Duration.milliseconds(250)
         while true {
-            if await attemptConnect() {
+            if !Task.isCancelled, ContinuousClock.now < deadline, await attemptConnect(until: deadline) {
                 logger.info("ADB connected to \(endpoint, .public)")
                 return
             }
@@ -99,11 +99,11 @@ public actor AdbClient {
     }
 
     /// Runs `getprop <name>` and returns its value without the trailing newline. An unset property is "".
-    public func getprop(_ name: String) async throws(AdbFailure) -> String {
+    public func getprop(_ name: String, timeout: Duration? = nil) async throws(AdbFailure) -> String {
         guard Self.isPropertyName(name) else {
             throw .invalidArgument(command: "getprop")
         }
-        let reply = try await shell("getprop \(name)")
+        let reply = try await runShell(label: "getprop", "getprop \(name)", timeout: timeout ?? commandTimeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "getprop", status: reply.status)
         }
@@ -112,24 +112,15 @@ public actor AdbClient {
 
     /// Runs one command through the device's shell (`adb shell <command>`).
     ///
-    /// Each call counts once in `shellInvocationCount`, even when it fails.
+    /// Each call counts once in `shellInvocationCount`, even when it fails. Use a named helper where
+    /// one exists: the helpers keep the command lines in one place (M01 #015 step 3).
     public func shell(_ command: String, timeout: Duration? = nil) async throws(AdbFailure) -> AdbShellReply {
-        shellInvocationCount += 1
-        let result = try await runDeviceCommand(
-            "shell",
-            arguments: ["shell", command],
-            timeout: timeout ?? commandTimeout
-        )
-        return AdbShellReply(
-            output: result.standardOutput,
-            errorOutput: result.standardError,
-            status: result.status
-        )
+        try await runShell(label: "shell", command, timeout: timeout ?? commandTimeout)
     }
 
     /// Runs `logcat -d` and returns the buffered log. The buffer can be large, so the timeout is longer.
     public func logcatDump(timeout: Duration = .seconds(30)) async throws(AdbFailure) -> String {
-        let reply = try await shell("logcat -d", timeout: timeout)
+        let reply = try await runShell(label: "logcat", "logcat -d", timeout: timeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "logcat", status: reply.status)
         }
@@ -139,7 +130,7 @@ public actor AdbClient {
     /// Asks Android to power off with `reboot -p`. The connection usually drops while the reply is read,
     /// so the reply is returned as it is and a dropped connection is not an error here.
     public func rebootPowerOff(timeout: Duration = .seconds(5)) async throws(AdbFailure) -> AdbShellReply {
-        try await shell("reboot -p", timeout: timeout)
+        try await runShell(label: "reboot", "reboot -p", timeout: timeout)
     }
 
     /// Runs `adb -s <endpoint> <arguments>` with the developer's terminal attached, and returns its exit status.
@@ -161,24 +152,31 @@ public actor AdbClient {
 
     /// One connect attempt. It first drops any transport that the adb server still holds for the
     /// endpoint: after an earlier boot, `adb connect` answers "already connected" and the old transport
-    /// stays `offline`, so only a fresh transport can reach the device.
-    private func attemptConnect() async -> Bool {
+    /// stays `offline`, so only a fresh transport can reach the device. Each step gets the time left
+    /// before `deadline`, and no step starts after it.
+    private func attemptConnect(until deadline: ContinuousClock.Instant) async -> Bool {
         _ = try? await AdbProcess.run(
             executable: executable,
             arguments: ["disconnect", endpoint],
             command: "disconnect",
-            timeout: commandTimeout
+            timeout: remainingTime(until: deadline)
         )
+        guard ContinuousClock.now < deadline else {
+            return false
+        }
         guard
             let connected = try? await AdbProcess.run(
                 executable: executable,
                 arguments: ["connect", endpoint],
                 command: "connect",
-                timeout: commandTimeout
+                timeout: remainingTime(until: deadline)
             ),
             connected.status == 0,
             connected.standardOutput.contains("connected to \(endpoint)")
         else {
+            return false
+        }
+        guard ContinuousClock.now < deadline else {
             return false
         }
         guard
@@ -186,12 +184,33 @@ public actor AdbClient {
                 executable: executable,
                 arguments: ["-s", endpoint, "get-state"],
                 command: "get-state",
-                timeout: commandTimeout
+                timeout: remainingTime(until: deadline)
             )
         else {
             return false
         }
         return state.status == 0 && state.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines) == "device"
+    }
+
+    /// The time left before `deadline`, at least 100 ms so that a process always gets a chance to answer.
+    private func remainingTime(until deadline: ContinuousClock.Instant) -> Duration {
+        max(.milliseconds(100), min(commandTimeout, deadline - ContinuousClock.now))
+    }
+
+    /// Runs one `adb shell` command, counted in `shellInvocationCount`, and names it `label` in errors.
+    private func runShell(label: String, _ command: String, timeout: Duration) async throws(AdbFailure) -> AdbShellReply
+    {
+        shellInvocationCount += 1
+        let result = try await runDeviceCommand(
+            label,
+            arguments: ["shell", command],
+            timeout: timeout
+        )
+        return AdbShellReply(
+            output: result.standardOutput,
+            errorOutput: result.standardError,
+            status: result.status
+        )
     }
 
     private func runDeviceCommand(

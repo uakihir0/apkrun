@@ -222,6 +222,12 @@ public actor RuntimeSupervisor {
         } catch {
             throw Self.vmFailure(error)
         }
+        guard self.controller === controller else {
+            // stop() ran while the VM was starting. It cannot stop a starting VM, so this boot stops it,
+            // and it does not start the ADB bridge on a supervisor that has been torn down.
+            try? await controller.stop()
+            throw .androidBootFailed(detail: "the runtime was stopped while starting")
+        }
         if options.developerMode {
             startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
         }
@@ -262,7 +268,7 @@ public actor RuntimeSupervisor {
                         continue
                     }
                     events.yield(.console(bytes))
-                    for event in tracker.consume(console: bytes) {
+                    tracker.consume(console: bytes) { event in
                         if case .entered(_, let marker) = event {
                             Perf.mark(marker, timeline: timeline)
                         }
@@ -411,7 +417,7 @@ public actor RuntimeSupervisor {
         isADBConnected = true
         while !Task.isCancelled {
             if let state = try? await readADBState(client) {
-                for event in tracker.observe(adb: state) {
+                tracker.observe(adb: state) { event in
                     if case .entered(_, let marker) = event {
                         Perf.mark(marker, timeline: diagnostics.perfTimeline)
                     }
@@ -434,19 +440,23 @@ public actor RuntimeSupervisor {
         )
     }
 
-    /// Asks Android to power off: `reboot -p` over ADB when it is connected, else over the serial
-    /// shell. Waits up to 20 s for the VM to stop, and the caller forces the stop after that.
+    /// Asks Android to power off with `reboot -p`: over ADB when it is connected, and over the serial shell
+    /// when the ADB request fails or ADB is not connected. The 20 s deadline starts before the request, so the
+    /// forced stop follows 20 s after the request, whatever the channel does.
     private func requestPowerOff(_ controller: VMController) async {
+        let deadline = ContinuousClock.now + .seconds(20)
+        var requested = false
         if isADBConnected, let adbClient {
             logger.notice("Stopping Android with reboot -p over ADB")
-            _ = try? await adbClient.rebootPowerOff()
-        } else if let shell {
+            requested = (try? await adbClient.rebootPowerOff()) != nil
+        }
+        if !requested, let shell {
             logger.notice("Stopping Android with reboot -p over the serial shell")
-            _ = try? await shell.run("su 0 reboot -p", timeout: .seconds(2))
-        } else {
+            requested = (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
+        }
+        guard requested else {
             return
         }
-        let deadline = ContinuousClock.now + .seconds(20)
         while ContinuousClock.now < deadline, await controller.state != .stopped {
             try? await Task.sleep(for: .milliseconds(250))
         }

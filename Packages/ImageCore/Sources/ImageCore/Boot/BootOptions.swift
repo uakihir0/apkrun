@@ -46,7 +46,7 @@ public struct BootOptions: Equatable, Sendable {
 
 /// The Android parts of a boot, ready for RuntimeCore (android-image.md §9.1).
 public struct AndroidBootPlan: Sendable {
-    /// The VM definition; RuntimeCore adds the GraphicsCore device for `drmVirgl`.
+    /// The VM definition; RuntimeCore adds the GraphicsCore device for every profile except `headless` (#021).
     public var definition: VMDefinition
     /// The merged bootconfig with each key's layer.
     public var bootconfig: [BootconfigEntry]

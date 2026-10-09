@@ -1617,6 +1617,7 @@ See [../test-strategy.md](../test-strategy.md).
 - The forwarder is a POSIX socket, not `NWListener` ([IR-315](../implementation-review.md#ir-315-bind-the-adb-loopback-forwarder-with-a-posix-socket-not-nwlistener)). The port-in-use and listen-failure paths are IR-316 and IR-321.
 - Step 5 writes `apkrun-dev`. The embedded CLI is the `apkrun` binary built with `--traits EmbeddedRuntime`, so the check runs as `apkrun dev adb shell getprop sys.boot_completed`.
 - Verification (2026-10-09): T0 `AdbClientTests` (15 tests with the stale-transport case), `BootPhaseDetectorTests`, and `DevAdbTests` (3) passed; T1 `VsockLoopbackForwarderSystemTests` (6) passed; T2 `AndroidADBTests` passed 2 of 2 (`xcodebuild`, AndroidADB configuration, under `lockf -k /tmp/apkrun-vm.lock`).
+- Adversarial review (2026-10-09) fixed the descriptor race in the forwarder, the listener left open after `stop()`, the accept spin on descriptor exhaustion, the connect deadline overrun, the timeout path without SIGKILL, the mislabelled timeout errors, the event order between the console and ADB sources, a stop during the VM start, and the power-off deadline. The review's remaining findings are IR-325 (half-close), IR-326 (`AdbClient.shell` stays public), and IR-327 (a stop during the start leaves the boot failed). The T2 suite was run again after those fixes and passed 2 of 2.
 
 ---
 

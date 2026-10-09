@@ -10311,6 +10311,289 @@ schedule. Gate checks run locally with `scripts/run-gate.sh G<n>`, and their
 results are recorded by hand. When the lab runners are registered, the daily
 schedule (`cron: "15 3 * * *"`) comes back.
 
+## IR-315: Bind the ADB loopback forwarder with a POSIX socket, not NWListener
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [vm.md](../02-design/vm.md) §8; [android-image.md](../02-design/android-image.md) §7.3; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 6 |
+
+**Choice.** `VsockLoopbackForwarder` listens on a POSIX IPv4 socket bound to
+`127.0.0.1` only. Before it binds, it connects once to the port, and a connection
+that succeeds is reported as `vm.loopbackPortInUse`. `SO_REUSEADDR` is set after
+that probe.
+
+**Reason.** vm.md §8 asked for an `NWListener` with `requiredLocalEndpoint` on the
+loopback address. On macOS 27 that call fails with `EINVAL` for a listener. With
+`requiredInterfaceType = .loopback`, the listener stays on every address (`*:6520`),
+which fails the #015 check that `lsof` shows only `127.0.0.1`. `SO_REUSEADDR` is
+needed so that a restart is not blocked by a TIME_WAIT connection from the previous
+run. On this host it also lets a bind to `127.0.0.1` succeed while another process
+listens on the wildcard address, so the probe closes that gap.
+
+**Consequence.** Developer mode depends on a POSIX listener. The security review
+(NFR-SEC-06) should confirm it. `vm.md` §8 describes the implementation, and
+`VsockLoopbackForwarderSystemTests` checks the `lsof` result.
+
+## IR-316: Report loopback listener failures as VMFailure cases in the vm domain
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) §5.1; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** The forwarder's failures are two cases of `VMFailure`:
+`loopbackPortInUse(port:)` and `loopbackListenFailed(port:underlying:)`. Their
+catalog codes are `vm.loopbackPortInUse` and `vm.loopbackListenFailed`.
+
+**Reason.** The forwarder belongs to VirtualMachineCore, which owns the `vm` domain,
+and a new domain would split one subsystem across two. RuntimeCore logs the failure
+and boots without ADB, so the codes show up in the log and in `apkrun doctor`
+rather than in a user message. Both entries still carry a remediation, as the
+catalog requires.
+
+## IR-317: Add each ADB helper with the task that first uses it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015, #016, #017 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #015 step 3; [guest-protocol.md](../02-design/guest-protocol.md) §15 |
+
+**Choice.** `AdbClient` in #015 has the helpers that the ADB signals, the stop
+sequence, and the connection need: `connect`, `getprop`, `shell`, `logcat`
+(`logcatDump`), and `rebootPowerOff`. The helpers `install`, `uninstall`,
+`listPackages`, and `dumpsysPackage` come with #016, and `startActivity`, `pidof`,
+`dumpsysActivities`, and `forceStop` come with #017. Each helper is defined in the
+task whose deliverables name it.
+
+**Reason.** #015 step 3 lists the whole helper set, but the deliverables of #016 and
+#017 name the install and launch helpers. A helper with no caller and no test
+would be unverified code. The rule that every command string lives in a helper
+still holds, so the #027 lint needs no exception.
+
+**Consequence.** `AdbClient` gains methods in three steps. Nothing outside
+`AdbClient` builds an `adb` command line.
+
+## IR-318: Keep the ADB client's errors in the runtime domain with their own codes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) §7.6; [diagnostics.md](../02-design/diagnostics.md) §3.1 |
+
+**Choice.** `AdbFailure` is a RuntimeCore type in the `runtime` domain, with the
+codes `runtime.adbExecutableMissing`, `adbLaunchFailed`, `adbConnectionUnavailable`,
+`adbCommandFailed`, `adbCommandTimedOut`, `adbInvalidArgument`, and
+`adbUnexpectedOutput`. Its logs go to a new `io.apkrun.runtime` category, `adb`.
+
+**Reason.** The ADB client talks to the Android guest, so it belongs with the other
+runtime-domain errors and the catalog's `runtime` section. A separate domain would
+add a second top-level family for one client. The category keeps the ADB traffic
+separate in `apkrun logs`. The command output is never put in an error or a log
+line: it can carry app data or logcat text, so only the command name, exit status,
+and timeout are kept.
+
+## IR-319: Connect to the ADB endpoint only when the device reports `device`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.3; [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** `AdbClient.connect` succeeds only when `adb connect 127.0.0.1:6520`
+reports a connection and `adb -s 127.0.0.1:6520 get-state` prints `device`. It
+retries with a backoff of 250 ms, doubling to 2 s, until its deadline (30 s).
+
+**Reason.** The loopback forwarder accepts a TCP connection before the guest has
+an adbd listener behind it, and the forwarder then closes it at once. `adb connect`
+alone therefore reports success while the device is still `offline` or missing.
+Checking `get-state` is the only way the client knows that the adb protocol
+handshake has finished, so the first command after `connect` does not fail.
+
+## IR-320: Stop developer Android over ADB first and keep the serial shell as the fallback
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) §3.5 step 6 |
+
+**Choice.** In developer mode, `RuntimeSupervisor.stop()` runs `adb shell reboot -p`
+when the ADB poller has connected in this boot. Otherwise it runs
+`su 0 reboot -p` over the serial shell, as #014 did. Either way it waits up to 20 s
+for `stopped`, and then it forces the stop.
+
+**Reason.** #015 step 4 asks for `adb shell reboot -p` on Ctrl-C, and the ADB path
+does not need the serial console. The serial path stays for a boot where ADB never
+connected, so the stop still works without ADB. Verified on 2026-10-09 with a
+headless boot: the stop took 2 s, the guest logged `reboot: Power down`, and the
+notice `Stopping Android with reboot -p over ADB` was logged.
+
+**Consequence.** `adb shell reboot -p` runs as the `shell` user (uid 2000) on this
+image, and init accepted it. If a future image refuses it, the reply's exit status
+is ignored and the stop falls back to the forced stop after 20 s, so the ADB path
+needs a check in the T2 test.
+
+## IR-321: Start no ADB poller when the loopback forwarder cannot start
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 6; [configuration.md](../03-reference/configuration.md) §2.5 |
+
+**Choice.** `RuntimeSupervisor` starts the forwarder and the ADB poller only in
+developer mode. If the forwarder does not start, nothing else in the ADB bridge
+starts: no `adb` client, no poll, and no ADB signal. The boot continues on the
+console signals, and the failure is logged with its code (`vm.loopbackPortInUse` or
+`vm.loopbackListenFailed`). The poller reads `sys.system_server.start_count` and
+`sys.boot_completed` through two `getprop` calls every 500 ms, until
+`sys.boot_completed` is `1`, and a failed read is skipped.
+
+**Reason.** When another process holds port 6520, `adb connect 127.0.0.1:6520` would
+reach that process, not the guest. Polling would then read another program's
+answers as Android's boot state. Stopping the ADB bridge at a failed forwarder
+keeps the boot signals honest. The developer mode boot still works, because the
+console signals reach `.bootCompleted` on their own, as #014 shows.
+
+**Consequence.** Without the forwarder, `apkrun dev adb` fails with
+`runtime.adbConnectionUnavailable`, and no ADB signal is seen. The poller stops at
+`sys.boot_completed`, so the ADB client stays connected only as far as later
+commands need it. The supervisor takes the environment as an init parameter, so
+that tests can point it at a fake `adb`.
+
+## IR-322: Do not implement the ADB key append on the stock image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #015 step 1; [android-image.md](../02-design/android-image.md) §11.3 |
+
+**Choice.** #015 step 1 asks that, when `ro.adb.secure=1`, developer mode append
+`~/.android/adbkey.pub` to `/data/misc/adb/adb_keys` over the serial shell before the
+first connect. The branch is not implemented. The stock image is checked for the value
+instead: `ro.adb.secure` is unset on build 16373615 (`getprop` prints an empty line,
+checked on 2026-10-09 and recorded in the #015 notes).
+
+**Reason.** The branch cannot run on the stock image, and no secure development image
+exists yet to test it. android-image.md §11.3 says the Guest Agent authorizes the host
+key on a `user` build, through `AdbManager.allowDebugging`, which is #035 and #072 work.
+Writing the key from the host would be a second, untested path that the design assigns
+elsewhere. If a secure image appears before #035, its boot fails with an unauthorized
+device, which `AdbClient.connect` reports as `runtime.adbConnectionUnavailable`.
+
+## IR-323: Give the ADB tests a private adb server, and drop stale transports before connecting
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §8; [M01](../04-plan/issues/M01-android-bring-up.md) #015 |
+
+**Choice.** `AdbClient` runs `adb disconnect <endpoint>` before each `adb connect`
+attempt. The AndroidADB test configuration sets `ANDROID_ADB_SERVER_PORT=15037`, so
+the tests use their own adb server, not the default one on port 5037.
+
+**Reason.** The adb server is shared by every process on the Mac. On this host the
+server on port 5037 was started by the Homebrew `platform-tools` cask. A transport left
+over from an earlier boot is reported as "already connected", and it stays `offline`
+until it is dropped, so the first T2 run failed to reach a booted device for 30 s.
+Dropping the transport before each attempt fixes the client for every caller. The
+private server keeps the tests from depending on what other tools left on the shared
+server. The `apkrun dev adb` command still uses the default server, as a developer
+expects.
+
+## IR-324: Pass the SDK path to the T2 host through its Info.plist
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015, #016, #017 |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §2; [build-system.md](../05-development/build-system.md) §8 |
+
+**Choice.** The IntegrationTests host's `Info.plist` carries `APKRUN_ANDROID_HOME`,
+set by a build setting, the same way as `APKRUN_TEST_LINUX_DIR`. The AndroidADB test
+configuration of `IntegrationTests.xctestplan` runs the tests with the `android-adb`
+suite. The tests are skipped outside that suite.
+
+**Reason.** xcodebuild does not pass the caller's environment to the test host, so
+`ANDROID_HOME` was unset in the test process and the first run skipped the developer
+test. A build setting follows the existing pattern for the test directory. The T2
+signing team is the one in the certificate's OU field, which is the `DEVELOPMENT_TEAM`
+value. The certificate's common name carries a different identifier.
+
+## IR-325: Close both sides of a loopback connection when either side ends
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [vm.md](../02-design/vm.md) §8 |
+
+**Choice.** `VsockLoopbackForwarder` closes the TCP client and the guest connection
+as soon as either side reaches end of stream. It does not keep a half-closed
+connection open for the other direction.
+
+**Reason.** The forwarder carries adb's protocol, and adb never half-closes: it
+closes the whole connection when a command ends. Keeping a half-closed connection
+would need a per-direction state machine for no caller. A later caller that needs
+half-close has to change this rule and say so in its own record.
+
+**Consequence.** A reply that the guest sends after the client has closed its write
+side is dropped. The forwarder's header documents the rule.
+
+## IR-326: Keep AdbClient.shell public as the one generic command helper
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015, #027 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #015 step 3; [guest-protocol.md](../02-design/guest-protocol.md) §15 |
+
+**Choice.** `AdbClient.shell(_:timeout:)` stays public and accepts any device command.
+The named helpers (`getprop`, `logcatDump`, `rebootPowerOff`) validate or fix their
+own command lines, and the T2 test uses `shell` only for `ps -A` and `pm list packages`,
+which are fixed strings.
+
+**Reason.** The T2 check and the M1 control paths need a way to run a fixed device
+command that has no named helper yet. Removing `shell` would force a helper per
+check. No caller passes untrusted text: the one dynamic argument, the property name
+of `getprop`, is validated.
+
+**Consequence.** The #027 lint has to treat `shell(` as a helper call and check that
+its arguments are literals or validated. This is noted for #027.
+
+## IR-327: A stop during the VM start leaves the boot failed, not stopped
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.1, §3.5; [vm.md](../02-design/vm.md) §9.1 |
+
+**Choice.** When `stop()` runs while `VMController.start()` is still in progress,
+`boot()` stops the VM it started, does not start the ADB bridge, and throws
+`androidBootFailed("the runtime was stopped while starting")`. The state then
+becomes `failed`, not `stopped`.
+
+**Reason.** `VMController.stop()` is rejected while a start is pending, so `stop()`
+cannot stop a starting VM. Before this change a late start left the VM running
+after `stop()` had reported `stopped`. The new guard keeps the VM and the bridge
+from outliving the stop. Reporting `failed` instead of `stopped` is the smaller
+change: the runtime-daemon state machine has no `stopping`-during-start transition,
+and `failed` triggers the diagnostics capture that a user-stopped start does not need.
+
+**Consequence.** A stop within the first moments of a start shows a failed boot in
+the logs. Making this a clean `stopped` needs `stop()` to wait for the start, which
+belongs to the state-machine work of #031 (`RuntimeSupervisor`). The race is
+recorded here, not fixed in #015.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 | Field | Value |

@@ -62,12 +62,16 @@ struct AndroidBootFixture {
         _ = try await store.resetAndroid(image: image, sizing: .default)
     }
 
-    /// A supervisor for one boot with the headless profile, as `apkrun dev boot --gpu none` uses.
-    func supervisor(developerMode: Bool, timeouts: BootTimeouts = .standard) -> RuntimeSupervisor {
+    /// A supervisor for one boot. The headless profile is the default, as `apkrun dev boot --gpu none` uses.
+    func supervisor(
+        developerMode: Bool,
+        gpuProfile: GPUProfileID = .headless,
+        timeouts: BootTimeouts = .standard
+    ) -> RuntimeSupervisor {
         RuntimeSupervisor(
             image: image,
             instanceStore: store,
-            options: BootOptions(gpuProfile: .headless, developerMode: developerMode, captureLogcat: false),
+            options: BootOptions(gpuProfile: gpuProfile, developerMode: developerMode, captureLogcat: false),
             diagnostics: .live(paths: paths),
             timeouts: timeouts
         )

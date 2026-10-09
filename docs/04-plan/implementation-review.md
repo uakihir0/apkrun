@@ -11843,3 +11843,162 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 **Reason.** graphics.md §12 says that `boot_completed` is not required here. This host reaches it anyway, and the error responses did not stop the boot.
 
 **Consequence.** A boot that completes with this profile does not show that the display works. #022 must check the 2D path with rendering, not only `boot_completed`. The maintainer should confirm the wording of graphics.md §12.
+
+## IR-400: Keep the unconfirmed drm_virgl values and leave the layer-2 criterion open
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #010, #022 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #010 and #022; [android-image.md](../02-design/android-image.md) §6.2; [graphics.md](../02-design/graphics.md) §9; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
+
+**Choice.** The layout keeps the eight `drmVirgl` bootconfig keys. The #010
+acceptance bullet "every (reference) value traces to the launcher capture or a
+VZ observation" stays unchecked. The maintainer chooses one of two outcomes:
+(a) accept the source-derived `drm_virgl` set for #010, let #022 confirm it,
+and narrow the bullet to the image layer and the guest_swiftshader and headless
+profiles; or (b) empty `gpuProfiles.drmVirgl.bootconfig` until #022 confirms
+the keys, so the layout carries only capture-verified values.
+
+**Reason.** Every other image and GPU value traces to the launcher capture or to
+the VZ record. The eight `drmVirgl` values trace to neither. Their only source
+is `graphics-props-from-source.txt`, which records the Cuttlefish source at
+revision `9bb9c72` (`crosvm_manager.cpp`). That file sits under the git-ignored
+`Images/work/`, so the repository cannot check it. Removing the keys would
+change a profile that #022 needs. Narrowing the bullet changes the milestone's
+acceptance text, which is the maintainer's decision.
+
+**Consequence.** #010 stays open. #011 lists #010 as a dependency, so this
+decision also decides when #011 starts.
+
+## IR-401: Leave display_framebuffer_format out of the drm_virgl set
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #022 (from #010) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.2; [graphics.md](../02-design/graphics.md) §9; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
+
+**Choice.** The layout's `drmVirgl` set has no
+`androidboot.hardware.hwcomposer.display_framebuffer_format`, although
+`graphics-props-from-source.txt` lists it with `rgba`. The key stays out until
+#022 decides.
+
+**Reason.** The file's header says that the `rgba` value is the one observed in
+`internal-bootconfig.txt`, which is the guest_swiftshader capture, and that the
+source selects `bgra` only when `guest_uses_bgra_framebuffers` is set. The
+header does not say that the drm_virgl path sets `rgba`, so the layout follows
+the source-derived set. #022 confirms the key on a drm_virgl boot, which needs
+the virtio-gpu device.
+
+**Consequence.** If #022 finds the key is needed, the layout gains one entry and
+the `drmVirgl` bootconfig changes. The G2 record uses the guest_swiftshader and
+headless sets, not `drmVirgl`.
+
+## IR-402: Check the layer-2 values in the tests, not only in the layout's sources text
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #010, #012 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #010 (acceptance and Tests); [android-image.md](../02-design/android-image.md) §6.2; `Images/tools/tests/test_layout.py` |
+
+**Choice.** `test_layout.py` builds the expected image layer from the committed
+launcher capture: the capture keys without the graphics keys and the eight
+pinned omitted keys, with the seven decided values of §6.2 applied. The test
+fails on any change to a value, a key, or the omitted set. Three further tests
+check the guestSwiftshader and headless profiles against the capture's graphics
+keys, check that each android-image.md section the layout cites exists, and
+check the two command-line additions.
+
+**Reason.** The layout's `sources` block is documentation, and nothing reads it.
+The G2 record depends on these values, so a change must fail in the test suite,
+not later in a boot. The decided values are written in the test, so changing one
+means changing the layout, the test, and the §6.2 record together. The omitted
+set is pinned too: when it was read from the layout itself, a key could move
+from the image layer into the omitted list without failing any test.
+
+**Consequence.** A later decision that changes one of the pinned values updates
+the test in the same change.
+
+## IR-403: Worktree test runs must put the worktree's apkrun_image first
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #010; parallel work ([workflow.md](../05-development/workflow.md)) |
+| Affected documents | [workflow.md](../05-development/workflow.md) (parallel work); `Images/tools/.venv` |
+
+**Choice.** Run the Python suite from a worktree with the worktree's
+`Images/tools` first on `sys.path`, for example
+`python3 -I -c "import sys; sys.path.insert(0, '<worktree>/Images/tools'); import pytest; raise SystemExit(pytest.main([...]))"`.
+The maintainer decides whether each worktree gets its own venv, or whether the
+venv symlink should not exist.
+
+**Reason.** `Images/tools/.venv` is a symlink to the main checkout's venv, and
+its editable install maps `apkrun_image` to
+`/Users/N3275/Documents/projects/apkrun/Images/tools`. Run from the worktree root,
+`Images/tools/.venv/bin/python3 -c "import apkrun_image"` prints the main
+checkout's path. A plain `python -m pytest` in a worktree therefore imports the
+main checkout's package while it collects the worktree's tests. The results of
+#010's runs depend on the explicit insert.
+
+**Consequence.** The #010 results were produced with the insert. Other
+worktrees that use the same venv have the same risk until the maintainer decides.
+
+## IR-404: Confirm androidboot.hypervisor.vm.supported=0 on a reference boot, or record it as a spike choice
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #010, #013 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.2; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`bootconfig.sources.decided`); `Images/reference/16373615/incomplete/default-20261001T120904-49816/kernel.log` (line 1154) |
+
+**Choice.** The image layer keeps `androidboot.hypervisor.vm.supported=0`,
+which the VZ spike booted with and which G2 depends on. Its §6.2 status is now
+"decided", not "verified". The maintainer decides whether `0` stays, with the
+reason recorded, or whether the key is removed to reproduce the reference's
+absent state. Changing it needs a new VZ boot, so this task does not change it.
+
+**Reason.** The launcher capture has no such key. Its `kernel.log` shows that
+init's `setprop hypervisor.memory_reclaim.supported
+${ro.boot.hypervisor.vm.supported}` fails because the property does not exist.
+So the key changes what the guest does at that step: the setprop succeeds. The
+VZ spike set `0` and booted, but it never ran without the key, so the record
+does not show which state is right on VZ.
+
+**Consequence.** Whichever value the maintainer keeps, the record in §6.2 and the
+layout's decided note say why.
+
+## IR-405: The reference record has no expected-differences entry for androidboot.serialno
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #013 (record), #010 |
+| Affected documents | `Images/reference/16373615/expected-differences.yaml`; [android-image.md](../02-design/android-image.md) §6.2; [IR-367](#ir-367-derive-the-reference-differences-from-the-launchers-bootconfig-and-command-line) |
+
+**Choice.** This task does not add the entry. The maintainer decides whether
+`androidboot.serialno` (instance layer, `APKRUN` plus the instance UUID, §6.2)
+joins `expected-differences.yaml` now or when #013 next updates it.
+
+**Reason.** The file is #013's evidence, and IR-367 states its entry count. Its
+25 bootconfig entries are the record for the launcher's differences. The #010
+test pins the eight omitted keys, and serialno is the only omitted key with no
+entry in that file.
+
+**Consequence.** The entry count in IR-367 changes if the entry is added.
+
+## IR-406: The complete manifest example still shows the 157-byte command line
+
+| Field | Value |
+| Status | Needs maintainer review |
+| Task | #065, #010 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.1 (complete example) and §6.2 (`SHA256SUMS` example); [android-image.md](../02-design/android-image.md) §4.1 |
+
+**Choice.** #010 updates the command-line example in §3.3 to 172 bytes. The
+complete example in §4.1 and the sample `SHA256SUMS` in §6.2 are not changed.
+They still show `boot/cmdline.txt` at 157 bytes, and sizes that do not match the
+pinned build (for example, a kernel of 43,581,440 bytes, where the pinned kernel
+is 42,031,616). The maintainer decides whether to mark them as illustrative now
+or to regenerate them from #065's first real bundle.
+
+**Reason.** Those blocks are generated sample output, not measured values from
+the pinned build. Regenerating them by hand would invent values, and #065 writes
+the real manifest.
+
+**Consequence.** Until then, a reader can take the sample sizes as measured.

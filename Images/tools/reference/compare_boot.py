@@ -42,6 +42,9 @@ FILE_CATEGORIES = {
     "cmdline.txt": "cmdline",
     "bootconfig.txt": "bootconfig",
     "internal-bootconfig.txt": "bootconfig",
+    # The launcher's kernel log holds the reference command line; only its "Kernel command
+    # line:" line counts.
+    "kernel.log": "cmdline",
     "properties.txt": "props",
     "block-by-name.txt": "block devices",
     "block-sysfs.txt": "block devices",
@@ -758,6 +761,11 @@ def _category_records(
                 # `# Parameters from bootloader:` repeats the command line, which cmdline compares.
                 continue
             if category == "cmdline":
+                if path.name == "kernel.log":
+                    marker = "Kernel command line:"
+                    if marker not in line:
+                        continue
+                    line = line.split(marker, 1)[1]
                 for token_index, match in enumerate(COMMAND_LINE_TOKEN.finditer(line), start=1):
                     token = match.group()
                     key, separator, value = token.partition("=")
@@ -879,10 +887,11 @@ def _compare(
     candidate: Path,
     expected_entries: Sequence[Mapping[str, str]],
     substitutions: Sequence[NormalizationRule],
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
     expected_by_key = {(entry["category"], entry["key"]): entry for entry in expected_entries}
     used_expected: set[tuple[str, str]] = set()
     differences: list[dict[str, Any]] = []
+    not_compared: list[str] = []
     reference_budget = _RecordBudget()
     candidate_budget = _RecordBudget()
     reference_paths = _capture_category_paths(reference)
@@ -894,6 +903,10 @@ def _compare(
         after = _category_records(
             candidate, category, substitutions, candidate_budget, candidate_paths[category]
         )
+        if not before and after:
+            # The launcher capture holds no booted data for this category (IR-305, IR-367).
+            not_compared.append(category)
+            continue
         if not before or not after:
             differences.append(
                 {
@@ -926,7 +939,7 @@ def _compare(
         for entry in expected_entries
         if (entry["category"], entry["key"]) not in used_expected
     ]
-    return differences, stale
+    return differences, stale, not_compared
 
 
 def _write_report(
@@ -935,6 +948,7 @@ def _write_report(
     candidate: Path,
     differences: Sequence[Mapping[str, Any]],
     stale: Sequence[Mapping[str, str]],
+    not_compared: Sequence[str] = (),
 ) -> None:
     unexplained = [item for item in differences if item["expected"] is None]
     document = {
@@ -945,6 +959,7 @@ def _write_report(
         "unexplainedCount": len(unexplained),
         "differences": list(differences),
         "staleExpectedDifferences": list(stale),
+        "notComparedCategories": sorted(not_compared),
     }
     try:
         report_directory.mkdir(parents=True, exist_ok=True)
@@ -1015,9 +1030,11 @@ def compare_captures(
     expected_file = expected_path or reference.parent / "expected-differences.yaml"
     expected = _load_expected_differences(expected_file)
     substitutions = _load_substitutions(rules_path)
-    differences, stale = _compare(reference, candidate, expected, substitutions)
+    differences, stale, not_compared = _compare(reference, candidate, expected, substitutions)
     output_directory = report_directory or candidate
-    _write_report(output_directory, reference, candidate, differences, stale)
+    _write_report(output_directory, reference, candidate, differences, stale, not_compared)
+    for category in not_compared:
+        print(f"not compared: {category} (the reference holds no booted data)")
 
     unexplained = [item for item in differences if item["expected"] is None]
     for item in unexplained:
@@ -1063,6 +1080,19 @@ def _read_guest_commands(path: Path) -> list[tuple[str, str]]:
     return commands
 
 
+def _without_shell_echo(body: str) -> str:
+    """Drop the shell's echo of the command (and its prompt) from a reply.
+
+    The echo line carries the sentinel text or the prompt, and command output never does.
+    """
+    kept = [
+        line
+        for line in body.split("\n")
+        if "__APKRUN_END_" not in line and not line.startswith("console:")
+    ]
+    return "\n".join(kept)
+
+
 class _ShellSession:
     """Run guest commands one at a time over the serial shell, reading to each sentinel."""
 
@@ -1088,7 +1118,7 @@ class _ShellSession:
                 end = text.find("\n", match.end())
                 self._pending = text[end + 1 :].encode("utf-8") if end >= 0 else b""
 
-                return text[: match.start()], int(match.group(1))
+                return _without_shell_echo(text[: match.start()]), int(match.group(1))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise CaptureToolError(

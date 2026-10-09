@@ -223,3 +223,58 @@ def test_bootconfig_records_ignore_comments_and_compare_quoted_and_plain_forms(
     assert records == {"androidboot.hardware": "cutf_cvm", "androidboot.slot_suffix": "_a"}
     assert records == reference_records
     assert not any(re.match(r"bootconfig\.txt:line", key) for key in records)
+
+
+def test_capture_drops_the_shell_echo_and_prompt_from_each_reply(tmp_path: Path) -> None:
+    directory = _short_directory()
+    commands = _commands(
+        directory / "guest-capture.txt", ["bootconfig.txt\tsu 0 cat /proc/bootconfig"]
+    )
+    echoed = "console:/ $ su 0 cat /proc/bootconfig; echo __APKRUN_END_1__ $?\r\n"
+    replies = {"su 0 cat /proc/bootconfig": (echoed + 'androidboot.hardware = "cutf_cvm";\r\n', 0)}
+
+    with FakeShell(directory, replies) as shell:
+        compare_boot.capture_vz(shell.path, tmp_path / "out", commands_path=commands, timeout=5)
+
+    text = (tmp_path / "out" / "bootconfig.txt").read_text(encoding="utf-8")
+    assert text == 'androidboot.hardware = "cutf_cvm";\n'
+
+
+def test_a_category_the_reference_lacks_is_recorded_not_compared(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    candidate = tmp_path / "candidate"
+    reference.mkdir()
+    candidate.mkdir()
+    (candidate / "bootconfig.txt").write_text('androidboot.slot_suffix = "_a";\n', encoding="utf-8")
+
+    differences, stale, not_compared = compare_boot._compare(reference, candidate, [], [])
+
+    assert "bootconfig" in not_compared
+    assert all(item["category"] != "bootconfig" for item in differences)
+    assert stale == []
+
+
+def test_the_reference_command_line_comes_from_its_kernel_log(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "kernel.log").write_text(
+        "[    0.000000][    T0] Booting Linux on physical CPU 0x0\n"
+        "[    0.000000][    T0] Kernel command line: "
+        "console=ttynull panic=-1 panic=-1 console=hvc0\n",
+        encoding="utf-8",
+    )
+
+    records = compare_boot._category_records(
+        reference,
+        "cmdline",
+        [],
+        compare_boot._RecordBudget(),
+        [reference / "kernel.log"],
+    )
+
+    assert records == {
+        "console": "ttynull",
+        "panic": "-1",
+        "panic#2": "-1",
+        "console#2": "hvc0",
+    }

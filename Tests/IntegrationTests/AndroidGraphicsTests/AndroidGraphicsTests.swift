@@ -7,12 +7,12 @@ import XCTest
 ///
 /// They run in the `AndroidGraphics` configuration of IntegrationTests.xctestplan, with the `guestSwiftshader`
 /// profile. They need the Android bundle of `scripts/build-test-android-bundle.sh` and adb under ANDROID_HOME.
-/// Android does not reach `boot_completed` with this profile before #022 (graphics.md §12). So the check does not
-/// wait for readiness: it waits for adb, reads the guest, saves the capture, and stops Android.
+/// Android does not need to reach `boot_completed` for this check. So the check reads the guest while Android runs,
+/// saves the capture, and stops Android.
 final class AndroidGraphicsTests: XCTestCase {
-    /// The wait for the guest's adbd. A first boot has 900 s for the whole boot (BootTimeouts.standard).
-    private static let adbBudget = Duration.seconds(600)
-    /// The virtio device ID of virtio-gpu (virtio_gpu_ids: VIRTIO_ID_GPU), as the `device` attribute prints it.
+    /// The wait for the guest's adbd. Android answers within seconds on this image, so a longer wait only hides a fault.
+    private static let adbBudget = Duration.seconds(120)
+    /// The virtio device ID of virtio-gpu (VIRTIO_ID_GPU, 16), as the `device` attribute prints it.
     private static let virtioGPUDeviceID: UInt32 = 16
     /// The connectors that `virtio_gpu` creates: one per scanout, named `card0-Virtual-N`.
     private static let connectorNames = (1...16).map { "card0-Virtual-\($0)" }
@@ -43,8 +43,8 @@ final class AndroidGraphicsTests: XCTestCase {
                 }
             }
         }
-        // The check reads the guest while Android runs, and stops Android after the capture. The boot wait is not
-        // awaited on its own terms, so a boot that stalls before `ready` still gets its capture.
+        // The boot wait is not awaited on its own terms: the check reads the guest while Android runs, and it stops
+        // Android after the capture. A boot that stalls before `ready` still gets its capture.
         let boot = Task { try? await supervisor.ensureReady(.cli) }
 
         let captured: Result<GraphicsCapture, Error>
@@ -74,7 +74,10 @@ final class AndroidGraphicsTests: XCTestCase {
         case .success(let value):
             capture = value
         case .failure(let error):
-            XCTFail("the guest capture did not complete: \(error). Console tail: \(console.text.suffix(400))")
+            XCTFail(
+                "the guest capture did not complete (adb \(adbExecutable.path)): \(error). "
+                    + "Console tail: \(console.text.suffix(400))"
+            )
             return
         }
         try capture.save(to: directory, attach: { add($0) })

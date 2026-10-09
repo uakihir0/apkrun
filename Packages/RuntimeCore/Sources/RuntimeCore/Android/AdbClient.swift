@@ -70,6 +70,20 @@ public struct AdbVirtioDevice: Equatable, Sendable {
     }
 }
 
+/// One forward of `adb forward --list`: the host side (`tcp:<port>`) and the guest side (`localabstract:<name>`).
+public struct AdbForward: Equatable, Sendable {
+    /// The host side, such as `tcp:43001`.
+    public var local: String
+    /// The guest side, such as `localabstract:apkrun-guestd-control`.
+    public var remote: String
+
+    /// Creates a forward.
+    public init(local: String, remote: String) {
+        self.local = local
+        self.remote = remote
+    }
+}
+
 /// The host's ADB client for the developer's Android (#015; cli.md §5; android-image.md §7.3).
 ///
 /// APKRun does not ship adb. The client runs the developer's `platform-tools/adb`, found under
@@ -250,8 +264,15 @@ public actor AdbClient {
 
     /// Installs an APK with `adb install -r`. adb installs through the device's PackageInstaller session
     /// (package-store.md §6.1), so no APK is copied into an Android package directory (FR-PKG-01).
-    public func install(apk: URL, timeout: Duration = .seconds(180)) async throws(AdbFailure) {
-        let result = try await runDeviceCommand("install", arguments: ["install", "-r", apk.path], timeout: timeout)
+    public func install(
+        apk: URL,
+        timeout: Duration = .seconds(180),
+        allowTestOnly: Bool = false
+    ) async throws(AdbFailure) {
+        // `-t` admits an APK that is flagged test-only. It is used for the development Guest Agent alone, which
+        // the development key signs (guest-components.md §3.1).
+        let flags = allowTestOnly ? ["-r", "-t"] : ["-r"]
+        let result = try await runDeviceCommand("install", arguments: ["install"] + flags + [apk.path], timeout: timeout)
         try Self.requirePackageSuccess(result, command: "install")
     }
 
@@ -339,6 +360,99 @@ public actor AdbClient {
         return pid
     }
 
+    /// The process ID of the process named `name` (its `comm` name, as `pidof` matches it), or nil when none runs.
+    /// The name is letters, digits, and underscores, so it cannot add shell syntax.
+    public func processID(named name: String) async throws(AdbFailure) -> Int? {
+        guard Self.isProcessName(name) else {
+            throw .invalidArgument(command: "pidof")
+        }
+        let reply = try await runShell(label: "pidof", "pidof \(name)", timeout: commandTimeout)
+        let silent =
+            reply.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && reply.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if reply.status == 1, silent {
+            return nil
+        }
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "pidof", status: reply.status)
+        }
+        guard let pid = AdbOutputParser.processIdentifier(reply.output) else {
+            throw .unexpectedOutput(command: "pidof")
+        }
+        return pid
+    }
+
+    /// Sends SIGTERM to the processes named `name` (`pkill -x`, which matches the process name exactly, so that
+    /// the shell that runs this command, whose name is `sh`, is never matched). A `pkill` that finds nothing exits 1.
+    public func terminateProcess(named name: String) async throws(AdbFailure) {
+        guard Self.isProcessName(name) else {
+            throw .invalidArgument(command: "pkill")
+        }
+        let reply = try await runShell(label: "pkill", "pkill -x \(name)", timeout: commandTimeout)
+        guard reply.status == 0 || reply.status == 1 else {
+            throw .commandFailed(command: "pkill", status: reply.status)
+        }
+    }
+
+    /// Starts the Guest Agent of `packageName` as the shell user with `app_process` (guest-components.md §3.2). The
+    /// process detaches from this ADB session, so it survives the session's end. The command returns at once.
+    public func startGuestAgent(packageName: String) async throws(AdbFailure) {
+        guard Self.isPackageName(packageName) else {
+            throw .invalidArgument(command: "app_process")
+        }
+        let command =
+            "CLASSPATH=$(pm path \(packageName) | sed \"s/^package://\") setsid nohup app_process "
+            + "-Dapkrun.mode=development / --nice-name=apkrun_guestd io.apkrun.guest.daemon.Main "
+            + ">/dev/null 2>&1 &"
+        let reply = try await runShell(label: "app_process", command, timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "app_process", status: reply.status)
+        }
+    }
+
+    /// Adds a forward from a loopback TCP port to a guest socket, `adb forward tcp:0 <remote>`, and returns the
+    /// port that adb chose. The forward listens on the host's loopback address only (NFR-SEC-06).
+    public func forward(remote: String) async throws(AdbFailure) -> UInt16 {
+        guard Self.isForwardTarget(remote) else {
+            throw .invalidArgument(command: "forward")
+        }
+        let result = try await runDeviceCommand("forward", arguments: ["forward", "tcp:0", remote], timeout: commandTimeout)
+        guard result.status == 0 else {
+            throw .commandFailed(command: "forward", status: result.status)
+        }
+        guard let port = UInt16(result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else {
+            throw .unexpectedOutput(command: "forward")
+        }
+        return port
+    }
+
+    /// Removes the forward of the loopback port `port` (`adb forward --remove tcp:<port>`).
+    public func forwardRemove(port: UInt16) async throws(AdbFailure) {
+        let result = try await runDeviceCommand(
+            "forward",
+            arguments: ["forward", "--remove", "tcp:\(port)"],
+            timeout: commandTimeout
+        )
+        guard result.status == 0 else {
+            throw .commandFailed(command: "forward", status: result.status)
+        }
+    }
+
+    /// The forwards of the device (`adb forward --list`).
+    public func forwardList() async throws(AdbFailure) -> [AdbForward] {
+        let result = try await runDeviceCommand("forward", arguments: ["forward", "--list"], timeout: commandTimeout)
+        guard result.status == 0 else {
+            throw .commandFailed(command: "forward", status: result.status)
+        }
+        return result.standardOutput.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: " ")
+            guard fields.count == 3 else {
+                return nil
+            }
+            return AdbForward(local: String(fields[1]), remote: String(fields[2]))
+        }
+    }
+
     /// Reads the resumed activity from `dumpsys activity activities`. The component is nil when the dump
     /// names a resumed record that is not an activity. A dump with no resumed-activity line at all is an
     /// unexpected reply, not an empty answer.
@@ -394,6 +508,23 @@ public actor AdbClient {
             }
             throw .unexpectedOutput(command: command)
         }
+    }
+
+    /// A process name is letters, digits, and underscores, starting with a letter.
+    private static func isProcessName(_ name: String) -> Bool {
+        guard let first = name.first, first.isASCII, first.isLetter else {
+            return false
+        }
+        return name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
+    }
+
+    /// A forward target is a guest abstract socket: `localabstract:` and a name of letters, digits, and dashes.
+    private static func isForwardTarget(_ remote: String) -> Bool {
+        guard remote.hasPrefix("localabstract:") else {
+            return false
+        }
+        let name = remote.dropFirst("localabstract:".count)
+        return !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 
     /// Package names are dot-separated identifiers, such as `io.apkrun.fixture.hellotext`.

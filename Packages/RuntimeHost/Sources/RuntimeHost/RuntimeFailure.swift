@@ -64,6 +64,12 @@ public enum RuntimeFailure: APKRunError, Equatable {
     /// VM cleanup failed and the session must retain ownership until release.
     case devConsoleCleanupPending
 
+    /// `apkrun dev console --android-shell` found no dev console socket, so no `apkrun dev boot` owns the instance.
+    case devConsoleNotRunning(console: String)
+
+    /// `apkrun dev boot` cannot create the developer console socket.
+    case devConsoleSocketUnavailable
+
     /// The stable error catalog namespace for the runtime host.
     public static let domain: ErrorDomain = .runtime
 
@@ -81,6 +87,8 @@ public enum RuntimeFailure: APKRunError, Equatable {
         case .devConsoleInputFailed: "devConsoleInputFailed"
         case .devConsoleOutputDropped: "devConsoleOutputDropped"
         case .devConsoleCleanupPending: "devConsoleCleanupPending"
+        case .devConsoleNotRunning: "devConsoleNotRunning"
+        case .devConsoleSocketUnavailable: "devConsoleSocketUnavailable"
         }
     }
 
@@ -101,8 +109,10 @@ public enum RuntimeFailure: APKRunError, Equatable {
             [:]
         case .devConsoleOutputDropped(let bytes):
             ["bytes": .count(Int(clamping: bytes))]
-        case .devConsoleCleanupPending:
+        case .devConsoleCleanupPending, .devConsoleSocketUnavailable:
             [:]
+        case .devConsoleNotRunning(let console):
+            ["console": .text(console)]
         }
     }
 

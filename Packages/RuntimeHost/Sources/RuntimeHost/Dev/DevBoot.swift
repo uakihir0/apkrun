@@ -123,6 +123,7 @@ public struct DevBoot: Sendable {
         )
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
+        let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
         let eventTask = Task {
             for await event in supervisor.events {
                 switch event {
@@ -134,11 +135,20 @@ public struct DevBoot: Sendable {
                     logcat.write(bytes)
                 case .firstBootSettingsApplied:
                     onEvent(.message("applied the first-boot settings (Bluetooth off, Wi-Fi on VirtWifi)"))
+                case .devConsole(let endpoint):
+                    do throws(RuntimeFailure) {
+                        try consoles.serve(endpoint)
+                        onEvent(.message("developer console \(endpoint.name) is on \(paths.devConsoleDirectory.path)"))
+                    } catch {
+                        onEvent(
+                            .warning("the developer console \(endpoint.name) is unavailable: \(error.qualifiedCode)"))
+                    }
                 }
             }
         }
         defer {
             eventTask.cancel()
+            consoles.stop()
             logcat.close()
         }
 

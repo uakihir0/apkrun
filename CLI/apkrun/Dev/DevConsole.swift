@@ -1,6 +1,7 @@
 #if APKRUN_EMBEDDED_RUNTIME
     import ArgumentParser
     import Darwin
+    import DiagnosticsCore
     import Foundation
     import RuntimeHost
 
@@ -16,7 +17,14 @@
         @Option(name: .long, help: "Path to the gzip-compressed initramfs.")
         var initrd: String?
 
+        @Flag(name: .long, help: "Attach to the Android serial shell (hvc1) of a running `apkrun dev boot`.")
+        var androidShell = false
+
         mutating func run() async throws {
+            if androidShell {
+                try await attachAndroidShell()
+                return
+            }
             #if DEBUG
                 let override = ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
             #else
@@ -91,6 +99,59 @@
             }
             inputPump.cancel()
             await inputPump.task.value
+        }
+    }
+
+    /// Relays this terminal to the Android serial shell socket of a running `apkrun dev boot` (#014).
+    ///
+    /// The socket is the owner's; this command only attaches. Ctrl-] detaches.
+    private func attachAndroidShell() async throws {
+        let paths = APKRunPaths(allowingHomeOverride: true, environment: ProcessInfo.processInfo.environment)
+        let descriptor = try DevConsoleSocketClient.connect(console: "hvc1", directory: paths.devConsoleDirectory)
+        defer { Darwin.close(descriptor) }
+
+        let terminalRestore = TerminalRestoreController(try RawConsoleTerminal())
+        defer { terminalRestore.restore() }
+        let outputWriter: DevConsoleOutputWriter
+        do {
+            outputWriter = try DevConsoleOutputWriter(fileDescriptor: STDOUT_FILENO)
+        } catch {
+            throw CLIFailure.devConsoleRequiresTerminal
+        }
+        defer { outputWriter.restore() }
+        let inputPump = TerminalConsoleInputPump(fileDescriptor: STDIN_FILENO)
+        defer { inputPump.cancel() }
+
+        let reader = Task.detached(priority: .userInitiated) {
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while !Task.isCancelled {
+                let count = read(descriptor, &buffer, buffer.count)
+                if count <= 0 {
+                    break
+                }
+                outputWriter.write(Data(buffer.prefix(count)))
+            }
+            terminalRestore.restore()
+        }
+        defer { reader.cancel() }
+
+        for try await input in inputPump.input.stream {
+            switch input {
+            case .bytes(let data):
+                try data.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return }
+                    var offset = 0
+                    while offset < raw.count {
+                        let written = Darwin.write(descriptor, base + offset, raw.count - offset)
+                        if written <= 0 {
+                            throw RuntimeFailure.devConsoleInputFailed
+                        }
+                        offset += written
+                    }
+                }
+            case .detach:
+                return
+            }
         }
     }
 

@@ -10772,6 +10772,28 @@ pass constant component names, and no fixture has a nested class. Refusing the c
 is the smaller, safe change. Nested classes are a follow-up for the first task that starts
 one: that task quotes the component, adds a test, and removes the refusal.
 
+## IR-337: Installed templates are read-only, and clonefile keeps their mode: provisioning and boot fail on main
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015, #016, #017 (found by the T2 suites on main) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §5.1 and §6.3; [build-system.md](../05-development/build-system.md) §8 |
+
+**Choice.** Not fixed in these three tasks. The owner of ImageCore decides the fix.
+
+**Reason.** On main, an installed image is read-only (`templates/userdata.img`, `disks/os.img`, and
+`boot/ramdisk.img` are mode 0444). `clonefile(2)` keeps the mode of its source, so the instance disk
+clone and the per-boot initrd clone are read-only, and the write that follows fails with `EACCES`.
+Provisioning reports `image.cloneFailed(underlying: NSPOSIXErrorDomain 13)`, and a boot reports
+`runtime.image`. `apkrun dev image install` on a fresh home fails the same way. Two local, uncommitted
+experiments confirmed the cause: a `chmod` to 0600 after each clone (`InstanceDiskProvisioner.swift`
+after `clonefile`, and `AndroidBootPlanner.swift` before the trailer is written) made the AndroidPackage
+suite pass 4 of 4 and the AndroidADB suite pass 2 of 2 on the rebased tip.
+
+**Consequence.** The T2 suites of #015 to #017 cannot pass on main until the clone sets a writable
+mode. The fix is small, but it changes ImageCore, which these tasks do not own, so it is recorded here.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 | Field | Value |

@@ -62,7 +62,7 @@ The planned RiftVM v1.0.4 source tag is not present in the upstream tag list che
 | Fences | `CONTEXT_INIT` is not offered; host completions are serialized into the guest's single timeline and time out after two seconds |
 | Scanout | borrows the VirGL texture, wraps the destination `CAMetalDrawable` texture in an ANGLE `EGLImage`, then GPU-blits; same-process `CAMetalLayer`, no IOSurface pool |
 | Patches | RiftVM's MSAA downgrade patch (`scripts/virgl-patches/`); the macOS and recipe patches are applied by RiftVM's `scripts/prepare-virgl-sources.sh`. APKRun's adopted set, its lineage, and its differences from RiftVM are in §5.1 and [riftvm-analysis.md](riftvm-analysis.md) §4 |
-| Limits | 8192 px texture edge, 256 MiB buffer, 4096 resources, 256 contexts, 4 GiB renderer budget, 4 GiB total guest backing; the full set and APKRun differences are in [riftvm-analysis.md](riftvm-analysis.md) §3 |
+| Limits | 8192 px texture edge, 256 MiB buffer, 4096 resources, 256 contexts, 4 GiB renderer budget, 4 GiB total guest backing; the full set is in [riftvm-analysis.md](riftvm-analysis.md) §2.2, and the APKRun differences are in §7 |
 | Save/restore | Disabled for VirGL (renderer state cannot be serialized) |
 | Input | GPU prototype does not implement input. A separate experimental `virtio-input` probe is not a production backend; RiftVM uses USB and its Guest Agent/uinput path |
 | Performance | Upstream reports ≈ 60 fps and 0.4–0.8 ms per present for a specific Omarchy/Hyprland run; not measured by APKRun |
@@ -93,7 +93,7 @@ Acceptance: the document identifies the exact source components required for APK
 
 - Copied or adapted RiftVM files keep the MIT notice at the top plus the line `Derived from RiftVM <commit> (MIT)`. The notice is also included in `ThirdPartyNotices.html` ([../05-development/legal-and-licensing.md](../05-development/legal-and-licensing.md)).
 - Code is adapted to our module boundaries: device-agnostic parts go to `VirtioDeviceCore`, and the virtio-gpu parts go to `GraphicsCore`. We do not keep RiftVM's app structure.
-- The #018 pin is `ships: reference`: the source is recorded for analysis only and is not built, imported, copied, or distributed. If a later task copies or adapts RiftVM code, it changes the lock entry to `ships: derived`, preserves the required notices, and still never imports the RiftVM package.
+- The #018 pin is `ships: reference`: the source is recorded for analysis only and is not built, imported, copied, or distributed. The MSAA code copied into the virglrenderer patch set is an exception, which IR-410 records. If a later task copies or adapts RiftVM code, it changes the lock entry to `ships: derived`, preserves the required notices, and still never imports the RiftVM package.
 
 ---
 
@@ -349,7 +349,7 @@ Commands flow device queue → render thread in batches (one batch per queue dra
 | virglrenderer | 960bd667 + APKRun patches | MIT | decodes VirGL command streams; manages GL objects |
 | libepoxy | 1b6d7db | MIT | GL/EGL function dispatch for virglrenderer |
 | ANGLE | 2d91f554, Metal backend only | BSD-3-Clause | EGL + GLES 3.0 on Metal |
-| ANGLE DEPS | astc-encoder 2319d9c4, vulkan-headers c0fe12c8, zlib e00f7038 | Apache-2.0, Apache-2.0, Zlib | pinned per component in the lock instead of `gclient sync` (IR-190) |
+| ANGLE DEPS | astc-encoder 2319d9c4, vulkan-headers c0fe12c8, zlib e00f7038 | Apache-2.0, Apache-2.0, Zlib | listed in the lock for their notices; equal to ANGLE's `DEPS` revisions at the pinned commit; `gclient sync` still runs in the work area (IR-190) |
 | depot_tools | f7083527 | BSD-3-Clause | build helper, run only from its own work area (IR-190) |
 | PyYAML | 49790e73 (`6.0.3`) | MIT | pinned pure-Python build tooling used by virglrenderer’s Meson configuration |
 
@@ -364,7 +364,7 @@ Commands flow device queue → render thread in batches (one batch per queue dra
   3. `angle/0001-fix-metal-boolean-mix.patch` emits Metal `select` for boolean-selector `mix` and raises the Metal shader UBO limit from 12 to 16.
 - The RiftVM MIT notice covers RiftVM-authored source only. Renderer component licenses and recipe-patch provenance/notices remain tracked separately for the #093 legal review.
 - Differences found by #018 in the adopted inputs. The side-by-side flags and the patch crosswalk are in [riftvm-analysis.md](riftvm-analysis.md) §4.
-  - Build flags. #020 passes the lock's `buildFlags` unchanged. Against RiftVM it adds virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`, which are open for review in IR-413. It also pins ANGLE's DEPS per component instead of running `gclient sync`, and gives ANGLE to virglrenderer through pkg-config (IR-190).
+  - Build flags. #020 passes the lock's `buildFlags` unchanged. Against RiftVM it adds virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`, which are open for review in IR-413. It also lists ANGLE's DEPS components in the lock for their notices, while `gclient sync` still runs in the work area (IR-190). It gives ANGLE to virglrenderer through generated pkg-config files.
   - Patch lineage. `virglrenderer/0001` is one regenerated diff of the recipe patch; with `0002` applied, it gives the same source tree as the recipe patch plus RiftVM's MSAA patch. `virglrenderer/0002` is RiftVM MIT code carried from RiftVM `f615e16`, not from the pinned commit, and it ships in the runtime; that is copied RiftVM code under [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 (IR-410). `angle/0001` omits the recipe's Vulkan-backend hunk, which the Metal-only build does not compile (IR-411). `libepoxy/0001` names the bundled dylibs with `@rpath`, as IR-190 requires.
   - Patch headers. None of the carried patches (`virglrenderer/0001`, `virglrenderer/0002`, `angle/0001`, `libepoxy/0001`–`0003`) records whether it was sent upstream, which [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 requires (IR-412).
 - APKRun sets virglrenderer `venus=false`. The host Venus/Vulkan backend is outside v1; the guest uses the documented GLES/VirGL path. This differs from the RiftVM recipe and is recorded for maintainer review in [implementation-review.md](../04-plan/implementation-review.md) IR-190.

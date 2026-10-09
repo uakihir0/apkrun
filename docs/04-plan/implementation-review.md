@@ -11510,6 +11510,30 @@ only way to measure the stack before it merges.
 branch, not from `main`. The G2 result must be repeated from a clean `main`
 after the branches merge, as the #014 entry requires.
 
+**The clean-main gate stopped at LinuxGuest (2026-10-10).** The gate on `main` at
+`424a171` failed in `LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout`:
+"Android disks are missing." The cause is the gate's artifact directory.
+`run-gate.sh` defaulted to `${TMPDIR:-/tmp}/apkrun-test-linux`, and on macOS
+`TMPDIR` is `/var/folders/.../T/`. Every producer script and the test harness
+default to `/tmp/apkrun-test-linux`. The gate built the kernel, the initramfs, and
+the Android bundle in the `$TMPDIR` directory, and no step built the Android disks
+there, because `run-gate.sh` never ran `scripts/build-test-android-disks.sh`. The
+shared `/tmp/apkrun-test-linux` had the disks, but the gate never read it. The test
+host is not sandboxed (`ENABLE_APP_SANDBOX: NO`). It reads the directory from its
+Info.plist, which expands the build setting `APKRUN_TEST_LINUX_DIR` the gate passes;
+the built host of the failed run carried the `$TMPDIR` path. The environment
+variable is read first by the harness, but in a gate run both carry the same value,
+so the build setting is the one that matters.
+
+**Decision and fix (`4b7a6ea`).** The gate defaults to `/tmp/apkrun-test-linux`, the
+directory the producers and the harness use. Both gates build the Android disks, so
+no run depends on disks from an earlier build. Before any test runs, the gate checks
+the files its test plans read (`scripts/tools/verify-gate-artifacts.sh`), builds the
+test host, and checks that the host's Info.plist reads the same directory
+(`scripts/tools/verify-test-host-directory.sh`). The report records
+`artifact_directory`. `scripts/tests/test_gate_artifacts.sh` covers both verifiers
+and the order of the steps. The harness's environment-first lookup is unchanged.
+
 **Review decisions on the gate's integrity (2026-10-09).** An independent review
 of `0c5ad6c` raised two points on the gate's evidence. Both are recorded here for
 maintainer review; the first is changed, the second is not.

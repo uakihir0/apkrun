@@ -361,7 +361,8 @@ extension RuntimeImageManifest {
             requirements: try c.decode(Requirements.self, forKey: .requirements),
             userdata: try c.decode(Userdata.self, forKey: .userdata),
             compatibility: try c.decode(Compatibility.self, forKey: .compatibility),
-            legal: try c.decodeIfPresent(Legal.self, forKey: .legal),
+            // Present with null is a schema failure (the schema forbids null here).
+            legal: c.contains(.legal) ? try c.decode(Legal.self, forKey: .legal) : nil,
             files: try c.decode([FileEntry].self, forKey: .files)
         )
     }
@@ -407,9 +408,10 @@ extension RuntimeImageManifest.Disk {
             readOnly: try c.decode(Bool.self, forKey: .readOnly),
             identifier: try c.decode(String.self, forKey: .identifier),
             logicalSize: try c.decode(UInt64.self, forKey: .logicalSize),
-            userdataStrategy: try c.decodeIfPresent(
-                RuntimeImageManifest.UserdataStrategy.self, forKey: .userdataStrategy
-            ),
+            // Present with null is a schema failure (the schema forbids null here).
+            userdataStrategy: c.contains(.userdataStrategy)
+                ? try c.decode(RuntimeImageManifest.UserdataStrategy.self, forKey: .userdataStrategy)
+                : nil,
             partitions: try c.decode([Partition].self, forKey: .partitions)
         )
     }
@@ -673,6 +675,9 @@ extension RuntimeImageManifest {
     public static func load(_ data: Data) throws(ImageFailure) -> RuntimeImageManifest {
         guard data.count <= ManifestLimits.manifestBytes else {
             throw .manifestInvalid(path: "manifest.json", reason: "schema: larger than 1 MiB")
+        }
+        if let problem = RuntimeImageManifestJSON.firstProblem(in: data) {
+            throw .manifestInvalid(path: "manifest.json", reason: "schema: \(problem)")
         }
         struct Version: Decodable { let schemaVersion: Int }
         if let version = try? JSONDecoder().decode(Version.self, from: data),

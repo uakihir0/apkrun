@@ -207,10 +207,50 @@ def semantic_violations(document: Mapping[str, Any]) -> list[Violation]:
     return found
 
 
+class _RepeatedKey(ValueError):
+    """A JSON object names one key twice (§11). The readers would then disagree on its value."""
+
+
+def _reject_repeated_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _RepeatedKey(key)
+        result[key] = value
+    return result
+
+
+def _line_break_pointer(value: object, pointer: str = "") -> str | None:
+    """The pointer of the first string with a line break, or None.
+
+    The schema patterns are anchored with `$`, which Python's `re` also matches before a
+    trailing line feed. ECMA regular expressions do not, and neither does Swift, so such a
+    string is refused here instead of being accepted by one reader only.
+    """
+    if isinstance(value, str):
+        return pointer if "\n" in value or "\r" in value else None
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if "\n" in key or "\r" in key:
+                return pointer + "/" + key
+            found = _line_break_pointer(child, f"{pointer}/{key}")
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            found = _line_break_pointer(child, f"{pointer}/{index}")
+            if found is not None:
+                return found
+    return None
+
+
 def validate(document: object) -> list[Violation]:
     """Return every violation: the schema first, then S1–S14 only if the schema holds."""
     if not isinstance(document, dict):
         return [Violation("schema", "", "the manifest must be a JSON object")]
+    line_break = _line_break_pointer(document)
+    if line_break is not None:
+        return [Violation("schema", line_break, "strings must not contain line breaks")]
     schema_errors = schema_violations(document)
     if schema_errors:
         return schema_errors
@@ -218,11 +258,19 @@ def validate(document: object) -> list[Violation]:
 
 
 def load_and_validate(data: bytes) -> list[Violation]:
-    """Parse the bytes of `manifest.json` and validate them (size limit first)."""
+    """Parse the bytes of `manifest.json` and validate them (size limit first).
+
+    A byte-order mark is refused, because ImageCore refuses it too: the two readers must
+    agree on which bytes are a manifest.
+    """
     if len(data) > MAX_MANIFEST_BYTES:
         return [Violation("schema", "", "manifest.json is larger than 1 MiB")]
+    if data.startswith(b"\xef\xbb\xbf"):
+        return [Violation("schema", "", "manifest.json must not start with a byte-order mark")]
     try:
-        document = json.loads(data.decode("utf-8"))
+        document = json.loads(data.decode("utf-8"), object_pairs_hook=_reject_repeated_keys)
+    except _RepeatedKey as error:
+        return [Violation("schema", "", f"manifest.json repeats the key {error}")]
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         return [Violation("schema", "", f"manifest.json does not parse: {error}")]
     return validate(document)

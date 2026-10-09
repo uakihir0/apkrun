@@ -386,13 +386,16 @@ enum RuntimeImageManifestRules {
                 for (position, partition) in disk.partitions.enumerated() {
                     let pointer = "/\(group)/\(index)/partitions/\(position)"
                     let first = partition.firstLBA
-                    let last = first + partition.size / 512 - 1
+                    // The size is at least 512 bytes (checked above), so one sector at least.
+                    let sectors = partition.size / 512
                     try expect(
                         first >= lastEnd, rule: "S5", path: pointer,
                         reason: "partitions must be ascending and not overlap"
                     )
+                    // Checked without trapping: the first sector is only bounded by UInt64.
+                    let (last, overflow) = first.addingReportingOverflow(sectors - 1)
                     try expect(
-                        last <= limit, rule: "S5", path: pointer,
+                        !overflow && last <= limit, rule: "S5", path: pointer,
                         reason: "partition ends in the backup GPT area"
                     )
                     lastEnd = last + 1

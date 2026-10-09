@@ -35,7 +35,7 @@ func everyValidFixtureLoadsAndRoundTrips() throws {
 @Test
 func everyInvalidFixtureFailsWithTheRuleItNames() throws {
     let files = try fixtureFiles("invalid", suffix: ".json")
-    #expect(files.count == 27)
+    #expect(files.count == 33)
     for url in files {
         let name = url.deletingPathExtension().lastPathComponent
         let expected = try String(

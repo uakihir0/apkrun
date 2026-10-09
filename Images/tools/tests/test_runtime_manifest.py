@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from apkrun_image.runtime_manifest import load_and_validate, validate
+from apkrun_image.runtime_manifest import load_and_validate
 
 TESTS = Path(__file__).parent
 REPOSITORY = TESTS.parents[2]
@@ -21,13 +21,13 @@ DOCUMENT = REPOSITORY / "docs/03-reference/runtime-image-manifest.md"
 
 @pytest.mark.parametrize("path", VALID, ids=lambda path: path.name)
 def test_valid_fixtures_pass_the_schema_and_every_rule(path: Path) -> None:
-    assert validate(json.loads(path.read_text(encoding="utf-8"))) == []
+    assert load_and_validate(path.read_bytes()) == []
 
 
 @pytest.mark.parametrize("path", INVALID, ids=lambda path: path.stem)
 def test_invalid_fixtures_fail_with_the_rule_they_name(path: Path) -> None:
     expected = (path.parent / f"{path.stem}.expected.txt").read_text(encoding="ascii").strip()
-    violations = validate(json.loads(path.read_text(encoding="utf-8")))
+    violations = load_and_validate(path.read_bytes())
     assert violations, "an invalid fixture must fail"
     assert violations[0].rule == expected, violations
 

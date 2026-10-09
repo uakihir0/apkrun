@@ -190,6 +190,23 @@ def _sdk_floor(d: Document) -> None:
     d["guest"]["targetSdkFloor"] = 23
 
 
+def _trailing_line_break(d: Document) -> None:
+    d["provenance"]["revisions"]["imagesTools"] = d["provenance"]["revisions"]["imagesTools"] + "\n"
+
+
+def _legal_null(d: Document) -> None:
+    d["legal"] = None
+
+
+def _strategy_null(d: Document) -> None:
+    d["disks"][0]["userdataStrategy"] = None
+
+
+def _first_lba_overflow(d: Document) -> None:
+    custom = next(p for p in d["disks"][0]["partitions"] if p["label"] == "custom")
+    custom["firstLBA"] = 2**64 - 2048
+
+
 INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("schema-unknown-top-level-field", "schema", _unknown_top),
     ("schema-missing-console-ports", "schema", _missing_ports),
@@ -218,6 +235,10 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("s13-stock-with-guest-revision", "S13", _stock_guest_revision),
     ("s14-sdk-mismatch", "S14", _sdk_mismatch),
     ("s14-target-sdk-floor", "S14", _sdk_floor),
+    ("schema-trailing-line-break", "schema", _trailing_line_break),
+    ("schema-legal-null", "schema", _legal_null),
+    ("schema-userdata-strategy-null", "schema", _strategy_null),
+    ("s5-first-lba-beyond-the-disk", "S5", _first_lba_overflow),
 )
 
 
@@ -237,7 +258,15 @@ def main() -> int:
         mutate(document)
         write_json(INVALID / f"{name}.json", document)
         (INVALID / f"{name}.expected.txt").write_text(rule + "\n", encoding="ascii")
-    print(f"wrote {len(INVALID_CASES)} invalid and 3 valid manifest fixtures")
+    # Two invalid files are not JSON values but bytes: a repeated key, and a byte-order mark.
+    text = json.dumps(stock, indent=2, sort_keys=True) + "\n"
+    repeated = text.replace('"kind": "stock"', '"kind": "stock", "kind": "apkrun"', 1)
+    assert repeated != text
+    (INVALID / "schema-repeated-key.json").write_text(repeated, encoding="utf-8")
+    (INVALID / "schema-repeated-key.expected.txt").write_text("schema\n", encoding="ascii")
+    (INVALID / "schema-byte-order-mark.json").write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    (INVALID / "schema-byte-order-mark.expected.txt").write_text("schema\n", encoding="ascii")
+    print(f"wrote {len(INVALID_CASES) + 2} invalid and 3 valid manifest fixtures")
     return 0
 
 

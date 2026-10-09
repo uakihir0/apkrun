@@ -57,6 +57,20 @@
         ],
         "maximumTestExecutionTimeAllowance" : 1800
       }
+    },
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003007",
+      "name" : "AndroidNetwork",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "android-network",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 900
+      }
     }
   ],
   "defaultOptions" : {

@@ -349,7 +349,7 @@ Notes:
 `sparse.py` implements the Android sparse format directly (28-byte file header, magic `0xED26FF3A`, 12-byte chunk headers; RAW `0xCAC1`, FILL `0xCAC2`, DONT_CARE `0xCAC3`, CRC32 `0xCAC4`):
 
 - The output is written straight into the partition's range inside `os.img`. There is no intermediate file.
-- DONT_CARE chunks and zero FILL chunks become holes (`seek`), so `os.img` uses only as much physical space as the data.
+- DONT_CARE chunks and zero FILL chunks become holes (`seek`), so `os.img` uses only as much physical space as the data. The same holds for every 4 KiB block of a RAW chunk, and of a raw partition, that is all zeros (#065, `write_skipping_zeros`). Before #065 those zeros were written, and the stock `os.img` took about 8 GB where its data is 1.8 GB.
 - CRC32 chunks are verified when present. The total block count must equal the header's `total_blks`.
 - T1 test: for the fixture sparse images and for the real `super.img`, the output hash equals `simg2img` output (simg2img 1.1.5; the expected hashes are committed in `Images/tools/tests/fixtures/sparse/expected-sha256.txt`). The real `super.img` expands to 8 GiB with SHA-256 `7dd80d27…85e3b5`.
 
@@ -1423,7 +1423,7 @@ It runs extract (§4.1), disks (§4.5), and the bootconfig baseline (§6), write
 
 - **Deterministic:** the same inputs and tool revision produce identical bytes (fixed GUIDs, no timestamps, sorted keys). CI builds the fixture bundle twice and compares `SHA256SUMS` (T1).
 - **Size:** `os.img` is written sparse. Physical size is about the sum of the images (super ≈ 1.75 GB of data for build 16373615).
-- **Unsigned development bundles (#012 until #065):** `bundle --unsigned` writes the same tree without the two signature files. Only a Debug build loads it, through `DevelopmentImage.load(directory:)`, and `apkrun dev boot --bundle <dir>` boots it in place without installing it ([cli.md](cli.md) §5). #065 adds signing and installation (§10.3) and removes `--unsigned`, `DevelopmentImage`, and `--bundle`.
+- **Signing (#065):** `bundle` needs `--sign-key` and writes `SHA256SUMS` and `manifest.sig` with the tree. The unsigned path of #012 (`--unsigned`, `DevelopmentImage`, and `apkrun dev boot --bundle`) is removed. `apkrun dev boot` boots `current` ([cli.md](cli.md) §5).
 
 ### 10.3 Development install
 
@@ -1602,6 +1602,9 @@ New rows are added whenever #011–#014, #035, #083, or #095 find a difference. 
 |---|---|---|
 | `manifestInvalid(path, reason)` | schema or semantic check failed | reinstall the image |
 | `signatureInvalid(keyID)` / `untrustedKey(keyID)` | bad or unknown signature | reinstall from the official feed; in development, trust your dev key |
+| `unexpectedFile(file)` | a bundle holds a file its manifest does not list, or an installed image of the same version has a different manifest | reinstall the image; run `apkrun doctor --deep` |
+| `imageNotInstalled(version)` | an activation names a version with no directory under `Images/` (#065) | install that image first, or choose an installed one |
+| `noCurrentImage` | a boot or a verification needs `Images/current`, and it does not exist (#065) | install an Android system; developers run `apkrun dev image install <bundle>` |
 | `hashMismatch(file)` / `missingFile(file)` / `unexpectedFile(file)` | integrity failure | reinstall the image; run `apkrun doctor --deep` |
 | `incompatibleRuntime(required)` | host too old | update APKRun |
 | `incompatibleProtocol(range)` | agents' protocol range outside the host's | variant `hostNewer` (the image's range ends below the host's lowest major): update Android. Variant `guestNewer` (it starts above the host's highest major): update APKRun |
@@ -1694,6 +1697,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | VZ direct-boot spike of the stock image (IR-306) | spike | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615, harness `Experiments/vz-android-boot/`: kernel, first-stage init, dynamic partitions, AVB (`orange`/`unlocked`, `avb.py` digest), and first-boot formatting of `/metadata` and `/data` all worked. `/proc/bootconfig` equalled the merged block (49 keys, 2574 bytes). `getenforce` was `Enforcing` with no AVC denials. `/dev/rtc0` existed with the correct date. `VIRTUAL_DEVICE_BOOT_COMPLETED` came at 7.5 s on a first boot. `g2_spike.py` passed five cold boots in a row, each stable for 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, no init service exiting three times, and no tombstone (three-disk layout); the two-disk layout passed two cold boots. The handling it needed is in §4.2, §7, and §9.1 |
 | Real sizes of the blank partitions; omitted partitions not needed | #011 | the manifest sizes (`misc` 1 MiB, `metadata` 64 MiB, `frp` 1 MiB) booted in the spike; `_b` slots, `uboot_env`, `bootconfig`, and the persistent vbmeta were not needed. #011 confirms them against the composite specs (§3.2, §4.2) |
 | fstab `formattable` flags and the metadata encryption path | #011 | confirmed in the spike: `formattable` on `/data` and `/metadata`, `keydirectory=/metadata/vold/metadata_encryption` (§5.2) |
+| Signed stock bundle, install, and boot (#065) | #065 | 2026-10-09, macOS 27.0.1 (26A434), build 16373615. `scripts/build-test-android-bundle.sh` built the signed bundle twice from the same inputs, and `manifest.json`, `manifest.sig`, and `SHA256SUMS` were byte-identical. `os.img` allocates 1.8 GB for 8.7 GB logical after the zero-block fix (§4.3). `apkrun dev image install` made the image current, and `apkrun dev boot` reached `ready` in 13.7 s. `G2AndroidBootTests` passed five cold boots from the installed bundle, each with `sys.boot_completed=1`, with a 60-second dwell instead of 600 seconds. |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09, macOS 27.0.1 (26A434): `40000000.pci`; the disks, PCI functions, and device-tree nodes are in `Images/reference/vz/26A434/topology.txt` (§5.3) |
 | Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `apkrun dev boot` boots through `AndroidBootPlanner` and `RuntimeSupervisor`, and the console shows `[vda]` with nine partitions and `[vdb]` with four. `/dev/rtc0`, `/proc/cmdline`, and `/proc/bootconfig` are not yet checked on the production path (§6, §7.6) |
 | First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |

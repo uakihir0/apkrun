@@ -192,6 +192,20 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         lock.withLock { scanouts }
     }
 
+    /// The virtio-gpu features this device offers, named as the `requiredHostCapabilities` of a GPU profile
+    /// in the bundle manifest (runtime-image-manifest.md §4.7): `edid` is `VIRTIO_GPU_F_EDID`, and `virgl` is
+    /// `VIRTIO_GPU_F_VIRGL`. The set follows the descriptor, so `virgl` appears only with the renderer (#022).
+    public var hostCapabilities: Set<String> {
+        var names: Set<String> = []
+        if descriptor.optionalFeatures & VirtioGPUProtocol.Feature.virgl != 0 {
+            names.insert("virgl")
+        }
+        if descriptor.optionalFeatures & VirtioGPUProtocol.Feature.edid != 0 {
+            names.insert("edid")
+        }
+        return names
+    }
+
     /// Waits until no configuration update is in flight. Tests use it to observe `events_read`.
     package func waitForConfigurationWrites() async {
         while true {

@@ -98,6 +98,11 @@ private final class TraceBox: @unchecked Sendable {
     #expect(descriptor.sharedMemoryRegions.isEmpty)
 }
 
+@Test func hostCapabilitiesNameTheFeaturesTheDeviceOffers() {
+    // No renderer yet (#021), so the device offers EDID only. `virgl` is named only when the descriptor offers it.
+    #expect(VirtioGPUDevice().hostCapabilities == ["edid"])
+}
+
 @Test func configurationSpaceHasSixteenLittleEndianBytes() {
     let bytes = Array(VirtioGPUDevice().descriptor.configurationSpace)
     // events_read = 0, events_clear = 0, num_scanouts = 16, num_capsets = 0.

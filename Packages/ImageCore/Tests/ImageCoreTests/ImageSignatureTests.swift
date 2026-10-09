@@ -116,4 +116,37 @@ func theTrustStoreFindsOnlyTheKeysItHolds() {
         try Data("not a key\n".utf8).write(to: keyFile)
         #expect(ImageTrustStore.standard(home: home).keys.isEmpty)
     }
+    @Test
+    func aDeveloperKeyAnotherUserCanWriteIsNotTrusted() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-trust-mode-\(UUID().uuidString)", isDirectory: true)
+        let config = home.appendingPathComponent(".config/apkrun", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let keyFile = config.appendingPathComponent("dev-image-key.pub")
+        try Data((testPublicKey.base64EncodedString() + "\n").utf8).write(to: keyFile)
+
+        for mode in [0o664, 0o646, 0o666] as [Int] {
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: keyFile.path)
+            #expect(ImageTrustStore.standard(home: home).keys.isEmpty, "mode \(String(mode, radix: 8))")
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyFile.path)
+        #expect(ImageTrustStore.standard(home: home).key(for: "d4a6987f22e8f45f") != nil)
+    }
+
+    @Test
+    func aDeveloperKeyThatIsASymbolicLinkIsNotTrusted() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-trust-link-\(UUID().uuidString)", isDirectory: true)
+        let config = home.appendingPathComponent(".config/apkrun", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let target = home.appendingPathComponent("elsewhere.pub")
+        try Data((testPublicKey.base64EncodedString() + "\n").utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: config.appendingPathComponent("dev-image-key.pub"), withDestinationURL: target
+        )
+        #expect(ImageTrustStore.standard(home: home).keys.isEmpty)
+    }
 #endif

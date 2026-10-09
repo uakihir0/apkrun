@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The Ed25519 keys that may sign image manifests (runtime-image-manifest.md §6.1).
@@ -52,6 +53,9 @@ public struct ImageTrustStore: Equatable, Sendable {
         /// never trusts a key by mistake.
         static func developmentStore(home: URL) -> ImageTrustStore {
             let url = home.appendingPathComponent(".config/apkrun/dev-image-key.pub")
+            guard isPrivateToTheUser(url) else {
+                return release
+            }
             guard
                 let text = try? String(contentsOf: url, encoding: .utf8),
                 let data = Data(
@@ -62,6 +66,17 @@ public struct ImageTrustStore: Equatable, Sendable {
                 return release
             }
             return ImageTrustStore(keys: release.keys + [Key(publicKey: data)])
+        }
+
+        /// True when `url` is a regular file owned by the current user, which no group or other
+        /// user can write. Anyone who could replace the file could add a signer to the trust list,
+        /// so a file like that is not a key. A symbolic link is not a regular file, so it is refused.
+        static func isPrivateToTheUser(_ url: URL) -> Bool {
+            var status = stat()
+            guard lstat(url.path, &status) == 0, status.st_mode & S_IFMT == S_IFREG else {
+                return false
+            }
+            return status.st_uid == getuid() && status.st_mode & (S_IWGRP | S_IWOTH) == 0
         }
     #endif
 }

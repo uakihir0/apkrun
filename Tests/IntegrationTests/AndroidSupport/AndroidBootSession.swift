@@ -43,7 +43,9 @@ final class AndroidBootSession: @unchecked Sendable {
         self.captureTask = captureTask
     }
 
-    static func start(developerMode: Bool) async throws -> AndroidBootSession {
+    /// Starts a boot whose supervisor installs and starts `guestAgentBundle` in developer mode (#072). Nil boots without the agent.
+    static func start(developerMode: Bool, guestAgentBundle: GuestAgentBundle? = nil) async throws -> AndroidBootSession
+    {
         let bundle = try bundleDirectory()
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-015-adb-\(UUID().uuidString)", isDirectory: true)
@@ -59,7 +61,8 @@ final class AndroidBootSession: @unchecked Sendable {
             instanceStore: store,
             options: BootOptions(gpuProfile: .headless, developerMode: developerMode, captureLogcat: false),
             diagnostics: diagnostics,
-            environment: AndroidTestEnvironment.current()
+            environment: AndroidTestEnvironment.current(),
+            guestAgentBundle: guestAgentBundle
         )
         let capture = ConsoleCapture()
         let events = supervisor.events
@@ -76,9 +79,10 @@ final class AndroidBootSession: @unchecked Sendable {
     /// Runs `body` on a fresh boot, and stops Android and removes the instance afterwards, also when `body` throws.
     static func withBoot(
         developerMode: Bool,
+        guestAgentBundle: GuestAgentBundle? = nil,
         _ body: (AndroidBootSession) async throws -> Void
     ) async throws {
-        let session = try await start(developerMode: developerMode)
+        let session = try await start(developerMode: developerMode, guestAgentBundle: guestAgentBundle)
         do {
             try await session.supervisor.ensureReady(.cli)
             try await body(session)

@@ -91,6 +91,36 @@
         "maximumTestExecutionTimeAllowance" : 1500
       }
     }
+    ,
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003008",
+      "name": "AndroidGuestAgent",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-guest-agent",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_OTHER_DIR",
+            "value": "/tmp/apkrun-test-guest-1001",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    }
   ],
   "defaultOptions" : {
     "maximumTestExecutionTimeAllowance" : 900,

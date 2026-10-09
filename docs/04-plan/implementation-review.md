@@ -11621,3 +11621,59 @@ reach, and fixing it needs a change to the controller's start path that is not
 part of #014's readiness work. The rest are noted for the owner tasks.
 
 **Consequence.** #014 does not claim that a stop during VM start works.
+
+## IR-410: Copied RiftVM MSAA code ships under a reference pin
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #018, #020 |
+| Affected files | `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/ThirdParty.lock.json` (`riftvm`, `virglrenderer`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4, §5; [graphics.md](../02-design/graphics.md) §5.1; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §3.2, §4.1 |
+
+**Choice.** Treat `virglrenderer/0002` as copied RiftVM MIT code. Reclassify the `riftvm` lock entry from `ships: reference` to `ships: derived`, and add the RiftVM MIT text and the marked file list to the generated notices, as [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 requires. The patch header keeps the `f615e16` origin and also cites the pinned commit `51f19193`. The rule as written requires this change, so this entry records it as the choice. The alternative is an independent rewrite of the downgrade, which would keep the `reference` pin. That needs new code and review, so it is not chosen here. #018 does not make the change, because its acceptance criteria require the pin to stay source-only and IR-188 chose `reference`. Release artifacts that contain the runtime wait for the change.
+
+**Reason.** `virglrenderer/0002` carries RiftVM's `virglrenderer-msaa-downgrade.patch`. Its added lines equal the code of `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` at the pinned commit, apart from blank-line placement, and its comments say "RiftVM:". The patch is shipped in APKRun's virglrenderer dylib (`ships: app`). So it is copied RiftVM code, and [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1 defines `reference` as "not built, copied, linked, or distributed". §3.1 requires the lock entry to become `ships: derived` when APKRun copies RiftVM code. IR-188 chose `reference` on the premise that no RiftVM code is copied, and that premise does not hold for this patch. The header cites `f615e16`, not the pinned commit, so the §3.1 marker does not match the pin either. §3.2 keeps the original `From:` author, who matches the author of `f615e16`, so attribution is right. The gap is the notice and the classification.
+
+**Verification.** On 2026-10-10 the added lines of `0002` were compared with the pinned file, `f615e16` was confirmed to exist upstream (2026-09-19, same author as the patch's `From:` line), and the shipped code was confirmed to carry the `RiftVM:` comments. `scripts/check-lock.sh` passes because it does not inspect code for copies. The `scripts/check-licenses.sh` checker that would test the marker is planned for #093 and is not in this checkout.
+
+## IR-411: ANGLE patch omits the Vulkan-backend hunk of the recipe
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020; follow-up to the Vulkan track (#096) |
+| Affected files | `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+
+**Choice.** Keep `angle/0001` without the recipe's `VertexArrayVk.cpp` hunk for v1. Record that the hunk, or an equivalent fix, must be applied before the ANGLE Vulkan backend is enabled, and that the Vulkan track (#096) owns that step. #018 changes no patch.
+
+**Reason.** The recipe's `angle-changes-main.patch` changes four files. APKRun's `angle/0001` changes three, and it leaves out `src/libANGLE/renderer/vulkan/VertexArrayVk.cpp`, where the recipe replaces `bufferVk->getSize()` with `bufferHelper.getSize()` in the `padVertexAttribBufferSizeIfNeeded` call. The pinned Vulkan renderer's `BUILD.gn` asserts `angle_enable_vulkan`, and the lock sets `angle_enable_vulkan=false`, so the Metal-only library does not compile that file. The omission therefore does not change the v1 library. But no record shows that the omission was intended, and a later Vulkan build would differ from the recipe.
+
+**Verification.** On 2026-10-10 the two sequences were applied to copies of the pinned ANGLE files that the patches touch. The only difference was that one line. The `BUILD.gn` assertion was read from the pinned archive. #020's build evidence (IR-191) does not cover a Vulkan build.
+
+## IR-412: Carried patch headers do not record upstream status
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020 |
+| Affected files | `ThirdParty/patches/virglrenderer/0001-add-macos-metal-support.patch`; `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; `ThirdParty/patches/libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, `0003-enable-egl-platform-display.patch`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 |
+
+**Choice.** Each carried patch header gets one line that states whether the patch was sent upstream, and where. This is a follow-up to the #020 patch set. #018 does not edit patch files.
+
+**Reason.** §3.2 requires the patch header to keep the author, the reason, and whether the patch was sent upstream. `virglrenderer/0003` states "Upstream: not submitted". The carried patches state only their recipe or RiftVM origin. The libepoxy headers are series patches (`[PATCH n/3]`) and do not say whether they were merged or submitted. Without that line, a reviewer cannot check the upstream status of these patches from the files.
+
+**Verification.** On 2026-10-10 each of the six headers was read. None of them states an upstream status. The one APKRun patch that does, `virglrenderer/0003`, is not in this list.
+
+## IR-413: Renderer flags that RiftVM does not pass
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020 |
+| Affected files | `ThirdParty/ThirdParty.lock.json` (`buildFlags` of `virglrenderer`, `libepoxy`, and `angle`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+
+**Choice.** Keep the three flags that RiftVM does not pass: virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`. The maintainer confirms them at the next #020 build review. #018 changes no build input.
+
+**Reason.** The flags match the v1 scope, which is a macOS 27 Metal-only renderer. For virglrenderer, RiftVM's default `platforms=auto` already selects EGL on macOS when libepoxy reports it, as the pinned `meson.build` shows. So `-Dplatforms=egl` makes a missing EGL a build error instead of a silent omission, and it does not change the compiled winsys. For libepoxy, `-Dglx=no` removes GLX, which is not used on macOS; the expected effect is nil, but libepoxy's `meson.build` was not read for this entry. For ANGLE, RiftVM's GN arguments do not set `mac_deployment_target`, so the minimum OS of the shipped libraries follows the SDK default. The lock sets 27.0 to match the product minimum. The effect of the default was not measured.
+
+**Verification.** On 2026-10-10 the flags were compared with the pinned `build-virgl-runtime-from-source.sh` and with the lock. The virglrenderer `platforms` handling was read from the pinned `meson.build` with the recipe patch applied. #018 ran no build. The #020 build (IR-191) ran with these flags; whether they change the runtime's behavior is not established.

@@ -11677,3 +11677,157 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 **Reason.** The flags match the v1 scope, which is a macOS 27 Metal-only renderer. For virglrenderer, RiftVM's default `platforms=auto` already selects EGL on macOS when libepoxy reports it, as the pinned `meson.build` shows. So `-Dplatforms=egl` makes a missing EGL a build error instead of a silent omission, and it does not change the compiled winsys. For libepoxy, `-Dglx=no` removes GLX, which is not used on macOS; the expected effect is nil, but libepoxy's `meson.build` was not read for this entry. For ANGLE, RiftVM's GN arguments do not set `mac_deployment_target`, so the minimum OS of the shipped libraries follows the SDK default. The lock sets 27.0 to match the product minimum. The effect of the default was not measured.
 
 **Verification.** On 2026-10-10 the flags were compared with the pinned `build-virgl-runtime-from-source.sh` and with the lock. The virglrenderer `platforms` handling was read from the pinned `meson.build` with the recipe patch applied. #018 ran no build. The #020 build (IR-191) ran with these flags; whether they change the runtime's behavior is not established.
+
+## IR-380: Refuse a GPU profile that the device does not offer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 1) |
+| Affected documents | [M02](issues/M02-graphics.md) #021, #022; [graphics.md](../02-design/graphics.md) §9; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7; [error-catalog.md](../03-reference/error-catalog.md) §7.2 |
+
+**Choice.** `RuntimeSupervisor` checks the profile's `requiredHostCapabilities`, from the bundle manifest, against the names of the device's features (`VirtioGPUDevice.hostCapabilities`: `edid`, and `virgl` once the renderer offers it). A profile the device cannot satisfy fails with `runtime.gpuProfileUnavailable` before the instance is read or the initrd is written. `drmVirgl` fails this way until #022. The entry is `cliExit` 1 with action `none`.
+
+**Reason.** Without the check, a `drmVirgl` boot gives the guest no VirGL feature for its Mesa stack, and the guest stalls or aborts after minutes (graphics.md §9). The manifest already names the features a profile needs, so the check uses that vocabulary and does not hard-code a list of profiles.
+
+**Consequence.** `drmVirgl` cannot boot in this build, and `--gpu virgl` is refused (IR-382). #022 offers `VIRTIO_GPU_F_VIRGL` in the descriptor, and this check then passes without a change to it.
+
+## IR-381: Append the GPU device in RuntimeSupervisor, for every caller
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 1) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §9.2; [vm.md](../02-design/vm.md) §2; [runtime-daemon.md](../02-design/runtime-daemon.md) §3 |
+
+**Choice.** `RuntimeSupervisor.boot()` decides the profile's devices (`AndroidGraphicsDevices.devices(for:requiredHostCapabilities:)`) before it reads the instance. It assigns them to a copy of the planner's `VMDefinition` before validation. The CLI and RuntimeHost pass only the profile.
+
+**Reason.** ImageCore cannot depend on GraphicsCore (modules.md §3), and the planner leaves `customDevices` empty (android-image.md §9.2). RuntimeCore already owns the device list of a boot, and the supervisor is the boot path that apkrund will host, so every caller gets the same device.
+
+**Consequence.** Assignment replaces `customDevices`, so a planner that later fills it would lose its devices silently. The current contract is that the planner leaves it empty, and a later change to that contract needs a check here.
+
+## IR-382: Offer only the GPU profiles of this build in `apkrun dev boot --gpu`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 4) |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [runtime-api.md](../03-reference/runtime-api.md) §15; [M02](issues/M02-graphics.md) #021 |
+
+**Choice.** `DevGPUProfile` has `none` (headless) and `swiftshader`. `--gpu virgl` is refused as an invalid argument. The default stays `none`.
+
+**Reason.** A profile that the CLI offers must boot, and `virgl` cannot boot before #022 (IR-380). Keeping `none` as the default leaves the headless bring-up unchanged.
+
+**Consequence.** runtime-api.md §15 names `.virgl` and the default that follows #022 is `virgl`. cli.md §5 lists the values without a default. The maintainer should confirm when #022 changes the default.
+
+## IR-383: Keep the 1024×768 test mode on scanout 0 in #021
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.1, §12 (#023 step 3); [android-image.md](../02-design/android-image.md) §6.2 |
+
+**Choice.** The device is created with the default `ScanoutTable`, so scanout 0 is the 1024×768 at 60 Hz test mode. graphics.md §6.1 says that scanout 0 takes the image's default mode at device creation. #021 does not implement that.
+
+**Reason.** No manifest key or capture value fixes the default mode. The reference capture pins `lcd_density` only, and the mode depends on the window and display policy that #023 implements (display-and-windowing.md). The #021 acceptance (only `Virtual-1` connected) holds at any mode.
+
+**Consequence.** Under `guestSwiftshader`, Android's display 0 is 1024×768 until #023. The maintainer should decide whether §6.1's default mode belongs to #021.
+
+## IR-384: Read the DRM connector status as root, through `adb root`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#021 step 2), §16; [test-strategy.md](../04-plan/test-strategy.md) §6.3 |
+
+**Choice.** `AdbClient.restartAsRoot()` runs `adb root`, connects again, and checks that `id -u` is 0. The #021 capture runs as root. A user build refuses `adb root`, so the call throws `commandFailed`. The production path never calls it.
+
+**Reason.** On the development image, SELinux denies the shell domain every read of a connector's `status`, `enabled`, `edid`, `modes`, and `dpms` (`Permission denied`), so the check cannot tell which connector is connected. The guest protocol that would report the DRM state has no Guest Agent yet (guest-protocol.md, guest-components.md).
+
+**Consequence.** The T2 check depends on a development-only root restart (`ro.debuggable=1`). The DRM connector state should come from a guest-protocol query when the Guest Agent exists. That is a follow-up for the guest-protocol owners, not part of #021.
+
+## IR-385: Fall back to the console only for the kernel log
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#021 step 2) |
+
+**Choice.** The kernel log is `dmesg` over adb. If `dmesg` fails, the check uses the hvc0 console text instead. The sysfs captures have no console fallback, so an unreachable adb fails the check. The hvc0 console is always saved as `hvc0-console.log`.
+
+**Reason.** The console carries the kernel's messages, so it is a valid kernel log. It does not carry sysfs state, and a fallback there would be false evidence.
+
+**Consequence.** Step 2's "when ADB is not up, use the kernel console" is applied to the kernel log only. The binding check needs adb.
+
+## IR-386: Read the guest while Android runs, and do not wait for readiness
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9, §12 (#021) |
+
+**Choice.** The T2 check starts the boot, waits for adb, reads the guest, saves the capture, and stops Android. It does not require `ready`. The summary records `sys.boot_completed` at capture time.
+
+**Reason.** graphics.md §12 says `boot_completed` is not needed for #021, because the 2D commands fail until #022. Waiting for readiness would tie the check to #022.
+
+**Consequence.** On this host the capture happens in the first seconds of Android (IR-390), and the summary can be empty if the capture comes first.
+
+## IR-387: Keep the captures beside the test bundle and in the test report
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 2) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §6.3 |
+
+**Choice.** The captures are written to `<APKRUN_TEST_LINUX_DIR>/android-graphics/` (`kernel-log.txt`, `drm-connectors.txt`, `virtio-devices.txt`, `summary.txt`, `hvc0-console.log`) and attached to the XCTest result with `keepAlways`.
+
+**Reason.** The Linux `gpu` check keeps its driver trace beside the guest artifacts (`GPUDeviceTests`). The bundle directory is outside `~/Documents`, as the rule requires.
+
+**Consequence.** The captures are overwritten by the next run of the check.
+
+## IR-388: Run the T2 adb from a copy of the SDK platform-tools, outside `~/Documents`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 6) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5; [test-strategy.md](../04-plan/test-strategy.md) §3.5 |
+
+**Choice.** The run that graphics.md §16 records set `APKRUN_ANDROID_HOME=/tmp/apkrun-021-sdk`, a copy of `build/android-sdk/platform-tools` (adb 1.0.41, Android Debug Bridge version 37.0.1-15733141). It is the same binary, not a different adb.
+
+**Reason.** Inside the test host, a child adb blocked in dyld on an `open` under the worktree's `~/Documents` path: `adb version` never returned. The same binary from `/tmp` returned in 0.1 s, and the test then passed. The cause is the macOS file-access rule for `~/Documents`, so the fix is the location, not the code.
+
+**Consequence.** A checkout under `~/Documents` can hang the AndroidADB and AndroidGraphics configurations the same way. The maintainer should decide whether environment-setup.md says where the SDK goes for the test host.
+
+## IR-389: Give the AndroidGraphics configuration its own adb server port
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (step 6) |
+| Affected documents | [IntegrationTests.xctestplan](../../Tests/IntegrationTests/IntegrationTests.xctestplan) |
+
+**Choice.** The configuration sets `ANDROID_ADB_SERVER_PORT=15038`. The AndroidADB configuration uses 15037.
+
+**Reason.** Configurations should not share an adb server, because the server keeps transport state between runs. The port change was made while the first runs were being diagnosed. It is not established as the cause of the earlier failure, since port 15038 failed the same way until the SDK location changed (IR-388).
+
+**Consequence.** None for the other configurations.
+
+## IR-390: With `guestSwiftshader`, Android completes its boot before #022
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #021 (steps 1 and 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9, §12 (#021 notes), §16 |
+
+**Choice.** Recorded as an observation, not as a design change. In the first CLI check, `apkrun dev boot --gpu swiftshader` reached `ready` about 9 s after the VM started, and the console shows `sys.boot_completed=1` at kernel time 8.5 s. The 2D commands (`SET_SCANOUT`, `RESOURCE_CREATE_2D`, `TRANSFER_TO_HOST_2D`, `RESOURCE_FLUSH`) return `VIRTIO_GPU_RESP_ERR_UNSPEC` (`0x1200`), and the kernel logs each one as `*ERROR*`.
+
+**Reason.** graphics.md §12 says that `boot_completed` is not required here, and this host reaches it anyway. The error responses are the expected behaviour until #022, and they did not stop the boot.
+
+**Consequence.** A boot that completes with this profile does not show that the display works. #022 must check the 2D path with rendering, not only `boot_completed`. The maintainer should confirm the wording of graphics.md §12.

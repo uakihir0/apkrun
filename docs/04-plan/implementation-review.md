@@ -11157,7 +11157,8 @@ VM, so the comparison logic is exercised on every kernel.
 
 **Choice.** The T2 Android tests bound each stop at 60 s with
 `ConsoleBuffer.completes(within:)` and fail with "the forced stop returns within
-60 s" when it does not return. `VMController` is not changed by #012.
+60 s" when it does not return. The first version of this entry left the
+`VMController` fix to #014; it landed in #012 (see Consequence).
 
 **Reason.** `AndroidBootTests.testKernelBoot` stops the VM about one second
 after `init`. In one of three runs, VZ returned `vm.stoppedWithError`
@@ -11169,9 +11170,11 @@ traced past `RuntimeSupervisor.stop()`, `fail()`, and
 stop-during-boot fix), but the VZ error and the hang come from `VMController`,
 which #012 does not change.
 
-**Consequence.** #014 owns the readiness monitor's stop and failure path. It
-should make a stop that follows a VZ error return with a typed result. Until
-then the bound makes the failure visible in the test instead of a hang.
+**Consequence.** The hang is fixed in `0e32d62` (`fix(vm)`, on
+`task/012-android-kernel-boot-closure`): `VMController` releases the VM after a
+failed stop, and `waitForConsoleLogDrain()` releases a failed VM, so a stop that
+follows a VZ error returns. The 60 s bound stays in the T2 tests as a guard. The
+#012 entry records the fix. The G2 gate found no hang in its runs.
 
 ## IR-364: Accept the unsigned development vbmeta messages in the AVB check
 

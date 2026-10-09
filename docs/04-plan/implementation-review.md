@@ -10502,3 +10502,39 @@ schedule (`cron: "15 3 * * *"`) comes back.
 **Choice.** `ImageStore` caches steps 1–6 of the quick check. The key is the inode, size, and modification time of `manifest.json` and `manifest.sig`, as §7.1 says. Step 7 always runs.
 
 **Reason.** This follows §7.1. A file rewritten in place with the same size and modification time would pass the cache. Install never reads the cache, and `verify(.full)` always hashes the files. Recorded so that a reviewer knows the trade-off.
+
+## IR-356: The release check can name only the developer key of the machine that runs it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065; #093 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §3.1 |
+
+**Choice.** The image bundle row refuses a bundle signed with the test key, or with the developer key in `~/.config/apkrun/dev-image-key.pub` on the machine that runs the check. It cannot refuse a bundle signed with another developer's key.
+
+**Reason.** The release job runs on a build machine that holds only its own key, and the spec lists no other keys to compare with. The primary defence is the empty release trust list (IR-341): a Release build refuses every bundle whatever key signed it. The row is a second line of defence for the keys it can know.
+
+## IR-357: Refuse a repeated key and a byte-order mark in manifest.json
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §11, §13 |
+
+**Choice.** Both readers refuse a JSON object that names one key twice, and a document that starts with a byte-order mark. The validator uses `object_pairs_hook` to raise, and ImageCore scans the bytes before it decodes.
+
+**Reason.** §11 defines unknown fields but not repeated keys. Python's `json` keeps the last value and `JSONDecoder` keeps the first, so a validated document could mean different things to the validator and to the device. A byte-order mark is refused because the Python reader does not take one. Both cases are shared fixtures with the rule `schema`.
+
+## IR-358: Refuse a line break in any string value
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §5, §11 |
+
+**Choice.** A string that contains a line feed or carriage return fails the schema, in both readers, before any pattern is checked.
+
+**Reason.** The schema patterns end in `$`. Python's `re` matches `$` before a trailing line feed, so `"sha256": "<64 hex>\n"` passed the Python validator and failed Swift. ECMA regular expressions, which JSON Schema specifies, do not match there. The rule makes the two readers agree without changing the committed schema, which must stay byte for byte as §5 gives it.

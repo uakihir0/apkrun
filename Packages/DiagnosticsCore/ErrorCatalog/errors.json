@@ -1581,7 +1581,7 @@
       "doc": {
         "case": "missingFile(file:)",
         "when": "a file that the manifest lists is missing",
-        "raisedBy": "DevelopmentImage, AndroidBootPlanner",
+        "raisedBy": "ImageStore, AndroidBootPlanner",
         "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §7.1"
       }
     },
@@ -1603,7 +1603,7 @@
       "doc": {
         "case": "hashMismatch(file:)",
         "when": "a file's size (quick check) or SHA-256 (full check) differs from the manifest",
-        "raisedBy": "DevelopmentImage",
+        "raisedBy": "ImageStore",
         "ref": "[runtime-image-manifest.md](runtime-image-manifest.md) §7.1"
       }
     },

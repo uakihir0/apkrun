@@ -45,7 +45,16 @@ final class AndroidGraphicsTests: XCTestCase {
         }
         // The boot wait is not awaited on its own terms: the check reads the guest while Android runs, and it stops
         // Android after the capture. A boot that stalls before `ready` still gets its capture.
-        let boot = Task { try? await supervisor.ensureReady(.cli) }
+        let boot = Task { () -> String in
+            do {
+                try await supervisor.ensureReady(.cli)
+                return "ready"
+            } catch let failure as RuntimeBootFailure {
+                return "ended with \(failure.qualifiedCode)"
+            } catch {
+                return "ended with \(String(describing: error))"
+            }
+        }
 
         let captured: Result<GraphicsCapture, Error>
         do {
@@ -57,8 +66,10 @@ final class AndroidGraphicsTests: XCTestCase {
         } catch {
             captured = .failure(error)
         }
+        // The state before the stop is what the capture saw. The stop then ends the boot task with its own error.
+        let stateAtCapture = await supervisor.state
         await supervisor.stop()
-        _ = await boot.value
+        let bootOutcome = await boot.value
         collector.cancel()
 
         let directory = bundle.deletingLastPathComponent().appendingPathComponent("android-graphics", isDirectory: true)
@@ -76,11 +87,17 @@ final class AndroidGraphicsTests: XCTestCase {
         case .failure(let error):
             XCTFail(
                 "the guest capture did not complete (adb \(adbExecutable.path)): \(error). "
+                    + "The boot was \(stateAtCapture) at the capture, and its task \(bootOutcome). "
                     + "Console tail: \(console.text.suffix(400))"
             )
             return
         }
-        try capture.save(to: directory, attach: { add($0) })
+        try capture.save(
+            to: directory,
+            stateAtCapture: "\(stateAtCapture)",
+            bootOutcome: bootOutcome,
+            attach: { add($0) }
+        )
 
         let gpu = capture.virtioDevices.first { $0.deviceID == Self.virtioGPUDeviceID }
         XCTAssertEqual(gpu?.driver, "virtio_gpu", "device 16 is bound to virtio_gpu: \(capture.virtioDevices)")
@@ -98,7 +115,12 @@ final class AndroidGraphicsTests: XCTestCase {
             capture.connectors.filter { $0.name != "card0-Virtual-1" }.allSatisfy { $0.status == .disconnected },
             "every other connector is disconnected: \(capture.connectors)"
         )
-        XCTAssertTrue(capture.drmListing.contains("card0"), "/sys/class/drm lists card0")
+        // The DRM driver creates card0 (minor 0), and the kernel logs that. card0's own `device` link is the PCI
+        // function, which the virtio-pci transport drives, so the driver is checked through the log.
+        XCTAssertTrue(
+            capture.kernelLog.contains("Initialized virtio_gpu") && capture.kernelLog.contains("on minor 0"),
+            "the kernel log shows the DRM driver virtio_gpu initialized minor 0 (card0)"
+        )
     }
 
     /// Reads the guest. The kernel log comes from `dmesg` over adb, and from the hvc0 console when adb refuses it.
@@ -135,11 +157,18 @@ private struct GraphicsCapture {
     let bootCompleted: String
 
     /// Writes the capture into `directory` and attaches each file to the test report.
-    func save(to directory: URL, attach: (XCTAttachment) -> Void) throws {
+    func save(
+        to directory: URL,
+        stateAtCapture: String,
+        bootOutcome: String,
+        attach: (XCTAttachment) -> Void
+    ) throws {
         let files: [(String, String)] = [
             (
                 "summary.txt",
                 "sys.boot_completed=\(bootCompleted)\nkernel-log source: \(kernelLogSource)\n"
+                    + "supervisor state at the capture: \(stateAtCapture)\n"
+                    + "boot task after the stop: \(bootOutcome)\n"
             ),
             (
                 "kernel-log.txt",

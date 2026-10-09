@@ -167,6 +167,59 @@ enum AdbOutputParser {
         return candidates.min { $0.rank < $1.rank }?.component
     }
 
+    /// The connectors of `drmConnectors` (#021): one `<name> <status>` line each. Any other line makes the whole
+    /// reply unexpected, so a glob that matched nothing (`card*-* `) is never read as a connector.
+    static func drmConnectors(_ output: String) -> [AdbDRMConnector]? {
+        var connectors: [AdbDRMConnector] = []
+        for line in lines(output) {
+            let fields = line.split(separator: " ")
+            guard fields.count == 2, isDRMConnectorName(fields[0]),
+                let status = AdbDRMConnectorStatus(rawValue: String(fields[1]))
+            else {
+                return nil
+            }
+            connectors.append(AdbDRMConnector(name: String(fields[0]), status: status))
+        }
+        return connectors
+    }
+
+    /// The devices of `virtioDevices` (#021): `<name> device=<0xHEX or empty> driver=<name or empty>` per line.
+    static func virtioDevices(_ output: String) -> [AdbVirtioDevice]? {
+        var devices: [AdbVirtioDevice] = []
+        for line in lines(output) {
+            let fields = line.split(separator: " ")
+            guard fields.count == 3, isVirtioDeviceName(fields[0]) else {
+                return nil
+            }
+            let values = keyValues(line)
+            guard let device = values["device"], let driver = values["driver"] else {
+                return nil
+            }
+            var deviceID: UInt32?
+            if !device.isEmpty {
+                guard device.hasPrefix("0x"), let value = UInt32(device.dropFirst(2), radix: 16) else {
+                    return nil
+                }
+                deviceID = value
+            }
+            devices.append(
+                AdbVirtioDevice(name: String(fields[0]), deviceID: deviceID, driver: driver.isEmpty ? nil : driver)
+            )
+        }
+        return devices
+    }
+
+    /// `card<N>-<connector>`, made of letters, digits, and hyphens. A `*` is refused, so an unmatched glob fails.
+    private static func isDRMConnectorName(_ name: Substring) -> Bool {
+        name.hasPrefix("card") && name.contains("-")
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+    }
+
+    /// `virtio<N>`, the directory name of a virtio device.
+    private static func isVirtioDeviceName(_ name: Substring) -> Bool {
+        name.hasPrefix("virtio") && name.count > 6 && name.dropFirst(6).allSatisfy { $0.isASCII && $0.isNumber }
+    }
+
     /// The lines of a reply, without carriage returns and without blank lines at either end.
     private static func lines(_ text: String) -> [String] {
         text.split(whereSeparator: \.isNewline)

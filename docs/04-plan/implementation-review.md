@@ -11751,3 +11751,151 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 **Reason.** graphics.md §12 says that `boot_completed` is not required here. This host reaches it anyway, and the error responses did not stop the boot.
 
 **Consequence.** A boot that completes with this profile does not show that the display works. #022 must check the 2D path with rendering, not only `boot_completed`. The maintainer should confirm the wording of graphics.md §12.
+
+## IR-440: The pinned AOSP mesa3d tree defines no EGL, GLES, gbm, or virgl module
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 1) |
+| Affected documents | [M02](issues/M02-graphics.md) #099; [graphics.md](../02-design/graphics.md) §5.3; [android-image.md](../02-design/android-image.md) §11.1; [receipt](../../Images/reference/16373615/mesa-payload-receipt.txt) §2 |
+
+**Choice.** Keep the lock pin of AOSP `external/mesa3d` at `android-17.0.0_r1` (commit `875160ed`) as the candidate source for the guest Mesa. Do not describe the pin as the source of the libraries that `egl=mesa` loads. The design documents now say which modules the tree has.
+
+**Reason.** The tree has 90 `Android.bp` files. They define 8 shared libraries, 44 static libraries, and 3 Rust libraries. The shared libraries are five stubs for non-Bionic builds (`cutils`, `hardware`, `log`, `nativewindow`, `sync`), two Vulkan ICDs (`vulkan.ranchu`, `vulkan.lvp`), and `gpudataproducer`. No module is an EGL, GLES, gbm, gallium DRI, or virgl library. `src/egl`, `src/gallium/drivers/virgl`, `src/gallium/targets/dri`, and `src/gbm` have `meson.build` files and no `Android.bp`. The tree's `README.aosp.md` says that its `Android.bp` files are generated from the meson build, so the EGL and virgl modules are absent from this snapshot.
+
+**Verification.** A shallow clone of the tag, with `VERSION` 26.1.0-devel, was searched with `find` and `grep` over `Android.bp`. The module-name search and the directory checks are in the receipt, §2.
+
+**Consequence.** The pin alone does not make a Mesa guest. Any build route must add the EGL, GLES, gbm, and virgl modules. The route is the open decision of IR-442 and IR-443.
+
+## IR-441: The candidate revision for build 16373615 is not recorded
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 1) |
+| Affected documents | `ThirdParty/ThirdParty.lock.json` (`aosp-mesa3d`); [receipt](../../Images/reference/16373615/mesa-payload-receipt.txt) §1, §7 |
+
+**Choice.** Use the `android-17.0.0_r1` tag, peeled to commit `875160ed32cc5bc32777fa04870a0a57ed38c987`, as the candidate. On 2026-10-10 the same commit is the head of `android17-release`. Do not present it as the external/mesa3d revision of build 16373615.
+
+**Reason.** The manifest's `source` block says that build 16373615 came from the `aosp-android-latest-release` branch. The reference archive has no manifest, only the `android-info.txt`, `fastboot-info.txt`, and image files. No artifact records the mesa3d revision of that build. The candidate is the only pinned revision the repository can point to.
+
+**Consequence.** A corrected image cannot claim that its Mesa matches build 16373615 until a maintainer checks the CI manifest for that build and confirms or changes the pin. The pin is a commit, so a change is an explicit lock edit.
+
+## IR-442: The AOSP Soong route cannot run on this host
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.5; [environment-setup.md](../05-development/environment-setup.md) §5; [M02](issues/M02-graphics.md) #099 |
+
+**Choice.** Do not run an AOSP build of the guest Mesa in this task. A maintainer must choose a build host and a route. The AOSP route needs a Linux x86-64 host with at least 64 GB of RAM and 400 GB of disk, as §11.5 requires.
+
+**Reason.** This Mac is arm64 with 162 GiB free. The Lima VM `apkrun-cuttlefish` is arm64, has a 120 GiB disk, and is stopped. The tree's `README.aosp.md` generates `Android.bp` with `meson convert android` from a personal fork's `meson2hermetic` branch (`gurchetansingh/mesonbuild`, PR 15462). That branch is not in the lock, so it is not pinned or reviewed. Running it would add a generated-file step that no pinned tool produces.
+
+**Verification.** `df` reports 162 GiB free. `limactl list` reports `apkrun-cuttlefish` as Stopped, aarch64, 120 GiB. No AOSP checkout was made.
+
+**Consequence.** No Mesa module, corrected image, or manifest exists after this task. The maintainer must choose a Linux x86-64 build host, or decide that the Soong route is not used.
+
+## IR-443: The standalone NDK route needs an SDK change, new pins, and an ADR
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.1; [build-system.md](../05-development/build-system.md) §6; [AGENTS.md](../../AGENTS.md) §6.6 |
+
+**Choice.** Do not install the NDK or cross-build Mesa with meson in this task. The route stays an option for the maintainer to decide.
+
+**Reason.** `build/android-sdk` has platforms, build-tools, platform-tools, and cmdline-tools, but no `ndk` directory. Installing one would change the SDK that the other checkouts share. A standalone build would also need libraries that the lock does not pin: libdrm for the virtio-gpu winsys, and zlib and expat unless the build drops them. It would need the Android headers that Mesa's Android platform code includes, such as `hardware/gralloc*.h` and the `libsync` header. The guest runs these components, so AGENTS §6.6 requires an ADR for them. Built outside the AOSP build, the modules would also have to match the vendor linker namespace and the VNDK rules by hand.
+
+**Verification.** `build/android-sdk` contains no `ndk` directory. A HEAD request to `dl.google.com` returned HTTP 200, so a download is possible, but none was run.
+
+**Consequence.** The maintainer chooses this route or the one in IR-442, and an ADR is written before any component is pinned.
+
+## IR-444: The AOSP source in the lock conflicts with the legal policy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1, §4.3; [AGENTS.md](../../AGENTS.md) §6.6; `ThirdParty/ThirdParty.lock.json` (`aosp-mesa3d`) |
+
+**Choice.** Keep the `aosp-mesa3d` lock entry with `ships: image`, `kind: source`, and the vendored `LICENSE`. Leave its classification open. The entry is not in any notice list, because `generate-notices.py` lists only `app` and `derived` entries.
+
+**Reason.** The task asked for the pin, and AGENTS §6.6 requires every third-party dependency to be pinned in the lock. But legal-and-licensing §4.3 says that AOSP components are not individual lock entries, since `Guest/product/manifest/pinned.xml` pins them. §4.1 puts an `image` component either under the image rules (from AOSP) or under the app list (added by us). The `ships` field does not say which. `scripts/check-licenses.sh` does not exist yet. Under the app list, GPL-2.0-only is forbidden, so the classification decides the result.
+
+**Consequence.** Before any image contains Mesa, the maintainer chooses one of two options. Either the lock entry stays and §4.1 gets a rule for AOSP source that APKRun builds, or the pin moves to `pinned.xml` and the lock has no entry. The entry is not a release approval.
+
+## IR-445: The Mesa tree is BY_EXCEPTION_ONLY, which blocks an image release
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.3, §7; [android-image.md](../02-design/android-image.md) §10.1 (`legal`) |
+
+**Choice.** Record the blocker. Do not put the Mesa tree into any image. The image release needs the maintainer decision that §4.3 requires.
+
+**Reason.** The `METADATA` file of `external/mesa3d` sets `license_type: BY_EXCEPTION_ONLY` and says that the package "HAS SPECIAL LICENSING CONDITIONS". Its `Android.bp` license block declares MIT, Apache-2.0, GPL-1.0-or-later, and GPL-2.0-only. §4.3 stops the image release for a `by_exception_only` module until a maintainer decides. GPL components may be in the image only with their source offer (§7.4).
+
+**Verification.** Read `METADATA` and the `external_mesa3d_license` block of the root `Android.bp` at `android-17.0.0_r1`.
+
+**Consequence.** The exception decision and the source offer belong to #093 and to the image release issue, not to #099.
+
+## IR-446: The corrected image and the `apkrun.test=egl` check are not built, and the tests are not run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (steps 3 and 4) |
+| Affected documents | [M02](issues/M02-graphics.md) #099; [android-image.md](../02-design/android-image.md) §8, §10.2; IR-239, IR-244 |
+
+**Choice.** Steps 3 and 4 are not done. Acceptance criteria 1 to 3 stay unchecked. The T0 manifest check and the T2 `apkrun.test=egl` check are not run. The checks that ran are the lock validator (`scripts/tools/check-lock.swift`, passed) and `scripts/tests/test_third_party_build.py` and `test_third_party_notices.py` (both passed).
+
+**Reason.** There is no Mesa payload to package (IR-440, IR-442, IR-443), so a corrected image has no identity and no manifest. The `apkrun.test=egl` check needs a guest binary and an init service, and neither exists. Even with an image, the `drm_virgl` path is not established on this host. IR-239 and IR-244 record an uncertified host crosvm and a startup that timed out.
+
+**Consequence.** #022 cannot use an image from this task. Steps 2 to 4 need the route decision first.
+
+## IR-447: The receipt was produced with scratch tooling that is not committed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 1) |
+| Affected documents | [receipt](../../Images/reference/16373615/mesa-payload-receipt.txt) §1; [environment-setup.md](../05-development/environment-setup.md) §3.3 |
+
+**Choice.** Commit the receipt text, not the scripts. The receipt lists the inputs, the tools, and the commands. The tools ran from scratch directories outside the repository. They were the `lp.py` reader of this worktree, `dump.erofs` 1.9.4 from the Homebrew bottle, and two short scripts that walk the EROFS tree and read ELF headers.
+
+**Reason.** The receipt is a one-time comparison, and a committed walker would have no consumer or tests. `dump.erofs` was not installed with Homebrew. The bottle's copy had its lz4 and xz references pointed at the installed Homebrew libraries and was re-signed, so the Homebrew installation is unchanged. `scripts/Brewfile` still does not list erofs-utils.
+
+**Consequence.** A later check of build 16373615 needs erofs-utils (1.9.4, or the 1.7.1 that IR-185 used) and the commands in the receipt. The maintainer decides whether the walker belongs in `Images/tools/`, with tests.
+
+## IR-448: The brief placed the pinned Mesa sources under ThirdParty/out
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 1) |
+| Affected documents | [M02](issues/M02-graphics.md) #099; [build-system.md](../05-development/build-system.md) §6 |
+
+**Choice.** Fetch the candidate tree into a scratch directory for the audit, and pin it in the lock by commit. Do not place a Mesa tree in `ThirdParty/out`.
+
+**Reason.** `ThirdParty/out/src` holds `angle`, `libepoxy`, and `virglrenderer`, and the lock had no Mesa entry before this task. `ThirdParty/out` is produced by `scripts/build-third-party.sh` from the lock. A tree placed there by hand would not come from a checked lock.
+
+**Consequence.** A build of the Mesa source needs a script path that does not exist yet. Until then, the pinned commit is only a candidate.
+
+## IR-449: Criterion 4 of #099 is checked, and criteria 1 to 3 stay open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [M02](issues/M02-graphics.md) #099; [M01](issues/M01-android-bring-up.md) #064 |
+
+**Choice.** Check "#064 is unaffected" and leave the other three criteria unchecked. Criterion 3 is not checked, because the Mesa build components are not pinned and no artifact exists yet.
+
+**Reason.** `git diff task/021-android-detects-virtio-gpu...HEAD` shows no change to `Images/manifests/16373615/`, to the captures under `Images/reference/16373615/incomplete/`, or to the M01 #064 entry. The only new file under `Images/reference/16373615/` is the receipt. Criterion 4 names build 16373615 and asks for nothing more.
+
+**Consequence.** Criterion 1 asks that build 16373615 stay unchanged. A maintainer may ask whether a new file in its directory counts as a change. The receipt changes no manifest, artifact, or capture.

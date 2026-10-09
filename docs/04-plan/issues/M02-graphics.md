@@ -480,12 +480,28 @@ Out of scope:
       build `16373615` is unchanged.
 - [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`).
 - [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock.
-- [ ] #064 is unaffected: its acceptance uses build `16373615`.
+- [x] #064 is unaffected: its acceptance uses build `16373615`.
 
 ### Notes
 
 - Placement and the reasons for it are in IR-240. This task sits between #021 and
   #022, because #022 needs a working Mesa guest.
+- **Status (2026-10-10).** Step 1 is done. The receipt
+  [mesa-payload-receipt.txt](../../../Images/reference/16373615/mesa-payload-receipt.txt)
+  shows that build `16373615` has no Mesa EGL, GLES, or gallium library. The
+  candidate source, `aosp-mesa3d` in the lock (commit `875160ed`, the
+  `android-17.0.0_r1` tag), defines no Soong module that would install one
+  (IR-440, IR-441). Steps 2 to 4 are not done. No build route is chosen, so there
+  is no fragment, no corrected image, and no `apkrun.test=egl` check (IR-442, IR-443, and
+  IR-446). Criterion 4 is checked because build `16373615` and its manifest did not
+  change. Criteria 1 to 3 stay open. The T0 manifest check and the T2 check need the
+  corrected identity, so they were not run.
+- The brief placed the pinned Mesa sources under `ThirdParty/out`. That directory
+  has no Mesa tree, and the lock had no Mesa entry. The source was fetched for the
+  audit and is pinned by commit (IR-448).
+- The lock entry is `ships: image` for AOSP source. The legal policy puts AOSP
+  image components outside the lock, so the classification is open
+  (IR-444, IR-445, and #093).
 - The task cannot start until #021 is done, and #021 depends on #014, which waits
   for the Android boot in #064 (IR-298 to IR-302). It is recorded now so that the
   dependency is visible.

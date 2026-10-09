@@ -337,3 +337,48 @@ func verifyCatchesAFileChangedAfterInstall() async throws {
         try await store.verify(installed, depth: .full)
     }
 }
+
+@Test
+func aReinstallOfAnOlderImageIsADowngrade() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let store = sandbox.store()
+    _ = try await store.install(from: .directory(try sandbox.bundle("old", version: "2026.10.0-cf1-arm64")))
+    _ = try await store.install(from: .directory(try sandbox.bundle("new", version: "2026.10.1-cf1-arm64")))
+    await #expect(
+        throws: ImageFailure.downgradeRejected(from: "2026.10.1-cf1-arm64", to: "2026.10.0-cf1-arm64")
+    ) {
+        _ = try await store.install(from: .directory(try sandbox.bundle("old-again", version: "2026.10.0-cf1-arm64")))
+    }
+    #expect(try await store.current().version.description == "2026.10.1-cf1-arm64")
+}
+
+@Test
+func aSourceThatChangesDuringTheInstallIsRefused() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let source = try sandbox.bundle("a")
+    let other = try sandbox.bundle("b", kernel: Data(repeating: 0x43, count: 64))
+    let replacementManifest = try Data(contentsOf: other.appendingPathComponent("manifest.json"))
+    let replacementSignature = try Data(contentsOf: other.appendingPathComponent("manifest.sig"))
+    let sourceManifest = source.appendingPathComponent("manifest.json")
+    let sourceSignature = source.appendingPathComponent("manifest.sig")
+    let store = ImageStore(
+        paths: sandbox.paths,
+        trust: testImageTrust,
+        diagnostics: .live(paths: sandbox.paths),
+        cloneFile: { from, to in
+            // The source is replaced after it was verified and before its manifest is cloned.
+            if from == sourceManifest {
+                try replacementManifest.write(to: sourceManifest)
+                try replacementSignature.write(to: sourceSignature)
+            }
+            try FileCloner.clone(from, to)
+        }
+    )
+    await #expect(throws: ImageFailure.unexpectedFile(file: "manifest.json")) {
+        _ = try await store.install(from: .directory(source))
+    }
+    let remaining = (try? FileManager.default.contentsOfDirectory(atPath: sandbox.images.path)) ?? []
+    #expect(remaining.isEmpty, "\(remaining)")
+}

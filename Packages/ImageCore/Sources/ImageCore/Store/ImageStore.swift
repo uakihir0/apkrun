@@ -132,6 +132,11 @@ public actor ImageStore {
         let name = version.description
         let target = paths.imageDirectory(version: name)
 
+        // Refused before the existing-directory branch too, so that a reinstall of an older
+        // image is a downgrade like any other (IR-347).
+        if let current = linkedName(paths.currentImage).flatMap(ImageVersion.init), version < current {
+            throw .downgradeRejected(from: current.description, to: name)
+        }
         if FileManager.default.fileExists(atPath: target.path) {
             let installed = try checkedManifest(in: target, cacheKey: nil)
             guard installed.manifestBytes == original.manifestBytes else {
@@ -141,9 +146,6 @@ public actor ImageStore {
             try setCurrent(version)
             return try installedImage(named: name, depth: .quick)
         }
-        if let current = linkedName(paths.currentImage).flatMap(ImageVersion.init), version < current {
-            throw .downgradeRejected(from: current.description, to: name)
-        }
 
         let staging = paths.imageInstallStagingDirectory(name: name)
         try remove(staging)
@@ -151,10 +153,18 @@ public actor ImageStore {
         do {
             try copyFiles(of: original, from: directory, to: staging)
             let copy = try checkedManifest(in: staging, cacheKey: nil)
+            // The source may have changed after it was read. The clone is then a different
+            // image, and it must not be installed under the name of the first one.
+            guard copy.manifestBytes == original.manifestBytes else {
+                throw ImageFailure.unexpectedFile(file: "manifest.json")
+            }
             try checkFiles(in: staging, bundle: copy, depth: .full)
+        } catch let failure as ImageFailure {
+            try? remove(staging)
+            throw failure
         } catch {
             try? remove(staging)
-            throw error
+            throw storageFailure(error)
         }
         do {
             try FileManager.default.moveItem(at: staging, to: target)

@@ -31,7 +31,7 @@ final class AndroidBootTests: XCTestCase {
     func testKernelBoot() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: false)
         let console = ConsoleBuffer()
@@ -84,8 +84,14 @@ final class AndroidBootTests: XCTestCase {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let bundle = try AndroidBootFixture.bundleDirectory()
+        // The truncated copy is not signed, so it is not installed: the test image is the installed image
+        // with the truncated folder as its root (the planner reads only the files the manifest names).
+        let installed = try await AndroidBootFixture(home: home, bundle: bundle).image
         let truncated = try AndroidBootFixture.truncatedBundle(from: bundle, into: home)
-        let fixture = try AndroidBootFixture(home: home, bundle: truncated)
+        let fixture = AndroidBootFixture(
+            home: home,
+            image: InstalledImage(version: installed.version, root: truncated, manifest: installed.manifest)
+        )
         try await fixture.resetInstance()
         let timeouts = BootTimeouts(
             whole: .seconds(60),
@@ -112,7 +118,7 @@ final class AndroidBootTests: XCTestCase {
     func testReachesInit() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let expected = try await Self.plannedBootconfig(fixture)
         let supervisor = fixture.supervisor(developerMode: true)
@@ -158,7 +164,7 @@ final class AndroidBootTests: XCTestCase {
     func testNetwork() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
         let collector = Task {
@@ -208,7 +214,7 @@ final class AndroidBootTests: XCTestCase {
     func testHostServiceSubstitutes() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
         let collector = Task {
@@ -246,7 +252,7 @@ final class AndroidBootTests: XCTestCase {
     func testBootCompleted() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
         let collector = Task {
@@ -292,7 +298,7 @@ final class AndroidBootTests: XCTestCase {
     func testPhasesInOrder() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: false)
         let states = StateCollector()
@@ -331,7 +337,7 @@ final class AndroidBootTests: XCTestCase {
     func testDevConsoleShell() async throws {
         let home = try AndroidBootFixture.makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
         let consoles = DevConsoleSocketServer(directory: fixture.paths.devConsoleDirectory)

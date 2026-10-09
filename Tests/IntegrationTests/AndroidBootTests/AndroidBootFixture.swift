@@ -6,7 +6,7 @@ import XCTest
 
 /// One development Android boot in a private `APKRUN_HOME`, shared by the T2 Android tests (#012-#014).
 ///
-/// The fixture uses the product path: `DevelopmentImage`, `InstanceStore`, and `RuntimeSupervisor`.
+/// The fixture uses the product path: `ImageStore`, `InstanceStore`, and `RuntimeSupervisor`.
 /// The bundle is the one `scripts/build-test-android-bundle.sh` writes under `APKRUN_TEST_LINUX_DIR`.
 struct AndroidBootFixture {
     let home: URL
@@ -34,10 +34,18 @@ struct AndroidBootFixture {
     }
 
     /// Creates a fixture with a fresh private home and the image in `bundle`.
-    init(home: URL, bundle: URL) throws {
+    /// Installs the signed bundle through `ImageStore`, as `apkrun dev image install` does.
+    init(home: URL, bundle: URL) async throws {
+        let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
+        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
+        self.init(home: home, image: try await images.install(from: .directory(bundle)))
+    }
+
+    /// A fixture over an image that is already installed (or a test image built from one).
+    init(home: URL, image: InstalledImage) {
         self.home = home
         paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
-        image = try DevelopmentImage.load(directory: bundle)
+        self.image = image
         store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
     }
 
@@ -78,7 +86,7 @@ struct AndroidBootFixture {
 
     /// Copies `bundle` into `home/truncated-bundle` with `boot/ramdisk.img` cut to half its size.
     ///
-    /// The manifest's size for the ramdisk is updated to match, because `DevelopmentImage.load`
+    /// The manifest's size for the ramdisk is updated to match, because the install checks the listed sizes
     /// checks the listed sizes. Everything else is copied unchanged.
     static func truncatedBundle(from bundle: URL, into home: URL) throws -> URL {
         let destination = home.appendingPathComponent("truncated-bundle", isDirectory: true)

@@ -1,0 +1,17 @@
+# Guest commands for the VZ capture that the G2 gate compares (#014): the cheap outputs of guest-capture.txt.
+# dmesg and logcat are left out: over the serial shell they take minutes, and the reference holds no booted
+# data for their categories (IR-305, IR-367). Run the full list with `capture-vz --commands guest-capture.txt`.
+cmdline.txt	cat /proc/cmdline
+bootconfig.txt	su 0 cat /proc/bootconfig
+properties.txt	getprop
+by-name-list.txt	su 0 ls -l /dev/block/by-name/
+block-by-name.txt	su 0 sh -c 'found=0; for p in /dev/block/by-name/*; do [ -e "$p" ] || continue; found=1; printf "%s -> %s\n" "${p##*/}" "$(readlink -f "$p")"; done; [ "$found" -eq 1 ]'
+mounts.txt	su 0 cat /proc/mounts
+fstab.txt	su 0 sh -c 'found=0; for f in /vendor/etc/fstab.*; do [ -f "$f" ] || continue; found=1; printf "# %s\n" "$f"; cat "$f"; done; [ "$found" -eq 1 ]'
+modules.txt	su 0 lsmod
+hvc-devices.txt	su 0 sh -c 'found=0; for p in /dev/hvc*; do [ -e "$p" ] || continue; found=1; ls -l "$p"; done; [ "$found" -eq 1 ]'
+hvc-users.txt	su 0 sh -c 'found=0; for fd in /proc/[0-9]*/fd/*; do target=$(readlink "$fd" 2>/dev/null) || continue; case "$target" in /dev/hvc*) pid=${fd#/proc/}; pid=${pid%%/*}; number=${fd##*/}; name=$(cat "/proc/$pid/comm" 2>/dev/null); printf "%s fd=%s -> %s\n" "${name:-unknown}" "$number" "$target"; found=1;; esac; done; [ "$found" -eq 1 ] || printf "(no hvc file descriptor holders)\\n"'
+services.txt	service list
+ip-addr.txt	ip addr
+ip-route.txt	ip route
+selinux-mode.txt	getenforce

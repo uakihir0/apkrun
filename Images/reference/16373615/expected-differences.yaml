@@ -1,2 +1,183 @@
 # Expected reference-to-VZ differences: JSON-compatible YAML keeps the parser dependency-free.
-[]
+[
+  {
+    "category": "bootconfig",
+    "key": "androidboot.hardware",
+    "reason": "present in vendor_boot on the reference (vendor layer), not in the launcher's internal file; APKRun sets it from the vendor layer (verified in the VZ boot)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size",
+    "reason": "vendor_boot's key, which the reference passes as a kernel parameter; APKRun passes it through bootconfig (layer 1), so the cmdline has no copy",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.force_normal_boot",
+    "reason": "set by the U-Boot and AVB chain on the reference; APKRun sets it in the image layer (verified on VZ)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.slot_suffix",
+    "reason": "set by the bootloader on the reference; APKRun sets _a in the image layer (ADR-0015)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.verifiedbootstate",
+    "reason": "set by AVB on the reference; APKRun sets orange for development images (§11.4 for release)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.device_state",
+    "reason": "set by AVB on the reference; APKRun sets unlocked for development images",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.digest",
+    "reason": "computed by avb.py from the vbmeta chain (§6.2); the reference computes its own digest for its signed images",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.hash_alg",
+    "reason": "computed by avb.py (§6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.size",
+    "reason": "computed by avb.py (§6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.avb_version",
+    "reason": "computed by avb.py from the pinned AVB 1.4 toolchain (§6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vbmeta.invalidate_on_error",
+    "reason": "computed by avb.py for the restart_and_invalidate policy (§6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.hypervisor.vm.supported",
+    "reason": "arm64 default, set in the image layer (§6.2); the reference's internal file leaves it to the bootloader",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.cuttlefish_service_bluetooth_checker",
+    "reason": "false in the image layer, as on Cuttlefish's automotive product: the boot reporter does not wait for Bluetooth (CF-14, §7.6)",
+    "design": "android-image.md §7.6"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.apkrun.instance",
+    "reason": "APKRun instance UUID (layer 4, §6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.apkrun.devmode",
+    "reason": "APKRun developer-mode flag (layer 4, §6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.apkrun.image",
+    "reason": "APKRun image version (layer 4, §6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.console",
+    "reason": "hvc1 in developer mode, so the Android serial shell is available (CF-15)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.serialconsole",
+    "reason": "1 in developer mode (CF-15); the reference capture was not in developer mode",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.boot_devices",
+    "reason": "the VZ bus is 40000000.pci, not 10000.pci (CF-05, §5.3)",
+    "design": "android-image.md §5.3"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.wifi_impl",
+    "reason": "VZ has no virtio Wi-Fi device, so Wi-Fi is virt_wifi on eth2 (CF-11, §7.4)",
+    "design": "android-image.md §7.4"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.ddr_size",
+    "reason": "the VM's memory is exactly 4096 MiB; the launcher's 4915 MB includes crosvm overhead (§6.2)",
+    "design": "android-image.md §6.2"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.lcd_density",
+    "reason": "density 320 for the headless profile's 720x1280 display (BootOptions default); the reference's display was 280",
+    "design": "android-image.md §9.1"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.auto_eth_guest_addr",
+    "reason": "automotive-only key for a host-side client; omitted (CF-13, §7.3)",
+    "design": "android-image.md §7.3"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vhal_proxy_server_port",
+    "reason": "host-side vHAL proxy; omitted (CF-13, §7.3)",
+    "design": "android-image.md §7.3"
+  },
+  {
+    "category": "bootconfig",
+    "key": "androidboot.vsock_tombstone_port",
+    "reason": "host-side tombstone transmit; omitted (CF-13, §7.3)",
+    "design": "android-image.md §7.3"
+  },
+  {
+    "category": "cmdline",
+    "key": "panic#2",
+    "reason": "the launcher's command line repeats panic=-1; cmdline.txt passes it once (§6.4)",
+    "design": "android-image.md §6.4"
+  },
+  {
+    "category": "cmdline",
+    "key": "earlycon",
+    "reason": "crosvm's 8250 UART at 0x3f8; VZ has no such UART, so no early console is passed (§6.4)",
+    "design": "android-image.md §6.4"
+  },
+  {
+    "category": "cmdline",
+    "key": "ramoops.mem_address",
+    "reason": "crosvm's ramoops buffer; VZ has no ramoops region (§6.4, CF-19)",
+    "design": "android-image.md §6.4"
+  },
+  {
+    "category": "cmdline",
+    "key": "ramoops.mem_size",
+    "reason": "crosvm's ramoops buffer size; VZ has no ramoops region (§6.4, CF-19)",
+    "design": "android-image.md §6.4"
+  },
+  {
+    "category": "cmdline",
+    "key": "log_buf_len",
+    "reason": "APKRun addition: a 2 MiB kernel log buffer for the boot's first lines (CF-18, §6.6)",
+    "design": "android-image.md §6.6"
+  }
+]

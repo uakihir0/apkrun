@@ -43,6 +43,7 @@ blk_phase=
 blk_ro_sha256=
 blk_token=
 blk_order=
+port_count=3
 for argument in $(cat /proc/cmdline); do
     case "$argument" in
         apkrun.test=*) requested_tests="${argument#apkrun.test=}" ;;
@@ -56,6 +57,7 @@ for argument in $(cat /proc/cmdline); do
         apkrun.test.blk.ro_sha256=*) blk_ro_sha256="${argument#apkrun.test.blk.ro_sha256=}" ;;
         apkrun.test.blk.token=*) blk_token="${argument#apkrun.test.blk.token=}" ;;
         apkrun.test.blk.order=*) blk_order="${argument#apkrun.test.blk.order=}" ;;
+        apkrun.test.portcount=*) port_count="${argument#apkrun.test.portcount=}" ;;
     esac
 done
 
@@ -390,7 +392,42 @@ read_console_marker() {
     printf '%s' "$console_marker"
 }
 
+run_port_map_test() {
+    # Each console port i (host) receives APKRUN-PORT-<i>; the guest reads /dev/hvc<i> for it.
+    # A matching marker on the same number proves the port order (vm.md §6.2, android-image.md §7.1).
+    ports_to_check=$1
+    printf 'APKRUN-TEST: hvc-devices ok %s\n' "$(ls /dev | grep '^hvc' | tr '\n' ' ')"
+    i=1
+    while [ "$i" -lt "$ports_to_check" ]; do
+        if ! stty -F "/dev/hvc$i" raw -echo 2>/dev/null; then
+            kernel_lines=$(dmesg | grep -i -e virtio -e hvc | cut -c1-70 | head -n 40 | tr '\n' '|')
+            printf 'APKRUN-TEST: port-%s fail could not configure /dev/hvc%s; devices: %s; kernel: %s\n' "$i" "$i" "$(ls /dev | grep '^hvc' | tr '\n' ' ')" "$kernel_lines"
+        fi
+        i=$((i + 1))
+    done
+    i=1
+    while [ "$i" -lt "$ports_to_check" ]; do
+        printf 'APKRUN-PORT-READY-%s\n' "$i" > /dev/hvc0
+        i=$((i + 1))
+    done
+    i=1
+    while [ "$i" -lt "$ports_to_check" ]; do
+        if ! IFS= read -r -t 30 marker < "/dev/hvc$i"; then
+            printf 'APKRUN-TEST: port-%s fail no host marker arrived on /dev/hvc%s\n' "$i" "$i"
+        elif [ "$marker" = "APKRUN-PORT-$i" ]; then
+            printf 'APKRUN-TEST: port-%s ok %s\n' "$i" "$marker"
+        else
+            printf 'APKRUN-TEST: port-%s fail /dev/hvc%s received %s\n' "$i" "$i" "$marker"
+        fi
+        i=$((i + 1))
+    done
+}
+
 run_ports_test() {
+    if [ "$port_count" -gt 3 ]; then
+        run_port_map_test "$port_count"
+        return
+    fi
     if ! stty -F /dev/hvc1 raw -echo; then
         printf 'APKRUN-TEST: ports fail could not configure hvc1\n'
         return 1

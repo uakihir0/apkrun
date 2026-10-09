@@ -37,6 +37,7 @@ public enum LinuxTestGuest {
         customDevices: [any VirtioDeviceModel] = [],
         entropyTestDevice: EntropyTestDevice? = nil,
         powerOff: Bool = false,
+        consolePortCount: Int = 3,
         extraCommandLine: [String] = []
     ) -> VMDefinition {
         let checks = tests.joined(separator: ",")
@@ -46,13 +47,12 @@ public enum LinuxTestGuest {
             usesEntropyDevice
             ? (entropyTestDevice ?? EntropyTestDevice(seed: 0))
             : nil
+        // The port test attaches `consolePortCount` ports: the system console, then test-1 and up.
+        // Ports 10 and up sit on one multiport device, as in the Android definition (vm.md §6.1).
         let consolePorts: [ConsolePortDefinition] =
             tests.contains("ports")
-            ? [
-                ConsolePortDefinition(role: .systemConsole),
-                ConsolePortDefinition(role: .service(name: "test-1")),
-                ConsolePortDefinition(role: .service(name: "test-2")),
-            ]
+            ? [ConsolePortDefinition(role: .systemConsole)]
+                + (1..<max(consolePortCount, 3)).map { ConsolePortDefinition(role: .service(name: "test-\($0)")) }
             : [ConsolePortDefinition(role: .systemConsole)]
         let commandLine =
             ([

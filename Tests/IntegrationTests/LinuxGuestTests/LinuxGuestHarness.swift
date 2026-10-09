@@ -156,6 +156,7 @@ enum LinuxGuestHarness {
         stopBehavior: StopBehavior,
         powerOff: Bool,
         tests: [String] = [],
+        consolePortCount: Int = 3,
         initrd: URL? = nil,
         blockDisks: LinuxTestGuest.BlockDisks? = nil,
         blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
@@ -190,6 +191,7 @@ enum LinuxGuestHarness {
             customDevices: customDevices,
             entropyTestDevice: entropyTestDevice,
             powerOff: powerOff,
+            consolePortCount: consolePortCount,
             extraCommandLine: extraCommandLine
         )
         let validated = try VMDefinitionValidator().validate(definition)
@@ -236,10 +238,13 @@ enum LinuxGuestHarness {
             ])
         }
         if tests.contains("ports") {
-            consoleMarkers.append(contentsOf: [
-                (name: "APKRUN-PORT-READY-1", bytes: Data("APKRUN-PORT-READY-1\n".utf8)),
-                (name: "APKRUN-PORT-READY-2", bytes: Data("APKRUN-PORT-READY-2\n".utf8)),
-            ])
+            for index in 1..<max(consolePortCount, 3) {
+                consoleMarkers.append(
+                    (
+                        name: "APKRUN-PORT-READY-\(index)",
+                        bytes: Data("APKRUN-PORT-READY-\(index)\n".utf8)
+                    ))
+            }
         }
         let maximumConsoleMarkerLength = consoleMarkers.map(\.bytes.count).max() ?? 0
         let consoleCapture = LinuxGuestConsoleCapture()
@@ -310,20 +315,16 @@ enum LinuxGuestHarness {
                 try await hostAction(controller)
             }
             if tests.contains("ports") {
-                try await waitForConsoleMarker(
-                    "APKRUN-PORT-READY-1",
-                    events: events.stream,
-                    timeout: .seconds(60)
-                )
-                try controller.console(.service(name: "test-1"))
-                    .writeHostInput(Data("APKRUN-PORT-1\n".utf8))
-                try await waitForConsoleMarker(
-                    "APKRUN-PORT-READY-2",
-                    events: events.stream,
-                    timeout: .seconds(60)
-                )
-                try controller.console(.service(name: "test-2"))
-                    .writeHostInput(Data("APKRUN-PORT-2\n".utf8))
+                // Port i gets APKRUN-PORT-<i> once the guest has announced it (vm.md §6.2).
+                for index in 1..<max(consolePortCount, 3) {
+                    try await waitForConsoleMarker(
+                        "APKRUN-PORT-READY-\(index)",
+                        events: events.stream,
+                        timeout: .seconds(60)
+                    )
+                    try controller.console(.service(name: "test-\(index)"))
+                        .writeHostInput(Data("APKRUN-PORT-\(index)\n".utf8))
+                }
             }
             let observedRecords: [TestGuestRecord]
             let observedStates: [VMState]

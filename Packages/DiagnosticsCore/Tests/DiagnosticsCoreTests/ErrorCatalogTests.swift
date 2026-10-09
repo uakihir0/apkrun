@@ -36,7 +36,7 @@ import Testing
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
                 "devConsoleNotRunning", "devConsoleSocketUnavailable",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
-                "bootTimedOut", "bootStalled",
+                "bootTimedOut", "bootStalled", "gpuProfileUnavailable",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

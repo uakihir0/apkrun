@@ -2164,6 +2164,28 @@
         "raisedBy": "RuntimeSupervisor",
         "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §3.3"
       }
+    },
+    {
+      "code": "runtime.gpuProfileUnavailable",
+      "parameters": [
+        "profile"
+      ],
+      "message": {
+        "en": "Android can't use the {profile} graphics profile in this version of APKRun.",
+        "ja": "このバージョンの APKRun では、{profile} のグラフィックスプロファイルを使えません。"
+      },
+      "remediation": {
+        "en": "Start Android with `apkrun dev boot --gpu swiftshader`. The VirGL profile is available with the VirGL renderer.",
+        "ja": "`apkrun dev boot --gpu swiftshader` で Android を起動してください。VirGL プロファイルは VirGL レンダラーとともに提供されます。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "gpuProfileUnavailable(profile:)",
+        "when": "the boot profile needs a virtio-gpu feature that the device does not offer: drmVirgl until the VirGL renderer (#022)",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/graphics.md](../02-design/graphics.md) §9; [../02-design/android-image.md](../02-design/android-image.md) §9.2"
+      }
     }
   ]
 }

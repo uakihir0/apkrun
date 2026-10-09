@@ -25,6 +25,8 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
     case bootStalled(phase: BootPhase)
     /// The boot profile needs a virtio-gpu feature that the device does not offer (graphics.md §9, #021).
     case gpuProfileUnavailable(profile: String)
+    /// The development Guest Agent could not be installed, started, or reached (guest-components.md §3).
+    case guestAgent(GuestAgentFailure)
 
     /// The `runtime` error domain.
     public static let domain: ErrorDomain = .runtime
@@ -40,6 +42,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .bootTimedOut: "bootTimedOut"
         case .bootStalled: "bootStalled"
         case .gpuProfileUnavailable: "gpuProfileUnavailable"
+        case .guestAgent: "guestAgent"
         }
     }
 
@@ -59,6 +62,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .image(let failure): failure
         case .vmConfiguration(let failure): failure
         case .vm(let failure): failure
+        case .guestAgent(let failure): failure
         default: nil
         }
     }

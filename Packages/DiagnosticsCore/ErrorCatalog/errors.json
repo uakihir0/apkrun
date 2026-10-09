@@ -2186,6 +2186,162 @@
         "raisedBy": "RuntimeSupervisor",
         "ref": "[../02-design/graphics.md](../02-design/graphics.md) §9; [../02-design/android-image.md](../02-design/android-image.md) §9.2"
       }
+    },
+    {
+      "code": "runtime.guestAgent",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "guestAgent(GuestAgentFailure)",
+        "when": "the development Guest Agent cannot be installed, started, or reached after boot completion",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3"
+      }
+    },
+    {
+      "code": "runtime.adb",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "adb(AdbFailure)",
+        "when": "an ADB command that installs, starts, or forwards to the Guest Agent fails",
+        "raisedBy": "GuestAgentProvisioner, ADBForwardGuestTransport",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.1"
+      }
+    },
+    {
+      "code": "runtime.guestAgentBundleMissing",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can't find the Guest Agent for Android."
+      },
+      "remediation": {
+        "en": "Build the Guest Agent with scripts/build-guest.sh, or set APKRUN_GUEST_DIR to the folder that holds apkrun-guest.apk and apkrun-guest.json, then try again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "bundleMissing",
+        "when": "apkrun-guest.apk or apkrun-guest.json is missing, or the record does not name io.apkrun.guest",
+        "raisedBy": "GuestAgentBundle",
+        "ref": "[../05-development/build-system.md](../05-development/build-system.md) §7.1"
+      }
+    },
+    {
+      "code": "runtime.guestAgentInstallFailed",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "Android didn't install the Guest Agent: {reason}."
+      },
+      "remediation": {
+        "en": "Check the reason, fix the device, then try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "installFailed(reason:)",
+        "when": "adb install of the bundled agent is refused. The reason is Android's code",
+        "raisedBy": "GuestAgentProvisioner",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.1"
+      }
+    },
+    {
+      "code": "runtime.guestAgentStartFailed",
+      "parameters": [],
+      "message": {
+        "en": "The Guest Agent didn't start."
+      },
+      "remediation": {
+        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "startFailed",
+        "when": "the agent is started but no agent process runs, or the device shell refused the start",
+        "raisedBy": "GuestAgentProvisioner",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.2"
+      }
+    },
+    {
+      "code": "runtime.guestAgentConnectTimedOut",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't connect to the Guest Agent within 5 seconds."
+      },
+      "remediation": {
+        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+      },
+      "action": "restartAndroid",
+      "cliExit": 75,
+      "doc": {
+        "case": "connectTimedOut",
+        "when": "the Hello of the agent does not arrive within 5 seconds after boot completion",
+        "raisedBy": "GuestAgentSupervisor",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15 (#072)"
+      }
+    },
+    {
+      "code": "runtime.guestAgentHandshakeFailed",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The Guest Agent refused the connection: {reason}."
+      },
+      "remediation": {
+        "en": "Update APKRun and Android so that both speak the same guest protocol version, then try again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "handshakeFailed(reason:)",
+        "when": "the handshake fails with a typed protocol failure: an incompatible version, a wrong channel, or a bad token",
+        "raisedBy": "GuestAgentSupervisor",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §5.2, §12.3"
+      }
+    },
+    {
+      "code": "runtime.requiredAgentUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "The Guest Agent keeps stopping, so APKRun stopped restarting it."
+      },
+      "remediation": {
+        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "requiredAgentUnavailable",
+        "when": "the agent died a fourth time within a minute, which the restart budget does not allow",
+        "raisedBy": "DevelopmentGuestAgent",
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.3"
+      }
+    },
+    {
+      "code": "runtime.guestAgentOperationFailed",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The Guest Agent didn't complete the request: {reason}."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, restart Android."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "operationFailed(reason:)",
+        "when": "a request to the agent fails with a protocol failure or a remote error. The reason is the catalog name of the failure",
+        "raisedBy": "DevelopmentGuestAgent",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.3"
+      }
     }
   ]
 }

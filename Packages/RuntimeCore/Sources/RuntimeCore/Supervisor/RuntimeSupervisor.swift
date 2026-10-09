@@ -109,6 +109,10 @@ public actor RuntimeSupervisor {
     private var adbClient: AdbClient?
     /// Polls ADB for the boot signals until boot completion.
     private var adbPollTask: Task<Void, Never>?
+    /// The bundled development Guest Agent, when developer mode is given one (guest-components.md §3).
+    private let guestAgentBundle: GuestAgentBundle?
+    /// The development Guest Agent of the boot in flight, from the start of the ADB bridge until the boot ends.
+    public private(set) var developmentGuestAgent: DevelopmentGuestAgent?
     /// Whether the ADB poller has connected to the development endpoint in this boot.
     private var isADBConnected = false
 
@@ -135,8 +139,10 @@ public actor RuntimeSupervisor {
         diagnostics: DiagnosticsContext,
         platform: VZPlatformProfile = .macOS27,
         timeouts: BootTimeouts = .standard,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        guestAgentBundle: GuestAgentBundle? = nil
     ) {
+        self.guestAgentBundle = guestAgentBundle
         self.image = image
         self.instanceStore = instanceStore
         self.options = options
@@ -189,6 +195,7 @@ public actor RuntimeSupervisor {
             return
         }
         stopRequested = true
+        await stopGuestAgent()
         bootProgress?.finish()
         transition(to: .stopping)
         if options.developerMode {
@@ -307,6 +314,16 @@ public actor RuntimeSupervisor {
             try await confirmBootCompleted(shell)
             if isFirstBoot {
                 await applyFirstBootSettings(shell)
+            }
+        }
+        if options.developerMode, guestAgentBundle != nil {
+            guard let agent = developmentGuestAgent else {
+                throw .guestAgent(.startFailed)
+            }
+            do throws(GuestAgentFailure) {
+                try await agent.start(connectTimeout: .seconds(5))
+            } catch {
+                throw .guestAgent(error)
             }
         }
         try throwIfStopped()
@@ -457,6 +474,9 @@ public actor RuntimeSupervisor {
                 logSink: diagnostics.logSink
             )
             adbClient = client
+            if let bundle = guestAgentBundle {
+                developmentGuestAgent = DevelopmentGuestAgent(adb: client, bundle: bundle)
+            }
             let task = Task {
                 await self.pollADB(client, tracker: tracker, progress: progress)
             }
@@ -534,6 +554,16 @@ public actor RuntimeSupervisor {
         while ContinuousClock.now < deadline, await controller.state != .stopped {
             try? await Task.sleep(for: .milliseconds(250))
         }
+    }
+
+    /// Stops the Guest Agent of the boot. It runs before the guest powers off, so that the supervisor does not
+    /// try to restart an agent that is going down.
+    private func stopGuestAgent() async {
+        guard let agent = developmentGuestAgent else {
+            return
+        }
+        developmentGuestAgent = nil
+        await agent.stop()
     }
 
     /// Closes the forwarder and forgets the ADB client of the boot that just ended.
@@ -688,6 +718,7 @@ public actor RuntimeSupervisor {
     ]
 
     private func fail(_ failure: RuntimeBootFailure) async {
+        await stopGuestAgent()
         bootProgress?.finish()
         bootProgress = nil
         if stopRequested {

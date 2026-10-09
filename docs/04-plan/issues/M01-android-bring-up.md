@@ -1690,17 +1690,19 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] HelloText has a single Activity with a `TextView`, a `Button`, and a counter that persists across process restarts.
-- [ ] HelloText is installed through ADB, and the install is a PackageInstaller session (FR-PKG-01).
-- [ ] PackageManager reports the correct package name, `versionCode`, and `versionName`.
-- [ ] HelloText is uninstalled through ADB, and PackageManager no longer lists it.
-- [ ] The fixture build is reproducible, `out/` is git-ignored, and the signing key is test-only.
+- [ ] HelloText has a single Activity with a `TextView`, a `Button`, and a counter that persists across process restarts. The Activity, the `Button`, and the counter are built and verified in the APK. The persistence contract (a new store over the same preferences sees the count) is a JVM test. A process restart on the device is not checked in this task, because nothing clicks the button before #017. Leave open until the #017 device check.
+- [x] HelloText is installed through ADB, and the install is a PackageInstaller session (FR-PKG-01). T2 `testInstallHelloText` checks the `Success` reply. The PackageInstaller path is recorded in [IR-332](../implementation-review.md#ir-332-take-the-packageinstaller-path-of-fr-pkg-01-from-adbs-install-command-and-the-devices-metadata).
+- [x] PackageManager reports the correct package name, `versionCode`, and `versionName`. (T2 `testInstallHelloText`: `versionCode 1`, `versionName 1.0`, `minSdk 29`, `targetSdk 37` on a booted guest, 2026-10-09.)
+- [x] HelloText is uninstalled through ADB, and PackageManager no longer lists it. (T2 `testUninstallHelloText`, which also checks that a second uninstall is refused and that a reinstall succeeds.)
+- [x] The fixture build is reproducible, `out/` is git-ignored, and the signing key is test-only. `scripts/build-fixtures.sh --check-reproducible` matched badging, dex hashes, and archive listing on 2026-10-09; `Tests/Fixtures/AndroidApps/out/` is in `.gitignore`; the key is [IR-328](../implementation-review.md#ir-328-commit-one-test-only-fixture-keystore-with-its-password-in-the-gradle-file).
 
 ### Notes
 
 - The M3–M4 `ADBStoreAgentChannel` uses `adb install-multiple` ([package-store.md](../../02-design/package-store.md) §6.1). That is #027 and does not change this task.
 
 ---
+- Verification (2026-10-09): the JVM test `:HelloText:testReleaseUnitTest` passed (4 tests, IR-329); `scripts/build-fixtures.sh` wrote the APK and checked its signer; `--check-reproducible` passed; T2 `AndroidPackageTests` passed 2 of 2 (`xcodebuild`, AndroidPackage configuration, under `lockf -k /tmp/apkrun-vm.lock`). Replies recorded from the guest are in the T0 parser tests.
+- `adb install` leaves `installerPackageName=null` and `initiatingPackageName=com.android.shell` on the device ([IR-332](../implementation-review.md#ir-332-take-the-packageinstaller-path-of-fr-pkg-01-from-adbs-install-command-and-the-devices-metadata)).
 
 ## #017 Launch HelloText APK
 

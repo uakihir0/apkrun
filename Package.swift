@@ -310,7 +310,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ImageCoreTests",
-            dependencies: ["ImageCore"],
+            dependencies: ["ImageCore", "DiagnosticsCore", "DiagnosticsCoreTestSupport", "VirtualMachineCore"],
             path: "Packages/ImageCore/Tests/ImageCoreTests"
         ),
         .testTarget(

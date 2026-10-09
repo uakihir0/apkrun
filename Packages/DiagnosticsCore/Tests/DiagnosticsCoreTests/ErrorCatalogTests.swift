@@ -38,7 +38,8 @@ import Testing
             ].map { "graphics.\($0)" }
             + [
                 "manifestInvalid", "insufficientSpace", "cloneUnsupported", "cloneFailed",
-                "instanceCorrupt",
+                "instanceCorrupt", "instanceMissing", "missingFile", "hashMismatch",
+                "bootconfigConflict", "bootconfigTooLarge", "cmdlineTooLong",
             ].map { "image.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)

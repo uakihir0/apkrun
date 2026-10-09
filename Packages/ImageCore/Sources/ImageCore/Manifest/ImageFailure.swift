@@ -17,6 +17,24 @@ public enum ImageFailure: APKRunError, Equatable {
     /// An instance disk or the instance record is inconsistent.
     case instanceCorrupt(reason: String)
 
+    /// The instance record exists but a disk is missing (android-image.md §9.3 step 2).
+    case instanceMissing
+
+    /// A file that the manifest lists is missing.
+    case missingFile(file: String)
+
+    /// A file's size (quick check) or SHA-256 (full check) differs from the manifest.
+    case hashMismatch(file: String)
+
+    /// Two bootconfig layers set one key, and the later one has no override (§6.1).
+    case bootconfigConflict(key: String, layerA: String, layerB: String)
+
+    /// The serialized bootconfig exceeds the kernel's limit (§6.3).
+    case bootconfigTooLarge(size: Int)
+
+    /// The kernel command line exceeds 2048 bytes (§6.4).
+    case cmdlineTooLong(length: Int)
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -28,6 +46,12 @@ public enum ImageFailure: APKRunError, Equatable {
         case .cloneUnsupported: "cloneUnsupported"
         case .cloneFailed: "cloneFailed"
         case .instanceCorrupt: "instanceCorrupt"
+        case .instanceMissing: "instanceMissing"
+        case .missingFile: "missingFile"
+        case .hashMismatch: "hashMismatch"
+        case .bootconfigConflict: "bootconfigConflict"
+        case .bootconfigTooLarge: "bootconfigTooLarge"
+        case .cmdlineTooLong: "cmdlineTooLong"
         }
     }
 
@@ -44,6 +68,16 @@ public enum ImageFailure: APKRunError, Equatable {
             [:]
         case .instanceCorrupt(let reason):
             ["reason": .text(reason)]
+        case .instanceMissing:
+            [:]
+        case .missingFile(let file), .hashMismatch(let file):
+            ["file": .fileName(file)]
+        case .bootconfigConflict(let key, let layerA, let layerB):
+            ["key": .text(key), "layerA": .text(layerA), "layerB": .text(layerB)]
+        case .bootconfigTooLarge(let size):
+            ["size": .bytes(Int64(size))]
+        case .cmdlineTooLong(let length):
+            ["length": .count(length)]
         }
     }
 

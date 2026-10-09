@@ -145,9 +145,6 @@ public struct APKRunPaths: Sendable {
     /// The current instance's generated initrd.
     public var instanceInitrdFile: URL { bootDirectory.appendingPathComponent("initrd.img") }
 
-    /// The current instance's writable persistent disk.
-    public var persistentDiskFile: URL { instanceDirectory.appendingPathComponent("persistent.img") }
-
     /// The current instance's writable user data disk.
     public var userDataDiskFile: URL { instanceDirectory.appendingPathComponent("userdata.img") }
 

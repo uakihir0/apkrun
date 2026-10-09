@@ -575,7 +575,7 @@ Owner: ImageCore. Design: [../02-design/android-image.md](../02-design/android-i
 - `insufficientSpace` exists in two domains. `image.insufficientSpace` is ImageCore's check. `maintenance.insufficientSpace` is the update coordinator's check before a download (catalog §14.2). The codes differ, so both can exist.
 - The parameters `path`, `reason`, `keyID`, `file`, `report`, `key`, and `layerA`/`layerB` are logged and not shown. `{version}`, `{newVersion}`, and `{installedVersion}` are image versions.
 
-### 9.1 Image errors implemented by #011
+### 9.1 Image errors implemented by #011 and #012
 
 <!-- errorgen:begin image -->
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
@@ -585,6 +585,12 @@ Owner: ImageCore. Design: [../02-design/android-image.md](../02-design/android-i
 | `cloneUnsupported(volume:)` | `image.cloneUnsupported` | the volume of the instance directory is not APFS, so `clonefile(2)` cannot share blocks | InstanceStore | "APKRun's data is not on an APFS volume." | "Move APKRun's data to an APFS volume." `none` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
 | `cloneFailed(underlying:)` | `image.cloneFailed` | `clonefile(2)`, `ftruncate`, or `fsync` of an instance disk fails. `errno` becomes the `UnderlyingError` | InstanceStore | "Android's disks couldn't be created." | "Check the free disk space, then try again. If it fails again, create a diagnostics report." `retry` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5.1 |
 | `instanceCorrupt(reason:)` | `image.instanceCorrupt` | an instance disk's GPT does not verify, or disk sizes or `instance.json` are inconsistent. `reason` is logged | InstanceStore | "Android's data is damaged." | "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage." `openTroubleshooting` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §5, §9.3 step 2 |
+| `instanceMissing` | `image.instanceMissing` | `instance.json` exists but an instance disk is missing | InstanceStore | "Android's data is missing." | "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage." `openTroubleshooting` | 1 | [../02-design/android-image.md](../02-design/android-image.md) §9.3 step 2 |
+| `missingFile(file:)` | `image.missingFile` | a file that the manifest lists is missing | DevelopmentImage, AndroidBootPlanner | "Some Android system files are missing." | "Install Android again from Settings → Storage. To check every file, run: apkrun doctor --deep" `openStorageSettings` | 1 | [runtime-image-manifest.md](runtime-image-manifest.md) §7.1 |
+| `hashMismatch(file:)` | `image.hashMismatch` | a file's size (quick check) or SHA-256 (full check) differs from the manifest | DevelopmentImage | "Some Android system files are damaged." | "Install Android again from Settings → Storage. To check every file, run: apkrun doctor --deep" `openStorageSettings` | 1 | [runtime-image-manifest.md](runtime-image-manifest.md) §7.1 |
+| `bootconfigConflict(key:layerA:layerB:)` | `image.bootconfigConflict` | two bootconfig layers set one key without an override. `key`, `layerA`, and `layerB` are logged | AndroidBootPlanner | "Android's start configuration isn't valid." | "Report the problem." `reportProblem` | 70 | [../02-design/android-image.md](../02-design/android-image.md) §6.1 |
+| `bootconfigTooLarge(size:)` | `image.bootconfigTooLarge` | the serialized bootconfig is above 32 KiB or above the kernel's 1024 nodes | AndroidBootPlanner | "Android's start configuration isn't valid." | "Report the problem." `reportProblem` | 70 | [../02-design/android-image.md](../02-design/android-image.md) §6.3 |
+| `cmdlineTooLong(length:)` | `image.cmdlineTooLong` | the kernel command line is above 2048 bytes | AndroidBootPlanner | "Android's start configuration isn't valid." | "Report the problem." `reportProblem` | 70 | [../02-design/android-image.md](../02-design/android-image.md) §6.4 |
 <!-- errorgen:end image -->
 
 ---

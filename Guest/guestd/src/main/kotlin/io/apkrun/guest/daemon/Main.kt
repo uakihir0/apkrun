@@ -3,6 +3,7 @@ package io.apkrun.guest.daemon
 import android.os.Looper
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.SocketNameInUse
+import io.apkrun.guest.runtime.SystemContext
 import java.io.File
 import kotlin.system.exitProcess
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,10 @@ object Main {
     @Suppress("DEPRECATION") // prepareMainLooper is the call that the framework's own servers use.
     fun main(args: Array<String>) {
         Looper.prepareMainLooper()
+        // The system context needs the main looper, so it is created here, on the main thread. A
+        // worker thread that
+        // asks for it later would fail, because it has no looper.
+        SystemContext.get()
         File(DEVELOPMENT_LOG_PATH).parentFile?.mkdirs()
         AgentLog.install(File(DEVELOPMENT_LOG_PATH))
         Thread.setDefaultUncaughtExceptionHandler { _, error ->

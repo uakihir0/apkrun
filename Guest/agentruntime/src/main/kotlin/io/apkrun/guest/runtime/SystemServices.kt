@@ -136,6 +136,25 @@ object SystemServices {
                         "registerTaskStackListener",
                         listOf(listOf("android.app.ITaskStackListener")),
                     ),
+                    MethodRequirement(
+                        "startActivityAsUser",
+                        listOf(
+                            listOf(
+                                "android.app.IApplicationThread",
+                                "java.lang.String",
+                                "java.lang.String",
+                                "android.content.Intent",
+                                "java.lang.String",
+                                "android.os.IBinder",
+                                "java.lang.String",
+                                "int",
+                                "int",
+                                "android.app.ProfilerInfo",
+                                "android.os.Bundle",
+                                "int",
+                            )
+                        ),
+                    ),
                     MethodRequirement("setFocusedTask", listOf(listOf("int"))),
                     MethodRequirement("moveRootTaskToDisplay", listOf(listOf("int", "int"))),
                 ),

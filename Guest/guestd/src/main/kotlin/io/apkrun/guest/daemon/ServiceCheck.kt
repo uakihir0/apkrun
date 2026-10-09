@@ -23,6 +23,17 @@ object ServiceCheck {
             }
             return
         }
+        // `--constants <class> <text>` lists the static int fields of a class whose name contains
+        // the text, with their
+        // values. It reads the framework's result codes on the image (guest-components.md §6.4).
+        if (args.size == 3 && args[0] == "--constants") {
+            for (field in Class.forName(args[1]).fields) {
+                if (field.name.contains(args[2]) && field.type == Int::class.javaPrimitiveType) {
+                    println("${field.name}=${field.getInt(null)}")
+                }
+            }
+            return
+        }
         for (wrapper in SystemServices.all) {
             println(
                 "service=${wrapper.serviceName} available=${wrapper.available} " +

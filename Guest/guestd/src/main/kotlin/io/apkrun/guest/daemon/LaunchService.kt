@@ -1,7 +1,6 @@
 package io.apkrun.guest.daemon
 
 import android.app.ActivityOptions
-import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -11,6 +10,9 @@ import io.apkrun.guest.protocol.v1.LaunchMode
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.TaskInfo
+import io.apkrun.guest.runtime.AgentLog
+import io.apkrun.guest.runtime.HiddenApi
+import io.apkrun.guest.runtime.SystemServices
 
 /** How long a launch waits for its task to appear on the display (guest-components.md §6.4). */
 private const val TASK_APPEARANCE_MILLIS = 2_000L
@@ -19,15 +21,28 @@ private const val TASK_APPEARANCE_MILLIS = 2_000L
 private const val TASK_POLL_MILLIS = 100L
 
 /**
- * `LaunchApplication` (launch.v1, guest-components.md §6.4). The activity starts through the system
- * context with `ActivityOptions.setLaunchDisplayId`. When the package already has a task on another
- * display, that task is moved first. The result is the task that appears on the display within 2 s.
- * Without one the answer is TIMEOUT.
+ * The package that the agent's uid belongs to. The activity start names it as the calling package.
+ */
+private const val SHELL_PACKAGE = "com.android.shell"
+
+/**
+ * The user that the development agent starts activities for: the system user (guest-components.md
+ * §5).
+ */
+private const val CURRENT_USER_ID = 0
+
+/**
+ * `LaunchApplication` (launch.v1, guest-components.md §6.4). The activity starts through
+ * `startActivityAsUser` with the shell package as the calling package, because the system context's
+ * package does not belong to the agent's uid. The activity is placed on its display with
+ * `ActivityOptions.setLaunchDisplayId`. When the package already has a task on another display,
+ * that task is moved first. The result is the task that appears on the display within 2 s, and
+ * without one the answer is TIMEOUT.
  */
 class LaunchService(
     private val tasks: TaskService,
     private val displays: DisplayService,
-    private val context: () -> Context,
+    private val system: () -> Context,
 ) {
     /** Launches the package of [request] on its display, and returns the task that it has there. */
     fun launch(request: LaunchApplication): LaunchResult {
@@ -50,8 +65,11 @@ class LaunchService(
         val existing = tasks.list().filter { it.getPackage() == pkg }
         val onTarget = existing.firstOrNull { it.getDisplayId() == displayId }
         var outcome =
-            if (onTarget != null && !clearTask) LaunchOutcome.LAUNCH_OUTCOME_BROUGHT_TO_FRONT
-            else LaunchOutcome.LAUNCH_OUTCOME_STARTED
+            if (onTarget != null && !clearTask) {
+                LaunchOutcome.LAUNCH_OUTCOME_BROUGHT_TO_FRONT
+            } else {
+                LaunchOutcome.LAUNCH_OUTCOME_STARTED
+            }
         if (onTarget == null && !clearTask && existing.isNotEmpty()) {
             tasks.moveToDisplay(existing.first().getTaskId(), displayId)
             outcome = LaunchOutcome.LAUNCH_OUTCOME_MOVED_FROM_DISPLAY
@@ -71,19 +89,33 @@ class LaunchService(
             .build()
     }
 
+    /**
+     * Starts the launcher activity of the package, or the request's component, and maps the result
+     * code.
+     */
     private fun startActivity(request: LaunchApplication, displayId: Int) {
-        val intent = Intent(Intent.ACTION_MAIN)
-        if (request.hasComponent()) {
-            val component =
-                ComponentName.unflattenFromString(request.getComponent())
+        val intent =
+            if (request.hasComponent()) {
+                val component =
+                    ComponentName.unflattenFromString(request.getComponent())
+                        ?: throw GuestFailure(
+                            GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
+                            "the component is not valid",
+                        )
+                Intent(Intent.ACTION_MAIN).setComponent(component)
+            } else {
+                // The launcher activity comes from PackageManager, as getLaunchIntentForPackage
+                // resolves it, and the
+                // start names the explicit component. A package-only intent is resolved against the
+                // caller's
+                // visibility, which the shell uid does not have for every package.
+                system().packageManager.getLaunchIntentForPackage(request.getPackage())
                     ?: throw GuestFailure(
-                        GuestErrorCode.GUEST_ERROR_CODE_INVALID_ARGUMENT,
-                        "the component is not valid",
+                        GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                        "the package has no launcher activity",
+                        mapOf("package" to request.getPackage()),
                     )
-            intent.setComponent(component)
-        } else {
-            intent.addCategory(Intent.CATEGORY_LAUNCHER).setPackage(request.getPackage())
-        }
+            }
         if (request.hasAction()) {
             intent.action = request.getAction()
         }
@@ -95,17 +127,63 @@ class LaunchService(
             flags = flags or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         intent.addFlags(flags)
-        val options = launchOptions(displayId)
-        try {
-            context().startActivity(intent, options)
-        } catch (error: ActivityNotFoundException) {
-            throw GuestFailure(
-                GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
-                "the package has no launcher activity",
-                mapOf("package" to request.getPackage()),
-            )
+        val result =
+            SystemServices.activityTask.call(
+                "startActivityAsUser",
+                null,
+                SHELL_PACKAGE,
+                null,
+                intent,
+                null,
+                null,
+                null,
+                0,
+                flags,
+                null,
+                launchOptions(displayId),
+                CURRENT_USER_ID,
+            ) as? Int ?: Int.MIN_VALUE
+        AgentLog.info(
+            "the activity start for ${request.getPackage()} on display $displayId returned $result"
+        )
+        when (result) {
+            startResult("START_SUCCESS"),
+            startResult("START_TASK_TO_FRONT"),
+            startResult("START_DELIVERED_TO_TOP") -> Unit
+            startResult("START_INTENT_NOT_RESOLVED"),
+            startResult("START_CLASS_NOT_FOUND") ->
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_NOT_FOUND,
+                    "the package has no activity for the launch",
+                    mapOf("package" to request.getPackage()),
+                )
+            startResult("START_PERMISSION_DENIED") ->
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_PERMISSION_DENIED,
+                    "Android refused the start",
+                )
+            else ->
+                throw GuestFailure(
+                    GuestErrorCode.GUEST_ERROR_CODE_INTERNAL,
+                    "the activity start returned a result code",
+                    mapOf("start_result" to result.toString()),
+                )
         }
     }
+
+    /**
+     * A start result of `ActivityManager`, read from this image. Android renumbers these between
+     * releases (on build 16373615 `START_INTENT_NOT_RESOLVED` is -91), so the values are not
+     * written into the agent.
+     */
+    private fun startResult(name: String): Int =
+        try {
+            checkNotNull(HiddenApi.classOrNull("android.app.ActivityManager"))
+                .getField(name)
+                .getInt(null)
+        } catch (error: ReflectiveOperationException) {
+            Int.MIN_VALUE
+        }
 
     /**
      * `ActivityOptions` that place the activity on [displayId]. `setLaunchDisplayId` is a hidden

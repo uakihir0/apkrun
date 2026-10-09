@@ -3,10 +3,10 @@ package io.apkrun.guest.runtime
 import android.content.Context
 
 /**
- * A `Context` of the system process, for the public APIs that need one (`Settings`,
- * `startActivity`). It comes from `ActivityThread.systemMain().getSystemContext()`, which
- * `app_process` can call. The caller must have prepared the main looper first (guest-components.md
- * §3.2).
+ * A `Context` of the system process, for the public APIs that need one. It comes from
+ * `ActivityThread.systemMain().getSystemContext()`, which `app_process` can call. The caller must
+ * have prepared the main looper first (guest-components.md §3.2), so the daemon creates it on the
+ * main thread at start.
  */
 object SystemContext {
     private val context: Context by lazy {

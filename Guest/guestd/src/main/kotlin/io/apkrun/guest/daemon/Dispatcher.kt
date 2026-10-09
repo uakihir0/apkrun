@@ -87,10 +87,21 @@ class Dispatcher(
                 GuestErrorCode.GUEST_ERROR_CODE_PERMISSION_DENIED,
                 "Android refused the operation",
             )
-        } catch (error: RuntimeException) {
+        } catch (error: Exception) {
+            // Reflection and framework calls raise checked exceptions too. An operation that fails
+            // must not end the
+            // daemon, so every such failure is answered.
             return failure(
                 GuestErrorCode.GUEST_ERROR_CODE_INTERNAL,
                 "the operation failed",
+                mapOf("exception" to error.javaClass.name),
+            )
+        } catch (error: LinkageError) {
+            // A framework class or method that this image does not have. The request fails, and the
+            // agent keeps running.
+            return failure(
+                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                "the framework does not provide what the operation needs",
                 mapOf("exception" to error.javaClass.name),
             )
         } finally {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HelloText</string>
+    <string name="counter_format">Count: %1$d</string>
+    <string name="increment">Increment</string>
+    <string name="input_hint">Type here</string>
+    <string name="context_target">Long-press this text</string>
+    <string name="reset_counter">Reset counter</string>
+</resources>

@@ -1,0 +1,12 @@
+# Versions of the fixture apps. AGP matches Guest/gradle/libs.versions.toml (build-system.md §8.1).
+# AGP 9 has built-in Kotlin, so no Kotlin plugin is listed.
+
+[versions]
+agp = "9.4.1"
+junit = "4.13.2"
+
+[libraries]
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

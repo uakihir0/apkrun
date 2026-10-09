@@ -17,4 +17,8 @@ Guest/.gradle/
 Guest/local.properties
 Tests/Fixtures/AndroidApps/out/
 Tests/Fixtures/AndroidApps/local.properties
+Tests/Fixtures/AndroidApps/.gradle/
+Tests/Fixtures/AndroidApps/.kotlin/
+Tests/Fixtures/AndroidApps/build/
+Tests/Fixtures/AndroidApps/**/build/
 .claude/settings.local.json

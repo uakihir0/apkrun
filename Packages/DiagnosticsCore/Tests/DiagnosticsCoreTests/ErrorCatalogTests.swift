@@ -34,6 +34,7 @@ import Testing
                 "adbPackageRejected",
                 "devConsoleGuestFailed", "devConsoleInputFailed",
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
+                "devConsoleNotRunning", "devConsoleSocketUnavailable",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
                 "bootTimedOut", "bootStalled",
             ].map { "runtime.\($0)" }

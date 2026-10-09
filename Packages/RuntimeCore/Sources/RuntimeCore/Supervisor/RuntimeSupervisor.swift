@@ -104,6 +104,11 @@ public actor RuntimeSupervisor {
     /// The guest vsock port where adbd listens (android-image.md §7.3).
     static let developmentADBGuestPort: UInt32 = 5555
 
+    /// The progress stream of the boot in flight, finished by `stop()` so that the boot wait ends.
+    private var bootProgress: AsyncStream<Progress>.Continuation?
+    /// Set by `stop()` and cleared when the next boot starts. A stop ends a boot without a failure state.
+    private var stopRequested = false
+
     /// Creates a supervisor for one image and instance.
     public init(
         image: InstalledImage,
@@ -150,6 +155,8 @@ public actor RuntimeSupervisor {
         guard let controller else {
             return
         }
+        stopRequested = true
+        bootProgress?.finish()
         transition(to: .stopping)
         if options.developerMode {
             await requestPowerOff(controller)
@@ -216,6 +223,8 @@ public actor RuntimeSupervisor {
             tracker: tracker,
             progress: progress.continuation
         )
+        stopRequested = false
+        bootProgress = progress.continuation
 
         do {
             try await controller.start()
@@ -233,6 +242,7 @@ public actor RuntimeSupervisor {
         }
         try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot)
         adbPollTask?.cancel()
+        bootProgress = nil
 
         if let shell {
             try await confirmBootCompleted(shell)
@@ -510,6 +520,9 @@ public actor RuntimeSupervisor {
                 throw .bootStalled(phase: phase)
             }
         }
+        if stopRequested {
+            throw .androidBootFailed(detail: "the runtime was stopped during boot")
+        }
         throw .androidBootFailed(detail: "the console closed while booting")
     }
 
@@ -555,8 +568,14 @@ public actor RuntimeSupervisor {
     }
 
     private func fail(_ failure: RuntimeBootFailure) async {
-        logger.error("Android boot failed", errorCode: failure.qualifiedCode)
-        transition(to: .failed(failure))
+        bootProgress = nil
+        if stopRequested {
+            // A stop ended this boot. `stop()` owns the state from here, and the boot is not a failure.
+            logger.notice("Android boot ended by a stop request")
+        } else {
+            logger.error("Android boot failed", errorCode: failure.qualifiedCode)
+            transition(to: .failed(failure))
+        }
         if let controller {
             if await controller.state != .stopped {
                 try? await controller.stop()

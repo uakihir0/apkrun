@@ -235,7 +235,8 @@ func anInterruptedInstallLeavesNothingBehind() async throws {
         paths: sandbox.paths,
         trust: testImageTrust,
         diagnostics: .live(paths: sandbox.paths),
-        cloneFile: counter.clone
+        cloneFile: counter.clone,
+        beforeActivation: {}
     )
     await #expect(throws: ImageFailure.self) {
         _ = try await store.install(from: .directory(source))
@@ -374,11 +375,72 @@ func aSourceThatChangesDuringTheInstallIsRefused() async throws {
                 try replacementSignature.write(to: sourceSignature)
             }
             try FileCloner.clone(from, to)
-        }
+        },
+        beforeActivation: {}
     )
     await #expect(throws: ImageFailure.unexpectedFile(file: "manifest.json")) {
         _ = try await store.install(from: .directory(source))
     }
     let remaining = (try? FileManager.default.contentsOfDirectory(atPath: sandbox.images.path)) ?? []
     #expect(remaining.isEmpty, "\(remaining)")
+}
+
+@Test
+func aDowngradeIsRefusedWhenTheCurrentLinkIsMissing() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let store = sandbox.store()
+    _ = try await store.install(from: .directory(try sandbox.bundle("new", version: "2026.10.1-cf1-arm64")))
+    try FileManager.default.removeItem(at: sandbox.images.appendingPathComponent("current"))
+    await #expect(
+        throws: ImageFailure.downgradeRejected(from: "2026.10.1-cf1-arm64", to: "2026.10.0-cf1-arm64")
+    ) {
+        _ = try await store.install(from: .directory(try sandbox.bundle("old", version: "2026.10.0-cf1-arm64")))
+    }
+}
+
+@Test
+func aCrashBetweenTheRenameAndTheActivationStillBlocksADowngrade() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    // The first install stops after the image is renamed into place and before it is made current.
+    let crashing = ImageStore(
+        paths: sandbox.paths,
+        trust: testImageTrust,
+        diagnostics: .live(paths: sandbox.paths),
+        cloneFile: { from, to in try FileCloner.clone(from, to) },
+        beforeActivation: {
+            throw ImageFailure.cloneFailed(underlying: UnderlyingError(domain: "test", code: 2))
+        }
+    )
+    await #expect(throws: ImageFailure.self) {
+        _ = try await crashing.install(from: .directory(try sandbox.bundle("new", version: "2026.10.1-cf1-arm64")))
+    }
+    #expect(FileManager.default.fileExists(atPath: sandbox.images.appendingPathComponent("2026.10.1-cf1-arm64").path))
+    #expect(!FileManager.default.fileExists(atPath: sandbox.images.appendingPathComponent("current").path))
+
+    let store = sandbox.store()
+    await #expect(
+        throws: ImageFailure.downgradeRejected(from: "2026.10.1-cf1-arm64", to: "2026.10.0-cf1-arm64")
+    ) {
+        _ = try await store.install(from: .directory(try sandbox.bundle("old", version: "2026.10.0-cf1-arm64")))
+    }
+}
+
+@Test
+func aSameTripleImageWithAnotherBaseIsNotNewer() async throws {
+    let sandbox = try StoreSandbox()
+    defer { sandbox.remove() }
+    let store = sandbox.store()
+    _ = try await store.install(from: .directory(try sandbox.bundle("a", version: "2026.10.0-cf16373615-arm64")))
+    await #expect(
+        throws: ImageFailure.downgradeRejected(
+            from: "2026.10.0-cf16373615-arm64", to: "2026.10.0-cf16000000-arm64"
+        )
+    ) {
+        _ = try await store.install(
+            from: .directory(try sandbox.bundle("b", version: "2026.10.0-cf16000000-arm64"))
+        )
+    }
+    #expect(try await store.current().version.description == "2026.10.0-cf16373615-arm64")
 }

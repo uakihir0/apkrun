@@ -27,22 +27,30 @@ public actor ImageStore {
     private let trust: ImageTrustStore
     private let logger: APKLogger
     private let cloneFile: @Sendable (URL, URL) throws -> Void
+    /// Runs after a new image is renamed into place, before it becomes current. Tests use it to
+    /// stop an install at the point where a crash would leave the image installed but not current.
+    private let beforeActivation: @Sendable () throws -> Void
     private var manifestCache: [String: CachedManifest] = [:]
 
     /// Creates a store for the images under `paths.imagesDirectory`.
     public init(paths: APKRunPaths, trust: ImageTrustStore, diagnostics: DiagnosticsContext) {
-        self.init(paths: paths, trust: trust, diagnostics: diagnostics, cloneFile: FileCloner.clone)
+        self.init(
+            paths: paths, trust: trust, diagnostics: diagnostics, cloneFile: FileCloner.clone,
+            beforeActivation: {}
+        )
     }
 
     init(
         paths: APKRunPaths,
         trust: ImageTrustStore,
         diagnostics: DiagnosticsContext,
-        cloneFile: @escaping @Sendable (URL, URL) throws -> Void
+        cloneFile: @escaping @Sendable (URL, URL) throws -> Void,
+        beforeActivation: @escaping @Sendable () throws -> Void
     ) {
         self.paths = paths
         self.trust = trust
         self.cloneFile = cloneFile
+        self.beforeActivation = beforeActivation
         logger = APKLogger(category: ImageLogCategory.install, sink: diagnostics.logSink)
     }
 
@@ -132,10 +140,14 @@ public actor ImageStore {
         let name = version.description
         let target = paths.imageDirectory(version: name)
 
-        // Refused before the existing-directory branch too, so that a reinstall of an older
-        // image is a downgrade like any other (IR-347).
-        if let current = linkedName(paths.currentImage).flatMap(ImageVersion.init), version < current {
-            throw .downgradeRejected(from: current.description, to: name)
+        // A candidate must be newer than every installed image, and this check runs before the
+        // existing-directory branch so that a reinstall of an older image is refused too. An image
+        // with the same triple and another base is not newer (§2.3), so it is refused as well.
+        // The installed images are the directories under Images/ and the target of `current`,
+        // which covers an interrupted activation (IR-347, IR-359).
+        let blocking = try installedVersions().filter { $0 != version && !($0 < version) }
+        if let highest = blocking.max(by: Self.isBefore) {
+            throw .downgradeRejected(from: highest.description, to: name)
         }
         if FileManager.default.fileExists(atPath: target.path) {
             let installed = try checkedManifest(in: target, cacheKey: nil)
@@ -173,11 +185,35 @@ public actor ImageStore {
             throw storageFailure(error)
         }
         logger.notice("Installed the image \(name, .public) from a directory")
+        do {
+            try beforeActivation()
+        } catch let failure as ImageFailure {
+            throw failure
+        } catch {
+            throw storageFailure(error)
+        }
         try setCurrent(version)
         return try installedImage(named: name, depth: .quick)
     }
 
     // MARK: Helpers
+
+    /// Every installed image version: the version-named directories under `Images/`, and the
+    /// target of `current` even when that directory is missing.
+    private func installedVersions() throws(ImageFailure) -> [ImageVersion] {
+        var versions = try directoryNames().compactMap(ImageVersion.init)
+        if let name = linkedName(paths.currentImage), let current = ImageVersion(name),
+            !versions.contains(current)
+        {
+            versions.append(current)
+        }
+        return versions
+    }
+
+    /// Orders versions by triple, then by base, so that a same-triple pair has an order too.
+    private static func isBefore(_ lhs: ImageVersion, _ rhs: ImageVersion) -> Bool {
+        lhs < rhs || (lhs.shortForm == rhs.shortForm && lhs.base < rhs.base)
+    }
 
     /// The parsed manifest and the exact bytes that the signature covers.
     private struct CheckedBundle {

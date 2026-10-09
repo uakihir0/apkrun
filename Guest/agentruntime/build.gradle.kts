@@ -1,6 +1,6 @@
-// The shared runtime of both Guest Agents (guest-components.md §2, §6.2): the reflection wrappers of the
-// system services, the socket server with its peer check, and the agent log. It uses the Kotlin standard
-// library and kotlinx-coroutines only (guest-components.md §2).
+// The shared runtime of both Guest Agents (guest-components.md §2, §6.2): the reflection wrappers
+// of the system services, the socket server with its peer check, and the agent log. It uses the
+// Kotlin standard library and kotlinx-coroutines only (guest-components.md §2).
 plugins {
     alias(libs.plugins.android.library)
 }

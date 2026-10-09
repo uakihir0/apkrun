@@ -39,4 +39,15 @@ struct AndroidShellConsole {
         }
         return reply.output
     }
+
+    /// The result of a scalar command: its last output line. The shell echoes a long command with
+    /// line-editing artifacts before its output, so the echo is skipped (IR-370).
+    func value(_ command: String, root: Bool = false, timeout: Duration = .seconds(60)) async throws -> String {
+        // The status is not checked: `grep -c` exits 1 when the count is zero, which is a result.
+        let text = try await run(command, root: root, timeout: timeout).output
+        let lines = text.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains("__APK") && !$0.hasPrefix("console:") }
+        return lines.last ?? ""
+    }
 }

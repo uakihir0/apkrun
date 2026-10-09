@@ -149,6 +149,95 @@ final class AndroidBootTests: XCTestCase {
         }
     }
 
+    /// #095 step 5: the guest has an address, a default route, DNS, and a validated network (FR-VM-04).
+    ///
+    /// The checks run inside Android over the serial shell. `connectivitycheck` is the name NetworkMonitor
+    /// probes, and `VALIDATED` in `dumpsys connectivity` means its `generate_204` probe passed.
+    func testNetwork() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: true)
+        let collector = Task {
+            for await _ in supervisor.events {}
+        }
+        var failure: Error?
+        do {
+            try await supervisor.ensureReady(.cli)
+            let shellOrNil = await supervisor.shell
+            let android = AndroidShellConsole(shell: try XCTUnwrap(shellOrNil))
+            // The design (android-image.md §7.4) puts the guest on wlan0 (virt_wifi on eth2) with vmnet's DHCP.
+            // ICMP gets no reply through vmnet, so name resolution is checked with getent, not ping.
+            let wlan = try await android.run("ip addr show wlan0 | grep 'inet '").output
+            XCTAssertTrue(wlan.contains("inet 192.168."), "wlan0 has the vmnet IPv4 address: \(wlan)")
+            let routes = try await android.run("ip route show table all | grep 'default via'").output
+            XCTAssertTrue(routes.contains("default via 192.168."), "the default route goes through vmnet")
+            let resolved = try await android.run("getent hosts connectivitycheck.gstatic.com").output
+            XCTAssertFalse(resolved.isEmpty, "connectivitycheck.gstatic.com resolves: \(resolved)")
+            let validated = try await android.value("dumpsys connectivity | grep -c VALIDATED")
+            XCTAssertNotEqual(validated, "0", "a network is validated")
+            // Diagnostics for the record: the Wi-Fi state, the links, and the join's log lines.
+            let record = [
+                "wlan0:\n\(wlan)",
+                "routes:\n\(routes)",
+                "wifi:\n\(try await android.run("cmd wifi status | head -n 8").output)",
+                "links:\n\(try await android.run("ip -o link | cut -c1-90").output)",
+                "wifi log:\n\(try await android.run("logcat -d | grep -i virtwifi | tail -n 8").output)",
+            ].joined(separator: "\n")
+            let attachment = XCTAttachment(string: record)
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        } catch {
+            failure = error
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        collector.cancel()
+        XCTAssertTrue(stopped, "the developer-mode stop returns within 90 s")
+        if let failure {
+            throw failure
+        }
+    }
+
+    /// #095 step 3 and step 6: the in-guest KeyMint and Gatekeeper are running, `/data` is mounted, and
+    /// LockSettings did not stall on Weaver (`logcat -s LockSettingsService`).
+    func testHostServiceSubstitutes() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: true)
+        let collector = Task {
+            for await _ in supervisor.events {}
+        }
+        var failure: Error?
+        do {
+            try await supervisor.ensureReady(.cli)
+            let shellOrNil = await supervisor.shell
+            let android = AndroidShellConsole(shell: try XCTUnwrap(shellOrNil))
+            let keymint = try await android.value("service list | grep -c keymint")
+            XCTAssertNotEqual(keymint, "0", "KeyMint is registered")
+            let gatekeeper = try await android.value("service list | grep -c -i gatekeeper")
+            XCTAssertNotEqual(gatekeeper, "0", "Gatekeeper is registered")
+            let data = try await android.value("grep -c ' /data ' /proc/mounts")
+            XCTAssertNotEqual(data, "0", "/data is mounted")
+            let weaverStalls = try await android.value("logcat -d | grep -i weaver | grep -ci -e timed -e fail")
+            XCTAssertEqual(weaverStalls, "0", "LockSettings does not stall on Weaver")
+        } catch {
+            failure = error
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        collector.cancel()
+        XCTAssertTrue(stopped, "the developer-mode stop returns within 90 s")
+        if let failure {
+            throw failure
+        }
+    }
+
     /// The merged bootconfig and command line the planner gives this instance (android-image.md §6.1).
     static func plannedBootconfig(_ fixture: AndroidBootFixture) async throws -> [String: String] {
         let loaded = try await fixture.store.load(image: fixture.image)

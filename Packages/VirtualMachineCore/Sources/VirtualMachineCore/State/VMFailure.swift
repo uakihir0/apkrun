@@ -14,6 +14,8 @@ public enum VMFailure: APKRunError, Equatable {
     case vsockConnectFailed(port: UInt32, underlying: VZErrorInfo)
     case vsockPortNotListening(port: UInt32)
     case vsockConnectTimedOut(port: UInt32)
+    case loopbackPortInUse(port: UInt16)
+    case loopbackListenFailed(port: UInt16, underlying: UnderlyingError)
     case virtualizationUnavailable
     case networkAttachmentLost
     case consoleLogWriteFailed
@@ -46,6 +48,10 @@ public enum VMFailure: APKRunError, Equatable {
             "vsockPortNotListening"
         case .vsockConnectTimedOut:
             "vsockConnectTimedOut"
+        case .loopbackPortInUse:
+            "loopbackPortInUse"
+        case .loopbackListenFailed:
+            "loopbackListenFailed"
         case .virtualizationUnavailable:
             "virtualizationUnavailable"
         case .networkAttachmentLost:
@@ -66,6 +72,9 @@ public enum VMFailure: APKRunError, Equatable {
         case .vsockConnectFailed(let port, _),
             .vsockPortNotListening(let port),
             .vsockConnectTimedOut(let port):
+            ["port": .count(Int(port))]
+        case .loopbackPortInUse(let port),
+            .loopbackListenFailed(let port, _):
             ["port": .count(Int(port))]
         case .startFailed,
             .stoppedWithError,
@@ -90,12 +99,15 @@ public enum VMFailure: APKRunError, Equatable {
             .resumeFailed(let error),
             .vsockConnectFailed(_, let error):
             error.underlying
+        case .loopbackListenFailed(_, let error):
+            error
         case .invalidTransition,
             .stopTimedOut,
             .vsockDeviceNotConfigured,
             .vsockDeviceUnavailable,
             .vsockPortNotListening,
             .vsockConnectTimedOut,
+            .loopbackPortInUse,
             .virtualizationUnavailable,
             .networkAttachmentLost,
             .consoleLogWriteFailed:

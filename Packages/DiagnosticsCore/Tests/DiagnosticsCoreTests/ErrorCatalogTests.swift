@@ -18,6 +18,7 @@ import Testing
             "missingSystemConsole", "invalidMACAddress", "machineIdentifierInvalid",
             "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
             "configurationInvalid", "networkAttachmentLost", "consoleLogWriteFailed",
+            "loopbackPortInUse", "loopbackListenFailed",
         ].map { "vm.\($0)" }
             + [
                 "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",

@@ -220,6 +220,48 @@
       }
     },
     {
+      "code": "vm.loopbackPortInUse",
+      "parameters": [
+        "port"
+      ],
+      "message": {
+        "en": "APKRun couldn't open developer debugging port {port}, because another program is using it."
+      },
+      "remediation": {
+        "en": "Quit the program that uses port {port}, then start Android again. Android starts without ADB until then."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "table": "vmFailure",
+        "case": "loopbackPortInUse(port:)",
+        "when": "developer mode is on and another process already listens on the ADB port",
+        "raisedBy": "VsockLoopbackForwarder",
+        "ref": "§8"
+      }
+    },
+    {
+      "code": "vm.loopbackListenFailed",
+      "parameters": [
+        "port"
+      ],
+      "message": {
+        "en": "APKRun couldn't open developer debugging port {port} on this Mac."
+      },
+      "remediation": {
+        "en": "Check that no security tool blocks local connections, then start Android again. Android starts without ADB until then."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "vmFailure",
+        "case": "loopbackListenFailed(port:underlying:)",
+        "when": "the loopback listener cannot be created or bound for a reason other than a port in use",
+        "raisedBy": "VsockLoopbackForwarder",
+        "ref": "§8"
+      }
+    },
+    {
       "code": "vm.virtualizationUnavailable",
       "parameters": [],
       "message": {

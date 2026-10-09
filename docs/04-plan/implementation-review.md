@@ -10288,3 +10288,25 @@ maintainer can still dispatch the job by hand.
 When a lab runner is registered, the push trigger comes back with the path
 filter of build-system.md §15.1. The nightly lab jobs (`nightly.yml`) are not
 changed by this entry.
+
+## IR-314: Run the nightly lab jobs on manual dispatch only until lab runners exist
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 (nightly `gates`); #006 (nightly `network`); #062 |
+| Affected files | `.github/workflows/nightly.yml`; [build-system.md](../05-development/build-system.md) §15.1; [test-strategy.md](test-strategy.md) §2.5 |
+
+**Choice.** `nightly.yml` has no `schedule` trigger, only `workflow_dispatch`.
+Its jobs (`gates` on `apkrun-reference`, `network` on `apkrun-lab`) are
+unchanged.
+
+**Reason.** No `apkrun-reference` or `apkrun-lab` runner is registered (IR-295).
+A daily run could only stay queued. IR-313 turned off the push trigger of
+`integration.yml` for the same reason. IR-295 had left the nightly jobs as they
+were; the maintainer has now asked for them to be stopped as well.
+
+**Consequence.** Gate regressions and the network check do not run on a
+schedule. Gate checks run locally with `scripts/run-gate.sh G<n>`, and their
+results are recorded by hand. When the lab runners are registered, the daily
+schedule (`cron: "15 3 * * *"`) comes back.

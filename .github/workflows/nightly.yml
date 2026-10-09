@@ -1,8 +1,9 @@
 name: Nightly acceptance gates
 
+# Manual dispatch only: no apkrun-reference or apkrun-lab runner is registered
+# (IR-295), so a scheduled run could only stay queued (IR-314). Restore the
+# daily schedule (cron "15 3 * * *") once the lab runners exist.
 on:
-  schedule:
-    - cron: "15 3 * * *"
   workflow_dispatch:
 
 permissions:

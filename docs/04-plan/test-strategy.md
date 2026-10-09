@@ -112,6 +112,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
 | Long fuzzing (`fuzz-long`), soak, notarization (`notarize`: the Release app and a distribution wrapper) | §7.2, §7.3, #088 | nightly | none |
 | Manual checklists (§8) | the release issue | every release candidate | not applicable |
 
+- **Current state.** No lab runner is registered (IR-295), so `nightly.yml` has no schedule and runs only on manual dispatch (IR-314). Until the runners exist, the gate checks run locally with `scripts/run-gate.sh G<n>`.
 - **Budget.** The nightly T3 run finishes in 8 hours per machine.
 - **Required.** T3 does not gate pull requests. A gate check closes its gate. Release checks gate the release (§9).
 

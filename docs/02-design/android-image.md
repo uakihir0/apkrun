@@ -717,6 +717,16 @@ line on hvc0 is `init: Loaded kernel module /lib/modules/virtio_pci.ko`. #012 an
 #013 base `.kernel` on the first console byte and `.init` on the first `init: `
 line ([runtime-daemon.md](runtime-daemon.md) §3.3).
 
+### 7.8 Verification (#095)
+
+Checked 2026-10-09, macOS 27.0.1 (26A434), build 16373615.
+
+- **Ports, test kernel.** `LinuxGuestConsolePortTests.testConsolePortMarkersMatchTheirNumbers` attaches eight ports: `APKRUN-PORT-<i>` arrives on `/dev/hvc<i>` for every `i` from 1 to 7 (identity). The pinned test kernel (Alpine 6.18.54) creates `/dev/hvc0` to `/dev/hvc7` and no more. Ten or twenty ports fail at `/dev/hvc8`, although the guest's virtio-pci probe shows 13 devices. The 20-port check therefore skips with that reason (IR-371, IR-372).
+- **Ports, Android kernel.** The VZ capture of the Android guest lists `/dev/hvc0` to `/dev/hvc19` on the 20-port layout. The holders are the shell on `hvc1`, logcat on `hvc2`, and the HALs on the other numbers (for example `hvc18` and `hvc19` for the sensors and the vendor HALs). No marker test runs on the Android guest, because host input is attached to service ports only.
+- **ConsolePortPlan.** The identity mapping needs no reordering on VZ. The plan is a data function with T0 tests, and the boot path does not apply it (IR-373).
+- **Security HALs and `/data`.** `testHostServiceSubstitutes` passes: KeyMint and Gatekeeper are registered, `/data` is mounted, and `logcat` has no Weaver timeout or failure line, so LockSettings does not wait for Weaver.
+- **Network (open).** On the first boot the first-boot settings run and `cmd wifi connect-network VirtWifi open` logs `Enable disabled network: "VirtWifi"`. `cmd wifi status` then reports `Wifi is disabled`, and `wlan0` (on `buried_eth2`) stays `NO-CARRIER`. No IPv4 address, default route, or DNS follows, and `eth1` and `buried_eth2` have IPv6 addresses only. `dumpsys connectivity` shows validated offers, but name resolution fails (`getent hosts connectivitycheck.gstatic.com` returns nothing). The Wi-Fi state after the first boot is a follow-up (IR-374).
+
 ---
 
 ## 8. Reference boot capture (#064)
@@ -1739,3 +1749,4 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Archive extraction time and bytes written | #087 | pending (R-25) |
 | 20 console ports, silent-port HAL behaviour, Weaver, vsock clients, RIL cost | #095 | spike: VZ allows 10 single-port devices, ports 10–19 on one multiport device; hvc holders and client behaviour as in §7.1, §7.3, and §7.6; Weaver is `none`. The 2026-10-09 G2 run with the production code had no HAL crash loop over five 10-minute dwells. Marker verification and the RIL's CPU and log cost are pending |
 | Network on the stock image | #095 | spike: three NICs and `virt_wifi` gave a validated Wi-Fi network (§7.4); the production path is pending (OQ-37) |
+| Port markers on the test kernel, host-service substitutes, and the network (#095) | #095 | 2026-10-09: eight-port marker identity passes; `testHostServiceSubstitutes` passes; the network fails on the Wi-Fi join, and the 20-port marker test is blocked by the test kernel's eight hvc nodes (§7.8, IR-372, IR-374) |

@@ -1386,19 +1386,19 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] All 20 console ports are attached. Their numbering is verified with the `APKRUN-PORT-<i>` markers, and `ConsolePortPlan` is applied if needed.
+- [ ] All 20 console ports are attached. Their numbering is verified with the `APKRUN-PORT-<i>` markers, and `ConsolePortPlan` is applied if needed. Open (IR-372): the pinned test kernel creates eight `hvc` nodes, so the marker check passes for eight ports (`testConsolePortMarkersMatchTheirNumbers`) and the 20-port check skips with that reason. The Android kernel creates `hvc0` through `hvc19` with the 20 ports, and the VZ capture shows their holders; no marker test runs there.
 - [x] Each hvc port has a recorded role. No HAL crash-loops on a silent port.
 - [x] In-guest insecure KeyMint and Gatekeeper are selected by bootconfig, and vold mounts `/data`.
 - [x] The behaviour of each vsock client whose key is left out is recorded in [android-image.md](../../02-design/android-image.md) §7.3.
-- [ ] The guest has a working network: an address, a default route, DNS resolution, and a validated network in `dumpsys connectivity` (FR-VM-04).
-- [ ] LockSettings does not wait for Weaver.
+- [ ] The guest has a working network: an address, a default route, DNS resolution, and a validated network in `dumpsys connectivity` (FR-VM-04). Open (IR-374): on the current first boot Wi-Fi reads as disabled after the first-boot settings, `wlan0` has no carrier, and no IPv4 address or DNS follows. `testNetwork` checks the design's configuration and records the state.
+- [x] LockSettings does not wait for Weaver. `testHostServiceSubstitutes` passes on the stock image: KeyMint and Gatekeeper are registered, `/data` is mounted, and `logcat` has no Weaver timeout or failure line.
 - [x] RIL, Bluetooth, NFC, UWB, GNSS, and sensors are kept unless they crash-loop, and the findings are recorded.
 
 ### Notes
 
 - Prefer in-guest implementations selected by configuration over host-side re-implementations (§7). Do not remove guest services unless they are shown to break boot, stability, or resource use.
 - vsock ports 6120–6199 are reserved for future substitutes. v1 substitutes are host-initiated only (§7.3).
-- **Product-code status (2026-10-09).** The layout's `consolePorts` give every port a role, `VZConfigurationBuilder` attaches ports 10–19 on one multiport device, and `RuntimeSupervisor` runs the sensors responder on `sensors_control` (hvc18). The G2 run of #014 (five cold boots, 10 minutes each) had no init service exiting more than twice (`apexd` twice per boot, as designed), no Watchdog kill, and `/data` mounted on every boot with the launcher's in-guest KeyMint and Gatekeeper keys. Open: the `APKRUN-PORT-<i>` marker test on the Linux guest (and `ConsolePortPlan` if the order ever differs), the network T2 checks inside Android (`ip addr`, default route, DNS, `generate_204`, `dumpsys connectivity`), and an explicit LockSettings/Weaver check.
+- **Product-code status (2026-10-09, #095).** The layout's `consolePorts` give every port a role, `VZConfigurationBuilder` attaches ports 10–19 on one multiport device, and `RuntimeSupervisor` runs the sensors responder on `sensors_control` (hvc18). The port test (`apkrun.test.portcount`) passes for eight ports, the identity mapping. The test kernel exposes only `hvc0`–`hvc7` (IR-372), so the 20-port check skips. `testHostServiceSubstitutes` passes. `testNetwork` fails on the Wi-Fi join (IR-374, a follow-up). The results are in [android-image.md](../../02-design/android-image.md) §7.8.
 - **Spike findings (2026-10-08; IR-306).** The direct-boot spike settled most decisions of this task before the production code exists: the 10-port limit and the multiport device, the sensors wait and its responder, the keys that must stay, three NICs with `virt_wifi`, and Bluetooth. The handling is in [android-image.md](../../02-design/android-image.md) §7. This task builds it into RuntimeCore, the layout, and VirtualMachineCore, and verifies it with the tests above. The sensors responder is a host-side substitute: no configuration selects another sensors implementation in this build (§7.1).
 
 ---

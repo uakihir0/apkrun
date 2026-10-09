@@ -11327,3 +11327,97 @@ lines were present. `su 0 dmesg` in the first version did not answer within
 
 **Consequence.** A later check that needs long output uses the same pattern.
 `AndroidShellConsole` does not add a wrapping layer.
+
+## IR-371: Pass the port-marker check for the ports the test kernel exposes, and skip the 20-port check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and its criterion; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** `LinuxGuestConsolePortTests.testConsolePortMarkersMatchTheirNumbers`
+attaches eight ports and checks the marker of each one on its own `/dev/hvc<i>`.
+It passes. `testTwentyConsolePorts` attaches twenty ports and skips, with the
+kernel's reason, when it reaches a missing `hvc` node. It does not fail.
+
+**Reason.** The pinned test kernel (Alpine `linux-virt` 6.18.54) creates
+`/dev/hvc0` through `/dev/hvc7` and no more, with ten or twenty ports attached
+(IR-372). A skip with the reason is the form #012 step 5 used for the
+bootconfig check. A failing twenty-port test would block every Linux guest run,
+and the Android guest shows that VZ itself creates the twenty nodes.
+
+**Consequence.** The #095 criterion "all 20 console ports are attached, and
+their numbering is verified with markers" stays open. Closing it needs a test
+kernel that exposes twenty `hvc` nodes (a ThirdParty pin change, outside #095)
+or a marker method that works on the Android guest.
+
+## IR-372: The pinned test kernel exposes eight hvc consoles, and the Android kernel exposes twenty
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.8; [vm.md](../02-design/vm.md) §6.1; [risks.md](risks.md) R-12 |
+
+**Choice.** Recorded as a finding. The Linux test guest's kernel creates
+`/dev/hvc0` to `/dev/hvc7` for the twenty-port layout, and its dmesg shows
+thirteen virtio-pci devices, all enabled. The Android kernel (6.12) creates
+`/dev/hvc0` to `/dev/hvc19` on the same VZ configuration, as the VZ capture
+lists.
+
+**Reason.** The test shows the console nodes that exist, and the failing node
+is `/dev/hvc8`. The Android kernel's log buffer and numbering differ from the
+Alpine kernel's. The cause in the Alpine kernel was not traced further (its
+configuration is not in the pin). No VZ-side change would fix it, because the
+Android guest on the same attachments has all twenty.
+
+**Consequence.** The numbering check runs with eight ports on the test kernel.
+For the Android guest, the holders in the VZ capture (`hvc1` for the shell,
+`hvc2` for logcat, `hvc18` for sensors) are the only evidence of the numbering.
+
+## IR-373: Do not apply ConsolePortPlan on the boot path, because VZ numbers the ports as attached
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1; [android-image.md](../02-design/android-image.md) §7.1 |
+
+**Choice.** `ConsolePortPlan` is a data function with T0 tests (identity,
+permutation, and rejected mappings). The boot path does not call it.
+
+**Reason.** The eight-port marker test shows the identity mapping on VZ, so
+there is no order to correct. The product does not run the port test, so it
+has no device-number evidence to feed a plan at boot. Wiring the plan into the
+boot without evidence would add a mapping that nothing checks.
+
+**Consequence.** If a later kernel or VZ release changes the numbering, the
+port test fails first. The plan then gets its mapping from that test's output.
+
+## IR-374: The network does not come up after the first boot, so #095's network criterion stays open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (follow-up for the first boot's Wi-Fi join) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criteria and notes; [android-image.md](../02-design/android-image.md) §7.4, §7.6, §7.8 |
+
+**Choice.** The network criterion stays open. `AndroidBootTests.testNetwork`
+checks the design's configuration (an IPv4 address on `wlan0`, a default route
+through vmnet, name resolution with `getent`, and a validated network). It
+fails on the first boot of build 16373615 and records the state. The fix is a
+follow-up, not part of #095.
+
+**Reason.** The first-boot settings run `cmd wifi connect-network VirtWifi open`,
+and WifiConfigManager logs the network as enabled. `cmd wifi status` then
+reports `Wifi is disabled`, `wlan0` has no carrier, and no DHCP runs. The
+design (§7.4) describes the result the spike had: `wlan0` on vmnet's
+`192.168.64.x`, DNS resolving, and a validated network. The difference is
+whether Wi-Fi stays enabled after the first boot; the cause was not traced
+further. Changing `FirstBootSettings` without a traced cause would guess at
+Android's Wi-Fi state.
+
+**Consequence.** `testNetwork` fails until the follow-up lands, and #095's
+network criterion, DNS and the validated network, stays unchecked. The follow-up
+owns the first-boot Wi-Fi state, with `testNetwork` as its check.

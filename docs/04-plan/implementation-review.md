@@ -10241,3 +10241,29 @@ system, which is where the sparse-growth claim (NFR-RES-02) is measured.
 
 **Verification.** The four provisioner tests pass; the grown 32 GiB disk was
 allocated below 16 MiB on APFS.
+
+## IR-312: Keep the M1 boot failures in a RuntimeCore type of their own
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012, #014 |
+| Affected files | `Packages/RuntimeCore/Sources/RuntimeCore/Boot/RuntimeBootFailure.swift`; `Packages/RuntimeHost/Sources/RuntimeHost/RuntimeFailure.swift`; [error-catalog.md](../03-reference/error-catalog.md) §7.6 |
+
+**Choice.** The first-cut `RuntimeSupervisor` reports its failures as
+`RuntimeBootFailure` in RuntimeCore, with the catalog codes of error-catalog.md
+§7.2 (`runtime.image`, `runtime.vmConfiguration`, and `runtime.vm` as
+transparent entries, and `runtime.kernelPanic`, `runtime.androidBootFailed`,
+`runtime.bootTimedOut`, and `runtime.bootStalled`). RuntimeHost's
+`RuntimeFailure` keeps its host-process cases.
+
+**Reason.** state-machines.md §2 puts `RuntimeFailure` in RuntimeCore, but the
+existing enum of that name lives in RuntimeHost, and the CLI, which may not
+import RuntimeCore, names its cases. Moving it would need a re-export or CLI
+changes outside #012. Both enums are in the `runtime` domain, which RuntimeCore
+and RuntimeHost share, and their codes do not collide; the CLI prints either
+through the catalog. They merge when the full `RuntimeSupervisor` arrives with
+#031.
+
+**Verification.** The catalog test lists the new codes, and `apkrun dev boot`
+prints them through `ErrorOutput`.

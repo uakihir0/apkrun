@@ -321,7 +321,8 @@ let package = Package(
         .testTarget(
             name: "RuntimeCoreTests",
             dependencies: ["RuntimeCore"],
-            path: "Packages/RuntimeCore/Tests/RuntimeCoreTests"
+            path: "Packages/RuntimeCore/Tests/RuntimeCoreTests",
+            exclude: ["Fixtures"]
         ),
         .testTarget(
             name: "RuntimeClientTests",

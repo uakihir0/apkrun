@@ -8,7 +8,7 @@
         static let configuration = CommandConfiguration(
             commandName: "dev",
             abstract: "Run development-only APKRun commands.",
-            subcommands: [DevLinuxCommand.self, DevConsoleCommand.self]
+            subcommands: [DevLinuxCommand.self, DevConsoleCommand.self, DevBootCommand.self]
         )
     }
 

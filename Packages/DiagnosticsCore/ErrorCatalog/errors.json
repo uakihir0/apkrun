@@ -1674,6 +1674,128 @@
         "raisedBy": "AndroidBootPlanner",
         "ref": "[../02-design/android-image.md](../02-design/android-image.md) §6.4"
       }
+    },
+    {
+      "code": "runtime.image",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "image(ImageFailure)",
+        "when": "ImageCore fails in the pre-boot checks or while writing the initrd",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 2"
+      }
+    },
+    {
+      "code": "runtime.vmConfiguration",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "vmConfiguration(VMConfigurationFailure)",
+        "when": "`VMDefinitionValidator` rejects the Android definition",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4"
+      }
+    },
+    {
+      "code": "runtime.vm",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "vm(VMFailure)",
+        "when": "the VM fails to start or fails while booting",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4"
+      }
+    },
+    {
+      "code": "runtime.kernelPanic",
+      "parameters": [],
+      "message": {
+        "en": "Android's system crashed while starting.",
+        "ja": "Android のシステムが起動中にクラッシュしました。"
+      },
+      "remediation": {
+        "en": "Restart Android. If it happens again, create a diagnostics report.",
+        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "kernelPanic",
+        "when": "the console shows `Kernel panic - not syncing`",
+        "raisedBy": "BootPhaseDetector",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2"
+      }
+    },
+    {
+      "code": "runtime.androidBootFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "Android failed to start.",
+        "ja": "Android を起動できませんでした。"
+      },
+      "remediation": {
+        "en": "Restart Android. If it happens again, create a diagnostics report.",
+        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "androidBootFailed(detail:)",
+        "when": "the console shows `VIRTUAL_DEVICE_BOOT_FAILED`, the guest stops while booting, or `sys.boot_completed` does not become 1. `detail` is logged",
+        "raisedBy": "BootPhaseDetector, RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2"
+      }
+    },
+    {
+      "code": "runtime.bootTimedOut",
+      "parameters": [
+        "phase"
+      ],
+      "message": {
+        "en": "Android took too long to start (stopped at {phase}).",
+        "ja": "Android の起動に時間がかかりすぎました（{phase} で停止）。"
+      },
+      "remediation": {
+        "en": "Restart Android. If it happens again, create a diagnostics report.",
+        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "bootTimedOut(phase:)",
+        "when": "the whole boot exceeds 180 s, or 900 s on a first boot",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2"
+      }
+    },
+    {
+      "code": "runtime.bootStalled",
+      "parameters": [
+        "phase"
+      ],
+      "message": {
+        "en": "Android stopped making progress while starting ({phase}).",
+        "ja": "Android が起動中に進まなくなりました（{phase}）。"
+      },
+      "remediation": {
+        "en": "Restart Android. If it happens again, create a diagnostics report.",
+        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "case": "bootStalled(phase:)",
+        "when": "no phase progress for 90 s (first boot: 600 s)",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §3.3"
+      }
     }
   ]
 }

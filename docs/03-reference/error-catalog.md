@@ -356,7 +356,7 @@ Owners: RuntimeCore and RuntimeHost. Design: [../02-design/runtime-daemon.md](..
 | `notProvisioned` | `runtime.notProvisioned` | Android is not set up yet: first-run provisioning is incomplete (§9) | RuntimeSupervisor | "APKRun needs to finish setup." | "Open APKRun to finish setup, or run: apkrun setup" `none` | 69 | §3.2 step 0, §9.2 |
 | `hostRequirementsNotMet([HostRequirement])` | `runtime.hostRequirementsNotMet` | `HostRequirementsCheck` finds one or more failed requirements. The list has one item per failure | HostRequirementsCheck | "APKRun can't run on this Mac." | one line per item (catalog §7.5) `none` | 1 | §9.1 |
 
-### 7.6 Development and instance-lock errors implemented by #003
+### 7.6 Runtime errors implemented so far (#003, #012)
 
 <!-- errorgen:begin runtime -->
 | Case | Code | When raised | Raised by | Message | Remediation · action | Exit | Ref |
@@ -374,6 +374,13 @@ Owners: RuntimeCore and RuntimeHost. Design: [../02-design/runtime-daemon.md](..
 | `devLinuxArtifactDirectoryMustBeAbsolute` | `runtime.devLinuxArtifactDirectoryMustBeAbsolute` | `APKRUN_TEST_LINUX_DIR` is set to a relative path | `apkrun dev linux` | "The Linux guest artifact directory must be an absolute path." | "Use an absolute path such as /tmp/apkrun-test-linux." `none` | 64 | [../02-design/cli.md](../02-design/cli.md) §5 |
 | `devLinuxCheckFailed` | `runtime.devLinuxCheckFailed` | the guest reports a requested check as failed | `apkrun dev linux` | "A Linux test guest check failed." | "Inspect the guest console output, then fix or retry the requested check." `retry` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
 | `devLinuxDidNotFinish` | `runtime.devLinuxDidNotFinish` | the console stream ends without the `done` marker | `apkrun dev linux` | "The Linux test guest exited before finishing its checks." | "Inspect the guest console output and run the test again." `retry` | 1 | [../02-design/cli.md](../02-design/cli.md) §5 |
+| `image(ImageFailure)` | `runtime.image` | ImageCore fails in the pre-boot checks or while writing the initrd | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 2 |
+| `vmConfiguration(VMConfigurationFailure)` | `runtime.vmConfiguration` | `VMDefinitionValidator` rejects the Android definition | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
+| `vm(VMFailure)` | `runtime.vm` | the VM fails to start or fails while booting | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
+| `kernelPanic` | `runtime.kernelPanic` | the console shows `Kernel panic - not syncing` | BootPhaseDetector | "Android's system crashed while starting." | "Restart Android. If it happens again, create a diagnostics report." `restartAndroid` | 1 | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
+| `androidBootFailed(detail:)` | `runtime.androidBootFailed` | the console shows `VIRTUAL_DEVICE_BOOT_FAILED`, the guest stops while booting, or `sys.boot_completed` does not become 1. `detail` is logged | BootPhaseDetector, RuntimeSupervisor | "Android failed to start." | "Restart Android. If it happens again, create a diagnostics report." `restartAndroid` | 1 | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
+| `bootTimedOut(phase:)` | `runtime.bootTimedOut` | the whole boot exceeds 180 s, or 900 s on a first boot | RuntimeSupervisor | "Android took too long to start (stopped at {phase})." | "Restart Android. If it happens again, create a diagnostics report." `restartAndroid` | 1 | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
+| `bootStalled(phase:)` | `runtime.bootStalled` | no phase progress for 90 s (first boot: 600 s) | RuntimeSupervisor | "Android stopped making progress while starting ({phase})." | "Restart Android. If it happens again, create a diagnostics report." `restartAndroid` | 1 | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §3.3 |
 <!-- errorgen:end runtime -->
 
 ### 7.2 Runtime lifecycle

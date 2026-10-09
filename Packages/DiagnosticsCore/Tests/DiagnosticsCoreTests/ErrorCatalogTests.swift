@@ -30,6 +30,8 @@ import Testing
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
                 "devConsoleGuestFailed", "devConsoleInputFailed",
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
+                "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
+                "bootTimedOut", "bootStalled",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

@@ -11792,9 +11792,9 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 **Choice.** Do not run an AOSP build of the guest Mesa in this task. A maintainer must choose a build host and a route. The AOSP route needs a Linux x86-64 host with at least 64 GB of RAM and 400 GB of disk, as §11.5 requires.
 
-**Reason.** This Mac is arm64 with 162 GiB free. The Lima VM `apkrun-cuttlefish` is arm64, has a 120 GiB disk, and is stopped. The tree's `README.aosp.md` generates `Android.bp` with `meson convert android` from a personal fork's `meson2hermetic` branch (`gurchetansingh/mesonbuild`, PR 15462). That branch is not in the lock, so it is not pinned or reviewed. Running it would add a generated-file step that no pinned tool produces.
+**Reason.** This Mac is arm64, and its free space was 162 GiB at the first check and 193 GiB at a later one. Both are far below the 400 GB that the AOSP build needs. The Lima VM `apkrun-cuttlefish` is arm64, has a 120 GiB disk, and is stopped. The tree's `README.aosp.md` generates `Android.bp` with `meson convert android` from a personal fork's `meson2hermetic` branch (`gurchetansingh/mesonbuild`, PR 15462). That branch is not in the lock, so it is not pinned or reviewed. Running it would add a generated-file step that no pinned tool produces.
 
-**Verification.** `df` reports 162 GiB free. `limactl list` reports `apkrun-cuttlefish` as Stopped, aarch64, 120 GiB. No AOSP checkout was made.
+**Verification.** `df` reported 162 GiB free at the first check and 193 GiB at a later check. `limactl list` reports `apkrun-cuttlefish` as Stopped, aarch64, 120 GiB. No AOSP checkout was made.
 
 **Consequence.** No Mesa module, corrected image, or manifest exists after this task. The maintainer must choose a Linux x86-64 build host, or decide that the Soong route is not used.
 

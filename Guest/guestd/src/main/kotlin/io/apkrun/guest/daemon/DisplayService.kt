@@ -10,7 +10,6 @@ import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
-import io.apkrun.guest.runtime.ServiceMethodMissing
 import io.apkrun.guest.runtime.SystemServices
 
 /** The system user, which the density and the IME policy apply to (guest-components.md §5). */
@@ -45,18 +44,26 @@ class DisplayService(
         if (listenerInterface == null) {
             AgentLog.warning("display events are unavailable: the callback interface is missing")
         } else {
-            val listener =
-                HiddenApi.proxy(listenerInterface) { _, _ ->
-                    callbacks { refresh() }
-                    null
-                }
+            val listener = HiddenApi.listener(listenerInterface) { callbacks { refresh() } }
             try {
                 SystemServices.display.call("registerCallback", listener)
-            } catch (error: ServiceMethodMissing) {
-                AgentLog.warning("display events are unavailable: ${error.method} is missing")
+            } catch (error: Exception) {
+                AgentLog.warning("display events are unavailable: ${error.javaClass.simpleName}")
             }
         }
-        refresh()
+        refreshAtStart()
+    }
+
+    /**
+     * The first list of displays. A failure here only fails display events, and the agent keeps
+     * running.
+     */
+    private fun refreshAtStart() {
+        try {
+            refresh()
+        } catch (error: Exception) {
+            AgentLog.warning("the display list is unavailable: ${error.javaClass.simpleName}")
+        }
     }
 
     /** The displays that Android reports now, by display ID. */

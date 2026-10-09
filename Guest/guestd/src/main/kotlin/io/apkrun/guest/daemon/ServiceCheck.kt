@@ -11,6 +11,18 @@ import io.apkrun.guest.runtime.SystemServices
 object ServiceCheck {
     @JvmStatic
     fun main(args: Array<String>) {
+        // `--methods <interface> <text>` lists the methods of a hidden interface whose name
+        // contains the text. It is the
+        // way to read the signatures of an image when a wrapper reports a missing method (R-18).
+        if (args.size == 3 && args[0] == "--methods") {
+            val methods = Class.forName(args[1]).methods.filter { it.name.contains(args[2]) }
+            for (method in methods) {
+                println(
+                    "${method.name}(${method.parameterTypes.joinToString(",") { it.typeName }})"
+                )
+            }
+            return
+        }
         for (wrapper in SystemServices.all) {
             println(
                 "service=${wrapper.serviceName} available=${wrapper.available} " +

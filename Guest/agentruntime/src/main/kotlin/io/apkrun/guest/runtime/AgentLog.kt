@@ -32,8 +32,12 @@ object AgentLog {
 
     fun warning(message: String) = write(Log.WARN, message)
 
+    /**
+     * Logs an error, with the stack trace of [error]. A stack trace names code and never carries
+     * user data.
+     */
     fun error(message: String, error: Throwable? = null) {
-        write(Log.ERROR, if (error == null) message else "$message: ${error.javaClass.name}")
+        write(Log.ERROR, if (error == null) message else "$message\n${error.stackTraceToString()}")
     }
 
     private fun write(level: Int, message: String) {

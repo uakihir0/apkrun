@@ -57,6 +57,34 @@ object HiddenApi {
     }
 
     /**
+     * A listener for a framework callback interface. The framework calls its listener through
+     * Binder, so the object it receives must answer `asBinder` with a Binder. Each call on that
+     * Binder runs [onNotify], and the framework receives an empty reply. The callback carries no
+     * data that the agent needs: the agent reads the state again when it is notified.
+     */
+    fun listener(interfaceClass: Class<*>, onNotify: () -> Unit): Any {
+        val binder =
+            object : android.os.Binder() {
+                override fun onTransact(
+                    code: Int,
+                    data: android.os.Parcel,
+                    reply: android.os.Parcel?,
+                    flags: Int,
+                ): Boolean {
+                    if (code == android.os.IBinder.INTERFACE_TRANSACTION) {
+                        return super.onTransact(code, data, reply, flags)
+                    }
+                    onNotify()
+                    reply?.writeNoException()
+                    return true
+                }
+            }
+        return proxy(interfaceClass) { method, _ ->
+            if (method.name == "asBinder") binder else null
+        }
+    }
+
+    /**
      * `SystemProperties.get(name)`, or null when the property is not readable from this process.
      */
     fun systemProperty(name: String): String? =

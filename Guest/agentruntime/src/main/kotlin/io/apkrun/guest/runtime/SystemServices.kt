@@ -128,7 +128,10 @@ object SystemServices {
             interfaceName = "android.app.IActivityTaskManager",
             requirements =
                 listOf(
-                    MethodRequirement("getTasks", listOf(listOf("int"))),
+                    MethodRequirement(
+                        "getTasks",
+                        listOf(listOf("int", "boolean", "boolean", "int"), listOf("int")),
+                    ),
                     MethodRequirement(
                         "registerTaskStackListener",
                         listOf(listOf("android.app.ITaskStackListener")),
@@ -159,7 +162,10 @@ object SystemServices {
             interfaceName = "com.android.internal.widget.ILockSettings",
             requirements =
                 listOf(
-                    MethodRequirement("setLockScreenDisabled", listOf(listOf("boolean", "int")))
+                    MethodRequirement(
+                        "setBoolean",
+                        listOf(listOf("java.lang.String", "boolean", "int")),
+                    )
                 ),
         )
 

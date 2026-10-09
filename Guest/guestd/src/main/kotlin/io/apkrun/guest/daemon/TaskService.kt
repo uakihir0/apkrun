@@ -7,11 +7,13 @@ import io.apkrun.guest.protocol.v1.TaskInfo
 import io.apkrun.guest.protocol.v1.TaskVanished
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
-import io.apkrun.guest.runtime.ServiceMethodMissing
 import io.apkrun.guest.runtime.SystemServices
 
 /** The most tasks that one `getTasks` call asks for. */
 private const val MAXIMUM_TASKS = 100
+
+/** `Display.INVALID_DISPLAY`: lists the tasks of every display in `getTasks`. */
+private const val INVALID_DISPLAY = -1
 
 /**
  * Task events and task control (launch.v1, input.v1, guest-protocol.md §8.3, guest-components.md
@@ -34,18 +36,25 @@ class TaskService(
         if (listenerInterface == null) {
             AgentLog.warning("task events are unavailable: the listener interface is missing")
         } else {
-            val listener =
-                HiddenApi.proxy(listenerInterface) { _, _ ->
-                    callbacks { refresh() }
-                    null
-                }
+            val listener = HiddenApi.listener(listenerInterface) { callbacks { refresh() } }
             try {
                 SystemServices.activityTask.call("registerTaskStackListener", listener)
-            } catch (error: ServiceMethodMissing) {
-                AgentLog.warning("task events are unavailable: ${error.method} is missing")
+            } catch (error: Exception) {
+                AgentLog.warning("task events are unavailable: ${error.javaClass.simpleName}")
             }
         }
-        refresh()
+        refreshAtStart()
+    }
+
+    /**
+     * The first list of tasks. A failure here only fails task events, and the agent keeps running.
+     */
+    private fun refreshAtStart() {
+        try {
+            refresh()
+        } catch (error: Exception) {
+            AgentLog.warning("the task list is unavailable: ${error.javaClass.simpleName}")
+        }
     }
 
     /** The tasks that Android reports now, most recent first. */
@@ -112,11 +121,24 @@ class TaskService(
     }
 
     private fun readTasks(): List<TaskInfo> {
-        val raw = SystemServices.activityTask.call("getTasks", MAXIMUM_TASKS) ?: return emptyList()
+        val raw =
+            SystemServices.activityTask.call("getTasks", *taskListArguments()) ?: return emptyList()
         val items =
             (raw as? List<*>) ?: (HiddenApi.read(raw, "list") as? List<*>) ?: return emptyList()
         return items.filterNotNull().map { toProto(it) }
     }
+
+    /**
+     * The arguments of `getTasks` for the variant of this image. The 4-parameter form takes the
+     * display and lists the tasks of every display with INVALID_DISPLAY. The 1-parameter form lists
+     * the most recent tasks.
+     */
+    private fun taskListArguments(): Array<Any?> =
+        if (SystemServices.activityTask.parameterCount("getTasks") == 4) {
+            arrayOf(MAXIMUM_TASKS, false, false, INVALID_DISPLAY)
+        } else {
+            arrayOf(MAXIMUM_TASKS)
+        }
 
     private fun toProto(info: Any): TaskInfo {
         val base = HiddenApi.read(info, "baseActivity") as? ComponentName

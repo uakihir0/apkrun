@@ -26,7 +26,12 @@ object DeviceSetup {
             Settings.System.putInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT, Int.MAX_VALUE)
         }
         step("no keyguard") {
-            SystemServices.lockSettings.call("setLockScreenDisabled", true, SYSTEM_USER_ID)
+            SystemServices.lockSettings.call(
+                "setBoolean",
+                LOCKSCREEN_DISABLED_KEY,
+                true,
+                SYSTEM_USER_ID,
+            )
         }
     }
 
@@ -35,7 +40,9 @@ object DeviceSetup {
             action()
             AgentLog.info("device setup: $name applied")
         } catch (error: Exception) {
-            AgentLog.warning("device setup: $name failed (${error.javaClass.simpleName})")
+            AgentLog.warning(
+                "device setup: $name failed: ${error.javaClass.simpleName}: ${error.message}"
+            )
         }
     }
 
@@ -46,4 +53,7 @@ object DeviceSetup {
     private const val STAY_ON_ALL_POWER_SOURCES = 7
 
     private const val SYSTEM_USER_ID = 0
+
+    /** The lock settings key that `LockPatternUtils.setLockScreenDisabled` writes. */
+    private const val LOCKSCREEN_DISABLED_KEY = "lockscreen.disabled"
 }

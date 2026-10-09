@@ -28,7 +28,20 @@ const val BULK_SOCKET = "apkrun-guestd-bulk"
 class Daemon(internal val scope: CoroutineScope) {
     private val callbackThread = HandlerThread("apkrun-callbacks").apply { start() }
     private val callbackHandler = android.os.Handler(callbackThread.looper)
-    private val post: (() -> Unit) -> Unit = { work -> callbackHandler.post { work() } }
+    /**
+     * Runs a callback's work on the callbacks thread. An exception there is logged and does not end
+     * the process, because the framework callbacks are not the place for an error that only one
+     * capability has.
+     */
+    private val post: (() -> Unit) -> Unit = { work ->
+        callbackHandler.post {
+            try {
+                work()
+            } catch (error: Exception) {
+                AgentLog.error("a framework callback failed", error)
+            }
+        }
+    }
 
     internal val events = EventBus()
     internal val sessions = SessionManager { SystemClock.elapsedRealtime() }

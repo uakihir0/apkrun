@@ -159,7 +159,16 @@ public actor AdbClient {
         return process.terminationStatus
     }
 
+    /// One connect attempt. It first drops any transport that the adb server still holds for the
+    /// endpoint: after an earlier boot, `adb connect` answers "already connected" and the old transport
+    /// stays `offline`, so only a fresh transport can reach the device.
     private func attemptConnect() async -> Bool {
+        _ = try? await AdbProcess.run(
+            executable: executable,
+            arguments: ["disconnect", endpoint],
+            command: "disconnect",
+            timeout: commandTimeout
+        )
         guard
             let connected = try? await AdbProcess.run(
                 executable: executable,

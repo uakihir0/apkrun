@@ -15,6 +15,7 @@ func adbClientConnectsAndChecksTheDeviceState() async throws {
 
     #expect(
         try fake.calls() == [
+            "disconnect 127.0.0.1:6520",
             "connect 127.0.0.1:6520",
             "-s 127.0.0.1:6520 get-state",
         ]
@@ -31,6 +32,19 @@ func adbClientRetriesWhileTheEndpointRefusesTheConnection() async throws {
     try await client.connect(timeout: .seconds(10))
 
     #expect(try fake.calls().filter { $0 == "connect 127.0.0.1:6520" }.count == 3)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientDropsAStaleTransportBeforeConnecting() async throws {
+    // A transport left by an earlier boot reports "already connected" but stays offline until it is
+    // dropped. The client must disconnect first, or it can never reach the device.
+    let fake = try FakeADB()
+    try fake.markTransportStale()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    try await client.connect(timeout: .seconds(5))
+
+    #expect(try fake.calls().first == "disconnect 127.0.0.1:6520")
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -213,8 +227,10 @@ private final class FakeADB: @unchecked Sendable {
                 fi
                 echo "connected to 127.0.0.1:6520"
                 exit 0 ;;
+              "disconnect 127.0.0.1:6520") touch "$dir/disconnected"; exit 0 ;;
               *"get-state")
                 if [ -f "$dir/state" ]; then cat "$dir/state"; exit 0; fi
+                if [ -f "$dir/stale" ] && [ ! -f "$dir/disconnected" ]; then echo offline; exit 0; fi
                 echo device
                 exit 0 ;;
               "-s 127.0.0.1:6520 shell getprop unset.prop") echo ""; exit 0 ;;
@@ -254,6 +270,11 @@ private final class FakeADB: @unchecked Sendable {
             atomically: true,
             encoding: .utf8
         )
+    }
+
+    /// The transport stays offline until the client disconnects it.
+    func markTransportStale() throws {
+        try "stale\n".write(to: directory.appendingPathComponent("stale"), atomically: true, encoding: .utf8)
     }
 
     func setDeviceState(_ state: String) throws {

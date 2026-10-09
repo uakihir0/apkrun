@@ -17,7 +17,7 @@ func devAdbConnectsThenPassesTheExitStatusThrough() async throws {
 
     #expect(status == 7)
     let calls = try fake.calls()
-    #expect(calls.first == "connect 127.0.0.1:6520")
+    #expect(calls.contains("connect 127.0.0.1:6520"))
     #expect(calls.last == "-s 127.0.0.1:6520 shell exit-7")
 }
 
@@ -62,6 +62,7 @@ private final class FakeSDK: @unchecked Sendable {
             printf '%s\\n' "$*" >> '\(root.path)/calls.log'
             case "$*" in
               "connect 127.0.0.1:6520") echo "connected to 127.0.0.1:6520"; exit 0 ;;
+              "disconnect 127.0.0.1:6520") exit 0 ;;
               *"get-state") echo device; exit 0 ;;
               "-s 127.0.0.1:6520 shell exit-7") exit 7 ;;
               "-s 127.0.0.1:6520 devices") echo "List of devices attached"; exit 0 ;;

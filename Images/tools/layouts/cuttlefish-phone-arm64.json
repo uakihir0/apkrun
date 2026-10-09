@@ -56,6 +56,10 @@
       {
         "comment": "The VZ direct-kernel path requires the documented hvc0 guest console (ADR-0015; android-image.md §6.4).",
         "value": "console=hvc0"
+      },
+      {
+        "comment": "The kernel log buffer is 256 KiB by default and wraps before the Android serial shell answers (about 1,000 lines left), so dmesg loses the first-stage and kernel-start lines. 2 MiB keeps the whole boot for `dmesg` (android-image.md §6.5, IR-366).",
+        "value": "log_buf_len=2M"
       }
     ]
   },

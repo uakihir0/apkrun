@@ -1033,7 +1033,7 @@ See [../test-strategy.md](../test-strategy.md).
 - [x] Each virtual device is documented with its backing image, read-only or read-write access, and the name the guest expects (the verified table in §4.2).
 - [x] The mapping is data-driven. It lives in the layout and the manifest, and no partition or file name appears in Python or Swift code.
 - [x] The Linux test guest sees two virtio block devices with the partition names and sizes of `disks.json`.
-- [ ] The Android kernel detects the expected virtio block devices. The design moves this check to #012.
+- [x] The Android kernel detects the expected virtio block devices. The design moves this check to #012.
 - [x] `os.img` is read-only and `userdata.img` is read-write. The instance disk is an APFS clone, and `userdata.img` grows sparse (NFR-RES-02).
 - [x] The `boot_devices` value is recorded in `topology.txt` and in [android-image.md](../../02-design/android-image.md) §5.3.
 
@@ -1048,7 +1048,7 @@ See [../test-strategy.md](../test-strategy.md).
   - Step 4: `scripts/build-test-android-disks.sh` writes the disks outside `~/Documents`, and the signed `LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout` passed. `topology.txt` is committed under `Images/reference/vz/26A434/`.
   - Step 5: `GPTDisk` equals the Python provisioning fixture byte for byte; `InstanceDiskProvisioner` clones, grows a 32 GiB disk to less than 16 MiB allocated, keeps the 10 GiB margin, and refuses a non-APFS volume. The volume checks use an injected volume probe rather than `hdiutil` scratch volumes (IR-311).
   - Python: 72 new or changed tests pass; ImageCore: 36 tests; the error catalog test covers the new `image.*` codes.
-  - The Android-kernel check of this task runs in #012.
+  - The Android-kernel check of this task runs in #012. It passed on 2026-10-09 with `apkrun dev boot`: the console shows `[vda]` with `vda1`–`vda9` (`os.img`) and `[vdb]` with `vdb1`–`vdb4` (`userdata.img`, 32 GiB logical).
 - The disk count changed from three to two after the VZ spike: the stock fstab has `/devices/*/block/vdc auto auto defaults voldmanaged=sdcard1:auto`, and vold scanned the third disk (the userdata disk, mounted as `/data`) as removable storage `disk:253,32` (IR-308).
 
 ---
@@ -1174,15 +1174,15 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] An Android-specific `VMDefinition` is created by `AndroidBootPlanner` and accepted by `VMDefinitionValidator`.
+- [x] An Android-specific `VMDefinition` is created by `AndroidBootPlanner` and accepted by `VMDefinitionValidator`.
 - [ ] The kernel command line is passed: the `Kernel command line:` log line equals `cmdline.txt`.
 - [ ] The bootconfig is passed as the initrd trailer, and `/proc/bootconfig` equals the merged block. The check runs on the Linux guest, or on Android in #013.
-- [ ] The complete serial output is captured in `~/Library/Logs/APKRun-Dev/vm/console.log` and in `boot-<timestamp>.log`.
-- [ ] The kernel boots past early init and detects the configured virtio devices, including two virtio block devices with the expected partition counts (the #011 Android check).
-- [ ] Successful init is not required.
-- [ ] A kernel panic ends the boot at once with `.kernelPanic`.
-- [ ] Every boot logs the image version, the bootconfig hash, and the disk identifiers (subsystem `io.apkrun.image`, category `boot`, §14.2).
-- [ ] A bootconfig over 16 KiB fails the build. Conflicting keys fail with `bootconfigConflict`.
+- [x] The complete serial output is captured in `~/Library/Logs/APKRun-Dev/vm/console.log` and in `boot-<timestamp>.log`.
+- [x] The kernel boots past early init and detects the configured virtio devices, including two virtio block devices with the expected partition counts (the #011 Android check).
+- [x] Successful init is not required.
+- [x] A kernel panic ends the boot at once with `.kernelPanic`.
+- [x] Every boot logs the image version, the bootconfig hash, and the disk identifiers (subsystem `io.apkrun.image`, category `boot`, §14.2).
+- [x] A bootconfig over 16 KiB fails the build. Conflicting keys fail with `bootconfigConflict`.
 
 ### Notes
 
@@ -1190,6 +1190,12 @@ See [../test-strategy.md](../test-strategy.md).
 - The `headless` GPU profile starts empty here. #014 fills it and verifies it.
 - If `virtio_console` or `virtio_blk` are vendor modules rather than built in, hvc0 output starts only after first-stage init loads them. The kernel replays its buffer, but a panic before that point shows nothing. In that case, record the module list and compare it with the reference `lsmod`.
 - The `virtio_blk` lines may appear after first-stage init has started. Wait for them with the same 120 s budget.
+- **Product-code verification (2026-10-09, macOS 27.0.1 26A434, build 16373615, branch `task/012-android-kernel-boot`).**
+  - `apkrun dev boot --bundle <dir>` boots the stock image through `AndroidBootPlanner`, `VMDefinitionValidator`, `RuntimeSupervisor`, and `VMController`: a first boot was ready in 12.6 s, a later cold boot in 5.4 s. G2 then ran on this code (#014).
+  - The console log and the per-boot copies are written to `~/Library/Logs/APKRun-Dev/vm/` (`console.log`, `boot-<timestamp>.log`). They show `[vda]` with nine partitions and `[vdb]` with four.
+  - Each boot logs `Prepared boot <id> of image 2026.10.0-cf16373615-arm64 bootconfig sha256 <hash> disks apkrun-os,apkrun-data gpu headless` (category `boot`).
+  - T0: `BootPhaseDetectorTests` covers the panic and the boot-failed detail over a captured VZ console log; `AndroidBootPlannerTests` covers the definition, the initrd trailer, the shared bootconfig golden vectors, and `bootconfigConflict`. The 16 KiB build limit is `bootconfig.MAX_BUILD_BOOTCONFIG_SIZE` in `apkrun_image`.
+  - Open: (1) On VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The command-line criterion has to compare `/proc/cmdline`, read over the serial shell, with `cmdline.txt`; correct the criterion when that check is written. (2) `/proc/bootconfig` against the merged block (step 5 on the Linux guest, or over the serial shell). (3) The T2 `AndroidBootTests` (`testKernelBoot`, `testKernelPanicDetected`, `testReachesInit`, `testBootCompleted`) are not written; the G2 acceptance test covers the boot path in the meantime.
 
 ---
 
@@ -1273,15 +1279,16 @@ See [../test-strategy.md](../test-strategy.md).
 
 - [ ] The debug ramdisk, fstab, dynamic partitions, boot device names, AVB, bootconfig, and SELinux are each checked, and each result is recorded in [android-image.md](../../02-design/android-image.md) §6.
 - [ ] Every deviation from Cuttlefish is documented: a row in [android-image.md](../../02-design/android-image.md) §13, and an entry with a reason in `expected-differences.yaml`.
-- [ ] The serial logs show init running and service startup beginning.
-- [ ] `.init` and `ANDROID_INIT` are emitted.
-- [ ] The Android serial shell answers commands in developer mode.
+- [x] The serial logs show init running and service startup beginning.
+- [x] `.init` and `ANDROID_INIT` are emitted.
+- [x] The Android serial shell answers commands in developer mode.
 - [ ] The SELinux mode equals the reference, or a permissive workaround carries a TODO, a reason, and a tracking issue.
 
 ### Notes
 
 - The strings come from [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3, observed on VZ (IR-306). Update `BootSignals.swift` and the document together.
 - `/data` does not mount until #095 provides KeyMint. Failures after `post-fs-data` belong to #095 and #014.
+- **Product-code status (2026-10-09).** The init and serial-shell criteria are ticked from the `apkrun dev boot` runs and the G2 run (#014): `.init` and `ANDROID_INIT` come from the first `] init: ` line, and `RuntimeSupervisor` reads `getprop` over the serial shell (`AndroidSerialShell`, hvc1). The spike checked the debug ramdisk, fstab, dynamic partitions, boot devices, AVB, bootconfig, and SELinux (`Enforcing`, no AVC denials; android-image.md §17), but the product code has no check for them yet. Open: the `AndroidShellConsole` test helper and its T2 checks (`dmesg`, `/proc/cmdline`, `/proc/bootconfig`, `/dev/rtc0`, `getenforce`, `/dev/block/by-name/`), and `expected-differences.yaml`, which is still the empty list (it is filled together with the `compare_boot.py` diff of #014).
 
 ---
 
@@ -1375,17 +1382,18 @@ See [../test-strategy.md](../test-strategy.md).
 ### Acceptance criteria
 
 - [ ] All 20 console ports are attached. Their numbering is verified with the `APKRUN-PORT-<i>` markers, and `ConsolePortPlan` is applied if needed.
-- [ ] Each hvc port has a recorded role. No HAL crash-loops on a silent port.
-- [ ] In-guest insecure KeyMint and Gatekeeper are selected by bootconfig, and vold mounts `/data`.
-- [ ] The behaviour of each vsock client whose key is left out is recorded in [android-image.md](../../02-design/android-image.md) §7.3.
+- [x] Each hvc port has a recorded role. No HAL crash-loops on a silent port.
+- [x] In-guest insecure KeyMint and Gatekeeper are selected by bootconfig, and vold mounts `/data`.
+- [x] The behaviour of each vsock client whose key is left out is recorded in [android-image.md](../../02-design/android-image.md) §7.3.
 - [ ] The guest has a working network: an address, a default route, DNS resolution, and a validated network in `dumpsys connectivity` (FR-VM-04).
 - [ ] LockSettings does not wait for Weaver.
-- [ ] RIL, Bluetooth, NFC, UWB, GNSS, and sensors are kept unless they crash-loop, and the findings are recorded.
+- [x] RIL, Bluetooth, NFC, UWB, GNSS, and sensors are kept unless they crash-loop, and the findings are recorded.
 
 ### Notes
 
 - Prefer in-guest implementations selected by configuration over host-side re-implementations (§7). Do not remove guest services unless they are shown to break boot, stability, or resource use.
 - vsock ports 6120–6199 are reserved for future substitutes. v1 substitutes are host-initiated only (§7.3).
+- **Product-code status (2026-10-09).** The layout's `consolePorts` give every port a role, `VZConfigurationBuilder` attaches ports 10–19 on one multiport device, and `RuntimeSupervisor` runs the sensors responder on `sensors_control` (hvc18). The G2 run of #014 (five cold boots, 10 minutes each) had no init service exiting more than twice (`apexd` twice per boot, as designed), no Watchdog kill, and `/data` mounted on every boot with the launcher's in-guest KeyMint and Gatekeeper keys. Open: the `APKRUN-PORT-<i>` marker test on the Linux guest (and `ConsolePortPlan` if the order ever differs), the network T2 checks inside Android (`ip addr`, default route, DNS, `generate_204`, `dumpsys connectivity`), and an explicit LockSettings/Weaver check.
 - **Spike findings (2026-10-08; IR-306).** The direct-boot spike settled most decisions of this task before the production code exists: the 10-port limit and the multiport device, the sensors wait and its responder, the keys that must stay, three NICs with `virt_wifi`, and Bluetooth. The handling is in [android-image.md](../../02-design/android-image.md) §7. This task builds it into RuntimeCore, the layout, and VirtualMachineCore, and verifies it with the tests above. The sensors responder is a host-side substitute: no configuration selects another sensors implementation in this build (§7.1).
 
 ---
@@ -1481,10 +1489,10 @@ See [../test-strategy.md](../test-strategy.md).
 
 - [ ] The framework and service failures that blocked boot are resolved. Each fix is recorded in [android-image.md](../../02-design/android-image.md) §13 and in `expected-differences.yaml`.
 - [ ] A host-side readiness monitor (`BootPhaseDetector`) emits `.kernel`, `.init`, `.systemServer`, and `.bootCompleted` with their PerfMarkers. It fails boots with typed errors on panic, boot failure, timeout, and stall.
-- [ ] `sys.boot_completed` is read through an available debug channel, the Android serial shell, and its value is `1`.
-- [ ] Android stays stable for 10 minutes: no `system_server` restart, no watchdog, and no HAL crash loop.
+- [x] `sys.boot_completed` is read through an available debug channel, the Android serial shell, and its value is `1`.
+- [x] Android stays stable for 10 minutes: no `system_server` restart, no watchdog, and no HAL crash loop.
 - [ ] `BOOT_COMPLETED` is logged as a boot phase marker, and each boot has a `perf/boots.jsonl` record.
-- [ ] Five cold boots in a row pass.
+- [x] Five cold boots in a row pass.
 - [ ] The reference diff has no unexplained difference.
 - [ ] Gate G2 passes on the reference Mac with a clean build from `main`. The result is recorded in [android-image.md](../../02-design/android-image.md) §8 and in [../risks.md](../risks.md) (R-06, R-11, R-12).
 
@@ -1494,6 +1502,19 @@ See [../test-strategy.md](../test-strategy.md).
 - A gate failure is recorded in the design document's verification log and in [../risks.md](../risks.md) (status `realized` if a fallback is taken).
 - The console strings for `.systemServer` depend on the console log level ([runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3). If `starting service 'zygote'` is not visible, the ADB signal of #015 or the serial-shell reading covers it.
 - **VZ direct-boot spike (2026-10-08; IR-306).** The stock image reached `VIRTUAL_DEVICE_BOOT_COMPLETED` on VZ in 7.5 s on a first boot, and `Experiments/vz-android-boot/g2_spike.py` passed the G2 conditions over five cold boots (each stable for 10 minutes, no `system_server` restart, no Watchdog kill, no crash loop). The one framework failure was the sensors wait of [android-image.md](../../02-design/android-image.md) §7.1: `system_server` blocked in `SystemSensorManager.nativeCreate` and its Watchdog killed it after 185 s. The headless profile needs VZ's 2D virtio-gpu (step 2). This task builds the same result into the product code and runs the gate.
+- **G2 with the product code (2026-10-09, arm64 Mac17,9, macOS 27.0.1 26A434, build 16373615, branch `task/012-android-kernel-boot` at `ec72fa2`).**
+  - `G2AndroidBootTests.testFiveColdBootsReachBootCompletedAndStayStable` passed in 3046.6 s (`xcodebuild test … -testPlan AcceptanceTests -only-test-configuration G2`, the default 600 s dwell). It resets the instance, then boots five times through `RuntimeSupervisor` with the `headless` profile.
+  - `BOOT_COMPLETED` came 12.4 s after the start on the first boot and 5.2–6.0 s on the four cold boots. `ready`, after the serial-shell confirmation and the first-boot settings, came at 13.7 s, then 5.8, 5.3, 5.6, and 6.1 s.
+  - On every boot, `getprop sys.boot_completed` over the serial shell was `1`. After 10 minutes `sys.system_server.start_count` was still `1`, neither logcat nor the console had `WATCHDOG KILLING SYSTEM PROCESS`, and no init service exited more than twice (`apexd` twice per boot; `artd` and `media.codeclist.generator` twice on the first boot only).
+  - The first attempt was stopped by XCTest's default 10-minute execution time allowance during boot 2. The plan's `maximumTestExecutionTimeAllowance` only caps the allowance, so the test now sets its own (`ec72fa2`).
+  - Ticked from this run: the serial-shell reading, the 10-minute stability, and the five cold boots.
+  - Still open:
+    - A clean-`main` G2 run after the branches merge. Use `scripts/run-gate.sh G2`, which builds the bundle with `scripts/build-test-android-bundle.sh`.
+    - `perf/boots.jsonl`.
+    - T0 tests of the timeout and stall paths of `RuntimeSupervisor.waitForBootCompletion`; the panic and boot-failed paths are tested.
+    - The `compare_boot.py capture-vz` diff and `expected-differences.yaml`.
+    - The dev console sockets with `apkrun dev console --android-shell`.
+    - The T2 `AndroidBootTests`.
 - **Launch-option ladder (2026-10-08; see IR-298 to IR-301).** In this host configuration `--gpu_mode=none`, the design's headless profile, did not start the Android VM (IR-300), so `gpuProfiles.headless` has no boot evidence yet. The `system_server` Watchdog timeout is a DeviceConfig key, not a host bootconfig key (IR-301). This task stays open.
 
 ---

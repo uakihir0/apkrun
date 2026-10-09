@@ -29,13 +29,13 @@ A risk is something that could make a planned design fail or cost much more than
 | R-03 | Graphics performance with one renderer thread | Medium | Medium | #023, #030, #068, #070 | open |
 | R-04 | Multi-display: scanout hotplug, mode changes, apps on secondary displays | High | Medium | #028, #029, #067, #030 | open |
 | R-05 | Input injection and IME on secondary displays | High | Low | #024, #030, #071 | open |
-| R-06 | The stock Cuttlefish image does not boot on the VZ topology | High | Medium | #012–#014 | spike positive (boots on VZ, IR-306); open until G2 |
+| R-06 | The stock Cuttlefish image does not boot on the VZ topology | High | Medium | #012–#014 | G2 conditions passed with the production code on a branch (2026-10-09); closes with the clean-`main` G2 run |
 | R-07 | No VM save/restore while VirGL is active | Medium | High (known) | accepted; #070 measures cold start | watching |
 | R-08 | Memory footprint of the guest and the renderer | Medium | Medium | #028, #070 | open |
 | R-09 | No Google Mobile Services: apps that need them do not work | Medium | High (known) | accepted; #090 labels apps | watching |
 | R-10 | Licensing of redistributed images and libraries | High | Low | #093 | open |
-| R-11 | Direct kernel boot is not enough (AVB, slots, boot devices) | High | Low | #012–#014 | spike positive (IR-306); open until G2 |
-| R-12 | Cuttlefish host-service dependencies (hvc HALs, input, network naming) | High | Medium | #095, #014 | realized in part (10-port limit, sensors wait); mitigations found in the spike (IR-306) |
+| R-11 | Direct kernel boot is not enough (AVB, slots, boot devices) | High | Low | #012–#014 | positive with the production code (2026-10-09); closes with the clean-`main` G2 run |
+| R-12 | Cuttlefish host-service dependencies (hvc HALs, input, network naming) | High | Medium | #095, #014 | realized in part (10-port limit, sensors wait); mitigated in the production code, G2 conditions passed (2026-10-09) |
 | R-13 | SELinux policy for the vsock bridge and the privileged agents | Medium | Medium | #035 | open |
 | R-14 | AOSP build infrastructure and upstream branch changes | Medium | Medium | #035 | open |
 | R-15 | Android install floors reject older apps (targetSdk, signature, alignment) | Low | High (known) | #041, #073, #090 | watching |
@@ -101,7 +101,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** Use the static launcher outputs of the #064 captures (bootconfig, command line, disk layout, kernel log up to `system_server`) as the reference, and the Cuttlefish source at the pinned revision for host-service behaviour; a complete crosvm reference boot needs a non-nested arm64 Linux host (IR-305). Continue direct kernel boot with a generated bootconfig ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)) and topology discovery with the Linux test guest (#011).
 - **Fallback.** Adapt the custom image (#035): kernel config, fstab, init scripts. That moves the fix to M5 and delays G2 with the stock image.
 - **Settled by.** #012, #013, #014 (gate G2). #064 supplies the static launcher captures only (IR-305).
-- **Result.** The stock image boots on VZ. The 2026-10-08 direct-boot spike (`Experiments/vz-android-boot/`, IR-306) booted build 16373615 on macOS 27.0.1 (26A434) to `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s on the first boot and about 5 s on later cold boots, with SELinux enforcing and no AVC denials. The kernel, first-stage init, `boot_devices` (`40000000.pci`), dynamic partitions, AVB with `orange`/`unlocked`, and first-boot formatting of `/metadata` and `/data` all worked without image changes. The deviations it needed are host-service substitutes (R-12), the M1 GPU profile ([../02-design/android-image.md](../02-design/android-image.md) §9.1), and the two-disk layout (§4.2). The #064 crosvm reference never became a known-good baseline: inside a nested-virtualization Linux VM the guest ran about 100 times slower than on VZ, and `system_server` was killed by its Watchdog (IR-305). The risk stays open until G2 passes with the production code (#014).
+- **Result.** The stock image boots on VZ. The 2026-10-08 direct-boot spike (`Experiments/vz-android-boot/`, IR-306) booted build 16373615 on macOS 27.0.1 (26A434) to `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s on the first boot and about 5 s on later cold boots, with SELinux enforcing and no AVC denials. The kernel, first-stage init, `boot_devices` (`40000000.pci`), dynamic partitions, AVB with `orange`/`unlocked`, and first-boot formatting of `/metadata` and `/data` all worked without image changes. The deviations it needed are host-service substitutes (R-12), the M1 GPU profile ([../02-design/android-image.md](../02-design/android-image.md) §9.1), and the two-disk layout (§4.2). The #064 crosvm reference never became a known-good baseline: inside a nested-virtualization Linux VM the guest ran about 100 times slower than on VZ, and `system_server` was killed by its Watchdog (IR-305). On 2026-10-09 the production code (`apkrun dev boot`, `RuntimeSupervisor`; branch `task/012-android-kernel-boot` at `ec72fa2`) passed the G2 conditions: `G2AndroidBootTests` ran five cold boots with 10 minutes of stability each, reaching `BOOT_COMPLETED` in 12.4 s on the first boot and 5.2–6.0 s later ([../02-design/android-image.md](../02-design/android-image.md) §17). The risk closes when the same run passes from a clean `main`.
 
 ### R-07 No VM save/restore while VirGL is active
 
@@ -138,7 +138,7 @@ A risk is something that could make a planned design fail or cost much more than
 - **Mitigation.** The bootconfig carries the values U-Boot would set (`androidboot.slot_suffix=_a`, `verifiedbootstate`, `boot_devices`; [../02-design/android-image.md](../02-design/android-image.md) §6); the reference capture (#064) lists what U-Boot passes.
 - **Fallback.** A U-Boot EFI build as the boot loader ([ADR-0015](../01-architecture/decisions/0015-direct-kernel-boot.md)).
 - **Settled by.** #012–#014.
-- **Result.** Spike positive (IR-306). With the bootconfig of [../02-design/android-image.md](../02-design/android-image.md) §6 (the launcher's keys, `slot_suffix=_a`, `force_normal_boot=1`, `verifiedbootstate=orange`, `vbmeta.device_state=unlocked`, the `avb.py` digest, and `boot_devices=40000000.pci`), first-stage init mounted every logical partition, `libfs_avb` accepted the chain, and `/proc/bootconfig` equalled the merged block. Nothing U-Boot provides was missing. Closed when G2 passes.
+- **Result.** Spike positive (IR-306). With the bootconfig of [../02-design/android-image.md](../02-design/android-image.md) §6 (the launcher's keys, `slot_suffix=_a`, `force_normal_boot=1`, `verifiedbootstate=orange`, `vbmeta.device_state=unlocked`, the `avb.py` digest, and `boot_devices=40000000.pci`), first-stage init mounted every logical partition, `libfs_avb` accepted the chain, and `/proc/bootconfig` equalled the merged block. Nothing U-Boot provides was missing. The production boot planner uses the same values, and the 2026-10-09 G2 run passed five cold boots with them. Closed when G2 passes from a clean `main`.
 
 ### R-12 Cuttlefish host-service dependencies
 
@@ -152,6 +152,7 @@ A risk is something that could make a planned design fail or cost much more than
   - Several launcher keys configure guest-side servers, and their HALs abort without them; the RIL exits without `modem_simulator_ports`. These keys stay (§7.3).
   - The OpenThread HAL needs `eth1`, and Wi-Fi needs `virt_wifi` on `eth2`: three NAT NICs in Cuttlefish's order (§7.4).
   - Without rootcanal, `com.android.bluetooth` aborts seven times per boot until its recovery limit; Bluetooth is turned off on the first boot (§7.6).
+  - The production code applies all of these: the multiport console device in VirtualMachineCore, the sensors responder and the first-boot settings in RuntimeCore, the three NICs and the kept keys in the boot plan. In the 2026-10-09 G2 run no init service exited more than twice in five 10-minute dwells. The `APKRUN-PORT-<i>` marker check and the network checks inside Android remain for #095.
 
 ### R-13 SELinux policy for the bridge and agents
 

@@ -238,6 +238,26 @@ APKRun's normal-path readback counter must remain zero.
 ## 3. ANGLE initialization and presentation
 
 `CVirGLBridge.c` loads `libEGL.dylib` and `libGLESv2.dylib` beside the
+### 2.4 Flow-step crosswalk
+
+[graphics.md](graphics.md) §2.2 lists the flow steps that this analysis must
+answer. The table maps each step to the section that answers it and to the
+pinned files that implement it. Names are the identifiers used in the pinned
+source.
+
+| Flow step | Answered in | Pinned files |
+|---|---|---|
+| `VZCustomVirtioDevice` | §2.1: `VZCustomVirtioDeviceConfiguration` fields (device ID, PCI class, two queues, features `subset0 = 3`, device-specific config), the delegate callbacks `didCreateDevice`, `customVirtioDeviceDidAcceptDriverOk`, pause and resume, reset and stop, and the serial `deviceQueue` | `VirtioGPUDevice.swift`; `RiftVMVirGLRuntime.swift` (`makeDeviceConfigurations`) |
+| virtqueue handling | §2.1: the drain loop on `nextElement()`, synchronous and fenced `returnToQueue`, the 16 MiB request bound, and error logging | `VirtioGPUDevice.swift` |
+| virtio-gpu commands | §2.2: command coverage, error responses for unknown, short, and invalid requests, and the response table | `VirtioGPUProtocol.swift` (command and response enums, length checks); `VirtioGPUDevice.swift` (dispatch) |
+| resource creation | §2.2: 2D and 3D creation paths, limits, and budget refusal. The device forwards the guest's `format` to the renderer without its own allowlist, so formats are checked only by the renderer (§7) | `VirtioGPUDevice.swift`; `VirtioGPUProtocol.swift` (`Limits`) |
+| resource backing | §2.1: `guestMemoryMapping` lifetime and release on detach, reset, and stop; §2.2: `RESOURCE_ATTACH_BACKING` checks and limits | `VirtioGPUDevice.swift` |
+| VirGL | §2.3: `virgl_renderer_init` with callback version 4 and flags `0`, capset 1, fence polling from 1 ms to 4 ms, and the 2-second timeout; §1.1 and §5: renderer lifecycle | `VirGLRenderer.swift`; `RendererExecutor.swift`; `CVirGLBridge.c` |
+| scanout | §2.2: `SET_SCANOUT` clear and error paths; §2.3: `RESOURCE_FLUSH`, texture borrowing, the blit, and its Y orientation | `VirtioGPUDevice.swift`; `CVirGLBridge.c` |
+| ANGLE | §3: Metal EGL platform, root context, and context sharing; §2.3: `EGL_METAL_TEXTURE_ANGLE` import and the producer sync. The prototype's `MTLCreateSystemDefaultDevice()` assignment is not shown to be ANGLE's device (§3) | `CVirGLBridge.c`; `PrototypeApplication.swift` |
+| Metal | §2.3 and §3: presentation into a `CAMetalLayer` drawable, GPU ordering with an explicit `glFlush`, and `LatestFrameScheduler` pacing | `CVirGLBridge.c`; `LatestFrameScheduler.swift`; `VMCustomVirGLGraphics.swift` |
+| cursor | §2.2: `UPDATE_CURSOR` and `MOVE_CURSOR`, the 256 × 256 px cap, scanout 0 only, and the host-memory copy that stays outside the scanout path | `VirtioGPUDevice.swift`; `VirtioGPUProtocol.swift` (`Limits.maxCursorDimension`) |
+
 virglrenderer library. EGL initialization uses:
 
 1. `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, …)`
@@ -328,8 +348,9 @@ in a public RiftVM release.
 
 ## 5. File-by-file license and reuse decisions
 
-The source files listed below have no individual copyright/license header at
-the pinned commit. Their license is the repository-root MIT license. The
+The files listed below (source, tests, and build scripts) have no individual
+copyright or license header at the pinned commit. #018 checked each one on
+2026-10-10. Their license is the repository-root MIT license. The
 license text is preserved in `ThirdParty/licenses/riftvm/LICENSE`. These
 decisions authorize no code copy by #018; any later copied or adapted file
 must keep the required MIT notice and the full
@@ -400,6 +421,13 @@ limitations:
   APKRun must define and test its own daemon and renderer lifecycle before
   adopting that behavior.
 - The ANGLE/Metal producer-to-root-context handoff depends on EGL syncs and
+| `scripts/virgl-runtime-pins.sh` | Source and recipe pins: commits, archive SHA-256 values, and the bottle identities of prebuilt binaries | No file header (a comment only); repository MIT | Use as a cross-check of the §4 pins. Do not source it: APKRun's pins are in `ThirdParty.lock.json`. APKRun does not use the prebuilt bottles (virglrenderer 1.0.33, ANGLE 1.0.15, libepoxy 1.0.4). |
+| `scripts/prepare-virgl-sources.sh` | Patch order: the virglrenderer recipe patch, then `scripts/virgl-patches/virglrenderer-*.patch`, then the ANGLE and libepoxy recipe patches | No file header; repository MIT | Reference for the patch order in §4. Ignore the script; APKRun applies patches through `scripts/tools/build_third_party.py`. |
+| `scripts/build-virgl-runtime-from-source.sh` | ANGLE GN arguments, Meson arguments, `gclient sync`, install names, and link order | No file header; repository MIT | Reference for the flags in §4. Ignore the script; APKRun builds from the lock's `buildFlags`. |
+| `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` | The MSAA downgrade code, which APKRun ships as `virglrenderer/0002` | No file header; the added code is RiftVM-authored (its comments say "RiftVM:") | Copied RiftVM code in APKRun's patch set. See IR-410 for the notice and classification. |
+| `Tests/CVirGLBridgeTests/ActiveContextSetTests.c`; `Tests/CVirGLBridgeTests/ContextSyncLifecycleTests.c` | Unit tests of `ActiveContextSet.h`; renderer lifecycle tests with deterministic EGL and renderer callbacks. The second file includes `CVirGLBridge.c` directly | No file header; repository MIT | Review prompts for the #020 and #022 bridge tests. Do not copy: the lifecycle test compiles RiftVM's bridge source. |
+| `Tests/RiftVMCoreTests/VMVirGLPresentationTests.swift` | Presentation and lifecycle tests of the custom VirGL path: late fence invalidation, failure recovery, late completion after stop, and backend selection | No file header; repository MIT | Review prompts for the #023 presentation tests. Do not copy. |
+| `Experiments/VZVirtioGPUPrototype/RUNTIME_DEPENDENCIES.md`; `ThirdPartyLicenses/virglrenderer.txt` | Upstream statements of the runtime licenses (MIT for virglrenderer and libepoxy, BSD-3-Clause for ANGLE) and the upstream virglrenderer license text | Documentation and license text; repository MIT | Evidence for the §4 license table only. Not copied. APKRun keeps its own license copies under `ThirdParty/licenses/`. |
   an explicit `glFlush`; the C bridge comments that the external winsys does
   not reliably retire work without that synchronization. Keep the producer
   fence and ordering requirements visible in the #020/#023 tests.
@@ -450,3 +478,5 @@ accepted by review. #018 did not build RiftVM, run a VM boot, or perform an
 Android/Metal presentation test; the separately scoped #020 renderer build and
 tests are recorded in [graphics.md](graphics.md) §16 / IR-191. Maintainer
 review of the source-version substitution and this analysis is still required.
+| Resource formats | The device forwards the guest's `format` to virglrenderer without a device-side allowlist; the renderer decides, and its refusal maps to an error response | Formats are limited to the renderer's supported set ([graphics.md](graphics.md) §4.4) |
+| Renderer inputs | RiftVM's pinned recipe archives and repository patches, applied by its own scripts, with reference flags | APKRun's lock-listed patch series and `buildFlags`, with the choices recorded in §4 and IR-190, IR-410 to IR-413 |

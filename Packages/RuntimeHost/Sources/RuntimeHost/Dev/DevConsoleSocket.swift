@@ -31,6 +31,8 @@ public final class DevConsoleSocketServer: @unchecked Sendable {
     private let directory: URL
     private let lock = NSLock()
     private var listeners: [Listener] = []
+    /// Set by `stop()`. A late `serve` after the owner stopped must not leave a socket behind.
+    private var isStopped = false
 
     /// Creates a server for the sockets in `directory`.
     public init(directory: URL) {
@@ -39,6 +41,9 @@ public final class DevConsoleSocketServer: @unchecked Sendable {
 
     /// Creates the socket of `endpoint`, and relays the endpoint's output to its client.
     public func serve(_ endpoint: any DevConsoleSource) throws(RuntimeFailure) {
+        guard !lock.withLock({ isStopped }) else {
+            throw .devConsoleSocketUnavailable
+        }
         let path = directory.appendingPathComponent("\(endpoint.name).sock").path
         guard path.utf8.count <= Self.maximumPathBytes else {
             throw .devConsoleSocketUnavailable
@@ -50,6 +55,10 @@ public final class DevConsoleSocketServer: @unchecked Sendable {
                 attributes: [.posixPermissions: 0o700]
             )
         } catch {
+            throw .devConsoleSocketUnavailable
+        }
+        // An existing folder keeps its old mode unless it is set again here.
+        guard chmod(directory.path, 0o700) == 0 else {
             throw .devConsoleSocketUnavailable
         }
         if FileManager.default.fileExists(atPath: path) {
@@ -72,6 +81,7 @@ public final class DevConsoleSocketServer: @unchecked Sendable {
     /// Closes every socket, detaches the clients, and removes the socket files.
     public func stop() {
         let closing = lock.withLock { () -> [Listener] in
+            isStopped = true
             let current = listeners
             listeners = []
             return current
@@ -141,6 +151,10 @@ public enum DevConsoleSocketClient {
 }
 
 /// One console's listening socket, its single client, and the relay between them.
+///
+/// A client descriptor has one owner: whoever takes it out of `client` under the lock closes it. `stop()`
+/// shuts the client down first, which ends the reader, and then closes it, so no descriptor is closed
+/// twice and none is used after it is closed.
 private final class Listener: @unchecked Sendable {
     let name: String
     let path: String
@@ -176,15 +190,15 @@ private final class Listener: @unchecked Sendable {
     }
 
     func stop() {
-        let clientToClose: Int32? = lock.withLock {
+        let attached = lock.withLock { () -> Int32? in
             isStopped = true
             let current = client
             client = nil
             return current
         }
-        if let clientToClose {
-            shutdown(clientToClose, SHUT_RDWR)
-            close(clientToClose)
+        if let attached {
+            shutdown(attached, SHUT_RDWR)
+            close(attached)
         }
         shutdown(descriptor, SHUT_RDWR)
         close(descriptor)
@@ -198,14 +212,14 @@ private final class Listener: @unchecked Sendable {
             if accepted < 0 {
                 return
             }
-            let refused = lock.withLock { () -> Bool in
-                if isStopped || client != nil {
-                    return true
+            let attached = lock.withLock { () -> Bool in
+                guard !isStopped, client == nil else {
+                    return false
                 }
                 client = accepted
-                return false
+                return true
             }
-            if refused {
+            guard attached else {
                 close(accepted)
                 continue
             }
@@ -232,31 +246,38 @@ private final class Listener: @unchecked Sendable {
                 break
             }
         }
-        lock.withLock {
-            if client == clientDescriptor {
-                client = nil
+        // Close the client only if it is still attached: `stop()` may already have taken and closed it.
+        let owned = lock.withLock { () -> Bool in
+            guard client == clientDescriptor else {
+                return false
             }
+            client = nil
+            return true
         }
-        close(clientDescriptor)
+        if owned {
+            close(clientDescriptor)
+        }
     }
 
-    /// Writes one chunk of guest output to the attached client, if there is one.
+    /// Writes one chunk of guest output to the attached client, if there is one. The send is
+    /// non-blocking under the lock, so a slow client drops output instead of stalling the relay or `stop()`.
     private func deliver(_ bytes: Data) {
-        let current = lock.withLock { client }
-        guard let current else {
-            return
-        }
-        bytes.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else {
+        lock.withLock {
+            guard let current = client, !isStopped else {
                 return
             }
-            var offset = 0
-            while offset < raw.count {
-                let written = send(current, base + offset, raw.count - offset, MSG_NOSIGNAL)
-                if written <= 0 {
+            bytes.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else {
                     return
                 }
-                offset += written
+                var offset = 0
+                while offset < raw.count {
+                    let written = send(current, base + offset, raw.count - offset, MSG_NOSIGNAL | MSG_DONTWAIT)
+                    if written <= 0 {
+                        return
+                    }
+                    offset += written
+                }
             }
         }
     }

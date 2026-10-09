@@ -122,6 +122,8 @@
         let inputPump = TerminalConsoleInputPump(fileDescriptor: STDIN_FILENO)
         defer { inputPump.cancel() }
 
+        // When the socket closes (the VM stopped, or the owner refused this client), the command ends too.
+        let closed = inputPump
         let reader = Task.detached(priority: .userInitiated) {
             var buffer = [UInt8](repeating: 0, count: 4_096)
             while !Task.isCancelled {
@@ -132,6 +134,7 @@
                 outputWriter.write(Data(buffer.prefix(count)))
             }
             terminalRestore.restore()
+            closed.cancel()
         }
         defer { reader.cancel() }
 
@@ -142,7 +145,8 @@
                     guard let base = raw.baseAddress else { return }
                     var offset = 0
                     while offset < raw.count {
-                        let written = Darwin.write(descriptor, base + offset, raw.count - offset)
+                        // MSG_NOSIGNAL: a closed socket is an error here, not a SIGPIPE that kills the terminal session.
+                        let written = send(descriptor, base + offset, raw.count - offset, MSG_NOSIGNAL)
                         if written <= 0 {
                             throw RuntimeFailure.devConsoleInputFailed
                         }

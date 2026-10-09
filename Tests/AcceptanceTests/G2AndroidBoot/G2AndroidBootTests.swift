@@ -25,11 +25,32 @@ final class G2AndroidBootTests: XCTestCase {
         }
     }
 
+    /// Removes a private home. An installed image is read-only, so the owner's write bits come back first.
+    private static func removeHome(_ home: URL) {
+        let manager = FileManager.default
+        func restoreWrite(_ url: URL) {
+            guard let attributes = try? manager.attributesOfItem(atPath: url.path),
+                let mode = attributes[.posixPermissions] as? NSNumber
+            else {
+                return
+            }
+            try? manager.setAttributes(
+                [.posixPermissions: NSNumber(value: mode.uint16Value | 0o200)], ofItemAtPath: url.path)
+        }
+        restoreWrite(home)
+        if let walker = manager.enumerator(at: home, includingPropertiesForKeys: nil) {
+            for case let url as URL in walker {
+                restoreWrite(url)
+            }
+        }
+        try? manager.removeItem(at: home)
+    }
+
     func testFiveColdBootsReachBootCompletedAndStayStable() async throws {
         let bundle = try Self.bundleDirectory()
         // A short path under /tmp: the developer console socket path must fit in sockaddr_un.
         let home = URL(fileURLWithPath: "/tmp/apkrun-g2-\(UUID().uuidString.prefix(8))", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { Self.removeHome(home) }
         let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
         // The signed bundle goes through the install path of `apkrun dev image install`.
         let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))

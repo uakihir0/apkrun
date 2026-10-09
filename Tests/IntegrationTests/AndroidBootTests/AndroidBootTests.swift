@@ -30,7 +30,7 @@ final class AndroidBootTests: XCTestCase {
     /// shell in #013.
     func testKernelBoot() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: false)
@@ -82,7 +82,7 @@ final class AndroidBootTests: XCTestCase {
     /// over captured console logs (`BootPhaseDetectorTests`).
     func testKernelPanicDetected() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let bundle = try AndroidBootFixture.bundleDirectory()
         // The truncated copy is not signed, so it is not installed: the test image is the installed image
         // with the truncated folder as its root (the planner reads only the files the manifest names).
@@ -117,7 +117,7 @@ final class AndroidBootTests: XCTestCase {
     /// merged block of the same instance, so the check compares the kernel with what was sent.
     func testReachesInit() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let expected = try await Self.plannedBootconfig(fixture)
@@ -163,7 +163,7 @@ final class AndroidBootTests: XCTestCase {
     /// probes, and `VALIDATED` in `dumpsys connectivity` means its `generate_204` probe passed.
     func testNetwork() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
@@ -213,7 +213,7 @@ final class AndroidBootTests: XCTestCase {
     /// LockSettings did not stall on Weaver (`logcat -s LockSettingsService`).
     func testHostServiceSubstitutes() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
@@ -251,7 +251,7 @@ final class AndroidBootTests: XCTestCase {
     /// record to `perf/boots.jsonl` with the markers in order from `VM_START`.
     func testBootCompleted() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)
@@ -297,7 +297,7 @@ final class AndroidBootTests: XCTestCase {
     /// #014 step 6: the console and VM states pass through the phases in order, and the boot ends ready.
     func testPhasesInOrder() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: false)
@@ -336,7 +336,7 @@ final class AndroidBootTests: XCTestCase {
     /// client's end of the socket.
     func testDevConsoleShell() async throws {
         let home = try AndroidBootFixture.makeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
+        defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let supervisor = fixture.supervisor(developerMode: true)

@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import Testing
 
@@ -8,7 +9,7 @@ import Testing
 @Test(.timeLimit(.minutes(1)))
 func adbClientConnectsAndChecksTheDeviceState() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     try await client.connect(timeout: .seconds(5))
 
@@ -25,7 +26,7 @@ func adbClientConnectsAndChecksTheDeviceState() async throws {
 func adbClientRetriesWhileTheEndpointRefusesTheConnection() async throws {
     let fake = try FakeADB()
     try fake.setConnectFailures(2)
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     try await client.connect(timeout: .seconds(10))
 
@@ -36,7 +37,7 @@ func adbClientRetriesWhileTheEndpointRefusesTheConnection() async throws {
 func adbClientFailsWhenTheDeviceNeverLeavesOffline() async throws {
     let fake = try FakeADB()
     try fake.setDeviceState("offline")
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     do {
         try await client.connect(timeout: .seconds(1))
@@ -49,7 +50,7 @@ func adbClientFailsWhenTheDeviceNeverLeavesOffline() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientGetpropReturnsTheTrimmedValueAndCountsTheShell() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     let boot = try await client.getprop("sys.boot_completed")
     let unset = try await client.getprop("unset.prop")
@@ -68,7 +69,7 @@ func adbClientGetpropReturnsTheTrimmedValueAndCountsTheShell() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientReportsANonzeroStatusWithoutItsOutput() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     do {
         _ = try await client.getprop("broken.prop")
@@ -83,7 +84,7 @@ func adbClientReportsANonzeroStatusWithoutItsOutput() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientRefusesPropertyNamesThatCouldAddShellSyntax() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     do {
         _ = try await client.getprop("sys.boot_completed; reboot")
@@ -97,7 +98,7 @@ func adbClientRefusesPropertyNamesThatCouldAddShellSyntax() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientTerminatesACommandThatRunsPastItsTimeout() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     do {
         _ = try await client.shell("sleep-forever", timeout: .milliseconds(300))
@@ -111,7 +112,7 @@ func adbClientTerminatesACommandThatRunsPastItsTimeout() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientReadsLargeLogcatOutputWithoutBlockingOnThePipe() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     let log = try await client.logcatDump(timeout: .seconds(20))
 
@@ -122,7 +123,7 @@ func adbClientReadsLargeLogcatOutputWithoutBlockingOnThePipe() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientPowersOffWithRebootPAndReturnsTheReply() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     let reply = try await client.rebootPowerOff()
 
@@ -133,7 +134,7 @@ func adbClientPowersOffWithRebootPAndReturnsTheReply() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientPassesTheShellExitStatusThrough() async throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     let reply = try await client.shell("exit-7")
 
@@ -144,7 +145,7 @@ func adbClientPassesTheShellExitStatusThrough() async throws {
 @Test(.timeLimit(.minutes(1)))
 func adbClientRunsAttachedCommandsWithTheEndpointAndReturnsTheStatus() throws {
     let fake = try FakeADB()
-    let client = AdbClient(executable: fake.executable)
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     let status = try client.runAttached(["shell", "exit-7"])
 
@@ -270,4 +271,13 @@ private func makeScratchDirectory() throws -> URL {
 private func writeExecutable(at url: URL) throws {
     try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+}
+
+/// Keeps the client's log entries out of the shared unified log during tests.
+private struct SilentLogSink: LogSink {
+    func isEnabled(for level: LogLevel) -> Bool {
+        false
+    }
+
+    func write(_ entry: LogEntry) {}
 }

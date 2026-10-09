@@ -68,7 +68,8 @@ public enum RuntimeEvent: Sendable {
 /// `ensureReady` runs steps 0-2, 4, and 5 of runtime-daemon.md §3.2 with the
 /// boot timeouts and the stall limit. In M1, `ready` is entered at
 /// `.bootCompleted`, because the agents (#072) and the post-boot setup do not
-/// exist yet. The GraphicsCore device (#021) and the ADB bridge (#015) are added later.
+/// exist yet. Developer mode adds the ADB bridge (#015): the loopback forwarder, and the ADB
+/// boot signals. The GraphicsCore device (#021) is added later.
 public actor RuntimeSupervisor {
     /// The current state.
     public private(set) var state: RuntimeState = .stopped
@@ -86,8 +87,22 @@ public actor RuntimeSupervisor {
     private let eventContinuation: AsyncStream<RuntimeEvent>.Continuation
     private let logger: APKLogger
     private let bootLogger: APKLogger
+    private let environment: [String: String]
     private var controller: VMController?
     private var tasks: [Task<Void, Never>] = []
+    /// The loopback forwarder of developer ADB (`127.0.0.1:6520` to guest vsock 5555), while Android runs.
+    private var forwarder: VsockLoopbackForwarder?
+    /// The developer's adb client, when adb was found.
+    private var adbClient: AdbClient?
+    /// Polls ADB for the boot signals until boot completion.
+    private var adbPollTask: Task<Void, Never>?
+    /// Whether the ADB poller has connected to the development endpoint in this boot.
+    private var isADBConnected = false
+
+    /// The loopback TCP port of developer ADB (configuration.md §2.5).
+    static let developmentADBPort: UInt16 = 6520
+    /// The guest vsock port where adbd listens (android-image.md §7.3).
+    static let developmentADBGuestPort: UInt32 = 5555
 
     /// Creates a supervisor for one image and instance.
     public init(
@@ -96,7 +111,8 @@ public actor RuntimeSupervisor {
         options: BootOptions,
         diagnostics: DiagnosticsContext,
         platform: VZPlatformProfile = .macOS27,
-        timeouts: BootTimeouts = .standard
+        timeouts: BootTimeouts = .standard,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.image = image
         self.instanceStore = instanceStore
@@ -104,6 +120,7 @@ public actor RuntimeSupervisor {
         self.diagnostics = diagnostics
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
+        self.environment = environment
         let stream = AsyncStream.makeStream(of: RuntimeEvent.self, bufferingPolicy: .bufferingNewest(4096))
         events = stream.stream
         eventContinuation = stream.continuation
@@ -127,24 +144,22 @@ public actor RuntimeSupervisor {
         }
     }
 
-    /// Stops Android: `reboot -p` over the serial shell in developer mode, then a forced stop.
+    /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
+    /// developer mode, then a forced stop after 20 s (vm.md §9.3).
     public func stop() async {
         guard let controller else {
             return
         }
         transition(to: .stopping)
-        if let shell, options.developerMode {
-            _ = try? await shell.run("su 0 reboot -p", timeout: .seconds(2))
-            let deadline = ContinuousClock.now + .seconds(20)
-            while ContinuousClock.now < deadline, await controller.state != .stopped {
-                try? await Task.sleep(for: .milliseconds(250))
-            }
+        if options.developerMode {
+            await requestPowerOff(controller)
         }
         if await controller.state != .stopped {
             try? await controller.stop()
         }
         await controller.waitForConsoleLogDrain()
         finishTasks()
+        closeDevelopmentChannels()
         self.controller = nil
         shell = nil
         transition(to: .stopped)
@@ -194,14 +209,24 @@ public actor RuntimeSupervisor {
         self.controller = controller
 
         let progress = AsyncStream.makeStream(of: Progress.self, bufferingPolicy: .unbounded)
-        attachConsumers(to: plan.definition.consolePorts, controller: controller, progress: progress.continuation)
+        let tracker = BootPhaseTracker()
+        attachConsumers(
+            to: plan.definition.consolePorts,
+            controller: controller,
+            tracker: tracker,
+            progress: progress.continuation
+        )
 
         do {
             try await controller.start()
         } catch {
             throw Self.vmFailure(error)
         }
+        if options.developerMode {
+            startADBBridge(controller: controller, tracker: tracker, progress: progress.continuation)
+        }
         try await waitForBootCompletion(progress.stream, firstBoot: isFirstBoot)
+        adbPollTask?.cancel()
 
         if let shell {
             try await confirmBootCompleted(shell)
@@ -223,6 +248,7 @@ public actor RuntimeSupervisor {
     private func attachConsumers(
         to ports: [ConsolePortDefinition],
         controller: VMController,
+        tracker: BootPhaseTracker,
         progress: AsyncStream<Progress>.Continuation
     ) {
         let events = eventContinuation
@@ -230,14 +256,13 @@ public actor RuntimeSupervisor {
         let console = controller.console(.systemConsole).makeByteStream()
         tasks.append(
             Task {
-                var detector = BootPhaseDetector()
                 for await bytes in console.stream {
                     if bytes.isEmpty {
                         console.acknowledgeDrainBarrier()
                         continue
                     }
                     events.yield(.console(bytes))
-                    for event in detector.consume(bytes) {
+                    for event in tracker.consume(console: bytes) {
                         if case .entered(_, let marker) = event {
                             Perf.mark(marker, timeline: timeline)
                         }
@@ -313,6 +338,127 @@ public actor RuntimeSupervisor {
                 continue
             }
         }
+    }
+
+    /// Opens the developer ADB bridge: the loopback forwarder, then the ADB poller.
+    ///
+    /// Neither failure stops the boot. Without the forwarder the ADB signals and `apkrun dev adb`
+    /// are unavailable, and the console signals still decide the phases. The forwarder is not
+    /// started against a port that another process already uses, because adb would then talk to
+    /// that process.
+    private func startADBBridge(
+        controller: VMController,
+        tracker: BootPhaseTracker,
+        progress: AsyncStream<Progress>.Continuation
+    ) {
+        let forwarder = VsockLoopbackForwarder(
+            requestedPort: Self.developmentADBPort,
+            guestPort: Self.developmentADBGuestPort,
+            logSink: diagnostics.logSink,
+            connectGuest: { port in
+                try await controller.connect(vsockPort: port, timeout: .seconds(5))
+            }
+        )
+        do {
+            try forwarder.start()
+        } catch {
+            logger.warning(
+                "Booting without ADB: the loopback forwarder did not start",
+                errorCode: error.qualifiedCode
+            )
+            return
+        }
+        self.forwarder = forwarder
+        do {
+            let executable = try AdbClient.resolveExecutable(environment: environment)
+            let client = AdbClient(
+                executable: executable,
+                endpoint: AdbClient.developmentEndpoint,
+                logSink: diagnostics.logSink
+            )
+            adbClient = client
+            let task = Task {
+                await self.pollADB(client, tracker: tracker, progress: progress)
+            }
+            adbPollTask = task
+            tasks.append(task)
+        } catch {
+            logger.warning(
+                "Booting without ADB signals: adb was not found",
+                errorCode: error.qualifiedCode
+            )
+        }
+    }
+
+    /// Connects ADB once the forwarder is up, then reads the boot properties every 500 ms until
+    /// `sys.boot_completed` is 1. A read that fails is skipped, and the poll continues.
+    private func pollADB(
+        _ client: AdbClient,
+        tracker: BootPhaseTracker,
+        progress: AsyncStream<Progress>.Continuation
+    ) async {
+        while !Task.isCancelled {
+            do {
+                try await client.connect(timeout: .seconds(5))
+                break
+            } catch {
+                continue
+            }
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+        isADBConnected = true
+        while !Task.isCancelled {
+            if let state = try? await readADBState(client) {
+                for event in tracker.observe(adb: state) {
+                    if case .entered(_, let marker) = event {
+                        Perf.mark(marker, timeline: diagnostics.perfTimeline)
+                    }
+                    progress.yield(.detector(event))
+                }
+                if state.bootCompleted {
+                    return
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    private func readADBState(_ client: AdbClient) async throws(AdbFailure) -> AdbBootState {
+        let systemServerStartCount = try await client.getprop(AdbBootSignals.systemServerStartCount)
+        let bootCompleted = try await client.getprop(AdbBootSignals.bootCompleted)
+        return AdbBootState(
+            systemServerStarted: !systemServerStartCount.isEmpty,
+            bootCompleted: bootCompleted == "1"
+        )
+    }
+
+    /// Asks Android to power off: `reboot -p` over ADB when it is connected, else over the serial
+    /// shell. Waits up to 20 s for the VM to stop, and the caller forces the stop after that.
+    private func requestPowerOff(_ controller: VMController) async {
+        if isADBConnected, let adbClient {
+            logger.notice("Stopping Android with reboot -p over ADB")
+            _ = try? await adbClient.rebootPowerOff()
+        } else if let shell {
+            logger.notice("Stopping Android with reboot -p over the serial shell")
+            _ = try? await shell.run("su 0 reboot -p", timeout: .seconds(2))
+        } else {
+            return
+        }
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now < deadline, await controller.state != .stopped {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    /// Closes the forwarder and forgets the ADB client of the boot that just ended.
+    private func closeDevelopmentChannels() {
+        forwarder?.stop()
+        forwarder = nil
+        adbClient = nil
+        adbPollTask = nil
+        isADBConnected = false
     }
 
     private func waitForBootCompletion(
@@ -408,6 +554,7 @@ public actor RuntimeSupervisor {
             await controller.waitForConsoleLogDrain()
         }
         finishTasks()
+        closeDevelopmentChannels()
         controller = nil
         shell = nil
     }

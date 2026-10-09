@@ -8,12 +8,13 @@ import sys
 from collections.abc import Sequence
 
 COMMANDS = {
-    "bundle": "Build an unsigned development runtime image bundle.",
+    "bundle": "Build and sign a runtime image bundle.",
     "disks": "Build the raw GPT disks of a device layout.",
     "extract": "Extract verified Android boot artifacts.",
     "fetch": "Fetch and verify Android build artifacts.",
     "inventory": "Classify every file in an Android build by content.",
     "inspect": "Inspect an Android image file.",
+    "keygen": "Create the Ed25519 key pair that signs runtime image bundles.",
     "manifest": "Generate or validate an Android image manifest.",
 }
 

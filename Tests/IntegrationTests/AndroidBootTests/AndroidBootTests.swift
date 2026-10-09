@@ -1,7 +1,9 @@
+import Darwin
 import DiagnosticsCore
 import Foundation
 import ImageCore
 import RuntimeCore
+import RuntimeHost
 import XCTest
 
 /// T2 checks of the Android boot on the product path (android-image.md §6, §13; #012-#014).
@@ -239,6 +241,153 @@ final class AndroidBootTests: XCTestCase {
         }
     }
 
+    /// #014 step 1 and step 6: `sys.boot_completed` is 1 over the serial shell, and the boot wrote its
+    /// record to `perf/boots.jsonl` with the markers in order from `VM_START`.
+    func testBootCompleted() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: true)
+        let collector = Task {
+            for await _ in supervisor.events {}
+        }
+        var failure: Error?
+        do {
+            try await supervisor.ensureReady(.cli)
+            let state = await supervisor.state
+            XCTAssertEqual(state, .ready)
+            let shellOrNil = await supervisor.shell
+            let shell = try XCTUnwrap(shellOrNil)
+            let completed = try await AndroidShellConsole(shell: shell).output("getprop sys.boot_completed")
+            XCTAssertEqual(completed.trimmingCharacters(in: .whitespacesAndNewlines), "1")
+        } catch {
+            failure = error
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        collector.cancel()
+        XCTAssertTrue(stopped, "the developer-mode stop returns within 90 s")
+        if let failure {
+            throw failure
+        }
+
+        let records = try String(contentsOf: fixture.paths.bootPerformanceFile, encoding: .utf8)
+            .split(separator: "\n")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = try decoder.decode(BootRecord.self, from: Data(try XCTUnwrap(records.last).utf8))
+        XCTAssertEqual(record.outcome, "ready")
+        XCTAssertEqual(record.markers["VM_START"], 0)
+        let order = [
+            "VM_START", "KERNEL_START", "ANDROID_INIT", "SYSTEM_SERVER_READY", "BOOT_COMPLETED", "RUNTIME_READY",
+        ]
+        let times = order.compactMap { record.markers[$0] }
+        XCTAssertEqual(times.count, order.count, "every marker is recorded: \(record.markers.keys.sorted())")
+        XCTAssertEqual(times, times.sorted(), "the markers are in boot order")
+    }
+
+    /// #014 step 6: the console and VM states pass through the phases in order, and the boot ends ready.
+    func testPhasesInOrder() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: false)
+        let states = StateCollector()
+        let collector = Task {
+            for await event in supervisor.events {
+                if case .state(let state) = event {
+                    states.append(state)
+                }
+            }
+        }
+        var failure: Error?
+        do {
+            try await supervisor.ensureReady(.cli)
+        } catch {
+            failure = error
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        collector.cancel()
+        XCTAssertTrue(stopped, "the stop returns within 90 s")
+        if let failure {
+            throw failure
+        }
+        let expected: [RuntimeState] = [
+            .booting(.kernel), .booting(.`init`), .booting(.systemServer), .booting(.bootCompleted), .ready,
+        ]
+        let observed = states.values.filter { expected.contains($0) }
+        XCTAssertEqual(observed, expected, "the boot enters each phase once, in order")
+    }
+
+    /// #014 step 4: the developer console socket relays the serial shell to a client.
+    ///
+    /// The socket server is the only consumer of the hvc1 output, so the test reads the answer from the
+    /// client's end of the socket.
+    func testDevConsoleShell() async throws {
+        let home = try AndroidBootFixture.makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fixture = try AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
+        try await fixture.resetInstance()
+        let supervisor = fixture.supervisor(developerMode: true)
+        let consoles = DevConsoleSocketServer(directory: fixture.paths.devConsoleDirectory)
+        let relay = Task {
+            for await event in supervisor.events {
+                if case .devConsole(let endpoint) = event, endpoint.name == "hvc1" {
+                    do throws(RuntimeFailure) {
+                        try consoles.serve(endpoint)
+                    } catch {
+                        XCTFail("the developer console socket could not be created: \(error)")
+                    }
+                }
+            }
+        }
+        var failure: Error?
+        do {
+            try await supervisor.ensureReady(.cli)
+            let socket = try DevConsoleSocketClient.connect(
+                console: "hvc1", directory: fixture.paths.devConsoleDirectory)
+            defer { Darwin.close(socket) }
+            let command = Data("getprop sys.boot_completed; echo SHELL_DONE\n".utf8)
+            _ = command.withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) }
+            // The echo of the typed line ends in "echo SHELL_DONE", so only an output line starts with a newline.
+            let reply = Self.readSocket(socket, until: "\nSHELL_DONE", seconds: 60)
+            let lines = reply.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            XCTAssertTrue(lines.contains("1"), "sys.boot_completed reads 1 through the socket: \(reply.suffix(200))")
+        } catch {
+            failure = error
+        }
+        let stopped = await ConsoleBuffer.completes(within: .seconds(90)) {
+            await supervisor.stop()
+        }
+        relay.cancel()
+        consoles.stop()
+        XCTAssertTrue(stopped, "the developer-mode stop returns within 90 s")
+        if let failure {
+            throw failure
+        }
+    }
+
+    /// Reads from `descriptor` until `marker` appears or `seconds` pass.
+    private static func readSocket(_ descriptor: Int32, until marker: String, seconds: Int) -> String {
+        var collected = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        while Date() < deadline {
+            var pending = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            guard poll(&pending, 1, 200) > 0 else { continue }
+            let count = read(descriptor, &buffer, buffer.count)
+            if count <= 0 { break }
+            collected.append(contentsOf: buffer[0..<count])
+            if String(decoding: collected, as: UTF8.self).contains(marker) { break }
+        }
+        return String(decoding: collected, as: UTF8.self)
+    }
+
     /// The merged bootconfig and command line the planner gives this instance (android-image.md §6.1).
     static func plannedBootconfig(_ fixture: AndroidBootFixture) async throws -> [String: String] {
         let loaded = try await fixture.store.load(image: fixture.image)
@@ -407,5 +556,19 @@ final class AndroidBootTests: XCTestCase {
             return listing.split(separator: " ").filter { $0.hasPrefix(disk) }.count
         }
         return nil
+    }
+}
+
+/// Collects runtime states from a supervisor's event stream.
+final class StateCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [RuntimeState] = []
+
+    func append(_ state: RuntimeState) {
+        lock.withLock { states.append(state) }
+    }
+
+    var values: [RuntimeState] {
+        lock.withLock { states }
     }
 }

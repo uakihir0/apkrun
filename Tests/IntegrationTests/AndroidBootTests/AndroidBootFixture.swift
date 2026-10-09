@@ -43,8 +43,8 @@ struct AndroidBootFixture {
 
     /// A new private home under the temporary directory.
     static func makeHome() throws -> URL {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apkrun-android-\(UUID().uuidString)", isDirectory: true)
+        // A short path under /tmp: the developer console socket path must fit in sockaddr_un.
+        let home = URL(fileURLWithPath: "/tmp/apkrun-android-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         return home
     }

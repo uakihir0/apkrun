@@ -79,8 +79,9 @@ file product_a:/media/audio/notifications/Gallium.ogg.
   libdrm.so, libOpenglCodecCommon.so, libOpenglSystemCommon.so, liblog.so,
   libnativewindow.so, libsync.so, libc++.so, libc.so, libm.so, and libdl.so.
   libcutils.so, libdrm.so, libOpenglCodecCommon.so, and libOpenglSystemCommon.so
-  are in vendor_a /lib64. liblog.so, libnativewindow.so, libsync.so, libc++.so,
-  libc.so, libm.so, and libdl.so are in system_a /system/lib64.
+  are in vendor_a /lib64. liblog.so, libnativewindow.so, libsync.so, and libc++.so
+  are in system_a /system/lib64. libc.so, libm.so, and libdl.so there are symbolic
+  links, which dump.erofs lists as type 7.
 - The pinned source declares its virtgpu platform library as needing libdrm and
   (on Android) libsync, and its guest iostream library as needing liblog. Those
   three are present in the image.

@@ -6,7 +6,5 @@ import android.content.SharedPreferences
 class PreferencesKeyValueStore(private val preferences: SharedPreferences) : KeyValueStore {
     override fun getInt(key: String, defaultValue: Int): Int = preferences.getInt(key, defaultValue)
 
-    override fun putInt(key: String, value: Int) {
-        preferences.edit().putInt(key, value).commit()
-    }
+    override fun putInt(key: String, value: Int): Boolean = preferences.edit().putInt(key, value).commit()
 }

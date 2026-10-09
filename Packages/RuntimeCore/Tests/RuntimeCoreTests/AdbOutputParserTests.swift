@@ -27,6 +27,17 @@ func uninstallOfAMissingPackageIsAFailureWithItsCode() {
 }
 
 @Test
+func aReasonThatIsNotAnAndroidCodeIsNeverPassedOn() {
+    // Output text between the brackets is not a code, so it must not reach an error message.
+    #expect(
+        AdbOutputParser.packageReply(
+            "adb: failed to install x.apk: Failure [INSTALL_FAILED_INVALID_APK: Failed to parse /data/x.apk]")
+            == .failure(reason: "unknown")
+    )
+    #expect(AdbOutputParser.packageReply("Failure [A [b] c]") == .failure(reason: "unknown"))
+}
+
+@Test
 func anEmptyOrUnrecognizedReplyIsUnknown() {
     #expect(AdbOutputParser.packageReply("") == .unknown)
     #expect(AdbOutputParser.packageReply("Performing Streamed Install\n") == .unknown)

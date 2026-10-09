@@ -17,48 +17,44 @@ final class AndroidPackageTests: XCTestCase {
         }
     }
 
-    /// `adb install -r` installs HelloText through PackageInstaller, and PackageManager reports its metadata.
+    /// `adb install -r` installs HelloText, and PackageManager reports its metadata (FR-PKG-01).
     func testInstallHelloText() async throws {
-        let session = try await AndroidBootSession.start(developerMode: true)
-        defer { session.cleanUp() }
-        try await session.supervisor.ensureReady(.cli)
-        let adb = try await Self.connectedClient()
+        let apk = try Self.fixtureAPK()
+        try await AndroidBootSession.withBoot(developerMode: true) { _ in
+            let adb = try await Self.connectedClient()
+            try await adb.install(apk: apk)
 
-        try await adb.install(apk: try Self.fixtureAPK())
-
-        let listing = try await adb.listPackages(matching: Self.packageName)
-        XCTAssertEqual(listing, [AdbPackageListing(name: Self.packageName, versionCode: 1)])
-        let metadata = try await adb.dumpsysPackage(Self.packageName)
-        XCTAssertEqual(metadata.versionCode, 1)
-        XCTAssertEqual(metadata.versionName, "1.0")
-        XCTAssertEqual(metadata.minSdk, 29)
-        XCTAssertEqual(metadata.targetSdk, 37)
-        await session.supervisor.stop()
+            let listing = try await adb.listPackages(matching: Self.packageName)
+            XCTAssertEqual(listing, [AdbPackageListing(name: Self.packageName, versionCode: 1)])
+            let metadata = try await adb.dumpsysPackage(Self.packageName)
+            XCTAssertEqual(metadata.versionCode, 1)
+            XCTAssertEqual(metadata.versionName, "1.0")
+            XCTAssertEqual(metadata.minSdk, 29)
+            XCTAssertEqual(metadata.targetSdk, 37)
+        }
     }
 
     /// `adb uninstall` removes HelloText, PackageManager no longer lists it, and a second install succeeds.
     func testUninstallHelloText() async throws {
-        let session = try await AndroidBootSession.start(developerMode: true)
-        defer { session.cleanUp() }
-        try await session.supervisor.ensureReady(.cli)
-        let adb = try await Self.connectedClient()
         let apk = try Self.fixtureAPK()
-        try await adb.install(apk: apk)
+        try await AndroidBootSession.withBoot(developerMode: true) { _ in
+            let adb = try await Self.connectedClient()
+            try await adb.install(apk: apk)
 
-        try await adb.uninstall(packageName: Self.packageName)
-
-        let remaining = try await adb.listPackages(matching: Self.packageName)
-        XCTAssertTrue(remaining.isEmpty, "PackageManager still lists \(Self.packageName)")
-        do {
             try await adb.uninstall(packageName: Self.packageName)
-            XCTFail("A package that is not installed must not uninstall again.")
-        } catch {
-            XCTAssertEqual(error.qualifiedCode, "runtime.adbPackageRejected")
+
+            let remaining = try await adb.listPackages(matching: Self.packageName)
+            XCTAssertTrue(remaining.isEmpty, "PackageManager still lists \(Self.packageName)")
+            do {
+                try await adb.uninstall(packageName: Self.packageName)
+                XCTFail("A package that is not installed must not uninstall again.")
+            } catch {
+                XCTAssertEqual((error as? APKRunError)?.qualifiedCode, "runtime.adbPackageRejected")
+            }
+            try await adb.install(apk: apk)
+            let reinstalled = try await adb.listPackages(matching: Self.packageName)
+            XCTAssertEqual(reinstalled, [AdbPackageListing(name: Self.packageName, versionCode: 1)])
         }
-        try await adb.install(apk: apk)
-        let reinstalled = try await adb.listPackages(matching: Self.packageName)
-        XCTAssertEqual(reinstalled, [AdbPackageListing(name: Self.packageName, versionCode: 1)])
-        await session.supervisor.stop()
     }
 
     private static func connectedClient() async throws -> AdbClient {

@@ -71,7 +71,25 @@ final class AndroidBootSession: @unchecked Sendable {
         return AndroidBootSession(supervisor: supervisor, capture: capture, home: home, captureTask: captureTask)
     }
 
-    func cleanUp() {
+    /// Runs `body` on a fresh boot, and stops Android and removes the instance afterwards, also when `body` throws.
+    static func withBoot(
+        developerMode: Bool,
+        _ body: (AndroidBootSession) async throws -> Void
+    ) async throws {
+        let session = try await start(developerMode: developerMode)
+        do {
+            try await session.supervisor.ensureReady(.cli)
+            try await body(session)
+        } catch {
+            await session.finish()
+            throw error
+        }
+        await session.finish()
+    }
+
+    /// Stops Android if it runs, then removes the instance. A stop that has already happened does nothing.
+    func finish() async {
+        await supervisor.stop()
         captureTask.cancel()
         try? FileManager.default.removeItem(at: home)
     }

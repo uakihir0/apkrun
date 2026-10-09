@@ -65,9 +65,9 @@ verify_signer() {
 
 if [[ "$mode" == "build" ]]; then
     gradle_build :HelloText:assembleRelease
+    verify_signer "$gradle_apk"
     mkdir -p "$(dirname "$output_apk")"
     cp "$gradle_apk" "$output_apk"
-    verify_signer "$output_apk"
     printf 'build-fixtures: wrote %s\n' "$output_apk"
     exit 0
 fi

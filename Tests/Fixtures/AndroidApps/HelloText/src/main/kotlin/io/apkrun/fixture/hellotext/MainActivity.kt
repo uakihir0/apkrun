@@ -29,9 +29,13 @@ class MainActivity : Activity() {
     }
 
     private fun click() {
-        val value = counter.increment()
-        Log.i(LOG_TAG, "click $value")
-        showCount(value)
+        try {
+            val value = counter.increment()
+            Log.i(LOG_TAG, "click $value")
+            showCount(value)
+        } catch (failure: IllegalStateException) {
+            Log.e(LOG_TAG, "click not saved: ${failure.message}")
+        }
     }
 
     private fun showCount(value: Int) {
@@ -47,8 +51,12 @@ class MainActivity : Activity() {
         if (item.itemId != MENU_RESET) {
             return super.onContextItemSelected(item)
         }
-        counter.reset()
-        showCount(0)
+        try {
+            counter.reset()
+            showCount(0)
+        } catch (failure: IllegalStateException) {
+            Log.e(LOG_TAG, "reset not saved: ${failure.message}")
+        }
         return true
     }
 

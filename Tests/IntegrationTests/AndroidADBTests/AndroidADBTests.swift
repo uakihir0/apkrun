@@ -21,58 +21,56 @@ final class AndroidADBTests: XCTestCase {
     /// Developer mode: ADB answers through the forwarder, only on the loopback address, and `reboot -p`
     /// stops Android gracefully.
     func testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully() async throws {
-        let session = try await AndroidBootSession.start(developerMode: true)
-        defer { session.cleanUp() }
-        let supervisor = session.supervisor
-        try await supervisor.ensureReady(.cli)
-        let readyState = await supervisor.state
-        XCTAssertEqual(readyState, .ready)
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let supervisor = session.supervisor
+            let readyState = await supervisor.state
+            XCTAssertEqual(readyState, .ready)
 
-        let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
-        try await adb.connect(timeout: .seconds(30))
-        let bootCompleted = try await adb.getprop("sys.boot_completed")
-        XCTAssertEqual(bootCompleted, "1")
-        let processes = try await adb.shell("ps -A")
-        XCTAssertEqual(processes.status, 0)
-        XCTAssertTrue(processes.output.contains("init"))
-        let packages = try await adb.shell("pm list packages")
-        XCTAssertEqual(packages.status, 0)
-        XCTAssertTrue(packages.output.contains("package:"))
-        let logcat = try await adb.logcatDump()
-        XCTAssertFalse(logcat.isEmpty)
-        let shellCount = await adb.shellInvocationCount
-        XCTAssertEqual(shellCount, 4)
+            let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
+            try await adb.connect(timeout: .seconds(30))
+            let bootCompleted = try await adb.getprop("sys.boot_completed")
+            XCTAssertEqual(bootCompleted, "1")
+            let processes = try await adb.shell("ps -A")
+            XCTAssertEqual(processes.status, 0)
+            XCTAssertTrue(processes.output.contains("init"))
+            let packages = try await adb.shell("pm list packages")
+            XCTAssertEqual(packages.status, 0)
+            XCTAssertTrue(packages.output.contains("package:"))
+            let logcat = try await adb.logcatDump()
+            XCTAssertFalse(logcat.isEmpty)
+            let shellCount = await adb.shellInvocationCount
+            XCTAssertEqual(shellCount, 4)
 
-        XCTAssertEqual(try Self.listeningAddresses(port: Self.port), ["127.0.0.1:\(Self.port)"])
-        for address in try Self.nonLoopbackIPv4Addresses() {
-            XCTAssertFalse(
-                Self.isAccepting(address: address, port: Self.port),
-                "ADB must not accept connections on \(address)"
-            )
+            XCTAssertEqual(try Self.listeningAddresses(port: Self.port), ["127.0.0.1:\(Self.port)"])
+            for address in try Self.nonLoopbackIPv4Addresses() {
+                XCTAssertFalse(
+                    Self.isAccepting(address: address, port: Self.port),
+                    "ADB must not accept connections on \(address)"
+                )
+            }
+
+            let stopStarted = ContinuousClock.now
+            await supervisor.stop()
+            let stopped = ContinuousClock.now - stopStarted
+            let stoppedState = await supervisor.state
+            XCTAssertEqual(stoppedState, .stopped)
+            XCTAssertLessThan(stopped, .seconds(20), "reboot -p must power Android off before the forced stop")
+            XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
+            XCTAssertTrue(session.capture.console().contains("reboot: Power down"))
         }
-
-        let stopStarted = ContinuousClock.now
-        await supervisor.stop()
-        let stopped = ContinuousClock.now - stopStarted
-        let stoppedState = await supervisor.state
-        XCTAssertEqual(stoppedState, .stopped)
-        XCTAssertLessThan(stopped, .seconds(20), "reboot -p must power Android off before the forced stop")
-        XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
-        XCTAssertTrue(session.capture.console().contains("reboot: Power down"))
     }
 
     /// Without developer mode, nothing listens on the ADB port, and Android still boots.
     func testDeveloperModeOffListensOnNoPort() async throws {
-        let session = try await AndroidBootSession.start(developerMode: false)
-        defer { session.cleanUp() }
-        try await session.supervisor.ensureReady(.cli)
-        let readyState = await session.supervisor.state
-        XCTAssertEqual(readyState, .ready)
+        try await AndroidBootSession.withBoot(developerMode: false) { session in
+            let readyState = await session.supervisor.state
+            XCTAssertEqual(readyState, .ready)
 
-        XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
-        XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: Self.port))
+            XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
+            XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: Self.port))
 
-        await session.supervisor.stop()
+            await session.supervisor.stop()
+        }
     }
 
     // MARK: - Helpers

@@ -154,7 +154,8 @@ public actor AdbClient {
     }
 
     /// Lists the packages whose names contain `filter`, with their versionCode (`pm list packages --show-versioncode`).
-    /// An empty filter lists every package.
+    /// The filter must be a full package name or empty: a partial name is refused, so that the command line
+    /// stays a package name. An empty filter lists every package.
     public func listPackages(matching filter: String = "") async throws(AdbFailure) -> [AdbPackageListing] {
         guard filter.isEmpty || Self.isPackageName(filter) else {
             throw .invalidArgument(command: "pm")

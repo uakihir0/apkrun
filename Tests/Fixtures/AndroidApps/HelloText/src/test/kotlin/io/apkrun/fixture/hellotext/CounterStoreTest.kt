@@ -10,8 +10,9 @@ class CounterStoreTest {
 
         override fun getInt(key: String, defaultValue: Int): Int = values[key] ?: defaultValue
 
-        override fun putInt(key: String, value: Int) {
+        override fun putInt(key: String, value: Int): Boolean {
             values[key] = value
+            return true
         }
     }
 
@@ -48,5 +49,15 @@ class CounterStoreTest {
 
         assertEquals(0, counter.current())
         assertEquals(1, counter.increment())
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun aCountThatCannotBeSavedIsReportedNotShown() {
+        val refusing = object : KeyValueStore {
+            override fun getInt(key: String, defaultValue: Int): Int = defaultValue
+
+            override fun putInt(key: String, value: Int): Boolean = false
+        }
+        CounterStore(refusing).increment()
     }
 }

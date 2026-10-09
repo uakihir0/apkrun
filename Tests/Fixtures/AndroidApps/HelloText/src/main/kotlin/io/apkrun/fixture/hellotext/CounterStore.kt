@@ -8,16 +8,23 @@ class CounterStore(private val backend: KeyValueStore) {
     /** The count that the backend holds, or 0 before the first click. */
     fun current(): Int = backend.getInt(KEY, 0)
 
-    /** Adds one click, stores the new count, and returns it. */
+    /**
+     * Adds one click, stores the new count, and returns it. Throws [IllegalStateException] when the backend
+     * does not save the count, so that a lost click is never shown as a stored one.
+     */
     fun increment(): Int {
         val next = current() + 1
-        backend.putInt(KEY, next)
+        save(next)
         return next
     }
 
     /** Sets the count back to 0. */
     fun reset() {
-        backend.putInt(KEY, 0)
+        save(0)
+    }
+
+    private fun save(value: Int) {
+        check(backend.putInt(KEY, value)) { "the counter could not be saved" }
     }
 
     companion object {
@@ -29,5 +36,6 @@ class CounterStore(private val backend: KeyValueStore) {
 interface KeyValueStore {
     fun getInt(key: String, defaultValue: Int): Int
 
-    fun putInt(key: String, value: Int)
+    /** Stores the value. Returns false when the store did not save it. */
+    fun putInt(key: String, value: Int): Boolean
 }

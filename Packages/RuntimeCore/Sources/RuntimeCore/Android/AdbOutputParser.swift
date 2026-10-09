@@ -61,8 +61,10 @@ enum AdbOutputParser {
             else {
                 continue
             }
-            let reason = String(line[marker.upperBound..<close])
-            return .failure(reason: reason.isEmpty ? "unknown" : reason)
+            let code = String(line[marker.upperBound..<close])
+            // Android's codes are upper-case words. Anything else is output text, which must not reach an error.
+            let isCode = !code.isEmpty && code.allSatisfy { $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_") }
+            return .failure(reason: isCode ? code : "unknown")
         }
         return .unknown
     }

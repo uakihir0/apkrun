@@ -41,6 +41,22 @@ CAPTURE_GRAPHICS_KEYS = frozenset(
     }
 )
 
+# Launcher-capture keys that APKRun leaves out of the image layer: host services, automotive
+# keys, and the platform and instance layers (android-image.md §6.2, §7.3). Pinned here, so a
+# key moved between the image layer and the omitted list fails this test.
+OMITTED_CAPTURE_KEYS = frozenset(
+    {
+        "androidboot.auto_eth_guest_addr",
+        "androidboot.boot_devices",
+        "androidboot.ddr_size",
+        "androidboot.lcd_density",
+        "androidboot.serialconsole",
+        "androidboot.serialno",
+        "androidboot.vhal_proxy_server_port",
+        "androidboot.vsock_tombstone_port",
+    }
+)
+
 # Image-layer values that the launcher capture does not give the same way. Six keys are
 # absent from the capture and set by APKRun, and wifi_impl replaces the capture's
 # mac80211_hwsim_virtio. Each value is decided or verified on VZ (android-image.md §6.2).
@@ -167,8 +183,8 @@ def test_layer_two_image_values_are_the_launcher_capture_values() -> None:
     sources = layout["bootconfig"]["sources"]
     omitted = {key for key in sources["omitted"] if key.startswith("androidboot.")}
 
-    assert CAPTURE_GRAPHICS_KEYS <= set(capture)
-    assert omitted <= set(capture)
+    assert CAPTURE_GRAPHICS_KEYS | OMITTED_CAPTURE_KEYS <= set(capture)
+    assert omitted == OMITTED_CAPTURE_KEYS
     assert set(sources["decided"]) == set(DECIDED_IMAGE_VALUES)
     expected = {
         key: value

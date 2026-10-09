@@ -11165,7 +11165,9 @@ after `init`. In one of three runs, VZ returned `vm.stoppedWithError`
 stop did not return. The run printed no further lines, so the hang was not
 traced past `RuntimeSupervisor.stop()`, `fail()`, and
 `VMController.waitForConsoleLogDrain()`. The other two runs stopped cleanly in
-0.3 s. The stop after a VZ error is outside #012's changes.
+0.3 s. `RuntimeSupervisor.stop()` and `fail()` were rewritten in #012 (the
+stop-during-boot fix), but the VZ error and the hang come from `VMController`,
+which #012 does not change.
 
 **Consequence.** #014 owns the readiness monitor's stop and failure path. It
 should make a stop that follows a VZ error return with a typed result. Until

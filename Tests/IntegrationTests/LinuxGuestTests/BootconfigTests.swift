@@ -60,7 +60,10 @@ final class LinuxGuestBootconfigTests: XCTestCase {
                     + "\(kernelLines.joined(separator: "; "))). #013 checks /proc/bootconfig on Android."
             )
         }
-        let printed = try Self.listing(in: console)
+        guard let printed = Self.listing(in: console) else {
+            XCTFail("the guest did not print /proc/bootconfig between the markers")
+            return
+        }
         let kernelView = Self.keyValues(in: printed)
         XCTAssertEqual(kernelView, golden, "/proc/bootconfig equals the merged block")
         XCTAssertEqual(result.records.last, .done)
@@ -109,12 +112,12 @@ final class LinuxGuestBootconfigTests: XCTestCase {
     }
 
     /// The lines the guest printed between the bootconfig markers.
-    static func listing(in console: String) throws -> String {
+    static func listing(in console: String) -> String? {
         guard
             let begin = console.range(of: "APKRUN-BOOTCONFIG-BEGIN\n"),
             let end = console.range(of: "APKRUN-BOOTCONFIG-END", range: begin.upperBound..<console.endIndex)
         else {
-            throw XCTSkip("The guest did not print /proc/bootconfig before the console ended.")
+            return nil
         }
         return String(console[begin.upperBound..<end.lowerBound])
     }

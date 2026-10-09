@@ -93,16 +93,12 @@ final class AndroidBootTests: XCTestCase {
         )
         let supervisor = fixture.supervisor(developerMode: false, timeouts: timeouts)
 
-        var failure: RuntimeBootFailure?
-        do {
-            try await supervisor.ensureReady(.cli)
-            XCTFail("a truncated ramdisk must not boot")
-        } catch {
-            failure = error
+        let returned = await ConsoleBuffer.completes(within: .seconds(120)) {
+            _ = try? await supervisor.ensureReady(.cli)
         }
-        XCTAssertEqual(failure, .bootStalled(phase: .kernel))
+        XCTAssertTrue(returned, "the truncated boot ends within 120 s")
         let state = await supervisor.state
-        XCTAssertEqual(state, .failed(.bootStalled(phase: .kernel)))
+        XCTAssertEqual(state, .failed(.bootStalled(phase: .kernel)), "a truncated ramdisk must not boot")
         let lines = try fixture.newestBootLog().components(separatedBy: "\n")
         XCTAssertFalse(lines.contains { $0.contains("] init: ") }, "the truncated boot never reaches init")
     }

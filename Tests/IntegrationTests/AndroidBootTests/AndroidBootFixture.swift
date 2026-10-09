@@ -71,7 +71,7 @@ struct AndroidBootFixture {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix("boot-") && $0.pathExtension == "log" }
         guard let newest = files.max(by: { $0.lastPathComponent < $1.lastPathComponent }) else {
-            throw XCTSkip("No boot log was written under \(directory.path).")
+            throw FixtureFailure.noBootLog(directory.path)
         }
         return String(decoding: try Data(contentsOf: newest), as: UTF8.self)
     }
@@ -120,6 +120,17 @@ struct AndroidBootFixture {
     /// Removes the private home.
     func remove() {
         try? FileManager.default.removeItem(at: home)
+    }
+}
+
+/// A fixture step that could not produce its evidence. XCTest reports it as a test failure.
+enum FixtureFailure: Error, CustomStringConvertible {
+    case noBootLog(String)
+
+    var description: String {
+        switch self {
+        case .noBootLog(let directory): "no boot log was written under \(directory)"
+        }
     }
 }
 

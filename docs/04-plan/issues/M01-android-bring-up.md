@@ -1146,7 +1146,7 @@ See [../test-strategy.md](../test-strategy.md).
    - Check: T0 golden tests pass over the captured console logs. `apkrun-dev dev boot --bundle Images/work/16373615/bundle/ --gpu none` prints `.kernel`.
 5. **Bootconfig on the Linux guest.**
    - Add `apkrun.test=bootconfig`, which prints `/proc/bootconfig`.
-   - `LinuxGuestTests.testBootconfigTrailer` boots the test kernel with an initrd that `BootconfigWriter` built from a golden input, then compares the output with the golden text.
+   - `LinuxGuestBootconfigTests.testBootconfigTrailer` (IR-362) boots the test kernel with an initrd that `BootconfigWriter` built from a golden input, then compares the output with the golden text.
    - If the pinned test kernel lacks `CONFIG_BOOT_CONFIG`, the test skips with that message, and #013 verifies `/proc/bootconfig` on Android.
    - Check: the T2 test passes or skips with the reason. It skips on the pinned test kernel, which is built without `CONFIG_BOOT_CONFIG`; the reason carries the kernel's warning (IR-362).
 6. **Android kernel boot.**
@@ -1154,10 +1154,10 @@ See [../test-strategy.md](../test-strategy.md).
    - It asserts these lines in `boot-<timestamp>.log`:
      - `virtio_blk` lines for `vda` and `vdb` with 9 and 4 partitions;
      - the virtio-gpu probe (`[drm] pci: virtio-gpu-pci detected`) of the `headless` profile;
-     - the first-stage module loads of `virtio_console`, `virtio_net`, and `vmw_vsock_virtio_transport`;
+     - the first-stage module load of `vmw_vsock_virtio_transport` (the `virtio_console` and `virtio_net` loads are not on hvc0, see below);
      - no panic.
    - On VZ, hvc0 starts only when first-stage init has loaded `virtio_console` (about 0.18 s of uptime), and the earlier kernel lines are not replayed (IR-306). `Booting Linux on physical CPU`, `Kernel command line:`, the PL031 RTC, and the rng and balloon probes are therefore checked in #013 over the serial shell (`su 0 dmesg`, `/proc/cmdline`, `/dev/rtc0`, `/sys/bus/virtio/drivers/`).
-   - A second test boots a deliberately truncated ramdisk and expects `failed(.kernelPanic)`.
+   - A second test boots a deliberately truncated ramdisk and expects `failed(.kernelPanic)`. The observed outcome is `failed(.bootStalled(phase: .kernel))`, because the panic text is written before hvc0 exists (IR-361).
    - Record in [android-image.md](../../02-design/android-image.md) §6: the kernel version, the time to each line, and any missing device.
    - Check: both T2 tests pass (`AndroidBootTests`, `AndroidBoot` configuration).
 
@@ -1170,7 +1170,7 @@ See [../test-strategy.md](../test-strategy.md).
   - RuntimeCore: `BootSignals` golden tests.
 - **T0 Python:** `bundle --unsigned` on the fixture set gives the expected file list.
 - **T1:** `InstanceStore.provision` and the per-boot initrd on a temporary APFS volume. The initrd SHA-256 is stable for the same inputs.
-- **T2:** `LinuxGuestTests.testBootconfigTrailer`, `AndroidBootTests.testKernelBoot`, and `AndroidBootTests.testKernelPanicDetected`.
+- **T2:** `LinuxGuestBootconfigTests.testBootconfigTrailer`, `AndroidBootTests.testKernelBoot`, and `AndroidBootTests.testKernelPanicDetected` (its outcome is `bootStalled`, IR-361).
 
 ### Acceptance criteria
 
@@ -1199,7 +1199,7 @@ See [../test-strategy.md](../test-strategy.md).
   - Bootconfig criterion (IR-362): `LinuxGuestBootconfigTests.testBootconfigTrailer` is written. The pinned test kernel has no `CONFIG_BOOT_CONFIG`, so it skips with the kernel's warning. The criterion stays open until `/proc/bootconfig` is read over the Android serial shell in #013 (`testReachesInit`).
   - T2 `AndroidBootTests` (2026-10-09, branch `task/012-android-kernel-boot-closure`): `testKernelBoot` passes in 1.1 s (nine partitions on `vda`, four on `vdb`, the virtio-gpu probe, the vsock module load, no panic). `testKernelPanicDetected` passes with the outcome of IR-361: `failed(.bootStalled(phase: .kernel))` after 30 s, with no init line, because the unpacking failure happens before hvc0 exists.
   - Still open for #013 and #014: `testReachesInit`, `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell`. The G2 acceptance test covers the boot path until then.
-  - A forced stop about one second into the boot can leave VZ in `failed` and the stop does not return (IR-363). The T2 stops are bounded at 60 s.
+  - A forced stop about one second into the boot can leave VZ in `failed` and the stop does not return (IR-363). The `testKernelBoot` stop is bounded at 60 s; the `testKernelPanicDetected` boot is bounded at 120 s.
 
 
 ---

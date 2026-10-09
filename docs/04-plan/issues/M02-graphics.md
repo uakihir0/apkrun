@@ -491,11 +491,12 @@ Out of scope:
   shows that build `16373615` has no Mesa EGL, GLES, or gallium library. The
   candidate source, `aosp-mesa3d` in the lock (commit `875160ed`, the
   `android-17.0.0_r1` tag), defines no Soong module that would install one
-  (IR-440; the revision is in IR-441). Steps 2 to 4 are not done. No build route is chosen, so there
-  is no fragment, no corrected image, and no `apkrun.test=egl` check (IR-442, IR-443, and
-  IR-446). Criterion 4 is checked because build `16373615` and its manifest did not
-  change. Criteria 1 to 3 stay open. The T0 manifest check and the T2 check need the
-  corrected identity, so they were not run.
+  (IR-440; the revision is in IR-441). Steps 2 to 4 are not done. No build route is
+  chosen, so there is no fragment, no corrected image, and no `apkrun.test=egl`
+  check (IR-442, IR-443, and IR-446). Criterion 4 is checked because build
+  `16373615` and its manifest did not change. Criteria 1 to 3 stay open. The T0
+  manifest check and the T2 check need the corrected identity, so they were not
+  run.
 - The brief placed the pinned Mesa sources under `ThirdParty/out`. That directory
   has no Mesa tree, and the lock had no Mesa entry. The source was fetched for the
   audit and is pinned by commit (IR-448).

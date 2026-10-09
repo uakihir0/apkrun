@@ -49,7 +49,9 @@ private final class FakeGuestADB: @unchecked Sendable {
                 if [ -f "$dir/running" ]; then echo 2121; exit 0; fi
                 exit 1 ;;
               "-s 127.0.0.1:6520 shell kill 2121") rm -f "$dir/running"; exit 0 ;;
-              *"app_process"*) touch "$dir/running"; exit 0 ;;
+              *"app_process"*)
+                if [ -f "$dir/refuse-start" ]; then exit 1; fi
+                touch "$dir/running"; exit 0 ;;
               *) exit 0 ;;
             esac
             """
@@ -77,6 +79,11 @@ private final class FakeGuestADB: @unchecked Sendable {
         } else {
             try? FileManager.default.removeItem(at: flag)
         }
+    }
+
+    /// Makes every start of the agent process fail, as `app_process` would when the device refuses it.
+    func refuseEveryStart() throws {
+        try Data().write(to: directory.appendingPathComponent("refuse-start"))
     }
 
     /// Makes every install refused, so that the reinstall after the removal is refused too.
@@ -229,4 +236,40 @@ func startingReplacesARunningAgentFirst() async throws {
     if let kill, let start {
         #expect(kill < start)
     }
+}
+
+/// Keeps the entries that a logger writes, so that a test can read the error codes it logged.
+private final class EntryRecorder: LogSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [LogEntry] = []
+
+    var entries: [LogEntry] {
+        lock.withLock { stored }
+    }
+
+    func isEnabled(for level: LogLevel) -> Bool {
+        true
+    }
+
+    func write(_ entry: LogEntry) {
+        lock.withLock { stored.append(entry) }
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRestartThatFailsIsLoggedWithTheCodeOfItsOwnFailure() async throws {
+    let fake = try FakeGuestADB()
+    try fake.setRunning(false)
+    try fake.refuseEveryStart()
+    let recorder = EntryRecorder()
+    let agent = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000),
+        logSink: recorder
+    )
+    let restarted = await agent.handleLoss(.disconnected)
+    #expect(!restarted)
+    let codes = recorder.entries.compactMap(\.errorCode)
+    #expect(codes.contains("runtime.adb"), "the logged codes are \(codes)")
+    #expect(!codes.contains("runtime.guestAgentStartFailed"))
 }

@@ -174,7 +174,8 @@ public actor DevelopmentGuestAgent {
 
     /// The decision on a lost agent (guest-components.md §3.3). A connection that closed while the process still runs
     /// reconnects without a restart. A dead or unresponsive agent counts a death, and it is restarted within the budget.
-    private func handleLoss(_ loss: GuestAgentLoss) async -> Bool {
+    /// Internal so that a test can drive the restart without a connection (`@testable`).
+    func handleLoss(_ loss: GuestAgentLoss) async -> Bool {
         if loss == .disconnected, (try? await provisioner.isRunning()) == true {
             return true
         }
@@ -188,7 +189,7 @@ public actor DevelopmentGuestAgent {
             return true
         } catch {
             restartsRefused = true
-            logger.error("The Guest Agent did not restart", errorCode: "runtime.guestAgentStartFailed")
+            logger.error("The Guest Agent did not restart", errorCode: error.qualifiedCode)
             return false
         }
     }

@@ -84,7 +84,7 @@
           },
           {
             "key" : "ANDROID_ADB_SERVER_PORT",
-            "value" : "15037",
+            "value" : "15038",
             "enabled" : true
           }
         ],

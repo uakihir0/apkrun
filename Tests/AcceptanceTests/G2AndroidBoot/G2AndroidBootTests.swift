@@ -170,7 +170,10 @@ final class G2AndroidBootTests: XCTestCase {
         guard capture.status == 0 else {
             throw G2Failure.captureFailed(capture.output)
         }
-        let comparison = try run(python, [tool.path, reference.path, output.path])
+        // The explanations live beside the reference's `incomplete/` directory, not in it, so pass them explicitly.
+        let expected = root.appendingPathComponent("Images/reference/16373615/expected-differences.yaml")
+        let comparison = try run(
+            python, [tool.path, reference.path, output.path, "--expected", expected.path])
         let report = (try? String(contentsOf: output.appendingPathComponent("report.txt"), encoding: .utf8)) ?? ""
         return (comparison.status, comparison.output + report)
     }

@@ -21,6 +21,12 @@ LABEL_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,35}$")
 ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 USERDATA_STRATEGIES = {"blankFormattable", "prebuiltTemplate"}
 SECTOR_SIZE = 512
+CONSOLE_ROLES = {"systemConsole", "log", "silent", "service"}
+PORT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+BOOTCONFIG_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,256}$")
+GPU_PROFILES = ("drmVirgl", "guestSwiftshader", "headless")
+REQUIRED_GPU_PROFILES = ("drmVirgl", "guestSwiftshader")
+HOST_CAPABILITIES = {"virgl", "edid"}
 
 
 class LayoutError(ValueError):
@@ -50,12 +56,23 @@ class LayoutDisk:
 
 
 @dataclass(frozen=True)
+class LayoutConsolePort:
+    """One console port of the plan (android-image.md §7.1)."""
+
+    index: int
+    name: str
+    role: str
+
+
+@dataclass(frozen=True)
 class Layout:
-    """The parsed parts of a layout file that the disk builder uses."""
+    """The parsed parts of a layout file that the disk and bundle builders use."""
 
     device_family: str
     disks: tuple[LayoutDisk, ...]
     document: Mapping[str, Any]
+    console_ports: tuple[LayoutConsolePort, ...] = ()
+    gpu_profiles: Mapping[str, Mapping[str, Any]] | None = None
 
 
 def _require(condition: bool, message: str) -> None:
@@ -154,6 +171,80 @@ def _parse_disk(value: object, context: str) -> LayoutDisk:
     )
 
 
+def _bootconfig_value_ok(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= 1024
+        and all(" " <= character <= "~" and character not in '"\\' for character in value)
+    )
+
+
+def _parse_console_ports(value: object) -> tuple[LayoutConsolePort, ...]:
+    _require(
+        isinstance(value, list) and 1 <= len(value) <= 32,
+        "layout consolePorts must have 1 to 32 entries.",
+    )
+    assert isinstance(value, list)
+    ports: list[LayoutConsolePort] = []
+    for position, item in enumerate(value):
+        context = f"layout consolePorts[{position}]"
+        _require(isinstance(item, dict), f"{context} must be an object.")
+        assert isinstance(item, dict)
+        _require(set(item) == {"index", "name", "role"}, f"{context} needs index, name, and role.")
+        _require(item["index"] == position, f"{context}.index must equal its position.")
+        _require(
+            isinstance(item["name"], str) and PORT_NAME_PATTERN.fullmatch(item["name"]) is not None,
+            f"{context}.name must match {PORT_NAME_PATTERN.pattern}.",
+        )
+        _require(item["role"] in CONSOLE_ROLES, f"{context}.role is not a console role.")
+        ports.append(LayoutConsolePort(index=position, name=item["name"], role=item["role"]))
+    names = [port.name for port in ports]
+    _require(len(set(names)) == len(names), "layout consolePorts names must be unique.")
+    system = [port.index for port in ports if port.role == "systemConsole"]
+    _require(system == [0], "layout consolePorts needs exactly one systemConsole, at index 0.")
+    return tuple(ports)
+
+
+def _parse_gpu_profiles(value: object) -> dict[str, Mapping[str, Any]]:
+    _require(isinstance(value, dict), "layout gpuProfiles must be an object.")
+    assert isinstance(value, dict)
+    unknown = set(value) - set(GPU_PROFILES)
+    _require(not unknown, f"layout gpuProfiles has unknown profiles: {', '.join(sorted(unknown))}.")
+    for name in REQUIRED_GPU_PROFILES:
+        _require(name in value, f"layout gpuProfiles needs {name}.")
+    for name, profile in value.items():
+        context = f"layout gpuProfiles.{name}"
+        _require(isinstance(profile, dict), f"{context} must be an object.")
+        assert isinstance(profile, dict)
+        _require(
+            set(profile) == {"bootconfig", "overrides", "requiredHostCapabilities"},
+            f"{context} needs bootconfig, overrides, and requiredHostCapabilities.",
+        )
+        bootconfig = profile["bootconfig"]
+        _require(
+            isinstance(bootconfig, dict) and len(bootconfig) <= 64,
+            f"{context}.bootconfig must be an object with at most 64 keys.",
+        )
+        for key, item in bootconfig.items():
+            _require(
+                BOOTCONFIG_KEY_PATTERN.fullmatch(key) is not None and _bootconfig_value_ok(item),
+                f"{context}.bootconfig has an invalid key or value: {key}.",
+            )
+        overrides = profile["overrides"]
+        _require(
+            isinstance(overrides, list) and len(set(overrides)) == len(overrides) <= 64,
+            f"{context}.overrides must be at most 64 unique keys.",
+        )
+        capabilities = profile["requiredHostCapabilities"]
+        _require(
+            isinstance(capabilities, list)
+            and len(set(capabilities)) == len(capabilities)
+            and set(capabilities) <= HOST_CAPABILITIES,
+            f"{context}.requiredHostCapabilities must be unique items of virgl and edid.",
+        )
+    return dict(value)
+
+
 def parse_layout(document: object, device_family: str) -> Layout:
     """Validate a layout document for one manifest's device family."""
     _require(isinstance(document, dict), "layout: top level must be an object.")
@@ -180,7 +271,19 @@ def parse_layout(document: object, device_family: str) -> Layout:
     labels = [partition.label for disk in parsed for partition in disk.partitions]
     duplicates = sorted({label for label in labels if labels.count(label) > 1})
     _require(not duplicates, f"layout partition labels are used twice: {', '.join(duplicates)}.")
-    return Layout(device_family=device_family, disks=parsed, document=document)
+    console_ports = (
+        _parse_console_ports(document["consolePorts"]) if "consolePorts" in document else ()
+    )
+    gpu_profiles = (
+        _parse_gpu_profiles(document["gpuProfiles"]) if "gpuProfiles" in document else None
+    )
+    return Layout(
+        device_family=device_family,
+        disks=parsed,
+        document=document,
+        console_ports=console_ports,
+        gpu_profiles=gpu_profiles,
+    )
 
 
 def load_layout(path: Path, device_family: str) -> Layout:

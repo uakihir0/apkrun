@@ -28,7 +28,6 @@
       "androidboot.wifi_mac_prefix": "5554"
     },
     "sources": {
-      "launcherCapture": "Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt: the Cuttlefish 1.57.0 launcher's bootconfig for build 16373615 (IR-305). Every key above not listed under 'decided' has the capture's value.",
       "decided": {
         "androidboot.cuttlefish_service_bluetooth_checker": "No rootcanal on VZ; the boot reporter must not wait for Bluetooth, as on Cuttlefish's automotive product (android-image.md §7.6, IR-309).",
         "androidboot.force_normal_boot": "Set by U-Boot on Cuttlefish; direct boot sets it here (android-image.md §6.2).",
@@ -38,6 +37,7 @@
         "androidboot.verifiedbootstate": "Development images are orange (android-image.md §6.2).",
         "androidboot.wifi_impl": "virt_wifi on eth2 instead of the capture's mac80211_hwsim_virtio, which needs crosvm's virtio Wi-Fi and the OpenWRT VM (android-image.md §7.4)."
       },
+      "launcherCapture": "Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt: the Cuttlefish 1.57.0 launcher's bootconfig for build 16373615 (IR-305). Every key above not listed under 'decided' has the capture's value.",
       "omitted": {
         "androidboot.auto_eth_guest_addr": "Automotive only.",
         "androidboot.boot_devices": "Platform layer: VZPlatformProfile (android-image.md §5.3).",
@@ -59,6 +59,109 @@
       }
     ]
   },
+  "consolePorts": [
+    {
+      "index": 0,
+      "name": "console",
+      "role": "systemConsole"
+    },
+    {
+      "index": 1,
+      "name": "serial",
+      "role": "silent"
+    },
+    {
+      "index": 2,
+      "name": "logcat",
+      "role": "silent"
+    },
+    {
+      "index": 3,
+      "name": "keymaster",
+      "role": "silent"
+    },
+    {
+      "index": 4,
+      "name": "gatekeeper",
+      "role": "silent"
+    },
+    {
+      "index": 5,
+      "name": "bluetooth",
+      "role": "silent"
+    },
+    {
+      "index": 6,
+      "name": "gnss",
+      "role": "silent"
+    },
+    {
+      "index": 7,
+      "name": "location",
+      "role": "silent"
+    },
+    {
+      "index": 8,
+      "name": "confirmationui",
+      "role": "silent"
+    },
+    {
+      "index": 9,
+      "name": "uwb",
+      "role": "silent"
+    },
+    {
+      "index": 10,
+      "name": "oemlock",
+      "role": "silent"
+    },
+    {
+      "index": 11,
+      "name": "keymint",
+      "role": "silent"
+    },
+    {
+      "index": 12,
+      "name": "nfc",
+      "role": "silent"
+    },
+    {
+      "index": 13,
+      "name": "weaver",
+      "role": "silent"
+    },
+    {
+      "index": 14,
+      "name": "mcu_control",
+      "role": "silent"
+    },
+    {
+      "index": 15,
+      "name": "mcu_uart",
+      "role": "silent"
+    },
+    {
+      "index": 16,
+      "name": "ti50_tpm",
+      "role": "silent"
+    },
+    {
+      "index": 17,
+      "name": "jcardsim",
+      "role": "silent"
+    },
+    {
+      "index": 18,
+      "name": "sensors_control",
+      "role": "service"
+    },
+    {
+      "index": 19,
+      "name": "sensors_data",
+      "role": "silent"
+    }
+  ],
+  "consolePortsComment": "android-image.md §7.1: Cuttlefish's hvc0-hvc19 order. serial (developer mode) and logcat (log capture) change role at boot by name. sensors_control is answered by RuntimeCore's sensors responder.",
   "deviceFamily": "cuttlefish-phone-arm64",
   "disks": [
     {
@@ -66,15 +169,42 @@
       "file": "os.img",
       "identifier": "apkrun-os",
       "partitions": [
-        { "label": "boot_a", "source": "boot" },
-        { "label": "init_boot_a", "source": "init_boot" },
-        { "label": "vendor_boot_a", "source": "vendor_boot" },
-        { "label": "vbmeta_a", "source": "vbmeta" },
-        { "label": "vbmeta_system_a", "source": "vbmeta_system" },
-        { "label": "vbmeta_system_dlkm_a", "source": "vbmeta_system_dlkm" },
-        { "label": "vbmeta_vendor_dlkm_a", "source": "vbmeta_vendor_dlkm" },
-        { "label": "super", "source": "super" },
-        { "label": "custom", "source": "custom" }
+        {
+          "label": "boot_a",
+          "source": "boot"
+        },
+        {
+          "label": "init_boot_a",
+          "source": "init_boot"
+        },
+        {
+          "label": "vendor_boot_a",
+          "source": "vendor_boot"
+        },
+        {
+          "label": "vbmeta_a",
+          "source": "vbmeta"
+        },
+        {
+          "label": "vbmeta_system_a",
+          "source": "vbmeta_system"
+        },
+        {
+          "label": "vbmeta_system_dlkm_a",
+          "source": "vbmeta_system_dlkm"
+        },
+        {
+          "label": "vbmeta_vendor_dlkm_a",
+          "source": "vbmeta_vendor_dlkm"
+        },
+        {
+          "label": "super",
+          "source": "super"
+        },
+        {
+          "label": "custom",
+          "source": "custom"
+        }
       ],
       "readOnly": true,
       "role": "os"
@@ -84,14 +214,87 @@
       "file": "userdata.img",
       "identifier": "apkrun-data",
       "partitions": [
-        { "blank": true, "label": "misc", "source": "misc" },
-        { "blank": true, "label": "metadata", "source": "metadata" },
-        { "blank": true, "label": "frp", "source": "frp" },
-        { "blank": true, "label": "userdata", "size": 14680064, "source": "userdata" }
+        {
+          "blank": true,
+          "label": "misc",
+          "source": "misc"
+        },
+        {
+          "blank": true,
+          "label": "metadata",
+          "source": "metadata"
+        },
+        {
+          "blank": true,
+          "label": "frp",
+          "source": "frp"
+        },
+        {
+          "blank": true,
+          "label": "userdata",
+          "size": 14680064,
+          "source": "userdata"
+        }
       ],
       "readOnly": false,
       "role": "userdata",
       "userdataStrategy": "blankFormattable"
     }
-  ]
+  ],
+  "gpuProfiles": {
+    "drmVirgl": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "0",
+        "androidboot.hardware.egl": "mesa",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.mode": "client",
+        "androidboot.opengles.version": "196608",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": [
+        "virgl",
+        "edid"
+      ]
+    },
+    "guestSwiftshader": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "4206592",
+        "androidboot.hardware.angle_feature_overrides_disabled": "exposeES32ForTesting",
+        "androidboot.hardware.angle_feature_overrides_enabled": "mapUnspecifiedColorSpaceToPassThrough",
+        "androidboot.hardware.egl": "angle",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format": "rgba",
+        "androidboot.hardware.vulkan": "pastel",
+        "androidboot.opengles.version": "196609",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": [
+        "edid"
+      ]
+    },
+    "headless": {
+      "bootconfig": {
+        "androidboot.cpuvulkan.version": "4206592",
+        "androidboot.hardware.angle_feature_overrides_disabled": "exposeES32ForTesting",
+        "androidboot.hardware.angle_feature_overrides_enabled": "mapUnspecifiedColorSpaceToPassThrough",
+        "androidboot.hardware.egl": "angle",
+        "androidboot.hardware.gralloc": "minigbm",
+        "androidboot.hardware.hwcomposer": "ranchu",
+        "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format": "rgba",
+        "androidboot.hardware.vulkan": "pastel",
+        "androidboot.opengles.version": "196609",
+        "androidboot.vendor.apex.com.android.hardware.graphics.composer": "com.android.hardware.graphics.composer.ranchu"
+      },
+      "overrides": [],
+      "requiredHostCapabilities": []
+    }
+  },
+  "gpuProfilesComment": "graphics.md §9. guestSwiftshader and headless carry the launcher capture's guest_swiftshader keys (IR-305); headless adds VZ's 2D virtio-gpu at boot and exists only in development bundles (IR-307). The drmVirgl keys are the verified names of graphics.md §9; #022 confirms the values."
 }

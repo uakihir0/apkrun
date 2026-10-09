@@ -39,9 +39,10 @@ from apkrun_image.manifest import (
 
 COPY_CHUNK_SIZE = 1024 * 1024
 MAX_CMDLINE_SIZE = 2048
+RAMDISK_OUTPUT = "ramdisk.img"
 OUTPUT_FILES = (
     "kernel",
-    "ramdisk.img",
+    RAMDISK_OUTPUT,
     "vendor-bootconfig.txt",
     "cmdline.txt",
     "dtb",

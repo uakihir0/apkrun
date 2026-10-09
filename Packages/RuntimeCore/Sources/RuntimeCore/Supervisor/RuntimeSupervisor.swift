@@ -106,8 +106,11 @@ public actor RuntimeSupervisor {
 
     /// The progress stream of the boot in flight, finished by `stop()` so that the boot wait ends.
     private var bootProgress: AsyncStream<Progress>.Continuation?
-    /// Set by `stop()` and cleared when the next boot starts. A stop ends a boot without a failure state.
+    /// Set by `stop()` during a boot and cleared when the next boot starts. A stop ends the boot
+    /// without a failure state, and `stop()` owns the shutdown.
     private var stopRequested = false
+    /// True from the start of `ensureReady` until the boot returns or fails.
+    private var isBooting = false
 
     /// Creates a supervisor for one image and instance.
     public init(
@@ -141,6 +144,9 @@ public actor RuntimeSupervisor {
             }
             throw .androidBootFailed(detail: "the runtime is not stopped")
         }
+        stopRequested = false
+        isBooting = true
+        defer { isBooting = false }
         do {
             try await boot()
         } catch {
@@ -153,6 +159,10 @@ public actor RuntimeSupervisor {
     /// developer mode, then a forced stop after 20 s (vm.md §9.3).
     public func stop() async {
         guard let controller else {
+            // A boot that has not created the VM yet checks this flag before it starts the VM.
+            if isBooting {
+                stopRequested = true
+            }
             return
         }
         stopRequested = true
@@ -194,6 +204,7 @@ public actor RuntimeSupervisor {
         } catch {
             throw .image(error)
         }
+        try throwIfStopped()
         let isFirstBoot = !instance.firstBootSettingsApplied
         transition(to: .booting(.kernel))
 
@@ -225,6 +236,7 @@ public actor RuntimeSupervisor {
         )
         stopRequested = false
         bootProgress = progress.continuation
+        try throwIfStopped()
 
         do {
             try await controller.start()
@@ -250,6 +262,7 @@ public actor RuntimeSupervisor {
                 await applyFirstBootSettings(shell)
             }
         }
+        try throwIfStopped()
         Perf.mark(.runtimeReady, timeline: diagnostics.perfTimeline)
         transition(to: .ready)
     }
@@ -491,6 +504,7 @@ public actor RuntimeSupervisor {
         var lastProgress = started
         var phase = BootPhase.kernel
         for await item in progress {
+            try throwIfStopped()
             switch item {
             case .detector(.entered(let entered, _)):
                 phase = entered
@@ -520,16 +534,22 @@ public actor RuntimeSupervisor {
                 throw .bootStalled(phase: phase)
             }
         }
+        try throwIfStopped()
+        throw .androidBootFailed(detail: "the console closed while booting")
+    }
+
+    /// Ends the boot when `stop()` arrived while it was running. `stop()` owns the shutdown.
+    private func throwIfStopped() throws(RuntimeBootFailure) {
         if stopRequested {
             throw .androidBootFailed(detail: "the runtime was stopped during boot")
         }
-        throw .androidBootFailed(detail: "the console closed while booting")
     }
 
     /// Reads `sys.boot_completed` over the serial shell (the M1 debug channel, #014).
     private func confirmBootCompleted(_ shell: AndroidSerialShell) async throws(RuntimeBootFailure) {
         let deadline = ContinuousClock.now + .seconds(30)
         while ContinuousClock.now < deadline {
+            try throwIfStopped()
             if let reply = try? await shell.run("getprop sys.boot_completed", timeout: .seconds(5)),
                 reply.output.split(whereSeparator: \.isNewline).last == "1"
             {
@@ -570,12 +590,13 @@ public actor RuntimeSupervisor {
     private func fail(_ failure: RuntimeBootFailure) async {
         bootProgress = nil
         if stopRequested {
-            // A stop ended this boot. `stop()` owns the state from here, and the boot is not a failure.
+            // A stop ended this boot. `stop()` shuts the VM down (gracefully in developer mode) and
+            // sets the state, so this path must not force the VM down or move the state to failed.
             logger.notice("Android boot ended by a stop request")
-        } else {
-            logger.error("Android boot failed", errorCode: failure.qualifiedCode)
-            transition(to: .failed(failure))
+            return
         }
+        logger.error("Android boot failed", errorCode: failure.qualifiedCode)
+        transition(to: .failed(failure))
         if let controller {
             if await controller.state != .stopped {
                 try? await controller.stop()

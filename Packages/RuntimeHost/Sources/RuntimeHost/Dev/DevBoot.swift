@@ -3,10 +3,28 @@ import Foundation
 import ImageCore
 import RuntimeCore
 
-/// Inputs for `apkrun dev boot` (cli.md §5; #012-#014).
+/// The GPU profile of `apkrun dev boot --gpu` (cli.md §5; runtime-api.md §15).
+///
+/// `virgl` (`drmVirgl`) is not offered until the VirGL renderer lands (#022), so `--gpu virgl` is refused.
+public enum DevGPUProfile: String, CaseIterable, Sendable {
+    /// `none`: the development `headless` profile, where VZ's 2D device is the DRM device (#012).
+    case none
+    /// `swiftshader`: the `guestSwiftshader` profile, which needs no host renderer (#021).
+    case swiftshader
+
+    /// The bundle's GPU profile that the boot uses.
+    var profile: GPUProfileID {
+        switch self {
+        case .none: .headless
+        case .swiftshader: .guestSwiftshader
+        }
+    }
+}
+
+/// Inputs for `apkrun dev boot` (cli.md §5; #012-#014, #021).
 public struct DevBootOptions: Sendable {
-    /// `--gpu none` selects the development `headless` profile.
-    public var headless: Bool
+    /// The GPU profile of the boot. `none` is the default.
+    public var gpu: DevGPUProfile
     /// Guest vCPUs of a newly provisioned instance.
     public var cpuCount: Int
     /// Guest memory in bytes of a newly provisioned instance.
@@ -20,14 +38,14 @@ public struct DevBootOptions: Sendable {
 
     /// Creates options for one development boot.
     public init(
-        headless: Bool = true,
+        gpu: DevGPUProfile = .none,
         cpuCount: Int = InstanceSizing.default.cpuCount,
         memoryBytes: UInt64 = InstanceSizing.default.memoryBytes,
         userdataBytes: UInt64 = InstanceSizing.default.userdataBytes,
         resetInstance: Bool = false,
         stopWhenReady: Bool = false
     ) {
-        self.headless = headless
+        self.gpu = gpu
         self.cpuCount = cpuCount
         self.memoryBytes = memoryBytes
         self.userdataBytes = userdataBytes
@@ -115,7 +133,7 @@ public struct DevBoot: Sendable {
             image: image,
             instanceStore: store,
             options: BootOptions(
-                gpuProfile: options.headless ? .headless : .drmVirgl,
+                gpuProfile: options.gpu.profile,
                 developerMode: true,
                 captureLogcat: true
             ),

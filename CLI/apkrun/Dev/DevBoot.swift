@@ -10,8 +10,11 @@
             abstract: "Boot Android from the current development image."
         )
 
-        @Option(name: .long, help: "GPU profile: `none` (headless, the only one before #021).")
-        var gpu = "none"
+        @Option(
+            name: .long,
+            help: "GPU profile: `none` (headless, the default) or `swiftshader` (software rendering in the guest)."
+        )
+        var gpu = DevGPUProfile.none.rawValue
 
         @Flag(name: .long, help: "Provision a fresh Android instance first (Reset Android).")
         var reset = false
@@ -32,7 +35,7 @@
         var userdataGib = 32
 
         mutating func run() async throws {
-            guard gpu == "none" else {
+            guard let profile = DevGPUProfile(rawValue: gpu) else {
                 throw CLIFailure.invalidArgument(argument: "--gpu", reason: "profile")
             }
             guard (1...16).contains(cpus) else {
@@ -46,7 +49,7 @@
             }
             let gibibyte: UInt64 = 1024 * 1024 * 1024
             let options = DevBootOptions(
-                headless: true,
+                gpu: profile,
                 cpuCount: cpus,
                 memoryBytes: UInt64(memoryGib) * gibibyte,
                 userdataBytes: UInt64(userdataGib) * gibibyte,

@@ -292,6 +292,11 @@ private final class FakeADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell pidof io.apkrun.empty") echo ""; exit 0 ;;
               "-s 127.0.0.1:6520 shell pidof io.apkrun.transport") echo "error: closed" >&2; exit 1 ;;
               "-s 127.0.0.1:6520 shell am force-stop io.apkrun.stuck") echo "failed"; exit 1 ;;
+              "-s 127.0.0.1:6520 shell dmesg")
+                if [ -f "$dir/dmesg-denied" ]; then echo "dmesg: klogctl: Operation not permitted" >&2; exit 1; fi
+                cat "$dir/dmesg"; exit 0 ;;
+              *"/sys/class/drm/card*-*"*) cat "$dir/drm"; exit 0 ;;
+              *"/sys/bus/virtio/devices/*"*) cat "$dir/virtio"; exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
             esac
             """
@@ -335,6 +340,16 @@ private final class FakeADB: @unchecked Sendable {
     func setDeviceState(_ state: String) throws {
         try "\(state)\n".write(to: directory.appendingPathComponent("state"), atomically: true, encoding: .utf8)
     }
+
+    /// Writes the reply that the fake prints for a command, such as `dmesg` or `drm`.
+    func setFile(_ name: String, contents: String) throws {
+        try contents.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    /// The kernel log is restricted, so `dmesg` exits 1, as a user build does.
+    func markDmesgDenied() throws {
+        try setFile("dmesg-denied", contents: "")
+    }
 }
 
 private func makeScratchDirectory() throws -> URL {
@@ -356,6 +371,101 @@ private struct SilentLogSink: LogSink {
     }
 
     func write(_ entry: LogEntry) {}
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReadsTheKernelLogWithDmesg() async throws {
+    let fake = try FakeADB()
+    try fake.setFile("dmesg", contents: "[    1.000000] virtio_gpu virtio0: [drm] number of scanouts: 16\n")
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    let log = try await client.dmesg()
+
+    #expect(log.contains("number of scanouts: 16"))
+    #expect(try fake.calls() == ["-s 127.0.0.1:6520 shell dmesg"])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReportsARestrictedKernelLogAsACommandFailure() async throws {
+    // A user build may restrict the kernel log to root. The caller then falls back to the console (#021).
+    let fake = try FakeADB()
+    try fake.markDmesgDenied()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.dmesg()
+        Issue.record("A restricted kernel log must not read as an empty log.")
+    } catch {
+        #expect(error == .commandFailed(command: "dmesg", status: 1))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReadsEveryDRMConnectorAndItsStatus() async throws {
+    let fake = try FakeADB()
+    try fake.setFile("drm", contents: "card0-Virtual-1 connected\ncard0-Virtual-2 disconnected\n")
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    let connectors = try await client.drmConnectors()
+
+    #expect(
+        connectors == [
+            AdbDRMConnector(name: "card0-Virtual-1", status: .connected),
+            AdbDRMConnector(name: "card0-Virtual-2", status: .disconnected),
+        ]
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientRefusesADRMReplyThatIsNotAConnectorList() async throws {
+    // A glob that matched nothing prints the pattern itself, which must not read as a connector.
+    let fake = try FakeADB()
+    try fake.setFile("drm", contents: "card*-* \n")
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.drmConnectors()
+        Issue.record("An unmatched DRM glob is an unexpected reply.")
+    } catch {
+        #expect(error == .unexpectedOutput(command: "drm"))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReadsVirtioDevicesWithTheirIDAndDriver() async throws {
+    let fake = try FakeADB()
+    try fake.setFile("virtio", contents: "virtio0 device=0x0010 driver=virtio_gpu\nvirtio1 device= driver=\n")
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    let devices = try await client.virtioDevices()
+
+    #expect(
+        devices == [
+            AdbVirtioDevice(name: "virtio0", deviceID: 16, driver: "virtio_gpu"),
+            AdbVirtioDevice(name: "virtio1", deviceID: nil, driver: nil),
+        ]
+    )
+}
+
+@Test func drmConnectorParserAcceptsOnlyConnectorLines() {
+    #expect(
+        AdbOutputParser.drmConnectors("card0-Virtual-1 connected\n")
+            == [AdbDRMConnector(name: "card0-Virtual-1", status: .connected)]
+    )
+    #expect(AdbOutputParser.drmConnectors("card0-Virtual-1 bogus\n") == nil)
+    #expect(AdbOutputParser.drmConnectors("card0 connected\n") == nil)
+    #expect(AdbOutputParser.drmConnectors("card*-* \n") == nil)
+    #expect(AdbOutputParser.drmConnectors("") == [])
+}
+
+@Test func virtioParserReadsHexDeviceIDsOnly() {
+    // The `device` attribute is hexadecimal (`0x%04x`), so a decimal value is refused.
+    #expect(
+        AdbOutputParser.virtioDevices("virtio0 device=0x0010 driver=virtio_gpu\n")
+            == [AdbVirtioDevice(name: "virtio0", deviceID: 16, driver: "virtio_gpu")]
+    )
+    #expect(AdbOutputParser.virtioDevices("virtio0 device=16 driver=virtio_gpu\n") == nil)
+    #expect(AdbOutputParser.virtioDevices("*\n") == nil)
 }
 
 @Test(.timeLimit(.minutes(1)))

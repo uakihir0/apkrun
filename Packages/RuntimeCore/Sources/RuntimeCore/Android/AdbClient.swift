@@ -29,6 +29,47 @@ public struct AdbActivitySnapshot: Equatable, Sendable {
     }
 }
 
+/// The state that `/sys/class/drm/<connector>/status` reports (#021).
+public enum AdbDRMConnectorStatus: String, Equatable, Sendable {
+    /// A display is attached to the connector.
+    case connected
+    /// No display is attached.
+    case disconnected
+    /// The driver cannot tell.
+    case unknown
+}
+
+/// One DRM connector of `/sys/class/drm` (#021; graphics.md §4.1).
+public struct AdbDRMConnector: Equatable, Sendable {
+    /// The connector's directory name, such as `card0-Virtual-1`.
+    public var name: String
+    /// The connector's status.
+    public var status: AdbDRMConnectorStatus
+
+    /// Creates a connector.
+    public init(name: String, status: AdbDRMConnectorStatus) {
+        self.name = name
+        self.status = status
+    }
+}
+
+/// One device of `/sys/bus/virtio/devices`, with the driver bound to it (#021).
+public struct AdbVirtioDevice: Equatable, Sendable {
+    /// The device's directory name, such as `virtio0`.
+    public var name: String
+    /// The virtio device ID of the `device` attribute, such as 16 for virtio-gpu. Nil when the attribute is empty.
+    public var deviceID: UInt32?
+    /// The driver bound to the device, such as `virtio_gpu`. Nil when no driver is bound.
+    public var driver: String?
+
+    /// Creates a device.
+    public init(name: String, deviceID: UInt32?, driver: String?) {
+        self.name = name
+        self.deviceID = deviceID
+        self.driver = driver
+    }
+}
+
 /// The host's ADB client for the developer's Android (#015; cli.md §5; android-image.md §7.3).
 ///
 /// APKRun does not ship adb. The client runs the developer's `platform-tools/adb`, found under
@@ -136,6 +177,46 @@ public actor AdbClient {
             throw .commandFailed(command: "logcat", status: reply.status)
         }
         return reply.output
+    }
+
+    /// Reads the kernel log with `dmesg` (#021 capture). A user build may restrict the log to root, and then this
+    /// throws `commandFailed`, so the caller falls back to the kernel console (hvc0).
+    public func dmesg(timeout: Duration = .seconds(30)) async throws(AdbFailure) -> String {
+        let reply = try await runShell(label: "dmesg", "dmesg", timeout: timeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "dmesg", status: reply.status)
+        }
+        return reply.output
+    }
+
+    /// Reads every DRM connector and its status from `/sys/class/drm` (#021; graphics.md §12). The device shell
+    /// names the connectors, and a reply that is not one `<name> <status>` line per connector is unexpected, so a
+    /// glob that matches nothing is never read as an empty list.
+    public func drmConnectors() async throws(AdbFailure) -> [AdbDRMConnector] {
+        let command = #"for d in /sys/class/drm/card*-*; do echo "${d##*/} $(cat "$d/status")"; done"#
+        let reply = try await runShell(label: "drm", command, timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "drm", status: reply.status)
+        }
+        guard let connectors = AdbOutputParser.drmConnectors(reply.output) else {
+            throw .unexpectedOutput(command: "drm")
+        }
+        return connectors
+    }
+
+    /// Reads every device of `/sys/bus/virtio/devices` with its `device` attribute and its bound driver (#021).
+    /// The driver is the link `driver`, so a device with no driver has an empty name.
+    public func virtioDevices() async throws(AdbFailure) -> [AdbVirtioDevice] {
+        let command =
+            #"for d in /sys/bus/virtio/devices/*; do l=$(readlink "$d/driver"); echo "${d##*/} device=$(cat "$d/device") driver=${l##*/}"; done"#
+        let reply = try await runShell(label: "virtio", command, timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "virtio", status: reply.status)
+        }
+        guard let devices = AdbOutputParser.virtioDevices(reply.output) else {
+            throw .unexpectedOutput(command: "virtio")
+        }
+        return devices
     }
 
     /// Asks Android to power off with `reboot -p`. The connection usually drops while the reply is read,

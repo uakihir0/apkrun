@@ -81,7 +81,7 @@ trap finish_report EXIT
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh
 if [[ "$gate" == G2 ]]; then
-    # G2 boots the stock image from an unsigned bundle outside ~/Documents (#014).
+    # G2 boots the stock image from a signed bundle outside ~/Documents (#014, #065).
     scripts/build-test-android-bundle.sh
 fi
 xcodebuild test \

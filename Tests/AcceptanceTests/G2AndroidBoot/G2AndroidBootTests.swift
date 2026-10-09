@@ -26,11 +26,13 @@ final class G2AndroidBootTests: XCTestCase {
 
     func testFiveColdBootsReachBootCompletedAndStayStable() async throws {
         let bundle = try Self.bundleDirectory()
-        let image = try DevelopmentImage.load(directory: bundle)
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-g2-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
         let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
+        // The signed bundle goes through the install path of `apkrun dev image install`.
+        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
+        let image = try await images.install(from: .directory(bundle))
         let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
         _ = try await store.resetAndroid(image: image, sizing: .default)
         let dwell = Self.dwell()

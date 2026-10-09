@@ -19,4 +19,6 @@ rootProject.name = "apkrun-guest"
 
 include(":protocol")
 
+include(":agentruntime")
+
 include(":guestd")

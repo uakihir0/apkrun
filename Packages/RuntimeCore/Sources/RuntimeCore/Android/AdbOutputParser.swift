@@ -117,9 +117,30 @@ enum AdbOutputParser {
         )
     }
 
-    /// Reads the process ID that `pidof` prints. A reply of nothing means that no such process runs.
+    /// Reads the process ID that `pidof` prints: the first token of its first line, which must be all digits
+    /// and greater than zero. Anything else is not a process ID.
     static func processIdentifier(_ output: String) -> Int? {
-        lines(output).first?.split(separator: " ").first.flatMap { Int($0) }
+        guard let token = lines(output).first?.split(separator: " ").first,
+            !token.isEmpty,
+            token.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+            let pid = Int(token),
+            pid > 0
+        else {
+            return nil
+        }
+        return pid
+    }
+
+    /// Whether `dumpsys activity activities` printed a resumed-activity line at all, in any of the forms
+    /// that `resumedComponent` reads. A dump without one is not the dump of this Android build.
+    static func hasResumedMarker(_ dump: String) -> Bool {
+        let markers = ["topResumedActivity=", "mResumedActivity:", "ResumedActivity:", "Resumed:"]
+        return lines(dump).contains { line in markers.contains { line.hasPrefix($0) } }
+    }
+
+    /// Whether `am start -W` replied with a started activity: the `Status: ok` line.
+    static func startReplyIsOk(_ output: String) -> Bool {
+        lines(output).contains("Status: ok")
     }
 
     /// Reads the component of the resumed activity from `dumpsys activity activities`, such as

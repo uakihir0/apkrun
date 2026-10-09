@@ -1,0 +1,7 @@
+
+  Resumed activities in task display areas (from top to bottom):
+    Resumed: ActivityRecord{247806208 u0 io.apkrun.fixture.hellotext/.MainActivity t12}
+
+  ResumedActivity: ActivityRecord{247806208 u0 io.apkrun.fixture.hellotext/.MainActivity t12}
+
+ActivityTaskSupervisor state:

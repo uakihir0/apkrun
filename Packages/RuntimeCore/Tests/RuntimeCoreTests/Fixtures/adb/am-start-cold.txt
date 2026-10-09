@@ -1,0 +1,7 @@
+Starting: Intent { cmp=io.apkrun.fixture.hellotext/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: io.apkrun.fixture.hellotext/.MainActivity
+TotalTime: 234
+WaitTime: 235
+Complete

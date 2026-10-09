@@ -276,6 +276,7 @@ private final class FakeADB: @unchecked Sendable {
                 if [ -f "$dir/stopped" ]; then exit 1; fi
                 echo 3456; exit 0 ;;
               "-s 127.0.0.1:6520 shell dumpsys activity activities")
+                if [ -f "$dir/unknown-dump" ]; then echo "no activity section here"; exit 0; fi
                 if [ -f "$dir/stopped" ]; then
                   echo "    Resumed: ActivityRecord{244065368 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t11}"
                 else
@@ -284,6 +285,13 @@ private final class FakeADB: @unchecked Sendable {
                 exit 0 ;;
               "-s 127.0.0.1:6520 shell am force-stop io.apkrun.fixture.hellotext")
                 touch "$dir/stopped"; exit 0 ;;
+              "-s 127.0.0.1:6520 shell am start -W -n io.apkrun.fixture.hellotext/.Missing")
+                echo "Error: Activity class {io.apkrun.fixture.hellotext/io.apkrun.fixture.hellotext.Missing} does not exist."
+                exit 0 ;;
+              "-s 127.0.0.1:6520 shell pidof io.apkrun.broken") echo "garbage"; exit 1 ;;
+              "-s 127.0.0.1:6520 shell pidof io.apkrun.empty") echo ""; exit 0 ;;
+              "-s 127.0.0.1:6520 shell pidof io.apkrun.transport") echo "error: closed" >&2; exit 1 ;;
+              "-s 127.0.0.1:6520 shell am force-stop io.apkrun.stuck") echo "failed"; exit 1 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
             esac
             """
@@ -312,6 +320,11 @@ private final class FakeADB: @unchecked Sendable {
             atomically: true,
             encoding: .utf8
         )
+    }
+
+    /// The dumpsys reply has no resumed-activity line.
+    func markUnknownDump() throws {
+        try "unknown\n".write(to: directory.appendingPathComponent("unknown-dump"), atomically: true, encoding: .utf8)
     }
 
     /// The transport stays offline until the client disconnects it.
@@ -435,10 +448,83 @@ func adbClientRefusesComponentsThatAreNotActivityNames() async throws {
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     do {
-        try await client.startActivity(component: "io.apkrun.fixture.hellotext/.Main; reboot")
-        Issue.record("A component with shell syntax must be refused.")
+        try await client.startActivity(component: "io.apkrun.fixture.hellotext/.Outer$Inner")
+        Issue.record("A component with a $ must be refused: the device shell would expand it.")
     } catch {
         #expect(error == .invalidArgument(command: "am start"))
     }
     #expect(try fake.calls().isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientRejectsAnAmStartThatDidNotStartTheActivity() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.startActivity(component: "io.apkrun.fixture.hellotext/.Missing")
+        Issue.record("An am start that reports a missing class must throw.")
+    } catch {
+        #expect(error == .unexpectedOutput(command: "am start"))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func pidofReportsABrokenConnectionAsAFailureNotAsNoProcess() async throws {
+    // A dropped endpoint makes adb exit 1 with an error on standard error. That is not "no process".
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.pidof("io.apkrun.transport")
+        Issue.record("A pidof that fails through adb must throw.")
+    } catch {
+        #expect(error == .commandFailed(command: "pidof", status: 1))
+    }
+    do {
+        _ = try await client.pidof("io.apkrun.broken")
+        Issue.record("A pidof with output and status 1 must throw.")
+    } catch {
+        #expect(error == .commandFailed(command: "pidof", status: 1))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func pidofWithASilentSuccessIsAnUnexpectedReply() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.pidof("io.apkrun.empty")
+        Issue.record("A pidof that exits 0 with no pid must throw.")
+    } catch {
+        #expect(error == .unexpectedOutput(command: "pidof"))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func forceStopNamesAFailedAmCommand() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.forceStop("io.apkrun.stuck")
+        Issue.record("An am force-stop that exits 1 must throw.")
+    } catch {
+        #expect(error == .commandFailed(command: "am force-stop", status: 1))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func dumpsysActivitiesRejectsADumpThatNamesNoResumedActivity() async throws {
+    let fake = try FakeADB()
+    try fake.markUnknownDump()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        _ = try await client.dumpsysActivities()
+        Issue.record("A dump without a resumed-activity line must throw.")
+    } catch {
+        #expect(error == .unexpectedOutput(command: "dumpsys"))
+    }
 }

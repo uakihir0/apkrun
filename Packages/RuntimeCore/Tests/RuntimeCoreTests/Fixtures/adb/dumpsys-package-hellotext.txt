@@ -1,0 +1,34 @@
+  Package [io.apkrun.fixture.hellotext] (e3e9947):
+    appId=10122
+    pccId=-1
+    pkg=Package{2c52988 io.apkrun.fixture.hellotext}
+    codePath=/data/app/~~n2bh9d3uwcIzWkLTn8026g==/io.apkrun.fixture.hellotext-gHuXLrpyNbgiI-EumUx7rw==
+    resourcePath=/data/app/~~n2bh9d3uwcIzWkLTn8026g==/io.apkrun.fixture.hellotext-gHuXLrpyNbgiI-EumUx7rw==
+    legacyNativeLibraryDir=/data/app/~~n2bh9d3uwcIzWkLTn8026g==/io.apkrun.fixture.hellotext-gHuXLrpyNbgiI-EumUx7rw==/lib
+    extractNativeLibs=false
+    primaryCpuAbi=null
+    secondaryCpuAbi=null
+    cpuAbiOverride=null
+    versionCode=1 minSdk=29 targetSdk=37
+    minExtensionVersions=[]
+    versionName=1.0
+    hiddenApiEnforcementPolicy=2
+    usesNonSdkApi=false
+    splits=[base]
+    apkSigningVersion=2
+    flags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ]
+    privateFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION ALLOW_AUDIO_PLAYBACK_CAPTURE PRIVATE_FLAG_ALLOW_NATIVE_HEAP_POINTER_TAGGING ]
+    forceQueryable=false
+    pageSizeCompat=0
+    scannedAsStoppedSystemApp=false
+    supportsScreens=[small, medium, large, xlarge, resizeable, anyDensity]
+    timeStamp=2026-10-09 06:11:38
+    lastUpdateTime=2026-10-09 06:11:38
+    installerPackageName=null
+    installerPackageUid=-1
+    initiatingPackageName=com.android.shell
+    originatingPackageName=null
+    packageSource=1
+    appMetadataFilePath=null
+    appMetadataSource=0
+    signatures=PackageSignatures{7ca4f21 version:2, signatures:[1cbf3ab3], past signatures:[]}

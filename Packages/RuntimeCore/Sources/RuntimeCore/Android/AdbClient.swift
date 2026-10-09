@@ -207,23 +207,23 @@ public actor AdbClient {
         guard reply.status == 0 else {
             throw .commandFailed(command: "am start", status: reply.status)
         }
-        guard
-            reply.output.split(whereSeparator: \.isNewline).contains(where: {
-                $0.trimmingCharacters(in: .whitespaces) == "Status: ok"
-            })
-        else {
+        guard AdbOutputParser.startReplyIsOk(reply.output) else {
             throw .unexpectedOutput(command: "am start")
         }
     }
 
-    /// The process ID of `packageName` from `pidof`, or nil when no such process runs. `pidof` exits 1 with no
-    /// output when nothing matches, which is an answer, not a failure.
+    /// The process ID of `packageName` from `pidof`, or nil when no such process runs. `pidof` exits 1 with
+    /// no output and no error text when nothing matches, which is an answer. Any other reply is a failure,
+    /// so a broken adb connection is never read as "the process is gone".
     public func pidof(_ packageName: String) async throws(AdbFailure) -> Int? {
         guard Self.isPackageName(packageName) else {
             throw .invalidArgument(command: "pidof")
         }
         let reply = try await runShell(label: "pidof", "pidof \(packageName)", timeout: commandTimeout)
-        if reply.status == 1, reply.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let silent =
+            reply.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && reply.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if reply.status == 1, silent {
             return nil
         }
         guard reply.status == 0 else {
@@ -235,17 +235,22 @@ public actor AdbClient {
         return pid
     }
 
-    /// Reads the resumed activity from `dumpsys activity activities`. The component is nil when no
-    /// activity is resumed.
+    /// Reads the resumed activity from `dumpsys activity activities`. The component is nil when the dump
+    /// names a resumed record that is not an activity. A dump with no resumed-activity line at all is an
+    /// unexpected reply, not an empty answer.
     public func dumpsysActivities() async throws(AdbFailure) -> AdbActivitySnapshot {
         let reply = try await runShell(label: "dumpsys", "dumpsys activity activities", timeout: commandTimeout)
         guard reply.status == 0 else {
             throw .commandFailed(command: "dumpsys", status: reply.status)
         }
+        guard AdbOutputParser.hasResumedMarker(reply.output) else {
+            throw .unexpectedOutput(command: "dumpsys")
+        }
         return AdbActivitySnapshot(resumedComponent: AdbOutputParser.resumedComponent(reply.output))
     }
 
-    /// Stops `packageName` and its processes, `am force-stop <package>`.
+    /// Stops `packageName` and its processes, `am force-stop <package>`. Success means that `am` exited 0.
+    /// It does not show that the process is gone: `pidof` does that.
     public func forceStop(_ packageName: String) async throws(AdbFailure) {
         guard Self.isPackageName(packageName) else {
             throw .invalidArgument(command: "am force-stop")
@@ -256,15 +261,20 @@ public actor AdbClient {
         }
     }
 
-    /// Component names are a package name, a slash, and a class name that starts with a dot or a letter.
+    /// Component names are a package name, a slash, and a class name: an optional leading dot, then a letter or
+    /// an underscore, then letters, digits, dots, and underscores. A `$` is refused, because the device shell
+    /// would expand it in the `am` command line (IR-336).
     private static func isComponentName(_ component: String) -> Bool {
         let parts = component.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, isPackageName(String(parts[0])) else {
             return false
         }
         let className = parts[1]
-        return !className.isEmpty
-            && className.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_") }
+        let body = className.first == "." ? className.dropFirst() : className[...]
+        guard let first = body.first, first.isASCII, first == "_" || first.isLetter else {
+            return false
+        }
+        return className.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_") }
     }
 
     /// Reads an install or uninstall result from both streams, because adb prints a rejection on standard error.

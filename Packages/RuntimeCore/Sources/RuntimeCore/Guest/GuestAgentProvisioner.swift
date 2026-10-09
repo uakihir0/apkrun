@@ -79,6 +79,10 @@ public actor GuestAgentProvisioner {
             return
         }
         do {
+            // `install -r` does not downgrade, so an older bundle replaces the installed copy by removing it first.
+            if let installed, installed > bundle.versionCode {
+                try await adb.uninstall(packageName: bundle.packageName)
+            }
             try await installBundle()
         } catch {
             throw .adb(error)

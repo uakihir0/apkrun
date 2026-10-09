@@ -16,6 +16,8 @@ public actor ADBForwardGuestTransport: GuestTransport {
         logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
     }
 
+    /// Opens one connection to the agent socket of `endpoint`, through a new forward. The forward is removed when the
+    /// stream closes.
     public func open(_ endpoint: GuestEndpoint) async throws -> any GuestByteStream {
         guard let name = endpoint.developmentSocketName else {
             throw GuestTransportFailure.notServedByDevelopmentTransport
@@ -91,7 +93,8 @@ private final class LoopbackSocket: @unchecked Sendable {
                     gate.resume()
                 case .failed(let error):
                     socket.connection.stateUpdateHandler = nil
-                    socket.logger.warning("The loopback connection to the guest failed: \(error.localizedDescription, .public)")
+                    socket.logger.warning(
+                        "The loopback connection to the guest failed: \(error.localizedDescription, .public)")
                     gate.fail(error)
                 case .cancelled:
                     gate.fail(GuestTransportFailure.notServedByDevelopmentTransport)
@@ -109,7 +112,9 @@ private final class LoopbackSocket: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { content, _, isComplete, error in
                 if let error {
-                    self.logger.warning("The guest closed the loopback connection with an error: \(error.localizedDescription, .public)")
+                    self.logger.warning(
+                        "The guest closed the loopback connection with an error: \(error.localizedDescription, .public)"
+                    )
                     continuation.resume(throwing: error)
                 } else if let content, !content.isEmpty {
                     continuation.resume(returning: content)

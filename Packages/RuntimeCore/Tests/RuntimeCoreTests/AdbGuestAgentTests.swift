@@ -44,7 +44,7 @@ private final class FakeGuestADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell pidof apkrun_guestd")
                 if [ -f "$dir/running" ]; then echo 2121; exit 0; fi
                 exit 1 ;;
-              "-s 127.0.0.1:6520 shell pkill -x apkrun_guestd") rm -f "$dir/running"; exit 0 ;;
+              "-s 127.0.0.1:6520 shell kill 2121") rm -f "$dir/running"; exit 0 ;;
               *"app_process"*) touch "$dir/running"; exit 0 ;;
               *) exit 0 ;;
             esac
@@ -148,6 +148,24 @@ func aDifferentVersionIsInstalledWithTheTestOnlyFlag() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func anOlderBundleReplacesANewerInstalledAgentByRemovingIt() async throws {
+    let fake = try FakeGuestADB()
+    try fake.setInstalledVersion(1001)
+    let provisioner = GuestAgentProvisioner(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000)
+    )
+    try await provisioner.installIfNeeded()
+    let calls = fake.calls
+    let uninstall = calls.firstIndex(of: "-s 127.0.0.1:6520 uninstall io.apkrun.guest")
+    let install = calls.firstIndex { $0.hasPrefix("-s 127.0.0.1:6520 install -r -t ") }
+    #expect(uninstall != nil && install != nil)
+    if let uninstall, let install {
+        #expect(uninstall < install)
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aSignerMismatchRemovesTheInstalledAgentBeforeInstalling() async throws {
     let fake = try FakeGuestADB()
     try fake.setInstalledVersion(999)
@@ -173,7 +191,7 @@ func startingReplacesARunningAgentFirst() async throws {
     )
     try await provisioner.startAgent()
     let calls = fake.calls
-    let kill = calls.firstIndex(of: "-s 127.0.0.1:6520 shell pkill -x apkrun_guestd")
+    let kill = calls.firstIndex(of: "-s 127.0.0.1:6520 shell kill 2121")
     let start = calls.firstIndex { $0.contains("app_process") }
     #expect(kill != nil && start != nil)
     if let kill, let start {

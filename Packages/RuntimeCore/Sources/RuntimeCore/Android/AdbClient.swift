@@ -272,7 +272,8 @@ public actor AdbClient {
         // `-t` admits an APK that is flagged test-only. It is used for the development Guest Agent alone, which
         // the development key signs (guest-components.md §3.1).
         let flags = allowTestOnly ? ["-r", "-t"] : ["-r"]
-        let result = try await runDeviceCommand("install", arguments: ["install"] + flags + [apk.path], timeout: timeout)
+        let result = try await runDeviceCommand(
+            "install", arguments: ["install"] + flags + [apk.path], timeout: timeout)
         try Self.requirePackageSuccess(result, command: "install")
     }
 
@@ -360,6 +361,24 @@ public actor AdbClient {
         return pid
     }
 
+    /// Waits until the device answers `get-state` with `device`, or `timeout` has passed. adb reports `offline`
+    /// for a few seconds after the guest's adbd comes up, so a command that needs the device waits for it first.
+    public func awaitDevice(timeout: Duration) async throws(AdbFailure) {
+        let deadline = ContinuousClock.now + timeout
+        while true {
+            if let state = try? await runDeviceCommand("get-state", arguments: ["get-state"], timeout: .seconds(5)),
+                state.status == 0,
+                state.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines) == "device"
+            {
+                return
+            }
+            guard ContinuousClock.now < deadline else {
+                throw .connectionUnavailable
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
     /// The process ID of the process named `name` (its `comm` name, as `pidof` matches it), or nil when none runs.
     /// The name is letters, digits, and underscores, so it cannot add shell syntax.
     public func processID(named name: String) async throws(AdbFailure) -> Int? {
@@ -382,15 +401,19 @@ public actor AdbClient {
         return pid
     }
 
-    /// Sends SIGTERM to the processes named `name` (`pkill -x`, which matches the process name exactly, so that
-    /// the shell that runs this command, whose name is `sh`, is never matched). A `pkill` that finds nothing exits 1.
+    /// Sends SIGTERM to the process named `name`. The process is found with `pidof`, and `kill` sends the signal to
+    /// that ID. `pkill -x` does not match the daemon on build 16373615, although `pidof` does, so the ID is used.
+    /// Nothing is sent when no such process runs.
     public func terminateProcess(named name: String) async throws(AdbFailure) {
         guard Self.isProcessName(name) else {
-            throw .invalidArgument(command: "pkill")
+            throw .invalidArgument(command: "kill")
         }
-        let reply = try await runShell(label: "pkill", "pkill -x \(name)", timeout: commandTimeout)
-        guard reply.status == 0 || reply.status == 1 else {
-            throw .commandFailed(command: "pkill", status: reply.status)
+        guard let pid = try await processID(named: name) else {
+            return
+        }
+        let reply = try await runShell(label: "kill", "kill \(pid)", timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "kill", status: reply.status)
         }
     }
 
@@ -416,7 +439,8 @@ public actor AdbClient {
         guard Self.isForwardTarget(remote) else {
             throw .invalidArgument(command: "forward")
         }
-        let result = try await runDeviceCommand("forward", arguments: ["forward", "tcp:0", remote], timeout: commandTimeout)
+        let result = try await runDeviceCommand(
+            "forward", arguments: ["forward", "tcp:0", remote], timeout: commandTimeout)
         guard result.status == 0 else {
             throw .commandFailed(command: "forward", status: result.status)
         }

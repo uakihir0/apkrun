@@ -81,10 +81,37 @@ public actor DevelopmentGuestAgent {
     /// Installs the agent, starts it, and connects within `connectTimeout` (guest-components.md §3.1, §3.2). The
     /// forwards that an earlier boot left behind are removed first, because they would make the forward fail.
     public func start(connectTimeout: Duration = .seconds(5)) async throws(GuestAgentFailure) {
-        try await removeForwards()
-        try await provisioner.installIfNeeded()
-        try await provisioner.startAgent()
-        try await supervisor.start(connectTimeout: connectTimeout)
+        do {
+            try await adb.awaitDevice(timeout: .seconds(30))
+        } catch {
+            logger.error("The Guest Agent failed at the device wait", errorCode: error.qualifiedCode)
+            throw .adb(error)
+        }
+        // The cleanup of forwards that an earlier boot left is best effort: a forward that cannot be listed does not
+        // stop the agent from starting.
+        do {
+            try await removeForwards()
+        } catch {
+            logger.warning("The stale Guest Agent forwards could not be removed: \(error.qualifiedCode, .public)")
+        }
+        do {
+            try await provisioner.installIfNeeded()
+        } catch {
+            logger.error("The Guest Agent failed at the install", errorCode: error.qualifiedCode)
+            throw error
+        }
+        do {
+            try await provisioner.startAgent()
+        } catch {
+            logger.error("The Guest Agent failed at the start", errorCode: error.qualifiedCode)
+            throw error
+        }
+        do {
+            try await supervisor.start(connectTimeout: connectTimeout)
+        } catch {
+            logger.error("The Guest Agent did not answer its handshake", errorCode: error.qualifiedCode)
+            throw error
+        }
     }
 
     /// Stops the supervisor and removes the forwards of the agent. It does not power off the guest.

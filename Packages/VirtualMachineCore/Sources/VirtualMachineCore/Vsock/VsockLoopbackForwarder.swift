@@ -11,9 +11,10 @@ import Foundation
 /// makes `NWListener` fail with `EINVAL`, and `requiredInterfaceType` still leaves the socket
 /// bound to every address.
 ///
-/// Each accepted TCP connection opens one guest connection, then copies bytes both ways until
-/// either side ends. When the guest connection cannot be opened, the TCP connection is closed at
-/// once, so the client sees a closed connection instead of a hang.
+/// Each accepted TCP connection opens one guest connection, then copies bytes both ways. When either
+/// side ends, both are closed: the forwarder does not keep a half-closed connection open, because adb
+/// never half-closes (IR-325). When the guest connection cannot be opened, the TCP connection is closed
+/// at once, so the client sees a closed connection instead of a hang.
 public final class VsockLoopbackForwarder: @unchecked Sendable {
     /// The TCP port requested at init. `0` asks the kernel for a free port, and `port` reports it.
     public let requestedPort: UInt16
@@ -28,6 +29,8 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
     private let acceptQueue = DispatchQueue(label: "io.apkrun.vm.vsock.loopback.accept")
     private let lock = NSLock()
     private var acceptSource: DispatchSourceRead?
+    /// Signalled on the accept queue once the listener's descriptor has been closed.
+    private var listenerClosed: DispatchSemaphore?
     private var sessions: [UUID: LoopbackSession] = [:]
     private var hasStarted = false
     private var isStopped = false
@@ -57,7 +60,8 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
         logger = APKLogger(category: VMLogCategory.vsock, sink: logSink)
     }
 
-    /// Binds `127.0.0.1` and starts accepting connections. Calling it again after a successful start does nothing.
+    /// Binds `127.0.0.1` and starts accepting connections. Calling it again after a successful start does nothing,
+    /// and so does calling it after `stop`: a stopped forwarder is replaced, not restarted.
     ///
     /// Throws `loopbackPortInUse` when another process already listens on the port, and
     /// `loopbackListenFailed` for any other socket error. Nothing is left open on failure.
@@ -85,15 +89,18 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
         }
         let descriptor = listener.descriptor
         let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: acceptQueue)
+        let closed = DispatchSemaphore(value: 0)
         source.setEventHandler { [weak self] in
             self?.acceptConnection(from: descriptor)
         }
         source.setCancelHandler {
             Darwin.close(descriptor)
+            closed.signal()
         }
         lock.withLock {
             boundPort = listener.port
             acceptSource = source
+            listenerClosed = closed
         }
         source.resume()
         logger.notice(
@@ -101,17 +108,24 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
         )
     }
 
-    /// Stops accepting connections and closes the open ones. The forwarder cannot be started again.
+    /// Stops accepting connections and closes the open ones. When it returns, the port is free again.
     public func stop() {
-        let (source, open) = lock.withLock { () -> (DispatchSourceRead?, [LoopbackSession]) in
+        let (source, closed, open) = lock.withLock {
+            () -> (DispatchSourceRead?, DispatchSemaphore?, [LoopbackSession]) in
             isStopped = true
             let source = acceptSource
+            let closed = listenerClosed
             acceptSource = nil
+            listenerClosed = nil
             let open = Array(sessions.values)
             sessions.removeAll()
-            return (source, open)
+            return (source, closed, open)
         }
         source?.cancel()
+        // The listener's descriptor is closed by the cancel handler on the accept queue. Waiting for
+        // it lets a restart on the same port bind at once. A stop on the accept queue cannot wait,
+        // so the wait is bounded.
+        _ = closed?.wait(timeout: .now() + .seconds(2))
         for session in open {
             session.finish()
         }
@@ -123,6 +137,18 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
     private func acceptConnection(from listenerDescriptor: Int32) {
         let client = Darwin.accept(listenerDescriptor, nil, nil)
         guard client >= 0 else {
+            // Out of descriptors: the connection stays in the backlog, so the source fires again at once.
+            // Pause the accept queue briefly instead of spinning.
+            if errno == EMFILE || errno == ENFILE {
+                logger.warning(
+                    "The loopback forwarder is out of file descriptors on port \(requestedPort, .public)",
+                    errorCode: VMFailure.loopbackListenFailed(
+                        port: requestedPort,
+                        underlying: Self.systemError(errno)
+                    ).qualifiedCode
+                )
+                usleep(100_000)
+            }
             return
         }
         Self.configureAcceptedSocket(client)
@@ -359,11 +385,16 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
 }
 
 /// One accepted TCP connection and the guest connection it is spliced to.
+///
+/// The descriptor is closed only through `closeDescriptor`, and `finish` shuts it down only while it is
+/// still open. Both run under one lock, so a `stop` racing with a finished client never touches a
+/// descriptor number that has been closed and reused.
 private final class LoopbackSession: @unchecked Sendable {
     let descriptor: Int32
     private let lock = NSLock()
     private var guest: VsockConnection?
     private var isFinished = false
+    private var isDescriptorOpen = true
 
     init(descriptor: Int32) {
         self.descriptor = descriptor
@@ -384,14 +415,22 @@ private final class LoopbackSession: @unchecked Sendable {
     func finish() {
         let connection = lock.withLock { () -> VsockConnection? in
             isFinished = true
+            if isDescriptorOpen {
+                Darwin.shutdown(descriptor, SHUT_RDWR)
+            }
             return guest
         }
-        Darwin.shutdown(descriptor, SHUT_RDWR)
         connection?.close()
     }
 
-    /// Closes the descriptor. Call only after both pumps have returned.
+    /// Closes the descriptor once. The pumps must have returned, because a blocked call holds the descriptor.
     func closeDescriptor() {
-        Darwin.close(descriptor)
+        lock.withLock {
+            guard isDescriptorOpen else {
+                return
+            }
+            isDescriptorOpen = false
+            Darwin.close(descriptor)
+        }
     }
 }

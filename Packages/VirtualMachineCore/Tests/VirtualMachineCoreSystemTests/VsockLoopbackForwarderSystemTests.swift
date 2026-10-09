@@ -101,6 +101,24 @@ func loopbackForwarderCanRestartOnThePortAfterTimeWait() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func loopbackForwarderFreesThePortWhenStopReturns() async throws {
+    let first = VsockLoopbackForwarder(requestedPort: 0, guestPort: 5555, logSink: nil) { _ in
+        throw VMFailure.vsockPortNotListening(port: 5555)
+    }
+    try first.start()
+    let port = try #require(first.port)
+
+    // stop() must not return before the listener's descriptor is closed, so a restart on the same port
+    // at once cannot see the old listener in its probe.
+    first.stop()
+    let second = VsockLoopbackForwarder(requestedPort: port, guestPort: 5555, logSink: nil) { _ in
+        throw VMFailure.vsockPortNotListening(port: 5555)
+    }
+    try second.start()
+    second.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func loopbackForwarderListensOnlyOnTheLoopbackAddress() async throws {
     let forwarder = VsockLoopbackForwarder(requestedPort: 0, guestPort: 5555, logSink: nil) { _ in
         throw VMFailure.vsockPortNotListening(port: 5555)

@@ -43,13 +43,16 @@ final class AndroidGraphicsTests: XCTestCase {
                 }
             }
         }
-        // The boot wait ends by its own limits, because boot_completed is not expected here. Stop Android below.
+        // The check reads the guest while Android runs, and stops Android after the capture. The boot wait is not
+        // awaited on its own terms, so a boot that stalls before `ready` still gets its capture.
         let boot = Task { try? await supervisor.ensureReady(.cli) }
 
         let captured: Result<GraphicsCapture, Error>
         do {
             let adb = AdbClient(executable: adbExecutable)
             try await adb.connect(timeout: Self.adbBudget)
+            // SELinux keeps the shell from reading the DRM connector status, so the capture runs as root (#021).
+            try await adb.restartAsRoot()
             captured = .success(try await Self.capture(adb: adb, consoleText: console.text))
         } catch {
             captured = .failure(error)
@@ -71,9 +74,7 @@ final class AndroidGraphicsTests: XCTestCase {
         case .success(let value):
             capture = value
         case .failure(let error):
-            XCTFail(
-                "adb did not reach the guest, so the sysfs state is unknown: \(error). Console tail: \(console.text.suffix(400))"
-            )
+            XCTFail("the guest capture did not complete: \(error). Console tail: \(console.text.suffix(400))")
             return
         }
         try capture.save(to: directory, attach: { add($0) })
@@ -114,7 +115,8 @@ final class AndroidGraphicsTests: XCTestCase {
             kernelLogSource: kernelLogSource,
             connectors: try await adb.drmConnectors(),
             virtioDevices: try await adb.virtioDevices(),
-            drmListing: try await adb.shell("ls -l /sys/class/drm /dev/dri").output
+            drmListing: try await adb.shell("ls -l /sys/class/drm /dev/dri").output,
+            bootCompleted: try await adb.getprop("sys.boot_completed")
         )
     }
 }
@@ -126,10 +128,16 @@ private struct GraphicsCapture {
     let connectors: [AdbDRMConnector]
     let virtioDevices: [AdbVirtioDevice]
     let drmListing: String
+    /// `sys.boot_completed` when the capture was taken. Android need not be complete for the #021 check.
+    let bootCompleted: String
 
     /// Writes the capture into `directory` and attaches each file to the test report.
     func save(to directory: URL, attach: (XCTAttachment) -> Void) throws {
         let files: [(String, String)] = [
+            (
+                "summary.txt",
+                "sys.boot_completed=\(bootCompleted)\nkernel-log source: \(kernelLogSource)\n"
+            ),
             (
                 "kernel-log.txt",
                 "source: \(kernelLogSource)\n\n\(kernelLog)"

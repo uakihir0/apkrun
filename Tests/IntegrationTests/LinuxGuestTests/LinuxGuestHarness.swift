@@ -156,6 +156,7 @@ enum LinuxGuestHarness {
         stopBehavior: StopBehavior,
         powerOff: Bool,
         tests: [String] = [],
+        initrd: URL? = nil,
         blockDisks: LinuxTestGuest.BlockDisks? = nil,
         blockDiskOrder: LinuxTestGuest.BlockDiskOrder = .readOnlyThenReadWrite,
         customDevices: [any VirtioDeviceModel] = [],
@@ -166,6 +167,7 @@ enum LinuxGuestHarness {
         logSink: (any LogSink)? = nil
     ) async throws -> RunResult {
         let artifacts = try artifactURLs()
+        let initrdURL = initrd ?? artifacts.initrd
         let runDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-linux-guest-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -181,7 +183,7 @@ enum LinuxGuestHarness {
 
         let definition = LinuxTestGuest.definition(
             kernel: artifacts.kernel,
-            initrd: artifacts.initrd,
+            initrd: initrdURL,
             tests: tests,
             blockDisks: blockDisks,
             blockDiskOrder: blockDiskOrder,

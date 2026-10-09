@@ -415,6 +415,20 @@ run_ports_test() {
     printf 'APKRUN-TEST: ports ok hvc1=%s hvc2=%s\n' "$hvc1_marker" "$hvc2_marker"
 }
 
+run_bootconfig_test() {
+    # The host appends a bootconfig trailer to the initrd (android-image.md §6.3). Print the
+    # kernel's view of it between markers; the host compares the keys with the merged block.
+    if [ ! -r /proc/bootconfig ]; then
+        printf 'APKRUN-BOOTCONFIG-ABSENT\n'
+        dmesg | grep -i 'bootconfig' | sed 's/^/APKRUN-BOOTCONFIG-DMESG /'
+        return 0
+    fi
+    printf 'APKRUN-BOOTCONFIG-BEGIN\n'
+    cat /proc/bootconfig
+    printf 'APKRUN-BOOTCONFIG-END\n'
+    printf 'APKRUN-TEST: bootconfig ok printed\n'
+}
+
 run_parts_test() {
     disks=0
     for path in /sys/class/block/vd*; do
@@ -795,6 +809,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             ports)
                 run_ports_test
+                ;;
+            bootconfig)
+                run_bootconfig_test
                 ;;
             parts)
                 run_parts_test

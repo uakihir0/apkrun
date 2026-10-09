@@ -1529,6 +1529,7 @@ Notes:
 - The base product uses a 16K maximum page size. Our Rust and Kotlin components have no page-size assumptions.
 - `vendor/google` is not needed. The desktop product (`aosp_cf_x86_64_desktop`) is x86-only and not used.
 - Properties: `ro.apkrun.product=1`, plus the GPU props of the default profile. The image version is not a build property: it is assigned later, by `bundle --image-version`, so ImageCore passes it at every boot as `androidboot.apkrun.image` (§6.2), which Android exposes as `ro.boot.apkrun.image`.
+- The Mesa part of the product is needed earlier, by #099 (M2), because #022 needs a working Mesa guest ([../04-plan/issues/M02-graphics.md](../04-plan/issues/M02-graphics.md) #099). As of 2026-10-10 no fragment exists under `Guest/product/`, and the pinned source does not yet provide the Mesa EGL and GLES modules ([graphics.md](graphics.md) §5.3, IR-440). When #099 builds the fragment, #035 extends it and does not replace it.
 
 ### 11.2 What the product changes, and what it does not
 

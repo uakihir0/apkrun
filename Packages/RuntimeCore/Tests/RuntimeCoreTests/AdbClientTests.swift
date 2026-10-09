@@ -295,6 +295,10 @@ private final class FakeADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell dmesg")
                 if [ -f "$dir/dmesg-denied" ]; then echo "dmesg: klogctl: Operation not permitted" >&2; exit 1; fi
                 cat "$dir/dmesg"; exit 0 ;;
+              "-s 127.0.0.1:6520 root")
+                if [ -f "$dir/user-build" ]; then echo "adbd cannot run as root in production builds"; exit 1; fi
+                echo "restarting adbd as root"; exit 0 ;;
+              "-s 127.0.0.1:6520 shell id -u") echo 0; exit 0 ;;
               *"/sys/class/drm/card*-*"*) cat "$dir/drm"; exit 0 ;;
               *"/sys/bus/virtio/devices/*"*) cat "$dir/virtio"; exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
@@ -397,6 +401,33 @@ func adbClientReportsARestrictedKernelLogAsACommandFailure() async throws {
         Issue.record("A restricted kernel log must not read as an empty log.")
     } catch {
         #expect(error == .commandFailed(command: "dmesg", status: 1))
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientRestartsAdbdAsRootAndChecksTheUid() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    try await client.restartAsRoot(timeout: .seconds(5))
+
+    let calls = try fake.calls()
+    #expect(calls.first == "-s 127.0.0.1:6520 root")
+    #expect(calls.last == "-s 127.0.0.1:6520 shell id -u")
+    #expect(await client.shellInvocationCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReportsARootRequestThatAUserBuildRefuses() async throws {
+    let fake = try FakeADB()
+    try fake.setFile("user-build", contents: "")
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.restartAsRoot(timeout: .seconds(5))
+        Issue.record("A user build must refuse adb root.")
+    } catch {
+        #expect(error == .commandFailed(command: "root", status: 1))
     }
 }
 

@@ -150,6 +150,29 @@ public actor AdbClient {
         }
     }
 
+    /// Restarts adbd as root with `adb root`, connects again, and checks that the shell runs as uid 0 (#021).
+    ///
+    /// Only a development image allows it (`ro.debuggable=1`), and a user build refuses it, so the call throws
+    /// `commandFailed` there. SELinux keeps the shell domain from reading the DRM connector status
+    /// (`/sys/class/drm/<connector>/status`), so the #021 capture runs as root. The restart drops the connection,
+    /// so the client connects again before it checks the uid.
+    public func restartAsRoot(timeout: Duration = .seconds(60)) async throws(AdbFailure) {
+        let result = try await AdbProcess.run(
+            executable: executable,
+            arguments: ["-s", endpoint, "root"],
+            command: "root",
+            timeout: timeout
+        )
+        guard result.status == 0 else {
+            throw .commandFailed(command: "root", status: result.status)
+        }
+        try await connect(timeout: timeout)
+        let reply = try await runShell(label: "id", "id -u", timeout: commandTimeout)
+        guard reply.status == 0, reply.output.trimmingCharacters(in: .whitespacesAndNewlines) == "0" else {
+            throw .unexpectedOutput(command: "root")
+        }
+    }
+
     /// Runs `getprop <name>` and returns its value without the trailing newline. An unset property is "".
     public func getprop(_ name: String, timeout: Duration? = nil) async throws(AdbFailure) -> String {
         guard Self.isPropertyName(name) else {

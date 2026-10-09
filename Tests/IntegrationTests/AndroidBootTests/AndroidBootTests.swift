@@ -431,12 +431,12 @@ final class AndroidBootTests: XCTestCase {
         let kernelCommandLineLines = try await Self.grep(android, "Kernel command [l]ine")
         let avcLines = try await Self.grep(android, "avc: [d]enied")
         let logicalPartitions = try await Self.grep(android, "Created logical partition sy[s]tem_a")
-        let dmesgLines = try await android.output("wc -l < /dev/apkrun-dmesg.txt", root: true)
-
-        XCTAssertTrue(
-            (Int(dmesgLines.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 100,
-            "the dmesg copy holds the boot: \(dmesgLines) lines"
-        )
+        // The count comes from the probe. `wc -l < file` would open the root-only copy as the shell user,
+        // before `su` runs, and fail with exit status 1 when the copy is not readable by that user.
+        let counts = probe.split(whereSeparator: \.isNewline).compactMap { line in
+            line.split(whereSeparator: \.isWhitespace).first.flatMap { Int($0) }
+        }
+        XCTAssertTrue((counts.last ?? 0) > 100, "the dmesg copy holds the boot: \(probe)")
         XCTAssertTrue(
             logicalPartitions.contains("Created logical partition system_a"),
             "first-stage init created the logical partitions of slot _a"

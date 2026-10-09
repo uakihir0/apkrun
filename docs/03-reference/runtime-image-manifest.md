@@ -471,8 +471,8 @@ How ImageCore uses them ([../02-design/android-image.md](../02-design/android-im
 
 | Field | Type | Required | Constraints | Meaning |
 |---|---|---|---|---|
-| `userdata.schemaVersion` | integer | yes | at least 1 | what `/data` and `/metadata` look like after this image boots them ([../02-design/android-image.md](../02-design/android-image.md) §12.1) |
-| `userdata.upgradableFrom` | array of integer | yes | 1 to 64 items, ascending, unique, each at least 1. Contains `schemaVersion` | instance userdata schemas this image can boot |
+| `userdata.schemaVersion` | integer | yes | 1 to 9223372036854775807 (2^63 − 1, so that every reader holds the same integers) | what `/data` and `/metadata` look like after this image boots them ([../02-design/android-image.md](../02-design/android-image.md) §12.1) |
+| `userdata.upgradableFrom` | array of integer | yes | 1 to 64 items, ascending, unique, each from 1 to 9223372036854775807. Contains `schemaVersion` | instance userdata schemas this image can boot |
 | `compatibility.upgradeFrom.minimumImageVersion` | string | yes | short form (§2.1). At most the triple of `imageVersion` | the oldest current image that may migrate to this one (C4) |
 
 - Provisioning writes `userdata.schemaVersion` into `instance.json`.
@@ -824,8 +824,8 @@ This schema is copied byte for byte into `Images/tools/schemas/runtime-image-man
       "additionalProperties": false,
       "required": ["schemaVersion", "upgradableFrom"],
       "properties": {
-        "schemaVersion": { "type": "integer", "minimum": 1 },
-        "upgradableFrom": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } }
+        "schemaVersion": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "upgradableFrom": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 } }
       }
     }
   }

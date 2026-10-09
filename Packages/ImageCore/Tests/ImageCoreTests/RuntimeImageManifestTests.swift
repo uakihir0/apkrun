@@ -23,7 +23,7 @@ private func fixtureFiles(_ directory: String, suffix: String) throws -> [URL] {
 @Test
 func everyValidFixtureLoadsAndRoundTrips() throws {
     let files = try fixtureFiles("valid", suffix: ".json")
-    #expect(files.count == 3)
+    #expect(files.count == 4)
     for url in files {
         let data = try Data(contentsOf: url)
         let manifest = try RuntimeImageManifest.load(data)
@@ -35,7 +35,7 @@ func everyValidFixtureLoadsAndRoundTrips() throws {
 @Test
 func everyInvalidFixtureFailsWithTheRuleItNames() throws {
     let files = try fixtureFiles("invalid", suffix: ".json")
-    #expect(files.count == 33)
+    #expect(files.count == 35)
     for url in files {
         let name = url.deletingPathExtension().lastPathComponent
         let expected = try String(

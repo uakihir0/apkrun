@@ -64,6 +64,13 @@ def apkrun_variant(stock: Document) -> Document:
     return document
 
 
+def userdata_at_the_bound(stock: Document) -> Document:
+    """The userdata integers at 2^63 - 1, the largest value that every reader holds exactly."""
+    document = copy.deepcopy(stock)
+    document["userdata"] = {"schemaVersion": 2**63 - 1, "upgradableFrom": [1, 2**63 - 1]}
+    return document
+
+
 def with_legal(stock: Document) -> Document:
     document = copy.deepcopy(stock)
     notice = {"path": "legal/notice.html", "size": 4096, "sha256": "4" * 64}
@@ -190,6 +197,14 @@ def _sdk_floor(d: Document) -> None:
     d["guest"]["targetSdkFloor"] = 23
 
 
+def _userdata_beyond_int64(d: Document) -> None:
+    d["userdata"] = {"schemaVersion": 2**63, "upgradableFrom": [1]}
+
+
+def _upgradable_beyond_int64(d: Document) -> None:
+    d["userdata"] = {"schemaVersion": 1, "upgradableFrom": [1, 2**63]}
+
+
 def _trailing_line_break(d: Document) -> None:
     d["provenance"]["revisions"]["imagesTools"] = d["provenance"]["revisions"]["imagesTools"] + "\n"
 
@@ -239,6 +254,8 @@ INVALID_CASES: tuple[tuple[str, str, Callable[[Document], None]], ...] = (
     ("schema-legal-null", "schema", _legal_null),
     ("schema-userdata-strategy-null", "schema", _strategy_null),
     ("s5-first-lba-beyond-the-disk", "S5", _first_lba_overflow),
+    ("schema-userdata-version-beyond-int64", "schema", _userdata_beyond_int64),
+    ("schema-upgradable-version-beyond-int64", "schema", _upgradable_beyond_int64),
 )
 
 
@@ -253,6 +270,7 @@ def main() -> int:
     write_json(VALID / "stock-cf16373615.json", stock)
     write_json(VALID / "stock-with-legal-notice.json", with_legal(stock))
     write_json(VALID / "apkrun-ar000123.json", apkrun_variant(stock))
+    write_json(VALID / "userdata-at-int64-maximum.json", userdata_at_the_bound(stock))
     for name, rule, mutate in INVALID_CASES:
         document = copy.deepcopy(stock)
         mutate(document)
@@ -266,7 +284,7 @@ def main() -> int:
     (INVALID / "schema-repeated-key.expected.txt").write_text("schema\n", encoding="ascii")
     (INVALID / "schema-byte-order-mark.json").write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
     (INVALID / "schema-byte-order-mark.expected.txt").write_text("schema\n", encoding="ascii")
-    print(f"wrote {len(INVALID_CASES) + 2} invalid and 3 valid manifest fixtures")
+    print(f"wrote {len(INVALID_CASES) + 2} invalid and 4 valid manifest fixtures")
     return 0
 
 

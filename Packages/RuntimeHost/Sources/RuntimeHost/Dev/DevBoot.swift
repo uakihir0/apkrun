@@ -184,22 +184,28 @@ public struct DevBoot: Sendable {
         let started = ContinuousClock.now
         try await supervisor.ensureReady(.cli)
         onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
-        if let package = options.launchPackage {
-            guard let agent = await supervisor.developmentGuestAgent else {
-                throw GuestAgentFailure.startFailed
-            }
-            let report = try await agent.launch(package: package, displayID: 0)
-            onEvent(
-                .message(
-                    "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+        do {
+            if let package = options.launchPackage {
+                guard let agent = await supervisor.developmentGuestAgent else {
+                    throw GuestAgentFailure.startFailed
+                }
+                let report = try await agent.launch(package: package, displayID: 0)
+                onEvent(
+                    .message(
+                        "launched \(package) on display 0: task \(report.taskID) \(report.component) (\(report.outcome))"
+                    )
                 )
-            )
-        }
-        if !options.stopWhenReady {
-            onEvent(.message("press Ctrl-C to stop Android"))
-            for await _ in stopRequests {
-                break
             }
+            if !options.stopWhenReady {
+                onEvent(.message("press Ctrl-C to stop Android"))
+                for await _ in stopRequests {
+                    break
+                }
+            }
+        } catch {
+            // A failed launch still stops Android, so the VM and the agent do not run on after the command has failed.
+            await supervisor.stop()
+            throw error
         }
         onEvent(.message("stopping Android"))
         await supervisor.stop()
@@ -231,7 +237,8 @@ public enum DevGuestAgentLocation {
         if let fromEnvironment = environment["APKRUN_GUEST_DIR"], !fromEnvironment.isEmpty {
             return URL(fileURLWithPath: fromEnvironment, isDirectory: true)
         }
-        return executable
+        return
+            executable
             .resolvingSymlinksInPath()
             .deletingLastPathComponent()
             .deletingLastPathComponent()

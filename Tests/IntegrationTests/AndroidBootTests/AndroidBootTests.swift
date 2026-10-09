@@ -125,7 +125,9 @@ final class AndroidBootTests: XCTestCase {
             for await _ in supervisor.events {}
         }
         let boot = Task { try await supervisor.ensureReady(.cli) }
-        try await Task.sleep(for: .milliseconds(100))
+        // The VM takes about 100 ms to reach running, so 40 ms after the boot starts it is usually still starting.
+        // The log line `Rejected VM lifecycle operation from starting to stopping` shows the window was hit.
+        try await Task.sleep(for: .milliseconds(40))
         do {
             try await supervisor.ensureReady(.cli)
             XCTFail("a second ensureReady must be refused while a boot is in progress")

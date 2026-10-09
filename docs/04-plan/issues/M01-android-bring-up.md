@@ -1853,7 +1853,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 - #066, #058, and #087 build on `ImageStore`. Keep `install(from:)` open for `.archive`, which #058 adds.
 - Implemented: `RuntimeImageManifest` (typed, strict), `RuntimeImageManifestRules` (schema value rules and S1–S14), `ImageSignature`, `ImageTrustStore`, `ImageStore`, `keygen`, `sign.py`, `runtime_manifest.py`, `apkrun dev image install`, the release-check image rows, and the T0, T1, and T2 tests. The shared fixtures are in `Images/tools/tests/fixtures/runtime-manifests/` and `…/signing/`.
-- Verified on 2026-10-09, macOS 27.0.1 (26A434), stock build 16373615: the installed image of `apkrun dev boot` booted to `ready`; `os.img` allocates 1.8 GB for 8.7 GB logical (after the sparse fix, IR-348); the two builds are identical. The Python suite (761 passed, 4 skipped), `scripts/tests/run.sh`, and the Swift ImageCore tests passed. The full 600-second G2 gate is for the maintainer to run from clean `main` (IR-350).
+- Verified on 2026-10-09, macOS 27.0.1 (26A434), stock build 16373615: the installed image of `apkrun dev boot` booted to `ready`; `os.img` allocates 1.8 GB for 8.7 GB logical (after the sparse fix, IR-348); the two builds are identical. The Python suite (762 passed, 4 skipped), `scripts/tests/run.sh`, and the Swift ImageCore tests passed. The full 600-second G2 gate is for the maintainer to run from clean `main` (IR-350).
 - Not done, with the reason:
   - Compatibility checks (`incompatibleRuntime`, `incompatibleProtocol`) are not checked at install or boot (IR-352). Follow-up: #066 and #058.
   - Release image keys do not exist, so Release builds refuse every bundle (IR-341). Follow-up: #093.

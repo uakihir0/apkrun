@@ -61,6 +61,19 @@ public enum RuntimeEvent: Sendable {
     case logcat(Data)
     /// The first-boot settings ran (android-image.md §7.6).
     case firstBootSettingsApplied
+    /// A developer console is attached for this boot: `hvc0`, and `hvc1` in developer mode (#014).
+    case devConsole(DevConsoleEndpoint)
+}
+
+/// What the supervisor keeps about one boot until its record is written.
+private struct BootDraft: Sendable {
+    var started: ContinuousClock.Instant
+    var operationID: UUID
+    var bootKind: String
+    var image: String
+    var gpuProfile: String
+    var memoryGiB: Int
+    var cpuCount: Int
 }
 
 /// Owns the Android VM: boot, readiness, and stop (runtime-daemon.md §3; first cut for #012-#014).
@@ -111,6 +124,8 @@ public actor RuntimeSupervisor {
     private var stopRequested = false
     /// True from the start of `ensureReady` until the boot returns or fails.
     private var isBooting = false
+    /// What `perf/boots.jsonl` needs about the boot in flight. Set once the VM is about to start.
+    private var bootDraft: BootDraft?
 
     /// Creates a supervisor for one image and instance.
     public init(
@@ -150,9 +165,12 @@ public actor RuntimeSupervisor {
         do {
             try await boot()
         } catch {
+            let outcome = stopRequested ? "stopped" : "failed:\(error.qualifiedCode)"
             await fail(error)
+            writeBootRecord(outcome: outcome)
             throw error
         }
+        writeBootRecord(outcome: "ready")
     }
 
     /// Stops Android: `reboot -p` over ADB (or over the serial shell when ADB is not connected) in
@@ -225,6 +243,15 @@ public actor RuntimeSupervisor {
         }
         let controller = VMController(definition: validated, diagnostics: diagnostics)
         self.controller = controller
+        bootDraft = BootDraft(
+            started: ContinuousClock.now,
+            operationID: plan.bootRecordID,
+            bootKind: isFirstBoot ? "firstBoot" : "cold",
+            image: image.version.description,
+            gpuProfile: options.gpuProfile.rawValue,
+            memoryGiB: Int(instance.sizing.memoryBytes / (1024 * 1024 * 1024)),
+            cpuCount: instance.sizing.cpuCount
+        )
 
         let progress = AsyncStream.makeStream(of: Progress.self, bufferingPolicy: .unbounded)
         let tracker = BootPhaseTracker()
@@ -319,6 +346,9 @@ public actor RuntimeSupervisor {
             }
         )
         for port in ports {
+            if port.role == .systemConsole {
+                events.yield(.devConsole(DevConsoleEndpoint(name: "hvc0", channel: controller.console(port.role))))
+            }
             switch port.role {
             case .service(let name) where name == "sensors_control":
                 let channel = controller.console(port.role)
@@ -347,6 +377,7 @@ public actor RuntimeSupervisor {
                     }
                 )
             case .service(let name) where name == "serial":
+                events.yield(.devConsole(DevConsoleEndpoint(name: "hvc1", channel: controller.console(port.role))))
                 shell = AndroidSerialShell(channel: controller.console(port.role))
             case .log(let name) where name == "logcat":
                 let stream = controller.console(port.role).makeByteStream()
@@ -499,39 +530,43 @@ public actor RuntimeSupervisor {
         firstBoot: Bool
     ) async throws(RuntimeBootFailure) {
         let started = ContinuousClock.now
-        let whole = firstBoot ? timeouts.firstBoot : timeouts.whole
-        let stall = firstBoot ? timeouts.firstBootStall : timeouts.stall
-        var lastProgress = started
-        var phase = BootPhase.kernel
+        var watch = BootWatch(
+            started: started,
+            whole: firstBoot ? timeouts.firstBoot : timeouts.whole,
+            stall: firstBoot ? timeouts.firstBootStall : timeouts.stall
+        )
         for await item in progress {
             try throwIfStopped()
+            let input: BootWatch.Input
             switch item {
             case .detector(.entered(let entered, _)):
-                phase = entered
-                lastProgress = .now
+                input = .entered(entered)
+            case .detector(.failed(let failure)):
+                input = .detectorFailed(failure)
+            case .vmState(.failed(let failure)):
+                input = .vmFailed(failure)
+            case .vmState(.stopped):
+                if case .booting = state {
+                    input = .guestStopped
+                } else {
+                    input = .tick
+                }
+            case .vmState, .tick:
+                input = .tick
+            }
+            if case .entered(let entered) = input {
                 transition(to: .booting(entered))
                 logger.info(
                     "Android boot entered \(entered.description, .public) after \(String(describing: ContinuousClock.now - started), .public)"
                 )
-                if entered == .bootCompleted {
-                    return
-                }
-            case .detector(.failed(let failure)):
+            }
+            switch watch.receive(input, at: .now) {
+            case .keepWaiting:
+                continue
+            case .bootCompleted:
+                return
+            case .fail(let failure):
                 throw failure
-            case .vmState(.failed(let failure)):
-                throw .vm(failure)
-            case .vmState(.stopped) where ContinuousClock.now - started > .milliseconds(1):
-                if case .booting = state {
-                    throw .androidBootFailed(detail: "the guest stopped while booting")
-                }
-            case .vmState, .tick:
-                break
-            }
-            if ContinuousClock.now - started > whole {
-                throw .bootTimedOut(phase: phase)
-            }
-            if ContinuousClock.now - lastProgress > stall {
-                throw .bootStalled(phase: phase)
             }
         }
         try throwIfStopped()
@@ -586,6 +621,45 @@ public actor RuntimeSupervisor {
         }
         return .androidBootFailed(detail: "the VM controller failed: \(type(of: error))")
     }
+
+    /// Appends the boot's record to `perf/boots.jsonl`. A boot that never started the VM has none.
+    private func writeBootRecord(outcome: String) {
+        guard let draft = bootDraft else {
+            return
+        }
+        bootDraft = nil
+        let events = diagnostics.perfTimeline.snapshot().filter { $0.time >= draft.started }
+        guard let origin = events.first(where: { $0.marker == .vmStart })?.time else {
+            return
+        }
+        var markers: [String: Double] = [:]
+        for event in events where Self.recordedMarkers.contains(event.marker) {
+            let components = (event.time - origin).components
+            markers[event.marker.rawValue] =
+                Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1_000_000_000_000_000
+        }
+        let record = BootRecord(
+            recordedAt: Date(),
+            operationID: draft.operationID,
+            bootKind: draft.bootKind,
+            image: draft.image,
+            gpuProfile: draft.gpuProfile,
+            memoryGiB: draft.memoryGiB,
+            cpuCount: draft.cpuCount,
+            markers: markers,
+            outcome: outcome
+        )
+        do {
+            try BootRecordLog.append(record, to: diagnostics.paths.bootPerformanceFile)
+        } catch {
+            logger.warning("Could not write the boot record: \(String(describing: error), .public)")
+        }
+    }
+
+    /// The markers of `perf/boots.jsonl` (diagnostics.md §4.3).
+    private static let recordedMarkers: Set<PerfMarker> = [
+        .vmStart, .kernelStart, .androidInit, .systemServerReady, .bootCompleted, .runtimeReady,
+    ]
 
     private func fail(_ failure: RuntimeBootFailure) async {
         bootProgress = nil

@@ -236,6 +236,8 @@ targets:
     sources:
       - path: Tests/IntegrationTests/LinuxGuestTests
       - path: Tests/IntegrationTests/AndroidADBTests
+      - path: Tests/IntegrationTests/AndroidPackageTests
+      - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:

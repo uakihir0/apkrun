@@ -21,14 +21,14 @@ final class AndroidADBTests: XCTestCase {
     /// Developer mode: ADB answers through the forwarder, only on the loopback address, and `reboot -p`
     /// stops Android gracefully.
     func testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully() async throws {
-        let session = try await BootSession.start(developerMode: true)
+        let session = try await AndroidBootSession.start(developerMode: true)
         defer { session.cleanUp() }
         let supervisor = session.supervisor
         try await supervisor.ensureReady(.cli)
         let readyState = await supervisor.state
         XCTAssertEqual(readyState, .ready)
 
-        let adb = AdbClient(executable: try Self.adbExecutable())
+        let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
         try await adb.connect(timeout: .seconds(30))
         let bootCompleted = try await adb.getprop("sys.boot_completed")
         XCTAssertEqual(bootCompleted, "1")
@@ -63,7 +63,7 @@ final class AndroidADBTests: XCTestCase {
 
     /// Without developer mode, nothing listens on the ADB port, and Android still boots.
     func testDeveloperModeOffListensOnNoPort() async throws {
-        let session = try await BootSession.start(developerMode: false)
+        let session = try await AndroidBootSession.start(developerMode: false)
         defer { session.cleanUp() }
         try await session.supervisor.ensureReady(.cli)
         let readyState = await session.supervisor.state
@@ -76,28 +76,6 @@ final class AndroidADBTests: XCTestCase {
     }
 
     // MARK: - Helpers
-
-    /// The adb of the SDK in `testEnvironment()`.
-    private static func adbExecutable() throws -> URL {
-        do {
-            return try AdbClient.resolveExecutable(environment: testEnvironment())
-        } catch {
-            throw XCTSkip("adb was not found under ANDROID_HOME or on PATH: \(error.qualifiedCode)")
-        }
-    }
-
-    /// The environment of the boot and of adb. xcodebuild does not pass ANDROID_HOME on, so the
-    /// SDK comes from the `APKRUN_ANDROID_HOME` build setting that the host's Info.plist carries.
-    static func testEnvironment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        if environment["ANDROID_HOME"] == nil,
-            let sdk = Bundle.main.object(forInfoDictionaryKey: "APKRUN_ANDROID_HOME") as? String,
-            !sdk.isEmpty
-        {
-            environment["ANDROID_HOME"] = sdk
-        }
-        return environment
-    }
 
     /// The addresses that `lsof` reports as listening on TCP `port`, as `host:port`.
     static func listeningAddresses(port: UInt16) throws -> [String] {
@@ -173,81 +151,5 @@ final class AndroidADBTests: XCTestCase {
         var length = socklen_t(MemoryLayout<Int32>.size)
         _ = getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &status, &length)
         return status == 0
-    }
-}
-
-/// One supervised boot of the test Android image in a private APKRUN_HOME.
-private final class BootSession: @unchecked Sendable {
-    let supervisor: RuntimeSupervisor
-    let capture: ConsoleCapture
-    private let home: URL
-    private let captureTask: Task<Void, Never>
-
-    private init(supervisor: RuntimeSupervisor, capture: ConsoleCapture, home: URL, captureTask: Task<Void, Never>) {
-        self.supervisor = supervisor
-        self.capture = capture
-        self.home = home
-        self.captureTask = captureTask
-    }
-
-    static func start(developerMode: Bool) async throws -> BootSession {
-        let bundle = try bundleDirectory()
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apkrun-015-adb-\(UUID().uuidString)", isDirectory: true)
-        let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
-        // The signed bundle goes through the install path of `apkrun dev image install`, as the G2 check does.
-        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
-        let image = try await images.install(from: .directory(bundle))
-        let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
-        _ = try await store.resetAndroid(image: image, sizing: .default)
-        let diagnostics = DiagnosticsContext.live(paths: paths)
-        let supervisor = RuntimeSupervisor(
-            image: image,
-            instanceStore: store,
-            options: BootOptions(gpuProfile: .headless, developerMode: developerMode, captureLogcat: false),
-            diagnostics: diagnostics,
-            environment: AndroidADBTests.testEnvironment()
-        )
-        let capture = ConsoleCapture()
-        let events = supervisor.events
-        let captureTask = Task {
-            for await event in events {
-                if case .console(let bytes) = event {
-                    capture.append(bytes)
-                }
-            }
-        }
-        return BootSession(supervisor: supervisor, capture: capture, home: home, captureTask: captureTask)
-    }
-
-    func cleanUp() {
-        captureTask.cancel()
-        try? FileManager.default.removeItem(at: home)
-    }
-
-    private static func bundleDirectory() throws -> URL {
-        let configured =
-            ProcessInfo.processInfo.environment["APKRUN_TEST_LINUX_DIR"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "APKRUN_TEST_LINUX_DIR") as? String
-        let rootPath = configured.flatMap { $0.isEmpty ? nil : $0 } ?? "/tmp/apkrun-test-linux"
-        let bundle = URL(fileURLWithPath: rootPath).appendingPathComponent("android-bundle", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manifest.json").path) else {
-            throw XCTSkip("The Android bundle is missing. Run scripts/build-test-android-bundle.sh.")
-        }
-        return bundle
-    }
-}
-
-/// Collects the console bytes of one boot.
-private final class ConsoleCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var bytes = Data()
-
-    func append(_ data: Data) {
-        lock.withLock { bytes.append(data) }
-    }
-
-    func console() -> String {
-        lock.withLock { String(decoding: bytes, as: UTF8.self) }
     }
 }

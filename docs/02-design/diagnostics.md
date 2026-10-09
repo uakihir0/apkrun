@@ -221,7 +221,7 @@ Unified logging (`os_log`) is the primary sink. Every host process logs only thr
 
 | Subsystem | Processes | Categories | Defined in |
 |---|---|---|---|
-| `io.apkrun.runtime` | apkrund | `host`, `supervisor`, `agents`, `idle`, `power`, `sessions`, `display`, `xpc` | [runtime-daemon.md](runtime-daemon.md) §12 |
+| `io.apkrun.runtime` | apkrund | `host`, `supervisor`, `agents`, `idle`, `power`, `sessions`, `display`, `xpc`, `adb` (developer ADB client, #015) | [runtime-daemon.md](runtime-daemon.md) §12 |
 | `io.apkrun.vm` | apkrund | `lifecycle`, `config`, `console`, `vsock`, `network`, `virtio` (VirtioDeviceCore) | [vm.md](vm.md) §14 |
 | `io.apkrun.graphics` | apkrund | `device`, `renderer`, `present`, `stats` | [graphics.md](graphics.md) |
 | `io.apkrun.input` | launcher, apkrund | `translate`, `route`, `ime` | [input.md](input.md) §11 |

@@ -29,6 +29,8 @@ import Testing
                 "instanceLocked", "instanceLockFailed", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
+                "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
+                "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument", "adbUnexpectedOutput",
                 "devConsoleGuestFailed", "devConsoleInputFailed",
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",

@@ -1200,6 +1200,142 @@
       }
     },
     {
+      "code": "runtime.adbExecutableMissing",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can't find the Android debug bridge (adb)."
+      },
+      "remediation": {
+        "en": "Install the Android SDK platform-tools, set ANDROID_HOME to the SDK folder, then try again. See environment-setup.md §2.5."
+      },
+      "action": "none",
+      "cliExit": 69,
+      "doc": {
+        "case": "executableMissing",
+        "when": "neither `$ANDROID_HOME/platform-tools/adb` nor `adb` on `PATH` exists",
+        "raisedBy": "AdbClient",
+        "ref": "[../05-development/environment-setup.md](../05-development/environment-setup.md) §2.5"
+      }
+    },
+    {
+      "code": "runtime.adbLaunchFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't start the Android debug bridge (adb)."
+      },
+      "remediation": {
+        "en": "Check that the platform-tools folder of the Android SDK is complete, then try again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "launchFailed",
+        "when": "the adb executable exists but the process cannot start",
+        "raisedBy": "AdbClient",
+        "ref": "[../05-development/environment-setup.md](../05-development/environment-setup.md) §2.5"
+      }
+    },
+    {
+      "code": "runtime.adbConnectionUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't reach Android over ADB."
+      },
+      "remediation": {
+        "en": "Start Android in developer mode with apkrun dev boot, then try again."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "connectionUnavailable",
+        "when": "the development endpoint 127.0.0.1:6520 does not reach the device state before the deadline",
+        "raisedBy": "AdbClient",
+        "ref": "[../02-design/cli.md](../02-design/cli.md) §5"
+      }
+    },
+    {
+      "code": "runtime.adbCommandFailed",
+      "parameters": [
+        "command",
+        "status"
+      ],
+      "message": {
+        "en": "The Android debug command {command} failed."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, restart Android."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "commandFailed(command:status:)",
+        "when": "an adb command exits with a nonzero status. The output is not logged",
+        "raisedBy": "AdbClient",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+      }
+    },
+    {
+      "code": "runtime.adbCommandTimedOut",
+      "parameters": [
+        "command",
+        "seconds"
+      ],
+      "message": {
+        "en": "The Android debug command {command} didn't finish within {seconds} seconds."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, restart Android."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "commandTimedOut(command:seconds:)",
+        "when": "an adb command runs past its timeout, and the process is terminated",
+        "raisedBy": "AdbClient",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+      }
+    },
+    {
+      "code": "runtime.adbInvalidArgument",
+      "parameters": [
+        "command"
+      ],
+      "message": {
+        "en": "APKRun refused an invalid argument for the Android debug command {command}."
+      },
+      "remediation": {
+        "en": "Report the problem."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "invalidArgument(command:)",
+        "when": "a helper receives a value that could change the command line. This is a bug",
+        "raisedBy": "AdbClient",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+      }
+    },
+    {
+      "code": "runtime.adbUnexpectedOutput",
+      "parameters": [
+        "command"
+      ],
+      "message": {
+        "en": "Android answered the debug command {command} in an unexpected way."
+      },
+      "remediation": {
+        "en": "Try again. If it happens again, report the problem."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "unexpectedOutput(command:)",
+        "when": "the output of an adb command has no shape the parser knows",
+        "raisedBy": "AdbClient",
+        "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §15"
+      }
+    },
+    {
       "code": "cli.confirmationRequired",
       "parameters": [
         "flag"

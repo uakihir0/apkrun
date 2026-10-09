@@ -69,6 +69,9 @@ public enum RuntimeLogCategory: String, CaseIterable, Sendable {
     /// XPC service traffic.
     case xpc
 
+    /// The developer's ADB client and its boot signals (development builds, #015).
+    case adb
+
     /// The owning logging subsystem.
     public static let subsystem = LogSubsystem.runtime
 }

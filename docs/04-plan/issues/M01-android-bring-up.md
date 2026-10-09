@@ -1175,8 +1175,8 @@ See [../test-strategy.md](../test-strategy.md).
 ### Acceptance criteria
 
 - [x] An Android-specific `VMDefinition` is created by `AndroidBootPlanner` and accepted by `VMDefinitionValidator`.
-- [ ] The kernel command line is passed: `/proc/cmdline`, read over the Android serial shell, equals `cmdline.txt`. The `Kernel command line:` log line is not the check, because it never reaches hvc0 on VZ (IR-360). This check runs in `AndroidBootTests.testReachesInit` (#013).
-- [ ] The bootconfig is passed as the initrd trailer, and `/proc/bootconfig` equals the merged block. The check runs on the Linux guest, or on Android in #013.
+- [x] The kernel command line is passed: `/proc/cmdline` ends with `cmdline.txt` unchanged, and the tokens before it are the kernel's built-in command line and the bootconfig `kernel.*` key (IR-365). The `Kernel command line:` log line is not the check, because it never reaches hvc0 on VZ (IR-360). `AndroidBootTests.testReachesInit` (#013) checks it over the serial shell.
+- [x] The bootconfig is passed as the initrd trailer, and `/proc/bootconfig` equals the merged block. The Linux guest check skips on the pinned test kernel (IR-362); `AndroidBootTests.testReachesInit` (#013) checks `/proc/bootconfig` on Android.
 - [x] The complete serial output is captured in `~/Library/Logs/APKRun-Dev/vm/console.log` and in `boot-<timestamp>.log`.
 - [x] The kernel boots past early init and detects the configured virtio devices, including two virtio block devices with the expected partition counts (the #011 Android check).
 - [x] Successful init is not required.
@@ -1195,10 +1195,10 @@ See [../test-strategy.md](../test-strategy.md).
   - The console log and the per-boot copies are written to `~/Library/Logs/APKRun-Dev/vm/` (`console.log`, `boot-<timestamp>.log`). They show `[vda]` with nine partitions and `[vdb]` with four.
   - Each boot logs `Prepared boot <id> of image 2026.10.0-cf16373615-arm64 bootconfig sha256 <hash> disks apkrun-os,apkrun-data gpu headless` (category `boot`).
   - T0: `BootPhaseDetectorTests` covers the panic and the boot-failed detail over a captured VZ console log; `AndroidBootPlannerTests` covers the definition, the initrd trailer, the shared bootconfig golden vectors, and `bootconfigConflict`. The 16 KiB build limit is `bootconfig.MAX_BUILD_BOOTCONFIG_SIZE` in `apkrun_image`.
-  - Command-line criterion (IR-360): on VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The criterion now compares `/proc/cmdline`, read over the serial shell, with `cmdline.txt`. The shell check is written in #013 (`testReachesInit`), so the criterion stays open here until that task runs it.
-  - Bootconfig criterion (IR-362): `LinuxGuestBootconfigTests.testBootconfigTrailer` is written. The pinned test kernel has no `CONFIG_BOOT_CONFIG`, so it skips with the kernel's warning. The criterion stays open until `/proc/bootconfig` is read over the Android serial shell in #013 (`testReachesInit`).
+  - Command-line criterion (IR-360, IR-365): on VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The criterion compares `/proc/cmdline` with `cmdline.txt` as a suffix, and `AndroidBootTests.testReachesInit` checks it (2026-10-09, passed).
+  - Bootconfig criterion (IR-362): `LinuxGuestBootconfigTests.testBootconfigTrailer` is written. The pinned test kernel has no `CONFIG_BOOT_CONFIG`, so it skips with the kernel's warning. `AndroidBootTests.testReachesInit` checks `/proc/bootconfig` on Android (2026-10-09, passed).
   - T2 `AndroidBootTests` (2026-10-09, branch `task/012-android-kernel-boot-closure`): `testKernelBoot` passes in 1.1 s (nine partitions on `vda`, four on `vdb`, the virtio-gpu probe, the vsock module load, no panic). `testKernelPanicDetected` passes with the outcome of IR-361: `failed(.bootStalled(phase: .kernel))` after 30 s, with no init line, because the unpacking failure happens before hvc0 exists.
-  - Still open for #013 and #014: `testReachesInit`, `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell`. The G2 acceptance test covers the boot path until then.
+  - Still open for #014: `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell`. `testReachesInit` (#013) passes. The G2 acceptance test covers the boot path until then.
   - A forced stop about one second into the boot can leave VZ in `failed` and the stop does not return (IR-363). The `testKernelBoot` stop is bounded at 60 s; the `testKernelPanicDetected` boot is bounded at 120 s.
 
 
@@ -1260,7 +1260,7 @@ First-stage init finds the boot devices, maps the dynamic partitions, and switch
    - Verify that `cat /proc/bootconfig` over the serial shell equals the merged block of #012.
    - Compare with the launcher capture `Images/reference/16373615/incomplete/default-20261001T120904-49816/internal-bootconfig.txt` plus the vendor and U-Boot keys of [android-image.md](../../02-design/android-image.md) §6.2.
    - If live VZ evidence shows that direct boot needs a different layer-2 value, update the VZ layout to the observed value and record the key and reason in `expected-differences.yaml`; the original value remains in the #064 capture.
-   - Check: no `libfs_avb` error lines. The bootconfig matches, or each difference has an `expected-differences.yaml` entry.
+   - Check: no `libfs_avb` error lines, except the messages of the unsigned development vbmeta (CF-16, IR-364). The bootconfig matches, or each difference has an `expected-differences.yaml` entry.
 5. **Debug ramdisk and SELinux.**
    - Build 16373615 is userdebug and already debuggable, so the debug ramdisk (`boot-debug.img` or `vendor_boot-debug.img`, if the inventory lists one) is not used. Record this decision in [android-image.md](../../02-design/android-image.md) §6.
    - `getenforce` must equal the reference (`Enforcing`). If `androidboot.selinux=permissive` is needed to make progress, it goes into the layout with `TODO(#NNN)`, a reason, and a tracking issue (NFR-DEV-04). G2 cannot pass while it is set.
@@ -1282,18 +1282,18 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The debug ramdisk, fstab, dynamic partitions, boot device names, AVB, bootconfig, and SELinux are each checked, and each result is recorded in [android-image.md](../../02-design/android-image.md) §6.
-- [ ] Every deviation from Cuttlefish is documented: a row in [android-image.md](../../02-design/android-image.md) §13, and an entry with a reason in `expected-differences.yaml`.
+- [x] The debug ramdisk, fstab, dynamic partitions, boot device names, AVB, bootconfig, and SELinux are each checked, and each result is recorded in [android-image.md](../../02-design/android-image.md) §6.6.
+- [x] Every deviation from Cuttlefish is documented: rows CF-16 to CF-19 in [android-image.md](../../02-design/android-image.md) §13, and the entries with reasons in `expected-differences.yaml` (25 bootconfig and 5 cmdline entries).
 - [x] The serial logs show init running and service startup beginning.
 - [x] `.init` and `ANDROID_INIT` are emitted.
 - [x] The Android serial shell answers commands in developer mode.
-- [ ] The SELinux mode equals the reference, or a permissive workaround carries a TODO, a reason, and a tracking issue.
+- [x] The SELinux mode equals the reference: `getenforce` is `Enforcing` and the boot has no AVC denial. No permissive workaround is set.
 
 ### Notes
 
 - The strings come from [runtime-daemon.md](../../02-design/runtime-daemon.md) §3.3, observed on VZ (IR-306). Update `BootSignals.swift` and the document together.
 - `/data` does not mount until #095 provides KeyMint. Failures after `post-fs-data` belong to #095 and #014.
-- **Product-code status (2026-10-09).** The init and serial-shell criteria are ticked from the `apkrun dev boot` runs and the G2 run (#014): `.init` and `ANDROID_INIT` come from the first `] init: ` line, and `RuntimeSupervisor` reads `getprop` over the serial shell (`AndroidSerialShell`, hvc1). The spike checked the debug ramdisk, fstab, dynamic partitions, boot devices, AVB, bootconfig, and SELinux (`Enforcing`, no AVC denials; android-image.md §17), but the product code has no check for them yet. Open: the `AndroidShellConsole` test helper and its T2 checks (`dmesg`, `/proc/cmdline`, `/proc/bootconfig`, `/dev/rtc0`, `getenforce`, `/dev/block/by-name/`), and `expected-differences.yaml`, which is still the empty list (it is filled together with the `compare_boot.py` diff of #014).
+- **Product-code status (2026-10-09).** `AndroidBootTests.testReachesInit` passes in 15.3 s on the product path, in developer mode. It checks the `dmesg` lines, `/proc/cmdline` and `/proc/bootconfig` (the planner's merged block), the bound virtio devices, `/dev/rtc0`, `getenforce`, AVC denials, every GPT label in `/dev/block/by-name`, the fstab, the boot properties, and the AVB messages. The results are in [android-image.md](../../02-design/android-image.md) §6.6. Two findings changed the plan: the kernel log buffer wraps before the shell answers, so `log_buf_len=2M` is added (CF-18, IR-366), and the balloon device has no driver (IR-369). The `expected-differences.yaml` file holds the reference differences, which the #014 capture diff checks.
 
 ---
 

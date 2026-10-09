@@ -521,7 +521,7 @@ The Python `bootconfig.py` and Swift `BootconfigWriter` share golden test vector
 `cmdline.txt` = vendor cmdline + boot cmdline + APKRun additions. The additions start with:
 
 - `console=hvc0`. crosvm adds this itself, so the Cuttlefish images do not carry it.
-- Anything else that `/proc/cmdline` in the reference capture shows beyond the vendor cmdline and that is not bootconfig-able (non-`androidboot` kernel parameters). Each addition is listed in the layout file with a comment on where it came from.
+- Anything else that `/proc/cmdline` in the reference capture shows beyond the vendor cmdline and that is not bootconfig-able (non-`androidboot` kernel parameters). Each addition is listed in the layout file with a comment on where it came from. The first addition after `console=hvc0` is `log_buf_len=2M`, so that `dmesg` keeps the boot's first lines until the serial shell answers (§6.6, CF-18).
 
 `androidboot.*` parameters are never put on the cmdline. The total length must fit the VM validation limit of 2048 bytes ([vm.md](vm.md) §3).
 
@@ -533,6 +533,23 @@ Checked on macOS 27.0.1 (26A434), build 16373615, with the Android kernel `6.12.
 - **Missing from hvc0.** `Booting Linux on physical CPU`, `Kernel command line:`, and the first-stage loads of `virtio_console` and `virtio_net` are written before hvc0 exists, so the console never shows them (IR-306, IR-360). #013 reads them over the serial shell (`su 0 dmesg`, `/proc/cmdline`, `/dev/rtc0`, `/sys/bus/virtio/drivers/`). Among the devices the console can show, none is missing.
 - **Bootconfig.** The Linux test kernel (Alpine `linux-virt` 6.18.54) has no `CONFIG_BOOT_CONFIG`, so `/proc/bootconfig` does not exist there. The Android check of `/proc/bootconfig` against the merged block is in #013 (IR-362).
 - **Truncated ramdisk.** The ramdisk is LZ4 (legacy). A cut ramdisk fails while the kernel unpacks it, before `virtio_console` exists, so no panic text reaches hvc0. The boot then ends with `bootStalled(kernel)` (IR-361).
+
+### 6.6 Init checks on VZ (#013)
+
+`AndroidBootTests.testReachesInit` checks these on the product path (`RuntimeSupervisor` in developer mode, `AndroidShellConsole` over hvc1). The run of 2026-10-09 (macOS 27.0.1 (26A434), build 16373615, headless profile) passed in 15.3 s.
+
+- **Debug ramdisk: not used.** The bundle lists only `boot/kernel` and `boot/ramdisk.img`, and no `boot-debug.img` or `vendor_boot-debug.img`. Build 16373615 is `userdebug` with `ro.debuggable=1`, so the debug ramdisk adds nothing (the decision of #013 step 5).
+- **fstab.** `androidboot.fstab_suffix=cf.f2fs.hctr2` selects `/vendor/etc/fstab.cf.f2fs.hctr2`. `/metadata` mounts as `ext4` and `/data` as `f2fs`, both `rw`.
+- **Dynamic partitions.** First-stage init created the nine non-empty logical partitions of slot `_a` (the empty `_b` ones are skipped). The system partitions mount read-only from `dm-9` to `dm-16`.
+- **Boot device names.** `/dev/block/by-name` has every GPT label of the disk plan in the manifest (`boot_a`, `init_boot_a`, `vbmeta_a`, `super`, `custom`, `misc`, `metadata`, `frp`, `userdata`, and the rest). `androidboot.boot_devices=40000000.pci` puts `vda` and `vdb` on the bus (§5.3).
+- **AVB.** The unsigned development vbmeta gives `OK_NOT_SIGNED`, an unknown key, and `VerificationError` for `/system` and `/system_dlkm`. The dm-verity tables are built and the boot continues with `verifiedbootstate=orange`. No other `libfs_avb` error appears (CF-16, IR-364).
+- **Bootconfig.** `/proc/bootconfig` equals the planner's merged block, key for key and value for value (§6.1).
+- **SELinux.** `getenforce` is `Enforcing`, and the boot's dmesg has no AVC denial. No permissive workaround is set, so no TODO is needed.
+- **Kernel log.** The default 256 KiB log buffer wraps before the serial shell answers, about 1,000 lines later. The first-stage and kernel-start lines were gone from `dmesg`. `log_buf_len=2M` keeps them (CF-18, IR-366). With it, `dmesg` shows `Booting Linux on physical CPU`, `Kernel command line`, `init: init first stage started!`, and `init: init second stage started!`.
+- **Command line.** `/proc/cmdline` is the kernel's built-in command line (`console=ttynull stack_depot_disable=on cgroup_disable=pressure kasan.stacktrace=off kvm-arm.mode=protected bootconfig`), the bootconfig key `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size`, and then `cmdline.txt` unchanged (IR-365). The kernel logs `KVM is not available. Ignoring kvm-arm.mode` (CF-17).
+- **Devices.** The bound drivers are `virtio_net` (device 1), `virtio_blk` (2), `virtio_console` (3, the hvc ports), `virtio_rng` (4), `virtio_gpu` (16), and `vmw_vsock_virtio_transport` (19). `/dev/rtc0` exists. The balloon device (id 5) has no driver, because no balloon module is in the first-stage ramdisk or among the modules the boot loads (IR-369).
+- **Modules.** First-stage init loaded 19 modules from `/lib/modules`, and the booted system has 67. The bundle has one unnamed PLATFORM ramdisk fragment and no RECOVERY fragment (§4.1), so there is no recovery module set to leave out, and the fragment policy needs no change.
+- **Logs.** The shell checks ran with short commands. Long command lines are echoed with line-editing artifacts on hvc1, so the test writes `dmesg` to a file on the guest first (IR-370).
 
 ---
 
@@ -1598,6 +1615,10 @@ T2 test with two bundles built from the same base: A, and B = A with `androidboo
 | CF-13 | Launcher keys for host-side clients are dropped (`vsock_tombstone_port`, `vhal_proxy_server_port`, `auto_eth_guest_addr`); keys for guest-side servers and the RIL stay | no host services; their HALs abort without the guest-side keys | §6.2, §7.3 |
 | CF-14 | `androidboot.cuttlefish_service_bluetooth_checker=false`, and first-boot settings: Bluetooth off, Wi-Fi on and joined to `VirtWifi` | no rootcanal; Wi-Fi defaults off | §7.6 |
 | CF-15 | `androidboot.console=hvc1` and `serialconsole=1` in developer mode | the Android serial shell is the debug channel before ADB | §6.2 |
+| CF-16 | AVB reports `OK_NOT_SIGNED`, an unknown key, and `VerificationError` for `/system` and `/system_dlkm`; the boot continues with `verifiedbootstate=orange` | the development vbmeta is unsigned; release images are signed (§11.4) | §6.6 |
+| CF-17 | The kernel logs `KVM is not available. Ignoring kvm-arm.mode`: the built-in `kvm-arm.mode=protected` has no effect | VZ does not expose pKVM; the Cuttlefish reference host runs pKVM | §6.6 |
+| CF-18 | `log_buf_len=2M` is added to the command line | the default 256 KiB buffer wraps before the serial shell answers, so `dmesg` loses the boot's first lines | §6.4, §6.6 |
+| CF-19 | The reference command line has `earlycon=uart8250,mmio,0x3f8`, `ramoops.mem_address`, `ramoops.mem_size`, and a second `panic=-1`; none is passed on VZ | crosvm's UART and ramoops buffer do not exist on VZ; the second `panic` repeats the first | §6.4, §6.6 |
 
 New rows are added whenever #011–#014, #035, #083, or #095 find a difference. #035 adds the product changes of §11.2 that differ from Cuttlefish at runtime (for example the developer-mode gate of adbd, §11.3).
 
@@ -1709,6 +1730,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | Signed stock bundle, install, and boot (#065) | #065 | 2026-10-09, macOS 27.0.1 (26A434), build 16373615. `scripts/build-test-android-bundle.sh` built the signed bundle twice from the same inputs, and `manifest.json`, `manifest.sig`, and `SHA256SUMS` were byte-identical. `os.img` allocates 1.8 GB for 8.7 GB logical after the zero-block fix (§4.3). `apkrun dev image install` made the image current, and `apkrun dev boot` reached `ready` in 13.7 s. `G2AndroidBootTests` passed five cold boots from the installed bundle, each with `sys.boot_completed=1`, with a 60-second dwell instead of 600 seconds. |
 | Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09, macOS 27.0.1 (26A434): `40000000.pci`; the disks, PCI functions, and device-tree nodes are in `Images/reference/vz/26A434/topology.txt` (§5.3) |
 | Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `apkrun dev boot` boots through `AndroidBootPlanner` and `RuntimeSupervisor`, and the console shows `[vda]` with nine partitions and `[vdb]` with four. `AndroidBootTests.testKernelBoot` passes in 1.1 s. `AndroidBootTests.testKernelPanicDetected` passes with `bootStalled(kernel)` (IR-361). `/dev/rtc0`, `/proc/cmdline`, and `/proc/bootconfig` are checked over the serial shell in #013 (§6.5) |
+| Init checks on the product path (#013): debug ramdisk, fstab, dynamic partitions, boot device names, AVB, bootconfig, SELinux, `/proc/cmdline`, devices | #013 | positive. 2026-10-09, macOS 27.0.1 (26A434), build 16373615: `AndroidBootTests.testReachesInit` passed in 15.3 s, with the results of §6.6 and the `log_buf_len=2M` addition |
 | First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |
 | `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive. 2026-10-09, arm64 Mac17,9, macOS 27.0.1 (26A434), build 16373615, two-disk layout, branch `task/012-android-kernel-boot` at `ec72fa2`: `G2AndroidBootTests` passed five cold boots after an instance reset. `BOOT_COMPLETED` came at 12.4 s on the first boot and 5.2–6.0 s later. Each boot stayed 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, and no init service exiting more than twice. The gate is recorded when the run is repeated from a clean `main` (§4.2, §9.1) |
 | AVB state of the release variant; SELinux denials on the custom image | #035 | pending (§11.4, OQ-36, R-13) |

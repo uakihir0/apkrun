@@ -11172,3 +11172,158 @@ which #012 does not change.
 **Consequence.** #014 owns the readiness monitor's stop and failure path. It
 should make a stop that follows a VZ error return with a typed result. Until
 then the bound makes the failure visible in the test instead of a hang.
+
+## IR-364: Accept the unsigned development vbmeta messages in the AVB check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013 step 4; [android-image.md](../02-design/android-image.md) §6.6, §13 CF-16 |
+
+**Choice.** The step 4 check "no `libfs_avb` error lines" allows four messages
+of the unsigned development vbmeta: `OK_NOT_SIGNED`, "public key data shouldn't
+be empty", "Found unknown public key", and the `VerificationError` status for
+`/system` and `/system_dlkm`. The test requires that AVB output is present, so
+the check cannot pass on an empty log.
+
+**Reason.** The development bundle is unsigned (android-image.md §10.2, replaced
+by #065), so AVB cannot verify it. With `verifiedbootstate=orange` the boot
+continues, and the dm-verity tables are built as on a signed image. Failing on
+these lines would fail every development boot without testing anything more.
+
+**Consequence.** Release images (§11.4) are signed, so they must not produce
+these messages. #035 must check AVB without this allowance.
+
+## IR-365: Expect the built-in and bootconfig tokens before cmdline.txt in /proc/cmdline
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012, #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #012 criterion 2; [android-image.md](../02-design/android-image.md) §6.4, §6.6, §13 CF-17 |
+
+**Choice.** The #012 criterion "`/proc/cmdline` equals `cmdline.txt`" (IR-360)
+is reworded to "`/proc/cmdline` ends with `cmdline.txt` unchanged, and the
+tokens before it are the kernel's built-in command line and the bootconfig
+`kernel.*` key". `AndroidBootTests.testReachesInit` asserts the exact value: the
+built-in prefix `console=ttynull stack_depot_disable=on cgroup_disable=pressure
+kasan.stacktrace=off kvm-arm.mode=protected bootconfig` (present in the Android
+kernel image), then `kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384`
+from bootconfig, then `cmdline.txt`.
+
+**Reason.** The kernel appends the bootconfig `kernel.*` keys to its command
+line, and it starts from its built-in `CONFIG_CMDLINE`. The reference kernel
+prints the same built-in prefix. APKRun passes `cmdline.txt` as the boot command
+line, and the kernel's own prefix is not APKRun's to remove.
+
+**Consequence.** A reviewer may want `/proc/cmdline` to equal `cmdline.txt`
+exactly. That needs a kernel built without the built-in command line, which is
+outside #012 and #013.
+
+## IR-366: Add log_buf_len=2M so that dmesg keeps the boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013 step 1; [android-image.md](../02-design/android-image.md) §6.4, §6.6, §13 CF-18; `Images/tools/layouts/cuttlefish-phone-arm64.json` |
+
+**Choice.** The layout's command-line additions get `log_buf_len=2M`, after
+`console=hvc0`. Every bundle built from the layout then carries it, so the
+`cmdline.txt` of the bundle changes.
+
+**Reason.** Step 1 allows a command-line addition when the kernel's log lines do
+not reach the shell at the default level. The default 256 KiB buffer had wrapped
+by the time the shell answered. The shell's `dmesg` held 1,021 lines and none of
+the first-stage, kernel-start, or command-line lines. A 2 MiB buffer holds the
+whole boot, about 4,000 lines, at a cost of 2 MiB of kernel memory.
+
+**Consequence.** `Kernel command line:` and the first-stage lines are in `dmesg`,
+as step 1 expects. The #014 G2 run uses the bundle with this addition.
+
+## IR-367: Derive the reference differences from the launcher's bootconfig and command line
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013, #014 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013 and #014; [IR-305](#ir-305-re-scope-064-and-keep-virtualizationframework-instead-of-qemu); `Images/reference/16373615/expected-differences.yaml`; [android-image.md](../02-design/android-image.md) §6.6, §13 |
+
+**Choice.** `expected-differences.yaml` lists 25 bootconfig entries and 5 cmdline
+entries. They come from comparing the launcher's `internal-bootconfig.txt` and
+the `Kernel command line:` line of `kernel.log` with the planner's merged block
+and `cmdline.txt`. Each entry names the design section that decides the value.
+
+**Reason.** The reference capture is incomplete (IR-305). It has no booted
+`/proc/bootconfig`, no `cmdline.txt`, and no `lsmod` or `getprop`. The launcher's
+internal bootconfig is the only reference bootconfig, and the keys it lacks are
+the ones the reference takes from vendor_boot and the bootloader. APKRun sets
+those in its own layers (§6.2).
+
+**Consequence.** `compare_boot.py` reads a category only from a file it knows
+(`FILE_CATEGORIES`). `kernel.log` is not one, so the cmdline category cannot be
+compared yet. #014 decides how the reference command line is read, and the five
+cmdline entries wait for that decision.
+
+## IR-368: Check by-name against the manifest and the bootconfig against the planner
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013 step 3; [android-image.md](../02-design/android-image.md) §4.2, §6.6 |
+
+**Choice.** The `/dev/block/by-name` check takes its expected names from the
+bundle's manifest (`disks[].partitions[].label`), not from a reference list. The
+bootconfig check compares `/proc/bootconfig` with the entries
+`AndroidBootPlanner` merges for the same instance.
+
+**Reason.** No booted reference by-name list exists (IR-305). The manifest is
+what the disk plan (§4.2) was built from. The planner's merged block is what the
+kernel must show, and a hand-written golden would copy it and go stale when the
+layout changes.
+
+**Consequence.** A partition the manifest does not list is not checked, and
+neither are dm devices that init creates.
+
+## IR-369: Keep the balloon device without a driver
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013; [android-image.md](../02-design/android-image.md) §6.6 |
+
+**Choice.** The VZ memory balloon stays in the definition (`memoryBalloon: true`).
+On build 16373615 no driver binds it.
+
+**Reason.** The balloon device (virtio id 5) is present. The first-stage ramdisk
+has no balloon module, and the boot shows no balloon line. An unbound device
+costs nothing. Shipping the module is an image change for memory reclaim, which
+no M1 check needs. The reference's binding is unknown, because it was never
+booted.
+
+**Consequence.** Host-side memory reclaim is inactive. #014's capture records the
+binding. An image change (#035 or later) decides whether the module ships.
+
+## IR-370: Keep shell commands short and read long output from a guest file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #013 (`AndroidShellConsole`); [android-image.md](../02-design/android-image.md) §6.6 |
+
+**Choice.** The T2 shell checks keep each command short. They write `dmesg` to a
+file on the guest and grep that file. Patterns use bracket classes (`[f]irst`),
+so the echoed command cannot match itself.
+
+**Reason.** The Android shell on hvc1 echoes each typed command, and a long line
+comes back with line-editing redraws. A 220-character `dmesg | grep` came back
+garbled. Its echo matched the patterns, which made a run look as if the kernel
+lines were present. `su 0 dmesg` in the first version did not answer within
+60 s.
+
+**Consequence.** A later check that needs long output uses the same pattern.
+`AndroidShellConsole` does not add a wrapping layer.

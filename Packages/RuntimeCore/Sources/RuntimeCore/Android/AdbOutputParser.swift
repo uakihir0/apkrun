@@ -117,6 +117,35 @@ enum AdbOutputParser {
         )
     }
 
+    /// Reads the process ID that `pidof` prints. A reply of nothing means that no such process runs.
+    static func processIdentifier(_ output: String) -> Int? {
+        lines(output).first?.split(separator: " ").first.flatMap { Int($0) }
+    }
+
+    /// Reads the component of the resumed activity from `dumpsys activity activities`, such as
+    /// `io.apkrun.fixture.hellotext/.MainActivity`. The line that names the top resumed activity is
+    /// preferred. Android 17 prints `ResumedActivity:` and `Resumed:`, and older builds print
+    /// `topResumedActivity=` or `mResumedActivity:`. Each names a record as
+    /// `ActivityRecord{<hash> u<user> <component> t<task>}`.
+    static func resumedComponent(_ dump: String) -> String? {
+        let markers = ["topResumedActivity=", "mResumedActivity:", "ResumedActivity:", "Resumed:"]
+        var candidates: [(rank: Int, component: String)] = []
+        for line in lines(dump) {
+            guard let rank = markers.firstIndex(where: { line.hasPrefix($0) }),
+                let open = line.range(of: "ActivityRecord{"),
+                let close = line[open.upperBound...].firstIndex(of: "}")
+            else {
+                continue
+            }
+            let fields = line[open.upperBound..<close].split(separator: " ")
+            guard fields.count >= 3, fields[2].contains("/") else {
+                continue
+            }
+            candidates.append((rank, String(fields[2])))
+        }
+        return candidates.min { $0.rank < $1.rank }?.component
+    }
+
     /// The lines of a reply, without carriage returns and without blank lines at either end.
     private static func lines(_ text: String) -> [String] {
         text.split(whereSeparator: \.isNewline)

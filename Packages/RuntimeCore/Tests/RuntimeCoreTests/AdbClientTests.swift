@@ -268,6 +268,22 @@ private final class FakeADB: @unchecked Sendable {
                 echo "    versionCode=1 minSdk=29 targetSdk=37"
                 echo "    versionName=1.0"
                 exit 0 ;;
+              "-s 127.0.0.1:6520 shell am start -W -n io.apkrun.fixture.hellotext/.MainActivity")
+                rm -f "$dir/stopped"
+                printf 'Starting: Intent { cmp=io.apkrun.fixture.hellotext/.MainActivity }\nStatus: ok\nLaunchState: COLD\n'
+                exit 0 ;;
+              "-s 127.0.0.1:6520 shell pidof io.apkrun.fixture.hellotext")
+                if [ -f "$dir/stopped" ]; then exit 1; fi
+                echo 3456; exit 0 ;;
+              "-s 127.0.0.1:6520 shell dumpsys activity activities")
+                if [ -f "$dir/stopped" ]; then
+                  echo "    Resumed: ActivityRecord{244065368 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t11}"
+                else
+                  echo "    Resumed: ActivityRecord{247806208 u0 io.apkrun.fixture.hellotext/.MainActivity t12}"
+                fi
+                exit 0 ;;
+              "-s 127.0.0.1:6520 shell am force-stop io.apkrun.fixture.hellotext")
+                touch "$dir/stopped"; exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
             esac
             """
@@ -378,6 +394,51 @@ func adbClientRefusesPackageNamesThatAreNotIdentifiers() async throws {
         Issue.record("A package name with shell syntax must be refused.")
     } catch {
         #expect(error == .invalidArgument(command: "uninstall"))
+    }
+    #expect(try fake.calls().isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientStartsReadsAndStopsTheActivity() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+    let component = "io.apkrun.fixture.hellotext/.MainActivity"
+
+    try await client.startActivity(component: component)
+    let pid = try await client.pidof("io.apkrun.fixture.hellotext")
+    let resumed = try await client.dumpsysActivities()
+    try await client.forceStop("io.apkrun.fixture.hellotext")
+    let pidAfterStop = try await client.pidof("io.apkrun.fixture.hellotext")
+    let resumedAfterStop = try await client.dumpsysActivities()
+
+    #expect(pid == 3456)
+    #expect(resumed.resumedComponent == component)
+    #expect(pidAfterStop == nil)
+    #expect(resumedAfterStop.resumedComponent == "com.android.launcher3/.uioverrides.QuickstepLauncher")
+    #expect(
+        try fake.calls() == [
+            "-s 127.0.0.1:6520 shell am start -W -n io.apkrun.fixture.hellotext/.MainActivity",
+            "-s 127.0.0.1:6520 shell pidof io.apkrun.fixture.hellotext",
+            "-s 127.0.0.1:6520 shell dumpsys activity activities",
+            "-s 127.0.0.1:6520 shell am force-stop io.apkrun.fixture.hellotext",
+            "-s 127.0.0.1:6520 shell pidof io.apkrun.fixture.hellotext",
+            "-s 127.0.0.1:6520 shell dumpsys activity activities",
+        ]
+    )
+    // pidof and dumpsys are shell commands, so each one is counted.
+    #expect(await client.shellInvocationCount == 6)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientRefusesComponentsThatAreNotActivityNames() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.startActivity(component: "io.apkrun.fixture.hellotext/.Main; reboot")
+        Issue.record("A component with shell syntax must be refused.")
+    } catch {
+        #expect(error == .invalidArgument(command: "am start"))
     }
     #expect(try fake.calls().isEmpty)
 }

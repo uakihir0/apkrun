@@ -18,6 +18,17 @@ public struct AdbShellReply: Equatable, Sendable {
     }
 }
 
+/// What `dumpsys activity activities` says about the foreground activity.
+public struct AdbActivitySnapshot: Equatable, Sendable {
+    /// The resumed activity as `<package>/<class>`, or nil when none is resumed.
+    public var resumedComponent: String?
+
+    /// Creates a snapshot.
+    public init(resumedComponent: String?) {
+        self.resumedComponent = resumedComponent
+    }
+}
+
 /// The host's ADB client for the developer's Android (#015; cli.md §5; android-image.md §7.3).
 ///
 /// APKRun does not ship adb. The client runs the developer's `platform-tools/adb`, found under
@@ -184,6 +195,76 @@ public actor AdbClient {
             throw .unexpectedOutput(command: "dumpsys")
         }
         return metadata
+    }
+
+    /// Starts an activity explicitly by component name, `am start -W -n <component>`, and waits for it to start.
+    /// The reply must carry `Status: ok`; anything else is an unexpected reply.
+    public func startActivity(component: String, timeout: Duration = .seconds(30)) async throws(AdbFailure) {
+        guard Self.isComponentName(component) else {
+            throw .invalidArgument(command: "am start")
+        }
+        let reply = try await runShell(label: "am start", "am start -W -n \(component)", timeout: timeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "am start", status: reply.status)
+        }
+        guard
+            reply.output.split(whereSeparator: \.isNewline).contains(where: {
+                $0.trimmingCharacters(in: .whitespaces) == "Status: ok"
+            })
+        else {
+            throw .unexpectedOutput(command: "am start")
+        }
+    }
+
+    /// The process ID of `packageName` from `pidof`, or nil when no such process runs. `pidof` exits 1 with no
+    /// output when nothing matches, which is an answer, not a failure.
+    public func pidof(_ packageName: String) async throws(AdbFailure) -> Int? {
+        guard Self.isPackageName(packageName) else {
+            throw .invalidArgument(command: "pidof")
+        }
+        let reply = try await runShell(label: "pidof", "pidof \(packageName)", timeout: commandTimeout)
+        if reply.status == 1, reply.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "pidof", status: reply.status)
+        }
+        guard let pid = AdbOutputParser.processIdentifier(reply.output) else {
+            throw .unexpectedOutput(command: "pidof")
+        }
+        return pid
+    }
+
+    /// Reads the resumed activity from `dumpsys activity activities`. The component is nil when no
+    /// activity is resumed.
+    public func dumpsysActivities() async throws(AdbFailure) -> AdbActivitySnapshot {
+        let reply = try await runShell(label: "dumpsys", "dumpsys activity activities", timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "dumpsys", status: reply.status)
+        }
+        return AdbActivitySnapshot(resumedComponent: AdbOutputParser.resumedComponent(reply.output))
+    }
+
+    /// Stops `packageName` and its processes, `am force-stop <package>`.
+    public func forceStop(_ packageName: String) async throws(AdbFailure) {
+        guard Self.isPackageName(packageName) else {
+            throw .invalidArgument(command: "am force-stop")
+        }
+        let reply = try await runShell(label: "am force-stop", "am force-stop \(packageName)", timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "am force-stop", status: reply.status)
+        }
+    }
+
+    /// Component names are a package name, a slash, and a class name that starts with a dot or a letter.
+    private static func isComponentName(_ component: String) -> Bool {
+        let parts = component.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, isPackageName(String(parts[0])) else {
+            return false
+        }
+        let className = parts[1]
+        return !className.isEmpty
+            && className.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "_") }
     }
 
     /// Reads an install or uninstall result from both streams, because adb prints a rejection on standard error.

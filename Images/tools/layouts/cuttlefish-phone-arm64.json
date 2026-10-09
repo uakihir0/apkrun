@@ -31,7 +31,7 @@
       "decided": {
         "androidboot.cuttlefish_service_bluetooth_checker": "No rootcanal on VZ; the boot reporter must not wait for Bluetooth, as on Cuttlefish's automotive product (android-image.md §7.6, IR-309).",
         "androidboot.force_normal_boot": "Not in the launcher capture; the reference's bootloader sets it (expected-differences.yaml). Set here for direct boot, verified on VZ (android-image.md §6.2).",
-        "androidboot.hypervisor.vm.supported": "arm64 default; no protected VMs (android-image.md §4.2).",
+        "androidboot.hypervisor.vm.supported": "arm64 default; no protected VMs (android-image.md §4.2). The VZ spike set 0, and the reference does not set the key (IR-404).",
         "androidboot.slot_suffix": "Slot _a only (ADR-0015).",
         "androidboot.vbmeta.device_state": "Development images are unlocked (android-image.md §6.2).",
         "androidboot.verifiedbootstate": "Development images are orange (android-image.md §6.2).",
@@ -58,7 +58,7 @@
         "value": "console=hvc0"
       },
       {
-        "comment": "The kernel log buffer is 256 KiB by default and wraps before the Android serial shell answers (about 1,000 lines left), so dmesg loses the first-stage and kernel-start lines. 2 MiB keeps the whole boot for `dmesg` (android-image.md §6.6, IR-366).",
+        "comment": "The kernel log buffer is 256 KiB by default and wraps before the Android serial shell answers (about 1,000 lines left), so dmesg loses the first-stage and kernel-start lines. 2 MiB keeps the first-stage and kernel-start lines in `dmesg` (android-image.md §6.6, IR-366).",
         "value": "log_buf_len=2M"
       }
     ]
@@ -300,5 +300,5 @@
       "requiredHostCapabilities": []
     }
   },
-  "gpuProfilesComment": "graphics.md §9. guestSwiftshader and headless carry the launcher capture's guest_swiftshader keys (IR-305); headless adds VZ's 2D virtio-gpu at boot and exists only in development bundles (IR-307). The drmVirgl keys are the source-derived set (graphics-props-from-source.txt, not committed), plus the composer key from the capture. No capture or VZ run confirms the drmVirgl values; #022 does (IR-400, IR-401)."
+  "gpuProfilesComment": "graphics.md §9. guestSwiftshader and headless carry the launcher capture's guest_swiftshader keys (IR-305); headless adds VZ's 2D virtio-gpu at boot and exists only in development bundles (IR-307). The drmVirgl keys are the source-derived set (graphics-props-from-source.txt, not committed) without its display_framebuffer_format, which that file takes from the capture (IR-401), plus the composer key from the capture. No capture or VZ run confirms the drmVirgl values; #022 does (IR-400)."
 }

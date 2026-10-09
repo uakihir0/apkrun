@@ -153,10 +153,10 @@ Rules:
 - The exact kernel command line: ASCII, one line, tokens separated by single spaces, **no** trailing newline.
 - Content: the vendor cmdline, the boot cmdline, then the APKRun additions starting with `console=hvc0` ([../02-design/android-image.md](../02-design/android-image.md) §6.4). It must contain the token `bootconfig`.
 - No token starts with `androidboot.`. The length is at most 2048 bytes (`cmdlineTooLong(length)` at boot, and a build failure before that).
-- Example (157 bytes, the stock build 16373615):
+- Example (172 bytes, the stock build 16373615; the APKRun additions are `console=hvc0` and `log_buf_len=2M`, [../02-design/android-image.md](../02-design/android-image.md) §4.1):
 
 ```text
-printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig console=hvc0
+printk.devkmsg=on audit=1 panic=-1 8250.nr_uarts=1 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig console=hvc0 log_buf_len=2M
 ```
 
 ## 4. `manifest.json`

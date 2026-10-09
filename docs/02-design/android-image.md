@@ -465,13 +465,13 @@ Merge rules:
 | `androidboot.fstab_suffix` | `cf.f2fs.hctr2` (launcher capture) | 2 | verified on VZ |
 | `androidboot.console`, `androidboot.serialconsole` | `hvc1` and `1` in developer mode (the init `console` service runs `sh` on hvc1); omitted otherwise | 4 (developer mode) | verified on VZ |
 | `androidboot.hw_timeout_multiplier` | `3` (launcher capture) | 2 | verified on VZ |
-| `androidboot.hypervisor.vm.supported` | `0` | 2 | verified (arm64 default) |
+| `androidboot.hypervisor.vm.supported` | `0` | 2 | decided (arm64 default). The VZ spike set `0`, and the reference does not set the key, so the value is not checked against the reference (IR-404) |
 | `androidboot.vendor.apex.com.android.hardware.keymint` | `com.android.hardware.keymint.rust_nonsecure` (§7.2) | 2 | verified on VZ; the launcher's default selection |
 | `androidboot.vendor.apex.com.android.hardware.gatekeeper` | `com.android.hardware.gatekeeper.nonsecure` (§7.2) | 2 | verified on VZ; the launcher's default selection |
 | `androidboot.vendor.apex.com.android.hardware.{weaver,strongbox}` | `none` | 2 | verified on VZ (launcher capture) |
 | `androidboot.vendor.apex.com.android.hardware.secure_element`, `…com.google.emulated.camera.provider.hal` | the launcher's values | 2 | verified on VZ |
 | `androidboot.vendor.apex.com.android.hardware.graphics.composer` | `com.android.hardware.graphics.composer.ranchu` | 2 (GPU profile) | verified on VZ with the `headless` profile |
-| `androidboot.vendor.apex.com.google.cf.vulkan` | per GPU profile (none for `drm_virgl`) | 2 (GPU profile) | reference |
+| `androidboot.vendor.apex.com.google.cf.vulkan` | per GPU profile (none for `drm_virgl`) | 2 (GPU profile) | absent from the launcher capture and not committed; no profile sets it |
 | Graphics props (`androidboot.hardware.egl=mesa`, `…gralloc=minigbm`, `…hwcomposer=ranchu`, `…hwcomposer.mode=client`, `…hwcomposer.display_finder_mode=drm`, `androidboot.cpuvulkan.version=0`, `androidboot.opengles.version=196608`) | as listed for `drm_virgl`; the `guest_swiftshader` profile has its own set ([graphics.md](graphics.md) §9) | 2 (GPU profile) | `guest_swiftshader` and `headless` keys verified against the launcher capture (IR-305). The `drm_virgl` set is source-derived (`graphics-props-from-source.txt`); no capture or VZ run confirms it, and #022 does (IR-400, IR-401) |
 | `androidboot.wifi_impl` | `virt_wifi` (§7.4) | 2 | verified on VZ |
 | `androidboot.wifi_mac_prefix` | the launcher's `5554`; `setup_wifi` derives eth2's MAC from it (§7.4) | 2 | verified on VZ |

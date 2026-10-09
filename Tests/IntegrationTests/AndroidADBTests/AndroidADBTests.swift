@@ -192,10 +192,12 @@ private final class BootSession: @unchecked Sendable {
 
     static func start(developerMode: Bool) async throws -> BootSession {
         let bundle = try bundleDirectory()
-        let image = try DevelopmentImage.load(directory: bundle)
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-015-adb-\(UUID().uuidString)", isDirectory: true)
         let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
+        // The signed bundle goes through the install path of `apkrun dev image install`, as the G2 check does.
+        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
+        let image = try await images.install(from: .directory(bundle))
         let store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
         _ = try await store.resetAndroid(image: image, sizing: .default)
         let diagnostics = DiagnosticsContext.live(paths: paths)

@@ -204,8 +204,11 @@ bridge dynamically loads virglrenderer, ANGLE EGL, and GLES entry points.
 `virgl_renderer_init` uses callback version 4 and **flags `0`**, with fence,
 GL-context create/destroy, make-current, and EGL-display callbacks. Although
 the bridge defines EGL/GLES-related flag constants, the observed initialization
-does not pass them. The pinned macOS renderer is built without its Linux EGL
-winsys and uses the supplied ANGLE context callbacks.
+does not pass them. On macOS the pinned Meson logic (`with_host_darwin`) sets `have_egl`
+whenever libepoxy reports EGL and does not set `ENABLE_GBM`. The GBM, Linux
+parts of the EGL winsys are therefore compiled out, and `-Ddrm-renderers=[]`
+excludes the DRM path. The renderer uses the supplied ANGLE context callbacks.
+This was read from the Meson files; the build was not run.
 
 There is no `CONTEXT_INIT`, so the guest exposes a single fence timeline.
 virglrenderer may retire per-context fences out of order; the host assigns
@@ -235,9 +238,6 @@ non-zero-copy fallback and cursor path also use CPU-side pixel data. These
 paths are not evidence that APKRun may read back during normal presentation;
 APKRun's normal-path readback counter must remain zero.
 
-## 3. ANGLE initialization and presentation
-
-`CVirGLBridge.c` loads `libEGL.dylib` and `libGLESv2.dylib` beside the
 ### 2.4 Flow-step crosswalk
 
 [graphics.md](graphics.md) §2.2 lists the flow steps that this analysis must
@@ -258,6 +258,9 @@ source.
 | Metal | §2.3 and §3: presentation into a `CAMetalLayer` drawable, GPU ordering with an explicit `glFlush`, and `LatestFrameScheduler` pacing | `CVirGLBridge.c`; `LatestFrameScheduler.swift`; `VMCustomVirGLGraphics.swift` |
 | cursor | §2.2: `UPDATE_CURSOR` and `MOVE_CURSOR`, the 256 × 256 px cap, scanout 0 only, and the host-memory copy that stays outside the scanout path | `VirtioGPUDevice.swift`; `VirtioGPUProtocol.swift` (`Limits.maxCursorDimension`) |
 
+## 3. ANGLE initialization and presentation
+
+`CVirGLBridge.c` loads `libEGL.dylib` and `libGLESv2.dylib` beside the
 virglrenderer library. EGL initialization uses:
 
 1. `eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, …)`
@@ -299,24 +302,49 @@ The current APKRun patches reconcile with those recipe inputs as follows.
 “Adopted” describes the #020 working patch set. Their application, clean
 renderer build, cache reuse, and tests are recorded in
 [graphics.md](graphics.md) §16 and IR-191; #018 itself did not repeat the build.
+On 2026-10-10 #018 checked each row against the pinned upstream files. The
+virglrenderer and ANGLE rows were checked by applying the patch sequences to the
+pinned source files; the libepoxy rows by comparing their added lines. The
+“Verified relation” column records the result.
 
-| APKRun patch | RiftVM recipe counterpart | Purpose and #020 disposition |
-|---|---|---|
-| `virglrenderer/0001-add-macos-metal-support.patch` | `virglrenderer-macos-unified.patch` | Adopted. Carries the macOS Metal and Objective-C build/renderer path from the pinned recipe. The patch also contains broader Venus-related source changes; APKRun configures `venus=false` and does not expose the Vulkan guest feature. |
-| `virglrenderer/0002-downgrade-unsupported-msaa.patch` | `virglrenderer-msaa-downgrade.patch` | Adopted. Falls back to single-sample storage when the GLES host cannot multisample a format; rendering can continue with antialiasing lost. |
-| `virglrenderer/0003-link-metal-runtime.patch` | None | Adopted as an APKRun downstream addition, not a RiftVM recipe patch. Links CoreFoundation and the Objective-C runtime for the non-Venus Metal build. Its patch header records that it has not been submitted upstream. |
-| `libepoxy/0001-improve-library-detection.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Resolves bundled ANGLE EGL/GLES dylibs and enables EGL on Apple platforms. |
-| `libepoxy/0002-disable-desktop-extensions-on-gles.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Keeps desktop GL extension providers from selecting the wrong unsuffixed entry point for GLES. |
-| `libepoxy/0003-enable-egl-platform-display.patch` | `libepoxy-akihikodaki-egl15.patch` | Adopted. Checks the EGL client version so `eglGetPlatformDisplay` can be resolved before a display exists. |
-| `angle/0001-fix-metal-boolean-mix.patch` | `angle-changes-main.patch` | Adopted. Emits Metal `select` for boolean-selector `mix` operations and raises the Metal shader UBO limit from 12 to 16. |
+| APKRun patch | RiftVM counterpart (pinned) | Verified relation to the counterpart (#018, 2026-10-10) | Purpose and #020 disposition |
+|---|---|---|---|
+| `virglrenderer/0001-add-macos-metal-support.patch` | `virglrenderer-macos-unified.patch` (recipe `20828ebf`, applied first by `scripts/prepare-virgl-sources.sh`) | Not byte-identical. The recipe file has two diffs for `src/vrend/vrend_renderer.h`; APKRun's file has one, so it is a regenerated form of the recipe patch (IR-190). Applying the recipe patch and RiftVM's MSAA patch to the pinned source, and APKRun `0001` and `0002` to a second copy, gives identical source trees. The only other difference is three `.orig` backups left by the recipe run. | Adopted. Carries the macOS Metal and Objective-C build and renderer path. The patch also contains broader Venus-related source changes; APKRun configures `venus=false` and does not expose the Vulkan guest feature. |
+| `virglrenderer/0002-downgrade-unsupported-msaa.patch` | `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` in RiftVM `51f19193`, applied after the recipe patch. This file is in the RiftVM repository, not in the recipe archive | The added lines equal the pinned file's, apart from blank-line placement. The header says it was carried from RiftVM `f615e16` (MIT), an earlier commit whose author matches the patch's `From:` line. The pinned commit is therefore not the recorded origin, and the code is RiftVM-authored (IR-410). | Adopted. Falls back to single-sample storage when the GLES host cannot multisample a format; rendering can continue with antialiasing lost. |
+| `virglrenderer/0003-link-metal-runtime.patch` | None | Not a counterpart. An APKRun downstream addition; its header states that it is not submitted upstream. | Adopted as an APKRun downstream addition. Links CoreFoundation and the Objective-C runtime for the non-Venus Metal build. |
+| `libepoxy/0001-improve-library-detection.patch` | `libepoxy-akihikodaki-egl15.patch` (recipe `eeb72845`), first of its three patches | Same as the counterpart, except that the dylib names are `@rpath/libEGL.dylib` and `@rpath/libGLESv2.dylib`, where the recipe uses bare names. This is the `@rpath` install-name rule of IR-190. | Adopted. Resolves bundled ANGLE EGL/GLES dylibs and enables EGL on Apple platforms. |
+| `libepoxy/0002-disable-desktop-extensions-on-gles.patch` | `libepoxy-akihikodaki-egl15.patch`, second patch | Same added lines as the counterpart. | Adopted. Keeps desktop GL extension providers from selecting the wrong unsuffixed entry point for GLES. |
+| `libepoxy/0003-enable-egl-platform-display.patch` | `libepoxy-akihikodaki-egl15.patch`, third patch | Same added lines as the counterpart. | Adopted. Checks the EGL client version so `eglGetPlatformDisplay` can be resolved before a display exists. |
+| `angle/0001-fix-metal-boolean-mix.patch` | `angle-changes-main.patch` (recipe `b010ac37`) | Same as the counterpart, except for one omitted hunk. The recipe also changes `src/libANGLE/renderer/vulkan/VertexArrayVk.cpp` (the argument of `padVertexAttribBufferSizeIfNeeded`). The Vulkan backend is excluded when `angle_enable_vulkan=false`, whose `renderer/vulkan/BUILD.gn` asserts that flag. Applied to the pinned source files they touch, the two sequences differ only at that line (IR-411). | Adopted. Emits Metal `select` for boolean-selector `mix` operations and raises the Metal shader UBO limit from 12 to 16. |
 
-The source-build script uses these configure/build arguments:
+The recipe archives contain further patches that RiftVM's
+`scripts/prepare-virgl-sources.sh` does not apply, and APKRun does not apply
+either. Examples are `venus-*`, `bgra-*`, `angle-egl-include.patch`,
+`virglrenderer-borrow.patch`, `vrend-error-reporting.patch`, and
+`libepoxy-changes-main.patch`. The script applies only the inputs named in the
+table, in this order: the virglrenderer recipe patch, every
+`scripts/virgl-patches/virglrenderer-*.patch`, the ANGLE recipe patch, and the
+libepoxy recipe patch.
+
+RiftVM's reference configure/build arguments, from
+`scripts/build-virgl-runtime-from-source.sh` at the pinned commit, are:
 
 | Component | Observed arguments |
 |---|---|
 | ANGLE | GN: `target_cpu="arm64"`, `angle_build_all=false`, `is_debug=false`, `symbol_level=0`, `angle_has_frame_capture=false`, `angle_enable_gl=false`, `angle_enable_vulkan=false`, `angle_enable_swiftshader=false`, `angle_enable_wgpu=false`, `angle_enable_metal=true`, `angle_enable_null=false`, `angle_enable_abseil=false`, `use_siso=false`, `use_system_xcode=true`, `use_custom_libcxx=false`, `use_lld=false`, `is_component_build=false`, `treat_warnings_as_errors=false`, `fatal_linker_warnings=false`; builds `libEGL` and `libGLESv2` |
 | libepoxy | Meson: `-Degl=yes -Dx11=false -Dtests=false`; `PKG_CONFIG_PATH` points at the pinned ANGLE EGL/GLES metadata |
 | virglrenderer | Meson: `-Ddrm-renderers=[] -Dvenus=true -Dtests=false -Dvideo=false -Dtracing=none`; adds the ANGLE include directory and a native Python path; `PKG_CONFIG_PATH` includes ANGLE and libepoxy |
+
+The arguments that #020 actually passes are the `buildFlags` of the lock
+entries, which `scripts/tools/build_third_party.py` passes verbatim to GN and
+Meson, plus the builder's own `--prefix`, `--libdir=lib`, and `--native-file`
+options. The differences from RiftVM are:
+
+| Component | APKRun #020 arguments (lock `buildFlags`) | Difference from RiftVM |
+|---|---|---|
+| ANGLE | GN: the nineteen RiftVM arguments above, plus `mac_deployment_target="27.0"` | Adds `mac_deployment_target="27.0"` (IR-413). ANGLE's DEPS are pinned per component in the lock (`angle-astc-encoder` `2319d9c4`, `angle-vulkan-headers` `c0fe12c8`, `angle-zlib` `e00f7038`) instead of `gclient sync`; the builder checks the notice set against the GN graph (IR-190, IR-191) |
+| libepoxy | Meson: `-Degl=yes -Dglx=no -Dx11=false -Dtests=false` | Adds `-Dglx=no` (IR-413) |
+| virglrenderer | Meson: `-Dplatforms=egl -Ddrm-renderers=[] -Dvenus=false -Dtests=false -Dvideo=false -Dtracing=none` | Adds `-Dplatforms=egl` (IR-413). On macOS RiftVM's default `platforms=auto` also selects EGL when libepoxy reports it, so the flag changes the failure mode (missing EGL becomes a build error), not the compiled winsys (read from `meson.build`; not built). `venus=false` (IR-190). RiftVM passes an ANGLE include path through `-Dc_args` and `-Dcpp_args`; APKRun gives ANGLE and libepoxy to Meson through generated pkg-config files (`PKG_CONFIG_PATH`). Python is the locked PyYAML 6.0.3, visible only to this Meson process (IR-190), not RiftVM's Python native file |
 
 The `-Dvenus=true` renderer build option is not guest Vulkan support. The
 prototype still advertises only VIRGL and EDID and does not advertise resource
@@ -332,8 +360,27 @@ RiftVM lists virglrenderer and libepoxy as MIT and ANGLE as BSD-3-Clause in
 its runtime dependency documentation. Those components are not covered by the
 single RiftVM MIT lock entry: APKRun must keep their own source pins, recipe
 patch provenance, and license notices when #020 implements the runtime build.
+The renderer components and their licenses, as the APKRun lock records them
+(`scripts/check-lock.sh` passed on 2026-10-10), are:
+
+| Component | License (lock) | `ships` | Legal list ([legal-and-licensing.md](../05-development/legal-and-licensing.md) §4) |
+|---|---|---|---|
+| virglrenderer | MIT (`COPYING`) | `app` | app list (§4.2) |
+| libepoxy | MIT (`COPYING`) | `app` | app list (§4.2) |
+| ANGLE | BSD-3-Clause (`LICENSE`) | `app` | app list (§4.2) |
+| ANGLE DEPS: `angle-astc-encoder`, `angle-vulkan-headers` | Apache-2.0 (`LICENSE.txt`; `vulkan-headers/LICENSE.txt`) | `app` | app list. Neither lock entry lists a `NOTICE` file. The astc-encoder commit has none at the top level (checked on GitHub). The Vulkan-headers commit is in Chromium's `vulkan-deps` repository, which #018 could not reach, so its `NOTICE` status is not verified |
+| ANGLE DEPS: `angle-zlib` | Zlib (`LICENSE`) | `app` | app list (§4.2) |
+| PyYAML 6.0.3 | MIT (`LICENSE`) | `tooling` | tooling list (§4.4) |
+| depot_tools | BSD-3-Clause (`LICENSE`) | `tooling` | tooling list (§4.4) |
+| RiftVM | MIT (`LICENSE`) | `reference` | none shipped. The carried MSAA patch is an exception; see the §4 patch table and IR-410 |
+
+Patches are under the license of the component they change
+([legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2).
+
 The RiftVM MIT notice applies to RiftVM-authored source, not automatically to
-the renderer sources or recipe patches. Keep the patch-origin records and
+the renderer sources or recipe patches. The carried MSAA patch is the one
+exception: its code is RiftVM-authored and is shipped in APKRun's virglrenderer
+(IR-410). Keep the patch-origin records and
 component license notices separate; the repository's legal review still
 covers the complete third-party package before release.
 
@@ -374,6 +421,13 @@ must keep the required MIT notice and the full
 | `Experiments/VZVirtioGPUPrototype/Sources/VZVirtioGPUPrototype/VirtioInputProbeDevice.swift` | Default-off static virtio-input experiment | No file header; repository MIT | Ignore for #018. Upstream documents that the stock guest does not reach `DRIVER_OK`; APKRun input remains the USB/Guest Agent path in ADR-0013. |
 | `Experiments/VZVirtioGPUPrototype/Tests/VZVirtioGPUPrototypeTests/VirtioGPUProtocolTests.swift` | Upstream protocol and helper tests | No file header; repository MIT | Use test cases as review prompts only; rewrite tests under APKRun modules and add the project's malformed-input and fuzz cases. |
 | `Experiments/VZVirtioGPUPrototype/Package.swift` and `Sources/VZVirtioGPUPrototypeRunner/main.swift` | Experiment package and runner | No file header; repository MIT | Ignore package and runner structure; APKRun does not import or build the RiftVM package. |
+| `scripts/virgl-runtime-pins.sh` | Source and recipe pins: commits, archive SHA-256 values, and the bottle identities of prebuilt binaries | No file header (a comment only); repository MIT | Use as a cross-check of the §4 pins. Do not source it: APKRun's pins are in `ThirdParty.lock.json`. APKRun does not use the prebuilt bottles (virglrenderer 1.0.33, ANGLE 1.0.15, libepoxy 1.0.4). |
+| `scripts/prepare-virgl-sources.sh` | Patch order: the virglrenderer recipe patch, then `scripts/virgl-patches/virglrenderer-*.patch`, then the ANGLE and libepoxy recipe patches | No file header; repository MIT | Reference for the patch order in §4. Ignore the script; APKRun applies patches through `scripts/tools/build_third_party.py`. |
+| `scripts/build-virgl-runtime-from-source.sh` | ANGLE GN arguments, Meson arguments, `gclient sync`, install names, and link order | No file header; repository MIT | Reference for the flags in §4. Ignore the script; APKRun builds from the lock's `buildFlags`. |
+| `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` | The MSAA downgrade code, which APKRun ships as `virglrenderer/0002` | No file header; the added code is RiftVM-authored (its comments say "RiftVM:") | Copied RiftVM code in APKRun's patch set. See IR-410 for the notice and classification. |
+| `Tests/CVirGLBridgeTests/ActiveContextSetTests.c`; `Tests/CVirGLBridgeTests/ContextSyncLifecycleTests.c` | Unit tests of `ActiveContextSet.h`; renderer lifecycle tests with deterministic EGL and renderer callbacks. The second file includes `CVirGLBridge.c` directly | No file header; repository MIT | Review prompts for the #020 and #022 bridge tests. Do not copy: the lifecycle test compiles RiftVM's bridge source. |
+| `Tests/RiftVMCoreTests/VMVirGLPresentationTests.swift` | Presentation and lifecycle tests of the custom VirGL path: late fence invalidation, failure recovery, late completion after stop, and backend selection | No file header; repository MIT | Review prompts for the #023 presentation tests. Do not copy. |
+| `Experiments/VZVirtioGPUPrototype/RUNTIME_DEPENDENCIES.md`; `ThirdPartyLicenses/virglrenderer.txt` | Upstream statements of the runtime licenses (MIT for virglrenderer and libepoxy, BSD-3-Clause for ANGLE) and the upstream virglrenderer license text | Documentation and license text; repository MIT | Evidence for the §4 license table only. Not copied. APKRun keeps its own license copies under `ThirdParty/licenses/`. |
 
 ### Production VM and renderer lifetime
 
@@ -421,13 +475,6 @@ limitations:
   APKRun must define and test its own daemon and renderer lifecycle before
   adopting that behavior.
 - The ANGLE/Metal producer-to-root-context handoff depends on EGL syncs and
-| `scripts/virgl-runtime-pins.sh` | Source and recipe pins: commits, archive SHA-256 values, and the bottle identities of prebuilt binaries | No file header (a comment only); repository MIT | Use as a cross-check of the §4 pins. Do not source it: APKRun's pins are in `ThirdParty.lock.json`. APKRun does not use the prebuilt bottles (virglrenderer 1.0.33, ANGLE 1.0.15, libepoxy 1.0.4). |
-| `scripts/prepare-virgl-sources.sh` | Patch order: the virglrenderer recipe patch, then `scripts/virgl-patches/virglrenderer-*.patch`, then the ANGLE and libepoxy recipe patches | No file header; repository MIT | Reference for the patch order in §4. Ignore the script; APKRun applies patches through `scripts/tools/build_third_party.py`. |
-| `scripts/build-virgl-runtime-from-source.sh` | ANGLE GN arguments, Meson arguments, `gclient sync`, install names, and link order | No file header; repository MIT | Reference for the flags in §4. Ignore the script; APKRun builds from the lock's `buildFlags`. |
-| `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` | The MSAA downgrade code, which APKRun ships as `virglrenderer/0002` | No file header; the added code is RiftVM-authored (its comments say "RiftVM:") | Copied RiftVM code in APKRun's patch set. See IR-410 for the notice and classification. |
-| `Tests/CVirGLBridgeTests/ActiveContextSetTests.c`; `Tests/CVirGLBridgeTests/ContextSyncLifecycleTests.c` | Unit tests of `ActiveContextSet.h`; renderer lifecycle tests with deterministic EGL and renderer callbacks. The second file includes `CVirGLBridge.c` directly | No file header; repository MIT | Review prompts for the #020 and #022 bridge tests. Do not copy: the lifecycle test compiles RiftVM's bridge source. |
-| `Tests/RiftVMCoreTests/VMVirGLPresentationTests.swift` | Presentation and lifecycle tests of the custom VirGL path: late fence invalidation, failure recovery, late completion after stop, and backend selection | No file header; repository MIT | Review prompts for the #023 presentation tests. Do not copy. |
-| `Experiments/VZVirtioGPUPrototype/RUNTIME_DEPENDENCIES.md`; `ThirdPartyLicenses/virglrenderer.txt` | Upstream statements of the runtime licenses (MIT for virglrenderer and libepoxy, BSD-3-Clause for ANGLE) and the upstream virglrenderer license text | Documentation and license text; repository MIT | Evidence for the §4 license table only. Not copied. APKRun keeps its own license copies under `ThirdParty/licenses/`. |
   an explicit `glFlush`; the C bridge comments that the external winsys does
   not reliably retire work without that synchronization. Keep the producer
   fence and ordering requirements visible in the #020/#023 tests.
@@ -453,6 +500,8 @@ limitations:
 | Guest trust | Upstream bounds and logs in a product-specific handler | APKRun validates every guest-controlled value, tracks bounded allocations, uses typed errors, and fuzzes decoders |
 | Renderer build | Pinned RiftVM source and recipe archives; upstream notice docs disagree about release packaging | APKRun's own lock, build scripts, reproducibility checks, and third-party notices |
 | Save/restore | Disabled for custom VirGL | Disabled while this device is attached, per R-07 |
+| Resource formats | The device forwards the guest's `format` to virglrenderer without a device-side allowlist; the renderer decides, and its refusal maps to an error response | Formats are limited to the renderer's supported set ([graphics.md](graphics.md) §4.4) |
+| Renderer inputs | RiftVM's pinned recipe archives and repository patches, applied by its own scripts, with reference flags | APKRun's lock-listed patch series and `buildFlags`, with the choices recorded in §4 and IR-190, IR-410 to IR-413 |
 
 The source findings update [graphics.md](graphics.md) §2.1 and inform the
 independent APKRun build plan in §5.1–§5.2. No core graphics gate is passed by
@@ -478,5 +527,25 @@ accepted by review. #018 did not build RiftVM, run a VM boot, or perform an
 Android/Metal presentation test; the separately scoped #020 renderer build and
 tests are recorded in [graphics.md](graphics.md) §16 / IR-191. Maintainer
 review of the source-version substitution and this analysis is still required.
-| Resource formats | The device forwards the guest's `format` to virglrenderer without a device-side allowlist; the renderer decides, and its refusal maps to an error response | Formats are limited to the renderer's supported set ([graphics.md](graphics.md) §4.4) |
-| Renderer inputs | RiftVM's pinned recipe archives and repository patches, applied by its own scripts, with reference flags | APKRun's lock-listed patch series and `buildFlags`, with the choices recorded in §4 and IR-190, IR-410 to IR-413 |
+
+On 2026-10-10 #018 checked the analysis again against the pinned commit. No
+local checkout is present in the task worktree, so the files were read through
+the GitHub API at `51f19193`. The annotated tag `riftvm-v0.6.1` (object
+`e757cdec`) peels to that commit. The checks covered the device and protocol
+paths and their line references, the error-code names in the attach and scanout
+paths, the `flags 0` initialization and callback version 4, the limits, the
+fence timeout and poll backoff, the scheduler counters, the production shutdown
+order, and the absence of license headers in every row of §5. The recipe
+archives and the virglrenderer, ANGLE, and libepoxy source archives were
+downloaded, and their SHA-256 values matched the pins in
+`scripts/virgl-runtime-pins.sh`. The patch comparisons applied the sequences to
+copies of the pinned sources (virglrenderer in full; ANGLE for the files the
+patches touch) or compared added lines (libepoxy). `scripts/check-lock.sh`
+passed in the worktree after the pinned XcodeGen was installed from its
+checksummed release archive. `build_third_party.py cache-key graphics-reference`
+refuses the group as having no buildable component, and the `virgl-runtime`
+selection does not include `riftvm`.
+
+Not checked: no build, no VM, no Metal presentation, and no Vulkan build. The
+prebuilt bottle binaries named in `virgl-runtime-pins.sh` were not examined.
+The NOTICE status of the Vulkan headers is not verified (§4).

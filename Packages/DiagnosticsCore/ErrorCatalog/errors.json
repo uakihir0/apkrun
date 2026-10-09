@@ -2175,10 +2175,10 @@
         "ja": "このバージョンの APKRun では、{profile} のグラフィックスプロファイルを使えません。"
       },
       "remediation": {
-        "en": "Start Android with `apkrun dev boot --gpu swiftshader`. The VirGL profile is available with the VirGL renderer.",
-        "ja": "`apkrun dev boot --gpu swiftshader` で Android を起動してください。VirGL プロファイルは VirGL レンダラーとともに提供されます。"
+        "en": "Start Android in Graphics Safe Mode. This version of APKRun can't use the VirGL graphics profile yet.",
+        "ja": "グラフィックスセーフモードでAndroidを起動してください。このバージョンのAPKRunでは、VirGLのグラフィックスプロファイルはまだ使えません。"
       },
-      "action": "none",
+      "action": "startGraphicsSafeMode",
       "cliExit": 1,
       "doc": {
         "case": "gpuProfileUnavailable(profile:)",

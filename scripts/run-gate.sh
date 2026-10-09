@@ -46,6 +46,10 @@ APKRUN_TEST_LINUX_DIR="$(
 export APKRUN_TEST_LINUX_DIR
 mkdir -p "$gate_dir"
 rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/$gate.xcresult"
+# The gate runs the spec's values. A dwell override in the environment would change the evidence, so both
+# variables are removed before any test runs. G2 holds each boot for the default 600 s (gate G2, roadmap.md §2).
+unset APKRUN_G2_DWELL_SECONDS TEST_RUNNER_APKRUN_G2_DWELL_SECONDS
+gate_dwell_seconds=600
 report="$gate_dir/report.txt"
 started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 commit="$(git rev-parse HEAD)"
@@ -58,6 +62,9 @@ macos_build="$(sw_vers -buildVersion)"
     printf 'started: %s\n' "$started_at"
     printf 'mac_model: %s\n' "$mac_model"
     printf 'macos_build: %s\n' "$macos_build"
+    if [[ "$gate" == G2 ]]; then
+        printf 'dwell_seconds: %s\n' "$gate_dwell_seconds"
+    fi
     printf 'status: running\n'
 } > "$report"
 

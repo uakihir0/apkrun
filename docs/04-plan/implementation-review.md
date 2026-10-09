@@ -11810,7 +11810,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 **Reason.** `build/android-sdk` has platforms, build-tools, platform-tools, and cmdline-tools, but no `ndk` directory. Installing one would change the SDK that the other checkouts share. A standalone build would also need libraries that the lock does not pin: libdrm for the virtio-gpu winsys, and zlib and expat unless the build drops them. It would need the Android headers that Mesa's Android platform code includes, such as `hardware/gralloc*.h` and the `libsync` header. The guest runs these components, so AGENTS §6.6 requires an ADR for them. Built outside the AOSP build, the modules would also have to match the vendor linker namespace and the VNDK rules by hand.
 
-**Verification.** `build/android-sdk` contains no `ndk` directory. A HEAD request to `dl.google.com` returned HTTP 200, so a download is possible, but none was run.
+**Verification.** `build/android-sdk` contains no `ndk` directory. A HEAD request to `https://dl.google.com/android/repository/repository2-3.xml` returned HTTP 200, so a download is possible, but none was run.
 
 **Consequence.** The maintainer chooses this route or the one in IR-442, and an ADR is written before any component is pinned.
 

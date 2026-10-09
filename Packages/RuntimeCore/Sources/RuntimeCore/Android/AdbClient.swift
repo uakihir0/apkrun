@@ -133,6 +133,85 @@ public actor AdbClient {
         try await runShell(label: "reboot", "reboot -p", timeout: timeout)
     }
 
+    /// Installs an APK with `adb install -r`. adb installs through the device's PackageInstaller session
+    /// (package-store.md §6.1), so no APK is copied into an Android package directory (FR-PKG-01).
+    public func install(apk: URL, timeout: Duration = .seconds(180)) async throws(AdbFailure) {
+        let result = try await runDeviceCommand("install", arguments: ["install", "-r", apk.path], timeout: timeout)
+        try Self.requirePackageSuccess(result, command: "install")
+    }
+
+    /// Uninstalls `packageName` with `adb uninstall`.
+    public func uninstall(packageName: String, timeout: Duration = .seconds(60)) async throws(AdbFailure) {
+        guard Self.isPackageName(packageName) else {
+            throw .invalidArgument(command: "uninstall")
+        }
+        let result = try await runDeviceCommand(
+            "uninstall",
+            arguments: ["uninstall", packageName],
+            timeout: timeout
+        )
+        try Self.requirePackageSuccess(result, command: "uninstall")
+    }
+
+    /// Lists the packages whose names contain `filter`, with their versionCode (`pm list packages --show-versioncode`).
+    /// An empty filter lists every package.
+    public func listPackages(matching filter: String = "") async throws(AdbFailure) -> [AdbPackageListing] {
+        guard filter.isEmpty || Self.isPackageName(filter) else {
+            throw .invalidArgument(command: "pm")
+        }
+        let command =
+            filter.isEmpty
+            ? "pm list packages --show-versioncode"
+            : "pm list packages --show-versioncode \(filter)"
+        let reply = try await runShell(label: "pm", command, timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "pm", status: reply.status)
+        }
+        return AdbOutputParser.packageListings(reply.output)
+    }
+
+    /// Reads the metadata of an installed package from `dumpsys package <name>`.
+    public func dumpsysPackage(_ packageName: String) async throws(AdbFailure) -> AdbPackageMetadata {
+        guard Self.isPackageName(packageName) else {
+            throw .invalidArgument(command: "dumpsys")
+        }
+        let reply = try await runShell(label: "dumpsys", "dumpsys package \(packageName)", timeout: commandTimeout)
+        guard reply.status == 0 else {
+            throw .commandFailed(command: "dumpsys", status: reply.status)
+        }
+        guard let metadata = AdbOutputParser.packageMetadata(reply.output, packageName: packageName) else {
+            throw .unexpectedOutput(command: "dumpsys")
+        }
+        return metadata
+    }
+
+    /// Reads an install or uninstall result from both streams, because adb prints a rejection on standard error.
+    private static func requirePackageSuccess(_ result: AdbProcessResult, command: String) throws(AdbFailure) {
+        switch AdbOutputParser.packageReply(result.standardOutput + "\n" + result.standardError) {
+        case .failure(let reason):
+            throw .packageRejected(command: command, reason: reason)
+        case .success where result.status == 0:
+            return
+        case .success, .unknown:
+            if result.status != 0 {
+                throw .commandFailed(command: command, status: result.status)
+            }
+            throw .unexpectedOutput(command: command)
+        }
+    }
+
+    /// Package names are dot-separated identifiers, such as `io.apkrun.fixture.hellotext`.
+    private static func isPackageName(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count >= 2
+            && parts.allSatisfy { part in
+                guard let first = part.first, first.isASCII, first.isLetter else {
+                    return false
+                }
+                return part.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
+            }
+    }
+
     /// Runs `adb -s <endpoint> <arguments>` with the developer's terminal attached, and returns its exit status.
     ///
     /// `apkrun dev adb` uses this. adb's output goes straight to the terminal, so the status is

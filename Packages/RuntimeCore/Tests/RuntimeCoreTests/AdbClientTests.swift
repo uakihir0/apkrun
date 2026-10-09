@@ -257,6 +257,17 @@ private final class FakeADB: @unchecked Sendable {
               "-s 127.0.0.1:6520 shell sleep-forever") exec sleep 30 ;;
               "-s 127.0.0.1:6520 shell reboot -p") exit 0 ;;
               "-s 127.0.0.1:6520 shell exit-7") exit 7 ;;
+              "-s 127.0.0.1:6520 install -r "*) echo "Performing Streamed Install"; echo "Success"; exit 0 ;;
+              "-s 127.0.0.1:6520 uninstall io.apkrun.fixture.hellotext") echo "Success"; exit 0 ;;
+              "-s 127.0.0.1:6520 uninstall io.apkrun.absent")
+                echo "Failure [DELETE_FAILED_INTERNAL_ERROR]"; exit 1 ;;
+              "-s 127.0.0.1:6520 shell pm list packages --show-versioncode io.apkrun.fixture.hellotext")
+                echo "package:io.apkrun.fixture.hellotext versionCode:1"; exit 0 ;;
+              "-s 127.0.0.1:6520 shell dumpsys package io.apkrun.fixture.hellotext")
+                echo "  Package [io.apkrun.fixture.hellotext] (e3e9947):"
+                echo "    versionCode=1 minSdk=29 targetSdk=37"
+                echo "    versionName=1.0"
+                exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;
             esac
             """
@@ -316,4 +327,57 @@ private struct SilentLogSink: LogSink {
     }
 
     func write(_ entry: LogEntry) {}
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientInstallsUninstallsAndReadsThePackageThroughAdb() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+    let apk = URL(fileURLWithPath: "/tmp/apkrun-015-fake/HelloText.apk")
+
+    try await client.install(apk: apk)
+    try await client.uninstall(packageName: "io.apkrun.fixture.hellotext")
+    let listing = try await client.listPackages(matching: "io.apkrun.fixture.hellotext")
+    let metadata = try await client.dumpsysPackage("io.apkrun.fixture.hellotext")
+
+    #expect(
+        try fake.calls() == [
+            "-s 127.0.0.1:6520 install -r /tmp/apkrun-015-fake/HelloText.apk",
+            "-s 127.0.0.1:6520 uninstall io.apkrun.fixture.hellotext",
+            "-s 127.0.0.1:6520 shell pm list packages --show-versioncode io.apkrun.fixture.hellotext",
+            "-s 127.0.0.1:6520 shell dumpsys package io.apkrun.fixture.hellotext",
+        ]
+    )
+    #expect(listing == [AdbPackageListing(name: "io.apkrun.fixture.hellotext", versionCode: 1)])
+    #expect(metadata == AdbPackageMetadata(versionCode: 1, versionName: "1.0", minSdk: 29, targetSdk: 37))
+    // The install and uninstall commands are adb commands, not shell commands.
+    #expect(await client.shellInvocationCount == 2)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientReportsAnUninstallThatAndroidRefuses() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.uninstall(packageName: "io.apkrun.absent")
+        Issue.record("An uninstall that Android refuses must throw.")
+    } catch {
+        #expect(error == .packageRejected(command: "uninstall", reason: "DELETE_FAILED_INTERNAL_ERROR"))
+        #expect(error.qualifiedCode == "runtime.adbPackageRejected")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func adbClientRefusesPackageNamesThatAreNotIdentifiers() async throws {
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    do {
+        try await client.uninstall(packageName: "io.apkrun; reboot")
+        Issue.record("A package name with shell syntax must be refused.")
+    } catch {
+        #expect(error == .invalidArgument(command: "uninstall"))
+    }
+    #expect(try fake.calls().isEmpty)
 }

@@ -18,6 +18,10 @@ public enum AdbFailure: APKRunError, Equatable {
     case commandTimedOut(command: String, seconds: Int)
     /// An argument that a helper refuses to put on a command line.
     case invalidArgument(command: String)
+    /// The output did not have the expected shape.
+    case unexpectedOutput(command: String)
+    /// Android refused a package operation: `Failure [CODE]` in the reply, with the code as `reason`.
+    case packageRejected(command: String, reason: String)
 
     /// The `runtime` error domain.
     public static let domain: ErrorDomain = .runtime
@@ -31,6 +35,8 @@ public enum AdbFailure: APKRunError, Equatable {
         case .commandFailed: "adbCommandFailed"
         case .commandTimedOut: "adbCommandTimedOut"
         case .invalidArgument: "adbInvalidArgument"
+        case .unexpectedOutput: "adbUnexpectedOutput"
+        case .packageRejected: "adbPackageRejected"
         }
     }
 
@@ -41,8 +47,10 @@ public enum AdbFailure: APKRunError, Equatable {
             ["command": .text(command), "status": .count(Int(status))]
         case .commandTimedOut(let command, let seconds):
             ["command": .text(command), "seconds": .count(seconds)]
-        case .invalidArgument(let command):
+        case .invalidArgument(let command), .unexpectedOutput(let command):
             ["command": .text(command)]
+        case .packageRejected(let command, let reason):
+            ["command": .text(command), "reason": .text(reason)]
         case .executableMissing, .launchFailed, .connectionUnavailable:
             [:]
         }

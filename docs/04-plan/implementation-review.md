@@ -10827,6 +10827,8 @@ For each pinned keystore, the app bundle and the image bundle (the second argume
 
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
+## IR-360: Check the kernel command line over the serial shell, not on hvc0
+
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
@@ -11073,3 +11075,22 @@ For each pinned keystore, the app bundle and the image bundle (the second argume
 **Reason.** Each choice follows the spec's text and the rules that the reviewer cited. Choice 2 goes further than the coordinator's wording ("a lower base"): §2.3 says a same-triple candidate is not newer, and a higher base is not newer either, so refusing both is the rigorous reading. Choice 3 changes a schema text that §5 gives byte for byte, so the maintainer should confirm it. Choice 4 uses `unexpectedFile` for links, which is how the file walker already reported them. Choice 5 makes the installed tree match the store's documented read-only rule, and it adds the restore step that removal needs.
 
 **Follow-up: writable instance clones (IR-337, branch fix/065-writable-instance-clones, cbaaf36).** Choice 5 made the installed tree read-only, and `clonefile(2)` carries the mode of the template into each clone. Provisioning and the initrd write then failed with EACCES. Every clone that is written after it is made is now cloned with `FileCloner.cloneWritable`, which adds the owner's write bit and keeps the read bits: the instance disk (`InstanceDiskProvisioner`) and the initrd, including its copy fallback (`AndroidBootPlanner.writeInitrd`). The installed templates and the installed ramdisk stay read-only, because the store clones them with the plain clone and never writes the copy. The install staging clones are not written either, so they stay read-only as well. The owner's write bit is the only bit added, so a clone keeps the read bits of its source. Tests clone a read-only template, write to the clone, and check the mode of both files. The provisioning and initrd tests failed on the old code with `cloneFailed` (`NSPOSIXErrorDomain`), which is the reported regression.
+
+| Task | #012, #013 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #012, #013; [android-image.md](../02-design/android-image.md) §6.4, §13 |
+
+**Choice.** The #012 criterion "the `Kernel command line:` log line equals
+`cmdline.txt`" is reworded to "`/proc/cmdline`, read over the Android serial
+shell, equals `cmdline.txt`". The check runs in `AndroidBootTests.testReachesInit`
+(#013), so the criterion stays open on the #012 branch until #013 runs it.
+
+**Reason.** On VZ the kernel prints `Kernel command line:` before virtio_console
+is loaded, so the line never reaches hvc0 and cannot be read from the console
+log (IR-306, and the #012 notes). `/proc/cmdline` is the same string, and it can
+be read once the serial shell on hvc1 answers, which is after first-stage init.
+The criterion's intent, that the kernel gets the exact `cmdline.txt`, does not
+change.
+
+**Consequence.** `testKernelBoot` (#012) does not check the command line. Its
+`Kernel command line:` assertion is not written, and `dmesg` over the shell
+(#013) carries the same line.

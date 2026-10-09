@@ -1175,7 +1175,7 @@ See [../test-strategy.md](../test-strategy.md).
 ### Acceptance criteria
 
 - [x] An Android-specific `VMDefinition` is created by `AndroidBootPlanner` and accepted by `VMDefinitionValidator`.
-- [ ] The kernel command line is passed: the `Kernel command line:` log line equals `cmdline.txt`.
+- [ ] The kernel command line is passed: `/proc/cmdline`, read over the Android serial shell, equals `cmdline.txt`. The `Kernel command line:` log line is not the check, because it never reaches hvc0 on VZ (IR-360). This check runs in `AndroidBootTests.testReachesInit` (#013).
 - [ ] The bootconfig is passed as the initrd trailer, and `/proc/bootconfig` equals the merged block. The check runs on the Linux guest, or on Android in #013.
 - [x] The complete serial output is captured in `~/Library/Logs/APKRun-Dev/vm/console.log` and in `boot-<timestamp>.log`.
 - [x] The kernel boots past early init and detects the configured virtio devices, including two virtio block devices with the expected partition counts (the #011 Android check).
@@ -1195,7 +1195,8 @@ See [../test-strategy.md](../test-strategy.md).
   - The console log and the per-boot copies are written to `~/Library/Logs/APKRun-Dev/vm/` (`console.log`, `boot-<timestamp>.log`). They show `[vda]` with nine partitions and `[vdb]` with four.
   - Each boot logs `Prepared boot <id> of image 2026.10.0-cf16373615-arm64 bootconfig sha256 <hash> disks apkrun-os,apkrun-data gpu headless` (category `boot`).
   - T0: `BootPhaseDetectorTests` covers the panic and the boot-failed detail over a captured VZ console log; `AndroidBootPlannerTests` covers the definition, the initrd trailer, the shared bootconfig golden vectors, and `bootconfigConflict`. The 16 KiB build limit is `bootconfig.MAX_BUILD_BOOTCONFIG_SIZE` in `apkrun_image`.
-  - Open: (1) On VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The command-line criterion has to compare `/proc/cmdline`, read over the serial shell, with `cmdline.txt`; correct the criterion when that check is written. (2) `/proc/bootconfig` against the merged block (step 5 on the Linux guest, or over the serial shell). (3) The T2 `AndroidBootTests` (`testKernelBoot`, `testKernelPanicDetected`, `testReachesInit`, `testBootCompleted`) are not written; the G2 acceptance test covers the boot path in the meantime.
+  - Command-line criterion (IR-360): on VZ, `Kernel command line:` is printed before hvc0 exists, so it is never in the console log. The criterion now compares `/proc/cmdline`, read over the serial shell, with `cmdline.txt`. The shell check is written in #013 (`testReachesInit`), so the criterion stays open here until that task runs it.
+  - Open: (1) `/proc/bootconfig` against the merged block on the Linux guest (step 5, `LinuxGuestBootTests.testBootconfigTrailer`). (2) The T2 `AndroidBootTests` (`testKernelBoot`, `testKernelPanicDetected`) are written in this task. `testReachesInit`, `testBootCompleted`, `testPhasesInOrder`, and `testDevConsoleShell` belong to #013 and #014; the G2 acceptance test covers the boot path in the meantime.
 
 ---
 

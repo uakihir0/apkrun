@@ -1,0 +1,185 @@
+{
+  "cases": [
+    {
+      "expected": "ok",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "valid-test-key",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "ok",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "valid-among-several-keys",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "other",
+        "test"
+      ]
+    },
+    {
+      "expected": "signatureInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMiwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "message-byte-changed",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "untrustedKey",
+      "keyID": "0123456789abcdef",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "key-id-unknown",
+      "signatureFile": "apkrun-signature-v1\nkey-id: 0123456789abcdef\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "untrustedKey",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "no-trusted-keys",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": []
+    },
+    {
+      "expected": "signatureInvalid",
+      "keyID": "949648f386c19d18",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "key-id-selects-other-trusted-key",
+      "signatureFile": "apkrun-signature-v1\nkey-id: 949648f386c19d18\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "other",
+        "test"
+      ]
+    },
+    {
+      "expected": "signatureInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "signature-bit-flipped",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7jXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "signature-63-bytes",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuu\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "signature-not-base64",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: not base64!!\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "extra-line",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\nextra: x\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "crlf-line-ends",
+      "signatureFile": "apkrun-signature-v1\r\nkey-id: d4a6987f22e8f45f\r\nalgorithm: ed25519\r\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\r\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "missing-final-lf",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "wrong-format-tag",
+      "signatureFile": "apkrun-signature-v2\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "wrong-algorithm",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed448\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": null,
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "uppercase-key-id",
+      "signatureFile": "apkrun-signature-v1\nkey-id: D4A6987F22E8F45F\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": "d4a6987f22e8f45f",
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "non-ascii-byte",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\u00e9\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\n",
+      "trustedKeys": [
+        "test"
+      ]
+    },
+    {
+      "expected": "manifestInvalid",
+      "keyID": null,
+      "message": "ewogICJzY2hlbWFWZXJzaW9uIjogMSwKICAiaW1hZ2VWZXJzaW9uIjogIjIwMjYuMTAuMC1jZjE2MzczNjE1LWFybTY0Igp9Cg==",
+      "name": "larger-than-4-kib",
+      "signatureFile": "apkrun-signature-v1\nkey-id: d4a6987f22e8f45f\nalgorithm: ed25519\nsignature: 7zXKplk33lU0kWD1xA3J7RqnxzatqPRwO35UQDpG5N2h6Wn9lSvR4+tZ7QYxmOYptU9xjV5mcpGrSC1ceyuuCw==\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trustedKeys": [
+        "test"
+      ]
+    }
+  ],
+  "keys": {
+    "other": {
+      "keyID": "949648f386c19d18",
+      "publicKey": "670B874UBr93wtms4c0FV7oqzAYGusNXxaoRxjRPn80="
+    },
+    "test": {
+      "keyID": "d4a6987f22e8f45f",
+      "publicKey": "Rke876LYe8krGBEA3FIFU1CycXgcDcuBHpt1iZc+X0c="
+    }
+  },
+  "schemaVersion": 1
+}

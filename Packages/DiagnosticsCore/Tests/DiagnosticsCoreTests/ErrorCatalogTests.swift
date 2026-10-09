@@ -42,6 +42,8 @@ import Testing
                 "manifestInvalid", "insufficientSpace", "cloneUnsupported", "cloneFailed",
                 "instanceCorrupt", "instanceMissing", "missingFile", "hashMismatch",
                 "bootconfigConflict", "bootconfigTooLarge", "cmdlineTooLong",
+                "untrustedKey", "signatureInvalid", "unexpectedFile", "downgradeRejected",
+                "imageNotInstalled", "noCurrentImage",
             ].map { "image.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)

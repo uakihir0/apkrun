@@ -499,6 +499,20 @@
       "upstream": { "watch": "commits", "branch": "main" }
     },
     {
+      "name": "aosp-mesa3d",
+      "group": "guest-image",
+      "kind": "source",
+      "repository": "https://android.googlesource.com/platform/external/mesa3d",
+      "commit": "875160ed32cc5bc32777fa04870a0a57ed38c987",
+      "version": "26.1.0-devel (android-17.0.0_r1)",
+      "license": "MIT AND Apache-2.0 AND GPL-1.0-or-later AND GPL-2.0-only",
+      "licenseFiles": ["LICENSE"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "image",
+      "upstream": { "watch": "commits", "branch": "android17-release" }
+    },
+    {
       "name": "riftvm",
       "group": "graphics-reference",
       "kind": "source",

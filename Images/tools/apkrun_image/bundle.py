@@ -1,10 +1,10 @@
-"""Build a runtime image bundle (android-image.md §10; runtime-image-manifest.md).
+"""Build and sign a runtime image bundle (android-image.md §10; runtime-image-manifest.md).
 
-`bundle --unsigned` (#012, development only) runs `extract` and `disks`, writes
-`boot/bootconfig.txt` from the vendor bootconfig, the layout's image layer, and
-the AVB values, and writes `manifest.json`. Signing, `manifest.sig`, and
-`SHA256SUMS` arrive with #065; until then a Debug build loads the directory
-with `DevelopmentImage`.
+`bundle` runs `extract` and `disks`, writes `boot/bootconfig.txt` from the vendor
+bootconfig, the layout's image layer, and the AVB values, then writes
+`manifest.json`, `SHA256SUMS`, and `manifest.sig`. The manifest is validated
+against the schema and rules S1–S14 before anything is written. The bundle is
+deterministic: the same inputs and tool revision give the same bytes.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, BinaryIO
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from apkrun_image import __version__
 from apkrun_image.avb import AvbError, calculate_vbmeta_bootconfig
@@ -44,6 +46,8 @@ from apkrun_image.manifest import (
     _repository_root,
     _resolve_archive_root,
 )
+from apkrun_image.runtime_manifest import validate
+from apkrun_image.sign import SignatureError, load_private_key, render_signature
 from apkrun_image.sparse import SparseImageError
 
 SCHEMA_VERSION = 1
@@ -102,6 +106,19 @@ def _tools_revision() -> str:
     return revision + ("-dirty" if status.strip() else "")
 
 
+def _load_signing_key(path: Path) -> Ed25519PrivateKey:
+    expanded = path.expanduser()
+    if not expanded.is_file():
+        raise BundleError(
+            f"--sign-key {expanded} does not exist; create it with "
+            "python3 -m apkrun_image keygen --out " + str(expanded)
+        )
+    try:
+        return load_private_key(expanded)
+    except (SignatureError, ValueError, OSError) as error:
+        raise BundleError(f"--sign-key {expanded} is not a usable Ed25519 key: {error}") from None
+
+
 def _repository_relative(path: Path) -> str:
     root = _repository_root().resolve()
     resolved = path.resolve()
@@ -119,6 +136,27 @@ def _bootconfig_text(vendor: Mapping[str, str], image: Mapping[str, str]) -> str
 
 def _target_sdk_floor(sdk: int) -> int:
     return 23 if sdk <= 34 else 24
+
+
+def _kernel_page_size(extraction: Mapping[str, Any]) -> int:
+    """The page size the kernel header declares (runtime-image-manifest.md §4.4).
+
+    Flags bits 1-2 of the arm64 Image header give 4 KiB, 16 KiB, or 64 KiB. Zero
+    means the kernel declares nothing, and the schema has no value for that, so
+    the build stops instead of guessing.
+    """
+    page_size = extraction["kernel"]["pageSize"]
+    if page_size not in (4096, 16384, 65536):
+        raise BundleError(
+            "the kernel header declares no page size (flags bits 1-2 are 0); "
+            "the bundle cannot record kernelPageSize"
+        )
+    return int(page_size)
+
+
+def _checksums(files: Sequence[Mapping[str, object]]) -> str:
+    """Render SHA256SUMS: one `<sha256>  <path>` line per file, in `files` order (§6.2)."""
+    return "".join(f"{entry['sha256']}  {entry['path']}\n" for entry in files)
 
 
 @contextlib.contextmanager
@@ -140,10 +178,12 @@ def build_bundle(
     output_directory: Path,
     source: Path | None = None,
     inventory_path: Path | None = None,
+    sign_key: Path,
 ) -> dict[str, object]:
-    """Build an unsigned development bundle in `output_directory`."""
+    """Build a signed bundle in `output_directory`."""
     if not SHORT_VERSION_PATTERN.fullmatch(image_version):
         raise BundleError("--image-version must be the short form YYYY.MM.N.")
+    signing_key = _load_signing_key(sign_key)
     device_family = document.get("deviceFamily")
     if not isinstance(device_family, str):
         raise BundleError("manifest deviceFamily is missing.")
@@ -282,7 +322,7 @@ def build_bundle(
             },
             "boot": {
                 **{key: by_path[path] for key, path in boot_paths.items()},
-                "kernelPageSize": extraction["kernel"]["pageSize"],
+                "kernelPageSize": _kernel_page_size(extraction),
                 "bootconfigOverrides": [],
             },
             "disks": disk_entries,
@@ -304,9 +344,14 @@ def build_bundle(
             "compatibility": {"upgradeFrom": {"minimumImageVersion": image_version}},
             "files": files,
         }
-        (bundle / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        violations = validate(manifest)
+        if violations:
+            first = violations[0]
+            raise BundleError(f"the manifest fails {first.rule} at {first.path}: {first.reason}")
+        manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        (bundle / "manifest.json").write_bytes(manifest_bytes)
+        (bundle / "SHA256SUMS").write_text(_checksums(files), encoding="ascii")
+        (bundle / "manifest.sig").write_bytes(render_signature(manifest_bytes, signing_key))
 
         if output_directory.exists():
             shutil.rmtree(output_directory)
@@ -327,9 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reference", type=Path, help="the reference capture used for the layout")
     parser.add_argument("--image-version", required=True, help="short form YYYY.MM.N")
     parser.add_argument(
-        "--unsigned",
-        action="store_true",
-        help="development bundle without manifest.sig and SHA256SUMS (until #065)",
+        "--sign-key",
+        required=True,
+        type=Path,
+        help="Ed25519 private key from `python3 -m apkrun_image keygen`",
     )
     parser.add_argument("--out", required=True, type=Path)
     return parser
@@ -339,8 +385,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Build the bundle and report actionable failures."""
     arguments = build_parser().parse_args(argv)
     try:
-        if not arguments.unsigned:
-            raise BundleError("signed bundles arrive with #065; pass --unsigned for development.")
         document = _load_json(arguments.manifest, description="manifest")
         if not isinstance(document, dict) or not isinstance(document.get("deviceFamily"), str):
             raise BundleError("manifest: top level must be an object with a deviceFamily.")
@@ -355,6 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_directory=arguments.out,
             source=arguments.source,
             inventory_path=arguments.inventory,
+            sign_key=arguments.sign_key,
         )
     except (
         AvbError,

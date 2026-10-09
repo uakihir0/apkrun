@@ -11688,7 +11688,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 **Choice.** `RuntimeSupervisor` checks the profile's `requiredHostCapabilities`, from the bundle manifest, against the names of the device's features (`VirtioGPUDevice.hostCapabilities`: `edid`, and `virgl` once the renderer offers it). A profile the device cannot satisfy fails with `runtime.gpuProfileUnavailable` before the instance is read or the initrd is written. `drmVirgl` fails this way until #022. The entry is `cliExit` 1 with action `none`.
 
-**Reason.** Without the check, a `drmVirgl` boot gives the guest no VirGL feature for its Mesa stack, and the guest stalls or aborts after minutes (graphics.md §9). The manifest already names the features a profile needs, so the check uses that vocabulary and does not hard-code a list of profiles.
+**Reason.** Without the check, a `drmVirgl` boot would start without `VIRTIO_GPU_F_VIRGL`, although the profile's bootconfig selects Mesa's VirGL path (`androidboot.hardware.egl=mesa`). The problem would then surface inside the guest, not as a host error. The manifest already names the features a profile needs, so the check uses that vocabulary and does not hard-code a list of profiles.
 
 **Consequence.** `drmVirgl` cannot boot in this build, and `--gpu virgl` is refused (IR-382). #022 offers `VIRTIO_GPU_F_VIRGL` in the descriptor, and this check then passes without a change to it.
 
@@ -11770,11 +11770,11 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 | Task | #021 (step 2) |
 | Affected documents | [graphics.md](../02-design/graphics.md) §9, §12 (#021) |
 
-**Choice.** The T2 check starts the boot, waits for adb, reads the guest, saves the capture, and stops Android. It does not require `ready`. The summary records `sys.boot_completed` at capture time.
+**Choice.** The T2 check starts the boot, waits for adb, reads the guest, saves the capture, and stops Android. It does not require `ready`. The summary records the supervisor state and `sys.boot_completed` at capture time.
 
 **Reason.** graphics.md §12 says `boot_completed` is not needed for #021, because the 2D commands fail until #022. Waiting for readiness would tie the check to #022.
 
-**Consequence.** On this host the capture happens in the first seconds of Android (IR-390), and the summary can be empty if the capture comes first.
+**Consequence.** On this host the first capture came while the boot was in `booting(systemServer)`, before `sys.boot_completed`, so the check's evidence is taken early in Android's boot (IR-390).
 
 ## IR-387: Keep the captures beside the test bundle and in the test report
 
@@ -11826,8 +11826,8 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 | Task | #021 (steps 1 and 2) |
 | Affected documents | [graphics.md](../02-design/graphics.md) §9, §12 (#021 notes), §16 |
 
-**Choice.** Recorded as an observation, not as a design change. In the first CLI check, `apkrun dev boot --gpu swiftshader` reached `ready` about 9 s after the VM started, and the console shows `sys.boot_completed=1` at kernel time 8.5 s. The 2D commands (`SET_SCANOUT`, `RESOURCE_CREATE_2D`, `TRANSFER_TO_HOST_2D`, `RESOURCE_FLUSH`) return `VIRTIO_GPU_RESP_ERR_UNSPEC` (`0x1200`), and the kernel logs each one as `*ERROR*`.
+**Choice.** Recorded as an observation, not as a design change. A CLI boot, `apkrun dev boot --gpu swiftshader`, reached `ready` about 9 s after the VM started. Its console, saved as `cli-swiftshader-boot.log` beside the test bundle's captures, shows `sys.boot_completed=1` at kernel time 8.5 s. The 2D commands (`SET_SCANOUT`, `RESOURCE_CREATE_2D`, `TRANSFER_TO_HOST_2D`, `RESOURCE_FLUSH`) return `VIRTIO_GPU_RESP_ERR_UNSPEC` (`0x1200`), and the kernel logs each one as `*ERROR*`. The T2 capture came earlier, in `booting(systemServer)`.
 
-**Reason.** graphics.md §12 says that `boot_completed` is not required here, and this host reaches it anyway. The error responses are the expected behaviour until #022, and they did not stop the boot.
+**Reason.** graphics.md §12 says that `boot_completed` is not required here. This host reaches it anyway, and the error responses did not stop the boot.
 
 **Consequence.** A boot that completes with this profile does not show that the display works. #022 must check the 2D path with rendering, not only `boot_completed`. The maintainer should confirm the wording of graphics.md §12.

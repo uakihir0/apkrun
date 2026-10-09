@@ -37,6 +37,10 @@ import Testing
                 "devConsoleNotRunning", "devConsoleSocketUnavailable",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
                 "bootTimedOut", "bootStalled", "gpuProfileUnavailable",
+                "bootTimedOut", "bootStalled", "guestAgent", "adb",
+                "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed",
+                "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
+                "guestAgentOperationFailed",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

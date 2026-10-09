@@ -162,9 +162,9 @@ All VZ objects are created and called on the controller's private serial `Dispat
 
 ## 5. Guest-visible topology
 
-What the guest sees on VZ (from a captured VZ device tree; to be confirmed by #011 on our hardware):
+What the guest sees on VZ (confirmed by #011 on macOS 27.0.1 (26A434); the capture is `Images/reference/vz/26A434/topology.txt`):
 
-- One `pci-host-ecam-generic` PCIe host bridge (ECAM at `0x40000000`). There are no virtio-mmio nodes, so every virtio device is a PCI function.
+- One `pci-host-ecam-generic` PCIe host bridge (ECAM at `0x40000000`, platform device `40000000.pci`, host bridge `0000:00:00.0` with vendor `0x106b`). There are no virtio-mmio nodes, so every virtio device is a PCI function. The device tree has the top-level nodes `chosen`, `clock`, `cpus`, `gic`, `gpio-keys`, `hypervisor`, `memory`, `pci`, `pl031`, `pl061`, `psci`, and `timer`.
 - GICv3, PSCI via `hvc`, the arm64 architected timer, PL031 RTC, a PL061 GPIO wired to `gpio-keys` as the power button.
 - No PL011 UART. The console is `hvc0` (virtio-console).
 - RAM starts at `0x70000000`.
@@ -484,7 +484,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | G1 acceptance test plan on the `codex` branch | #003 | 2026-10-08 UTC, same host, commit `ef9b729`: 5 tests, 1 configuration-scoped skip (the Network case), 0 failures. `testTenBootsStopThroughTheGuestPowerButton` passed in 3.079 s and `testFailedStartCanBeReset` passed. This run does not close G1, which needs the reference Mac and a clean `main` (IR-283) |
 | `apkrun dev linux` live exits and instance lock | #003 | 2026-10-08 UTC, same host, embedded CLI built with `EmbeddedRuntime` and signed with `apkrun-dev.entitlements`, at `ef9b729`: smoke exit 0 with `boot ok`, `powerinput ok`, `done`; `--tests rng` exit 0 with `rng ok`; a second instance started while the first held the lock exited 75 (`runtime.instanceLocked`); `--tests nosuchcheck` exited 1 (`runtime.devLinuxCheckFailed`), with the failing line on stdout only (IR-286) |
 | VZ console device limit; Android on 10 + 10 ports; `boot_devices`; three NICs on the stock image | spike (IR-306) | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615: `validate()` accepts 10 single-port console devices and rejects 11; 10 single-port devices plus one multiport device with 10 console ports validate and boot. Android saw hvc0–hvc19, and the sensors HAL's `/dev/hvc18` frames arrived on port 18. `/sys/block/vda` is under `40000000.pci`. With three NAT NICs and `virt_wifi`, `wlan0` got a DHCP lease and a validated network. Guest `reboot` restarts inside the same `VZVirtualMachine`; `reboot -p` ends in `guestDidStop`. Harness: `Experiments/vz-android-boot/` |
-| Guest-visible topology and `androidboot.boot_devices` value | #011 | `40000000.pci` observed (row above); `topology.txt` pending (§5) |
+| Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09 UTC, macOS 27.0.1 (26A434): signed `LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout` passed with the two Android disks; both are under `/sys/devices/platform/40000000.pci/pci0000:00/`, with 512-byte logical blocks and the serials `apkrun-ro` and `apkrun-rw`. The capture is `Images/reference/vz/26A434/topology.txt` (§5) |
 | Serial port numbering with 20 ports, verified with markers; network on the stock image | #095 | pending (§6.2, §7). The spike observation is in the first row |
 | Pause and resume across host sleep | #069 | pending (§9.4) |
 | `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |

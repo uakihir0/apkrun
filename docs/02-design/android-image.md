@@ -331,7 +331,7 @@ Design rules:
 4. **Partition size = image size, exactly.** AVB hash footers sit in the last 64 bytes of a *partition*. A partition larger than its image would move the footer away from where libavb looks. `super` is sized to the unsparsed logical size recorded in its sparse header, because liblp checks the block device size.
 5. **Partitions not needed on VZ are left out.** `uboot_env`, the persistent `bootconfig` partition, and the persistent vbmeta (AVB persistent values) serve U-Boot only. `android_esp` serves EFI boot only. `pvmfw_a` and `vvmtruststore` serve protected VMs (`hypervisor.vm.supported=0`). `hibernation` is unused. Each omission is confirmed in #011 against the reference `ls -l /dev/block/by-name` and the fstab. If an omitted partition turns out to be required, it is added blank.
 
-Plan (corrected from three disks to two by the 2026-10-08 spike; #011 confirms it, and each correction is recorded in §13):
+Verified plan (corrected from three disks to two by the 2026-10-08 spike, confirmed by #011 on 2026-10-09: the Linux test guest saw `vda` with the nine partitions and `vdb` with the four, at the `disks.json` offsets and sizes; `Images/reference/vz/26A434/topology.txt`). The data is the `disks` section of `Images/tools/layouts/cuttlefish-phone-arm64.json`; each correction is recorded in §13:
 
 | VZ disk (attach order) | File | Access | `blockDeviceIdentifier` | GPT partitions (label ← source) | Guest name |
 |---|---|---|---|---|---|
@@ -351,7 +351,7 @@ Notes:
 - The output is written straight into the partition's range inside `os.img`. There is no intermediate file.
 - DONT_CARE chunks and zero FILL chunks become holes (`seek`), so `os.img` uses only as much physical space as the data.
 - CRC32 chunks are verified when present. The total block count must equal the header's `total_blks`.
-- T1 test: for the fixture sparse images and for the real `super.img`, the output hash equals `simg2img` output produced once on the Linux builder (the expected hash is committed in the test data).
+- T1 test: for the fixture sparse images and for the real `super.img`, the output hash equals `simg2img` output (simg2img 1.1.5; the expected hashes are committed in `Images/tools/tests/fixtures/sparse/expected-sha256.txt`). The real `super.img` expands to 8 GiB with SHA-256 `7dd80d27…85e3b5`.
 
 ### 4.4 GPT writer
 
@@ -362,11 +362,11 @@ Notes:
 - Type GUID: Linux filesystem data (`0FC63DAF-8483-4772-8E79-3D69D8477DE4`) for every partition. Android does not look at type GUIDs.
 - Unique partition GUIDs and the disk GUID are deterministic: UUIDv5 over (`imageVersion`, disk role, label) for `os.img` and the templates. Per-instance disks get new disk GUIDs at provisioning (§5.1) so that two instances would never collide.
 - Names: UTF-16LE, at most 36 code units, case-sensitive.
-- Reader side: the same module parses GPTs for tests and for `apkrun_image inspect`. ImageCore has its own minimal GPT reader/writer in Swift for §5.2 (header relocation only, no partition creation), tested against Python-produced fixtures.
+- Reader side: the same module parses GPTs for tests and for `apkrun_image inspect`. ImageCore has its own minimal GPT reader/writer in Swift for §5.2 (`GPTDisk`: header relocation only, no partition creation). Provisioning in both languages (`gpt.provision_disk`, `GPTDisk.provision`) zeroes the old backup GPT, writes both copies for the new size, grows the last partition to the new last usable sector, and gives the disk and partitions GUIDs that are UUIDv5 values over `instance/<instance UUID>/<role>[/<label>]` in the same namespace. Both are pinned to `Images/tools/tests/fixtures/gpt/provision.json`.
 
 ### 4.5 Assembly and verification
 
-`python3 -m apkrun_image disks --manifest … --layout layouts/cuttlefish-phone-arm64.json --out Images/work/<buildId>/disks/` produces `os.img`, `userdata.img` and `disks.json` (per partition: label, first LBA, size, source, SHA-256 of the partition contents).
+`python3 -m apkrun_image disks --manifest … --layout layouts/cuttlefish-phone-arm64.json [--image-version <v>] --out Images/work/<buildId>/disks/` produces `os.img`, `userdata.img` and `disks.json`. Per disk, `disks.json` has the file, role, access, identifier, sector size, logical size, disk GUID, and `userdataStrategy`; per partition, the label, GUID, first and last LBA, size, source, content kind (`blank` or the artifact kind), and the SHA-256 of the partition contents. Each artifact is hashed while it is copied and must equal its manifest SHA-256. For build 16373615 the command takes about 20 s; `os.img` is 8.1 GiB logical and 1.8 GiB allocated, and `userdata.img` is an 82 MiB template that is all holes. `python3 -m apkrun_image inspect <disk>` prints the partition table.
 
 #011 acceptance ("Android kernel detects expected virtio block devices") is checked twice:
 
@@ -420,7 +420,7 @@ Discovery (#011):
 
 1. Boot the Linux test guest with the two disks. `/init` prints `readlink -f /sys/block/vda` (expected shape: `/sys/devices/platform/<addr>.<node>/pci0000:00/0000:00:NN.0/virtioM/block/vda`).
 2. The platform component (for example `40000000.pci` or `40000000.pcie`, depending on the DT node name) is the value.
-3. The value is stored with the topology capture in `Images/reference/vz/<macOS build>/topology.txt`, and compiled into ImageCore as `VZPlatformProfile.bootDevices` (host-platform data, not image data). The T2 suite re-checks it on every new macOS build (R-16).
+3. The value is stored with the topology capture in `Images/reference/vz/<macOS build>/topology.txt` (first capture: `Images/reference/vz/26A434/topology.txt`), and compiled into ImageCore as `VZPlatformProfile.bootDevices` (host-platform data, not image data). The T2 suite re-checks it on every new macOS build (R-16): `LinuxGuestAndroidDiskLayoutTests` asserts that both disks sit under `40000000.pci`.
 4. The Android boot (#013) confirms that `/dev/block/by-name/` contains every label from §4.2.
 
 Alternative if the path is not stable across macOS versions: `androidboot.boot_part_uuid`. It names one partition's unique GUID and makes that partition's *disk* the boot device, so it only works if all partitions are on one disk. The fallback layout would put `super` and the other `os.img` partitions on the read-write disk. That is kept as a documented fallback, not built unless needed.
@@ -1689,12 +1689,12 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| VZ virtio-blk logical sector size | #005, #011 | pending (§4.4) |
+| VZ virtio-blk logical sector size | #005, #011 | 2026-10-09, macOS 27.0.1 (26A434): `logical_block_size` 512 on both Android disks (§4.4) |
 | Kernel compression, ramdisk fragment list, and command-line length of the pinned build | #010 | 2026-10-01; rechecked 2026-10-06 on macOS 27.0 (26A428); build 16373615: uncompressed 42,031,616-byte kernel; one unnamed `PLATFORM` fragment of 18,816,072 bytes, included; current command line 157 bytes. Reference-derived command-line additions remain pending #064. |
 | VZ direct-boot spike of the stock image (IR-306) | spike | 2026-10-08 UTC, arm64 Mac17,9 (M5 Pro), macOS 27.0.1 (26A434), build 16373615, harness `Experiments/vz-android-boot/`: kernel, first-stage init, dynamic partitions, AVB (`orange`/`unlocked`, `avb.py` digest), and first-boot formatting of `/metadata` and `/data` all worked. `/proc/bootconfig` equalled the merged block (49 keys, 2574 bytes). `getenforce` was `Enforcing` with no AVC denials. `/dev/rtc0` existed with the correct date. `VIRTUAL_DEVICE_BOOT_COMPLETED` came at 7.5 s on a first boot. `g2_spike.py` passed five cold boots in a row, each stable for 10 minutes with `sys.system_server.start_count` 1, no Watchdog kill, no init service exiting three times, and no tombstone (three-disk layout); the two-disk layout passed two cold boots. The handling it needed is in §4.2, §7, and §9.1 |
 | Real sizes of the blank partitions; omitted partitions not needed | #011 | the manifest sizes (`misc` 1 MiB, `metadata` 64 MiB, `frp` 1 MiB) booted in the spike; `_b` slots, `uboot_env`, `bootconfig`, and the persistent vbmeta were not needed. #011 confirms them against the composite specs (§3.2, §4.2) |
 | fstab `formattable` flags and the metadata encryption path | #011 | confirmed in the spike: `formattable` on `/data` and `/metadata`, `keydirectory=/metadata/vold/metadata_encryption` (§5.2) |
-| Guest-visible topology and `androidboot.boot_devices` value | #011 | `40000000.pci` (spike); `topology.txt` pending (§5.3) |
+| Guest-visible topology and `androidboot.boot_devices` value | #011 | 2026-10-09, macOS 27.0.1 (26A434): `40000000.pci`; the disks, PCI functions, and device-tree nodes are in `Images/reference/vz/26A434/topology.txt` (§5.3) |
 | Direct kernel boot of the stock image; `/dev/rtc0` present | #012 | positive in the spike; the production path is pending (§6, §7.6) |
 | First-stage modules; `/dev/block/by-name/` has every label; first-boot userdata formatting | #013 | positive in the spike: 19 first-stage modules loaded, every §4.2 label present, `/data` formatted on the first boot (§4.1, §5.2, §5.3) |
 | `sys.boot_completed=1` with the `headless` profile; `_b` partitions not needed | #014 | positive in the spike; G2 with the production code is pending (§4.2, §9.1) |

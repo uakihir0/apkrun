@@ -10217,3 +10217,27 @@ exposes no host data to the guest.
 available sensors mask=0`, registered `ISensors/default`, and boot completed.
 The framing comes from `common/libs/transport/channel.h` and
 `host/commands/sensors_simulator/sensors_hal_proxy.cpp` on `android17-release`.
+
+## IR-311: Test the provisioner's volume checks with an injected probe
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #011 |
+| Affected files | `Packages/ImageCore/Sources/ImageCore/Disks/InstanceDiskProvisioner.swift`; `Packages/ImageCore/Tests/ImageCoreTests/InstanceDiskProvisionerTests.swift` |
+
+**Choice.** `InstanceDiskProvisioner` reads the destination volume's file
+system type, name, and free space through an injectable probe (`statfs` by
+default). The tests use the real probe and a real `clonefile` on the APFS
+temporary directory for the clone-and-grow case, and an injected probe for the
+non-APFS (`cloneUnsupported`) and free-space (`insufficientSpace`) cases. The
+#011 entry planned T1 tests on `hdiutil create` scratch volumes, an APFS one and
+an HFS+ one.
+
+**Reason.** The checks depend only on what `statfs` reports, and the probe tests
+exercise exactly that decision without creating and mounting disk images in a
+`swift test` process. The clone-and-grow test still runs against the real file
+system, which is where the sparse-growth claim (NFR-RES-02) is measured.
+
+**Verification.** The four provisioner tests pass; the grown 32 GiB disk was
+allocated below 16 MiB on APFS.

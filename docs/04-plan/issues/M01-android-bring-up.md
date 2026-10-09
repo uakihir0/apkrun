@@ -1029,18 +1029,26 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] The minimum disk mapping needed to boot is defined: the two disks of [android-image.md](../../02-design/android-image.md) §4.2.
-- [ ] Each virtual device is documented with its backing image, read-only or read-write access, and the name the guest expects (the verified table in §4.2).
-- [ ] The mapping is data-driven. It lives in the layout and the manifest, and no partition or file name appears in Python or Swift code.
-- [ ] The Linux test guest sees two virtio block devices with the partition names and sizes of `disks.json`.
+- [x] The minimum disk mapping needed to boot is defined: the two disks of [android-image.md](../../02-design/android-image.md) §4.2.
+- [x] Each virtual device is documented with its backing image, read-only or read-write access, and the name the guest expects (the verified table in §4.2).
+- [x] The mapping is data-driven. It lives in the layout and the manifest, and no partition or file name appears in Python or Swift code.
+- [x] The Linux test guest sees two virtio block devices with the partition names and sizes of `disks.json`.
 - [ ] The Android kernel detects the expected virtio block devices. The design moves this check to #012.
-- [ ] `os.img` is read-only and `userdata.img` is read-write. The instance disk is an APFS clone, and `userdata.img` grows sparse (NFR-RES-02).
-- [ ] The `boot_devices` value is recorded in `topology.txt` and in [android-image.md](../../02-design/android-image.md) §5.3.
+- [x] `os.img` is read-only and `userdata.img` is read-write. The instance disk is an APFS clone, and `userdata.img` grows sparse (NFR-RES-02).
+- [x] The `boot_devices` value is recorded in `topology.txt` and in [android-image.md](../../02-design/android-image.md) §5.3.
 
 ### Notes
 
 - `clonefile` needs the source and the destination on the same volume. Tests and `apkrun-dev` must keep `APKRUN_HOME` on the volume of the bundle, or they get `cloneFailed(EXDEV)`.
 - Steps 3 and 6 read the #064 launcher captures under `Images/reference/16373615/incomplete/` (composite disk specs, `cuttlefish_config.json`) and the VZ spike capture; a complete #064 reference is not needed (IR-305).
+- **Verification (2026-10-09, macOS 27.0.1 26A434, branch `task/011-gpt-disks`).**
+  - Step 1: `sparse.expand_into` writes RAW and non-zero FILL chunks and leaves the rest as holes. Its output equals `simg2img` 1.1.5 for the three fixture images and for the real `super.img` (8 GiB, SHA-256 `7dd80d27…85e3b5`), and the real expansion is allocated below half its size.
+  - Step 2: `gpt.py` and `inspect` are in place; T0 covers the round trip, CRCs, UUIDv5 stability, names, and layout rejections, and the T1 case attaches a GPT with `hdiutil` and finds both partitions in `diskutil list`.
+  - Step 3: the layout `disks` section and `disks` command are in place. For build 16373615 the command took 20 s; `os.img` is 8,739,880,960 bytes with 1.8 GiB allocated, and the `userdata.img` template is 85,983,232 bytes with 64 KiB allocated. The `blankPartitions` sizes (1, 64, and 1 MiB) are unchanged: they booted in the spike, and the launcher captures have no sysfs listing. The reference §8 layout messages are tested.
+  - Step 4: `scripts/build-test-android-disks.sh` writes the disks outside `~/Documents`, and the signed `LinuxGuestAndroidDiskLayoutTests.testAndroidDiskLayout` passed. `topology.txt` is committed under `Images/reference/vz/26A434/`.
+  - Step 5: `GPTDisk` equals the Python provisioning fixture byte for byte; `InstanceDiskProvisioner` clones, grows a 32 GiB disk to less than 16 MiB allocated, keeps the 10 GiB margin, and refuses a non-APFS volume. The volume checks use an injected volume probe rather than `hdiutil` scratch volumes (IR-311).
+  - Python: 72 new or changed tests pass; ImageCore: 36 tests; the error catalog test covers the new `image.*` codes.
+  - The Android-kernel check of this task runs in #012.
 - The disk count changed from three to two after the VZ spike: the stock fstab has `/devices/*/block/vdc auto auto defaults voldmanaged=sdcard1:auto`, and vold scanned the third disk (the userdata disk, mounted as `/data`) as removable storage `disk:253,32` (IR-308).
 
 ---

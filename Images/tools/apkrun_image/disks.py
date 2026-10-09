@@ -43,7 +43,7 @@ from apkrun_image.manifest import (
     _resolve_archive_root,
     validate_manifest,
 )
-from apkrun_image.sparse import SparseImageError, expand_into, read_header
+from apkrun_image.sparse import SparseImageError, expand_into, read_header, write_skipping_zeros
 
 COPY_CHUNK_SIZE = 4 * 1024 * 1024
 METADATA_FILE = "disks.json"
@@ -224,9 +224,10 @@ def _write_disk(
                         while reader.read(COPY_CHUNK_SIZE):
                             pass
                     else:
-                        out.seek(offset)
+                        position = offset
                         while data := reader.read(COPY_CHUNK_SIZE):
-                            out.write(data)
+                            write_skipping_zeros(out, position, data)
+                            position += len(data)
                     if reader.position != artifact.get("size"):
                         raise DisksError(f'"{partition.source}": artifact size changed.')
                     if reader.digest.hexdigest() != artifact.get("sha256"):

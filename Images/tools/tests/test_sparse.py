@@ -274,3 +274,28 @@ def test_expand_into_rejects_a_truncated_image() -> None:
     raw, _expanded = sparse_fixture()
     with pytest.raises(SparseImageError, match="truncated"):
         expand_into(io.BytesIO(raw[:40]), io.BytesIO(bytes(64)), 0)
+
+
+def test_zero_blocks_stay_holes_and_the_bytes_read_back(tmp_path: Path) -> None:
+    """A zero run is not allocated on disk, and the output reads back the same bytes (§4.3).
+
+    The file extends past the written range. APFS allocates the extent nearest the end of a
+    file when a write lands in it, so the test keeps the zero run away from the end.
+    """
+    from apkrun_image.sparse import write_skipping_zeros
+
+    megabyte = 1024 * 1024
+    target = tmp_path / "os.img"
+    start = 16 * megabyte
+    payload = b"\x05" * 4096 + bytes(8 * megabyte)
+    size = 64 * megabyte
+    with target.open("w+b") as out:
+        out.truncate(size)
+        write_skipping_zeros(out, start, payload)
+    status = target.stat()
+    assert status.st_size == size
+    assert status.st_blocks * 512 < megabyte, "the 8 MiB zero run was allocated"
+    data = target.read_bytes()
+    assert data[start : start + 4096] == b"\x05" * 4096
+    assert data[start + 4096 : start + len(payload)] == bytes(8 * megabyte)
+    assert data[start + len(payload) :] == bytes(size - start - len(payload))

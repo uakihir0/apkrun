@@ -16,6 +16,7 @@ CHUNK_CRC32 = 0xCAC4
 FILE_HEADER_SIZE = 28
 CHUNK_HEADER_SIZE = 12
 COPY_SIZE = 1024 * 1024
+ZERO_BLOCK_BYTES = 4096
 MAX_LOGICAL_SIZE = 64 * 1024 * 1024 * 1024
 
 
@@ -270,12 +271,25 @@ def iter_chunks(stream: BinaryIO, header: SparseHeader | None = None) -> Iterato
         )
 
 
+def write_skipping_zeros(out: BinaryIO, position: int, data: bytes) -> None:
+    """Write `data` at `position`, leaving every all-zero block as a hole.
+
+    Zero bytes that the image carries as RAW data would otherwise be allocated on disk. The
+    output is the same bytes either way (android-image.md §4.3, §10.2), and a hole reads as zeros.
+    """
+    for start in range(0, len(data), ZERO_BLOCK_BYTES):
+        block = data[start : start + ZERO_BLOCK_BYTES]
+        if block.strip(b"\0"):
+            out.seek(position + start)
+            out.write(block)
+
+
 def expand_into(stream: BinaryIO, out: BinaryIO, offset: int) -> SparseHeader:
     """Write the expanded image into `out` at `offset`, leaving zero ranges as holes.
 
-    RAW chunks and FILL chunks with a non-zero pattern are written. DONT_CARE
-    chunks and zero FILL chunks are skipped, so on a sparse-capable file
-    system they stay unallocated (android-image.md §4.3). The caller sizes
+    Non-zero blocks of RAW chunks and FILL chunks with a non-zero pattern are
+    written. Zero blocks, DONT_CARE chunks, and zero FILL chunks are skipped, so on
+    a sparse-capable file system they stay unallocated (android-image.md §4.3). The caller sizes
     `out` beforehand. Both checksum forms are verified as the stream is read;
     a mismatch raises after the bytes before it were written, so callers must
     discard the output on error.
@@ -298,12 +312,13 @@ def expand_into(stream: BinaryIO, out: BinaryIO, offset: int) -> SparseHeader:
         if chunk_type == CHUNK_RAW:
             if payload_size != logical_size:
                 raise SparseImageError(f"raw sparse chunk {index} has an invalid payload size")
-            out.seek(offset + logical_offset)
+            position = offset + logical_offset
             remaining = payload_size
             while remaining:
                 data = _read_exact(stream, min(remaining, COPY_SIZE), f"raw chunk {index}")
                 running_crc = zlib.crc32(data, running_crc)
-                out.write(data)
+                write_skipping_zeros(out, position, data)
+                position += len(data)
                 remaining -= len(data)
         elif chunk_type == CHUNK_FILL:
             if block_count == 0 or payload_size != 4:

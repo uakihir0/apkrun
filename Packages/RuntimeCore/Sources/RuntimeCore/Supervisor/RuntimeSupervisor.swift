@@ -153,6 +153,11 @@ public actor RuntimeSupervisor {
 
     /// Boots Android and waits until it reports boot completion.
     public func ensureReady(_ reason: StartReason) async throws(RuntimeBootFailure) {
+        // A boot in progress holds the state at `.stopped` until the VM has been created. A second call must not
+        // start another boot, and it must not clear `stopRequested` (a stop during the instance load would be lost).
+        guard !isBooting else {
+            throw .androidBootFailed(detail: "a boot is already in progress")
+        }
         guard state == .stopped else {
             if state == .ready {
                 return
@@ -190,12 +195,15 @@ public actor RuntimeSupervisor {
             await requestPowerOff(controller)
         }
         if await controller.state != .stopped {
+            // Rejected while the VM is starting. The boot then stops the VM itself (see `boot()`).
             try? await controller.stop()
         }
+        // Detach before the drain wait. The drain ends only when the VM has stopped, and a boot still starting the
+        // VM sees the detached controller and stops it. Waiting while still attached would never return.
+        self.controller = nil
         await controller.waitForConsoleLogDrain()
         finishTasks()
         closeDevelopmentChannels()
-        self.controller = nil
         shell = nil
         transition(to: .stopped)
     }
@@ -675,13 +683,14 @@ public actor RuntimeSupervisor {
         bootProgress?.finish()
         bootProgress = nil
         if stopRequested {
-            // A stop ended this boot. `stop()` shuts the VM down (gracefully in developer mode) and
-            // sets the state, so this path must not force the VM down or move the state to failed.
+            // A stop ended this boot. `stop()` owns the state and the graceful power-off, so this path does not move
+            // the state to failed. A VM that is still running is stopped here all the same, so that a boot ended by
+            // a stop during start does not leave the VM running.
             logger.notice("Android boot ended by a stop request")
-            return
+        } else {
+            logger.error("Android boot failed", errorCode: failure.qualifiedCode)
+            transition(to: .failed(failure))
         }
-        logger.error("Android boot failed", errorCode: failure.qualifiedCode)
-        transition(to: .failed(failure))
         if let controller {
             if await controller.state != .stopped {
                 try? await controller.stop()

@@ -1777,6 +1777,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 ---
 - Verification (2026-10-09): T0 `AdbLaunchParserTests` (6 tests) and the `AdbClientTests` launch cases passed; T2 `AndroidPackageTests` passed 4 of 4 (`xcodebuild`, AndroidPackage configuration, under `lockf -k /tmp/apkrun-vm.lock`). The T2 run covers the whole package suite, which includes the install and uninstall checks of #016.
+- Adversarial review (2026-10-09) found that `pidof` read a dropped endpoint as "no process", that `dumpsys` returned an empty answer for an unknown dump, and that the T0 tests had a tautology. All three are fixed; the recorded replies are committed under `Packages/RuntimeCore/Tests/RuntimeCoreTests/Fixtures/adb/`, and the `$` in a class name is refused ([IR-336](../implementation-review.md#ir-336-refuse-a-in-an-activity-class-name-instead-of-quoting-it)). After the fixes, the T2 package suite passed 4 of 4.
 - The headless default display of #014 did not block `am start`. No display error was seen, so the note in the entry did not apply.
 - Resumed-activity forms and the `pidof` reply are recorded as IR-334 and IR-335.
 - `apkrun dev launch` (the CLI launch) belongs to #027, and no CLI command was added here.

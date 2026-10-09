@@ -10712,6 +10712,66 @@ result is checked by `CounterStore`.
 **Consequence.** Criterion 1 stays open until the device check. The adapter has no
 automated test until then.
 
+## IR-334: Read the resumed activity from every form that Android prints
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #017 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #017 step 3 |
+
+**Choice.** `AdbClient.dumpsysActivities()` reads the resumed activity from the first of
+these lines that names a record: `topResumedActivity=`, `mResumedActivity:`,
+`ResumedActivity:`, or `Resumed:`. The record is written
+`ActivityRecord{<hash> u<user> <package>/<class> t<task>}`.
+
+**Reason.** #017 names `topResumedActivity` and `mResumedActivity`. The guest on this
+image (Android 17, build 16373615) prints `ResumedActivity:` for the global state and
+`Resumed:` under "Resumed activities in task display areas". It does not print
+`topResumedActivity=` in that dump. The earlier capture of the same guest did print it,
+so the reader accepts every form it has seen. The T0 tests run on the recorded forms.
+
+**Consequence.** A dump with none of these lines is an unexpected reply: `dumpsysActivities`
+throws `unexpectedOutput`. A dump that names a resumed record which is not an activity has
+no component and is not an error. A future Android release that prints only a fifth form
+therefore fails on the T2 check, and not silently.
+
+## IR-335: Read a pidof reply of nothing as "no process"
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #017 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #017 step 2 |
+
+**Choice.** `AdbClient.pidof` returns nil only when the command exits 1 with no output and no
+error text. It returns the first process ID when the command exits 0, and the ID must be a
+positive number. Every other reply is a failure: exit 1 with error text is a broken adb
+connection, not a missing process.
+
+**Reason.** `pidof` exits 1 with no output and no error when nothing matches. Treating that as an error
+would make "the process is gone" look like a failure, and #017's stop check depends on
+the difference. A recorded reply confirms the behaviour: after `am force-stop`, `pidof`
+exits 1 with no output.
+
+## IR-336: Refuse a `$` in an activity class name instead of quoting it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #017 |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #017 step 1 |
+
+**Choice.** `AdbClient.startActivity` refuses a component whose class name contains `$`,
+so a nested class such as `.Outer$Inner` is not started. The check is an `invalidArgument`
+error, not a quoted command line.
+
+**Reason.** The command runs through the device's shell (`adb shell`), and the shell expands
+`$` in an unquoted word. Quoting the component would be correct, but the only callers today
+pass constant component names, and no fixture has a nested class. Refusing the character
+is the smaller, safe change. Nested classes are a follow-up for the first task that starts
+one: that task quotes the component, adds a test, and removes the refusal.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 | Field | Value |

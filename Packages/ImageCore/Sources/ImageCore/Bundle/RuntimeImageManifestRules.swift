@@ -264,8 +264,7 @@ enum RuntimeImageManifestRules {
                 && Set(m.gpuProfiles.keys).isSubset(of: allowedProfiles),
             "/gpuProfiles", "drmVirgl and guestSwiftshader, and optionally headless"
         )
-        for name in m.gpuProfiles.keys.sorted() {
-            let profile = m.gpuProfiles[name]!
+        for (name, profile) in m.gpuProfiles.sorted(by: { $0.key < $1.key }) {
             let base = "/gpuProfiles/\(name)"
             try schema(profile.bootconfig.count <= 64, base + "/bootconfig", "at most 64 keys")
             for (key, value) in profile.bootconfig.sorted(by: { $0.key < $1.key }) {
@@ -351,8 +350,7 @@ enum RuntimeImageManifestRules {
         if let notice = m.legal?.notice {
             named[notice.path] = (notice.size, Optional(notice.sha256))
         }
-        for path in named.keys.sorted() {
-            let expected = named[path]!
+        for (path, expected) in named.sorted(by: { $0.key < $1.key }) {
             guard let entry = files[path] else {
                 throw Failure(violation: Violation(rule: "S3", path: "/files", reason: "\(path) has no files entry"))
             }
@@ -422,8 +420,7 @@ enum RuntimeImageManifestRules {
             reason: "port names must be unique"
         )
 
-        for name in m.gpuProfiles.keys.sorted() {
-            let profile = m.gpuProfiles[name]!
+        for (name, profile) in m.gpuProfiles.sorted(by: { $0.key < $1.key }) {
             let unknown = profile.overrides.filter { profile.bootconfig[$0] == nil }.sorted()
             try expect(
                 unknown.isEmpty, rule: "S8", path: "/gpuProfiles/\(name)/overrides",

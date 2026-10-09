@@ -343,6 +343,7 @@ public struct RuntimeImageManifest: Codable, Equatable, Sendable {
 // MARK: - Strict decoders (§11)
 
 extension RuntimeImageManifest {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -367,6 +368,7 @@ extension RuntimeImageManifest {
 }
 
 extension RuntimeImageManifest.FileEntry {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -379,6 +381,7 @@ extension RuntimeImageManifest.FileEntry {
 }
 
 extension RuntimeImageManifest.Boot {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -394,6 +397,7 @@ extension RuntimeImageManifest.Boot {
 }
 
 extension RuntimeImageManifest.Disk {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -412,6 +416,7 @@ extension RuntimeImageManifest.Disk {
 }
 
 extension RuntimeImageManifest.Disk.Partition {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -425,6 +430,7 @@ extension RuntimeImageManifest.Disk.Partition {
 }
 
 extension RuntimeImageManifest.ConsolePort {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -437,6 +443,7 @@ extension RuntimeImageManifest.ConsolePort {
 }
 
 extension RuntimeImageManifest.GPUProfile {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -449,6 +456,7 @@ extension RuntimeImageManifest.GPUProfile {
 }
 
 extension RuntimeImageManifest.Requirements {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -461,6 +469,7 @@ extension RuntimeImageManifest.Requirements {
 }
 
 extension RuntimeImageManifest.Requirements.ProtocolRange {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -472,6 +481,7 @@ extension RuntimeImageManifest.Requirements.ProtocolRange {
 }
 
 extension RuntimeImageManifest.Requirements.Agent {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -483,6 +493,7 @@ extension RuntimeImageManifest.Requirements.Agent {
 }
 
 extension RuntimeImageManifest.Userdata {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -494,6 +505,7 @@ extension RuntimeImageManifest.Userdata {
 }
 
 extension RuntimeImageManifest.Compatibility {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -502,6 +514,7 @@ extension RuntimeImageManifest.Compatibility {
 }
 
 extension RuntimeImageManifest.Compatibility.UpgradeFrom {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -510,6 +523,7 @@ extension RuntimeImageManifest.Compatibility.UpgradeFrom {
 }
 
 extension RuntimeImageManifest.Legal {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -518,6 +532,7 @@ extension RuntimeImageManifest.Legal {
 }
 
 extension RuntimeImageManifest.Guest {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -530,6 +545,7 @@ extension RuntimeImageManifest.Guest {
 }
 
 extension RuntimeImageManifest.Provenance {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -563,6 +579,7 @@ extension RuntimeImageManifest.Provenance {
 }
 
 extension RuntimeImageManifest.Provenance.FileReference {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -574,6 +591,7 @@ extension RuntimeImageManifest.Provenance.FileReference {
 }
 
 extension RuntimeImageManifest.Provenance.Source {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -588,6 +606,7 @@ extension RuntimeImageManifest.Provenance.Source {
 }
 
 extension RuntimeImageManifest.Provenance.Source.Archive {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -600,6 +619,7 @@ extension RuntimeImageManifest.Provenance.Source.Archive {
 }
 
 extension RuntimeImageManifest.Provenance.Android {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -613,6 +633,7 @@ extension RuntimeImageManifest.Provenance.Android {
 }
 
 extension RuntimeImageManifest.Provenance.Tools {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -625,6 +646,7 @@ extension RuntimeImageManifest.Provenance.Tools {
 }
 
 extension RuntimeImageManifest.Provenance.Revisions {
+    /// Decodes the object, rejecting any key the schema does not name (§11).
     public init(from decoder: any Decoder) throws {
         try decoder.rejectUnknownKeys(CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)

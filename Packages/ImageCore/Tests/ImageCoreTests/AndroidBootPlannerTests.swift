@@ -212,14 +212,17 @@ private struct FixtureBundle {
             byPath[path] = entry
         }
         let example = try JSONSerialization.jsonObject(
-            with: Data(contentsOf: repositoryRoot.appendingPathComponent(
-                "Images/tools/tests/fixtures/runtime-manifests/valid/stock-cf16373615.json"
-            ))
+            with: Data(
+                contentsOf: repositoryRoot.appendingPathComponent(
+                    "Images/tools/tests/fixtures/runtime-manifests/valid/stock-cf16373615.json"
+                ))
         )
         var document = try #require(example as? [String: Any])
         var boot = try #require(document["boot"] as? [String: Any])
-        for (key, path) in [("kernel", "boot/kernel"), ("ramdisk", "boot/ramdisk.img"),
-                            ("bootconfig", "boot/bootconfig.txt"), ("cmdline", "boot/cmdline.txt")] {
+        for (key, path) in [
+            ("kernel", "boot/kernel"), ("ramdisk", "boot/ramdisk.img"),
+            ("bootconfig", "boot/bootconfig.txt"), ("cmdline", "boot/cmdline.txt"),
+        ] {
             boot[key] = byPath[path]
         }
         document["boot"] = boot

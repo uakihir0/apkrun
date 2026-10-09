@@ -10780,7 +10780,7 @@ one: that task quotes the component, adds a test, and removes the refusal.
 | Task | #015, #016, #017 (found by the T2 suites on main) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §5.1 and §6.3; [build-system.md](../05-development/build-system.md) §8 |
 
-**Choice.** Not fixed in these three tasks. The owner of ImageCore decides the fix.
+**Choice.** Not fixed in these three tasks. main fixes it in cbaaf36: `FileCloner.cloneWritable` clones the file and then adds the owner's write bit, keeping the read bits.
 
 **Reason.** On main, an installed image is read-only (`templates/userdata.img`, `disks/os.img`, and
 `boot/ramdisk.img` are mode 0444). `clonefile(2)` keeps the mode of its source, so the instance disk
@@ -10791,8 +10791,8 @@ experiments confirmed the cause: a `chmod` to 0600 after each clone (`InstanceDi
 after `clonefile`, and `AndroidBootPlanner.swift` before the trailer is written) made the AndroidPackage
 suite pass 4 of 4 and the AndroidADB suite pass 2 of 2 on the rebased tip.
 
-**Consequence.** The T2 suites of #015 to #017 cannot pass on main until the clone sets a writable
-mode. The fix is small, but it changes ImageCore, which these tasks do not own, so it is recorded here.
+**Consequence.** The T2 suites of #015 to #017 cannot pass on main without a writable clone. With
+cbaaf36 they pass without any local change, and the T2 check is the one that confirms it.
 
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 

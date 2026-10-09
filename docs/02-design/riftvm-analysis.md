@@ -24,7 +24,7 @@ is copied by #018.
 | Tag | `riftvm-v0.6.1` |
 | Commit | `51f19193b1d3326b2e164d37a2a59e9970375170` |
 | Commit date | 2026-09-29 |
-| Lock entry | `riftvm` in `ThirdParty/ThirdParty.lock.json`, `kind: source`, `ships: reference`; RiftVM is not built, run as test software, or distributed. CI validates the lock metadata and license-file presence; this review manually compared the committed license copy with the pinned source. |
+| Lock entry | `riftvm` in `ThirdParty/ThirdParty.lock.json`, `kind: source`, `ships: reference`; RiftVM is not built, run as test software, or distributed. Code copied from it is recorded separately (the MSAA patch, IR-410). CI validates the lock metadata and license-file presence; this review manually compared the committed license copy with the pinned source. |
 | License | Repository-root MIT license, copied to `ThirdParty/licenses/riftvm/LICENSE` |
 
 The upstream tag list checked on 2026-10-05 contains no `v1.0.4` or
@@ -49,8 +49,9 @@ source/build scripts listed in §4, and the pinned commit's
 README and validation statements are attributed to upstream; this task did
 not rebuild RiftVM or reproduce those results.
 
-The prototype README describes passing its device, 2D, VirGL, zero-copy, and
-lifecycle stages on macOS 27 beta with Linux/Hyprland workloads. The maintained
+The prototype README reports that its first three gates (device, 2D, and VirGL)
+and the stage 4 zero-copy gate passed on macOS 27 beta with Linux/Hyprland
+workloads. It describes the stage 6 lifecycle handling without a pass claim. The maintained
 architecture and app integration show that the runtime is used by the normal
 RiftVM VM path, including general Linux VMs; the detailed end-to-end validation
 reported at this commit is specifically for Omarchy/Hyprland. Neither validates
@@ -95,7 +96,9 @@ boundaries.
 feature bits 0 and 1 (`VIRTIO_GPU_F_VIRGL` and `VIRTIO_GPU_F_EDID`). Its
 16-byte little-endian `virtio_gpu_config` reports one scanout and one capset.
 It does not advertise resource blobs or `VIRTIO_GPU_F_CONTEXT_INIT`, and it
-does not configure shared-memory regions. `supportsSaveRestore` is not enabled.
+does not configure shared-memory regions. The device does not define
+`supportsSaveRestore`; the backend reports `supportsMachineSaveRestore = false`
+(`VMCustomVirGLGraphics.swift`).
 
 The configuration provider supplies a serial `deviceQueue` to the VZ delegate
 provider. `didCreateDevice` stores the device and installs the delegate.
@@ -255,7 +258,7 @@ source.
 | VirGL | §2.3: `virgl_renderer_init` with callback version 4 and flags `0`, capset 1, fence polling from 1 ms to 4 ms, and the 2-second timeout; §1.1 and §5: renderer lifecycle | `VirGLRenderer.swift`; `RendererExecutor.swift`; `CVirGLBridge.c` |
 | scanout | §2.2: `SET_SCANOUT` clear and error paths; §2.3: `RESOURCE_FLUSH`, texture borrowing, the blit, and its Y orientation | `VirtioGPUDevice.swift`; `CVirGLBridge.c` |
 | ANGLE | §3: Metal EGL platform, root context, and context sharing; §2.3: `EGL_METAL_TEXTURE_ANGLE` import and the producer sync. The prototype's `MTLCreateSystemDefaultDevice()` assignment is not shown to be ANGLE's device (§3) | `CVirGLBridge.c`; `PrototypeApplication.swift` |
-| Metal | §2.3 and §3: presentation into a `CAMetalLayer` drawable, GPU ordering with an explicit `glFlush`, and `LatestFrameScheduler` pacing | `CVirGLBridge.c`; `LatestFrameScheduler.swift`; `VMCustomVirGLGraphics.swift` |
+| Metal | §2.3 and §3: GPU ordering with an explicit `glFlush` and `LatestFrameScheduler` pacing; §3.1: production drawable acquisition, presentation into `drawable.texture`, occlusion, and the stale-completion rules | `CVirGLBridge.c`; `LatestFrameScheduler.swift`; `VMCustomVirGLGraphics.swift` |
 | cursor | §2.2: `UPDATE_CURSOR` and `MOVE_CURSOR`, the 256 × 256 px cap, scanout 0 only, and the host-memory copy that stays outside the scanout path | `VirtioGPUDevice.swift`; `VirtioGPUProtocol.swift` (`Limits.maxCursorDimension`) |
 
 ## 3. ANGLE initialization and presentation
@@ -283,6 +286,32 @@ counts submitted, delivered, and coalesced frames. The callback returns to the
 device queue before the next frame is dispatched. This is a useful bounded
 queue policy; APKRun must connect it to its `SurfacePool`, sequence numbers,
 XPC frame ownership, and wrapper acknowledgement rules.
+
+### 3.1 Production drawable presentation
+
+`VMCustomVirGLGraphics.swift`, the production caller, presents each scanout
+under a single-flight rule:
+
+- A presentation starts only when demand is pending and none is in flight.
+  Damage received while a presentation is busy stays pending, and completion
+  drains it, so a guest that stops submitting frames still gets its last
+  update.
+- The drawable is acquired on `drawableAcquirer`, which calls
+  `CAMetalLayer.nextDrawable()` and records the wait. A nil drawable counts as
+  a miss, schedules a retry, and presents nothing.
+- The scanout is blitted with `runtime.presentAsync(...)` into
+  `drawable.texture`. Completion returns to the main queue. The result is
+  discarded if the presentation token is stale, if the view is occluded
+  (`canPresentFrames`), or if the display activity generation changed. In the
+  last case the drawable is dropped and the latest scanout is presented again.
+  `drawable.present()` is called only after a successful blit.
+- While the window is occluded, the live scanout is kept, but no drawables are
+  acquired and the presentation timer is not woken (`refreshPresentationActivity`).
+  Restoration presents the newest scanout even without a new `RESOURCE_FLUSH`.
+- Success and failure feed a presentation health window
+  (`recordPresentationResult`). Frame durations, drawable waits, and drawable
+  misses are counted per window. These are the kinds of markers that APKRun
+  must record ([diagnostics.md](diagnostics.md) §4.2).
 
 ## 4. Renderer sources, patches, and build flags
 
@@ -342,7 +371,7 @@ options. The differences from RiftVM are:
 
 | Component | APKRun #020 arguments (lock `buildFlags`) | Difference from RiftVM |
 |---|---|---|
-| ANGLE | GN: the nineteen RiftVM arguments above, plus `mac_deployment_target="27.0"` | Adds `mac_deployment_target="27.0"` (IR-413). ANGLE's DEPS are pinned per component in the lock (`angle-astc-encoder` `2319d9c4`, `angle-vulkan-headers` `c0fe12c8`, `angle-zlib` `e00f7038`) instead of `gclient sync`; the builder checks the notice set against the GN graph (IR-190, IR-191) |
+| ANGLE | GN: the nineteen RiftVM arguments above, plus `mac_deployment_target="27.0"` | Adds `mac_deployment_target="27.0"` (IR-413). The three ANGLE DEPS components of the Metal graph are listed in the lock (`angle-astc-encoder` `2319d9c4`, `angle-vulkan-headers` `c0fe12c8`, `angle-zlib` `e00f7038`). They equal ANGLE's `DEPS` revisions at the pinned commit (checked on 2026-10-10). The builder still runs `gclient sync` in its work area and checks only the ANGLE root commit, and it checks the GN graph against the locked notice entries (IR-190, IR-191) |
 | libepoxy | Meson: `-Degl=yes -Dglx=no -Dx11=false -Dtests=false` | Adds `-Dglx=no` (IR-413) |
 | virglrenderer | Meson: `-Dplatforms=egl -Ddrm-renderers=[] -Dvenus=false -Dtests=false -Dvideo=false -Dtracing=none` | Adds `-Dplatforms=egl` (IR-413). On macOS RiftVM's default `platforms=auto` also selects EGL when libepoxy reports it, so the flag changes the failure mode (missing EGL becomes a build error), not the compiled winsys (read from `meson.build`; not built). `venus=false` (IR-190). RiftVM passes an ANGLE include path through `-Dc_args` and `-Dcpp_args`; APKRun gives ANGLE and libepoxy to Meson through generated pkg-config files (`PKG_CONFIG_PATH`). Python is the locked PyYAML 6.0.3, visible only to this Meson process (IR-190), not RiftVM's Python native file |
 
@@ -475,9 +504,12 @@ limitations:
   APKRun must define and test its own daemon and renderer lifecycle before
   adopting that behavior.
 - The ANGLE/Metal producer-to-root-context handoff depends on EGL syncs and
-  an explicit `glFlush`; the C bridge comments that the external winsys does
-  not reliably retire work without that synchronization. Keep the producer
-  fence and ordering requirements visible in the #020/#023 tests.
+  an explicit `glFlush`. The C bridge says that the presenter's server-side
+  `eglWaitSync` never flushes the producer context, so every producer
+  submission ends with `glFlush`. It also says that the external ANGLE/Metal
+  winsys does not reliably retire the legacy ctx0 `GLsync`, so ctx0 work is
+  finished explicitly. Keep the producer fence and ordering requirements
+  visible in the #020/#023 tests.
 - The optional content-signature diagnostic uses synchronous `glReadPixels`,
   and cursor updates copy pixels to host memory. Neither belongs in APKRun's
   normal scanout path.
@@ -544,7 +576,8 @@ patches touch) or compared added lines (libepoxy). `scripts/check-lock.sh`
 passed in the worktree after the pinned XcodeGen was installed from its
 checksummed release archive. `build_third_party.py cache-key graphics-reference`
 refuses the group as having no buildable component, and the `virgl-runtime`
-selection does not include `riftvm`.
+selection does not include `riftvm`. The three ANGLE DEPS commits in the lock
+equal ANGLE's `DEPS` revisions at `2d91f554`, read from the downloaded archive.
 
 Not checked: no build, no VM, no Metal presentation, and no Vulkan build. The
 prebuilt bottle binaries named in `virgl-runtime-pins.sh` were not examined.

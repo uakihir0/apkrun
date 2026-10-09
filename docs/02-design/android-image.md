@@ -1427,7 +1427,7 @@ It runs extract (§4.1), disks (§4.5), and the bootconfig baseline (§6), write
 
 ### 10.3 Development install
 
-`apkrun dev image install Images/work/16373615/bundle/` asks apkrund (or the embedded runtime before #031) to install the directory. ImageCore verifies it, `clonefile`s the files into `Images/.installing-<version>/`, renames the directory to `Images/<version>/`, and sets `current`. If there is no instance yet, it provisions one (§5.1). Acceptance of #065: a bundle built from the stock image boots to `sys.boot_completed=1` under VZ.
+`apkrun dev image install Images/work/16373615/bundle/` asks apkrund (or the embedded runtime before #031) to install the directory. ImageCore verifies it, `clonefile`s the files into `Images/.installing-<version>/`, renames the directory to `Images/<version>/`, and sets `current`. If there is no instance yet, it provisions one (§5.1). The installed tree is read-only: the write bits are removed after the full check of the copy, as runtime-image-manifest.md §3.1 requires (IR-359). Acceptance of #065: a bundle built from the stock image boots to `sys.boot_completed=1` under VZ.
 
 ### 10.4 Release packaging and distribution (#087)
 

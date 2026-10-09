@@ -10538,3 +10538,22 @@ schedule (`cron: "15 3 * * *"`) comes back.
 **Choice.** A string that contains a line feed or carriage return fails the schema, in both readers, before any pattern is checked.
 
 **Reason.** The schema patterns end in `$`. Python's `re` matches `$` before a trailing line feed, so `"sha256": "<64 hex>\n"` passed the Python validator and failed Swift. ECMA regular expressions, which JSON Schema specifies, do not match there. The rule makes the two readers agree without changing the committed schema, which must stay byte for byte as §5 gives it.
+
+## IR-359: Refuse any candidate that is not newer than an installed image, and treat links as unexpected files
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #065 (review of the store, findings 1-6) |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §2.3, §3.1, §4.9, §5; [android-image.md](../02-design/android-image.md) §10.3; [filesystem-layout.md](../01-architecture/filesystem-layout.md) §1 |
+
+**Choice.** Six decisions, one per finding of the review:
+
+1. The downgrade check compares the candidate with every installed image, not only with `current`. The installed images are the version-named directories under `Images/` and the target of `current`, even when that directory is missing. A candidate is refused as `downgradeRejected` when any installed image other than itself is not strictly older than it, so the reported `from` is the highest such image. This covers a missing link and a crash between the rename and the activation, which a hook in the store lets the tests reproduce.
+2. A same-triple image with another base is refused, whether its base is lower or higher. §2.3 says such a candidate is not newer, so the check does not order bases. `ImageVersion.<` keeps comparing the triple only, as the spec requires.
+3. The schema bounds `userdata.schemaVersion` and `userdata.upgradableFrom` at 9223372036854775807. The reference text in §4.9 and the schema in §5 change with it, and the schema file is regenerated from §5. Swift's `Int` is 64-bit, so both readers now hold the same integers.
+4. A link, or any other entry that is not a regular file, is refused as `unexpectedFile` before its size or bytes are read. `lstat` decides, and files are opened with `O_NOFOLLOW`. A link is not `manifestInvalid`, because the bundle holds an entry the manifest does not allow, the same as any extra file.
+5. The staged copy loses every write bit, for files and directories, after its full check and before the rename. Removal restores the owner's write bit first, so garbage collection and a failed staging still delete their images. Links are left alone, since `chmod` would follow them.
+6. In Debug builds the developer key is read only from a regular file owned by the current user with no group or other write bit. Any other file trusts nothing. The owner check is implemented but not tested, because a test needs a file owned by another user, which needs root.
+
+**Reason.** Each choice follows the spec's text and the rules that the reviewer cited. Choice 2 goes further than the coordinator's wording ("a lower base"): §2.3 says a same-triple candidate is not newer, and a higher base is not newer either, so refusing both is the rigorous reading. Choice 3 changes a schema text that §5 gives byte for byte, so the maintainer should confirm it. Choice 4 uses `unexpectedFile` for links, which is how the file walker already reported them. Choice 5 makes the installed tree match the store's documented read-only rule, and it adds the restore step that removal needs.

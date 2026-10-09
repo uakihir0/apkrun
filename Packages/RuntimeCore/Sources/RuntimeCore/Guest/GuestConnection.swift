@@ -141,7 +141,8 @@ public actor GuestConnection {
                             try await opened.write(frame)
                         } catch {
                             // A write that fails ends the connection, and the requests that wait on it get the reason.
-                            self.logger.warning("A frame could not be written to the guest: \(error.localizedDescription, .public)")
+                            self.logger.warning(
+                                "A frame could not be written to the guest: \(error.localizedDescription, .public)")
                             self.connectionLost(.disconnected)
                             break
                         }
@@ -415,7 +416,9 @@ public actor GuestConnection {
             return
         }
         failure = reason
-        logger.info("The \(endpoint.developmentSocketName ?? "guest", .public) connection ended: \(reason.catalogName, .public)")
+        logger.info(
+            "The \(endpoint.developmentSocketName ?? "guest", .public) connection ended: \(reason.catalogName, .public)"
+        )
         handshakeTimer?.cancel()
         if let continuation = handshakeContinuation {
             handshakeContinuation = nil

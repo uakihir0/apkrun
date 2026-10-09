@@ -299,7 +299,9 @@ public actor GuestAgentSupervisor {
         await closing?.close()
         state = .connecting
         guard await restartAgent(reason) else {
-            logger.error("The Guest Agent restart budget is spent, so the agent stays down", errorCode: "runtime.requiredAgentUnavailable")
+            logger.error(
+                "The Guest Agent restart budget is spent, so the agent stays down",
+                errorCode: "runtime.requiredAgentUnavailable")
             state = .unavailable
             return
         }

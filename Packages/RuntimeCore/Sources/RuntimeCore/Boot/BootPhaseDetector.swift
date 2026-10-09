@@ -39,6 +39,24 @@ struct BootPhaseDetector: Sendable {
         return events
     }
 
+    /// Applies one ADB poll. The phases it enters are reported in boot order, and a phase already
+    /// entered from the console is not entered again. ADB never enters `.kernel`: the console does.
+    mutating func observe(adb state: AdbBootState) -> [Event] {
+        guard failure == nil else {
+            return []
+        }
+        var events: [Event] = []
+        if state.systemServerStarted, (phase ?? .kernel) < .systemServer {
+            phase = .systemServer
+            events.append(.entered(.systemServer, marker: .systemServerReady))
+        }
+        if state.bootCompleted, (phase ?? .kernel) < .bootCompleted {
+            phase = .bootCompleted
+            events.append(.entered(.bootCompleted, marker: .bootCompleted))
+        }
+        return events
+    }
+
     private mutating func consume(line: String) -> [Event] {
         if line.contains(BootSignals.kernelPanic) {
             failure = .kernelPanic

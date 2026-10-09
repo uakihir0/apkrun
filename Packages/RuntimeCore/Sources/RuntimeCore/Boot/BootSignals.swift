@@ -29,3 +29,19 @@ enum BootSignals {
     static let kernelPanic = "Kernel panic - not syncing"
     static let androidBootFailed = "VIRTUAL_DEVICE_BOOT_FAILED"
 }
+
+/// The Android properties that the ADB readiness signals read (runtime-daemon.md §3.3; development only).
+enum AdbBootSignals {
+    /// Set once `system_server` has started. A non-empty value enters `.systemServer`.
+    static let systemServerStartCount = "sys.system_server.start_count"
+    /// `1` once Android reports boot completion. Enters `.bootCompleted`.
+    static let bootCompleted = "sys.boot_completed"
+}
+
+/// What one poll of the ADB properties saw.
+struct AdbBootState: Equatable, Sendable {
+    /// Whether `sys.system_server.start_count` is non-empty.
+    var systemServerStarted: Bool
+    /// Whether `sys.boot_completed` is `1`.
+    var bootCompleted: Bool
+}

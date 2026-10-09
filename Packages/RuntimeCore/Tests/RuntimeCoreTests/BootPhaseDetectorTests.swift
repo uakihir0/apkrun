@@ -88,3 +88,52 @@ private func consoleFixture(_ name: String) throws -> Data {
         .appendingPathComponent("Fixtures/console/\(name)")
     return try Data(contentsOf: url)
 }
+
+@Test
+func adbSignalsEnterTheLaterPhasesWhenTheConsoleIsSilent() {
+    var detector = BootPhaseDetector()
+    let events = detector.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false))
+    #expect(events == [.entered(.systemServer, marker: .systemServerReady)])
+    #expect(detector.phase == .systemServer)
+
+    let completed = detector.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: true))
+    #expect(completed == [.entered(.bootCompleted, marker: .bootCompleted)])
+    #expect(detector.phase == .bootCompleted)
+}
+
+@Test
+func adbSignalsNeverReenterOrSkipBackwards() {
+    var detector = BootPhaseDetector()
+    _ = detector.consume(Data("] init: Loaded kernel module\n".utf8))
+    #expect(detector.phase == .`init`)
+
+    // A poll that still shows the earlier state enters nothing.
+    #expect(detector.observe(adb: AdbBootState(systemServerStarted: false, bootCompleted: false)).isEmpty)
+    // The first system_server poll enters systemServer once, and a repeat is silent.
+    #expect(
+        detector.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false))
+            == [.entered(.systemServer, marker: .systemServerReady)]
+    )
+    #expect(detector.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false)).isEmpty)
+}
+
+@Test
+func consoleAndAdbSignalsMixIntoOneOrderedPhaseSequence() {
+    let tracker = BootPhaseTracker()
+    var entered: [BootPhase] = []
+    func record(_ events: [BootPhaseDetector.Event]) {
+        for event in events {
+            if case .entered(let phase, _) = event {
+                entered.append(phase)
+            }
+        }
+    }
+    // The console sees the kernel and init first; ADB reports system_server and then boot completion.
+    record(tracker.consume(console: Data("] init: Loaded kernel module virtio_pci.ko\n".utf8)))
+    record(tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: false)))
+    // The console's own boot-completed line arrives after ADB already reported it: no second entry.
+    record(tracker.observe(adb: AdbBootState(systemServerStarted: true, bootCompleted: true)))
+    record(tracker.consume(console: Data("VIRTUAL_DEVICE_BOOT_COMPLETED\n".utf8)))
+
+    #expect(entered == [.kernel, .`init`, .systemServer, .bootCompleted])
+}

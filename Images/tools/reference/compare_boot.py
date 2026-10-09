@@ -11,9 +11,11 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import stat
 import sys
 import tempfile
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -752,6 +754,9 @@ def _category_records(
         ):
             if not line.strip():
                 continue
+            if category == "bootconfig" and line.lstrip().startswith("#"):
+                # `# Parameters from bootloader:` repeats the command line, which cmdline compares.
+                continue
             if category == "cmdline":
                 for token_index, match in enumerate(COMMAND_LINE_TOKEN.finditer(line), start=1):
                     token = match.group()
@@ -765,6 +770,14 @@ def _category_records(
     return records
 
 
+def _bootconfig_value(text: str) -> str:
+    """Return a bootconfig value without its statement semicolon or its quotes."""
+    value = text.strip().removesuffix(";").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
 def _record_key(category: str, relative: str, line: str, line_number: int) -> tuple[str, str]:
     """Extract stable keys from common Android output formats."""
     if category == "props":
@@ -774,7 +787,7 @@ def _record_key(category: str, relative: str, line: str, line_number: int) -> tu
     if category == "bootconfig":
         match = re.match(r"^\s*([^\s=]+)\s*=\s*(.*?)\s*$", line)
         if match:
-            return match.group(1), match.group(2)
+            return match.group(1), _bootconfig_value(match.group(2))
     fields = COMMAND_LINE_TOKEN.finditer(line)
     first = next(fields, None)
     second = next(fields, None)
@@ -1025,6 +1038,152 @@ def compare_captures(
     return 1 if unexplained else 0
 
 
+GUEST_CAPTURE_PATH = Path(__file__).with_name("guest-capture.txt")
+SHELL_COMMAND_TIMEOUT_SECONDS = 60.0
+SHELL_READ_BYTES = 65_536
+MAX_SHELL_CAPTURE_BYTES = 64 * 1024 * 1024
+
+
+def _read_guest_commands(path: Path) -> list[tuple[str, str]]:
+    """Read `<output file>\\t<guest command>` lines, skipping blanks and `#` comments."""
+    commands: list[tuple[str, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise CaptureToolError(f"cannot read the guest command list {path}: {error}") from None
+    for line_number, raw in enumerate(lines, start=1):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        name, separator, command = raw.partition("\t")
+        if not separator or not command.strip() or Path(name).name != name or not name:
+            raise CaptureToolError(
+                f"{path}:{line_number} must be '<output file>' TAB '<guest command>'."
+            )
+        commands.append((name, command.strip()))
+    return commands
+
+
+class _ShellSession:
+    """Run guest commands one at a time over the serial shell, reading to each sentinel."""
+
+    def __init__(self, connection: socket.socket) -> None:
+        self._connection = connection
+        self._pending = b""
+
+    def run(self, command: str, index: int, timeout: float) -> tuple[str, int]:
+        sentinel = f"__APKRUN_END_{index}__"
+        try:
+            self._connection.sendall(f"{command}; echo {sentinel} $?\n".encode())
+        except OSError as error:
+            raise CaptureToolError(
+                f"cannot send `{command}` to the serial shell: {error}"
+            ) from None
+        pattern = re.compile(rf"^{re.escape(sentinel)} (-?\d+)\r?$", re.MULTILINE)
+        deadline = time.monotonic() + timeout
+        while True:
+            text = self._pending.decode("utf-8", errors="replace")
+            match = pattern.search(text)
+            if match:
+                # Keep what follows the sentinel line, without its newline, for the next command.
+                end = text.find("\n", match.end())
+                self._pending = text[end + 1 :].encode("utf-8") if end >= 0 else b""
+
+                return text[: match.start()], int(match.group(1))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CaptureToolError(
+                    f"the serial shell did not finish `{command}` within {timeout:g} s"
+                )
+            self._connection.settimeout(remaining)
+            try:
+                chunk = self._connection.recv(SHELL_READ_BYTES)
+            except TimeoutError:
+                continue
+            except OSError as error:
+                raise CaptureToolError(
+                    f"the serial shell failed during `{command}`: {error}"
+                ) from None
+            if not chunk:
+                raise CaptureToolError(f"the serial shell closed the connection during `{command}`")
+            self._pending += chunk
+            if len(self._pending) > MAX_SHELL_CAPTURE_BYTES:
+                raise CaptureToolError(
+                    f"`{command}` produced more than the capture limit of output"
+                )
+
+
+def _require_socket(path: Path) -> None:
+    try:
+        mode = os.stat(path, follow_symlinks=False).st_mode
+    except OSError as error:
+        raise CaptureToolError(f"no serial shell socket at {path}: {error.strerror}") from None
+    if not stat.S_ISSOCK(mode):
+        raise CaptureToolError(f"{path} is not a socket")
+
+
+def _write_capture_output(path: Path, content: bytes) -> None:
+    """Create or replace one capture file without following a symbolic link."""
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+            os.chmod(temporary, 0o644)
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    except OSError as error:
+        raise CaptureToolError(f"cannot write {path}: {error}") from None
+
+
+def capture_vz(
+    shell: Path,
+    output: Path,
+    *,
+    commands_path: Path = GUEST_CAPTURE_PATH,
+    timeout: float = SHELL_COMMAND_TIMEOUT_SECONDS,
+) -> int:
+    """Run the reference command list on the VZ serial shell and write one file per output.
+
+    The shell echo is turned off for the capture, so the replies hold only the commands' output.
+    Each file's name comes from the command list, and `.gz` names are gzip-compressed. The
+    statuses go to `capture-status.txt`. Returns the number of commands run.
+    """
+    commands = _read_guest_commands(commands_path)
+    _require_socket(shell)
+    if output.is_symlink():
+        raise CaptureToolError(f"capture directory must not be a symbolic link: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    statuses: list[str] = []
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        try:
+            connection.connect(str(shell))
+        except OSError as error:
+            raise CaptureToolError(
+                f"cannot connect to the serial shell {shell}: {error.strerror}"
+            ) from None
+        session = _ShellSession(connection)
+        session.run("stty -echo", 0, timeout)
+        try:
+            for index, (name, command) in enumerate(commands, start=1):
+                body, status = session.run(command, index, timeout)
+                content = body.replace("\r", "").encode("utf-8")
+                if name.endswith(".gz"):
+                    content = gzip.compress(content, mtime=0)
+                _write_capture_output(output / name, content)
+                statuses.append(f"{name}\t{status}")
+        finally:
+            try:
+                session.run("stty echo", 0, timeout)
+            except CaptureToolError:
+                pass
+    status_text = "\n".join(statuses) + "\n"
+    _write_capture_output(output / "capture-status.txt", status_text.encode())
+    return len(commands)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Normalize a Cuttlefish capture or compare two boot captures."
@@ -1041,9 +1200,42 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _capture_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="compare_boot.py capture-vz",
+        description="Run the reference guest commands on the VZ serial shell and save the output.",
+    )
+    parser.add_argument(
+        "--shell", required=True, type=Path, help="the hvc1 socket of `apkrun dev boot`"
+    )
+    parser.add_argument("--out", required=True, type=Path, help="directory for the capture files")
+    parser.add_argument(
+        "--commands", type=Path, default=GUEST_CAPTURE_PATH, help="guest command list"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=SHELL_COMMAND_TIMEOUT_SECONDS, help="seconds per command"
+    )
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    arguments_list = list(sys.argv[1:] if argv is None else argv)
+    if arguments_list and arguments_list[0] == "capture-vz":
+        capture_arguments = _capture_parser().parse_args(arguments_list[1:])
+        try:
+            count = capture_vz(
+                capture_arguments.shell,
+                capture_arguments.out,
+                commands_path=capture_arguments.commands,
+                timeout=capture_arguments.timeout,
+            )
+        except CaptureToolError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        print(f"Captured {count} guest outputs into {capture_arguments.out}.")
+        return 0
     parser = _build_parser()
-    arguments = parser.parse_args(argv)
+    arguments = parser.parse_args(arguments_list)
     try:
         if len(arguments.paths) == 2 and str(arguments.paths[0]) == "normalize":
             count = normalize_capture(arguments.paths[1], arguments.rules)

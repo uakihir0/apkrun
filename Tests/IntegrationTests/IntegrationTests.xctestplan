@@ -71,6 +71,25 @@
         ],
         "maximumTestExecutionTimeAllowance" : 900
       }
+    },
+    {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003008",
+      "name" : "AndroidGraphics",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "android-graphics",
+            "enabled" : true
+          },
+          {
+            "key" : "ANDROID_ADB_SERVER_PORT",
+            "value" : "15037",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 1500
+      }
     }
   ],
   "defaultOptions" : {

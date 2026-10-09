@@ -144,10 +144,10 @@ final class GuestAgentTests: XCTestCase {
         let other = try Self.otherBundle()
         try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { _ in
             let adb = try await Self.connectedClient()
-            try await GuestAgentProvisioner(adb: adb, bundle: other).installIfNeeded()
+            try await GuestAgentProvisioner(adb: adb, bundle: other).install()
             let installed = try await adb.listPackages(matching: Self.agentPackage).first?.versionCode
             XCTAssertEqual(installed, other.versionCode)
-            try await GuestAgentProvisioner(adb: adb, bundle: bundle).installIfNeeded()
+            try await GuestAgentProvisioner(adb: adb, bundle: bundle).install()
             let restored = try await adb.listPackages(matching: Self.agentPackage).first?.versionCode
             XCTAssertEqual(restored, bundle.versionCode)
         }

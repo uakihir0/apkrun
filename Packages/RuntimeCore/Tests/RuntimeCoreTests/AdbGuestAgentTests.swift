@@ -34,6 +34,10 @@ private final class FakeGuestADB: @unchecked Sendable {
                 echo "package:io.apkrun.guest versionCode:$v"
                 exit 0 ;;
               "-s 127.0.0.1:6520 install -r -t "*)
+                if [ -f "$dir/refuse-all-installs" ]; then
+                  echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
+                  exit 1
+                fi
                 if [ -f "$dir/refuse-install" ]; then
                   rm -f "$dir/refuse-install"
                   echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
@@ -73,6 +77,11 @@ private final class FakeGuestADB: @unchecked Sendable {
         } else {
             try? FileManager.default.removeItem(at: flag)
         }
+    }
+
+    /// Makes every install refused, so that the reinstall after the removal is refused too.
+    func refuseEveryInstall() throws {
+        try Data().write(to: directory.appendingPathComponent("refuse-all-installs"))
     }
 
     func refuseNextInstall() throws {
@@ -124,15 +133,16 @@ func startGuestAgentRunsTheDocumentedAppProcessCommand() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aMatchingVersionIsNotInstalledAgain() async throws {
+func aMatchingVersionIsInstalledAgainOnEveryStart() async throws {
     let fake = try FakeGuestADB()
     try fake.setInstalledVersion(1000)
     let provisioner = GuestAgentProvisioner(
         adb: AdbClient(executable: fake.executable),
         bundle: bundle(version: 1000)
     )
-    try await provisioner.installIfNeeded()
-    #expect(!fake.calls.contains { $0.contains(" install ") })
+    try await provisioner.install()
+    #expect(fake.calls.contains { $0.hasPrefix("-s 127.0.0.1:6520 install -r -t ") })
+    #expect(!fake.calls.contains("-s 127.0.0.1:6520 uninstall io.apkrun.guest"))
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -143,7 +153,7 @@ func aDifferentVersionIsInstalledWithTheTestOnlyFlag() async throws {
         adb: AdbClient(executable: fake.executable),
         bundle: bundle(version: 1000)
     )
-    try await provisioner.installIfNeeded()
+    try await provisioner.install()
     #expect(fake.calls.contains { $0.hasPrefix("-s 127.0.0.1:6520 install -r -t ") })
 }
 
@@ -155,7 +165,7 @@ func anOlderBundleReplacesANewerInstalledAgentByRemovingIt() async throws {
         adb: AdbClient(executable: fake.executable),
         bundle: bundle(version: 1000)
     )
-    try await provisioner.installIfNeeded()
+    try await provisioner.install()
     let calls = fake.calls
     let uninstall = calls.firstIndex(of: "-s 127.0.0.1:6520 uninstall io.apkrun.guest")
     let install = calls.firstIndex { $0.hasPrefix("-s 127.0.0.1:6520 install -r -t ") }
@@ -166,7 +176,7 @@ func anOlderBundleReplacesANewerInstalledAgentByRemovingIt() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aSignerMismatchRemovesTheInstalledAgentBeforeInstalling() async throws {
+func aSignerMismatchUninstallsBetweenTheRefusedInstallAndTheRetry() async throws {
     let fake = try FakeGuestADB()
     try fake.setInstalledVersion(999)
     try fake.refuseNextInstall()
@@ -174,11 +184,33 @@ func aSignerMismatchRemovesTheInstalledAgentBeforeInstalling() async throws {
         adb: AdbClient(executable: fake.executable),
         bundle: bundle(version: 1000)
     )
-    try await provisioner.installIfNeeded()
-    let installs = fake.calls.filter { $0.contains(" install -r -t ") }
-    let uninstallIndex = fake.calls.firstIndex(of: "-s 127.0.0.1:6520 uninstall io.apkrun.guest")
+    try await provisioner.install()
+    let calls = fake.calls
+    let installs = calls.indices.filter { calls[$0].contains(" install -r -t ") }
+    let uninstall = calls.firstIndex(of: "-s 127.0.0.1:6520 uninstall io.apkrun.guest")
     #expect(installs.count == 2)
-    #expect(uninstallIndex != nil)
+    #expect(uninstall != nil)
+    if let uninstall, installs.count == 2 {
+        #expect(installs[0] < uninstall)
+        #expect(uninstall < installs[1])
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRefusalThatTheRetryDoesNotClearIsInstallFailedWithAndroidsReason() async throws {
+    let fake = try FakeGuestADB()
+    try fake.setInstalledVersion(999)
+    try fake.refuseEveryInstall()
+    let provisioner = GuestAgentProvisioner(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000)
+    )
+    do {
+        try await provisioner.install()
+        Issue.record("the install succeeded although Android refused it")
+    } catch {
+        #expect(error == .installFailed(reason: "INSTALL_FAILED_UPDATE_INCOMPATIBLE"))
+    }
 }
 
 @Test(.timeLimit(.minutes(1)))

@@ -50,6 +50,8 @@ public actor DevelopmentGuestAgent {
     private let clock: @Sendable () -> ContinuousClock.Instant
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
+    /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
+    private var generation: UInt64 = 0
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
     public init(
@@ -79,14 +81,18 @@ public actor DevelopmentGuestAgent {
     }
 
     /// Installs the agent, starts it, and connects within `connectTimeout` (guest-components.md §3.1, §3.2). The
-    /// forwards that an earlier boot left behind are removed first, because they would make the forward fail.
+    /// forwards that an earlier boot left behind are removed first, because they would make the forward fail. A
+    /// ``stop()`` during the start ends it with `stopped`. A start that is not running after its connection failed is
+    /// `startFailed`.
     public func start(connectTimeout: Duration = .seconds(5)) async throws(GuestAgentFailure) {
+        let started = generation
         do {
             try await adb.awaitDevice(timeout: .seconds(30))
         } catch {
             logger.error("The Guest Agent failed at the device wait", errorCode: error.qualifiedCode)
             throw .adb(error)
         }
+        try requireStarted(started)
         // The cleanup of forwards that an earlier boot left is best effort: a forward that cannot be listed does not
         // stop the agent from starting.
         do {
@@ -94,30 +100,50 @@ public actor DevelopmentGuestAgent {
         } catch {
             logger.warning("The stale Guest Agent forwards could not be removed: \(error.qualifiedCode, .public)")
         }
+        try requireStarted(started)
         do {
-            try await provisioner.installIfNeeded()
+            try await provisioner.install()
         } catch {
             logger.error("The Guest Agent failed at the install", errorCode: error.qualifiedCode)
             throw error
         }
+        try requireStarted(started)
         do {
             try await provisioner.startAgent()
         } catch {
             logger.error("The Guest Agent failed at the start", errorCode: error.qualifiedCode)
             throw error
         }
+        try requireStarted(started)
         do {
             try await supervisor.start(connectTimeout: connectTimeout)
+        } catch GuestAgentFailure.stopped {
+            throw .stopped
         } catch {
+            if case .connectTimedOut = error, (try? await provisioner.isRunning()) == false {
+                logger.error(
+                    "The Guest Agent process is not running after the start",
+                    errorCode: "runtime.guestAgentStartFailed")
+                throw .startFailed
+            }
             logger.error("The Guest Agent did not answer its handshake", errorCode: error.qualifiedCode)
             throw error
         }
     }
 
-    /// Stops the supervisor and removes the forwards of the agent. It does not power off the guest.
+    /// Stops the supervisor and removes the forwards of the agent. A start in flight ends with `stopped`. The agent
+    /// process keeps running, because the next start replaces it, and the guest is not powered off.
     public func stop() async {
+        generation += 1
         await supervisor.stop()
         try? await removeForwards()
+    }
+
+    /// Throws `stopped` when ``stop()`` has run since `started`, so that a start in flight does not go on.
+    private func requireStarted(_ started: UInt64) throws(GuestAgentFailure) {
+        if generation != started {
+            throw .stopped
+        }
     }
 
     /// Launches a package on a display through `LaunchApplication` (guest-components.md §6.4). The result is the task

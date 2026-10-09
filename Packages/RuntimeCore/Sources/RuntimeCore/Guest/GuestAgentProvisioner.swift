@@ -63,11 +63,13 @@ public actor GuestAgentProvisioner {
         self.bundle = bundle
     }
 
-    /// Installs the bundled agent when the installed `versionCode` differs (guest-components.md §3.1). An installed
-    /// agent that another signer made is refused by Android with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Then the
-    /// installed copy is removed, and the bundled one is installed. The agent keeps no user data in development mode,
-    /// so the removal is safe.
-    public func installIfNeeded() async throws(GuestAgentFailure) {
+    /// Installs the bundled agent (guest-components.md §3.1). The install runs on every start, even when the versionCode
+    /// is the same, so that a rebuilt agent takes effect and so that Android decides on the signer. An installed agent
+    /// that another signer made is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Then the installed copy is
+    /// removed, and the bundled one is installed. A newer installed agent is removed first, because `install -r` does
+    /// not downgrade. The agent keeps no user data in development mode, so the removal is safe. A refusal that is not
+    /// recovered is `installFailed` with Android's reason (IR-423, IR-424, IR-425).
+    public func install() async throws(GuestAgentFailure) {
         let installed: Int?
         do {
             let listing = try await adb.listPackages(matching: bundle.packageName)
@@ -75,16 +77,15 @@ public actor GuestAgentProvisioner {
         } catch {
             throw .adb(error)
         }
-        if installed == bundle.versionCode {
-            return
-        }
         do {
-            // `install -r` does not downgrade, so an older bundle replaces the installed copy by removing it first.
             if let installed, installed > bundle.versionCode {
                 try await adb.uninstall(packageName: bundle.packageName)
             }
             try await installBundle()
         } catch {
+            if case .packageRejected(_, let reason) = error {
+                throw .installFailed(reason: reason)
+            }
             throw .adb(error)
         }
     }

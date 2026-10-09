@@ -1120,9 +1120,7 @@ class _ShellSession:
             ) from None
         # The status line ends in a newline, so a status split across reads (127 as 12) never
         # matches.
-        pattern = re.compile(
-            rb"^" + re.escape(sentinel.encode()) + rb" (-?\d+)\r?\n", re.MULTILINE
-        )
+        pattern = re.compile(rb"^" + re.escape(sentinel.encode()) + rb" (-?\d+)\r?\n", re.MULTILINE)
         deadline = time.monotonic() + timeout
         while True:
             match = pattern.search(self._pending)
@@ -1145,9 +1143,7 @@ class _ShellSession:
                     f"the serial shell failed during `{command}`: {error}"
                 ) from None
             if not chunk:
-                raise CaptureToolError(
-                    f"the serial shell closed the connection during `{command}`"
-                )
+                raise CaptureToolError(f"the serial shell closed the connection during `{command}`")
             self._pending += chunk
             if len(self._pending) > MAX_SHELL_CAPTURE_BYTES:
                 raise CaptureToolError(

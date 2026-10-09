@@ -7,11 +7,8 @@
     struct DevBootCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "boot",
-            abstract: "Boot Android from an unsigned development bundle."
+            abstract: "Boot Android from the current development image."
         )
-
-        @Option(name: .long, help: "Directory written by `apkrun_image bundle --unsigned`.")
-        var bundle: String
 
         @Option(name: .long, help: "GPU profile: `none` (headless, the only one before #021).")
         var gpu = "none"
@@ -49,7 +46,6 @@
             }
             let gibibyte: UInt64 = 1024 * 1024 * 1024
             let options = DevBootOptions(
-                bundleURL: URL(fileURLWithPath: bundle).standardizedFileURL,
                 headless: true,
                 cpuCount: cpus,
                 memoryBytes: UInt64(memoryGib) * gibibyte,

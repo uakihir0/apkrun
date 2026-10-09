@@ -5,8 +5,6 @@ import RuntimeCore
 
 /// Inputs for `apkrun dev boot` (cli.md §5; #012-#014).
 public struct DevBootOptions: Sendable {
-    /// The unsigned development bundle written by `apkrun_image bundle --unsigned`.
-    public var bundleURL: URL
     /// `--gpu none` selects the development `headless` profile.
     public var headless: Bool
     /// Guest vCPUs of a newly provisioned instance.
@@ -22,7 +20,6 @@ public struct DevBootOptions: Sendable {
 
     /// Creates options for one development boot.
     public init(
-        bundleURL: URL,
         headless: Bool = true,
         cpuCount: Int = InstanceSizing.default.cpuCount,
         memoryBytes: UInt64 = InstanceSizing.default.memoryBytes,
@@ -30,7 +27,6 @@ public struct DevBootOptions: Sendable {
         resetInstance: Bool = false,
         stopWhenReady: Bool = false
     ) {
-        self.bundleURL = bundleURL
         self.headless = headless
         self.cpuCount = cpuCount
         self.memoryBytes = memoryBytes
@@ -57,10 +53,12 @@ public struct DevBoot: Sendable {
     /// Creates the development boot runner.
     public init() {}
 
-    /// Provisions the instance if needed, boots Android, and waits for a stop request.
+    /// Boots the current image, provisions the instance if needed, and waits for a stop request.
     ///
-    /// The instance lock is held for the whole run. Developer mode is always on:
-    /// the Android serial shell answers on hvc1, and logcat is captured to
+    /// The instance lock is held for the whole run. The current image is checked quickly before
+    /// the boot (android-image.md §9.3). An instance made from another image version is refused,
+    /// because migration arrives with #058; `--reset` provisions a new instance instead. Developer
+    /// mode is always on: the Android serial shell answers on hvc1, and logcat is captured to
     /// `<logs>/guest/logcat-<timestamp>.log` (android-image.md §7.1).
     public func run(
         options: DevBootOptions,
@@ -73,8 +71,11 @@ public struct DevBoot: Sendable {
         defer { lock.close() }
         let diagnostics = DiagnosticsContext.live(paths: paths)
 
-        let image = try DevelopmentImage.load(directory: options.bundleURL)
-        onEvent(.message("image \(image.version.description) from \(options.bundleURL.path)"))
+        let images = ImageStore(paths: paths, trust: .standard(), diagnostics: diagnostics)
+        try await images.removeOrphanedInstalls()
+        let image = try await images.current()
+        try await images.verify(image, depth: .quick)
+        onEvent(.message("image \(image.version.description) (current)"))
         let store = InstanceStore(paths: paths, diagnostics: diagnostics)
         let sizing = InstanceSizing(
             cpuCount: options.cpuCount,
@@ -84,7 +85,14 @@ public struct DevBoot: Sendable {
         if options.resetInstance {
             _ = try await store.resetAndroid(image: image, sizing: sizing)
             onEvent(.message("reset the Android instance"))
-        } else if try await store.load(image: image) == nil {
+        } else if let existing = try await store.load(image: image) {
+            guard existing.imageVersion == image.version else {
+                throw ImageFailure.instanceCorrupt(
+                    reason:
+                        "the instance uses \(existing.imageVersion.description), not \(image.version.description); use --reset"
+                )
+            }
+        } else {
             _ = try await store.provision(image: image, sizing: sizing)
             onEvent(.message("provisioned a new Android instance"))
         }

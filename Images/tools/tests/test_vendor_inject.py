@@ -34,6 +34,7 @@ from apkrun_image.vendor_inject import (
     InjectError,
     MesaLibrary,
     _ensure_output,
+    _work_area,
     compare_entries,
     load_component,
     load_mesa_output,
@@ -80,6 +81,18 @@ Descriptors:
 """
 
 
+def _shared_object(soname: str, *, machine: int = 183) -> bytes:
+    """Return a minimal 64-bit little-endian shared object header that names `soname`."""
+    header = bytearray(64)
+    header[0:4] = b"\x7fELF"
+    header[4] = 2  # ELFCLASS64
+    header[5] = 1  # ELFDATA2LSB
+    header[6] = 1  # EV_CURRENT
+    header[16:18] = (3).to_bytes(2, "little")  # ET_DYN
+    header[18:20] = machine.to_bytes(2, "little")  # EM_AARCH64 is 183
+    return bytes(header) + b"\0" + soname.encode("utf-8") + b"\0"
+
+
 def _mesa_directory(
     root: Path,
     *,
@@ -92,7 +105,7 @@ def _mesa_directory(
     output = root / "mesa"
     records = []
     for name in MESA_LIBRARIES:
-        content = b"\x7fELF" + name.encode("utf-8") * 8
+        content = _shared_object(name)
         path = output / "vendor" / "lib64" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
@@ -189,13 +202,67 @@ def test_the_comparison_allows_only_the_named_additions() -> None:
         "/b": entry("/b"),
     }
     assert compare_entries(before, after, added=["/b"]) == []
-    assert compare_entries(before, after) == ["/b: new in the rebuild and not expected"]
+    # Only a directory that receives an added entry may change size. "/" receives "/b", so it may;
+    # "/d" receives nothing, so its size must stay.
+    with_dir_before = dict(before, **{"/d": Entry("/d", DIRECTORY, 0o755, 0, 0, 7, "t", label="l")})
+    with_dir_after = dict(after, **{"/d": Entry("/d", DIRECTORY, 0o755, 0, 0, 9, "t", label="l")})
+    assert compare_entries(with_dir_before, with_dir_after, added=["/b"]) == ["/d: size differs"]
+    every_size = compare_entries(
+        with_dir_before, with_dir_after, added=["/b"], directory_sizes=True
+    )
+    assert every_size == ["/: size differs", "/d: size differs"]
+    assert compare_entries(before, after) == [
+        "/b: new in the rebuild and not expected",
+        "/: size differs",
+    ]
     changed = dict(after, **{"/a": entry("/a", sha="b")})
     assert compare_entries(before, changed, added=["/b"]) == ["/a: sha256 differs"]
-    assert compare_entries(before, {"/": after["/"]}) == ["/a: missing from the rebuild"]
+    assert compare_entries(before, {"/": after["/"]}) == [
+        "/a: missing from the rebuild",
+        "/: size differs",
+    ]
     assert compare_entries(before, after, added=["/b", "/c"]) == [
         "/c: expected in the rebuild but missing"
     ]
+
+
+def test_a_library_that_is_not_an_aarch64_shared_object_is_refused(tmp_path: Path) -> None:
+    output = _mesa_directory(tmp_path)
+    target = output / "vendor" / "lib64" / "libEGL_mesa.so"
+    wrong = _shared_object("libEGL_mesa.so", machine=62)  # x86-64
+    target.write_bytes(wrong)
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    for record in manifest["files"]:
+        if record["path"] == "vendor/lib64/libEGL_mesa.so":
+            record["size"] = len(wrong)
+            record["sha256"] = hashlib.sha256(wrong).hexdigest()
+    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(InjectError, match="not an AArch64 shared object"):
+        load_mesa_output(output, LOCK_MESA)
+
+
+def test_a_library_without_its_soname_in_the_file_is_refused(tmp_path: Path) -> None:
+    output = _mesa_directory(tmp_path)
+    target = output / "vendor" / "lib64" / "libEGL_mesa.so"
+    other = _shared_object("libOther.so")
+    target.write_bytes(other)
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    for record in manifest["files"]:
+        if record["path"] == "vendor/lib64/libEGL_mesa.so":
+            record["size"] = len(other)
+            record["sha256"] = hashlib.sha256(other).hexdigest()
+    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(InjectError, match="does not contain its SONAME"):
+        load_mesa_output(output, LOCK_MESA)
+
+
+def test_the_work_directory_must_be_outside_the_repository(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    with pytest.raises(InjectError, match="work directory must be outside the repository"):
+        with _work_area(repository / "work", repository):
+            pass
+    assert not (repository / "work").exists()
 
 
 def test_the_output_must_be_outside_the_repository(tmp_path: Path) -> None:

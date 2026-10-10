@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,32 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+ELF_MAGIC = b"\x7fELF"
+ELFCLASS64 = 2
+ELFDATA2LSB = 1
+ET_DYN = 3
+EM_AARCH64 = 183
+
+
+def check_aarch64_shared_object(path: Path, soname: str) -> None:
+    """Check the file itself: a 64-bit little-endian AArch64 shared object that names its SONAME.
+
+    The manifest's class, machine, and SONAME are claims made by the build. This check reads the
+    file itself, and it looks for the SONAME string in the file's bytes (the dynamic string table).
+    """
+    data = path.read_bytes()
+    if len(data) < 20 or data[:4] != ELF_MAGIC or data[4] != ELFCLASS64 or data[5] != ELFDATA2LSB:
+        raise InjectError(f"{path}: not a 64-bit little-endian ELF file.")
+    e_type = int.from_bytes(data[16:18], "little")
+    e_machine = int.from_bytes(data[18:20], "little")
+    if e_type != ET_DYN or e_machine != EM_AARCH64:
+        raise InjectError(
+            f"{path}: not an AArch64 shared object (e_type {e_type}, e_machine {e_machine})."
+        )
+    if soname.encode("utf-8") + b"\0" not in data:
+        raise InjectError(f"{path}: the file does not contain its SONAME {soname!r}.")
+
+
 def load_mesa_output(
     directory: Path, lock_mesa: Mapping[str, Any]
 ) -> tuple[list[MesaLibrary], dict[str, Any]]:
@@ -166,6 +193,7 @@ def load_mesa_output(
         digest = sha256_file(source)
         if size != record.get("size") or digest != record.get("sha256"):
             raise InjectError(f"{source}: size or SHA-256 differs from the Mesa build manifest.")
+        check_aarch64_shared_object(source, name)
         libraries.append(MesaLibrary(name=name, source=source, sha256=digest, size=size))
     provenance = {
         "manifestSha256": sha256_file(manifest_path),
@@ -307,8 +335,14 @@ def compare_entries(
     added: Iterable[str] = (),
     directory_sizes: bool = False,
 ) -> list[str]:
-    """Return every difference between two exports. `added` names the only new entries allowed."""
+    """Return every difference between two exports.
+
+    `added` names the only new entries allowed. A directory's size counts its entries, so only the
+    directories that receive the added entries may change size; `directory_sizes` makes every
+    directory size count (a plain rebuild must reproduce them all).
+    """
     expected_new = set(added)
+    receiving = {posixpath.dirname(path) for path in expected_new}
     problems: list[str] = []
     for path in sorted(set(before) - set(after)):
         problems.append(f"{path}: missing from the rebuild")
@@ -325,9 +359,9 @@ def compare_entries(
         for field in COMPARED_FIELDS:
             if getattr(old, field) != getattr(new, field):
                 problems.append(f"{path}: {field} differs")
-        if directory_sizes or old.kind != DIRECTORY:
-            if old.size != new.size:
-                problems.append(f"{path}: size differs")
+        may_change_size = not directory_sizes and old.kind == DIRECTORY and path in receiving
+        if not may_change_size and old.size != new.size:
+            problems.append(f"{path}: size differs")
     return problems
 
 
@@ -385,10 +419,16 @@ def _rebuild(
     return image_path
 
 
+def _refuse_inside(path: Path, repository: Path, what: str) -> None:
+    """Refuse a path that is the repository or lies inside it (symlinks are resolved first)."""
+    root = repository.resolve()
+    if path == root or root in path.parents:
+        raise InjectError(f"{path}: {what} must be outside the repository.")
+
+
 def _ensure_output(output: Path, repository: Path) -> Path:
     resolved = output.expanduser().resolve()
-    if resolved == repository.resolve() or repository.resolve() in resolved.parents:
-        raise InjectError(f"{resolved}: the output must be outside the repository.")
+    _refuse_inside(resolved, repository, "the output")
     if resolved.exists() and (not resolved.is_dir() or any(resolved.iterdir())):
         raise InjectError(f"{resolved}: the output directory must not exist or must be empty.")
     resolved.mkdir(parents=True, exist_ok=True)
@@ -396,13 +436,14 @@ def _ensure_output(output: Path, repository: Path) -> Path:
 
 
 @contextmanager
-def _work_area(work_directory: Path | None) -> Iterator[str]:
+def _work_area(work_directory: Path | None, repository: Path) -> Iterator[str]:
     """Yield a temporary work directory, or a caller-chosen one that is kept (it must be empty)."""
     if work_directory is None:
         with tempfile.TemporaryDirectory(prefix="apkrun-099-inject-") as name:
             yield name
         return
     resolved = work_directory.expanduser().resolve()
+    _refuse_inside(resolved, repository, "the work directory")
     if resolved.exists() and (not resolved.is_dir() or any(resolved.iterdir())):
         raise InjectError(f"{resolved}: the work directory must not exist or must be empty.")
     resolved.mkdir(parents=True, exist_ok=True)
@@ -612,7 +653,7 @@ def inject_vendor(
         uuid.uuid5(UUID_NAMESPACE, f"{build_id}:{PARTITION}:mesa:{mesa_record['commit']}")
     )
 
-    with _work_area(work_directory) as scratch_name:
+    with _work_area(work_directory, repository) as scratch_name:
         scratch = Path(scratch_name)
         stock_image = scratch / f"{PARTITION}.part"
         stock_sha = read_super_partition(
@@ -644,16 +685,6 @@ def inject_vendor(
         salt = stock_hashtree["salt"]
         stock_partition_digest = stock_hashtree["rootDigest"]
 
-        output_image = output / OUTPUT_IMAGE
-        new_digest = seal_partition(
-            avbtool,
-            result.image,
-            output_image,
-            partition_size=partition_size,
-            salt=salt,
-            scratch=scratch,
-        )
-
         vbmeta_path = scratch / "vbmeta.part"
         vbmeta_ids = (document.get("roles") or {}).get("vbmeta")
         if not isinstance(vbmeta_ids, list) or not vbmeta_ids:
@@ -665,6 +696,16 @@ def inject_vendor(
             raise InjectError(
                 "the stock vendor footer and the stock vbmeta disagree on the root digest."
             )
+
+        output_image = output / OUTPUT_IMAGE
+        new_digest = seal_partition(
+            avbtool,
+            result.image,
+            output_image,
+            partition_size=partition_size,
+            salt=salt,
+            scratch=scratch,
+        )
 
         record = {
             "schemaVersion": 1,

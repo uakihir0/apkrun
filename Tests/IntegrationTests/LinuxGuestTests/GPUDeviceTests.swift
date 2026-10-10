@@ -40,7 +40,9 @@ final class GPUDeviceTests: XCTestCase {
         XCTAssertTrue(detail.contains("virtual1=connected"), detail)
 
         // Scanout 0 is the test mode, so the guest's EDID must equal the golden block of that mode.
-        let golden = try Data(contentsOf: goldenEDIDURL(named: "scanout-00-1024x768-60.edid"))
+        // The golden block is the copy that scripts/tools/stage-hosted-test-inputs.sh stages beside the kernel. The
+        // checkout under ~/Documents is not read here: the test process must not read it (IR-600).
+        let golden = try Data(contentsOf: LinuxGuestHarness.stagedInput("scanout-00-1024x768-60.edid"))
         let expectedSHA = SHA256.hash(data: golden).map { String(format: "%02x", $0) }.joined()
         XCTAssertTrue(detail.contains("edid_sha256=\(expectedSHA)"), detail)
     }
@@ -96,12 +98,5 @@ final class GPUDeviceTests: XCTestCase {
             return nil
         }.first
         return try XCTUnwrap(detail, "no ok record for \(name)")
-    }
-
-    /// The golden EDID block, which `scripts/build-test-initramfs.sh` copies beside the kernel. The test does not read
-    /// `Tests/Fixtures/graphics/edid/` in the checkout: a test process that reads ~/Documents waits on the macOS
-    /// approval prompt (IR-600).
-    private func goldenEDIDURL(named name: String) throws -> URL {
-        try LinuxGuestHarness.artifactURLs().kernel.deletingLastPathComponent().appendingPathComponent(name)
     }
 }

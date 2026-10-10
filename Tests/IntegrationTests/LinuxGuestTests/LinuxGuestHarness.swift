@@ -657,17 +657,34 @@ enum LinuxGuestHarness {
             FileManager.default.isReadableFile(atPath: kernel.path),
             FileManager.default.isReadableFile(atPath: initrd.path)
         else {
-            let message =
+            try failMissingArtifact(
                 "Linux test artifacts are missing. Run scripts/fetch-test-linux.sh and scripts/build-test-initramfs.sh."
-            let isCI =
-                ProcessInfo.processInfo.environment["APKRUN_CI"] == "1"
-                || Bundle.main.object(forInfoDictionaryKey: "APKRUN_CI") as? String == "1"
-            if isCI {
-                throw HarnessFailure.missingArtifacts(message)
-            }
-            throw XCTSkip(message)
+            )
         }
         return (kernel, initrd)
+    }
+
+    /// A file that `scripts/tools/stage-hosted-test-inputs.sh` copies into the artifact directory, found beside the
+    /// kernel. The hosted test reads it from there, never from the checkout under ~/Documents (IR-600).
+    static func stagedInput(_ relativePath: String) throws -> URL {
+        let url = try artifactURLs().kernel.deletingLastPathComponent().appendingPathComponent(relativePath)
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            try failMissingArtifact(
+                "\(relativePath) is missing from the Linux test artifacts. Run scripts/build-test-initramfs.sh."
+            )
+        }
+        return url
+    }
+
+    /// Fails a run without its artifacts in CI, and skips it locally, as the artifact checks always have.
+    private static func failMissingArtifact(_ message: String) throws -> Never {
+        let isCI =
+            ProcessInfo.processInfo.environment["APKRUN_CI"] == "1"
+            || Bundle.main.object(forInfoDictionaryKey: "APKRUN_CI") as? String == "1"
+        if isCI {
+            throw HarnessFailure.missingArtifacts(message)
+        }
+        throw XCTSkip(message)
     }
 
     static func isLexicallyWithin(_ url: URL, directory: URL) -> Bool {

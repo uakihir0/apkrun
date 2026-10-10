@@ -25,7 +25,7 @@
                 throw CLIFailure.invalidArgument(argument: "package", reason: "name")
             }
             let options = DevBootOptions(
-                headless: true,
+                gpu: .none,
                 stopWhenReady: true,
                 guestAgentDirectory: DevGuestAgentLocation.directory(
                     guestDir: guestDir,

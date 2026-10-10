@@ -5,8 +5,9 @@ import VirtioDeviceCore
 
 // UNCHECKED-SENDABLE: mutable state is guarded by `lock`; queue callbacks run on the device queue.
 /// The virtio-gpu device model: the control and cursor queues, the configuration
-/// space, `GET_DISPLAY_INFO`, `GET_EDID`, error responses, and display change
-/// events ([graphics.md](../../../../../docs/02-design/graphics.md) §4).
+/// space, `GET_DISPLAY_INFO`, `GET_EDID`, the 2D and 3D commands of the device's
+/// path, error responses, and display change events
+/// ([graphics.md](../../../../../docs/02-design/graphics.md) §4, §9).
 ///
 /// VZ calls the model callbacks on the device queue. Host calls such as
 /// ``enableScanout(_:mode:)`` may come from any thread, so all mutable state is
@@ -56,6 +57,13 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     /// The R-01 spike delay, or `nil`. It is set only for development guests.
     private let hotplugSpikeDelay: Duration?
     private var isHotplugSpikeScheduled = false
+    /// The renderer of the `drmVirgl` path, or `nil` for the paths without one.
+    private let backend: VirGLBackend?
+    /// The guest's 2D and 3D state. Only the device queue reads or writes it.
+    private let session: GuestGPUSession
+    private let counters = GraphicsCounterBox()
+    /// The number of capsets in the configuration space: 2 with VirGL, 0 otherwise.
+    private let capsetCount: UInt32
 
     /// Runs after the `GET_DISPLAY_INFO` snapshot and before the `events_read` decision.
     /// Tests use it to make a host change arrive while a query is in flight.
@@ -71,12 +79,89 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     ///   - hotplugSpikeDelay: For the R-01 spike only. After the first DRIVER_OK, scanout 1 is
     ///     enabled after this delay, so a development guest can see whether `events_read`
     ///     raises a config-change interrupt (graphics.md §4.3). `nil` in every other build.
-    public init(
+    public convenience init(
         scanouts: ScanoutTable = ScanoutTable(),
         logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
         traceObserver: (@Sendable (TraceRecord) -> Void)? = nil,
         hotplugSpikeDelay: Duration? = nil
+    ) {
+        self.init(
+            path: .edidOnly,
+            backend: nil,
+            scanouts: scanouts,
+            logger: logger,
+            clock: clock,
+            traceObserver: traceObserver,
+            hotplugSpikeDelay: hotplugSpikeDelay
+        )
+    }
+
+    /// The device of the `guestSwiftshader` profile: EDID and host-memory 2D resources, with no renderer (graphics.md §9).
+    public static func twoDimensional(
+        scanouts: ScanoutTable = ScanoutTable(),
+        logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
+        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+    ) -> VirtioGPUDevice {
+        VirtioGPUDevice(
+            path: .twoD,
+            backend: nil,
+            scanouts: scanouts,
+            logger: logger,
+            clock: clock,
+            traceObserver: nil,
+            hotplugSpikeDelay: nil
+        )
+    }
+
+    /// The device of the `drmVirgl` profile. It starts the render thread and creates virglrenderer on it, so a renderer
+    /// failure is reported here, before the VM starts (graphics.md §8). It offers `VIRTIO_GPU_F_VIRGL` and two capsets.
+    public static func virgl(
+        scanouts: ScanoutTable = ScanoutTable(),
+        logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
+        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+    ) throws(GraphicsFailure) -> VirtioGPUDevice {
+        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.render") { onFence throws(GraphicsFailure) in
+            try VirGLRenderer(onFenceCompleted: onFence)
+        }
+        return VirtioGPUDevice(
+            path: .virgl,
+            backend: backend,
+            scanouts: scanouts,
+            logger: logger,
+            clock: clock,
+            traceObserver: nil,
+            hotplugSpikeDelay: nil
+        )
+    }
+
+    /// The device of the `drmVirgl` path with a caller-supplied engine. Tests use it to run the device logic without Metal.
+    static func makeVirgl(
+        scanouts: ScanoutTable = ScanoutTable(),
+        logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
+        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+        engine makeEngine: @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
+    ) throws(GraphicsFailure) -> VirtioGPUDevice {
+        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.test-render", makeEngine: makeEngine)
+        return VirtioGPUDevice(
+            path: .virgl,
+            backend: backend,
+            scanouts: scanouts,
+            logger: logger,
+            clock: clock,
+            traceObserver: nil,
+            hotplugSpikeDelay: nil
+        )
+    }
+
+    private init(
+        path: GuestGPUSession.Path,
+        backend: VirGLBackend?,
+        scanouts: ScanoutTable,
+        logger: APKLogger,
+        clock: @escaping @Sendable () -> UInt64,
+        traceObserver: (@Sendable (TraceRecord) -> Void)?,
+        hotplugSpikeDelay: Duration?
     ) {
         self.scanouts = scanouts
         self.reportedGeneration = scanouts.displayGeneration
@@ -84,6 +169,13 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         self.clock = clock
         self.traceObserver = traceObserver
         self.hotplugSpikeDelay = hotplugSpikeDelay
+        self.backend = backend
+        session = GuestGPUSession(path: path, backend: backend, counters: counters)
+        capsetCount = backend == nil ? 0 : UInt32(VirGLBackend.capsetIDs.count)
+        var features = VirtioGPUProtocol.Feature.edid
+        if backend != nil {
+            features |= VirtioGPUProtocol.Feature.virgl
+        }
         descriptor = VirtioDeviceDescriptor(
             name: "virtio-gpu",
             deviceID: VirtioGPUProtocol.deviceID,
@@ -91,20 +183,30 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             pciSubclass: VirtioGPUProtocol.pciSubclass,
             queueCount: VirtioGPUProtocol.queueCount,
             mandatoryFeatures: 0,
-            optionalFeatures: VirtioGPUProtocol.Feature.edid,
-            configurationSpace: VirtioGPUDevice.configurationSpace(eventsRead: 0)
+            optionalFeatures: features,
+            configurationSpace: VirtioGPUDevice.configurationSpace(
+                eventsRead: 0,
+                capsetCount: backend == nil ? 0 : UInt32(VirGLBackend.capsetIDs.count)
+            )
         )
     }
 
     /// The configuration bytes of `virtio_gpu_config`: `events_read`, `events_clear`,
     /// `num_scanouts`, and `num_capsets`, all little-endian.
-    static func configurationSpace(eventsRead: UInt32) -> Data {
+    static func configurationSpace(eventsRead: UInt32, capsetCount: UInt32 = 0) -> Data {
         var writer = VirtioGPUWireWriter(capacity: VirtioGPUProtocol.configurationByteCount)
         writer.writeUInt32(eventsRead)
         writer.writeUInt32(0)
         writer.writeUInt32(UInt32(VirtioGPUProtocol.scanoutCount))
-        writer.writeUInt32(0)
+        writer.writeUInt32(capsetCount)
         return Data(writer.bytes)
+    }
+
+    /// The pixel-traffic counters of graphics.md §7, with the renderer failures counted by the backend.
+    public var statistics: GraphicsCounters {
+        var snapshot = counters.snapshot
+        snapshot.rendererFailures = backend?.rendererFailures ?? 0
+        return snapshot
     }
 
     // MARK: - VirtioDeviceModel
@@ -144,19 +246,23 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             return
         }
         queue.drain { element in
-            self.process(element, queueIndex: index)
+            self.process(element, queueIndex: index, context: context)
         }
     }
 
-    /// Clears the guest session. Host scanout configuration is kept.
+    /// Clears the guest session and resets the renderer. Host scanout configuration is kept.
     public func deviceWillReset() {
         clearGuestSession()
+        session.reset()
+        backend?.reset()
         logger.info("virtio-gpu reset: guest session cleared, host scanout configuration kept")
     }
 
-    /// Clears the guest session at VM stop. Host scanout configuration is kept.
+    /// Clears the guest session and destroys the renderer at VM stop. Host scanout configuration is kept.
     public func deviceWillStop() {
         clearGuestSession()
+        session.reset()
+        backend?.shutdown()
         logger.info("virtio-gpu stop")
     }
 
@@ -217,8 +323,15 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     // MARK: - Requests
 
-    /// Takes one element, copies its request once, and completes it exactly once.
-    private func process(_ element: consuming VirtioElement, queueIndex: Int) {
+    /// The response of one request, and the renderer work it needs (nil when it needs none).
+    private struct Reply {
+        var bytes: [UInt8]?
+        var work: VirGLRenderWork?
+    }
+
+    /// Takes one element, copies its request once, and returns it exactly once: now, or when its
+    /// work and its fence complete (graphics.md §4.5, §4.7).
+    private func process(_ element: consuming VirtioElement, queueIndex: Int, context: VirtioDeviceContext) {
         let copyLimit = VirtioGPUProtocol.Limits.maximumRequestByteCount + 1
         var request: [UInt8] = []
         do {
@@ -227,48 +340,109 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             reportGuestError("request could not be copied from guest memory", command: nil)
         }
         let header = try? VirtioGPUControlHeader(decodingFrom: request)
-        let response = makeResponse(for: request, header: header, queueIndex: queueIndex)
-        if let response, let header {
-            deliver(response, answering: header, to: element)
+        let reply = makeReply(for: request, header: header, queueIndex: queueIndex, context: context)
+        if let bytes = reply.bytes, let header {
+            deliver(bytes, answering: header, to: element)
         }
-        traceObserver?(TraceRecord(queueIndex: queueIndex, request: request, response: response))
+        traceObserver?(TraceRecord(queueIndex: queueIndex, request: request, response: reply.bytes))
+        finish(element, header: header, work: reply.work)
+    }
+
+    /// Completes an element that the device has answered. With a renderer, the element waits in the queue
+    /// behind earlier waiting elements, and behind its own renderer work and fence.
+    private func finish(
+        _ element: consuming VirtioElement,
+        header: VirtioGPUControlHeader?,
+        work: VirGLRenderWork?
+    ) {
+        guard let backend else {
+            // Without a renderer there is no work to wait for, and every fence completes at once.
+            element.complete()
+            return
+        }
+        let fenceRequested = header.map { $0.flags & VirtioGPUProtocol.Flag.fence != 0 } ?? false
+        if work != nil || fenceRequested {
+            let token = element.deferCompletion().makeCompletionToken()
+            backend.execute(
+                token: token,
+                fence: fenceRequested ? header.flatMap { VirGLBackend.fenceNumber($0.fenceID) } : nil,
+                context: header?.contextID ?? 0,
+                operation: work ?? { _ in nil }
+            )
+            return
+        }
+        if backend.hasWaitingElements {
+            let token = element.deferCompletion().makeCompletionToken()
+            backend.appendExecuted(token)
+            return
+        }
         element.complete()
     }
 
-    /// The response bytes for one request, or `nil` when the request is too short for a header.
-    private func makeResponse(
+    /// The response for one request, or `nil` when the request is too short for a header.
+    private func makeReply(
         for request: [UInt8],
         header: VirtioGPUControlHeader?,
-        queueIndex: Int
-    ) -> [UInt8]? {
+        queueIndex: Int,
+        context: VirtioDeviceContext
+    ) -> Reply {
         guard let header else {
             reportGuestError("request is shorter than the 24-byte header", command: nil)
-            return nil
+            return Reply(bytes: nil, work: nil)
         }
         if request.count > VirtioGPUProtocol.Limits.maximumRequestByteCount {
             reportGuestError("request exceeds the 4 MiB limit", command: header.type)
-            return errorReply(.invalidParameter, answering: header)
+            return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
         }
         if queueIndex == VirtioGPUProtocol.cursorQueueIndex {
-            // The cursor queue belongs to #022 and #023. Until then every command gets an error response.
+            // The cursor queue belongs to #023. Until then every command gets an error response.
             let isCursorCommand = header.command == .updateCursor || header.command == .moveCursor
             let code: VirtioGPUErrorCode = isCursorCommand ? .unspec : .invalidParameter
             reportGuestError("command on the cursor queue is not implemented", command: header.type)
-            return errorReply(code, answering: header)
+            return Reply(bytes: errorReply(code, answering: header), work: nil)
         }
         switch header.command {
         case .getDisplayInfo:
             guard request.count == VirtioGPUProtocol.headerByteCount else {
                 reportGuestError("GET_DISPLAY_INFO has trailing bytes", command: header.type)
-                return errorReply(.invalidParameter, answering: header)
+                return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
             }
-            return displayInfoReply(answering: header)
+            return Reply(bytes: displayInfoReply(answering: header), work: nil)
         case .getEDID:
-            return edidReply(for: request, answering: header)
+            return Reply(bytes: edidReply(for: request, answering: header), work: nil)
         default:
-            reportGuestError("command is not implemented in this device", command: header.type)
-            return errorReply(.unspec, answering: header)
+            break
         }
+
+        // A fence beyond 32 bits cannot name a virglrenderer ctx0 fence (graphics.md §5.2, IR-461).
+        if backend != nil, header.flags & VirtioGPUProtocol.Flag.fence != 0,
+            VirGLBackend.fenceNumber(header.fenceID) == nil {
+            reportGuestError("fence identifier exceeds 32 bits", command: header.type)
+            return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
+        }
+        let decoded: VirtioGPURequest
+        do {
+            decoded = try VirtioGPUProtocol.decodeRequest(request)
+        } catch {
+            reportGuestError("request is malformed", command: header.type)
+            return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
+        }
+        if case .unsupported = decoded.body {
+            reportGuestError("command is not implemented in this device", command: header.type)
+            return Reply(bytes: errorReply(.unspec, answering: header), work: nil)
+        }
+        let answer = session.reply(to: decoded, context: context)
+        if case .error(let code) = answer.response {
+            reportGuestError("command was rejected", command: header.type)
+            return Reply(
+                bytes: errorReply(code, answering: header),
+                work: nil
+            )
+        }
+        return Reply(
+            bytes: VirtioGPUProtocol.encodeResponse(answer.response, answering: header),
+            work: answer.renderWork
+        )
     }
 
     private func edidReply(for request: [UInt8], answering header: VirtioGPUControlHeader) -> [UInt8] {
@@ -388,7 +562,9 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             }
             guard let value = next else { return }
             do {
-                try await updater.updateConfigurationSpace(VirtioGPUDevice.configurationSpace(eventsRead: value))
+                try await updater.updateConfigurationSpace(
+                    VirtioGPUDevice.configurationSpace(eventsRead: value, capsetCount: capsetCount)
+                )
                 lock.withLock {
                     if epoch == writerEpoch {
                         eventsReadWritten = value

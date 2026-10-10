@@ -12813,3 +12813,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The default follows the design (§6.6 keeps the output under `ThirdParty/out/`). The worktree layout is an environment fact, not a design choice.
 
 **Consequence.** The build output of this task is outside the repository. A maintainer rebuilds it in the main checkout (or the release machine) with `scripts/guest/build-mesa-android.sh`, and then runs the output check of IR-496.
+
+## IR-496: The output checks run on a built output, not in the default test run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 4) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) (T0 and T1); [build-system.md](../05-development/build-system.md) §3 |
+
+**Choice.** `scripts/tests/run.sh` runs the T0 part of `scripts/tests/test_guest_mesa_build.py`: the lock pins, the ELF parsers, and the verifier, run against fake ELF tools. The output part runs only with `--out DIR`, and it needs the NDK's `llvm-readelf` and `llvm-nm`.
+
+**Reason.** The default test run has no NDK and no build output, and it must stay fast and runnable on any checkout. A Mesa build takes about ten minutes on this Mac. The output check is therefore run by hand after a build, and the result is recorded in the M02 #099 entry.
+
+**Consequence.** CI does not check the built output. The maintainer adds that check to a release job, which needs the NDK on the runner.

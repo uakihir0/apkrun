@@ -198,13 +198,14 @@ public actor RuntimeSupervisor {
         await stopGuestAgent()
         bootProgress?.finish()
         transition(to: .stopping)
-        if options.developerMode {
-            await requestPowerOff(controller)
-        }
-        if await controller.state != .stopped {
-            // Rejected while the VM is starting. The boot then stops the VM itself (see `boot()`).
-            try? await controller.stop()
-        }
+        // A forced stop that is rejected while the VM is still starting is left to the boot, which stops the VM itself.
+        let powerOff: (@Sendable () async -> Bool)? =
+            options.developerMode ? { @Sendable in await self.requestPowerOff() } : nil
+        await AndroidStopSequence().run(
+            requestPowerOff: powerOff,
+            isStopped: { await controller.state == .stopped },
+            forceStop: { try? await controller.stop() }
+        )
         // Detach before the drain wait. The drain ends only when the VM has stopped, and a boot still starting the
         // VM sees the detached controller and stops it. Waiting while still attached would never return.
         self.controller = nil
@@ -539,25 +540,19 @@ public actor RuntimeSupervisor {
     }
 
     /// Asks Android to power off with `reboot -p`: over ADB when it is connected, and over the serial shell
-    /// when the ADB request fails or ADB is not connected. The 20 s deadline starts before the request, so the
-    /// forced stop follows 20 s after the request, whatever the channel does.
-    private func requestPowerOff(_ controller: VMController) async {
-        let deadline = ContinuousClock.now + .seconds(20)
-        var requested = false
+    /// when the ADB request fails or ADB is not connected. Returns whether a channel accepted the request.
+    private func requestPowerOff() async -> Bool {
         if isADBConnected, let adbClient {
             logger.notice("Stopping Android with reboot -p over ADB")
-            requested = (try? await adbClient.rebootPowerOff()) != nil
+            if (try? await adbClient.rebootPowerOff()) != nil {
+                return true
+            }
         }
-        if !requested, let shell {
-            logger.notice("Stopping Android with reboot -p over the serial shell")
-            requested = (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
+        guard let shell else {
+            return false
         }
-        guard requested else {
-            return
-        }
-        while ContinuousClock.now < deadline, await controller.state != .stopped {
-            try? await Task.sleep(for: .milliseconds(250))
-        }
+        logger.notice("Stopping Android with reboot -p over the serial shell")
+        return (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
     }
 
     /// Stops the Guest Agent of the boot. It runs before the guest powers off, so that the supervisor does not

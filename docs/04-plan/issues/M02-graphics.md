@@ -427,7 +427,7 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 | Depends on | #020, #021 |
 | Requirements | As for #022, which this task unblocks |
 | Design | [../../02-design/graphics.md](../../02-design/graphics.md) §5; [../../02-design/android-image.md](../../02-design/android-image.md) §3, §8, §11 |
-| Modules / paths | `ThirdParty/ThirdParty.lock.json`, `Images/tools/`, `Images/reference/`, `Packages/ImageCore/`, `Guest/` (product fragment) |
+| Modules / paths | `ThirdParty/ThirdParty.lock.json`, `scripts/guest/` (the Mesa build, IR-497), `scripts/tests/`, `Images/tools/`, `Images/reference/`, `Packages/ImageCore/`, `Guest/` (product fragment) |
 | Risks / questions | The guest Mesa EGL load failure recorded in IR-240 and IR-244 |
 
 ### Goal
@@ -453,7 +453,7 @@ Out of scope:
 
 ### Deliverables
 
-- The product fragment and its build script under `Images/tools/`.
+- The product fragment under `Guest/product/`, and the Mesa build script under `scripts/guest/` (IR-497; the entry first named `Images/tools/`).
 - A corrected image build with its own identity, recorded under `Images/reference/`.
 - The guest check `apkrun.test=egl`, which prints `APKRUN-TEST: egl ok` only
   when `eglInitialize` succeeds on the VirGL display.
@@ -493,7 +493,7 @@ Out of scope:
   the task number and the issue number are both #099 (IR-293 covers the earlier offset).
 - **Status (2026-10-10, host work only, no VM started).** The route is ADR-0018 (NDK, Mesa 26.1.8), accepted with the project owner's approval.
   - Step 1 (the comparison and the receipt, IR-440 to IR-451) is on `task/099-mesa-virgl-guest-image`. It is not on this branch, and ADR-0018 cites it.
-  - Step 2, the Mesa libraries from locked sources, is done. `scripts/guest/build-mesa-android.sh` builds the four shipped libraries (`libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, `libgallium_dri.so`) from the pinned sources, and `ThirdParty/ThirdParty.lock.json` pins Mesa 26.1.8 and its build tools (group `guest-mesa`). The Android product fragment in `Guest/product/` is not done.
+  - Step 2 is partly done. The Mesa libraries from locked sources are built, and the lock pins them: `scripts/guest/build-mesa-android.sh` builds the four shipped libraries (`libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, `libgallium_dri.so`) from the pinned sources, and `ThirdParty/ThirdParty.lock.json` pins Mesa 26.1.8 and its build tools (group `guest-mesa`). The product fragment in `Guest/product/` is not done, so step 2 stays open.
   - Step 3, the corrected image with its own identity, is not done. No image is built. The build writes `manifest.json` next to the libraries, and it is the only provenance record so far.
   - Step 4, the boot and `apkrun.test=egl`, is not done. It needs the VM and the image.
   - Acceptance criterion 4 is checked (see above). Criteria 1 to 3 stay open. Criterion 1 needs the image, criterion 2 needs the VM, and criterion 3 needs the `flex` and `m4` pins (IR-485) and a maintainer decision on the app list (IR-483) and on the NDK licence (IR-486).

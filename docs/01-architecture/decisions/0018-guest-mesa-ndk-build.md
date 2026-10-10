@@ -18,7 +18,7 @@ The project owner approved the NDK route in this session. Mesa is built on this 
 ## Decision
 
 1. APKRun builds the guest Mesa itself. The source is Mesa **26.1.8** (`https://gitlab.freedesktop.org/mesa/mesa.git`, tag `mesa-26.1.8`, commit `0fadfea4f394211946f308458f614839ef253ee8`). The build is Meson and Ninja, with the Android NDK **r28c** (`ndk;28.2.13676358`) and its clang 19.0.1. The script is `scripts/guest/build-mesa-android.sh`, and the build output is git-ignored under `ThirdParty/out/mesa-android/`.
-2. The target is Android ARM64 with bionic. The NDK r28c clang targets `aarch64-linux-android35`, the highest API level its sysroot provides. Mesa's `platform-sdk-version` is 37, the platform of the guest image (Android 17), so that Mesa's platform gates match the image. The symbols that the libraries import from the guest are listed in the test. Whether the guest provides them is not verified until the VM check.
+2. The target is Android ARM64 with bionic. The NDK r28c clang targets `aarch64-linux-android35`, the highest API level its sysroot provides. Mesa's `platform-sdk-version` is 37, the platform of the guest image (Android 17), so that Mesa's platform gates match the image. The symbols that the libraries import from the guest are listed in `scripts/guest/mesa_android.py` (`GUEST_SYMBOL_CONTRACT`). Whether the guest provides them is not verified until the VM check.
 3. **Shipped in the image** (`ships: image`, added by APKRun):
    - `libEGL_mesa.so` (EGL, the `android` and `surfaceless` platforms),
    - `libGLESv2_mesa.so` and `libGLESv1_CM_mesa.so` (the GLES 2.0 and 1.1 entry points),
@@ -43,12 +43,13 @@ The project owner approved the NDK route in this session. Mesa is built on this 
    - BSD-2-Clause (`src/gallium/auxiliary/postprocess/pp_mlaa.c`) and BSD-3-Clause (`src/util/softfloat.c`);
    - BSL-1.0 (`src/c11/impl/time.c`);
    - HPND, the "sell this software" notice (`src/loader/loader_dri_helper.c`). **HPND is not on the app list.**
+   - Public-domain dedications in `src/util/fast_idiv_by_const.c` and `src/util/rand_xor.c`. **The app list does not name them either** (IR-483).
    - CC0-1.0 OR Apache-2.0 (BLAKE3 1.8.2, `src/util/blake3/`, whose tree has no licence file; the identity comes from the upstream project);
    - GPL-3.0-or-later with the Bison skeleton exception, in the three Bison-generated parsers (`glsl_parser.cpp`, `glcpp-parse.c`, `program_parse.tab.c`). **Neither the exception nor the generated-code notice is on the app list.**
    - Apache-2.0 WITH LLVM-exception: the NDK's libc++abi and libunwind code, which `-static-libstdc++` links into `libgallium_dri.so` (IR-493).
    The lock entry records the expression, `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2 AND Apache-2.0 WITH LLVM-exception`. The policy result is a failure, and the image must not ship until the maintainer decides (IR-483). The Mesa licence texts are copied under `ThirdParty/licenses/mesa/`.
    The tools (NDK, Ninja, Bison, Meson, mako, MarkupSafe, packaging, PyYAML, libdrm) are `ships: tooling`. They are not in the image, and their licences are on the tooling list (§4.4), except the NDK, whose licence is the Android SDK licence (IR-486).
-8. **Provenance.** Every build writes `ThirdParty/out/mesa-android/manifest.json`. It records the Mesa commit and version, the lock entries used, the NDK revision and clang version, the Meson, Ninja, and Bison versions, the host Python and tool versions, the full flag list, and for each shipped file its size, SHA-256, `e_machine`, `DT_NEEDED`, `DT_SONAME`, and load alignment. `scripts/tests/test_guest_mesa_build.py` checks the manifest and the ELF properties of the output.
+8. **Provenance.** Every build writes `ThirdParty/out/mesa-android/manifest.json`. It records the Mesa commit and version, the SHA-256 of the lock file the build used, the NDK revision, its clang version, and the NDK archive SHA-256 that the lock states, the versions of the Meson, Ninja, Bison, mako, MarkupSafe, packaging, PyYAML, and libdrm tools, the host Python and the flex and m4 versions, the full flag list, and for each shipped file its size, SHA-256, `e_machine`, `DT_NEEDED`, `DT_SONAME`, and load alignment. `scripts/tests/test_guest_mesa_build.py` checks the manifest and the ELF properties of the output.
 9. **Image layout.** The Android loader takes `libEGL_mesa.so` and `libGLESv2_mesa.so` from `vendor/lib64/egl/`. `libgallium_dri.so` is a `DT_NEEDED` of the EGL and GLES libraries, so the linker must find it from the vendor namespace. The placement is decided in the image integration step, and the VM check verifies it. This ADR does not decide it (IR-489).
 
 ## Alternatives considered
@@ -64,7 +65,7 @@ The project owner approved the NDK route in this session. Mesa is built on this 
 ## Consequences
 
 - The guest gets Mesa's EGL and GLES 2.0 and 1.1 entry points and the `virgl` driver, so `eglInitialize` can run on the VirGL display. Acceptance of #099 needs the VM check, which is not part of this ADR.
-- The guest must provide the libraries that the shipped Mesa imports. These are `libcutils.so`, `libhardware.so`, `liblog.so`, `libnativewindow.so`, `libsync.so`, `libdrm.so`, `libz.so`, `libm.so`, `libdl.so`, and `libc.so`, and 37 Mesa-used symbols of the stub libraries and libdrm (the symbol list is in `scripts/tests/test_guest_mesa_build.py`). `libz.so` is not in the receipt's inventory, so it is an open check (IR-487).
+- The guest must provide the libraries that the shipped Mesa imports. These are `libcutils.so`, `libhardware.so`, `liblog.so`, `libnativewindow.so`, `libsync.so`, `libdrm.so`, `libz.so`, `libm.so`, `libdl.so`, and `libc.so`, and 37 Mesa-used symbols of the stub libraries and libdrm (the symbol list is in `scripts/guest/mesa_android.py`). `libz.so` is not in the receipt's inventory, so it is an open check (IR-487).
 - Mesa is a third-party component with runtime impact, so it is in the lock with `ships: image`, its licence texts, and this ADR. Security updates come from the upstream check (build-system §6.7), and a Mesa bump is a new pin with a new receipt.
 - The app list is not met for HPND and for the Bison-generated code (IR-483). The image release is blocked until the maintainer decides.
 - ADR-0004's Context sentence about Cuttlefish's `drm_virgl` mode is correct for the kernel side only. The userspace side is this ADR's.

@@ -12605,11 +12605,11 @@ the real manifest.
 | Task | #099 (step 3) |
 | Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 6 |
 
-**Choice.** The NDK r28c (`ndk;28.2.13676358`) is in `~/Library/Android/sdk/ndk/28.2.13676358`. The archive `android-ndk-r28c-darwin.zip` (952,495,160 bytes) came from `https://dl.google.com/android/repository/`, the URL that `repository2-3.xml` lists. Its SHA-1 equals the value in that manifest (`fc20a6bf15a30fb3428c9b60a7308793a362dc6d`). Its SHA-256 is in the lock. `build/android-sdk`, which the other checkouts share, has no `ndk` directory, and this task did not change it. `sdkmanager` was not run.
+**Choice.** The NDK r28c (`ndk;28.2.13676358`) is in `~/Library/Android/sdk/ndk/28.2.13676358`. The archive `android-ndk-r28c-darwin.zip` (952,495,160 bytes) came from `https://dl.google.com/android/repository/`, the URL that `repository2-3.xml` lists. Its SHA-1 equals the value in that manifest (`fc20a6bf15a30fb3428c9b60a7308793a362dc6d`), and its SHA-256 (`0d4599e8…`) is in the lock. `scripts/guest/build-mesa-android.sh --ndk-archive FILE` checks the archive against the lock. Without that option, the build checks the NDK by the revision in `source.properties`. `build/android-sdk`, which the other checkouts share, has no `ndk` directory, and this task did not change it. `sdkmanager` was not run.
 
 **Reason.** The task asked for a location outside the shared SDK. `sdkmanager` needs a JDK, and no JDK is installed on this Mac. Installing one would be an environment change that the task did not ask for. The archive is the file that `sdkmanager` downloads.
 
-**Consequence.** The Android SDK licence (`android-sdk-license`) was not accepted through `sdkmanager`, so no acceptance record exists on this Mac. The maintainer confirms the acceptance that environment-setup §2.5 expects. The licence text is in the lock copy (IR-486).
+**Consequence.** The shared SDK already has the acceptance record of an earlier `sdkmanager` run: `build/android-sdk/licenses/android-sdk-license` holds the SHA-1 `24333f8a63b6825ea9c5514f83c2829b004d1fee`. This task wrote nothing there. The lock's copy of the licence text (SHA-1 `efa68a6b…`, from `repository2-3.xml`) is not the text that the record hashes, and the two were not compared further. The maintainer confirms that the record covers the NDK (IR-486). The download copy was damaged after it was complete, because a retry loop appended 857 bytes to it. The checked copy is its first 952,495,160 bytes, whose SHA-1 and SHA-256 match the manifest and the lock. `unzip -tq` reports no errors in that copy, and the 8,365 regular files of the installed NDK have the sizes that the archive lists.
 
 ## IR-482: The NDK r28c sysroot stops at API 35, and Mesa's platform SDK is 37
 
@@ -12633,13 +12633,14 @@ the real manifest.
 | Task | #099 (step 2) |
 | Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1, §4.2, §4.5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 7 |
 
-**Choice.** The lock records the Mesa licence expression as found: `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2`. The app list is not changed. The image does not ship Mesa until the maintainer decides how to treat the two terms that the app list does not name.
+**Choice.** The lock records the Mesa licence expression as found: `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2 AND Apache-2.0 WITH LLVM-exception` (IR-493). The app list is not changed. The image does not ship Mesa until the maintainer decides how to treat the two terms that the app list does not name.
 
 **Reason.** The source scan covered the 859 files that the four shipped libraries compile. The scan found the terms as follows:
 
 - HPND (the "sell this software" notice) in `src/loader/loader_dri_helper.c`;
 - GPL-3.0-or-later with the Bison skeleton exception, in the three Bison-generated parsers `src/compiler/glsl/glsl_parser.cpp`, `src/compiler/glsl/glcpp/glcpp-parse.c`, and `src/mesa/program/program_parse.tab.c`;
 - BSD-2-Clause in `pp_mlaa.c`, BSD-3-Clause in `softfloat.c`, BSL-1.0 in `c11/impl/time.c`, and CC0 or Apache-2.0 in the BLAKE3 files, which the lock treats as upstream-identified;
+- public-domain dedications in `src/util/fast_idiv_by_const.c` and `src/util/rand_xor.c`, which the app list does not name;
 - MIT for the rest.
 
 The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E` unless the whole expression is on the list. HPND is not on the list, and neither is `GPL-3.0-or-later WITH Bison-exception-2.2`. The flex-generated lexers carry no GPL notice.
@@ -12654,7 +12655,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2) |
 | Affected documents | [build-system.md](../05-development/build-system.md) §6.1, §6.5 |
 
-**Choice.** Ninja 1.13.2 is built from the upstream tag `v1.13.2` (commit `3441b633c2fe2c494e958780ba0f4227b1327634`) with its bootstrap script. Bison 3.8.2 is built from `bison-3.8.2.tar.xz`, pinned by SHA-256 `9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2`, and its detached signature is checked with the GNU keyring (`gnu-keyring.gpg`, signer `7DF84374B1EE1F9764BBE25D0DDCAA3278D5264E`). Meson, mako, MarkupSafe, and packaging are PyPI wheels, pinned by SHA-256.
+**Choice.** Ninja 1.13.2 is built from the upstream tag `v1.13.2` (commit `3441b633c2fe2c494e958780ba0f4227b1327634`) with its bootstrap script. Bison 3.8.2 is built from `bison-3.8.2.tar.xz`, pinned by SHA-256 `9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2`, and its detached signature was checked against the GNU keyring (`gnu-keyring.gpg`, signer `7DF84374B1EE1F9764BBE25D0DDCAA3278D5264E`) when the pin was chosen. The build script checks the SHA-256 only. Meson, mako, MarkupSafe, and packaging are PyPI wheels, pinned by SHA-256.
 
 **Reason.** The PyPI ninja wheel reports the version `1.13.2.git.kitware.jobserver-pipe-1`, so it is not the upstream build, and the upstream source is the pin. macOS ships Bison 2.3, and Mesa needs a newer one (`meson.build`, the `bison` version check). `gpg` reports that the signer is not certified by a trusted signature. The check therefore shows that the tarball matches the keyring, not that the keyring belongs to the maintainer.
 
@@ -12670,7 +12671,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Choice.** The build uses the macOS flex 2.6.4 and GNU m4 1.4.6. The manifest records both versions. The lock does not pin them.
 
-**Reason.** Mesa needs flex for its GLSL lexers, and Bison runs m4 when it generates code. Both come with the macOS installation. Mesa's documentation accepts flex 2.5.35 and later, except 2.6.2. Pinning either tool means a source build with more tools.
+**Reason.** Mesa needs flex for its GLSL lexers, and Bison runs m4 when it generates code. Both come with the macOS installation. Mesa's install notes (`docs/install.rst`) name flex 2.5.35 and bison 2.4.1, and they say that some versions, such as 2.6.2, can be buggy. The macOS flex is 2.6.4. Pinning either tool means a source build with more tools.
 
 **Consequence.** The maintainer decides whether flex and m4 go into the lock or into `scripts/Brewfile`.
 
@@ -12710,7 +12711,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 4) |
 | Affected documents | [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 4 and Consequences; [android-image.md](../02-design/android-image.md) §8 |
 
-**Choice.** The five stub libraries (`cutils`, `hardware`, `log`, `nativewindow`, `sync`) are not in the output. The shipped libraries import 37 symbols from those stubs and from libdrm. The test lists them. The guest must export them, and the VM check (`apkrun.test=egl`) is the first check that can show it.
+**Choice.** The five stub libraries (`cutils`, `hardware`, `log`, `nativewindow`, `sync`) are not in the output. The shipped libraries import 37 symbols from those stubs and from libdrm. `scripts/guest/mesa_android.py` (`GUEST_SYMBOL_CONTRACT`) lists them. The guest must export them, and the VM check (`apkrun.test=egl`) is the first check that can show it.
 
 **Reason.** `-Dandroid-stub=true` builds the stubs for non-Bionic targets. Shipping them would shadow the guest's libraries of the same names. The receipt (§5) lists the files `libcutils.so`, `libhardware.so`, `libdrm.so` (vendor), and `liblog.so`, `libnativewindow.so`, `libsync.so` (system) by name only, so the symbols are not established.
 
@@ -12754,7 +12755,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Choice.** The `libdrm` lock entry has `license` `MIT`, which `libdrm`'s `meson.build` declares, and `licenseFiles` `["MIT-notice-xf86drm.txt"]`. The file is lines 9 to 31 of `xf86drm.c` in the 2.4.123 tarball, which carry the copyright lines and the MIT permission notice.
 
-**Reason.** The 2.4.123 tarball has no `COPYING` or `LICENSE` file. Its README does not state a licence. The lock needs a licence file under `ThirdParty/licenses/`, and the notice is the only MIT text in the tarball.
+**Reason.** The lock needs a licence file under `ThirdParty/licenses/`. The 2.4.123 tarball has no `COPYING` or `LICENSE` file at its top level, and its README does not state a licence. The excerpt is the MIT notice of `xf86drm.c`, and `meson.build` declares `license : 'MIT'`. That permission text is also in 234 other files of the tarball.
 
 **Consequence.** The licence file is an excerpt, not a full copy of the upstream licence. libdrm is `ships: tooling`, so it is not in the image, and the excerpt does not affect the image. A maintainer who wants the upstream file copies it from the libdrm repository at the same commit.
 
@@ -12780,7 +12781,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2) |
 | Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.2, §7.1; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decisions 5 and 7 |
 
-**Choice.** The C++ objects are linked with `-static-libstdc++`. The NDK's libc++abi and libunwind code is therefore inside `libgallium_dri.so`: the unstripped build has 18 defined `__cxa_` and `_Unwind_` symbols, and it has no `std::__1` symbol. The Mesa entry's `license` adds `Apache-2.0 WITH LLVM-exception`. `ThirdParty/licenses/mesa/ndk-llvm-exception.txt` is the exception text, copied verbatim from `NOTICE.toolchain` of NDK r28c (lines 2040 to 2052).
+**Choice.** The C++ objects are linked with `-static-libstdc++`. The NDK's libc++abi and libunwind code is therefore inside `libgallium_dri.so`: the unstripped build defines 21 `__cxa_` and `_Unwind_` symbols (18 in the text section, 3 in data), and it has no `std::__1` symbol. The Mesa entry's `license` adds `Apache-2.0 WITH LLVM-exception`. `ThirdParty/licenses/mesa/ndk-llvm-exception.txt` is the exception text, copied verbatim from `NOTICE.toolchain` of NDK r28c (lines 2040 to 2052).
 
 **Reason.** The guest has `libc++.so` and no `libc++_shared.so` (the receipt, §5). A dynamic link to `libc++_shared.so` would need a library the image does not have, and a link to the system `libc++.so` would depend on an ABI the build does not check. The Mesa Android documentation uses the static runtime too. The term is on the app list, and the static code is what its notice covers.
 
@@ -12808,7 +12809,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 3) |
 | Affected documents | [build-system.md](../05-development/build-system.md) §6.6 (caches) |
 
-**Choice.** The script writes to `ThirdParty/out/mesa-android` by default, and the work area to `ThirdParty/out/mesa-android-work`. Both are git-ignored. This task ran them with `--out` and `--work` set to `/tmp/apkrun-099/run/` instead, because `ThirdParty/out` and `build` are symlinks into `/Users/N3275/Documents/projects/apkrun` in this worktree. Writing there would change the main checkout, which the task forbids.
+**Choice.** The script writes to `ThirdParty/out/mesa-android` by default, and the work area to `ThirdParty/out/mesa-android-work`. Both are git-ignored. This task ran them with `--out` and `--work` set to a scratch directory outside the repository, because `ThirdParty/out` and `build` are symlinks into the main checkout in this worktree. Writing there would change the main checkout, which the task forbids.
 
 **Reason.** The default follows the design (§6.6 keeps the output under `ThirdParty/out/`). The worktree layout is an environment fact, not a design choice.
 
@@ -12827,3 +12828,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The default test run has no NDK and no build output, and it must stay fast and runnable on any checkout. A Mesa build takes about ten minutes on this Mac. The output check is therefore run by hand after a build, and the result is recorded in the M02 #099 entry.
 
 **Consequence.** CI does not check the built output. The maintainer adds that check to a release job, which needs the NDK on the runner.
+
+## IR-497: The Mesa build script lives under `scripts/guest/`, not under `Images/tools/` or `ThirdParty/build/`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [M02](issues/M02-graphics.md) #099 (`Modules / paths`, `Deliverables`); [build-system.md](../05-development/build-system.md) §6.8 (step 4); [android-image.md](../02-design/android-image.md) §1.2 |
+
+**Choice.** `scripts/guest/build-mesa-android.sh` and its helper `scripts/guest/mesa_android.py` are under `scripts/guest/`, as the task asked. The M02 entry named `Images/tools/`, and build-system §6.8 says that a source build's script goes under `ThirdParty/build/`.
+
+**Reason.** `Images/tools/` is the `apkrun_image` package, which handles the image and its manifests (AGENTS §6.3). The Mesa build makes a third-party component and its provenance record, not an image. `ThirdParty/build/` holds the scripts that the virgl-runtime group runs through `scripts/tools/build_third_party.py`, and this group is not run by that driver (IR-492).
+
+**Consequence.** The maintainer decides the final location when the image integration (M02 step 2, the product fragment) is written. The M02 entry now lists `scripts/guest/` and `scripts/tests/`.

@@ -124,7 +124,7 @@ final class VirGLBackend: @unchecked Sendable {
         switch created {
         case .failure(let failure):
             // A capset that is missing after the engine exists must still destroy it, or the next renderer
-            // in this process would be refused (IR-462 notes the one-renderer rule).
+            // in this process would be refused: virglrenderer admits one instance at a time (graphics.md §5.2).
             _ = renderThread.sync { () -> Bool in
                 if let engine = engineBox.engine {
                     try? engine.destroy()

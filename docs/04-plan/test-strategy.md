@@ -395,7 +395,7 @@ Developer ID, notarization credentials, the release Sparkle key, and the release
 | Boot console captures | `Images/reference/<buildId>/` from #064 | T0 `BootPhaseDetector` ([runtime-daemon.md](../02-design/runtime-daemon.md) §3.3) |
 | virtio-gpu byte vectors | from Linux driver traces, in GraphicsCore test resources | T0 ([graphics.md](../02-design/graphics.md) §12 #019) |
 | EDIDs | golden EDIDs and committed `edid-decode` output, in GraphicsCore test resources | T0 |
-| `kmscube` command stream | `Tests/Fixtures/graphics/` | T1 replay ([graphics.md](../02-design/graphics.md) §14) |
+| `kmscube` command stream | `Tests/Fixtures/graphics/`. Synthetic until a Linux run records it: `synthetic-virgl-session.json` (IR-514) | T1 replay ([graphics.md](../02-design/graphics.md) §14) |
 | CLI output | `CLI/apkrun/Tests/Golden/` | T0 human and JSON output per command ([cli.md](../02-design/cli.md) §6.3) |
 | `aapt2` output | APKStoreCore test resources, per pinned `aapt2` version | T1 |
 | Icon masters | WrapperCore test resources | T1 perceptual compare ([wrapper.md](../02-design/wrapper.md) §16) |

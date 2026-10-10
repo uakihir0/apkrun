@@ -338,7 +338,7 @@ Two VM runs on one Mac collide on the fixed resources in the table below. Every 
 
 **Per-run resources after this change (#098).** Each VM test run gets:
 
-- its own APKRUN home, `/tmp/apkrun-vm-<UUID>`, created by `VMRunResources` (`Tests/IntegrationTests/RunResources/VMRunResources.swift`). The instance, the logs, the image store, the console sockets, and the G2 capture are under that home, so nothing is shared;
+- its own APKRUN home, `/tmp/apkrun-vm-<UUID>`, created by `VMRunResources` (`Tests/IntegrationTests/RunResources/VMRunResources.swift`). The instance, the logs, the image store, and the console sockets are under that home, so nothing is shared. The G2 reference capture is kept beside the home, in `/tmp/apkrun-vm-<UUID>-capture`, because it is gate evidence and the teardown removes the home;
 - a full UUID in the name, and a path check that keeps every console socket path under the 103-byte limit;
 - an ADB host port from `TEST_RUNNER_APKRUN_TEST_ADB_PORT` (read as `APKRUN_TEST_ADB_PORT` in the test process). When it is unset, the value is `0`, and the kernel chooses a free loopback port. The supervisor reports the bound port as `developmentADBHostPort`. The product default stays `6520` (`BootOptions.adbHostPort`).
 
@@ -357,11 +357,12 @@ The console socket names stay `hvc0.sock` and `hvc1.sock`, because the CLI uses 
 
 1. `AndroidADBTests`, the developer-mode test, alone. Expect pass, `developmentADBHostPort` non-nil, and the `lsof` check to show only the run's port.
 2. The same test with `TEST_RUNNER_APKRUN_TEST_ADB_PORT=6520`, with no other ADB user running. Expect the behavior of `main`.
-3. `AndroidADBTests`, the developer-mode-off test, alone. Expect pass, `developmentADBHostPort` nil, and no TCP listener in the test host process.
+3. `AndroidADBTests`, the developer-mode-off test, alone. Expect pass, `developmentADBHostPort` nil, and no listener on 6520. It fails while a developer's `apkrun dev boot` holds 6520, so run it with no dev boot up (IR-530).
 4. Two runs in parallel (`AndroidADBTests` and `AndroidBootTests`, each with its own DerivedData and result bundle, both with the default port). Expect both to pass, and `adb devices` to list two different `127.0.0.1` endpoints.
 5. `apkrun dev boot` (default home) while one test runs. Expect `127.0.0.1:6520` for the dev boot, and no effect on the test.
 6. The G2 gate after the change, under the lock. Expect the same report fields as before, with the developer console on `<home>/Runtime/dev-console`.
-7. After each run, no `/tmp/apkrun-vm-*` directory remains, because each test removes its home.
+7. After each run, no `/tmp/apkrun-vm-<UUID>` home remains, because each test removes its home. The `-capture` directory of G2 stays, as evidence, and the coordinator removes it after the evidence is copied.
+8. Keep the T0 result: `swift test --skip SystemTests` passes on the reviewed commit, which includes `VMRunResourcesTests`.
 
 **IR references.** The decisions for this section are IR-520 to IR-539 in [implementation-review.md](implementation-review.md).
 

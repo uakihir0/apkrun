@@ -467,7 +467,11 @@ static virgl_renderer_gl_context gb_create_gl_context(
         return NULL;
     }
 
-    EGLContext shared = parameters->shared ? renderer->root_context : EGL_NO_CONTEXT;
+    /*
+     * Every virgl context shares the root context's objects. virglrenderer creates
+     * context 0 unshared, but resources made in the root context must stay visible to it.
+     */
+    EGLContext shared = renderer->root_context;
     EGLint client_version = parameters->major_ver > 0 ? parameters->major_ver : 3;
     const EGLint attributes[] = {
         EGL_CONTEXT_CLIENT_VERSION,

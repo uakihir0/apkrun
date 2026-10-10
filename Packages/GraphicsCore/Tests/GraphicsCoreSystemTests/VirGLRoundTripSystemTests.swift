@@ -123,6 +123,36 @@ private func sha256Hex(_ data: Data) -> String {
 /// fixture that is replaced without the generator fails the check.
 private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f8693c334519109cdb6380fd21"
 
+#if APKRUN_TEST_READBACK
+    /// The SHA-256 of the scanout that the synthetic session must produce. It was computed from the recorded transfers
+    /// with a separate script that applies the box rule of `expectedSyntheticScanout`, and it is pinned here (IR-515).
+    private let syntheticScanoutSHA256 = "41172b76173b4dd26e522abf890495d98aff5f9d2cc601ee617d48b4b7343b86"
+
+    /// The largest difference that a replayed byte may have from the expected byte. The synthetic session has no
+    /// rasterization, so its uploads must match exactly (IR-516).
+    private let syntheticScanoutTolerance = 0
+
+    /// The image that the recorded transfers produce, by the box rule of virglrenderer's `read_transfer_data`: data row
+    /// `r` starts `r * stride` bytes into the data, and pixel `c` of that row starts `c * 4` bytes in.
+    private func expectedSyntheticScanout(from recording: VirGLRecording) -> [UInt8] {
+        let rowBytes = 16 * 4
+        var image = [UInt8](repeating: 0, count: rowBytes * 16)
+        for operation in recording.operations {
+            guard case .transferWrite(let transfer, let data) = operation else { continue }
+            for row in 0..<Int(transfer.height) {
+                for column in 0..<Int(transfer.width) {
+                    for channel in 0..<4 {
+                        let destination =
+                            (Int(transfer.y) + row) * rowBytes + (Int(transfer.x) + column) * 4 + channel
+                        image[destination] = data[row * Int(transfer.stride) + column * 4 + channel]
+                    }
+                }
+            }
+        }
+        return image
+    }
+#endif
+
 extension VirGLRendererSuite {
     @Test(
         .enabled(
@@ -284,6 +314,38 @@ extension VirGLRendererSuite {
     }
 
     #if APKRUN_TEST_READBACK
+        @Test(
+            .enabled(
+                if: MTLCreateSystemDefaultDevice() != nil,
+                "This host does not provide a Metal device."
+            )
+        )
+        func theSyntheticSessionReplaysOnTheDeviceAndItsScanoutMatches() throws {
+            guard let runtime = runtimeDirectory() else {
+                Issue.record("The built VirGL runtime cache is unavailable.")
+                return
+            }
+            #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+
+            let device = try VirtioGPUDevice.virgl()
+            defer { device.deviceWillStop() }
+            let recording = try VirGLRecording.decoded(from: Data(contentsOf: syntheticFixtureURL()))
+            #expect(device.replayRecordingForTest(recording) == nil)
+
+            let expected = expectedSyntheticScanout(from: recording)
+            #expect(sha256Hex(Data(expected)) == syntheticScanoutSHA256)
+            let scanout = try device.readResourceForTest(box(width: 16, height: 16), byteCount: expected.count)
+            #expect(scanout.count == expected.count)
+            let mismatches = zip(scanout, expected).filter { abs(Int($0) - Int($1)) > syntheticScanoutTolerance }.count
+            #expect(mismatches == 0)
+            #expect(sha256Hex(Data(scanout)) == syntheticScanoutSHA256)
+
+            // The replay and the test-only readback leave the normal-path counters at zero (graphics.md §7).
+            let counters = device.statistics
+            #expect(counters.hostReadbacks == 0)
+            #expect(counters.guestReadbacks == 0)
+        }
+
         @Test(
             .enabled(
                 if: MTLCreateSystemDefaultDevice() != nil,

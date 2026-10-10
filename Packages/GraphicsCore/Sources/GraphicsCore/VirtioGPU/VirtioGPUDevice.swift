@@ -630,3 +630,52 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         )
     }
 }
+
+#if APKRUN_TEST_READBACK
+    // DEBUG-READBACK: test-only seams for the replay of a recorded session (graphics.md §12, #022 step 3). They exist only
+    // in builds with the TestReadback trait. Both run on the render thread that owns the renderer, and neither touches
+    // `counters`: the test-only readback is not a host readback of the normal path (graphics.md §7).
+    extension VirtioGPUDevice {
+        /// Replays `recording` on this device's renderer, in order. Returns the first call that failed, with its index,
+        /// or `nil` when every call succeeded.
+        func replayRecordingForTest(_ recording: VirGLRecording) -> (index: Int, failure: GraphicsFailure)? {
+            guard let backend else {
+                preconditionFailure("A replay needs the VirGL renderer of a drmVirgl device.")
+            }
+            guard let outcome = backend.sync({ engine in replay(recording, onto: engine) }) else {
+                preconditionFailure("The renderer is not running.")
+            }
+            return outcome
+        }
+
+        /// Reads `byteCount` bytes of the box `transfer` through the renderer's test-only readback.
+        func readResourceForTest(_ transfer: VirGLTransfer, byteCount: Int) throws(GraphicsFailure) -> [UInt8] {
+            guard let backend else {
+                preconditionFailure("A readback needs the VirGL renderer of a drmVirgl device.")
+            }
+            let outcome: Result<[UInt8], GraphicsFailure>? = backend.sync { engine in
+                guard let renderer = engine as? VirGLRenderer else {
+                    return .failure(
+                        .rendererOperationFailed(
+                            operation: "readResourceForTest",
+                            detail: "The renderer engine is not the VirGL renderer."
+                        ))
+                }
+                do throws(GraphicsFailure) {
+                    return .success(try renderer.readResourceForTest(transfer, byteCount: byteCount))
+                } catch {
+                    return .failure(error)
+                }
+            }
+            guard let outcome else {
+                preconditionFailure("The renderer is not running.")
+            }
+            switch outcome {
+            case .success(let bytes):
+                return bytes
+            case .failure(let failure):
+                throw failure
+            }
+        }
+    }
+#endif

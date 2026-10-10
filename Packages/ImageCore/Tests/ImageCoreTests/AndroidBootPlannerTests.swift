@@ -157,6 +157,64 @@ func androidBootPlannerBuildsTheHeadlessDefinitionAndInitrd() throws {
 }
 
 @Test
+func androidBootPlannerBuildsTheDrmVirglBootOfTheDesign() throws {
+    let bundle = try FixtureBundle.make()
+    defer { bundle.remove() }
+    let instance = InstanceConfiguration(
+        instanceID: try #require(UUID(uuidString: "3F2504E0-4F89-41D3-9A0C-0305E82C3301")),
+        machineIdentifier: MachineIdentity.newMachineIdentifier(),
+        macAddresses: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
+        sizing: InstanceSizing(cpuCount: 4, memoryBytes: 4 * 1024 * 1024 * 1024, userdataBytes: 1 << 30),
+        imageVersion: bundle.image.version,
+        userdataSchemaVersion: 1,
+        userdataGeneration: UUID()
+    )
+
+    let plan = try AndroidBootPlanner(paths: bundle.paths).prepareBoot(
+        image: bundle.image,
+        instance: instance,
+        options: BootOptions(gpuProfile: .drmVirgl)
+    )
+
+    // The device list of the plan. RuntimeCore appends the virtio-gpu device, so the planner adds none, and VZ's
+    // built-in 2D display stays off for drmVirgl (graphics.md §9).
+    #expect(plan.definition.customDevices.isEmpty)
+    #expect(plan.definition.builtInDisplay == nil)
+    #expect(plan.definition.networks.count == 3)
+
+    // The drmVirgl bootconfig of graphics.md §9. The composer key is a GPU-profile key of android-image.md §6.2,
+    // and the layout sets it for this profile.
+    let gpuValues = Dictionary(
+        uniqueKeysWithValues: plan.bootconfig.filter { $0.layer == "gpu:drmVirgl" }.map { ($0.key, $0.value) }
+    )
+    #expect(
+        gpuValues == [
+            "androidboot.hardware.egl": "mesa",
+            "androidboot.hardware.gralloc": "minigbm",
+            "androidboot.hardware.hwcomposer": "ranchu",
+            "androidboot.hardware.hwcomposer.mode": "client",
+            "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+            "androidboot.cpuvulkan.version": "0",
+            "androidboot.opengles.version": "196608",
+            "androidboot.vendor.apex.com.android.hardware.graphics.composer":
+                "com.android.hardware.graphics.composer.ranchu",
+        ]
+    )
+    // The keys of the SwiftShader and ANGLE profiles, and of the Vulkan profile, do not reach the drmVirgl boot.
+    let keys = Set(plan.bootconfig.map(\.key))
+    for key in [
+        "androidboot.hardware.angle_feature_overrides_enabled",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format",
+        "androidboot.hardware.vulkan",
+        "androidboot.vendor.apex.com.google.cf.vulkan",
+    ] {
+        #expect(!keys.contains(key), "\(key) belongs to another profile")
+    }
+    #expect(plan.bootconfig.first { $0.key == "androidboot.hardware.egl" }?.value == "mesa")
+    #expect(plan.bootconfig.first { $0.key == "androidboot.boot_devices" }?.layer == "platform")
+}
+
+@Test
 func androidBootPlannerKeepsSerialSilentOutsideDeveloperMode() throws {
     let bundle = try FixtureBundle.make()
     defer { bundle.remove() }

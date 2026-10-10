@@ -201,11 +201,14 @@ public actor RuntimeSupervisor {
         // A forced stop that is rejected while the VM is still starting is left to the boot, which stops the VM itself.
         let powerOff: (@Sendable () async -> Bool)? =
             options.developerMode ? { @Sendable in await self.requestPowerOff() } : nil
-        await AndroidStopSequence().run(
+        let stoppedByItself = await AndroidStopSequence().run(
             requestPowerOff: powerOff,
             isStopped: { await controller.state == .stopped },
             forceStop: { try? await controller.stop() }
         )
+        if options.developerMode, !stoppedByItself {
+            logger.warning("Android did not power off in time, so the VM was stopped by force")
+        }
         // Detach before the drain wait. The drain ends only when the VM has stopped, and a boot still starting the
         // VM sees the detached controller and stops it. Waiting while still attached would never return.
         self.controller = nil

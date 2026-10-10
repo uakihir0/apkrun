@@ -53,6 +53,22 @@ struct GPUResource: Equatable, Sendable {
     /// The highest mip level that transfers may address.
     let lastLevel: UInt32
     let layout: PixelLayout
+
+    /// The PIPE target of the resource: 2 for a 2D resource.
+    var target: UInt32 {
+        switch kind {
+        case .host2D:
+            2
+        case .virgl(let target):
+            target
+        }
+    }
+
+    /// True for the array and cube targets, whose layers are `arraySize`, not depth (graphics.md §4.4).
+    var isArrayLike: Bool {
+        [4, 5, 7, 8].contains(target)  // PIPE_TEXTURE_CUBE, 1D_ARRAY, 2D_ARRAY, and CUBE_ARRAY.
+    }
+
     /// The guest ranges attached with `RESOURCE_ATTACH_BACKING`. Empty until attached.
     var backing: [VirtioGPUMemoryEntry]
     /// The host memory estimate of the resource: its level-0 bytes, times depth and layers.
@@ -237,7 +253,8 @@ struct ResourceTable: Sendable {
                     throw .invalidParameter(field: field)
                 }
             }
-            byteEstimate = try Self.textureBytes(width: width, height: height, depth: depth, arraySize: arraySize, layout: layout)
+            byteEstimate = try Self.textureBytes(
+                width: width, height: height, depth: depth, arraySize: arraySize, layout: layout)
         }
         guard byteEstimate <= limits.singleResourceBytes else {
             throw .outOfMemory(limit: "singleResource")

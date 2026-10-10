@@ -13,6 +13,8 @@ enum GuestBackingFailure: Error, Equatable, Sendable {
 final class GuestBacking {
     let entries: [VirtioGPUMemoryEntry]
     private let views: [GuestMemory]
+    /// The byte offset from the start of the backing at which each entry begins.
+    private let starts: [UInt64]
     /// The sum of the entry lengths.
     let totalLength: UInt64
 
@@ -23,7 +25,15 @@ final class GuestBacking {
         precondition(entries.count == views.count, "Each backing entry has exactly one view.")
         self.entries = entries
         self.views = views
-        totalLength = entries.reduce(UInt64(0)) { $0 + UInt64($1.length) }
+        var starts: [UInt64] = []
+        starts.reserveCapacity(entries.count)
+        var total: UInt64 = 0
+        for entry in entries {
+            starts.append(total)
+            total += UInt64(entry.length)
+        }
+        self.starts = starts
+        totalLength = total
     }
 
     /// Copies `count` bytes starting `offset` bytes into the backing.
@@ -62,30 +72,50 @@ final class GuestBacking {
         let count: Int
     }
 
-    /// Splits an access across the entries. Fails when it is not entirely inside the backing.
+    /// Splits an access across the entries. It takes a binary search to find the first entry, so an access costs
+    /// O(log entries) plus its pieces. It fails when the access is not entirely inside the backing.
     private func pieces(offset: UInt64, count: Int) throws(GuestBackingFailure) -> [Piece] {
         guard count >= 0 else { throw .outOfBacking }
+        guard count > 0 else { return [] }
+        guard offset < totalLength else { throw .outOfBacking }
+        guard offset.addingReportingOverflow(UInt64(count)).overflow == false,
+            offset + UInt64(count) <= totalLength
+        else {
+            throw .outOfBacking
+        }
         var result: [Piece] = []
+        var index = Self.entryIndex(containing: offset, starts: starts)
         var position = offset
         var remaining = UInt64(count)
-        var entryStart: UInt64 = 0
-        for (index, entry) in entries.enumerated() where remaining > 0 {
-            let entryEnd = entryStart + UInt64(entry.length)
-            if position < entryEnd {
-                let take = min(remaining, entryEnd - position)
-                result.append(
-                    Piece(
-                        entry: index,
-                        localOffset: Int(position - entryStart),
-                        count: Int(take)
-                    )
+        while remaining > 0 {
+            let entryEnd = starts[index] + UInt64(entries[index].length)
+            let take = min(remaining, entryEnd - position)
+            result.append(
+                Piece(
+                    entry: index,
+                    localOffset: Int(position - starts[index]),
+                    count: Int(take)
                 )
-                position += take
-                remaining -= take
-            }
-            entryStart = entryEnd
+            )
+            position += take
+            remaining -= take
+            index += 1
         }
-        guard remaining == 0 else { throw .outOfBacking }
         return result
+    }
+
+    /// The index of the entry whose bytes contain `offset`. Callers ensure `offset` is inside the backing.
+    private static func entryIndex(containing offset: UInt64, starts: [UInt64]) -> Int {
+        var low = 0
+        var high = starts.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if starts[middle] <= offset {
+                low = middle
+            } else {
+                high = middle - 1
+            }
+        }
+        return low
     }
 }

@@ -172,17 +172,112 @@ private func texture(
     #expect(try geometry.extent() == 8)
 }
 
-@Test func anExtentThatOverflowsIsRejected() throws {
+@Test func aLayerStrideThatCannotHoldOneLayerIsRejected() throws {
+    let resource = try texture()
+    #expect(throws: ResourceTableFailure.invalidParameter(field: "layerStride")) {
+        _ = try TransferGeometry(
+            resource: resource,
+            level: 0,
+            stride: UInt32.max,
+            layerStride: UInt32.max,
+            box: geometryBox(width: 1, height: 32, depth: 1),
+            offset: UInt64.max - 4
+        )
+    }
+}
+
+private func arrayTexture(arraySize: UInt32) throws -> GPUResource {
+    var table = ResourceTable()
+    try table.create3D(
+        VirtioGPUResourceCreate3D(
+            resourceID: 1,
+            target: 7,
+            format: 1,
+            bind: 0,
+            width: 4,
+            height: 4,
+            depth: 1,
+            arraySize: arraySize,
+            lastLevel: 0,
+            sampleCount: 0,
+            flags: 0
+        )
+    )
+    return try #require(table.resource(id: 1))
+}
+
+@Test func arrayLayersAreAddressedByZNotByDepth() throws {
+    let resource = try arrayTexture(arraySize: 4)
+    let last = try TransferGeometry(
+        resource: resource,
+        level: 0,
+        stride: 0,
+        layerStride: 0,
+        box: geometryBox(z: 3, width: 4, height: 4),
+        offset: 0
+    )
+    #expect(last.levelLayers == 4)
+    #expect(throws: ResourceTableFailure.invalidParameter(field: "box")) {
+        _ = try TransferGeometry(
+            resource: resource,
+            level: 0,
+            stride: 0,
+            layerStride: 0,
+            box: geometryBox(z: 4, width: 4, height: 4),
+            offset: 0
+        )
+    }
+}
+
+@Test func aStrideBelowTheRowOrALayerStrideBelowTheLayerIsInvalid() throws {
+    let resource = try texture()
+    #expect(throws: ResourceTableFailure.invalidParameter(field: "stride")) {
+        _ = try TransferGeometry(
+            resource: resource,
+            level: 0,
+            stride: 8,
+            layerStride: 0,
+            box: geometryBox(width: 4, height: 4),
+            offset: 0
+        )
+    }
+    #expect(throws: ResourceTableFailure.invalidParameter(field: "layerStride")) {
+        _ = try TransferGeometry(
+            resource: try texture(width: 4, height: 2, depth: 2),
+            level: 0,
+            stride: 16,
+            layerStride: 16,
+            box: geometryBox(width: 4, height: 2, depth: 2),
+            offset: 0
+        )
+    }
+}
+
+@Test func anExtentAboveOneResourceLimitIsRejected() throws {
     let resource = try texture()
     let geometry = try TransferGeometry(
         resource: resource,
         level: 0,
-        stride: UInt32.max,
-        layerStride: UInt32.max,
-        box: geometryBox(width: 1, height: 32, depth: 1),
-        offset: UInt64.max - 4
+        stride: 16_000_000,
+        layerStride: 0,
+        box: geometryBox(width: 4, height: 32),
+        offset: 0
     )
     #expect(throws: ResourceTableFailure.invalidParameter(field: "box")) {
         _ = try geometry.extent()
     }
+}
+
+@Test func theRunCountIsTheNumberOfRows() throws {
+    let resource = try texture(depth: 2)
+    let geometry = try TransferGeometry(
+        resource: resource,
+        level: 0,
+        stride: 0,
+        layerStride: 0,
+        box: geometryBox(x: 1, y: 1, width: 2, height: 3, depth: 2),
+        offset: 0
+    )
+    #expect(geometry.runCount == 6)
+    #expect(UInt64(geometry.boxRuns().count) == geometry.runCount)
 }

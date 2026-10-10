@@ -152,9 +152,10 @@ final class GuestGPUSession {
                     sampleCount: 0,
                     flags: 0
                 )
-                return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-                    try engine.createResource(arguments)
-                })
+                return succeeded(
+                    renderWork: work { engine throws(GraphicsFailure) in
+                        try engine.createResource(arguments)
+                    })
             case .twoD, .edidOnly:
                 try resources.createHost2D(id: id, format: format, width: width, height: height)
                 return succeeded()
@@ -243,10 +244,12 @@ final class GuestGPUSession {
         } catch {
             return failed(error.errorCode)
         }
+        guard geometry.runCount <= TransferGeometry.maximumRuns else {
+            return failed(.invalidParameter)
+        }
         let gathered: [UInt8]
-        let runs: [TransferRun]
         do {
-            (gathered, runs) = try gather(target: target, geometry: geometry)
+            gathered = try gather(target: target, geometry: geometry)
         } catch {
             return failed(.invalidParameter)
         }
@@ -257,14 +260,19 @@ final class GuestGPUSession {
             // A host-memory copy of the rectangle, counted as a CPU pixel copy (graphics.md §9).
             var shadow = shadows[resource] ?? [UInt8](repeating: 0, count: Int(target.byteEstimate))
             var copied: UInt64 = 0
-            for run in runs {
+            var outOfRange = false
+            geometry.forEachRun { run in
                 let start = Int(run.offset)
                 let end = start + run.length
                 guard end <= shadow.count, end <= gathered.count else {
-                    return failed(.invalidParameter)
+                    outOfRange = true
+                    return
                 }
                 shadow.replaceSubrange(start..<end, with: gathered[start..<end])
                 copied += UInt64(run.length)
+            }
+            guard !outOfRange else {
+                return failed(.invalidParameter)
             }
             shadows[resource] = shadow
             counters.update {
@@ -286,10 +294,11 @@ final class GuestGPUSession {
                 height: rect.height,
                 depth: 1
             )
-            return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-                var data = gathered
-                try engine.transferWrite(transfer, data: &data)
-            })
+            return succeeded(
+                renderWork: work { engine throws(GraphicsFailure) in
+                    var data = gathered
+                    try engine.transferWrite(transfer, data: &data)
+                })
         case .edidOnly:
             return failed(.unspec)
         }
@@ -369,9 +378,10 @@ final class GuestGPUSession {
             return failed(error.errorCode)
         }
         let name = Self.contextName(debugName)
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.createContext(id: id, name: name)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.createContext(id: id, name: name)
+            })
     }
 
     /// The name of a context: its debug name up to the first NUL, decoded as UTF-8 with replacement.
@@ -387,27 +397,30 @@ final class GuestGPUSession {
         } catch {
             return failed(error.errorCode)
         }
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.destroyContext(id: id)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.destroyContext(id: id)
+            })
     }
 
     private func attachResource(context: UInt32, resource: UInt32) -> GPUCommandReply {
         guard path == .virgl else { return failed(.unspec) }
         guard contexts.contains(context) else { return failed(.invalidContextID) }
         guard resources.resource(id: resource) != nil else { return failed(.invalidResourceID) }
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.attachResource(context: context, resource: resource)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.attachResource(context: context, resource: resource)
+            })
     }
 
     private func detachResource(context: UInt32, resource: UInt32) -> GPUCommandReply {
         guard path == .virgl else { return failed(.unspec) }
         guard contexts.contains(context) else { return failed(.invalidContextID) }
         guard resources.resource(id: resource) != nil else { return failed(.invalidResourceID) }
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.detachResource(context: context, resource: resource)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.detachResource(context: context, resource: resource)
+            })
     }
 
     // MARK: - 3D resources, transfers, and submission
@@ -432,9 +445,10 @@ final class GuestGPUSession {
             sampleCount: arguments.sampleCount,
             flags: arguments.flags
         )
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.createResource(renderArguments)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.createResource(renderArguments)
+            })
     }
 
     private enum TransferDirection {
@@ -484,17 +498,21 @@ final class GuestGPUSession {
 
         switch direction {
         case .toHost:
+            guard geometry.runCount <= TransferGeometry.maximumRuns else {
+                return failed(.invalidParameter)
+            }
             let gathered: [UInt8]
             do {
-                (gathered, _) = try gather(target: target, geometry: geometry)
+                gathered = try gather(target: target, geometry: geometry)
             } catch {
                 return failed(.invalidParameter)
             }
             counters.update { $0.guestUploadBytes += UInt64(gathered.count) }
-            return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-                var data = gathered
-                try engine.transferWrite(renderTransfer, data: &data)
-            })
+            return succeeded(
+                renderWork: work { engine throws(GraphicsFailure) in
+                    var data = gathered
+                    try engine.transferWrite(renderTransfer, data: &data)
+                })
         case .fromHost:
             return readBack(renderTransfer, geometry: geometry, target: target)
         }
@@ -519,6 +537,9 @@ final class GuestGPUSession {
         guard geometry.offset + extent <= backing.totalLength else {
             return failed(.invalidParameter)
         }
+        guard geometry.runCount <= TransferGeometry.maximumRuns else {
+            return failed(.invalidParameter)
+        }
         let count = Int(extent)
         let outcome: ReadBackOutcome? = backend?.sync { engine in
             var data = [UInt8](repeating: 0, count: count)
@@ -533,18 +554,24 @@ final class GuestGPUSession {
             return failed(.unspec)
         }
         var copied: UInt64 = 0
-        for run in geometry.boxRuns() {
+        var writeFailed = false
+        geometry.forEachRun { run in
             let start = Int(run.offset)
             let end = start + run.length
             guard end <= outcome.bytes.count else {
-                return failed(.invalidParameter)
+                writeFailed = true
+                return
             }
             do {
                 try backing.write(outcome.bytes[start..<end], at: run.offset + geometry.offset)
             } catch {
-                return failed(.invalidParameter)
+                writeFailed = true
+                return
             }
             copied += UInt64(run.length)
+        }
+        guard !writeFailed else {
+            return failed(.invalidParameter)
         }
         counters.update {
             $0.guestReadbacks += 1
@@ -558,15 +585,16 @@ final class GuestGPUSession {
         guard contexts.contains(context) else { return failed(.invalidContextID) }
         guard commandStream.count % 4 == 0 else { return failed(.invalidParameter) }
         guard !commandStream.isEmpty else { return succeeded() }
-        return succeeded(renderWork: work { engine throws(GraphicsFailure) in
-            try engine.submit(context: context, commands: commandStream)
-        })
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.submit(context: context, commands: commandStream)
+            })
     }
 
     // MARK: - Geometry and memory
 
-    /// The bytes from the origin to the extent of the box, and the runs of the box inside them.
-    private func gather(target: GPUResource, geometry: TransferGeometry) throws -> ([UInt8], [TransferRun]) {
+    /// The bytes from the origin to the extent of the box, read from the backing.
+    private func gather(target: GPUResource, geometry: TransferGeometry) throws -> [UInt8] {
         let extent = try geometry.extent()
         guard let backing = backings[target.id] else {
             throw GuestBackingFailure.outOfBacking
@@ -574,8 +602,7 @@ final class GuestGPUSession {
         guard geometry.offset + extent <= backing.totalLength else {
             throw GuestBackingFailure.outOfBacking
         }
-        let bytes = try backing.read(offset: geometry.offset, count: Int(extent))
-        return (bytes, geometry.boxRuns())
+        return try backing.read(offset: geometry.offset, count: Int(extent))
     }
 
     /// True when `rect` lies inside a `width` × `height` resource.

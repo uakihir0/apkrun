@@ -34,7 +34,7 @@ final class AndroidGraphicsTests: XCTestCase {
         let bundle = try AndroidBootFixture.bundleDirectory()
         let fixture = try await AndroidBootFixture(home: home, bundle: bundle)
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: true, gpuProfile: .guestSwiftshader)
+        let supervisor = try fixture.supervisor(developerMode: true, gpuProfile: .guestSwiftshader)
         let console = ConsoleBuffer()
         let collector = Task {
             for await event in supervisor.events {

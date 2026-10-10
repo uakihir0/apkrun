@@ -49,12 +49,9 @@ struct AndroidBootFixture {
         store = InstanceStore(paths: paths, diagnostics: .live(paths: paths))
     }
 
-    /// A new private home under the temporary directory.
+    /// A new run's private home under `/tmp`, named with the run's UUID (test-strategy §3.10).
     static func makeHome() throws -> URL {
-        // A short path under /tmp: the developer console socket path must fit in sockaddr_un.
-        let home = URL(fileURLWithPath: "/tmp/apkrun-android-\(UUID().uuidString.prefix(8))", isDirectory: true)
-        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        return home
+        try VMRunResources.new(environment: ProcessInfo.processInfo.environment).home
     }
 
     /// Provisions a fresh instance, as G2 does before its first boot.
@@ -63,15 +60,22 @@ struct AndroidBootFixture {
     }
 
     /// A supervisor for one boot. The headless profile is the default, as `apkrun dev boot --gpu none` uses.
+    /// The developer ADB port is the run's own, from `APKRUN_TEST_ADB_PORT` (test-strategy §3.10).
     func supervisor(
         developerMode: Bool,
         gpuProfile: GPUProfileID = .headless,
         timeouts: BootTimeouts = .standard
-    ) -> RuntimeSupervisor {
-        RuntimeSupervisor(
+    ) throws -> RuntimeSupervisor {
+        let adbHostPort = try VMRunResources.adbHostPort(environment: ProcessInfo.processInfo.environment)
+        return RuntimeSupervisor(
             image: image,
             instanceStore: store,
-            options: BootOptions(gpuProfile: gpuProfile, developerMode: developerMode, captureLogcat: false),
+            options: BootOptions(
+                gpuProfile: gpuProfile,
+                developerMode: developerMode,
+                captureLogcat: false,
+                adbHostPort: adbHostPort
+            ),
             diagnostics: .live(paths: paths),
             timeouts: timeouts
         )

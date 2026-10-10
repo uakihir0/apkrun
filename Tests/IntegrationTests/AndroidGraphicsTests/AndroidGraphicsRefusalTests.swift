@@ -25,7 +25,7 @@ final class AndroidGraphicsRefusalTests: XCTestCase {
         let bundle = try AndroidBootFixture.bundleDirectory()
         let fixture = try await AndroidBootFixture(home: home, bundle: bundle)
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: false, gpuProfile: .drmVirgl)
+        let supervisor = try fixture.supervisor(developerMode: false, gpuProfile: .drmVirgl)
         let before = try Self.snapshot(of: home)
 
         do {

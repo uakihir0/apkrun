@@ -47,9 +47,10 @@ final class AndroidBootSession: @unchecked Sendable {
     static func start(developerMode: Bool, guestAgentBundle: GuestAgentBundle? = nil) async throws -> AndroidBootSession
     {
         let bundle = try bundleDirectory()
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apkrun-015-adb-\(UUID().uuidString)", isDirectory: true)
-        let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
+        // The run's own home and developer ADB port (test-strategy §3.10).
+        let run = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
+        let home = run.home
+        let paths = run.paths
         // The signed bundle goes through the install path of `apkrun dev image install`, as the G2 check does.
         let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
         let image = try await images.install(from: .directory(bundle))
@@ -59,7 +60,12 @@ final class AndroidBootSession: @unchecked Sendable {
         let supervisor = RuntimeSupervisor(
             image: image,
             instanceStore: store,
-            options: BootOptions(gpuProfile: .headless, developerMode: developerMode, captureLogcat: false),
+            options: BootOptions(
+                gpuProfile: .headless,
+                developerMode: developerMode,
+                captureLogcat: false,
+                adbHostPort: run.adbHostPort
+            ),
             diagnostics: diagnostics,
             environment: AndroidTestEnvironment.current(),
             guestAgentBundle: guestAgentBundle

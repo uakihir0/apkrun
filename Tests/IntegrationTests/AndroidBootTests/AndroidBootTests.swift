@@ -33,7 +33,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: false)
+        let supervisor = try fixture.supervisor(developerMode: false)
         let console = ConsoleBuffer()
         let collector = Task {
             for await event in supervisor.events {
@@ -100,7 +100,7 @@ final class AndroidBootTests: XCTestCase {
             stall: .seconds(30),
             firstBootStall: .seconds(30)
         )
-        let supervisor = fixture.supervisor(developerMode: false, timeouts: timeouts)
+        let supervisor = try fixture.supervisor(developerMode: false, timeouts: timeouts)
 
         let returned = await ConsoleBuffer.completes(within: .seconds(120)) {
             _ = try? await supervisor.ensureReady(.cli)
@@ -120,7 +120,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: false)
+        let supervisor = try fixture.supervisor(developerMode: false)
         let collector = Task {
             for await _ in supervisor.events {}
         }
@@ -159,7 +159,7 @@ final class AndroidBootTests: XCTestCase {
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
         let expected = try await Self.plannedBootconfig(fixture)
-        let supervisor = fixture.supervisor(developerMode: true)
+        let supervisor = try fixture.supervisor(developerMode: true)
         let console = ConsoleBuffer()
         let collector = Task {
             for await event in supervisor.events {
@@ -202,7 +202,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: true)
+        let supervisor = try fixture.supervisor(developerMode: true)
         let collector = Task {
             for await _ in supervisor.events {}
         }
@@ -240,7 +240,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: true)
+        let supervisor = try fixture.supervisor(developerMode: true)
         let collector = Task {
             for await _ in supervisor.events {}
         }
@@ -286,7 +286,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: false)
+        let supervisor = try fixture.supervisor(developerMode: false)
         let states = StateCollector()
         let collector = Task {
             for await event in supervisor.events {
@@ -325,7 +325,7 @@ final class AndroidBootTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: true)
+        let supervisor = try fixture.supervisor(developerMode: true)
         let consoles = DevConsoleSocketServer(directory: fixture.paths.devConsoleDirectory)
         let relay = Task {
             for await event in supervisor.events {

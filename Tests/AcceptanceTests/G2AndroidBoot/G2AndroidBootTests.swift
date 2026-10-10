@@ -48,10 +48,11 @@ final class G2AndroidBootTests: XCTestCase {
 
     func testFiveColdBootsReachBootCompletedAndStayStable() async throws {
         let bundle = try Self.bundleDirectory()
-        // A short path under /tmp: the developer console socket path must fit in sockaddr_un.
-        let home = URL(fileURLWithPath: "/tmp/apkrun-g2-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        // The run's own home and developer ADB port (test-strategy §3.10). Its console socket paths fit sockaddr_un.
+        let run = try VMRunResources.new(environment: ProcessInfo.processInfo.environment)
+        let home = run.home
         defer { Self.removeHome(home) }
-        let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": home.path])
+        let paths = run.paths
         // The signed bundle goes through the install path of `apkrun dev image install`.
         let images = ImageStore(paths: paths, trust: .standard(), diagnostics: .live(paths: paths))
         let image = try await images.install(from: .directory(bundle))
@@ -74,7 +75,12 @@ final class G2AndroidBootTests: XCTestCase {
             let supervisor = RuntimeSupervisor(
                 image: image,
                 instanceStore: store,
-                options: BootOptions(gpuProfile: .headless, developerMode: true, captureLogcat: true),
+                options: BootOptions(
+                    gpuProfile: .headless,
+                    developerMode: true,
+                    captureLogcat: true,
+                    adbHostPort: run.adbHostPort
+                ),
                 diagnostics: diagnostics
             )
             let capture = OutputCapture()
@@ -131,8 +137,7 @@ final class G2AndroidBootTests: XCTestCase {
                 // the developer console and compare it with the launcher capture while Android is up.
                 let comparison = try Self.compareWithReference(
                     socket: paths.devConsoleDirectory.appendingPathComponent("hvc1.sock"),
-                    output: FileManager.default.temporaryDirectory
-                        .appendingPathComponent("apkrun-g2-capture-\(UUID().uuidString.prefix(8))", isDirectory: true)
+                    output: run.captureDirectory
                 )
                 let report = XCTAttachment(string: comparison.report)
                 report.lifetime = .keepAlways

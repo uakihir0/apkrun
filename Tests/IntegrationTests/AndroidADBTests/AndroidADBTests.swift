@@ -9,8 +9,6 @@ import XCTest
 /// security-model.md §4). Runs only in the `AndroidADB` configuration of IntegrationTests.xctestplan,
 /// which needs the Android bundle of `scripts/build-test-android-bundle.sh` and adb under ANDROID_HOME.
 final class AndroidADBTests: XCTestCase {
-    private static let port: UInt16 = 6520
-
     override func setUpWithError() throws {
         try super.setUpWithError()
         guard ProcessInfo.processInfo.environment["APKRUN_INTEGRATION_SUITE"] == "android-adb" else {
@@ -25,8 +23,14 @@ final class AndroidADBTests: XCTestCase {
             let supervisor = session.supervisor
             let readyState = await supervisor.state
             XCTAssertEqual(readyState, .ready)
+            // The port this run's forwarder bound: the run's own, or the one the kernel chose (test-strategy §3.10).
+            let boundPort = await supervisor.developmentADBHostPort
+            let port = try XCTUnwrap(boundPort)
 
-            let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
+            let adb = AdbClient(
+                executable: try AndroidTestEnvironment.adbExecutable(),
+                endpoint: AdbClient.loopbackEndpoint(port: port)
+            )
             try await adb.connect(timeout: .seconds(30))
             let bootCompleted = try await adb.getprop("sys.boot_completed")
             XCTAssertEqual(bootCompleted, "1")
@@ -41,10 +45,10 @@ final class AndroidADBTests: XCTestCase {
             let shellCount = await adb.shellInvocationCount
             XCTAssertEqual(shellCount, 4)
 
-            XCTAssertEqual(try Self.listeningAddresses(port: Self.port), ["127.0.0.1:\(Self.port)"])
+            XCTAssertEqual(try Self.listeningAddresses(port: port), ["127.0.0.1:\(port)"])
             for address in try Self.nonLoopbackIPv4Addresses() {
                 XCTAssertFalse(
-                    Self.isAccepting(address: address, port: Self.port),
+                    Self.isAccepting(address: address, port: port),
                     "ADB must not accept connections on \(address)"
                 )
             }
@@ -55,19 +59,27 @@ final class AndroidADBTests: XCTestCase {
             let stoppedState = await supervisor.state
             XCTAssertEqual(stoppedState, .stopped)
             XCTAssertLessThan(stopped, .seconds(20), "reboot -p must power Android off before the forced stop")
-            XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
+            XCTAssertTrue(try Self.listeningAddresses(port: port).isEmpty)
             XCTAssertTrue(session.capture.console().contains("reboot: Power down"))
         }
     }
 
-    /// Without developer mode, nothing listens on the ADB port, and Android still boots.
+    /// Without developer mode, no ADB forwarder starts, nothing listens on the product ADB port, and Android still
+    /// boots.
+    ///
+    /// The product port is checked as well as the forwarder, because a developer's `apkrun dev boot` uses it. A
+    /// developer boot that runs at the same time fails this check. That is the one shared-port check left
+    /// (test-strategy §3.10).
     func testDeveloperModeOffListensOnNoPort() async throws {
         try await AndroidBootSession.withBoot(developerMode: false) { session in
             let readyState = await session.supervisor.state
             XCTAssertEqual(readyState, .ready)
 
-            XCTAssertTrue(try Self.listeningAddresses(port: Self.port).isEmpty)
-            XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: Self.port))
+            let boundPort = await session.supervisor.developmentADBHostPort
+            XCTAssertNil(boundPort, "developer mode off starts no ADB forwarder")
+            let productPort = BootOptions.defaultADBHostPort
+            XCTAssertTrue(try Self.listeningAddresses(port: productPort).isEmpty)
+            XCTAssertFalse(Self.isAccepting(address: "127.0.0.1", port: productPort))
 
             await session.supervisor.stop()
         }

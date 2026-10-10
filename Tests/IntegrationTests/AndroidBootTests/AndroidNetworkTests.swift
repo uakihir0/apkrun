@@ -24,7 +24,7 @@ final class AndroidNetworkTests: XCTestCase {
         defer { removeTestHome(home) }
         let fixture = try await AndroidBootFixture(home: home, bundle: AndroidBootFixture.bundleDirectory())
         try await fixture.resetInstance()
-        let supervisor = fixture.supervisor(developerMode: true)
+        let supervisor = try fixture.supervisor(developerMode: true)
         let collector = Task {
             for await _ in supervisor.events {}
         }

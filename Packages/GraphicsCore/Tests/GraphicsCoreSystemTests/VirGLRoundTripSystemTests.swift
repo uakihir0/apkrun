@@ -156,7 +156,8 @@ private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f869
 extension VirGLRendererSuite {
     @Test(
         .enabled(
-            if: MTLCreateSystemDefaultDevice() != nil && ProcessInfo.processInfo.environment["APKRUN_REGENERATE_FIXTURES"] == "1",
+            if: MTLCreateSystemDefaultDevice() != nil
+                && ProcessInfo.processInfo.environment["APKRUN_REGENERATE_FIXTURES"] == "1",
             "Set APKRUN_REGENERATE_FIXTURES=1 to rewrite the synthetic replay fixture from its generator."
         )
     )

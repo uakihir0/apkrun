@@ -13431,6 +13431,8 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** The branch cannot merge until issue #100 exists. The `Refs` lines are rewritten from #098 to #100 at that time.
 
+**Result of the teardown fix (2026-10-10, rebased onto main 18dbf01).** After an AndroidADB run, the run's home stayed behind without a message. An installed image is read-only (`dr-xr-xr-x`, `r--`), and `AndroidBootSession.finish()` removed the home with `try?`. `VMRunResources.removeHome(_:)` now restores the owner's write bit on each directory and file under the home and never follows a symbolic link, then removes the home. A failure throws with the path and the underlying error. `VMRunResources.removeHomeOrReport(_:)` writes the path and the error to standard error, so they appear in the test output. `AndroidBootSession.finish()`, `AndroidBootFixture.removeTestHome`, and the G2 teardown use it. T0 `VMRunResourcesTests`: 11 of 11 passed before the change, and 14 of 14 after it, including `removesAReadOnlyHomeAndLeavesSymbolicLinkTargetsAlone`, `aHomeThatCannotBeRemovedThrowsItsPathAndTheError`, and `removingAHomeThatIsGoneIsNotAnError`. T0 `BootOptionsTests`: 2 of 2 passed. One AndroidADB run under `lockf -k /tmp/apkrun-vm.lock`, `AndroidADBTests/testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully`: 1 passed, 0 failed, 17.1 s. No removal error was written, and no `/tmp/apkrun-vm-*` home was left. G2 was not run.
+
 ## IR-529: Parallel xcodebuild runs need their own DerivedData and result bundle paths
 
 | Field | Value |

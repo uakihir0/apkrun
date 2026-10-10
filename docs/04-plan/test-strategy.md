@@ -378,7 +378,7 @@ The console socket names stay `hvc0.sock` and `hvc1.sock`, because the CLI uses 
 6. **G2:** not run, as instructed.
 7. **Homes removed after each run: not met for the test's own teardown.** After checks 1 to 4, six `/tmp/apkrun-vm-<UUID>` homes of 1.9 to 2.0 GB remained, including after the passing runs. When I checked again later they were no longer present. I did not remove them, and I do not know who did. The image directories in each home are read-only (`dr-xr-xr-x`), and `AndroidBootSession.finish()` removes the home with `try?`, so a failed removal is silent. That is consistent with what is seen, and it was not reproduced in isolation. The home of the test in check 5 also remained after that test, and the homes of the aborted attempt and of check 5 were then removed by hand: `chmod -R u+w`, then `rm -rf`, after the `Logs` directories of the check 5 homes were copied to `/tmp/apkrun-098-logs/check5-homes/`.
 
-Summary: checks 1 to 4 passed at a623b37 (check 1 on rerun 1). Check 5 passed on the rebased tree. Checks 1 to 4 were not rerun on the rebased tree. Check 6 was not run. Check 7 is not met for the test's own teardown.
+Summary: checks 1 to 4 passed at a623b37 (check 1 on rerun 1). Check 5 passed on the rebased tree. Checks 1 to 4 were not rerun on the rebased tree. Check 6 was not run. Check 7 was not met for the test's own teardown. The teardown now restores the write bit before it removes the home, and it reports a failure (IR-528). One AndroidADB run after that change left no home.
 
 **IR references.** The decisions for this section are IR-520 to IR-539 in [implementation-review.md](implementation-review.md).
 

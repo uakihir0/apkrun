@@ -13304,3 +13304,283 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The step asks for a synthetic stream made by the existing helpers. Those helpers include no command-buffer encoder, so a `SUBMIT_3D` would need an encoder, which is a larger change than this step allows. The CI runner is not available from this worktree.
 
 **Consequence.** The T1 replay does not exercise virglrenderer's command decoder. Until the real capture exists, the `kmscube` check of step 2 is the only test of the decoder on real commands. The step 3 criteria that name the `kmscube` stream stay open.
+
+## IR-520: The developer ADB port is a per-boot option, and the product default stays 6520
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10; [../03-reference/configuration.md](../03-reference/configuration.md) §2.5; [../02-design/vm.md](../02-design/vm.md) §8 |
+
+**Choice.** `BootOptions.adbHostPort` carries the developer ADB port of one boot. Its default, `BootOptions.defaultADBHostPort`, is 6520, and the forwarder and the ADB client of the boot use that port. `apkrun dev boot`, `apkrun dev adb`, and `AdbClient.developmentEndpoint` keep 6520.
+
+**Reason.** The forwarder bound 6520 for every developer-mode boot, so two VM runs on one Mac collided. The port is an option of the boot, so the test harness can give each run its own value without changing a product path. The documented developer contract names 6520 (configuration.md §2.5, cli.md §5), and it stays.
+
+**Consequence.** Only the T2 harness passes another port. A developer's `apkrun dev adb` does not reach a test VM, which is the intended separation.
+
+## IR-521: A test run takes a kernel-chosen port, and the supervisor reports the bound port
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10; [../02-design/vm.md](../02-design/vm.md) §8 |
+
+**Choice.** The harness passes `0` unless `APKRUN_TEST_ADB_PORT` is set. The supervisor exposes the port the forwarder bound as `developmentADBHostPort`, and the ADB test reads it after `ensureReady`.
+
+**Reason.** A harness that probes a free port and closes it before the forwarder binds leaves a window in which another process can take the port. `VsockLoopbackForwarder` already accepts `0` and reports the port it bound, so the port is chosen and bound in one step.
+
+**Consequence.** The port is known only after the bridge starts. A pinned port remains possible through the environment (IR-522).
+
+## IR-522: APKRUN_TEST_ADB_PORT is parsed strictly, and xcodebuild passes it with the TEST_RUNNER_ prefix
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** An unset or empty value means `0`. Any other value must be a decimal port number from 0 to 65535, with ASCII digits only. Anything else fails the run with `VMRunResourcesFailure.invalidADBPort`. xcodebuild passes the variable to the test process as `TEST_RUNNER_APKRUN_TEST_ADB_PORT`, as `scripts/run-gate.sh` already does for `APKRUN_G2_DWELL_SECONDS` (line 53).
+
+**Reason.** A silent fallback could send a run to a port that another run owns, which is the cross-talk failure of test-strategy §3.10. The prefix is the one the repository already relies on.
+
+**Consequence.** The coordinator sets `TEST_RUNNER_APKRUN_TEST_ADB_PORT`. A VM run has not yet confirmed that the prefix reaches the test process (test-strategy §3.10, Notes item 2).
+
+## IR-523: Each run's home is a /tmp directory named with its UUID, and the console sockets keep their names
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.9, §3.10 |
+
+**Choice.** A run's home is `/tmp/apkrun-vm-<UUID>`, and every product path under it comes from `APKRunPaths`. The console sockets keep the names `hvc0.sock` and `hvc1.sock`. Their uniqueness comes from the per-run directory. A run's home is never under `$TMPDIR`.
+
+**Reason.** `DevConsoleSocketServer.serve` removes whatever file is at the socket path before it binds (`DevConsoleSocket.swift:64-66`), so two servers on one directory replace each other's socket silently. The CLI (`apkrun dev console`) depends on the names. A `$TMPDIR` home puts the socket path beyond the 103-byte `sockaddr_un` limit.
+
+**Consequence.** The boot fixtures and G2 use the same root. A T0 test checks that every run's console socket path fits the limit.
+
+## IR-524: The harness helper is a SwiftPM test target, and the Xcode bundles compile the same file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §2.2, §3.10; [../05-development/build-system.md](../05-development/build-system.md) §2.1, §2.2 |
+
+**Choice.** `VMRunResourcesTests` is a SwiftPM test target at `Tests/IntegrationTests/RunResources`. `project.yml` compiles the helper into the IntegrationTests and AcceptanceTests bundles and excludes the T0 file from them.
+
+**Reason.** CI runs T0 with `swift test --skip SystemTests`, which reaches only SwiftPM targets, and the Xcode bundles cannot run in that job. A product module would have added an architecture module, and the helper is test code only. `check-module-deps` classifies the target as an integration target, and it passes.
+
+**Consequence.** The helper is built twice, once by SwiftPM and once by Xcode, so a change to it must keep both builds green.
+
+## IR-525: Parallel VM runs go against the one-VM rule of §3.6, and a maintainer must decide
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.6, §3.10 |
+
+**Choice.** test-strategy §3.6 is not changed here. §3.10 describes parallel runs as allowed only under the coordinator rules, and that takes effect when a maintainer accepts this entry.
+
+**Reason.** §3.6 is the lab's operating rule ("runs one VM at a time"), not a test rule. Changing it changes what the lab Mac does on every run, and the memory cost of two Android VMs on a 16 GB Mac has not been measured (IR-537).
+
+**Consequence.** Until this entry is accepted, a parallel run is a manual exception that the coordinator records.
+
+## IR-526: The artifact directory stays shared, and no producer runs during a parallel run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** Runs keep reading `APKRUN_TEST_LINUX_DIR` directly. The producers (`run-gate.sh`, `build-test-initramfs.sh`, `fetch-test-linux.sh`, `build-test-android-bundle.sh`, `build-test-android-disks.sh`) do not run while a VM run is active.
+
+**Reason.** A per-run snapshot of the artifacts would change where each run reads its inputs. The race it would prevent is rare, and a coordinator rule prevents it, so the change is not needed for the parallel rule of this task.
+
+**Consequence.** A producer that rewrites a file during a VM start can make that start fail, and the failure does not name the cause.
+
+## IR-527: Gate runs use the per-run ADB port too
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [roadmap.md](roadmap.md) §2 (G2); [test-strategy.md](test-strategy.md) §5, §3.10 |
+
+**Choice.** G2 takes its ADB port from the run's environment, as every other suite does. It does not pin 6520. Unless `TEST_RUNNER_APKRUN_TEST_ADB_PORT` is set, G2 uses a kernel-chosen port.
+
+**Reason.** No G2 pass condition names the ADB port (roadmap.md §2). A gate that kept 6520 would be the one suite that differs from the others, which would hide port problems from the gate. The gates run alone under the lock, so their port does not affect their safety.
+
+**Consequence.** The G2 report does not record the port.
+
+## IR-528: #098 needs a GitHub issue number before merge
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 (reserved for follow-ups, AGENTS §11) |
+| Affected documents | [../05-development/workflow.md](../05-development/workflow.md) §2.4; [issues/README.md](issues/README.md) §3 (not edited here) |
+
+**Choice.** The branch and the commits carry #098. Before merge, GitHub assigns the issue number, the commit `Refs` lines and the pull request take that number, and the entry goes into its milestone file and into `issues/README.md` §3 in the same pull request. This change does not edit `issues/README.md`, as the task requires.
+
+**Reason.** workflow §2.4 says that GitHub gives each new task its number, so that two agents never take the same one.
+
+**Consequence.** The branch cannot merge until the issue exists. The `Refs` lines are rewritten to the new number at that time.
+
+## IR-529: Parallel xcodebuild runs need their own DerivedData and result bundle paths
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10; [../05-development/build-system.md](../05-development/build-system.md) §2.3 |
+
+**Choice.** test-strategy §3.10 states the rule. The harness does not check it.
+
+**Reason.** The paths are chosen on the `xcodebuild` command line, outside the test process, so a test cannot see another run's build. Two runs with one DerivedData path replace one test host app under each other, and two runs with one result path overwrite it.
+
+**Consequence.** The coordinator follows the rule. A wrapper script that enforces it can be added later.
+
+## IR-530: The developer-mode-off test still checks the product port
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 (Notes item 3) |
+
+**Choice.** `testDeveloperModeOffListensOnNoPort` asserts that no forwarder starts (`developmentADBHostPort` is nil) and that nothing listens on the product port, 6520.
+
+**Reason.** The product port is the one a developer's `apkrun dev boot` uses, and the test has always checked it. A stricter check, that no TCP listener belongs to the test host process, was not chosen, because XCTest could hold a listener inside the host and no VM run has shown that it does not. A check that cannot be verified could fail falsely.
+
+**Consequence.** The test fails while a developer boot holds 6520, so the coordinator runs it with no dev boot up. A follow-up can switch to the process check after a VM run confirms that the host holds no listener.
+
+## IR-531: The DiagnosticsCore T0 tests share fixed directories under /tmp
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** Not changed. The fixed directories are `/tmp/apkrun-health-tests` (`Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/HealthTests.swift:385`) and `/tmp/apkrun-host-check-tests` (`HostChecksTests.swift:125`).
+
+**Reason.** These T0 tests run no VM, and the parallel VM runs do not run them. Two concurrent `swift test` processes can still collide on them.
+
+**Consequence.** Concurrent T0 runs are not safe until these tests use per-run directories. That is a follow-up.
+
+## IR-532: The Debug apkrund label names one LaunchAgent per user, and no T2 suite starts apkrund
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** Parallel runs do not start apkrund in two runs at once. This is a rule for future suites, since the current suites do not start apkrund.
+
+**Reason.** `io.apkrun.apkrund.dev` (`Packages/DiagnosticsCore/Sources/DiagnosticsCore/Build/BuildInfo.swift:33`) names one LaunchAgent per user, and the host checks read it (`HostChecks.swift:216`). Giving each run its own label would change the Debug identity, which is a product decision.
+
+**Consequence.** A future suite that starts apkrund cannot run in parallel until the maintainer decides the identity.
+
+## IR-533: The error catalog keeps the port 6520 in its documentation text
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [../03-reference/error-catalog.md](../03-reference/error-catalog.md) (`runtime.adbConnectionUnavailable`) |
+
+**Choice.** `Packages/DiagnosticsCore/ErrorCatalog/errors.json` (the `doc.when` text of `runtime.adbConnectionUnavailable`, line 1289) is not changed.
+
+**Reason.** The remediation a user sees names `apkrun dev boot` and does not name the port. The port appears only in the documentation field, and changing it means regenerating `ErrorCatalog.generated.swift` for text that is still true of the product.
+
+**Consequence.** In a test run on another port, the catalog's documentation can name a port that the run does not use. The user-visible text is unaffected.
+
+## IR-534: DevConsoleSocketServer.serve removes a live socket file
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10; [../02-design/cli.md](../02-design/cli.md) §5 |
+
+**Choice.** Not changed in #098. Recorded as a product hazard.
+
+**Reason.** `DevConsoleSocketServer.serve` removes whatever file is at the socket path before it binds (`Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevConsoleSocket.swift:64-66`), even when a live server owns it. The product's own dev boot runs one server per home, so normal use is not affected. Refusing to replace a live socket changes the product's behavior in RuntimeHost, which needs a decision.
+
+**Consequence.** The test harness avoids the hazard with per-run directories (IR-523). A follow-up can make `serve` refuse a socket that still accepts connections.
+
+## IR-535: The bundle and disk builders take no lock, unlike the initramfs and kernel fetch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.4, §3.5, §3.10 |
+
+**Choice.** Not changed in #098. Recorded.
+
+**Reason.** `scripts/build-test-android-bundle.sh` and `scripts/build-test-android-disks.sh` write into `APKRUN_TEST_LINUX_DIR` without the `.artifacts.lock` that `build-test-initramfs.sh` and `fetch-test-linux.sh` take. Two producers can interleave. The fix changes the image pipeline's producers, which the image tasks own.
+
+**Consequence.** Two producers at once can leave a mixed set of files. The coordinator rule (IR-526) keeps the producers from running during a parallel run.
+
+## IR-536: Each run clones the Android image into its home, and the cost of the clones is not measured
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** Not changed. The image install of each run clones the bundle into the run's home with `clonefile(2)` (`Packages/ImageCore/Sources/ImageCore/Store/FileCloner.swift`, used at `Packages/ImageCore/Sources/ImageCore/Store/ImageStore.swift:166`).
+
+**Reason.** A clone shares blocks with its source, so one run's install costs little space until the files diverge. The time and the space of many clones on the lab's APFS volume are not measured, and AGENTS §8 says not to optimize before measuring. The instance disks are sparse, but their logical size is large (`removeTestHome` in `Tests/IntegrationTests/AndroidBootTests/AndroidBootFixture.swift`).
+
+**Consequence.** The coordinator checks the free space of the volume before a parallel run. A later task can measure the clone cost.
+
+## IR-537: The host capacity for parallel Android VMs is not verified
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.1, §3.10 (Notes item 4) |
+
+**Choice.** No limit is set in code. The coordinator checks the memory of the Mac and the number of VMs before a parallel run.
+
+**Reason.** No run on the lab Mac has measured two Android VMs together, and the Virtualization.framework limit on concurrent VMs has not been checked on this host.
+
+**Consequence.** The check is test-strategy §3.10, Notes item 4. Until it passes, parallel runs stay a manual exception (IR-525).
+
+## IR-538: The G2 reference capture stays after the run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [../02-design/android-image.md](../02-design/android-image.md) §8.4; [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** The capture directory is `/tmp/apkrun-vm-<UUID>-capture`, a sibling of the run's home, and the teardown does not remove it.
+
+**Reason.** The capture is gate evidence (android-image.md §8.4), and the teardown removes the home. The old code also kept the capture, in `$TMPDIR`.
+
+**Consequence.** Each G2 run leaves one capture directory under `/tmp`. The coordinator removes it after copying the evidence (test-strategy §3.10, Notes item 7).
+
+## IR-539: #098 is verified without a VM, and its T2 behavior is unverified
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #098 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 (Notes) |
+
+**Choice.** The change is verified by the T0 run (`swift test --skip SystemTests` passes), by the lint and the module graph check, and by building the IntegrationTests and AcceptanceTests bundles for testing. No test ran on a VM. The T2 behavior of the port, the console sockets, and the per-run homes is unverified until the coordinator runs the checks of test-strategy §3.10, Notes. Two checks cannot run in this worktree, because it has no `build/tools`: `scripts/check-protos.sh` (no proto file changed) and `scripts/check-lock.sh`, whose Swift checker passes when given the pinned xcodegen. `scripts/tests/run.sh` fails its keystore pin check, and the same check fails at the baseline eb23d2b: `Tests/Fixtures/signing/test-guest-dev.jks` is committed but not pinned (`scripts/tests/test_release_check_keystores.py`). That failure predates #098 and is not fixed here. The IR range was full, so it is recorded in this entry.
+
+**Reason.** The lab Mac runs VMs under the lock, and this task must not run a VM.
+
+**Consequence.** The change must not be merged as verified for T2 until the coordinator's checks pass. The decisions IR-520 to IR-539 remain open for the maintainer.

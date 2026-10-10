@@ -13789,3 +13789,199 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** `build_third_party.py` refuses a symlink at the cache root, and `scripts/check-lock.sh` needs the pinned XcodeGen under `build/tools`. The worktree `hang` had `ThirdParty/out` linked to the main checkout, so a copy into it wrote into the main checkout's runtime directory. One nested copy was removed, and the main checkout's `git status` is clean. A `build_third_party.py build virgl-runtime` started through that link also survived the kill of its wrapper and held `.artifacts.lock` for four minutes, until it was killed.
 
 **Consequence.** Worktree setup needs an explicit step, or the producer's lock can be held by a process the wrapper no longer tracks.
+
+## IR-620: The Mesa output of the feasibility run is not on this machine, so the injection uses a rebuild
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) (Verification); [M02](issues/M02-graphics.md) #099 (Notes) |
+
+**Choice.** The injection takes the output of `scripts/guest/build-mesa-android.sh` as its input. The output of the earlier build was written outside the repository (IR-495), and it is not on this machine. The build was run again with `--out /tmp/apkrun-099-inject-mesa/out --work /tmp/apkrun-099-inject-mesa/work`, and `scripts/tests/test_guest_mesa_build.py --out` checked the result (28 tests). Decision needed: where the verified output of the image build is kept.
+
+**Reason.** The SHA-256 values of the four libraries equal ADR-0018's: `libEGL_mesa.so` `73cb1755…`, `libGLESv2_mesa.so` `7da942f6…`, `libGLESv1_CM_mesa.so` `2a082937…`, and `libgallium_dri.so` `a261e62b…`. The build needs no VM, and it fetches its sources by commit.
+
+**Consequence.** The input of this step is a rebuild made on 2026-10-11, and its hashes are the ones that the ADR records. ADR-0018 is unchanged.
+
+## IR-621: erofs-utils comes from the Homebrew bottle of the receipt, relocated, not from a source build
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`erofs-utils`); [build-system.md](../05-development/build-system.md) §6.6 |
+
+**Choice.** The lock pins the erofs-utils 1.9.4 bottle for `arm64_golden_gate` (SHA-256 `52f58391…`). It is the bottle that the feasibility receipt used. Its binaries name Homebrew's lz4 and xz with the placeholder `@@HOMEBREW_PREFIX@@`, so the lock records two `install_name_tool -change` pairs, and the SHA-256 of each binary after the change and the ad-hoc signature (`mkfs.erofs` `645d8d55…`, `fsck.erofs` `d0fa5337…`, `dump.erofs` `850ddb32…`). `python3 -m apkrun_image erofs-tools --out DIR` fetches, relocates, and checks them, and every tool run checks the hashes first. Decision needed: whether to build erofs-utils from a pinned source tarball instead.
+
+**Reason.** A source build needs autotools and a tarball that the lock does not pin. The bottle is the byte set that the receipt already names, so the record and the tool agree.
+
+**Consequence.** At run time the binaries load Homebrew's lz4 1.10.0 and xz 5.8 from `/opt/homebrew`. Those libraries are not pinned. A Homebrew upgrade changes them without changing any pinned hash, and the tool checks the binaries, not those libraries.
+
+## IR-622: The Mesa libraries go to `/vendor/lib64/egl`, not to the `lib64` root that the Meson install uses
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline; closes the placement that IR-489 left open) |
+| Affected documents | [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) §9; [android-image.md](../02-design/android-image.md) §1.2; [graphics.md](../02-design/graphics.md) §5.3 |
+
+**Choice.** The four libraries go to `/vendor/lib64/egl/` in the partition. The Meson install writes them to `vendor/lib64/`, and the tool moves them. Decision needed: confirm this placement. The VM check is the first evidence that the EGL namespace finds `libgallium_dri.so` in that directory.
+
+**Reason.** (1) ADR-0018 §9 names `vendor/lib64/egl/` for the EGL and GLES libraries, and the build sets `-Ddri-drivers-path=/vendor/lib64/egl`, so the build itself names that directory for the gallium driver. (2) The platform contexts of build 16373615 have the line `/(vendor|system/vendor)/lib(64)?/egl(/.*)?`, which labels all four files `same_process_hal_file` (IR-623). The `lib64` root would give `libgallium_dri.so` the generic `vendor_file`, because no line names it. (3) The stock `libEGL_emulation.so` in `lib64/egl` depends on libraries in the `lib64` root. That shows that `lib64` is searched, and the image does not show whether `lib64/egl` is.
+
+**Consequence.** If the VM check finds that `lib64/egl` is not searched for `DT_NEEDED`, the fallback is `lib64/libgallium_dri.so`. That needs its own label, which means a line in `vendor_file_contexts`, a change to another file of the partition. That is a second decision.
+
+## IR-623: The label rule is the longest literal stem, with ties to the later rule, over the platform and then the vendor contexts
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §1.2; [selinux_labels.py](../../Images/tools/apkrun_image/selinux_labels.py) |
+
+**Choice.** The labels of the added files use this rule: the platform contexts (`plat_file_contexts`, from `system_a`) load first, then the vendor's (`vendor_file_contexts`). For a path, the rule with the longest literal prefix wins, and a tie goes to the later rule. The tool refuses a file for which the last matching rule gives a different label. The rule was measured against the stock labels, not read from libselinux.
+
+**Reason.** The rule gives the stock label of all 522 entries of the stock vendor partition, and the last-match rule also gives all 522. Both rules agree on the four added files (`same_process_hal_file`). Measuring the rule on real data was the check that was possible without a device.
+
+**Consequence.** The rule is a model that fits build 16373615. The VM check confirms the labels of the added files with `ls -Z`.
+
+## IR-624: The verity tree and footer are made without FEC, because no `fec` tool is pinned
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4 (partitions); [build-system.md](../05-development/build-system.md) §6 |
+
+**Choice.** The output's hashtree and footer come from the vendored avbtool (`add_hashtree_footer --do_not_generate_fec`, algorithm NONE, the stock salt). avbtool reproduces the stock root digest `d8895f6a…` from the stock bytes with the same salt, and `verify_image` checks the new partition. Decision needed: pin a `fec` tool (libfec) and generate FEC, or accept a partition without FEC data.
+
+**Reason.** avbtool calls an external `fec` binary for FEC. None is installed or pinned here. The root digest does not depend on FEC.
+
+**Consequence.** The footer has no FEC section, and the guest cannot repair blocks with FEC. When `vbmeta` is signed again (IR-625), the top-level descriptor of `vendor` must describe the same partition. The stock descriptor's FEC fields are not checked by this task.
+
+## IR-625: The top-level vbmeta is not signed again, so the output does not verify until the signing key is used
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline; blocks step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4 (variants and verified boot); [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The tool writes the partition and records that it does not match the top-level vbmeta (`vbmeta.matchesOutput: false`). It does not sign. The stock vbmeta is SHA256_RSA4096 with the key `2597c218…` (sha1), and its vendor descriptor holds the stock root digest `d8895f6a…`. The output's digest is `a373fc52…`. Decision needed, one of: (a) the maintainer signs the new vbmeta with the key of the stock build; (b) APKRun gets its own key, and the guest trusts it, which changes the trust chain; (c) the development boot turns verification off for `vendor`, which conflicts with §11.4.
+
+**Reason.** The private key is not in this repository, and AGENTS §9 forbids creating or guessing a key. Option (c) would also weaken the design that §11.4 fixes.
+
+**Consequence.** The partition cannot pass verification with verity on until one of (a), (b), or (c) is chosen. The VM check of the Mesa image depends on that choice.
+
+## IR-626: The partition keeps the size of its super extent, and `super.img` is not rewritten
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.2, §4.5 (disk plan and assembly) |
+
+**Choice.** The output is 291,229,696 bytes, which is the size of `vendor_a`'s single linear extent in super. The rebuilt EROFS uses 45,404 of the 71,101 blocks, so no extent grows. The tool does not write `super.img`, and it does not make a manifest or an identity for the corrected image. Decision needed: when the super is rewritten (this needs an LP metadata writer, and `lp.py` only reads), and whether criterion 1 of #099 waits for that.
+
+**Reason.** The task says not to rebuild other partitions. Writing the super needs a writer that the tree does not have.
+
+**Consequence.** The next step writes this file into the super's extent. The metadata does not change size.
+
+## IR-627: The rebuild is checked by logical equality, not by the bytes of the stock image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3, §4 |
+
+**Choice.** A plain rebuild of the stock tree and the injected rebuild are compared entry by entry: kind, mode, owner, group, timestamp, target, content, and label. Directory sizes are compared in the plain rebuild only. The EROFS bytes are not compared. The rebuild uses `lz4hc,9` and 4 KiB blocks. The stock image has 69,747 blocks, where the same content takes 43,956 blocks in the rebuild. Decision needed: whether to match the stock image's mkfs options.
+
+**Reason.** The mkfs options of the stock image are not in its archive or its manifest. A guessed set would not give the stock bytes either.
+
+**Consequence.** Every other file is unchanged in every property that the check reads. Their on-disk compression and layout differ from the stock image.
+
+## IR-628: The owners, modes, timestamps, and labels come from the EROFS image, not from the host
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1 (inventory and content rules) |
+
+**Choice.** Each entry's owner, group, mode, and timestamp come from `dump.erofs --path`. The host copy keeps only the content and the link target. A rebuild writes a PAX tar that carries the labels as `SCHILY.xattr.security.selinux`. The export stops at any host xattr other than `security.selinux`, except `com.apple.provenance`, which macOS adds to extracted files.
+
+**Reason.** A host that is not root cannot restore the stock owners (uid 0, gid 0 or 2000). The stock image uses no xattr other than `security.selinux`: all 322 files and directories and all 199 symlinks carry it, and no other name was found.
+
+**Consequence.** The tool needs `dump.erofs` for metadata and the xattr tool of the host (`/usr/bin/xattr` on macOS) for labels.
+
+## IR-629: A file that the rebuild adds is never written without a label
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §1.2 |
+
+**Choice.** The task asked for labels "if the image's file_contexts can be read". The tool fails closed instead: it stops when the contexts cannot be read, or when they do not reproduce the stock labels. It does not write an unlabelled file. Decision needed: none; recorded because the wording of the task allows the other reading.
+
+**Reason.** An unlabelled library fails at run time, with a denial that the image build does not show.
+
+**Consequence.** An image without its file contexts produces no output.
+
+## IR-630: Six tests need the erofs-utils tools and skip without `APKRUN_EROFS_UTILS`, and CI does not fetch them
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) (T0); [build-system.md](../05-development/build-system.md) §15.1 (`test-images`) |
+
+**Choice.** Six tests skip with a stated reason when `APKRUN_EROFS_UTILS` is unset: two in `test_erofs.py` and four in `test_vendor_inject.py`. This task did not change the `test-images` job. Decision needed: add `erofs-tools` and a cache to that job, or keep the skip.
+
+**Reason.** The job's runners have no erofs-utils, and a fetch needs the network. A failure would block every image test.
+
+**Consequence.** CI runs the other tests. On a developer Mac with the variable set, all of them run and pass.
+
+## IR-631: The image tools' virtualenv installs the main checkout, so a worktree's tests import the wrong package unless `PYTHONPATH` is set
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline); the same class of problem as IR-606 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.4 (Python 3.12) |
+
+**Choice.** This task runs the image tests with `PYTHONPATH=<worktree>/Images/tools`. The first baseline run, without it, had six failures in `test_bundle.py`. They came from the main checkout's package, which rejected the worktree's build directory as outside its repository. With `PYTHONPATH` set, the same ten tests pass. Decision needed: worktree setup should create a virtualenv for its own `Images/tools`.
+
+**Reason.** `Images/tools/.venv` in a worktree is a symlink to the main checkout's virtualenv, and that is an editable install of the main checkout's package.
+
+**Consequence.** Any worktree run without `PYTHONPATH` tests the wrong code, and it can report failures that are not in the code.
+
+## IR-632: The injection checks the `mesa` lock entry, not the whole-lock hash in the Mesa manifest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.6; `scripts/guest/mesa_android.py` (manifest `lock.sha256`) |
+
+**Choice.** `load_mesa_output` compares the commit, the version, and the Meson flags of the Mesa manifest with the `mesa` entry of the current lock. It does not compare the whole-file hash `lock.sha256` that the manifest records. Adding erofs-utils (commit `1dcde80`) changed that hash without changing any Mesa pin. Decision needed: whether the Mesa manifest should hash only the pins of its group.
+
+**Reason.** The whole-file hash makes every unrelated lock edit stale an output that is still correct.
+
+**Consequence.** The check depends on the content of the `mesa` entry. The file hashes of the four libraries are still checked against the manifest and the bytes.
+
+## IR-633: The injection lives in `Images/tools`, and its output must be outside the repository
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline; the M02 entry names `Images/tools/`) |
+| Affected documents | [M02](issues/M02-graphics.md) #099 (Modules / paths); [AGENTS.md](../../AGENTS.md) §6.3 |
+
+**Choice.** `vendor_inject.py` and its helpers are in `Images/tools/apkrun_image/`, because they handle an image and go through the manifest (AGENTS §6.3). The Mesa build stays in `scripts/guest/` (IR-497). The `--out` and `--work` directories must resolve outside the repository, and they must be new or empty, so a 290 MB partition cannot land in the checkout.
+
+**Reason.** AGENTS §6.3 puts image handling in the image tools. The guard is a cheap check against a large file in the tree.
+
+**Consequence.** A caller who wants the output in the repository's git-ignored `Images/work` must choose a path that the guard accepts, or the guard must change by a decision.

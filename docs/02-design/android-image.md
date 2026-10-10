@@ -74,7 +74,10 @@ Images/
 │   │   ├── gpt.py                 # GPT writer and reader (§4.4)
 │   │   ├── layout.py              # data-driven disk plans (§4.2)
 │   │   ├── bundle.py              # runtime image bundle writer (§10)
-│   │   └── sign.py                # Ed25519 manifest signing
+│   │   ├── sign.py                # Ed25519 manifest signing
+│   │   ├── erofs.py               # pinned erofs-utils: EROFS export and PAX rebuild (#099)
+│   │   ├── selinux_labels.py      # file-context rule for files a rebuild adds (#099)
+│   │   └── vendor_inject.py       # `inject-vendor`: Mesa libraries into vendor_a (#099)
 │   ├── layouts/
 │   │   └── cuttlefish-phone-arm64.json   # disk plan + console port plan + bootconfig baseline for this device family
 │   ├── schemas/

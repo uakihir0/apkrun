@@ -378,7 +378,7 @@ def _rebuild(
     image_uuid: str,
 ) -> Path:
     tar_path = scratch / f"{name}.tar"
-    image_path = scratch / f"{name}.img"
+    image_path = scratch / f"{name}.part"
     write_tar(members, tar_path)
     build_image(tools, tar_path, image_path, timestamp=BUILD_TIMESTAMP, uuid=image_uuid)
     tar_path.unlink()
@@ -550,10 +550,10 @@ def seal_partition(
             "--do_not_generate_fec",
         ],
     )
-    # avbtool finds the partition's image by its name in the directory of the path it is given.
+    # avbtool looks for <partition name><extension of --image> in the directory of --image.
     verify_dir = scratch / f"verify-{output.stem}"
     verify_dir.mkdir()
-    link = verify_dir / f"{VERITY_PARTITION}.img"
+    link = verify_dir / f"{VERITY_PARTITION}.part"
     link.symlink_to(output)
     verified = run_avbtool(avbtool, ["verify_image", "--image", str(link)])
     if "Successfully verified sha256 hashtree" not in verified:
@@ -614,11 +614,11 @@ def inject_vendor(
 
     with _work_area(work_directory) as scratch_name:
         scratch = Path(scratch_name)
-        stock_image = scratch / f"{PARTITION}.img"
+        stock_image = scratch / f"{PARTITION}.part"
         stock_sha = read_super_partition(
             document, source_root, archive_paths, PARTITION, stock_image
         )
-        system_image = scratch / f"{SYSTEM_PARTITION}.img"
+        system_image = scratch / f"{SYSTEM_PARTITION}.part"
         system_sha = read_super_partition(
             document, source_root, archive_paths, SYSTEM_PARTITION, system_image
         )
@@ -654,7 +654,7 @@ def inject_vendor(
             scratch=scratch,
         )
 
-        vbmeta_path = scratch / "vbmeta.img"
+        vbmeta_path = scratch / "vbmeta.part"
         vbmeta_ids = (document.get("roles") or {}).get("vbmeta")
         if not isinstance(vbmeta_ids, list) or not vbmeta_ids:
             raise InjectError("the manifest roles.vbmeta is missing.")

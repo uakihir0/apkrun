@@ -99,11 +99,13 @@ final class AndroidBootSession: @unchecked Sendable {
         await session.finish()
     }
 
-    /// Stops Android if it runs, then removes the instance. A stop that has already happened does nothing.
+    /// Stops Android if it runs, then removes the run's home. A stop that has already happened does nothing. The
+    /// home is removed with its read-only image restored to writable first, and a failure is reported in the test
+    /// output with its path (VMRunResources.removeHome).
     func finish() async {
         await supervisor.stop()
         captureTask.cancel()
-        try? FileManager.default.removeItem(at: home)
+        VMRunResources.removeHomeOrReport(home)
     }
 
     static func bundleDirectory() throws -> URL {

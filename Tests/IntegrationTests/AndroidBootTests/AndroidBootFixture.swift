@@ -139,26 +139,11 @@ struct AndroidBootFixture {
     }
 }
 
-/// Removes a private test home. An installed image is read-only, so the owner's write bits come back
-/// first; a plain `removeItem` would leave the 34 GB sparse user data behind.
+/// Removes a private test home. An installed image is read-only, so the owner's write bits come back first, and
+/// a failure is reported in the test output (VMRunResources.removeHome). A plain `removeItem` would leave the 34 GB
+/// sparse user data behind.
 func removeTestHome(_ home: URL) {
-    let manager = FileManager.default
-    func restoreWrite(_ url: URL) {
-        guard let attributes = try? manager.attributesOfItem(atPath: url.path),
-            let mode = attributes[.posixPermissions] as? NSNumber
-        else {
-            return
-        }
-        try? manager.setAttributes(
-            [.posixPermissions: NSNumber(value: mode.uint16Value | 0o200)], ofItemAtPath: url.path)
-    }
-    restoreWrite(home)
-    if let walker = manager.enumerator(at: home, includingPropertiesForKeys: nil) {
-        for case let url as URL in walker {
-            restoreWrite(url)
-        }
-    }
-    try? manager.removeItem(at: home)
+    VMRunResources.removeHomeOrReport(home)
 }
 
 /// A fixture step that could not produce its evidence. XCTest reports it as a test failure.

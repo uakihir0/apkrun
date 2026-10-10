@@ -69,10 +69,78 @@ public struct VMRunResources: Equatable, Sendable {
     public func consoleSocketPath(_ name: String) -> String {
         paths.devConsoleDirectory.appendingPathComponent("\(name).sock").path
     }
+
+    /// Removes the run's home and everything under it. An installed image is read-only (`dr-xr-xr-x`, `r--`), so
+    /// the owner's write bit is restored first, on each directory and file under the home. A symbolic link is never
+    /// followed, so nothing outside the home changes. A home that is already gone is not an error. Any other
+    /// failure throws, with the path and the underlying error.
+    public static func removeHome(_ home: URL) throws(VMRunResourcesFailure) {
+        guard FileManager.default.fileExists(atPath: home.path) else {
+            return
+        }
+        try makeOwnerWritable(home)
+        do {
+            try FileManager.default.removeItem(at: home)
+        } catch {
+            throw .homeNotRemoved(path: home.path, error: String(describing: error))
+        }
+    }
+
+    /// Removes the run's home, and writes the path and the error to standard error when that fails. A `defer`
+    /// cannot throw, so the failure appears in the test output instead of being discarded.
+    public static func removeHomeOrReport(_ home: URL) {
+        do {
+            try removeHome(home)
+        } catch {
+            FileHandle.standardError.write(Data("VMRunResources: the run home was not removed: \(error)\n".utf8))
+        }
+    }
+
+    /// Adds the owner's write bit to `url`, and to every entry under it when `url` is a directory. The entries are
+    /// listed after the directory is writable, so none is skipped.
+    private static func makeOwnerWritable(_ url: URL) throws(VMRunResourcesFailure) {
+        let manager = FileManager.default
+        let attributes: [FileAttributeKey: Any]
+        do {
+            // attributesOfItem describes a symbolic link itself, not its target.
+            attributes = try manager.attributesOfItem(atPath: url.path)
+        } catch {
+            throw .homeNotRemoved(path: url.path, error: String(describing: error))
+        }
+        let type = attributes[.type] as? FileAttributeType
+        if type == .typeSymbolicLink {
+            return
+        }
+        if let mode = attributes[.posixPermissions] as? NSNumber, mode.uint16Value & 0o200 == 0 {
+            do {
+                try manager.setAttributes(
+                    [.posixPermissions: NSNumber(value: mode.uint16Value | 0o200)],
+                    ofItemAtPath: url.path
+                )
+            } catch {
+                throw .homeNotRemoved(path: url.path, error: String(describing: error))
+            }
+        }
+        guard type == .typeDirectory else {
+            return
+        }
+        let names: [String]
+        do {
+            names = try manager.contentsOfDirectory(atPath: url.path)
+        } catch {
+            throw .homeNotRemoved(path: url.path, error: String(describing: error))
+        }
+        for name in names {
+            try makeOwnerWritable(url.appendingPathComponent(name))
+        }
+    }
 }
 
 /// Why a test run cannot take its resources from the environment.
 public enum VMRunResourcesFailure: Error, Equatable, Sendable {
     /// `APKRUN_TEST_ADB_PORT` is not a decimal port number from 0 to 65535.
     case invalidADBPort(String)
+    /// The run's home, or an entry under it, could not be made writable or removed. `path` names it, and `error`
+    /// is the underlying error.
+    case homeNotRemoved(path: String, error: String)
 }

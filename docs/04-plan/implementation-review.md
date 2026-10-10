@@ -13692,7 +13692,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** Decision needed: add `plan` to the table and state that `docs(<area>)` names the design area that a document describes, or use `docs` for these commits. Until then the commits follow main's practice and do not match the table as written.
 
-## IR-600: The G2 stall is a hosted test blocked on a read under `~/Documents`; the approval prompt is the likely cause, and the fix stages both inputs outside it
+## IR-600: The G2 stall is most likely a hosted test blocked on a read under `~/Documents`, and the fix stages both inputs outside it
 
 | Field | Value |
 |---|---|
@@ -13700,9 +13700,9 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #022 (and #019 for the EDID check) |
 | Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4 (artifact directory); [graphics.md](../02-design/graphics.md) §12; `Tests/IntegrationTests/GuestAgentTests/GuestAgentTests.swift` (the policy comment) |
 
-**Choice.** Treat a read of the checkout under `~/Documents` by the hosted test as the cause of the stall, and remove those reads. The producer copies the golden EDID block and the host virgl runtime into the artifact directory (`7e428b7`), and the two tests read them from there (`31cc0ca`). The stall did not reproduce, so the cause is a hypothesis that the next gate run must confirm.
+**Choice.** Treat a read of the checkout under `~/Documents` by the hosted test as the likely cause of the stall, and remove those reads. The producer copies the golden EDID block and the host virgl runtime into the artifact directory (`7e428b7`), and the two tests read them from there (`31cc0ca`). The stall did not reproduce, so the cause is a hypothesis that the next gate run must confirm.
 
-**Reason.** At fa8df7f the EDID test wrote `gpu-driver-trace.json` (28 records) at 22:03:43 JST, the second the guest's VM stopped (22:03:43.437). So `run()` had returned, and the next statement that reads a file is `Data(contentsOf:)` on the golden block under `~/Documents`. Nothing failed before the timeout. The Virgl test never logged a VM start. In a debug build the runtime lookup of `GraphicsBridge.m` walks up from the test host to the checkout, and the gate's DerivedData sits inside the checkout, ten levels below the repository. `GuestAgentTests.swift` records that the test process cannot read the checkout's `Documents` folder. Four VM runs on fa8df7f did not reproduce the stall: runs 1, 2, and 4 passed, and run 3 failed fast because its DerivedData was outside the checkout, so the runtime was not found. Runs 5 and 6 passed on the fix. The prompt was not observed.
+**Reason.** At fa8df7f the EDID test wrote `gpu-driver-trace.json` (28 records) at 22:03:43 JST, the second the guest's VM stopped (22:03:43.437). So `run()` had returned, and the next statement that reads a file is `Data(contentsOf:)` on the golden block under `~/Documents`. Nothing failed before the timeout. The Virgl test never logged a VM start. In a debug build the runtime lookup of `GraphicsBridge.m` walks up from the test host to the checkout, and the gate's DerivedData sits inside the checkout (`build/gates/G2/DerivedData`). The test host executable there is eleven levels below the repository, inside the walk-up's limit of 12 levels. `GuestAgentTests.swift` records that the test process cannot read the checkout's `Documents` folder. Four VM runs on fa8df7f did not reproduce the stall: runs 1, 2, and 4 passed, and run 3 failed fast because its DerivedData was outside the checkout, so the runtime was not found. Runs 5 and 6 passed on the fix. The prompt was not observed.
 
 **Consequence.** The next G2 run decides it. If either test still stalls, the next suspect is the DerivedData location (IR-603).
 
@@ -13760,7 +13760,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** `build-third-party.sh --print-cache-key virgl-runtime` gives `154fc…-de6cd9de…` in both the main checkout and the worktree, but `ThirdParty/out/virgl-runtime/current` names `154fc…-4808…`, built on 2026-10-08. The current key has no build, so a build compiles the runtime's sources. A build started in the worktree and was stopped, because the compile is long and changes the runtime under test.
 
-**Consequence.** The tests use the 2026-10-08 runtime. The stage passes with it (runs 4 and 6). A rebuild can change renderer behaviour (IR-605), so it needs its own gate run.
+**Consequence.** The tests use the 2026-10-08 runtime. The stage passes with it (runs 4 and 6). A fresh checkout must build `current` before the producer runs, because the stager stops until it exists. A rebuild can change renderer behaviour (IR-605), so it needs its own gate run.
 
 ## IR-605: The virgl test passes while the renderer rejects 61 operations, and the test does not check the rejects
 

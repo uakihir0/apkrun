@@ -12302,3 +12302,283 @@ the real manifest.
 **Reason.** macOS privacy protection stops the test host from reading the repository's `Documents` folder, while a terminal can read it. The existing helper already reads `/tmp`. The entry's path predates that helper.
 
 **Consequence.** The suite needs a shell step before the run, which the entry's notes describe.
+
+## IR-460: A renderer failure is counted and logged, and the guest still sees success
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §4.5, §8, §16 |
+
+**Choice.** A 3D or 2D command gets its response when the device validates it on the device queue. If the renderer then fails, the failure is logged and counted in `GraphicsCounters.rendererFailures`, and the guest still gets success. The device does not write an error response later.
+
+**Reason.** The response bytes must be written into the guest's element before `deferCompletion()`. VirtioDeviceCore's `PendingElement` only completes; it cannot carry bytes that are written after deferral. Adding that to the VZ adapter is outside this task and cannot be checked without a VM. The device can still reject everything the guest can cause: unknown or live IDs, out-of-range boxes, limits, and invalid sizes. A renderer failure is a host fault. The one command whose result the guest needs at once, `TRANSFER_FROM_HOST_3D`, runs synchronously and does return its error (IR-464).
+
+**Consequence.** Section 4.2 says a GL error returns `ERR_UNSPEC`. That holds only for readbacks in this build. The follow-up is a response-carrying completion in VirtioDeviceCore. Until it exists, a renderer failure shows in the counters and the log, not in the guest.
+
+## IR-461: A fence above 32 bits is refused, and every 32-bit fence is valid
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §4.5, §5.2 |
+
+**Choice.** A fenced request whose fence ID does not fit in 32 bits gets `ERR_INVALID_PARAMETER` before any command runs, and no renderer call is made. Every 32-bit value is a valid fence. The bridge passes the bit pattern of the fence to `virgl_renderer_create_fence`.
+
+**Reason.** The virglrenderer context-0 fence takes an `int` and reports a `uint32_t` to `write_fence` (`virglrenderer.c`, `virgl_renderer_create_fence` and `ctx0_fence_retire`). The header carries 64 bits, so a wider value would be truncated and could complete the wrong fence. An earlier bridge check refused every value above 2^31 - 1, which left the upper half of the range without a fence. It was fixed in review, and a T1 test now retires a fence of `0x80000001`.
+
+**Consequence.** A guest that numbers fences past 2^32 gets errors. Linux's counter does not reach that in practice.
+
+## IR-462: The planner still refuses drmVirgl until its boot is verified
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9; [IR-380](#ir-380-refuse-a-gpu-profile-that-the-device-does-not-offer), [IR-382](#ir-382-offer-only-the-gpu-profiles-of-this-build-in-apkrun-dev-boot---gpu) |
+
+**Choice.** `AndroidGraphicsDevices.devices(for:)` still builds the EDID-only device for `drmVirgl`, so the profile is refused with `runtime.gpuProfileUnavailable`. `VirtioGPUDevice.virgl()` exists and offers VIRGL with two capsets, but RuntimeCore does not construct it, and `apkrun dev boot --gpu virgl` stays refused.
+
+**Reason.** Removing the refusal starts a VM with the VirGL features. The `drmVirgl` boot has not run, and the task forbids a VM run here. IR-380 expected the check to pass by itself once the device offered VIRGL. That does not hold for the planner, which builds its own device, so the switch and the removal of the refusal must happen together, after a verified boot.
+
+**Consequence.** The `drmVirgl` acceptance criteria of #022 stay unmet (M02 #022). The follow-up is a one-line switch in `AndroidGraphicsDevices`, plus the removal of the refusal of IR-380 and IR-382, in the same commit as the verified boot.
+
+## IR-463: Every VirGL context shares the root context's objects
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (steps 1 and 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.1, §5.2 |
+
+**Choice.** `gb_create_gl_context` shares every context with the root EGL context. The `shared` flag that virglrenderer passes is not honoured.
+
+**Reason.** The T1 round trip uploaded a texture through context 0 and read zeros back. The same transfer through a guest context read the bytes correctly, and the T1 test `virglRoundTripsATextureUploadAndRetiresAFence` now shows the fix. virglrenderer creates context 0 with `shared` unset, so its GL objects were in a separate namespace from the texture the root context made.
+
+**Consequence.** All contexts share one object namespace. A resource is visible to every context, as the virgl model expects.
+
+## IR-464: TRANSFER_FROM_HOST_3D runs on the device queue and waits for the render thread
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.7, §7 (`guestReadbacks`) |
+
+**Choice.** The device queue asks the render thread to read the box, waits for the answer, writes the box into the guest backing, and only then answers the guest. Every other 3D command goes to the render thread asynchronously.
+
+**Reason.** `GuestMemory` is confined to the device queue. Off that queue, VirtioDeviceCore's `validate()` fails with `guestMemoryInvalidated`, so a render-thread completion cannot write the guest's memory. The rule of §4.7 that the device queue never calls virglrenderer is therefore broken for this one command. Readbacks are rare: `glReadPixels` and query results. The render thread never waits on the device queue, so the wait cannot deadlock.
+
+**Consequence.** A readback blocks the device queue for the length of the GL read. A guest that reads back often will see latency, which #023 measures.
+
+## IR-465: Backing is gathered by copies, not handed to the renderer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §4.4, §7 (`guestUploadBytes`) |
+
+**Choice.** `RESOURCE_ATTACH_BACKING` maps and validates each entry and keeps the views on the device queue. It does not call `virgl_renderer_resource_attach_iov`. A `TRANSFER_TO_HOST` gathers the box's guest bytes into a host buffer, and the renderer reads that buffer.
+
+**Reason.** `GuestMemory` exposes only copy calls, not a pointer, and a pointer into guest memory would outlive a reset or stop, which VirtioDeviceCore invalidates. virglrenderer's transfer calls take their buffer as an argument (`virgl_renderer_transfer_write_iov`), so the attached iovec is not needed for transfers.
+
+**Consequence.** An upload costs one copy of its box, counted in `guestUploadBytes`. The scanout path has no upload, so the frame-path rule of AGENTS.md §6.4 is unaffected. A zero-copy path needs a pointer API in VirtioDeviceCore, which is a follow-up.
+
+## IR-466: The waiting elements are one ordered queue on the render thread
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.7 |
+
+**Choice.** The elements that wait for execution or a fence sit in one ordered queue, `ControlCompletionQueue`, which the render thread completes. Each completion calls `PendingElementCompletionToken.complete()`, and VirtioDeviceCore returns the element on the device queue. No separate single-producer ring or `DispatchQueue.async` is built.
+
+**Reason.** The token is already `Sendable`, and VirtioDeviceCore already moves a completion from another thread to the device queue (`VZPendingElementStorage.complete` leads to `completePendingAsync`). A ring would repeat that hop. The queue takes one lock per operation, and AGENTS.md §8 says not to optimize before measuring.
+
+**Consequence.** The ring of §4.7 is not built. #070 should measure the lock before it is replaced.
+
+## IR-467: The completion waiter is built in #023, not in #022
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.7, §6.2; [M02](issues/M02-graphics.md) #022, #023 |
+
+**Choice.** No completion-waiter thread is created in #022. #023 creates it with the present blits.
+
+**Reason.** The waiter waits on the EGL syncs of present blits, and #022 makes none, because the pools arrive in #023. An empty thread would add nothing and could not be measured.
+
+**Consequence.** Step 1 of #022 is met without the waiter. The §4.7 row of the waiter stays with #023.
+
+## IR-468: Sizes, layers, and the limits that the spec does not set
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §5.4 |
+
+**Choice.** (a) A buffer (target 0) takes its width as a byte count, and the 8192 limit applies to textures only. The 8192 check moved from the request decoder to `ResourceTable`, which knows the target. (b) The byte estimate is the level-0 size times depth, or times array layers for array and cube targets; mip levels are not added. (c) `lastLevel` is at most 13, and the sample count is at most 16. (d) A transfer's extent is at most 256 MiB, the single-resource limit. (e) A transfer with more than 4 Mi rows is refused with `ERR_INVALID_PARAMETER`.
+
+**Reason.** Mesa creates buffers with the size in the width field, so a decoder-level 8192 check would refuse ordinary vertex buffers. The spec gives the estimate as `width × height × bpp`, and (b) follows it. Rules (c) to (e) are not in the spec. (c) is the largest mip count of an 8192-pixel texture. (d) and (e) bound the host memory and the device queue's time for one request, which the review found could otherwise reach gigabytes.
+
+**Consequence.** The byte estimate undercounts a mip chain by up to a third, so the 2 GiB total is a lower bound. #070 should count mip levels with the memory metric.
+
+## IR-469: The 3D formats are an allow-list with known sizes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §5.3 |
+
+**Choice.** `ResourceTable` accepts the uncompressed formats of `virgl_hw.h` whose size per pixel is fixed, and the block-compressed DXT and RGTC/LATC formats with 4 × 4 blocks. Any other format, including the planar YUV formats, gets `ERR_INVALID_PARAMETER`.
+
+**Reason.** The limits need a size for each format, so an unlisted format cannot be sized. The list is taken from the enumeration in `virgl_hw.h` (`virgl_formats`), and the renderer decides which of the listed formats it supports.
+
+**Consequence.** A guest that uses a rejected format gets an error. Adding a format is one table entry.
+
+## IR-470: The render thread is a condition-variable loop, not a run loop
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.5, §4.7 |
+
+**Choice.** The render thread is a `Thread` that waits on an `NSCondition`. It waits with a 1 ms timeout while a fence is outstanding and without a timeout otherwise. It runs queued work in order, and it calls the poll handler at most once per millisecond, only while polling is requested.
+
+**Reason.** §4.7 proposes a `DispatchSourceTimer` on the thread's run loop. A dispatch timer needs a dispatch queue, and a serial queue does not pin work to one thread. The condition wait gives the same cadence on one thread, with no run loop to manage.
+
+**Consequence.** None observable. The T0 test `aPollRequestNeverRunsTheHandlerWithoutAPendingRequest` checks that the poll is idle when no fence waits.
+
+## IR-471: Reset and stop return every waiting element, and forget the fence mark
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §8 (`WillReset`, `WillStop`) |
+
+**Choice.** On reset and on stop, every waiting element is completed at once, and the highest completed fence is forgotten. Nothing is abandoned.
+
+**Reason.** An abandoned `PendingElement` asserts in DEBUG builds, and VirtioDeviceCore drops the element of an old generation safely when it is completed. Forgetting the fence mark matters because the renderer restarts its fence numbers after a reset; without it, a new fence below the old mark would count as complete at once (found in review and fixed).
+
+**Consequence.** The guest's responses from before a reset are returned without their fences having completed. The guest is resetting, so it discards them.
+
+## IR-472: RESOURCE_CREATE_2D under drmVirgl is a renderer resource with the render-target bind
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2 (`RESOURCE_CREATE_2D`) |
+
+**Choice.** Under `drmVirgl`, a 2D resource is created in the renderer with target 2, depth 1, one layer, and the render-target bind flag (`1 << 1`). Its transfers go through the renderer with context 0.
+
+**Reason.** §4.2 says the VirGL profile uses `virgl_renderer_resource_create` with the 2D target. The bind flag is the one a 2D render target needs. Context 0 is the path that the 2D transfers use.
+
+**Consequence.** Only the VM run can confirm the bind flag, which is one of the checks of step 2 and step 4.
+
+## IR-473: A zero stride resolves as virglrenderer does, and a stride must hold a row
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2 (`TRANSFER_TO_HOST_3D`) |
+
+**Choice.** A zero `stride` becomes the tight row size of the mip level, in blocks times bytes per block. A zero `layer_stride` becomes the stride times the block rows. A nonzero stride must hold one row, and a nonzero layer stride must hold one layer. The renderer receives the resolved values.
+
+**Reason.** virglrenderer resolves a zero stride the same way (`vrend_renderer.c`, `util_format_get_nblocksx(...) * blsize`). Passing the resolved values makes the table's extent and the renderer's reads agree. A stride below a row would overlap the rows of a box, so it is refused.
+
+**Consequence.** None for conforming guests.
+
+## IR-474: The 2D profile keeps host shadows until the pools arrive in #023
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 5) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9, §12 (#022 step 5) |
+
+**Choice.** Each 2D resource of the `guestSwiftshader` path has a host shadow buffer. `TRANSFER_TO_HOST_2D` copies the rectangle into it and counts one CPU pixel copy and its bytes. The flush completes without a blit, because no pool exists before #023.
+
+**Reason.** Step 5 needs the 2D commands to succeed so that the boot can reach `boot_completed`. The shadow is the path that #023 extends with the pool blit. The shadow's memory is at most the resource's estimate, which is inside the 2 GiB total.
+
+**Consequence.** The shadow is not read until #023. The `guestSwiftshader` boot check of step 5 is not run here.
+
+## IR-475: The test-only readback has a trait, and the replay test replays a recorded session
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 3), §14; [coding-conventions.md](../05-development/coding-conventions.md) (`DEBUG-READBACK`) |
+
+**Choice.** The test-only readback is `readResourceForTest`, compiled only under `#if APKRUN_TEST_READBACK`, which the `TestReadback` trait sets (`swift test --traits TestReadback`). A recorder captures the renderer's state-changing calls as `VirGLRecording`, and a T1 test replays a recorded session on a fresh renderer and compares the bytes. The kmscube stream of step 3 is not recorded.
+
+**Reason.** The kmscube stream needs the Linux guest, which the task forbids here. A recording of the renderer's own calls gives the same replay mechanism, and it runs on this Mac.
+
+**Consequence.** The replay test of §14 is met by the session replay. The kmscube recording is a follow-up that needs the VM. The trait is a new entry in `Package.swift`.
+
+## IR-476: The renderer tests run in one serialized suite
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §3 (T1) |
+
+**Choice.** Every test that creates a virglrenderer instance is in one `@Suite(.serialized)`, `VirGLRendererSuite`.
+
+**Reason.** virglrenderer admits one instance per process, and `gb_renderer_create` returns `GB_E_RENDERER_ALREADY_EXISTS` for a second. Top-level `.serialized` tests still ran in parallel with each other, and two of them collided.
+
+**Consequence.** The T1 suite runs one test at a time, which takes about three seconds.
+
+## IR-477: The HelloGL fixture is a module of the fixture project, and it is built apart from the script
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 6) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §4.2; [build-system.md](../05-development/build-system.md) §8 |
+
+**Choice.** HelloGL is a module of the fixture Gradle project in `Tests/Fixtures/AndroidApps/`, built with `./gradlew :HelloGL:assembleRelease`, and signed with the test fixture key. `scripts/build-fixtures.sh` still builds HelloText only.
+
+**Reason.** The script is specific to HelloText, which it names in its output and in its signer check. The HelloGL release APK builds offline, and its signer matches the pinned fixture certificate. Extending the script and the committed copies belongs to the fixture pipeline (#016 and #029), not to this task.
+
+**Consequence.** HelloGL's `renderer` and `fps` events are not checked here. The check needs a `drmVirgl` boot.
+
+## IR-478: Context errors: zero and duplicate IDs, and the limit
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §5.4 |
+
+**Choice.** `CTX_CREATE` with ID 0, or with a live ID, gets `ERR_INVALID_CONTEXT_ID`. The 257th live context gets `ERR_UNSPEC`, which is the §5.4 row. A command on an unknown context gets `ERR_INVALID_CONTEXT_ID`.
+
+**Reason.** §4.2 defines `ERR_INVALID_CONTEXT_ID`, and §5.4 gives `ERR_UNSPEC` for the context limit. The spec does not say which error a zero or duplicate ID gets, and `ERR_INVALID_CONTEXT_ID` is the one that names it.
+
+**Consequence.** None.
+
+## IR-479: Capsets are read when the renderer starts, and GET_CAPSET accepts only the cached version
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2 (`GET_CAPSET_INFO`, `GET_CAPSET`), §5.2 (`gb_capset_fill`), §8 |
+
+**Choice.** The renderer's two capsets are read on the render thread when the device is created. The device answers `GET_CAPSET_INFO` and `GET_CAPSET` from that cache, and `GET_CAPSET` accepts only the cached maximum version.
+
+**Reason.** The device queue must not call virglrenderer (§4.7), and a renderer build's capsets do not change while it runs. A renderer that cannot offer its capsets fails at creation, before the VM starts (§8).
+
+**Consequence.** A guest that asks for an older capset version gets `ERR_INVALID_PARAMETER`.

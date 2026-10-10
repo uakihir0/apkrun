@@ -577,10 +577,14 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - [ ] SurfaceFlinger loads no SwiftShader or in-guest ANGLE library.
 - [ ] Android reaches `sys.boot_completed=1` with `drmVirgl` and with `guestSwiftshader`.
 - [ ] `kmscube` runs on the Linux test guest through virgl with `hostReadbacks = 0`.
-- [ ] Guest-controlled sizes and IDs are checked against the limits of §5.4.
+- [x] Guest-controlled sizes and IDs are checked against the limits of §5.4.
 
 ### Notes
 
+- **Status (2026-10-10, host work only, no VM started).** Criteria 1 to 5 are not met, because each needs a VM run. Criterion 1 and criterion 3 need a `drmVirgl` boot, which RuntimeCore still refuses (IR-462). Criterion 2: [../../02-design/graphics.md](../../02-design/graphics.md) §9 documents the profile, and the committed image manifest carries the same seven keys, but the reproducible boot is not run. Criterion 4: the `drmVirgl` boot is refused, and the `guestSwiftshader` boot is not run here. Criterion 5 needs the Linux guest's `virgl` check (step 2), and its Mesa and kmscube initramfs is not built, because that needs the x86-64 builder of #099.
+- **Steps not done here:** step 2 (the Linux `virgl` run and its initramfs, and the kmscube recording); step 4 (the `drmVirgl` boot and the removal of the refusal of IR-380); step 5 (the `guestSwiftshader` boot check); step 6 (the HelloGL check on `drmVirgl`, although the fixture builds offline, IR-477).
+- **Met at T0 and T1 without a VM:** the 3D command set, contexts, resources, submit, transfers, fences, and polling (steps 1 and 3); the limits of §5.4 (criterion 6); the 2D path of `guestSwiftshader` as host memory (IR-474); the recorder and the replay (IR-475); and a round trip through the real renderer, which found the context-sharing defect now fixed in IR-463.
+- **Judgment records:** IR-460 to IR-479, the entries added for this task. The renderer-failure rule (IR-460) and the readback on the device queue (IR-464) are the two that change what a guest can observe.
 - **Record:** the SurfaceFlinger result and the `kmscube` result in the #022 row and the `kmscube` row of [../../02-design/graphics.md](../../02-design/graphics.md) §16.
 - **Pitfall:** `hostReadbacks` counts every `gb_transfer_read` in the normal path. The replay test uses the test-only readback mode, which exists only in builds with the `APKRUN_TEST_READBACK` flag and is excluded from the counter.
 - The ≥ 55 fps condition of the Linux integration step needs a window. It is measured in #023.

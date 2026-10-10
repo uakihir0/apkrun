@@ -317,6 +317,8 @@ Rules:
 - `ATTACH_BACKING` maps every entry. Entries that are not within guest RAM, or whose total length is shorter than the resource needs, fail with `ERR_INVALID_PARAMETER`, and no partial state is kept.
 - On `deviceWillReset` the table is cleared, all mappings are dropped, the renderer is reset (all contexts destroyed, `virgl_renderer_reset`), and scanout bindings are cleared. Pools and host-side scanout configuration (§6.1) survive a reset, because they are host decisions.
 
+**Built in #022.** `RESOURCE_ATTACH_BACKING` maps every entry and keeps the views on the device queue. It does not call `virgl_renderer_resource_attach_iov`: transfers hand the renderer a buffer that the device queue gathered from the guest, so the renderer never holds a pointer into guest memory. The copy is counted as `guestUploadBytes`. A zero-copy path needs a pointer API in VirtioDeviceCore, which is a follow-up ([implementation-review.md](../04-plan/implementation-review.md) IR-465). Buffers (`target` 0) are sized in bytes, so the 8192 limit applies to textures only, and the byte estimate is the level-0 size times depth and layers, without mip levels (IR-468).
+
 ### 4.5 Contexts, submissions, and fences
 
 - Without `CONTEXT_INIT`, all fences are on one global timeline and complete in order. The device keeps a FIFO of deferred elements `(fenceID, PendingElement)`.
@@ -337,6 +339,8 @@ The Android `drm_virgl` configuration composes in client mode (`hwcomposer.mode=
 | completion waiter (one `Thread`) | waits on EGL sync objects for present blits, then emits `frameReady` | GL calls other than `eglClientWaitSync` |
 
 Commands flow device queue → render thread in batches (one batch per queue drain). Completions flow back in batches through a lock-free single-producer/single-consumer ring and a `DispatchQueue.async` on the device queue. virglrenderer is not thread-safe, and all of its callbacks arrive on the render thread.
+
+**Built in #022.** The waiting controlq elements sit in one ordered queue that the render thread completes. Each completion calls `PendingElementCompletionToken.complete()`, and VirtioDeviceCore moves the return to the device queue, so the SPSC ring above is not built (IR-466). The completion waiter belongs to #023, because it waits for present blits (IR-467). `TRANSFER_FROM_HOST_3D` runs on the device queue and waits for the render thread, because only the device queue may write guest memory (IR-464). The render thread is a `Thread` that waits on an `NSCondition`, and it polls fences every millisecond only while one is outstanding (IR-470).
 
 ---
 
@@ -423,6 +427,8 @@ Implementation notes:
 - `gb_present_blit`: `virgl_renderer_borrow_texture_for_scanout` gives the GL texture of the resource. The destination `MTLTexture` is imported once per pool buffer as an `EGLImage` (`EGL_METAL_TEXTURE_ANGLE`) and attached to an FBO. `glBlitFramebuffer` performs the copy with Y-flip and format conversion. Then an EGL fence sync is created and `glFlush` is called.
 - RiftVM's prototype instead blits to a same-process `CAMetalLayer` drawable. Its inspected `glBlitFramebuffer` call uses increasing Y coordinates and has no explicit vertical reversal or separate format-conversion step. This does not change APKRun's intended blit; #023 verifies the wrapper-facing IOSurface orientation and pixel layout.
 
+**Built in #022.** Every call of this section except the present functions (#023) is declared in `GraphicsBridge.h`. `gb_create_gl_context` gives every context the root context's objects, because virglrenderer creates context 0 unshared and its transfers would otherwise miss the textures of the root (IR-463).
+
 ### 5.3 What the guest gets
 
 - GLES 3.0 through Mesa virgl (`ro.opengles.version=196608`). There is no Vulkan (`ro.cpuvulkan.version=0`, and the Cuttlefish source says "No hardware Vulkan support, yet" for virgl). The bootconfig keys are in [android-image.md](android-image.md) §6.2.
@@ -444,6 +450,8 @@ Enforced by `ResourceTable` before calling the renderer. Values start as RiftVM'
 | `SUBMIT_3D` size | ≤ 4 MiB | `ERR_INVALID_PARAMETER` |
 
 Reaching a memory limit is logged with the current totals, and the `graphics.memory` health value turns yellow ([diagnostics.md](diagnostics.md)).
+
+**Built in #022.** The table takes the limits above, plus the ones that the spec does not set: `lastLevel` at most 13, a sample count at most 16, a transfer extent of at most one resource's 256 MiB, and at most 4 Mi row runs per transfer (IR-468). A nonzero stride must hold one row (IR-473). The formats are an allow-list of the virgl formats whose size is known, with uncompressed and 4 × 4 block-compressed layouts. Any other format gets `ERR_INVALID_PARAMETER` (IR-469).
 
 ---
 
@@ -587,6 +595,8 @@ Failure policy:
 - There is no automatic fallback in v1. Silent fallback would hide regressions and make performance reports meaningless.
 - The 2D renderer uses a plain Metal path (`replaceRegion` into the pool texture from the mapped guest backing). It is the only place where `cpuPixelCopies` may be non-zero. #022 builds it, and `boot_completed` with `guestSwiftshader` is part of #022's T2 suite.
 - `VZVirtioGraphicsDeviceConfiguration` (VZ's own 2D device, one scanout) is not used for `drmVirgl` or `guestSwiftshader`, because it cannot provide multiple scanouts ([ADR-0002](../01-architecture/decisions/0002-virtualization-framework-macos27.md)). It serves only the development `headless` profile, which ADR-0002 already allows as a debugging fallback. A profile with no DRM device at all cannot boot the stock image: zygote and SurfaceFlinger abort without an EGL implementation, and `init.cutf_cvm.rc` waits for `/dev/dri/card0` in `early-init` (2026-10-08, IR-307).
+
+**Built in #022.** The `guestSwiftshader` device keeps each 2D resource in a host shadow buffer, and `TRANSFER_TO_HOST_2D` copies the rectangle into it as a counted CPU pixel copy. The flush completes without a blit, because the pool arrives in #023 (IR-474). `drmVirgl` stays refused by RuntimeCore until its boot is verified on the VM (IR-462).
 
 ---
 
@@ -768,6 +778,7 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 | `kmscube` on the Linux test guest: `virgl` renderer and `hostReadbacks = 0` headless (#022), ≥ 55 fps in the development window (#023) | #022, #023 | pending (§12) |
 | Android binds `virtio_gpu`: `card0` with 16 `Virtual-N` connectors, only `Virtual-1` connected | #021 | 2026-10-10, Mac17,9 (arm64), macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a, image `2026.10.0-cf16373615-arm64` (build 16373615), `guestSwiftshader`: `AndroidGraphicsTests.testVirtioGPUBinds` passed in 13.7 s. Device ID 16 (`virtio18`) is bound to `virtio_gpu`: the kernel logs `[drm] number of scanouts: 16` and `Initialized virtio_gpu 0.1.0`, with `+edid -virgl`. `card0` has 16 connectors, and only `card0-Virtual-1` is `connected` (the others are `disconnected`). The captures (`kernel-log.txt`, `drm-connectors.txt`, `virtio-devices.txt`, `summary.txt`, `hvc0-console.log`) are in the bundle's `android-graphics` directory. The 2D commands return `VIRTIO_GPU_RESP_ERR_UNSPEC` until #022. The capture came while the boot was in `booting(systemServer)`. A CLI boot with this profile reached `sys.boot_completed=1` at kernel time 8.5 s (`cli-swiftshader-boot.log`, IR-390). The sysfs reads run as root (IR-384). `AndroidGraphicsRefusalTests` checks that `drmVirgl` is refused before any file changes (IR-380). |
 | SurfaceFlinger uses GLES through virgl, no guest SwiftShader or ANGLE libraries, `sys.boot_completed=1` | #022 | pending (§5.3) |
+| Host side of #022, without a VM: the 3D command set, transfers, fences, limits, the 2D path of `guestSwiftshader`, the recorder, and a texture round trip through the real renderer | #022 | 2026-10-10, Apple silicon Mac, macOS 27.0.1 build 26A434 / Xcode 27.0 build 27A266a, no VM started. GraphicsCore T0 passed (129 tests, `swift test --filter GraphicsCoreTests`). GraphicsCore T1 passed (6 tests, with `--traits TestReadback`), including the upload and readback through context 0 (IR-463) and the replay of a recorded session on a fresh renderer. RuntimeCore `AndroidGraphicsDevicesTests` passed (4 tests). The HelloGL fixture built offline, and its signer matches the fixture key. `hostReadbacks` stays 0 on every path, because nothing reads back on the host. This is not the guest result: the rows above stay pending until the VM runs. |
 | Gate G3: HelloGL ≥ 55 fps average, `hostReadbacks = 0` and `cpuPixelCopies = 0` over 60 s, no tearing | #023 | pending (§6.2, §7) |
 | Hotplug with Android, and whether fallback A makes the driver re-read the display info | #028 | pending (§4.3) |
 | A runtime mode change keeps the display ID; density of secondary displays from the EDID (OQ-39) | #067 | pending (§6.4) |

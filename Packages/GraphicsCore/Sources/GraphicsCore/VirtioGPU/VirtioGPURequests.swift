@@ -283,8 +283,8 @@ extension VirtioGPUProtocol {
                 flags: reader.readUInt32()
             )
             reader.skip(byteCount: 4)
-            try requireDimension(resource.width, field: "width", command: header.type)
-            try requireDimension(resource.height, field: "height", command: header.type)
+            // The size limits depend on the target (buffers are sized in bytes), so
+            // ResourceTable checks them, not the decoder.
             body = .resourceCreate3D(resource)
         case .transferToHost3D:
             try requireLength(bytes, RequestSize.transfer3D, command: header.type)

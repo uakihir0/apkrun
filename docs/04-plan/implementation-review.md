@@ -13812,7 +13812,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2, offline) |
 | Affected documents | [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (`erofs-utils`); [build-system.md](../05-development/build-system.md) §6.6 |
 
-**Choice.** The lock pins the erofs-utils 1.9.4 bottle for `arm64_golden_gate` (SHA-256 `52f58391…`). It is the bottle that the feasibility receipt used. Its binaries name Homebrew's lz4 and xz with the placeholder `@@HOMEBREW_PREFIX@@`, so the lock records two `install_name_tool -change` pairs, and the SHA-256 of each binary after the change and the ad-hoc signature (`mkfs.erofs` `645d8d55…`, `fsck.erofs` `d0fa5337…`, `dump.erofs` `850ddb32…`). `python3 -m apkrun_image erofs-tools --out DIR` fetches, relocates, and checks them, and every tool run checks the hashes first. Decision needed: whether to build erofs-utils from a pinned source tarball instead.
+**Choice.** The lock pins the erofs-utils 1.9.4 bottle for `arm64_golden_gate` (SHA-256 `52f58391…`). It is the bottle that the feasibility receipt used. Its binaries name Homebrew's lz4 and xz with the placeholder `@@HOMEBREW_PREFIX@@`, so the lock records two `install_name_tool -change` pairs, and the SHA-256 of each binary after the change and the ad-hoc signature (`mkfs.erofs` `645d8d55…`, `fsck.erofs` `d0fa5337…`, `dump.erofs` `850ddb32…`). `python3 -m apkrun_image erofs-tools --out DIR` fetches, relocates, and checks them. `inject-vendor` checks them before its first tool run. The helpers do not check again on each call. Decision needed: whether to build erofs-utils from a pinned source tarball instead.
 
 **Reason.** A source build needs autotools and a tarball that the lock does not pin. The bottle is the byte set that the receipt already names, so the record and the tool agree.
 
@@ -13912,7 +13912,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Choice.** Each entry's owner, group, mode, and timestamp come from `dump.erofs --path`. The host copy keeps only the content and the link target. A rebuild writes a PAX tar that carries the labels as `SCHILY.xattr.security.selinux`. The export stops at any host xattr other than `security.selinux`, except `com.apple.provenance`, which macOS adds to extracted files.
 
-**Reason.** A host that is not root cannot restore the stock owners (uid 0, gid 0 or 2000). The stock image uses no xattr other than `security.selinux`: all 322 files and directories and all 199 symlinks carry it, and no other name was found.
+**Reason.** A host that is not root cannot restore the stock owners (uid 0, gid 0 or 2000). The stock image uses no xattr other than `security.selinux`: all 522 entries carry it (the root included), and no other name was found.
 
 **Consequence.** The tool needs `dump.erofs` for metadata and the xattr tool of the host (`/usr/bin/xattr` on macOS) for labels.
 
@@ -13985,3 +13985,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** AGENTS §6.3 puts image handling in the image tools. The guard is a cheap check against a large file in the tree.
 
 **Consequence.** A caller who wants the output in the repository's git-ignored `Images/work` must choose a path that the guard accepts, or the guard must change by a decision.
+
+## IR-634: The contexts files are read from their fixed paths inside the partitions, which the manifest does not index
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [AGENTS.md](../../AGENTS.md) §6.3 (image file names); [android-image.md](../02-design/android-image.md) §3.1 (inventory) |
+
+**Choice.** The tool reads `/system/etc/selinux/plat_file_contexts` from `system_a` and `/etc/selinux/vendor_file_contexts` from the vendor partition, at those fixed AOSP paths. The manifest records artifacts, not the files inside a partition. Decision needed: index the files of each partition through the manifest (a larger change to the inventory), or keep these two fixed paths and name them in the image design.
+
+**Reason.** AGENTS §6.3 forbids assuming file names inside an artifact, and these paths are names inside a partition. The tool cannot label a file without the rules, and the manifest has no entry for them. The tool guards the paths: it refuses an image whose contexts do not reproduce the stock labels (IR-623), and it records their SHA-256 in the output.
+
+**Consequence.** A different AOSP layout (for example a moved contexts file) makes the tool stop with a missing-file error, and it writes no output.

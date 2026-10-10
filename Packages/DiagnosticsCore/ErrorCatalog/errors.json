@@ -2194,7 +2194,7 @@
       "cliExit": "cause",
       "doc": {
         "case": "graphics(GraphicsFailure)",
-        "when": "the host renderer of the boot profile fails to start before the VM is created, for example the VirGL renderer of drmVirgl. The cause names the stage",
+        "when": "the host renderer of the boot profile fails to start before the VM is created, for example the VirGL renderer of drmVirgl. The cause says which step failed: a missing library, a stage of the renderer, or a renderer operation",
         "raisedBy": "RuntimeSupervisor",
         "ref": "[../02-design/graphics.md](../02-design/graphics.md) §8, §13.1"
       }

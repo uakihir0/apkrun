@@ -186,20 +186,41 @@ def read_needed(path: Path) -> list[str]:
 
 
 def installed_regular_files(apk: Path) -> list[str]:
+    """The paths of the regular files and hard links that an apk installs.
+
+    apk metadata is a top-level dot entry (.PKGINFO, .SIGN.*), and it is skipped.
+    A leading "./" is removed from a member name.
+    """
+    names: list[str] = []
     with tarfile.open(apk, "r:gz") as archive:
-        return [
-            member.name
-            for member in archive.getmembers()
-            if member.isfile() and not member.name.startswith(".")
-        ]
+        for member in archive.getmembers():
+            if not (member.isfile() or member.islnk()):
+                continue
+            name = member.name[2:] if member.name.startswith("./") else member.name
+            if name.split("/", 1)[0].startswith("."):
+                continue
+            names.append(name)
+    return names
 
 
-def check_needed_libraries(root: Path, packages: list[dict[str, Any]]) -> list[str]:
+def provided_libraries(root: Path) -> set[str]:
+    """The names in the library directories that resolve to a regular file inside the root."""
     provided: set[str] = set()
     for directory in LIBRARY_DIRECTORIES:
         path = root / directory
-        if path.is_dir():
-            provided.update(entry.name for entry in path.iterdir())
+        if not path.is_dir():
+            continue
+        for entry in path.iterdir():
+            try:
+                resolve_inside(root, f"{directory}/{entry.name}")
+            except ManifestError:
+                continue
+            provided.add(entry.name)
+    return provided
+
+
+def check_needed_libraries(root: Path, packages: list[dict[str, Any]]) -> list[str]:
+    provided = provided_libraries(root)
     needed: set[str] = set()
     missing: list[str] = []
     for package in packages:

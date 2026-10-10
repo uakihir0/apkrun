@@ -66,8 +66,11 @@ fetch_component() {
 
     rm -f "$temporary"
     printf 'fetch-test-linux: downloading %s\n' "$filename"
-    curl --fail --location --retry 3 --output "$temporary" "$url"
-    verify_sha256 "$temporary" "$expected"
+    if ! curl --fail --location --retry 3 --output "$temporary" "$url" \
+        || ! verify_sha256 "$temporary" "$expected"; then
+        rm -f "$temporary"
+        return 1
+    fi
     mv -f "$temporary" "$destination"
 }
 

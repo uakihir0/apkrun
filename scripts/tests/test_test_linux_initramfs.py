@@ -319,6 +319,28 @@ class TestManifestTool(InitramfsFixture):
         self.assertEqual(result.returncode, 1)
         self.assertIn("not in the lock: alpine-absent", result.stderr)
 
+    def test_a_dangling_symlink_does_not_provide_a_needed_soname(self) -> None:
+        self.add_package(
+            "fake-one",
+            {"usr/bin/fake": make_elf(["libghost.so.1"])},
+            links={"usr/lib/libghost.so.1": "libmissing.so.1"},
+        )
+        self.write_inputs(["alpine-fake-one"], ["usr/bin/fake"])
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("libghost.so.1", result.stderr)
+
+    def test_checks_a_member_whose_name_starts_with_dot_slash(self) -> None:
+        self.add_package("fake-one", {"./usr/bin/fake": make_elf(["libmissing.so.9"])})
+        self.write_inputs(["alpine-fake-one"], [])
+
+        result = self.run_tool()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("libmissing.so.9", result.stderr)
+
     def test_reads_every_needed_name_of_an_elf_file(self) -> None:
         path = self.base / "lib.so"
         path.write_bytes(make_elf(["liba.so.1", "libb.so.2"]))

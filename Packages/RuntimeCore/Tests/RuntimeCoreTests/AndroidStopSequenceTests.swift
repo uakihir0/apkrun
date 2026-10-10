@@ -117,3 +117,69 @@ func theStandardStopDeadlineIsTwentySeconds() {
     #expect(AndroidStopSequence.standardDeadline == .seconds(20))
     #expect(AndroidStopSequence().deadline == .seconds(20))
 }
+
+/// Records the power-off channels that were tried, in order.
+private actor ChannelRecorder {
+    private(set) var calls: [String] = []
+
+    func attempt(_ channel: String, succeeds: Bool) -> Bool {
+        calls.append(channel)
+        return succeeds
+    }
+}
+
+/// A power-off that ADB accepts is the whole request, and the serial shell is not tried.
+@Test
+func aPowerOffAcceptedByADBIsNotSentAgainOverTheShell() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        overADB: { await recorder.attempt("adb", succeeds: true) },
+        overShell: { await recorder.attempt("shell", succeeds: true) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls == ["adb"])
+}
+
+/// A failed ADB request is retried over the serial shell.
+@Test
+func aFailedADBRequestFallsBackToTheShell() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        overADB: { await recorder.attempt("adb", succeeds: false) },
+        overShell: { await recorder.attempt("shell", succeeds: true) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls == ["adb", "shell"])
+}
+
+/// A failed ADB request with no serial shell still counts as tried. The reply may have been lost after Android
+/// received the request, so the stop waits for the deadline instead of forcing at once.
+@Test
+func aFailedADBRequestWithoutAShellStillCountsAsTried() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        overADB: { await recorder.attempt("adb", succeeds: false) },
+        overShell: nil
+    )
+    #expect(tried)
+    #expect(await recorder.calls == ["adb"])
+}
+
+/// A request that failed on every channel was still tried.
+@Test
+func aRequestThatFailedOnEveryChannelStillCountsAsTried() async {
+    let recorder = ChannelRecorder()
+    let tried = await AndroidStopSequence.sendPowerOff(
+        overADB: { await recorder.attempt("adb", succeeds: false) },
+        overShell: { await recorder.attempt("shell", succeeds: false) }
+    )
+    #expect(tried)
+    #expect(await recorder.calls == ["adb", "shell"])
+}
+
+/// With neither channel there is nothing to send, so the request is not tried and the stop does not wait.
+@Test
+func aPowerOffWithNoChannelIsNotTried() async {
+    let tried = await AndroidStopSequence.sendPowerOff(overADB: nil, overShell: nil)
+    #expect(!tried)
+}

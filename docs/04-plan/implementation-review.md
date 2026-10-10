@@ -12275,6 +12275,13 @@ the real manifest.
 
 **Consequence.** The T2 acceptance boxes that need the test host stay open, and the M03 T2 gate cannot close until the test host runs adb and the forwarder stop returns. Next steps: check whether the adb binary is readable by the test host from Documents (for example by running it from the test host with the grant), or run the suite with adb in a path outside Documents. Fix the forwarder stop so that a failed boot returns promptly, and check the restart failure with the logged code.
 
+**Update (2026-10-10, current T2 state).**
+- **adb location.** The test host runs adb from `~/Documents` (through the worktree `build/android-sdk` symlink), and that copy did not connect. A copy of the same platform-tools (adb 1.0.41) under `/tmp/apkrun-072-sdk/platform-tools`, passed as `APKRUN_ANDROID_HOME`, connected in the 07:18 run. The committed test plan is unchanged. The decision was requested under IR-388, which is not in the review log. The outside-Documents rule is recorded in IR-046 and IR-061. No record of a #021 run that used a copied SDK was found, so this entry does not cite one.
+- **Result with the `/tmp` copy (07:18 run).** The boot reached `bootCompleted`, the host connected, and the agent connected. The first kill's restart failed with `The Guest Agent did not restart err=runtime.guestAgentStartFailed`. That run predates the fix that logs the real code (5157c6b), so the cause is not known. The test then exceeded its allowance after teardown. No GuestAgentTests test has passed.
+- **Fake-adb run (08:37, a script that exits 1 for every command).** Not evidence for the real path. `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` failed at 45.7 s with the boot error and did not hang.
+- **Remaining blocker.** After `Stopped the loopback forwarder on port 6520`, the runs with the real adb went silent until the 10-minute allowance expired. The fake-adb run did not reproduce the silence, and no sample of the stalled test host was taken. The teardown fix and its T0 test are not done.
+- **Single next step.** Run `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` once with the `/tmp` copy, and `sample` the test host while it is silent after the forwarder stop, to name the blocked wait.
+
 ## IR-439: The test inputs are read from /tmp, and the entry's path is stale
 
 | Field | Value |

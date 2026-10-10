@@ -109,8 +109,40 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
     }
 
     /// Stops accepting connections and closes the open ones. When it returns, the port is free again.
+    ///
+    /// The wait for the listener's descriptor blocks the calling thread, so a caller on the Swift concurrency pool
+    /// should use ``stopAndWait(timeout:)`` instead.
     public func stop() {
-        let (source, closed, open) = lock.withLock {
+        let (source, closed, open) = beginStop()
+        source?.cancel()
+        // The listener's descriptor is closed by the cancel handler on the accept queue. Waiting for
+        // it lets a restart on the same port bind at once. A stop on the accept queue cannot wait,
+        // so the wait is bounded.
+        _ = closed?.wait(timeout: .now() + .seconds(2))
+        finishStop(source: source, open: open)
+    }
+
+    /// Stops like ``stop()``, but waits for the listener's descriptor on a dispatch thread instead of the caller's, so
+    /// that a teardown on the Swift concurrency pool does not hold one of its threads. The wait is bounded by
+    /// `timeout`: a listener that does not close in time does not hold the teardown, and its connections are still
+    /// closed.
+    public func stopAndWait(timeout: DispatchTimeInterval = .seconds(2)) async {
+        let (source, closed, open) = beginStop()
+        source?.cancel()
+        if let closed {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global(qos: .utility).async {
+                    _ = closed.wait(timeout: .now() + timeout)
+                    continuation.resume()
+                }
+            }
+        }
+        finishStop(source: source, open: open)
+    }
+
+    /// Marks the forwarder stopped and takes what must be cancelled or closed, under the lock.
+    private func beginStop() -> (DispatchSourceRead?, DispatchSemaphore?, [LoopbackSession]) {
+        lock.withLock {
             () -> (DispatchSourceRead?, DispatchSemaphore?, [LoopbackSession]) in
             isStopped = true
             let source = acceptSource
@@ -121,11 +153,9 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
             sessions.removeAll()
             return (source, closed, open)
         }
-        source?.cancel()
-        // The listener's descriptor is closed by the cancel handler on the accept queue. Waiting for
-        // it lets a restart on the same port bind at once. A stop on the accept queue cannot wait,
-        // so the wait is bounded.
-        _ = closed?.wait(timeout: .now() + .seconds(2))
+    }
+
+    private func finishStop(source: DispatchSourceRead?, open: [LoopbackSession]) {
         for session in open {
             session.finish()
         }

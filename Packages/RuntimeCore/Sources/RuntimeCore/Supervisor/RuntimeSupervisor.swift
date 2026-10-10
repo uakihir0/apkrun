@@ -210,7 +210,7 @@ public actor RuntimeSupervisor {
         self.controller = nil
         await controller.waitForConsoleLogDrain()
         finishTasks()
-        closeDevelopmentChannels()
+        await closeDevelopmentChannels()
         shell = nil
         transition(to: .stopped)
     }
@@ -571,12 +571,15 @@ public actor RuntimeSupervisor {
     }
 
     /// Closes the forwarder and forgets the ADB client of the boot that just ended.
-    private func closeDevelopmentChannels() {
-        forwarder?.stop()
+    /// Closes the forwarder and forgets the ADB client of the boot that just ended. The forwarder is awaited without
+    /// blocking a thread of the Swift concurrency pool, so a teardown after a failed boot cannot hold it.
+    private func closeDevelopmentChannels() async {
+        let closing = forwarder
         forwarder = nil
         adbClient = nil
         adbPollTask = nil
         isADBConnected = false
+        await closing?.stopAndWait()
     }
 
     private func waitForBootCompletion(
@@ -741,7 +744,7 @@ public actor RuntimeSupervisor {
             await controller.waitForConsoleLogDrain()
         }
         finishTasks()
-        closeDevelopmentChannels()
+        await closeDevelopmentChannels()
         controller = nil
         shell = nil
     }

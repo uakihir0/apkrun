@@ -118,6 +118,41 @@ func loopbackForwarderFreesThePortWhenStopReturns() async throws {
     second.stop()
 }
 
+/// The teardown after a failed boot stops the forwarder while the guest has not answered the connect. The stop must
+/// finish within its bound, close the client, and free the port.
+@Test(.timeLimit(.minutes(1)))
+func loopbackForwarderStopReturnsWhileAGuestConnectionNeverOpens() async throws {
+    let reached = DispatchSemaphore(value: 0)
+    let forwarder = VsockLoopbackForwarder(requestedPort: 0, guestPort: 5555, logSink: nil) { _ in
+        reached.signal()
+        // The guest does not answer the connect, as after a boot that failed while Android was still starting.
+        try await Task.sleep(for: .seconds(60))
+        throw VMFailure.vsockPortNotListening(port: 5555)
+    }
+    try forwarder.start()
+    let port = try #require(forwarder.port)
+    let client = try connectToLoopback(port: port)
+    defer { Darwin.close(client) }
+    let waiting = await withCheckedContinuation { (continuation: CheckedContinuation<DispatchTimeoutResult, Never>) in
+        DispatchQueue.global().async {
+            continuation.resume(returning: reached.wait(timeout: .now() + .seconds(5)))
+        }
+    }
+    #expect(waiting == .success)
+
+    let started = ContinuousClock.now
+    await forwarder.stopAndWait(timeout: .milliseconds(500))
+    #expect(ContinuousClock.now - started < .seconds(2))
+
+    let bytes = try await readExactly(1, from: client, expectingEnd: true)
+    #expect(bytes.isEmpty)
+    let second = VsockLoopbackForwarder(requestedPort: port, guestPort: 5555, logSink: nil) { _ in
+        throw VMFailure.vsockPortNotListening(port: 5555)
+    }
+    try second.start()
+    await second.stopAndWait()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func loopbackForwarderListensOnlyOnTheLoopbackAddress() async throws {
     let forwarder = VsockLoopbackForwarder(requestedPort: 0, guestPort: 5555, logSink: nil) { _ in

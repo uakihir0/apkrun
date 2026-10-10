@@ -13,6 +13,12 @@ public enum GPUProfileID: String, Codable, Sendable, CaseIterable {
 
 /// What a boot asks of the image (android-image.md §9.1).
 public struct BootOptions: Equatable, Sendable {
+    /// The loopback TCP port of developer ADB on `127.0.0.1` (configuration.md §2.5). Only developer mode opens it.
+    ///
+    /// `0` asks the kernel for a free port; the supervisor reports the port it bound. Several VM runs on one
+    /// Mac need that, because the default port belongs to one run at a time (test-strategy §3.10). The product
+    /// keeps ``defaultADBHostPort``.
+    public var adbHostPort: UInt16
     /// The GPU profile whose bootconfig fragment and devices this boot uses.
     public var gpuProfile: GPUProfileID
     /// The Android serial shell on hvc1 and the `androidboot.console` keys (§6.2, §7.1).
@@ -26,6 +32,9 @@ public struct BootOptions: Equatable, Sendable {
     /// `androidboot.lcd_density`: 160 × the backing scale of display 0.
     public var displayDensity: Int
 
+    /// The developer ADB port of the product: `apkrun dev boot` and `apkrun dev adb` use it (configuration.md §2.5).
+    public static let defaultADBHostPort: UInt16 = 6520
+
     /// Creates a value with every field.
     public init(
         gpuProfile: GPUProfileID = .drmVirgl,
@@ -33,7 +42,8 @@ public struct BootOptions: Equatable, Sendable {
         captureLogcat: Bool = false,
         soundOutput: Bool = false,
         microphone: Bool = false,
-        displayDensity: Int = 320
+        displayDensity: Int = 320,
+        adbHostPort: UInt16 = BootOptions.defaultADBHostPort
     ) {
         self.gpuProfile = gpuProfile
         self.developerMode = developerMode
@@ -41,6 +51,7 @@ public struct BootOptions: Equatable, Sendable {
         self.soundOutput = soundOutput
         self.microphone = microphone
         self.displayDensity = displayDensity
+        self.adbHostPort = adbHostPort
     }
 }
 

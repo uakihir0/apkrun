@@ -47,13 +47,7 @@ public enum LinuxTestGuest {
             usesEntropyDevice
             ? (entropyTestDevice ?? EntropyTestDevice(seed: 0))
             : nil
-        // The port test attaches `consolePortCount` ports: the system console, then test-1 and up.
-        // Ports 10 and up sit on one multiport device, as in the Android definition (vm.md §6.1).
-        let consolePorts: [ConsolePortDefinition] =
-            tests.contains("ports")
-            ? [ConsolePortDefinition(role: .systemConsole)]
-                + (1..<max(consolePortCount, 3)).map { ConsolePortDefinition(role: .service(name: "test-\($0)")) }
-            : [ConsolePortDefinition(role: .systemConsole)]
+        let ports = consolePorts(tests: tests, consolePortCount: consolePortCount)
         let commandLine =
             ([
                 "console=hvc0",
@@ -101,9 +95,20 @@ public enum LinuxTestGuest {
             disks: diskDefinitions,
             networks: networkDefinition.map { [$0] } ?? [],
             vsockEnabled: tests.contains("vsock"),
-            consolePorts: consolePorts,
+            consolePorts: ports,
             entropy: !usesEntropyDevice,
             customDevices: customDevices + (entropyDevice.map { [$0 as any VirtioDeviceModel] } ?? [])
         )
+    }
+
+    /// The console ports of the test guest, in attachment order: the system console at index 0, then
+    /// `test-1` and up when the port test runs. Ports 10 and up sit on one multiport device, as in the
+    /// Android definition (vm.md §6.1). The port test attaches at least three ports.
+    public static func consolePorts(tests: [String], consolePortCount: Int) -> [ConsolePortDefinition] {
+        guard tests.contains("ports") else {
+            return [ConsolePortDefinition(role: .systemConsole)]
+        }
+        return [ConsolePortDefinition(role: .systemConsole)]
+            + (1..<max(consolePortCount, 3)).map { ConsolePortDefinition(role: .service(name: "test-\($0)")) }
     }
 }

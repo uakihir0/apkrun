@@ -5,13 +5,15 @@ import Testing
 @Test func devGPUProfilesMapToTheBundleProfiles() {
     #expect(DevGPUProfile.none.profile == .headless)
     #expect(DevGPUProfile.swiftshader.profile == .guestSwiftshader)
+    #expect(DevGPUProfile.virgl.profile == .drmVirgl)
 }
 
-@Test func onlyTheGPUProfilesOfThisBuildAreSelectable() {
-    // `virgl` waits for the VirGL renderer (#022), so `--gpu virgl` is an invalid argument.
+@Test func theGPUProfilesOfTheDevCommandAreSelectableByName() {
+    // `virgl` is selectable from #022 on. Any other name is an invalid argument.
     #expect(DevGPUProfile(rawValue: "none") == DevGPUProfile.none)
     #expect(DevGPUProfile(rawValue: "swiftshader") == DevGPUProfile.swiftshader)
-    #expect(DevGPUProfile(rawValue: "virgl") == nil)
+    #expect(DevGPUProfile(rawValue: "virgl") == DevGPUProfile.virgl)
+    #expect(DevGPUProfile(rawValue: "drmVirgl") == nil)
 }
 
 @Test func devBootDefaultsToTheHeadlessProfile() {

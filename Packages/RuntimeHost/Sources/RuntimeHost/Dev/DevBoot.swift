@@ -5,18 +5,21 @@ import RuntimeCore
 
 /// The GPU profile of `apkrun dev boot --gpu` (cli.md §5; runtime-api.md §15).
 ///
-/// `virgl` (`drmVirgl`) is not offered until the VirGL renderer lands (#022), so `--gpu virgl` is refused.
+/// `none` stays the default of `apkrun dev boot` until the drmVirgl boot is verified on the VM (IR-584).
 public enum DevGPUProfile: String, CaseIterable, Sendable {
     /// `none`: the development `headless` profile, where VZ's 2D device is the DRM device (#012).
     case none
     /// `swiftshader`: the `guestSwiftshader` profile, which needs no host renderer (#021).
     case swiftshader
+    /// `virgl`: the `drmVirgl` profile, which renders through the VirGL renderer on the host (#022).
+    case virgl
 
     /// The bundle's GPU profile that the boot uses.
     var profile: GPUProfileID {
         switch self {
         case .none: .headless
         case .swiftshader: .guestSwiftshader
+        case .virgl: .drmVirgl
         }
     }
 }

@@ -369,6 +369,13 @@ let package = Package(
             dependencies: ["IntegrationCore"],
             path: "Packages/IntegrationCore/Tests/IntegrationCoreTests"
         ),
+        // The per-run resources of the VM tests (test-strategy §3.10). The same helper is compiled into the
+        // IntegrationTests and AcceptanceTests bundles, which exclude this file.
+        .testTarget(
+            name: "VMRunResourcesTests",
+            dependencies: ["DiagnosticsCore"],
+            path: "Tests/IntegrationTests/RunResources"
+        ),
         .testTarget(
             name: "apkrunTests",
             dependencies: ["apkrun", "DiagnosticsCore", "DiagnosticsCoreTestSupport"],

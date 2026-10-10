@@ -242,6 +242,9 @@ targets:
       - path: Tests/IntegrationTests/AndroidGraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
       - path: Tests/IntegrationTests/Support
+      - path: Tests/IntegrationTests/RunResources
+        excludes:
+          - VMRunResourcesTests.swift
       - path: Tests/Fixtures/linux/make-test-disks.sh
         buildPhase: resources
     settings:
@@ -282,6 +285,9 @@ targets:
       - path: Tests/AcceptanceTests
       - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHarness.swift
       - path: Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHTTPServer.swift
+      - path: Tests/IntegrationTests/RunResources
+        excludes:
+          - VMRunResourcesTests.swift
     settings:
       base:
         PRODUCT_NAME: AcceptanceTests

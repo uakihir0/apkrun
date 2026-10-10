@@ -150,6 +150,29 @@ extension VirGLRendererSuite {
         try fresh.destroy()
     }
 
+    @Test(
+        .enabled(
+            if: MTLCreateSystemDefaultDevice() != nil,
+            "This host does not provide a Metal device."
+        )
+    )
+    func aFenceAboveThirtyOneBitsRetires() throws {
+        guard let runtime = runtimeDirectory() else {
+            Issue.record("The built VirGL runtime cache is unavailable.")
+            return
+        }
+        #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+        let fences = FenceLog()
+        let renderer = try VirGLRenderer(onFenceCompleted: { fences.append($0) })
+        defer { try? renderer.destroy() }
+        try renderer.createFence(id: 0x8000_0001, context: 0)
+        for _ in 0..<2_000 where fences.values.isEmpty {
+            renderer.poll()
+            usleep(1_000)
+        }
+        #expect(fences.values == [0x8000_0001])
+    }
+
     #if APKRUN_TEST_READBACK
         @Test(
             .enabled(

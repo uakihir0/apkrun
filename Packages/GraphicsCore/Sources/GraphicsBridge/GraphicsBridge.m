@@ -1107,10 +1107,10 @@ int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id) {
     if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
         return status;
     }
-    if (fence_id > INT32_MAX) {
-        return GB_E_INVALID_ARGUMENT;
-    }
-    int result = renderer->virgl.create_fence((int)fence_id, ctx_id);
+    /* virglrenderer takes the fence as an int and casts it back to uint32_t, so the bit pattern is passed unchanged. */
+    int32_t bits = 0;
+    memcpy(&bits, &fence_id, sizeof bits);
+    int result = renderer->virgl.create_fence((int)bits, ctx_id);
     return result == 0 ? GB_OK : GB_E_FENCE_OPERATION;
 }
 

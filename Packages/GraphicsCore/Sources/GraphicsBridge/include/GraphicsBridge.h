@@ -187,7 +187,8 @@ int gb_transfer_read(
 /*
  * Creates a fence on the global timeline. It completes through the
  * `write_fence` callback, which runs on the render thread during `gb_poll`
- * or another call. Fences are 32-bit because virglrenderer's ctx0 fences are.
+ * or another call. Fences are 32-bit because virglrenderer's ctx0 fences are;
+ * every 32-bit value is valid.
  */
 int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id);
 

@@ -23,6 +23,7 @@ The project owner approved the NDK route in this session. Mesa is built on this 
    - `libEGL_mesa.so` (EGL, the `android` and `surfaceless` platforms),
    - `libGLESv2_mesa.so` and `libGLESv1_CM_mesa.so` (the GLES 2.0 and 1.1 entry points),
    - `libgallium_dri.so` (the gallium frontend, the `virgl` driver, and the shared GLAPI, which Meson builds into this library).
+   The shipped files are stripped with `meson install --strip` (IR-494). The unstripped build stays in the work area.
    The EGL and GLES names come from `-Degl-lib-suffix=_mesa` and `-Dgles-lib-suffix=_mesa`, because the Android loader opens `libEGL_<name>.so` and `libGLESv2_<name>.so`.
 4. **Not shipped:**
    - `libdrm.so`, which the guest's vendor partition already provides (the receipt, §5). The build links against libdrm 2.4.123 from Mesa's wrap, and the SONAME is `libdrm.so`, so the NEEDED entries match the guest. The other libdrm driver libraries (amdgpu, radeon, nouveau, and the rest) are not shipped.
@@ -44,7 +45,8 @@ The project owner approved the NDK route in this session. Mesa is built on this 
    - HPND, the "sell this software" notice (`src/loader/loader_dri_helper.c`). **HPND is not on the app list.**
    - CC0-1.0 OR Apache-2.0 (BLAKE3 1.8.2, `src/util/blake3/`, whose tree has no licence file; the identity comes from the upstream project);
    - GPL-3.0-or-later with the Bison skeleton exception, in the three Bison-generated parsers (`glsl_parser.cpp`, `glcpp-parse.c`, `program_parse.tab.c`). **Neither the exception nor the generated-code notice is on the app list.**
-   The lock entry records the expression, `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2`. The policy result is a failure, and the image must not ship until the maintainer decides (IR-483). The Mesa licence texts are copied under `ThirdParty/licenses/mesa/`.
+   - Apache-2.0 WITH LLVM-exception: the NDK's libc++abi and libunwind code, which `-static-libstdc++` links into `libgallium_dri.so` (IR-493).
+   The lock entry records the expression, `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2 AND Apache-2.0 WITH LLVM-exception`. The policy result is a failure, and the image must not ship until the maintainer decides (IR-483). The Mesa licence texts are copied under `ThirdParty/licenses/mesa/`.
    The tools (NDK, Ninja, Bison, Meson, mako, MarkupSafe, packaging, PyYAML, libdrm) are `ships: tooling`. They are not in the image, and their licences are on the tooling list (§4.4), except the NDK, whose licence is the Android SDK licence (IR-486).
 8. **Provenance.** Every build writes `ThirdParty/out/mesa-android/manifest.json`. It records the Mesa commit and version, the lock entries used, the NDK revision and clang version, the Meson, Ninja, and Bison versions, the host Python and tool versions, the full flag list, and for each shipped file its size, SHA-256, `e_machine`, `DT_NEEDED`, `DT_SONAME`, and load alignment. `scripts/tests/test_guest_mesa_build.py` checks the manifest and the ELF properties of the output.
 9. **Image layout.** The Android loader takes `libEGL_mesa.so` and `libGLESv2_mesa.so` from `vendor/lib64/egl/`. `libgallium_dri.so` is a `DT_NEEDED` of the EGL and GLES libraries, so the linker must find it from the vendor namespace. The placement is decided in the image integration step, and the VM check verifies it. This ADR does not decide it (IR-489).

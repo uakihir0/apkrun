@@ -12582,3 +12582,164 @@ the real manifest.
 **Reason.** The device queue must not call virglrenderer (§4.7), and a renderer build's capsets do not change while it runs. A renderer that cannot offer its capsets fails at creation, before the VM starts (§8).
 
 **Consequence.** A guest that asks for an older capset version gets `ERR_INVALID_PARAMETER`.
+
+## IR-480: Mesa 26.1.8 is the pinned release, not the newest 26.2.4
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 1) |
+| Affected documents | [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 1; [M02](issues/M02-graphics.md) #099 |
+
+**Choice.** Pin the Mesa 26.1.8 release: tag `mesa-26.1.8`, commit `0fadfea4f394211946f308458f614839ef253ee8`. The newest release tag on the upstream repository is 26.2.4.
+
+**Reason.** The AOSP android-17 snapshot is the 26.1 series (`VERSION` 26.1.0-devel, IR-440 on `task/099-mesa-virgl-guest-image`). A 26.1 point release keeps the Android platform code closest to that tree. The spec does not name a Mesa version.
+
+**Consequence.** A move to 26.2 is a pin update under [build-system.md](../05-development/build-system.md) §6.8. It repeats the ELF checks and the symbol contract of IR-488.
+
+## IR-481: The NDK is installed from its archive, not with sdkmanager, and outside the shared SDK
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 6 |
+
+**Choice.** The NDK r28c (`ndk;28.2.13676358`) is in `~/Library/Android/sdk/ndk/28.2.13676358`. The archive `android-ndk-r28c-darwin.zip` (952,495,160 bytes) came from `https://dl.google.com/android/repository/`, the URL that `repository2-3.xml` lists. Its SHA-1 equals the value in that manifest (`fc20a6bf15a30fb3428c9b60a7308793a362dc6d`). Its SHA-256 is in the lock. `build/android-sdk`, which the other checkouts share, has no `ndk` directory, and this task did not change it. `sdkmanager` was not run.
+
+**Reason.** The task asked for a location outside the shared SDK. `sdkmanager` needs a JDK, and no JDK is installed on this Mac. Installing one would be an environment change that the task did not ask for. The archive is the file that `sdkmanager` downloads.
+
+**Consequence.** The Android SDK licence (`android-sdk-license`) was not accepted through `sdkmanager`, so no acceptance record exists on this Mac. The maintainer confirms the acceptance that environment-setup §2.5 expects. The licence text is in the lock copy (IR-486).
+
+## IR-482: The NDK r28c sysroot stops at API 35, and Mesa's platform SDK is 37
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (steps 2 and 3) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 2 |
+
+**Choice.** The libraries are compiled with `aarch64-linux-android35`, the highest API that r28c provides. Mesa's `platform-sdk-version` is 37, the platform of the guest image (Android 17).
+
+**Reason.** The r28c sysroot has library directories for API 21 to 35 only. The guest runs Android 17 (API 37), which is newer than the compile API, so an API 35 binary runs on it. Mesa's platform code reads `platform-sdk-version` for its gates, so it gets the guest's value.
+
+**Consequence.** The link would fail on any symbol that the API 35 sysroot lacks, and it did not. A symbol that needs API 36 or 37 at run time would not show up in the build, so the VM check covers it.
+
+## IR-483: HPND and the Bison-generated parsers are not on the app list
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1, §4.2, §4.5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 7 |
+
+**Choice.** The lock records the Mesa licence expression as found: `MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2`. The app list is not changed. The image does not ship Mesa until the maintainer decides how to treat the two terms that the app list does not name.
+
+**Reason.** The source scan covered the 859 files that the four shipped libraries compile. The scan found the terms as follows:
+
+- HPND (the "sell this software" notice) in `src/loader/loader_dri_helper.c`;
+- GPL-3.0-or-later with the Bison skeleton exception, in the three Bison-generated parsers `src/compiler/glsl/glsl_parser.cpp`, `src/compiler/glsl/glcpp/glcpp-parse.c`, and `src/mesa/program/program_parse.tab.c`;
+- BSD-2-Clause in `pp_mlaa.c`, BSD-3-Clause in `softfloat.c`, BSL-1.0 in `c11/impl/time.c`, and CC0 or Apache-2.0 in the BLAKE3 files, which the lock treats as upstream-identified;
+- MIT for the rest.
+
+The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E` unless the whole expression is on the list. HPND is not on the list, and neither is `GPL-3.0-or-later WITH Bison-exception-2.2`. The flex-generated lexers carry no GPL notice.
+
+**Consequence.** The image release is blocked until the maintainer decides. The options are to add HPND and the Bison exception to the app list, or to replace the component. The BLAKE3 identification comes from the upstream project, because the Mesa tree has no licence file for it, and the maintainer confirms it.
+
+## IR-484: Ninja and Bison are built from pinned source, and Bison's signature is checked against the GNU keyring
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.1, §6.5 |
+
+**Choice.** Ninja 1.13.2 is built from the upstream tag `v1.13.2` (commit `3441b633c2fe2c494e958780ba0f4227b1327634`) with its bootstrap script. Bison 3.8.2 is built from `bison-3.8.2.tar.xz`, pinned by SHA-256 `9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2`, and its detached signature is checked with the GNU keyring (`gnu-keyring.gpg`, signer `7DF84374B1EE1F9764BBE25D0DDCAA3278D5264E`). Meson, mako, MarkupSafe, and packaging are PyPI wheels, pinned by SHA-256.
+
+**Reason.** The PyPI ninja wheel reports the version `1.13.2.git.kitware.jobserver-pipe-1`, so it is not the upstream build, and the upstream source is the pin. macOS ships Bison 2.3, and Mesa needs a newer one (`meson.build`, the `bison` version check). `gpg` reports that the signer is not certified by a trusted signature. The check therefore shows that the tarball matches the keyring, not that the keyring belongs to the maintainer.
+
+**Consequence.** The maintainer confirms that the GNU keyring is trusted for this check.
+
+## IR-485: flex and m4 come from macOS and are not pinned
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.5; [environment-setup.md](../05-development/environment-setup.md) §2.3 |
+
+**Choice.** The build uses the macOS flex 2.6.4 and GNU m4 1.4.6. The manifest records both versions. The lock does not pin them.
+
+**Reason.** Mesa needs flex for its GLSL lexers, and Bison runs m4 when it generates code. Both come with the macOS installation. Mesa's documentation accepts flex 2.5.35 and later, except 2.6.2. Pinning either tool means a source build with more tools.
+
+**Consequence.** The maintainer decides whether flex and m4 go into the lock or into `scripts/Brewfile`.
+
+## IR-486: The NDK's licence is not an SPDX identifier, and the lock records its text
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1, §4.4, §4.5; [build-system.md](../05-development/build-system.md) §6.1 |
+
+**Choice.** The NDK entry has `license` `LicenseRef-Android-SDK-License` and `licenseFiles` `["android-sdk-license.txt"]`. The file is the text of `android-sdk-license` from the SDK manifest. The NDK's own `NOTICE` and `NOTICE.toolchain` are not copied.
+
+**Reason.** The NDK is under the Android Software Development Kit License, which is not an SPDX identifier. §4.5 fails `LicenseRef-*` for tooling, so the entry fails the policy as written. The licence text is the licence that the package states. The NOTICE files are 504 KB and 781 KB, and the NDK is not distributed.
+
+**Consequence.** The maintainer decides whether this licence may appear in the lock for build tooling, and whether the NOTICE files are required.
+
+## IR-487: libz.so is a NEEDED entry that the receipt does not cover
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 4) |
+| Affected documents | Receipt of build 16373615 on `task/099-mesa-virgl-guest-image` §5; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Consequences |
+
+**Choice.** Zlib stays enabled, so `libgallium_dri.so` has `DT_NEEDED libz.so`. The test lists it as expected, with the note that the image inventory has not confirmed it.
+
+**Reason.** The receipt lists the libraries that the EGL emulation needs, and `libz.so` is not among them. The Mesa Android documentation (`docs/android.rst`) lists `libz` as a shared library of the Mesa Vulkan module, so AOSP's Mesa expects `libz` in the image. The alternative is `-Dzlib=disabled` together with `-Dshader-cache=disabled`, because Mesa's shader cache requires compression. That alternative drops the on-disk shader cache.
+
+**Consequence.** If the image lacks `libz.so`, the maintainer chooses between an image change and the build change. The check stays open until then.
+
+## IR-488: The stub libraries are link-time only, and the symbol contract is checked only in the VM
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 4) |
+| Affected documents | [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 4 and Consequences; [android-image.md](../02-design/android-image.md) §8 |
+
+**Choice.** The five stub libraries (`cutils`, `hardware`, `log`, `nativewindow`, `sync`) are not in the output. The shipped libraries import 37 symbols from those stubs and from libdrm. The test lists them. The guest must export them, and the VM check (`apkrun.test=egl`) is the first check that can show it.
+
+**Reason.** `-Dandroid-stub=true` builds the stubs for non-Bionic targets. Shipping them would shadow the guest's libraries of the same names. The receipt (§5) lists the files `libcutils.so`, `libhardware.so`, `libdrm.so` (vendor), and `liblog.so`, `libnativewindow.so`, `libsync.so` (system) by name only, so the symbols are not established.
+
+**Consequence.** A symbol that the guest lacks shows as a load failure of `libEGL_mesa.so`, which is an open check until the VM run.
+
+## IR-489: The image placement of the libraries is not decided by this task
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 9 |
+
+**Choice.** The build output mirrors Meson's install with prefix `/vendor` and libdir `lib64`, so all four libraries are under `vendor/lib64/`. The image integration step moves `libEGL_mesa.so` and `libGLESv2_mesa.so` (and `libGLESv1_CM_mesa.so`) into `vendor/lib64/egl/`, and places `libgallium_dri.so` where the vendor linker finds it. This task does not move them.
+
+**Reason.** Meson installs the EGL library to libdir. The `egl/` subdirectory is the Android loader's location for `ro.hardware.egl` drivers, as in the Mesa documentation's `file_contexts` (docs/android.rst). Linker search in the vendor namespace is not checked without a VM.
+
+**Consequence.** The image integration task places the files and checks the `DT_NEEDED` resolution in the guest.
+
+## IR-490: The aosp-mesa3d candidate of the feasibility branch is not carried into this branch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | `ThirdParty/ThirdParty.lock.json`; IR-441 and IR-444 on `task/099-mesa-virgl-guest-image` |
+
+**Choice.** The `aosp-mesa3d` entry exists only on `task/099-mesa-virgl-guest-image`, not on `main`, and this branch does not add it. The lock adds `mesa`, the upstream release that the build compiles, in its place. The candidate's `LICENSE` is not copied.
+
+**Reason.** The task asked for the candidate to be replaced. The feasibility record shows that the AOSP tree does not provide the libraries (IR-440 on that branch), and that its licence classification conflicts with the image rules (IR-444 on that branch).
+
+**Consequence.** The feasibility branch is not merged. Its IR-440 to IR-451 stay on that branch.

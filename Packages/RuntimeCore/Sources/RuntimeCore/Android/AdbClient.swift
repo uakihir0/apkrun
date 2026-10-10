@@ -88,7 +88,8 @@ public struct AdbForward: Equatable, Sendable {
 ///
 /// APKRun does not ship adb. The client runs the developer's `platform-tools/adb`, found under
 /// `$ANDROID_HOME` and then on `PATH`, and it talks only to the development endpoint
-/// `127.0.0.1:6520`, which `VsockLoopbackForwarder` opens in developer mode.
+/// `127.0.0.1:6520` (the product default), which `VsockLoopbackForwarder` opens in developer mode. A boot
+/// with another `BootOptions.adbHostPort` uses ``loopbackEndpoint(port:)`` instead.
 ///
 /// Every command line is built inside one of the helper methods below. `shellInvocationCount`
 /// counts `adb shell` runs, so tests can check that production paths stop using ADB shell commands
@@ -96,6 +97,11 @@ public struct AdbForward: Equatable, Sendable {
 public actor AdbClient {
     /// The development endpoint: adbd on vsock 5555, reached through the loopback forwarder.
     public static let developmentEndpoint = "127.0.0.1:6520"
+
+    /// The `host:port` endpoint of the loopback forward on `port`, which `adb -s` addresses.
+    public static func loopbackEndpoint(port: UInt16) -> String {
+        "127.0.0.1:\(port)"
+    }
 
     /// The adb executable this client runs.
     public nonisolated let executable: URL

@@ -103,7 +103,7 @@ public actor RuntimeSupervisor {
     private let environment: [String: String]
     private var controller: VMController?
     private var tasks: [Task<Void, Never>] = []
-    /// The loopback forwarder of developer ADB (`127.0.0.1:6520` to guest vsock 5555), while Android runs.
+    /// The loopback forwarder of developer ADB (`127.0.0.1:<port>` to guest vsock 5555), while Android runs.
     private var forwarder: VsockLoopbackForwarder?
     /// The developer's adb client, when adb was found.
     private var adbClient: AdbClient?
@@ -113,11 +113,14 @@ public actor RuntimeSupervisor {
     private let guestAgentBundle: GuestAgentBundle?
     /// The development Guest Agent of the boot in flight, from the start of the ADB bridge until the boot ends.
     public private(set) var developmentGuestAgent: DevelopmentGuestAgent?
+    /// The loopback TCP port that developer ADB is bound to in this boot: `BootOptions.adbHostPort`, or the port the
+    /// kernel chose for `0`. Nil while no forwarder runs (developer mode off, or before the ADB bridge starts).
+    public var developmentADBHostPort: UInt16? {
+        forwarder?.port
+    }
     /// Whether the ADB poller has connected to the development endpoint in this boot.
     private var isADBConnected = false
 
-    /// The loopback TCP port of developer ADB (configuration.md §2.5).
-    static let developmentADBPort: UInt16 = 6520
     /// The guest vsock port where adbd listens (android-image.md §7.3).
     static let developmentADBGuestPort: UInt32 = 5555
 
@@ -453,7 +456,7 @@ public actor RuntimeSupervisor {
         progress: AsyncStream<Progress>.Continuation
     ) {
         let forwarder = VsockLoopbackForwarder(
-            requestedPort: Self.developmentADBPort,
+            requestedPort: options.adbHostPort,
             guestPort: Self.developmentADBGuestPort,
             logSink: diagnostics.logSink,
             connectGuest: { port in
@@ -470,11 +473,16 @@ public actor RuntimeSupervisor {
             return
         }
         self.forwarder = forwarder
+        // The forwarder reports the port it bound, which is the requested port unless the request was 0.
+        guard let hostPort = forwarder.port else {
+            logger.warning("Booting without ADB: the loopback forwarder has no bound port")
+            return
+        }
         do {
             let executable = try AdbClient.resolveExecutable(environment: environment)
             let client = AdbClient(
                 executable: executable,
-                endpoint: AdbClient.developmentEndpoint,
+                endpoint: AdbClient.loopbackEndpoint(port: hostPort),
                 logSink: diagnostics.logSink
             )
             adbClient = client

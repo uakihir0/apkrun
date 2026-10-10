@@ -13206,3 +13206,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** `--apply` writes patches into the source checkouts. Running it on the main checkout would change another checkout.
 
 **Consequence.** CI's third-party job must run this check on a real checkout before the task closes. The new components are `ships: tooling`, so they do not change the app notices.
+
+## IR-513: The signing fixture checks of run.sh are fixed on main by f14faf8
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2); the signing fixtures of b44ad19 |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) (script T0 checks); `Tests/Fixtures/signing/`, `scripts/release/check-release-build.sh` |
+
+**Choice.** This branch makes no change to the signing checks. Before the rebase onto main f14faf8, `scripts/tests/run.sh` stopped at the keystore pin check and at the release fixture check of `check-release-build.sh`, both on `test-guest-dev.jks`, which b44ad19 committed without a pin. f14faf8 pins that keystore and verifies every pin. On the rebased tip, `scripts/tests/test_release_check_keystores.py` passes, and `scripts/tests/run.sh` exits 0 with 201 PASS lines.
+
+**Reason.** f14faf8 is the fix that this entry asked the fixture owner for, so the branch takes it from main instead of making a second change.
+
+**Consequence.** One run of `run.sh` on the rebased tip stopped at a 30-second timeout in a `check-lock --apply` fixture, while the host's load average was about 24. A rerun on a quiet host passed. The timeout reflects host load and not the code, but a run on a loaded host can fail the same way.

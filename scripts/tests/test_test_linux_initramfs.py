@@ -249,7 +249,7 @@ class TestHostedTestInputs(unittest.TestCase):
 
     def test_the_producer_stages_the_host_virgl_runtime_next_to_the_kernel(self) -> None:
         build = BUILD.read_text(encoding="utf-8")
-        self.assertIn("build-third-party.sh --print-cache-key virgl-runtime", build)
+        self.assertIn("ThirdParty/out/virgl-runtime/current", build)
         for library in (
             "libvirglrenderer.1.dylib",
             "libepoxy.0.dylib",

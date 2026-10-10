@@ -16,7 +16,8 @@ enum AndroidGraphicsDevices {
     ///   - requiredHostCapabilities: The profile's entry in the bundle manifest, or `nil` when the bundle does not
     ///     list the profile.
     /// - Returns: No device for `headless`, because VZ's own 2D device provides the DRM device there (graphics.md
-    ///   §9). For the other profiles, one virtio-gpu device, which offers EDID only until the renderer lands (#022).
+    ///   §9). `guestSwiftshader` gets the two-dimensional device, which offers EDID and host-memory 2D resources. For
+    ///   `drmVirgl`, the device without VirGL, so the profile stays refused until its boot is verified (IR-462).
     static func devices(
         for profile: GPUProfileID,
         requiredHostCapabilities: [String]?
@@ -24,7 +25,7 @@ enum AndroidGraphicsDevices {
         guard profile != .headless else {
             return []
         }
-        let device = VirtioGPUDevice()
+        let device = profile == .guestSwiftshader ? VirtioGPUDevice.twoDimensional() : VirtioGPUDevice()
         guard let required = requiredHostCapabilities,
             Set(required).isSubset(of: device.hostCapabilities)
         else {

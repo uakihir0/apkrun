@@ -23,6 +23,10 @@ enum {
     GB_E_CONTEXT_CREATION = -12,
     GB_E_RENDERER_ALREADY_EXISTS = -13,
     GB_E_WRONG_THREAD = -14,
+    GB_E_RESOURCE_OPERATION = -15,
+    GB_E_SUBMIT_OPERATION = -16,
+    GB_E_TRANSFER_OPERATION = -17,
+    GB_E_FENCE_OPERATION = -18,
 };
 
 enum {
@@ -103,6 +107,92 @@ int gb_ctx_create(gb_renderer *renderer, uint32_t ctx_id, const char *name);
 
 /* Destroys a virgl context if the renderer is valid. */
 int gb_ctx_destroy(gb_renderer *renderer, uint32_t ctx_id);
+
+/*
+ * Resource and context calls. Every buffer passed in is borrowed for the call
+ * only: virglrenderer copies or reads it before returning, and keeps no
+ * pointer into it. The caller sizes each buffer to the bytes the renderer will
+ * touch (graphics.md §4.4, §5.4).
+ */
+
+/* Binds a resource to a context (CTX_ATTACH_RESOURCE). */
+int gb_ctx_attach_resource(gb_renderer *renderer, uint32_t ctx_id, uint32_t res_id);
+
+/* Unbinds a resource from a context (CTX_DETACH_RESOURCE). */
+void gb_ctx_detach_resource(gb_renderer *renderer, uint32_t ctx_id, uint32_t res_id);
+
+/*
+ * Submits a VirGL command stream. The stream is copied when it is not 4-byte
+ * aligned. A nonzero `size_bytes` that is a multiple of 4 is required.
+ */
+int gb_submit(gb_renderer *renderer, uint32_t ctx_id, const void *commands, size_t size_bytes);
+
+typedef struct {
+    uint32_t resource_id;
+    uint32_t target;
+    uint32_t format;
+    uint32_t bind;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    uint32_t array_size;
+    uint32_t last_level;
+    uint32_t sample_count;
+    uint32_t flags;
+} gb_resource_args;
+
+/* Creates a resource (RESOURCE_CREATE_2D or RESOURCE_CREATE_3D). */
+int gb_resource_create(gb_renderer *renderer, const gb_resource_args *args);
+
+/* Destroys a resource and detaches it from every context. */
+void gb_resource_unref(gb_renderer *renderer, uint32_t res_id);
+
+typedef struct {
+    uint32_t resource_id;
+    uint32_t ctx_id;
+    uint32_t level;
+    uint32_t stride;
+    uint32_t layer_stride;
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+} gb_transfer_args;
+
+/*
+ * Copies bytes from `buffer` into the box of the resource (TRANSFER_TO_HOST).
+ * `buffer` begins at the resource origin: the caller has already gathered the
+ * guest bytes from the transfer's offset, so the renderer reads from offset 0.
+ */
+int gb_transfer_write(
+    gb_renderer *renderer,
+    const gb_transfer_args *args,
+    void *buffer,
+    size_t buffer_bytes
+);
+
+/*
+ * Copies the box out of the resource into `buffer` (TRANSFER_FROM_HOST). This
+ * is a GPU-to-CPU read. It is counted by the caller, never by the bridge.
+ */
+int gb_transfer_read(
+    gb_renderer *renderer,
+    const gb_transfer_args *args,
+    void *buffer,
+    size_t buffer_bytes
+);
+
+/*
+ * Creates a fence on the global timeline. It completes through the
+ * `write_fence` callback, which runs on the render thread during `gb_poll`
+ * or another call. Fences are 32-bit because virglrenderer's ctx0 fences are.
+ */
+int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id);
+
+/* Lets virglrenderer retire completed fences. Call on the render thread. */
+void gb_poll(gb_renderer *renderer);
 
 #if defined(DEBUG)
 /* Test-only probe for the signed-app runtime locator. */

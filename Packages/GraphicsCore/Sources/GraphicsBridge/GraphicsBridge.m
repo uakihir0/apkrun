@@ -13,6 +13,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h>
+
+/* The layout of virgl_box in virgl_hw.h, which the installed headers do not ship. */
+struct virgl_box {
+    uint32_t x, y, z;
+    uint32_t w, h, d;
+};
 
 struct gb_egl_api {
     PFNEGLGETPROCADDRESSPROC get_proc_address;
@@ -39,6 +46,19 @@ struct gb_virgl_api {
     int (*renderer_context_create)(uint32_t, uint32_t, const char *);
     void (*renderer_context_destroy)(uint32_t);
     void (*set_log_callback)(virgl_log_callback_type, void *, virgl_free_data_callback_type);
+    int (*resource_create)(struct virgl_renderer_resource_create_args *, struct iovec *, uint32_t);
+    void (*resource_unref)(uint32_t);
+    void (*ctx_attach_resource)(int, int);
+    void (*ctx_detach_resource)(int, int);
+    int (*submit_cmd)(void *, int, int);
+    int (*transfer_write_iov)(
+        uint32_t, uint32_t, int, uint32_t, uint32_t,
+        struct virgl_box *, uint64_t, struct iovec *, unsigned int);
+    int (*transfer_read_iov)(
+        uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+        struct virgl_box *, uint64_t, struct iovec *, int);
+    int (*create_fence)(int, uint32_t);
+    void (*poll)(void);
 };
 
 struct gb_renderer {
@@ -353,6 +373,30 @@ static bool gb_load_virgl_api(gb_renderer *renderer) {
         (void (*)(virgl_log_callback_type, void *, virgl_free_data_callback_type))
             gb_symbol(renderer->virgl_library, "virgl_set_log_callback");
 
+    renderer->virgl.resource_create =
+        (int (*)(struct virgl_renderer_resource_create_args *, struct iovec *, uint32_t))
+            gb_symbol(renderer->virgl_library, "virgl_renderer_resource_create");
+    renderer->virgl.resource_unref =
+        (void (*)(uint32_t))gb_symbol(renderer->virgl_library, "virgl_renderer_resource_unref");
+    renderer->virgl.ctx_attach_resource =
+        (void (*)(int, int))gb_symbol(renderer->virgl_library, "virgl_renderer_ctx_attach_resource");
+    renderer->virgl.ctx_detach_resource =
+        (void (*)(int, int))gb_symbol(renderer->virgl_library, "virgl_renderer_ctx_detach_resource");
+    renderer->virgl.submit_cmd =
+        (int (*)(void *, int, int))gb_symbol(renderer->virgl_library, "virgl_renderer_submit_cmd");
+    renderer->virgl.transfer_write_iov =
+        (int (*)(uint32_t, uint32_t, int, uint32_t, uint32_t,
+                 struct virgl_box *, uint64_t, struct iovec *, unsigned int))
+            gb_symbol(renderer->virgl_library, "virgl_renderer_transfer_write_iov");
+    renderer->virgl.transfer_read_iov =
+        (int (*)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                 struct virgl_box *, uint64_t, struct iovec *, int))
+            gb_symbol(renderer->virgl_library, "virgl_renderer_transfer_read_iov");
+    renderer->virgl.create_fence =
+        (int (*)(int, uint32_t))gb_symbol(renderer->virgl_library, "virgl_renderer_create_fence");
+    renderer->virgl.poll =
+        (void (*)(void))gb_symbol(renderer->virgl_library, "virgl_renderer_poll");
+
     return renderer->virgl.renderer_init != NULL
         && renderer->virgl.renderer_cleanup != NULL
         && renderer->virgl.renderer_reset != NULL
@@ -360,7 +404,16 @@ static bool gb_load_virgl_api(gb_renderer *renderer) {
         && renderer->virgl.renderer_fill_caps != NULL
         && renderer->virgl.renderer_context_create != NULL
         && renderer->virgl.renderer_context_destroy != NULL
-        && renderer->virgl.set_log_callback != NULL;
+        && renderer->virgl.set_log_callback != NULL
+        && renderer->virgl.resource_create != NULL
+        && renderer->virgl.resource_unref != NULL
+        && renderer->virgl.ctx_attach_resource != NULL
+        && renderer->virgl.ctx_detach_resource != NULL
+        && renderer->virgl.submit_cmd != NULL
+        && renderer->virgl.transfer_write_iov != NULL
+        && renderer->virgl.transfer_read_iov != NULL
+        && renderer->virgl.create_fence != NULL
+        && renderer->virgl.poll != NULL;
 }
 
 static bool gb_is_render_thread(gb_renderer *renderer) {
@@ -673,6 +726,14 @@ const char *gb_status_description(int status) {
             return "a virglrenderer instance is already active in this process";
         case GB_E_WRONG_THREAD:
             return "graphics renderer called from a thread other than its owner";
+        case GB_E_RESOURCE_OPERATION:
+            return "virglrenderer rejected a resource operation";
+        case GB_E_SUBMIT_OPERATION:
+            return "virglrenderer rejected a command stream";
+        case GB_E_TRANSFER_OPERATION:
+            return "virglrenderer rejected a transfer";
+        case GB_E_FENCE_OPERATION:
+            return "virglrenderer rejected a fence";
         default:
             return "unknown graphics bridge failure";
     }
@@ -892,4 +953,167 @@ int gb_ctx_destroy(gb_renderer *renderer, uint32_t ctx_id) {
     }
     renderer->virgl.renderer_context_destroy(ctx_id);
     return GB_OK;
+}
+
+static bool gb_renderer_is_ready_on_this_thread(gb_renderer *renderer, int *status) {
+    if (renderer == NULL || !renderer->virgl_initialized) {
+        *status = GB_E_INVALID_ARGUMENT;
+        return false;
+    }
+    if (!gb_is_render_thread(renderer)) {
+        *status = GB_E_WRONG_THREAD;
+        return false;
+    }
+    return true;
+}
+
+static struct virgl_box gb_box_from_args(const gb_transfer_args *args) {
+    struct virgl_box box = {args->x, args->y, args->z, args->width, args->height, args->depth};
+    return box;
+}
+
+int gb_ctx_attach_resource(gb_renderer *renderer, uint32_t ctx_id, uint32_t res_id) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (ctx_id > INT32_MAX || res_id > INT32_MAX) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    renderer->virgl.ctx_attach_resource((int)ctx_id, (int)res_id);
+    return GB_OK;
+}
+
+void gb_ctx_detach_resource(gb_renderer *renderer, uint32_t ctx_id, uint32_t res_id) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return;
+    }
+    if (ctx_id > INT32_MAX || res_id > INT32_MAX) {
+        return;
+    }
+    renderer->virgl.ctx_detach_resource((int)ctx_id, (int)res_id);
+}
+
+int gb_submit(gb_renderer *renderer, uint32_t ctx_id, const void *commands, size_t size_bytes) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (commands == NULL || size_bytes == 0 || size_bytes % sizeof(uint32_t) != 0
+        || size_bytes > INT32_MAX) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+
+    /* virglrenderer rejects buffers that are not 4-byte aligned, so copy those. */
+    void *aligned = NULL;
+    void *stream = (void *)commands;
+    if (((uintptr_t)commands & 3) != 0) {
+        aligned = malloc(size_bytes);
+        if (aligned == NULL) {
+            return GB_E_SUBMIT_OPERATION;
+        }
+        memcpy(aligned, commands, size_bytes);
+        stream = aligned;
+    }
+    int result = renderer->virgl.submit_cmd(stream, (int)ctx_id, (int)(size_bytes / sizeof(uint32_t)));
+    free(aligned);
+    return result == 0 ? GB_OK : GB_E_SUBMIT_OPERATION;
+}
+
+int gb_resource_create(gb_renderer *renderer, const gb_resource_args *args) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (args == NULL || args->resource_id == 0) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    struct virgl_renderer_resource_create_args create = {
+        .handle = args->resource_id,
+        .target = args->target,
+        .format = args->format,
+        .bind = args->bind,
+        .width = args->width,
+        .height = args->height,
+        .depth = args->depth,
+        .array_size = args->array_size,
+        .last_level = args->last_level,
+        .nr_samples = args->sample_count,
+        .flags = args->flags,
+    };
+    int result = renderer->virgl.resource_create(&create, NULL, 0);
+    return result == 0 ? GB_OK : GB_E_RESOURCE_OPERATION;
+}
+
+void gb_resource_unref(gb_renderer *renderer, uint32_t res_id) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return;
+    }
+    renderer->virgl.resource_unref(res_id);
+}
+
+int gb_transfer_write(
+    gb_renderer *renderer,
+    const gb_transfer_args *args,
+    void *buffer,
+    size_t buffer_bytes
+) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (args == NULL || buffer == NULL || buffer_bytes == 0) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    struct virgl_box box = gb_box_from_args(args);
+    struct iovec iov = {.iov_base = buffer, .iov_len = buffer_bytes};
+    int result = renderer->virgl.transfer_write_iov(
+        args->resource_id, args->ctx_id, (int)args->level, args->stride, args->layer_stride,
+        &box, 0, &iov, 1
+    );
+    return result == 0 ? GB_OK : GB_E_TRANSFER_OPERATION;
+}
+
+int gb_transfer_read(
+    gb_renderer *renderer,
+    const gb_transfer_args *args,
+    void *buffer,
+    size_t buffer_bytes
+) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (args == NULL || buffer == NULL || buffer_bytes == 0) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    struct virgl_box box = gb_box_from_args(args);
+    struct iovec iov = {.iov_base = buffer, .iov_len = buffer_bytes};
+    int result = renderer->virgl.transfer_read_iov(
+        args->resource_id, args->ctx_id, args->level, args->stride, args->layer_stride,
+        &box, 0, &iov, 1
+    );
+    return result == 0 ? GB_OK : GB_E_TRANSFER_OPERATION;
+}
+
+int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (fence_id > INT32_MAX) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    int result = renderer->virgl.create_fence((int)fence_id, ctx_id);
+    return result == 0 ? GB_OK : GB_E_FENCE_OPERATION;
+}
+
+void gb_poll(gb_renderer *renderer) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return;
+    }
+    renderer->virgl.poll();
 }

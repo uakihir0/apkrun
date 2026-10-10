@@ -67,7 +67,11 @@ let package = Package(
         .trait(
             name: "EmbeddedRuntime",
             description: "Enable in-process runtime commands for development builds."
-        )
+        ),
+        .trait(
+            name: "TestReadback",
+            description: "Compile the test-only readback mode of the VirGL replay test (graphics.md §12, #022)."
+        ),
     ],
     dependencies: [
         .package(
@@ -120,6 +124,9 @@ let package = Package(
             name: "GraphicsCore",
             dependencies: ["VirtioDeviceCore", "DiagnosticsCore", "GraphicsBridge"],
             path: "Packages/GraphicsCore/Sources/GraphicsCore",
+            swiftSettings: [
+                .define("APKRUN_TEST_READBACK", .when(traits: ["TestReadback"]))
+            ],
             linkerSettings: [
                 .linkedFramework("Metal")
             ]
@@ -291,7 +298,10 @@ let package = Package(
         .testTarget(
             name: "GraphicsCoreSystemTests",
             dependencies: ["GraphicsCore", "GraphicsBridge"],
-            path: "Packages/GraphicsCore/Tests/GraphicsCoreSystemTests"
+            path: "Packages/GraphicsCore/Tests/GraphicsCoreSystemTests",
+            swiftSettings: [
+                .define("APKRUN_TEST_READBACK", .when(traits: ["TestReadback"]))
+            ]
         ),
         .testTarget(
             name: "InputCoreTests",

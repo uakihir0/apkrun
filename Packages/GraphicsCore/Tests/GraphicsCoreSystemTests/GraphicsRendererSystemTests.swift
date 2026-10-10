@@ -143,139 +143,144 @@ func appBundleRuntimeLookupAllowsExpectedIdentitiesAndRejectsSymlinkEscapes() th
     #expect(!isAccepted(libraryEscapeExecutable))
 }
 
-@Test(
-    .enabled(
-        if: MTLCreateSystemDefaultDevice() != nil,
-        "This host does not provide a Metal device."
-    )
-)
-func rendererInitializesVirgl2CapsetAndCanBeRecreated() throws {
-    guard let runtimeDirectory = developmentRuntimeDirectory() else {
-        Issue.record("The built VirGL runtime cache is unavailable.")
-        return
-    }
-    #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtimeDirectory, 1) == 0)
-
-    for generation in 0..<2 {
-        let renderer = try VirGLRenderer()
-        defer { try? renderer.destroy() }
-
-        do {
-            _ = try VirGLRenderer()
-            Issue.record("A second process-wide virglrenderer instance was accepted.")
-        } catch let failure {
-            #expect(failure.code == "rendererInitFailed")
-            #expect(failure.parameters["stage"] == .text("virgl"))
-            #expect(
-                failure.parameters["detail"]
-                    == .text("a virglrenderer instance is already active in this process")
-            )
-        }
-
-        let angleDevice = try renderer.metalDevice()
-        #expect(!angleDevice.name.isEmpty)
-
-        let capsetInfo = try renderer.capsetInfo(id: GraphicsCapset.virgl2)
-        #expect(capsetInfo.maxVersion > 0)
-        #expect(capsetInfo.maxSizeBytes > 0)
-
-        #expect(capsetInfo.maxSizeBytes > 1)
-        var undersizedBuffer = [UInt8](
-            repeating: 0,
-            count: Int(capsetInfo.maxSizeBytes - 1)
+/// Every test that creates a virglrenderer instance. The process allows one instance at a time, so these run one after another.
+@Suite(.serialized)
+struct VirGLRendererSuite {
+    @Test(
+        .enabled(
+            if: MTLCreateSystemDefaultDevice() != nil,
+            "This host does not provide a Metal device."
         )
-        #expect(
-            throws: GraphicsFailure.rendererOperationFailed(
-                operation: "capsetFill",
-                detail: "capset output buffer is too small"
+    )
+    func rendererInitializesVirgl2CapsetAndCanBeRecreated() throws {
+        guard let runtimeDirectory = developmentRuntimeDirectory() else {
+            Issue.record("The built VirGL runtime cache is unavailable.")
+            return
+        }
+        #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtimeDirectory, 1) == 0)
+
+        for generation in 0..<2 {
+            let renderer = try VirGLRenderer()
+            defer { try? renderer.destroy() }
+
+            do {
+                _ = try VirGLRenderer()
+                Issue.record("A second process-wide virglrenderer instance was accepted.")
+            } catch let failure {
+                #expect(failure.code == "rendererInitFailed")
+                #expect(failure.parameters["stage"] == .text("virgl"))
+                #expect(
+                    failure.parameters["detail"]
+                        == .text("a virglrenderer instance is already active in this process")
+                )
+            }
+
+            let angleDevice = try renderer.metalDevice()
+            #expect(!angleDevice.name.isEmpty)
+
+            let capsetInfo = try renderer.capsetInfo(id: GraphicsCapset.virgl2)
+            #expect(capsetInfo.maxVersion > 0)
+            #expect(capsetInfo.maxSizeBytes > 0)
+
+            #expect(capsetInfo.maxSizeBytes > 1)
+            var undersizedBuffer = [UInt8](
+                repeating: 0,
+                count: Int(capsetInfo.maxSizeBytes - 1)
             )
-        ) {
+            #expect(
+                throws: GraphicsFailure.rendererOperationFailed(
+                    operation: "capsetFill",
+                    detail: "capset output buffer is too small"
+                )
+            ) {
+                try renderer.fillCapset(
+                    id: GraphicsCapset.virgl2,
+                    version: capsetInfo.maxVersion,
+                    into: &undersizedBuffer
+                )
+            }
+
+            var capset = [UInt8](repeating: 0, count: Int(capsetInfo.maxSizeBytes))
             try renderer.fillCapset(
                 id: GraphicsCapset.virgl2,
                 version: capsetInfo.maxVersion,
-                into: &undersizedBuffer
+                into: &capset
             )
-        }
+            #expect(capset.contains(where: { $0 != 0 }))
 
-        var capset = [UInt8](repeating: 0, count: Int(capsetInfo.maxSizeBytes))
-        try renderer.fillCapset(
-            id: GraphicsCapset.virgl2,
-            version: capsetInfo.maxVersion,
-            into: &capset
-        )
-        #expect(capset.contains(where: { $0 != 0 }))
+            try renderer.createContext(id: 1, name: "apkrun-t1-\(generation)")
+            try renderer.destroyContext(id: 1)
+            try renderer.createContext(id: 1, name: "apkrun-t1-recreated-\(generation)")
+            try renderer.reset()
 
-        try renderer.createContext(id: 1, name: "apkrun-t1-\(generation)")
-        try renderer.destroyContext(id: 1)
-        try renderer.createContext(id: 1, name: "apkrun-t1-recreated-\(generation)")
-        try renderer.reset()
-
-        let rendererBox = RendererBox(renderer: renderer)
-        let wrongThreadDetail = "graphics renderer called from a thread other than its owner"
-        let metalDeviceOperation: RendererOperation = {
-            _ = try rendererBox.renderer.metalDevice()
-        }
-        let capsetInfoOperation: RendererOperation = {
-            _ = try rendererBox.renderer.capsetInfo(id: GraphicsCapset.virgl2)
-        }
-        let capsetFillOperation: RendererOperation = {
-            var buffer = [UInt8](repeating: 0, count: Int(capsetInfo.maxSizeBytes))
-            try rendererBox.renderer.fillCapset(
-                id: GraphicsCapset.virgl2,
-                version: capsetInfo.maxVersion,
-                into: &buffer
+            let rendererBox = RendererBox(renderer: renderer)
+            let wrongThreadDetail = "graphics renderer called from a thread other than its owner"
+            let metalDeviceOperation: RendererOperation = {
+                _ = try rendererBox.renderer.metalDevice()
+            }
+            let capsetInfoOperation: RendererOperation = {
+                _ = try rendererBox.renderer.capsetInfo(id: GraphicsCapset.virgl2)
+            }
+            let capsetFillOperation: RendererOperation = {
+                var buffer = [UInt8](repeating: 0, count: Int(capsetInfo.maxSizeBytes))
+                try rendererBox.renderer.fillCapset(
+                    id: GraphicsCapset.virgl2,
+                    version: capsetInfo.maxVersion,
+                    into: &buffer
+                )
+            }
+            let contextCreateOperation: RendererOperation = {
+                try rendererBox.renderer.createContext(id: 2, name: "wrong-thread")
+            }
+            let contextDestroyOperation: RendererOperation = {
+                try rendererBox.renderer.destroyContext(id: 1)
+            }
+            let resetOperation: RendererOperation = {
+                try rendererBox.renderer.reset()
+            }
+            let destroyOperation: RendererOperation = {
+                try rendererBox.renderer.destroy()
+            }
+            let operations = [
+                metalDeviceOperation,
+                capsetInfoOperation,
+                capsetFillOperation,
+                contextCreateOperation,
+                contextDestroyOperation,
+                resetOperation,
+                destroyOperation,
+            ]
+            let threadResults = ThreadFailureBox()
+            let threadFinished = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                threadResults.store(operations.map(captureFailure))
+                threadFinished.signal()
+            }
+            // Quiesce every rejected off-thread call before owner-thread teardown.
+            threadFinished.wait()
+            let expectedFailure: (String) -> GraphicsFailure? = { operation in
+                .rendererOperationFailed(operation: operation, detail: wrongThreadDetail)
+            }
+            #expect(
+                threadResults.value
+                    == [
+                        expectedFailure("metalDevice"),
+                        expectedFailure("capsetInfo"),
+                        expectedFailure("capsetFill"),
+                        expectedFailure("contextCreate"),
+                        expectedFailure("contextDestroy"),
+                        expectedFailure("reset"),
+                        expectedFailure("destroy"),
+                    ]
             )
-        }
-        let contextCreateOperation: RendererOperation = {
-            try rendererBox.renderer.createContext(id: 2, name: "wrong-thread")
-        }
-        let contextDestroyOperation: RendererOperation = {
-            try rendererBox.renderer.destroyContext(id: 1)
-        }
-        let resetOperation: RendererOperation = {
-            try rendererBox.renderer.reset()
-        }
-        let destroyOperation: RendererOperation = {
-            try rendererBox.renderer.destroy()
-        }
-        let operations = [
-            metalDeviceOperation,
-            capsetInfoOperation,
-            capsetFillOperation,
-            contextCreateOperation,
-            contextDestroyOperation,
-            resetOperation,
-            destroyOperation,
-        ]
-        let threadResults = ThreadFailureBox()
-        let threadFinished = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            threadResults.store(operations.map(captureFailure))
-            threadFinished.signal()
-        }
-        // Quiesce every rejected off-thread call before owner-thread teardown.
-        threadFinished.wait()
-        let expectedFailure: (String) -> GraphicsFailure? = { operation in
-            .rendererOperationFailed(operation: operation, detail: wrongThreadDetail)
-        }
-        #expect(
-            threadResults.value
-                == [
-                    expectedFailure("metalDevice"),
-                    expectedFailure("capsetInfo"),
-                    expectedFailure("capsetFill"),
-                    expectedFailure("contextCreate"),
-                    expectedFailure("contextDestroy"),
-                    expectedFailure("reset"),
-                    expectedFailure("destroy"),
-                ]
-        )
 
-        try renderer.destroyContext(id: 1)
-        try renderer.reset()
-        try renderer.destroy()
+            try renderer.destroyContext(id: 1)
+            try renderer.reset()
+            try renderer.destroy()
+        }
     }
 }
+
 
 private typealias RendererOperation = @Sendable () throws(GraphicsFailure) -> Void
 

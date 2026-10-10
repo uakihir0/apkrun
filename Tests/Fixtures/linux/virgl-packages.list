@@ -1,0 +1,39 @@
+# Alpine v3.24 packages that the virgl check of the Linux test guest unpacks
+# (graphics.md §12 step 1, #022). Each name is a prebuilt test-linux component of
+# ThirdParty/ThirdParty.lock.json. The closure is what apk resolves for kmscube,
+# Mesa's EGL, GBM, GLES, GL, and DRI packages, and libdrm. musl is not listed:
+# the pinned minirootfs already has musl 1.2.6-r2.
+# scripts/fetch-test-linux.sh downloads them, and scripts/build-test-initramfs.sh
+# unpacks them in this order and checks them with scripts/tools/initramfs-manifest.py.
+alpine-hwdata-pci
+alpine-kmscube
+alpine-libbsd
+alpine-libdrm
+alpine-libelf
+alpine-libexpat
+alpine-libffi
+alpine-libgcc
+alpine-libmd
+alpine-libpciaccess
+alpine-libpng
+alpine-libstdcxx
+alpine-libx11
+alpine-libxau
+alpine-libxcb
+alpine-libxdmcp
+alpine-libxext
+alpine-libxml2
+alpine-libxshmfence
+alpine-libxxf86vm
+alpine-llvm22-libs
+alpine-mesa
+alpine-mesa-dri-gallium
+alpine-mesa-egl
+alpine-mesa-gbm
+alpine-mesa-gl
+alpine-mesa-gles
+alpine-spirv-tools
+alpine-wayland-libs-client
+alpine-xz-libs
+alpine-zlib
+alpine-zstd-libs

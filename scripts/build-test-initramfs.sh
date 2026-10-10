@@ -86,6 +86,17 @@ do
     verify_artifact "$component" "$package"
     tar -xzf "$package" -C "$root"
 done
+
+virgl_packages="$repo_root/Tests/Fixtures/linux/virgl-packages.list"
+virgl_paths="$repo_root/Tests/Fixtures/linux/virgl-paths.list"
+while IFS= read -r component || [[ -n "$component" ]]; do
+    case "$component" in
+        ""|\#*) continue ;;
+    esac
+    package="$(artifact_path "$component")"
+    verify_artifact "$component" "$package"
+    tar -xzf "$package" -C "$root"
+done < "$virgl_packages"
 rm -f "$root/.PKGINFO" "$root"/.SIGN.*
 
 for utility in "$root/sbin/e2fsck" "$root/sbin/mkfs.ext4"; do
@@ -360,7 +371,20 @@ with open(destination_path, "wb") as destination:
     destination.write(output)
 PY
 gzip -n -9 < "$temporary_dir/initramfs.normalized.cpio" > "$temporary_initrd"
+temporary_manifest="$output_dir/initramfs.manifest.json.partial.$$"
+if ! python3 "$script_dir/tools/initramfs-manifest.py" \
+    --root "$root" \
+    --lock "$lock_file" \
+    --packages "$virgl_packages" \
+    --paths "$virgl_paths" \
+    --downloads "$downloads_dir" \
+    --cpio "$temporary_initrd" \
+    --output "$temporary_manifest"; then
+    rm -f "$temporary_initrd" "$temporary_manifest"
+    exit 1
+fi
 mv -f "$temporary_initrd" "$output_dir/initramfs.cpio.gz"
+mv -f "$temporary_manifest" "$output_dir/initramfs.manifest.json"
 
 printf 'build-test-initramfs: built %s/initramfs.cpio.gz\n' "$output_dir"
 shasum -a 256 "$output_dir/initramfs.cpio.gz"

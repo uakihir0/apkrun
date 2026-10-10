@@ -1,0 +1,14 @@
+# Paths that the virgl check needs in the Linux test initramfs root. Each path may be
+# a symlink with a relative target, and scripts/tools/initramfs-manifest.py follows it
+# inside the root. The manifest also checks the DT_NEEDED sonames of every ELF file
+# that the packages in virgl-packages.list install.
+usr/bin/kmscube
+usr/lib/libEGL.so.1
+usr/lib/libGLESv2.so.2
+usr/lib/libgbm.so.1
+usr/lib/libdrm.so.2
+usr/lib/libgallium-26.1.6.so
+usr/lib/gbm/dri_gbm.so
+usr/lib/dri/virtio_gpu_dri.so
+usr/lib/libLLVM.so.22.1
+usr/lib/libpng16.so.16

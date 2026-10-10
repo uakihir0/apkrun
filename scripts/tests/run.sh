@@ -11,6 +11,7 @@ checker="$repo_root/scripts/check-lock.sh"
 module_checker="$repo_root/scripts/check-module-deps.sh"
 
 python3 "$script_dir/test_test_linux_directory.py"
+python3 "$script_dir/test_test_linux_initramfs.py"
 python3 "$script_dir/test_third_party_build.py"
 python3 "$script_dir/test_third_party_notices.py"
 python3 "$script_dir/test_guest_mesa_build.py"

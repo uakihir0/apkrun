@@ -92,6 +92,14 @@ do
     fetch_component "$component"
 done
 
+virgl_packages="$repo_root/Tests/Fixtures/linux/virgl-packages.list"
+while IFS= read -r component || [[ -n "$component" ]]; do
+    case "$component" in
+        ""|\#*) continue ;;
+    esac
+    fetch_component "$component"
+done < "$virgl_packages"
+
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-test-linux.XXXXXX")"
 trap 'rm -rf "$temporary_dir"' EXIT
 

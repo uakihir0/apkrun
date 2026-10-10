@@ -233,6 +233,47 @@ class TestVirglInputs(unittest.TestCase):
         self.assertIn("Tests/Fixtures/linux/virgl-paths.list", build)
 
 
+class TestHostedTestInputs(unittest.TestCase):
+    """The hosted test reads its inputs from the artifact directory, never from ~/Documents (#022, #019).
+
+    The test process cannot read the checkout under ~/Documents without a macOS approval prompt, and an
+    unattended gate stalls on that prompt (environment-setup.md, the artifact directory rules).
+    """
+
+    def test_the_producer_stages_the_golden_edid_next_to_the_kernel(self) -> None:
+        build = BUILD.read_text(encoding="utf-8")
+        self.assertIn("Tests/Fixtures/graphics/edid/scanout-00-1024x768-60.edid", build)
+        self.assertTrue(
+            (REPOSITORY_ROOT / "Tests" / "Fixtures" / "graphics" / "edid" / "scanout-00-1024x768-60.edid").is_file()
+        )
+
+    def test_the_producer_stages_the_host_virgl_runtime_next_to_the_kernel(self) -> None:
+        build = BUILD.read_text(encoding="utf-8")
+        self.assertIn("build-third-party.sh --print-cache-key virgl-runtime", build)
+        for library in (
+            "libvirglrenderer.1.dylib",
+            "libepoxy.0.dylib",
+            "libEGL.dylib",
+            "libGLESv2.dylib",
+        ):
+            with self.subTest(library=library):
+                self.assertIn(library, build)
+
+    def test_the_gpu_test_reads_the_golden_block_from_the_artifact_directory(self) -> None:
+        gpu = (
+            REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "GPUDeviceTests.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("LinuxGuestHarness.artifactURLs()", gpu)
+        self.assertNotIn("URL(fileURLWithPath: #filePath)", gpu)
+
+    def test_the_virgl_test_loads_the_runtime_from_the_artifact_directory(self) -> None:
+        virgl = (
+            REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "VirglTests.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"APKRUN_VIRGL_RUNTIME_PATH"', virgl)
+        self.assertIn("virgl-runtime", virgl)
+
+
 class TestManifestTool(InitramfsFixture):
     def test_writes_a_manifest_for_a_complete_root(self) -> None:
         self.add_package(

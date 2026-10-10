@@ -15,7 +15,9 @@
         @Argument(help: "The Android package to launch, for example io.apkrun.fixture.hellotext.")
         var package: String
 
-        @Option(name: .long, help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
+        @Option(
+            name: .long,
+            help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
         mutating func run() async throws {

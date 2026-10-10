@@ -67,7 +67,9 @@ private enum EnvelopeSchema {
     } else {
         Issue.record("GuestPing does not build the ping request")
     }
-    let launchRequest: GPRequest.OneOf_Op? = GuestLaunchApplication(package: "io.apkrun.fixture.hellotext", displayID: 0).request()
+    let launchRequest: GPRequest.OneOf_Op? = GuestLaunchApplication(
+        package: "io.apkrun.fixture.hellotext", displayID: 0
+    ).request()
     if case .launchApplication(let launch)? = launchRequest {
         #expect(launch.package == "io.apkrun.fixture.hellotext")
     } else {

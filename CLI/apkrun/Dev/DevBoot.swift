@@ -34,7 +34,9 @@
         @Option(name: .long, help: "Logical userdata size in GiB for a new instance (8-256).")
         var userdataGib = 32
 
-        @Option(name: .long, help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
+        @Option(
+            name: .long,
+            help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
         mutating func run() async throws {

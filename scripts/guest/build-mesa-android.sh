@@ -3,6 +3,7 @@
 #
 #   scripts/guest/build-mesa-android.sh                  build into ThirdParty/out/mesa-android
 #   scripts/guest/build-mesa-android.sh --out DIR        build into DIR; the work area is DIR-work
+#   scripts/guest/build-mesa-android.sh --ndk-archive F  also check the NDK archive F against the lock's SHA-256
 #   scripts/guest/build-mesa-android.sh --check          check the NDK, the host tools, and the lock; build nothing
 #
 # Every source and tool is pinned in ThirdParty/ThirdParty.lock.json (group guest-mesa, and pyyaml in virgl-runtime).
@@ -16,16 +17,12 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 lock="$repo_root/ThirdParty/ThirdParty.lock.json"
 helper="$script_dir/mesa_android.py"
 
-ndk_revision="28.2.13676358"
 ndk_api="35"
-ndk_name="r28c"
-bison_version="3.8.2"
-ninja_version="1.13.2"
-meson_version="1.12.1"
 flex_minimum="2.5.35"
 
 out_dir="$repo_root/ThirdParty/out/mesa-android"
 work_dir=""
+ndk_archive=""
 check_only=0
 jobs="$(sysctl -n hw.ncpu 2>/dev/null || printf '4')"
 
@@ -34,7 +31,7 @@ ninja_targets=(src/egl/libEGL_mesa.so src/mesa/glapi/es2api/libGLESv2_mesa.so sr
     src/gallium/targets/dri/libgallium_dri.so)
 
 usage() {
-    printf 'usage: scripts/guest/build-mesa-android.sh [--out DIR] [--work DIR] [--jobs N] [--check]\n' >&2
+    printf 'usage: scripts/guest/build-mesa-android.sh [--out DIR] [--work DIR] [--jobs N] [--ndk-archive FILE] [--check]\n' >&2
     exit 64
 }
 
@@ -58,6 +55,11 @@ while (($# > 0)); do
         --jobs)
             (($# >= 2)) || usage
             jobs="$2"
+            shift 2
+            ;;
+        --ndk-archive)
+            (($# >= 2)) || usage
+            ndk_archive="$2"
             shift 2
             ;;
         --check)
@@ -90,24 +92,6 @@ flex_version="$("$flex_path" --version | awk '{print $2}')"
 [[ "$(printf '%s\n%s\n' "$flex_minimum" "$flex_version" | sort -V | head -1)" == "$flex_minimum" ]] \
     || die "flex $flex_version is older than $flex_minimum"
 
-# The NDK. Its source.properties must name the pinned revision.
-ndk=""
-for candidate in "$repo_root/build/android-sdk/ndk/$ndk_revision" "${ANDROID_NDK_HOME:-}" \
-    "$HOME/Library/Android/sdk/ndk/$ndk_revision"; do
-    [[ -n "$candidate" && -f "$candidate/source.properties" ]] || continue
-    if grep -qxF "Pkg.Revision = $ndk_revision" "$candidate/source.properties"; then
-        ndk="$candidate"
-        break
-    fi
-done
-[[ -n "$ndk" ]] || die "NDK $ndk_revision ($ndk_name) not found; install it as environment-setup §2.5 describes"
-ndk_bin="$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin"
-for tool in "aarch64-linux-android$ndk_api-clang" "aarch64-linux-android$ndk_api-clang++" llvm-ar llvm-ranlib \
-    llvm-strip llvm-nm llvm-readelf lld; do
-    [[ -x "$ndk_bin/$tool" ]] || die "NDK tool $tool is missing"
-done
-ndk_clang="$("$ndk_bin/aarch64-linux-android$ndk_api-clang" --version | head -1)"
-
 # The pins. Each value is read from the lock, so the lock is the single source.
 [[ -f "$lock" ]] || die "missing $lock"
 mesa_commit="$(lock_field "$lock" mesa commit)"
@@ -126,6 +110,38 @@ libdrm_sha256="$(lock_field "$lock" libdrm sha256)"
 pyyaml_repository="$(lock_field "$lock" pyyaml repository)"
 pyyaml_commit="$(lock_field "$lock" pyyaml commit)"
 [[ "${#mesa_flags[@]}" -gt 0 ]] || die "the lock has no buildFlags for mesa"
+ndk_field="$(lock_field "$lock" ndk version)"
+ndk_revision="${ndk_field%% *}"
+ndk_name="$(printf '%s' "$ndk_field" | sed -E 's/^[^(]*\(([^)]*)\)$/\1/')"
+ndk_sha256="$(lock_field "$lock" ndk sha256)"
+ninja_version="$(lock_field "$lock" ninja version)"
+bison_version="$(lock_field "$lock" bison version)"
+meson_version="$(lock_field "$lock" meson version)"
+platform_sdk="$(printf '%s\n' "${mesa_flags[@]}" | sed -n 's/^-Dplatform-sdk-version=//p')"
+[[ -n "$ndk_revision" && -n "$ndk_name" && -n "$platform_sdk" ]] || die "the lock does not give the NDK or the platform SDK"
+if [[ -n "$ndk_archive" ]]; then
+    [[ "$(shasum -a 256 "$ndk_archive" | awk '{print $1}')" == "$ndk_sha256" ]] \
+        || die "the NDK archive differs from the lock's SHA-256"
+fi
+
+# The NDK. Its source.properties must name the pinned revision.
+ndk=""
+for candidate in "$repo_root/build/android-sdk/ndk/$ndk_revision" "${ANDROID_NDK_HOME:-}" \
+    "$HOME/Library/Android/sdk/ndk/$ndk_revision"; do
+    [[ -n "$candidate" && -f "$candidate/source.properties" ]] || continue
+    if grep -qxF "Pkg.Revision = $ndk_revision" "$candidate/source.properties"; then
+        ndk="$candidate"
+        break
+    fi
+done
+[[ -n "$ndk" ]] || die "NDK $ndk_revision ($ndk_name) not found; install it as environment-setup §2.5 describes"
+ndk_bin="$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+for tool in "aarch64-linux-android$ndk_api-clang" "aarch64-linux-android$ndk_api-clang++" llvm-ar llvm-ranlib \
+    llvm-strip llvm-nm llvm-readelf lld; do
+    [[ -x "$ndk_bin/$tool" ]] || die "NDK tool $tool is missing"
+done
+ndk_clang="$("$ndk_bin/aarch64-linux-android$ndk_api-clang" --version | head -1)"
+
 
 if ((check_only)); then
     printf 'check: NDK %s (%s) at %s\n' "$ndk_revision" "$ndk_name" "$ndk"
@@ -211,11 +227,13 @@ fi
 # 4. Python tools: meson, mako, MarkupSafe, and packaging, from hash-checked wheels (no dependency resolution).
 venv="$work_dir/venv"
 "$python_bin" "$helper" requirements "$lock" >"$work_dir/requirements.txt"
-if [[ ! -x "$venv/bin/meson" ]]; then
+requirements_stamp="$(shasum -a 256 "$work_dir/requirements.txt" | awk '{print $1}')"
+if [[ ! -x "$venv/bin/meson" || "$(cat "$venv/.requirements-sha256" 2>/dev/null || true)" != "$requirements_stamp" ]]; then
     rm -rf "$venv"
     "$python_bin" -m venv "$venv"
     "$venv/bin/python" -m pip install --quiet --no-deps --require-hashes -r "$work_dir/requirements.txt" \
         >"$logs/pip.log" 2>&1 || die "pip could not install the pinned wheels (see $logs/pip.log)"
+    printf '%s\n' "$requirements_stamp" >"$venv/.requirements-sha256"
 fi
 [[ "$("$venv/bin/meson" --version)" == "$meson_version" ]] || die "meson version differs from the lock"
 
@@ -289,7 +307,11 @@ pyyaml_version="$(lock_field "$lock" pyyaml version)"
     --tool "ndk=$ndk_revision ($ndk_name)" \
     --tool "ndkClang=$ndk_clang" \
     --tool "ndkApi=$ndk_api" \
-    --tool "platformSdkVersion=37" \
+    --tool "platformSdkVersion=$platform_sdk" \
+    --tool "ndkArchiveSha256=$ndk_sha256" \
+    --tool "mako=$(lock_field "$lock" mako version)" \
+    --tool "markupsafe=$(lock_field "$lock" markupsafe version)" \
+    --tool "packaging=$(lock_field "$lock" packaging version)" \
     --tool "meson=$("$venv/bin/meson" --version)" \
     --tool "ninja=$("$ninja_bin" --version)" \
     --tool "bison=$bison_version" \

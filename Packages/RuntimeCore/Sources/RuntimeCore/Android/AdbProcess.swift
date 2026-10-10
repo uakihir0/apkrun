@@ -45,12 +45,8 @@ enum AdbProcess {
                 continuation.resume(returning: nil)
                 return
             }
-            let output = Task.detached {
-                standardOutput.fileHandleForReading.readDataToEndOfFile()
-            }
-            let errorOutput = Task.detached {
-                standardError.fileHandleForReading.readDataToEndOfFile()
-            }
+            let output = Self.readToEnd(standardOutput.fileHandleForReading)
+            let errorOutput = Self.readToEnd(standardError.fileHandleForReading)
             let timer = Task.detached {
                 try? await Task.sleep(for: timeout)
                 guard !Task.isCancelled, state.terminateIfRunning() else {
@@ -73,6 +69,20 @@ enum AdbProcess {
             standardOutput: String(decoding: output, as: UTF8.self),
             standardError: String(decoding: errorData, as: UTF8.self)
         )
+    }
+
+    /// Reads a pipe to its end on a thread of its own. A blocking read on the Swift concurrency pool
+    /// holds one of the pool's few threads until the pipe closes. A command that keeps its pipes open
+    /// (a sleep, or an adb server that inherited them) would then hold pool threads, and the timers that
+    /// end other commands could not run, so those commands outlived their timeouts.
+    private static func readToEnd(_ handle: FileHandle) -> Task<Data, Never> {
+        Task {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                Thread.detachNewThread {
+                    continuation.resume(returning: handle.readDataToEndOfFile())
+                }
+            }
+        }
     }
 
     /// The timeout in whole seconds, rounded up, and at least 1, so that a sub-second timeout does not read as 0.

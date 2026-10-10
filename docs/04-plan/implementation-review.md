@@ -10825,6 +10825,18 @@ For each pinned keystore, the app bundle and the image bundle (the second argume
 
 **Consequence.** A keystore that is not pinned fails the release check, whatever its name. A new test keystore is added by committing it under `Tests/Fixtures/signing/` as `test-*.jks` and adding its entry to the pins file in the same change. The pins test fails until both match.
 
+## IR-339: Read adb pipes on threads of their own, so a parked command cannot stall the timeouts of others
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (the ADB client; its T0 tests on the hosted runner) |
+| Affected documents | none (the comment on `AdbProcess.run` in `Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbProcess.swift` describes the reads) |
+
+**Choice.** `AdbProcess.run` reads stdout and stderr to their end on a thread of its own for each pipe, not in a `Task.detached`. The FakeADB helper and the connect tests are unchanged. `adbClientEndsEveryTimedOutCommandWhileOthersHoldTheirPipesOpen` runs 32 commands that keep their pipes open past a 2 s timeout, and requires every one to end on its timeout within 20 s.
+
+**Reason.** Run 37949261551 on `424a171` failed three AdbClient connect tests with `connectionUnavailable` after about 30 s, and the timeout test recorded no timeout. Those tests only run fake scripts, so the cause is in the process runner. A blocking pipe read holds one thread of the Swift concurrency pool until the pipe closes. A command that keeps its pipes open (the fake's `sleep 30`) therefore holds pool threads, and the timers that end the other commands cannot run. A local repro with 64 parked `sleep 30` commands produced the same failure on the unfixed code: `connect` failed after 30.0 s with `connectionUnavailable`. With the fix, the same `connect` succeeded in 0.2 s, and the regression test fails on the unfixed code. The brief asked for a fix in the test or the FakeADB helper. Neither is the cause, so the fix is in the production runner, in the same #015 file, and this entry records that departure.
+
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
 ## IR-360: Check the kernel command line over the serial shell, not on hvc0

@@ -124,6 +124,37 @@ func adbClientTerminatesACommandThatRunsPastItsTimeout() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func adbClientEndsEveryTimedOutCommandWhileOthersHoldTheirPipesOpen() async throws {
+    // Each sleeping command keeps its two pipes open until it exits. Reading those pipes must not hold the
+    // Swift concurrency pool, or the timers that end these commands could not run and each one would last
+    // its full 30 seconds (#015).
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+    let started = ContinuousClock.now
+    let timedOut = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+        for _ in 0..<32 {
+            group.addTask {
+                do {
+                    _ = try await client.shell("sleep-forever", timeout: .seconds(2))
+                    return false
+                } catch let failure as AdbFailure {
+                    return failure == .commandTimedOut(command: "shell", seconds: 2)
+                } catch {
+                    return false
+                }
+            }
+        }
+        var count = 0
+        for await ended in group where ended {
+            count += 1
+        }
+        return count
+    }
+    #expect(timedOut == 32)
+    #expect(ContinuousClock.now - started < .seconds(20))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func adbClientNamesTheHelperThatTimedOut() async throws {
     let fake = try FakeADB()
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())

@@ -9,11 +9,13 @@ its certificate, its certificate fingerprint, or its public key.
 """
 
 import base64
+import copy
 import hashlib
 import json
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -103,25 +105,184 @@ def expect_accepted(name, output):
     passed(name)
 
 
-# 1. The pins match the committed files, and the pinned certificate and key are the committed keystore's.
-committed_names = sorted(
-    path.name for path in signing_folder.iterdir() if path.suffix == ".jks" and path.name.startswith("test-")
+JKS_MAGIC = b"\xfe\xed\xfe\xed"
+
+
+def store_passwords(name):
+    """The store passwords that the Gradle files give to a keystore with this name (the first one after each use)."""
+    gradle_files = sorted(repository.glob("Tests/Fixtures/AndroidApps/*/build.gradle.kts")) + sorted(
+        repository.glob("Guest/*/build.gradle.kts")
+    )
+    found = set()
+    for gradle in gradle_files:
+        source = gradle.read_text(encoding="utf-8")
+        for use in re.finditer(r"storeFile\s*=\s*[^\n]*" + re.escape(name) + r'"', source):
+            password = re.search(r'storePassword\s*=\s*"([^"]+)"', source[use.end() :])
+            if password:
+                found.add(password.group(1))
+    return found
+
+
+def jks_certificates(data):
+    """The certificate DER of each chain entry of a JKS keystore. A JKS keeps its chains unencrypted, only its keys are sealed."""
+    position = 8
+
+    def take(count):
+        nonlocal position
+        chunk = data[position : position + count]
+        if len(chunk) != count:
+            raise ValueError("the JKS keystore is truncated")
+        position += count
+        return chunk
+
+    def u4():
+        return struct.unpack(">I", take(4))[0]
+
+    def utf():
+        take(struct.unpack(">H", take(2))[0])
+
+    certificates = []
+    for _ in range(u4()):
+        tag = u4()
+        utf()  # alias
+        take(8)  # creation time
+        if tag == 1:  # a private key entry: sealed key, then its certificate chain
+            take(u4())
+            for _ in range(u4()):
+                utf()  # certificate type
+                certificates.append(take(u4()))
+        elif tag == 2:  # a trusted certificate entry
+            utf()
+            certificates.append(take(u4()))
+        else:
+            raise ValueError(f"the JKS keystore has an unknown entry tag {tag}")
+    if position + 20 != len(data):  # the keystore ends with a 20-byte SHA-1 integrity digest
+        raise ValueError("the JKS keystore has unexpected trailing bytes")
+    return certificates
+
+
+def keystore_certificates(path, data):
+    """The certificate DER of each entry of a committed test keystore (IR-338).
+
+    A JKS is parsed here. A PKCS#12 keystore is opened with openssl and the one store password that the Gradle
+    files give it. Anything else, or a password that does not open it, is an error.
+    """
+    if data[:4] == JKS_MAGIC:
+        return jks_certificates(data)
+    passwords = store_passwords(path.name)
+    if len(passwords) != 1:
+        raise ValueError(f"expected one store password in the Gradle files for {path.name}, found {sorted(passwords)}")
+    (password,) = passwords
+    opened = subprocess.run(
+        ["openssl", "pkcs12", "-in", str(path), "-passin", f"pass:{password}", "-nokeys", "-clcerts"],
+        capture_output=True,
+        check=False,
+    )
+    start = opened.stdout.find(b"-----BEGIN CERTIFICATE-----")
+    if opened.returncode != 0 or start < 0:
+        raise ValueError(f"{path.name} is neither a JKS keystore nor a PKCS#12 keystore that its Gradle password opens")
+    return [openssl("x509", "-outform", "DER", stdin=opened.stdout[start:])]
+
+
+def verify_pins(entries):
+    """The failures of a pin list against the committed keystores (IR-338). An empty list passes."""
+    failures = []
+    committed_names = sorted(
+        path.name for path in signing_folder.iterdir() if path.suffix == ".jks" and path.name.startswith("test-")
+    )
+    try:
+        pinned_names = sorted(entry["name"] for entry in entries)
+    except (KeyError, TypeError) as error:
+        return [f"a pin has no usable name: {error}"]
+    if committed_names != pinned_names:
+        failures.append(f"committed keystores {committed_names}, pinned {pinned_names}")
+    for entry in entries:
+        name = entry["name"]
+        path = signing_folder / name
+        if not path.is_file():
+            continue  # reported by the name comparison above
+        try:
+            data = path.read_bytes()
+            if hashlib.sha256(data).hexdigest() != entry["file_sha256"]:
+                failures.append(f"{name}: the committed file does not match its pinned SHA-256")
+                continue
+            certificate = base64.b64decode(entry["certificate_der"], validate=True)
+            public_key = base64.b64decode(entry["public_key_der"], validate=True)
+            if certificate not in keystore_certificates(path, data):
+                failures.append(f"{name}: the pinned certificate is not in the committed keystore")
+                continue
+            spki_pem = openssl("x509", "-inform", "DER", "-noout", "-pubkey", stdin=certificate)
+            if openssl("pkey", "-pubin", "-outform", "DER", stdin=spki_pem) != public_key:
+                failures.append(f"{name}: the pinned public key does not match the pinned certificate")
+        except (KeyError, ValueError, OSError, subprocess.CalledProcessError) as error:
+            failures.append(f"{name}: {error}")
+    return failures
+
+
+def entry_named(entries, name):
+    return next(entry for entry in entries if entry["name"] == name)
+
+
+# 1. The pins match the committed files: every committed keystore is pinned, its digest matches, and its pinned
+# certificate and public key are the committed keystore's. Each mutant below must be refused, so a check that
+# stopped refusing would fail here.
+pins_document = json.loads(pins_file.read_text(encoding="utf-8"))
+failures = verify_pins(pins_document["keystores"])
+if failures:
+    raise SystemExit("FAIL keystore pins: " + "; ".join(failures))
+passed("pins-match-committed-keystores")
+
+guest_signer = re.search(
+    r'expected_signer_sha256="([0-9a-f]{64})"', (repository / "scripts/build-guest.sh").read_text(encoding="utf-8")
+).group(1)
+guest_certificate = base64.b64decode(entry_named(pins_document["keystores"], "test-guest-dev.jks")["certificate_der"])
+if hashlib.sha256(guest_certificate).hexdigest() != guest_signer:
+    raise SystemExit("FAIL keystore pins: test-guest-dev.jks is not the signer that scripts/build-guest.sh pins")
+passed("guest-pin-is-the-build-guest-signer")
+
+
+def expect_pin_refused(name, entries, mentioning):
+    found = verify_pins(entries)
+    if not any(mentioning in failure for failure in found):
+        fail(name, "\n".join(found) or "no failure was reported")
+    passed(name)
+
+
+fixture_entry = entry_named(pins_document["keystores"], "test-fixture-a.jks")
+guest_entry = entry_named(pins_document["keystores"], "test-guest-dev.jks")
+
+
+def mutated(change):
+    entries = copy.deepcopy(pins_document["keystores"])
+    change(entries)
+    return entries
+
+
+expect_pin_refused(
+    "pin-digest-changed-refused",
+    mutated(lambda entries: entry_named(entries, "test-guest-dev.jks").update(file_sha256="0" * 64)),
+    "does not match its pinned SHA-256",
 )
-if committed_names != sorted(pins):
-    raise SystemExit(f"FAIL keystore pins: committed {committed_names}, pinned {sorted(pins)}")
-for name, entry in pins.items():
-    data = (signing_folder / name).read_bytes()
-    if hashlib.sha256(data).hexdigest() != entry["file_sha256"]:
-        raise SystemExit(f"FAIL keystore pins: {name} does not match its pinned digest")
-password = re.search(r'storePassword = "([^"]+)"', (repository / "Tests/Fixtures/AndroidApps/HelloText/build.gradle.kts").read_text(encoding="utf-8")).group(1)
-pem = openssl("pkcs12", "-in", str(committed), "-passin", f"pass:{password}", "-nokeys", "-clcerts")
-certificate_pem = pem[pem.index(b"-----BEGIN CERTIFICATE-----") :]
-if openssl("x509", "-outform", "DER", stdin=certificate_pem) != certificate_der:
-    raise SystemExit("FAIL keystore pins: the pinned certificate differs from the committed keystore")
-spki_pem = openssl("x509", "-noout", "-pubkey", stdin=certificate_pem)
-if openssl("pkey", "-pubin", "-outform", "DER", stdin=spki_pem) != public_key_der:
-    raise SystemExit("FAIL keystore pins: the pinned public key differs from the committed keystore")
-passed("pins-match-committed-keystore")
+expect_pin_refused(
+    "pin-certificate-of-another-keystore-refused",
+    mutated(lambda entries: entry_named(entries, "test-guest-dev.jks").update(certificate_der=fixture_entry["certificate_der"])),
+    "the pinned certificate is not in the committed keystore",
+)
+expect_pin_refused(
+    "pin-public-key-of-another-keystore-refused",
+    mutated(lambda entries: entry_named(entries, "test-guest-dev.jks").update(public_key_der=fixture_entry["public_key_der"])),
+    "the pinned public key does not match",
+)
+expect_pin_refused(
+    "unpinned-committed-keystore-refused",
+    mutated(lambda entries: entries.remove(guest_entry)),
+    "committed keystores",
+)
+expect_pin_refused(
+    "pin-for-a-missing-keystore-refused",
+    mutated(lambda entries: entries.append({**guest_entry, "name": "test-missing.jks"})),
+    "committed keystores",
+)
 
 # 2. The committed keystore is accepted: this is the regression case for a wrong refusal.
 expect_accepted("committed-keystore-accepted", check({"test-fixture-a.jks": keystore}))

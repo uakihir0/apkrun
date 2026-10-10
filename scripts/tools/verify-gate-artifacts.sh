@@ -28,6 +28,11 @@ require() {
 
 require Image
 require initramfs.cpio.gz
+require scanout-00-1024x768-60.edid
+require virgl-runtime/libvirglrenderer.1.dylib
+require virgl-runtime/libepoxy.0.dylib
+require virgl-runtime/libEGL.dylib
+require virgl-runtime/libGLESv2.dylib
 require android-disks/disks.json
 if [[ -f "$directory/android-disks/disks.json" ]]; then
     disk_files=$(python3 -I -c '

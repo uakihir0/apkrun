@@ -18,9 +18,13 @@ fail() {
 
 # A complete fixture: the artifacts as the builders write them.
 directory="$work/linux"
-mkdir -p "$directory/android-disks" "$directory/android-bundle"
+mkdir -p "$directory/android-disks" "$directory/android-bundle" "$directory/virgl-runtime"
 : > "$directory/Image"
 : > "$directory/initramfs.cpio.gz"
+: > "$directory/scanout-00-1024x768-60.edid"
+for library in libvirglrenderer.1.dylib libepoxy.0.dylib libEGL.dylib libGLESv2.dylib; do
+    : > "$directory/virgl-runtime/$library"
+done
 : > "$directory/android-bundle/manifest.json"
 : > "$directory/android-disks/os.img"
 : > "$directory/android-disks/userdata.img"
@@ -69,6 +73,18 @@ rm -r "$no_bundle/android-bundle"
 expect_pass "G1 does not need the Android bundle" "$verify_artifacts" "$no_bundle" G1
 expect_fail "G2 needs the Android bundle" "android-bundle/manifest.json" \
     "$verify_artifacts" "$no_bundle" G2
+
+no_runtime="$work/no-runtime"
+cp -R "$directory" "$no_runtime"
+rm "$no_runtime/virgl-runtime/libEGL.dylib"
+expect_fail "a missing staged runtime library stops G1 and names it" "virgl-runtime/libEGL.dylib" \
+    "$verify_artifacts" "$no_runtime" G1
+
+no_edid="$work/no-edid"
+cp -R "$directory" "$no_edid"
+rm "$no_edid/scanout-00-1024x768-60.edid"
+expect_fail "a missing golden EDID block stops G2 and names it" "scanout-00-1024x768-60.edid" \
+    "$verify_artifacts" "$no_edid" G2
 
 unreadable="$work/unreadable"
 cp -R "$directory" "$unreadable"

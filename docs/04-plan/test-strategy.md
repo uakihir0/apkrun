@@ -299,6 +299,72 @@ Artifacts come from test machines with fixture data only, but the diagnostics re
 - Update sources are local: `scripts/dev/update-server.py`, the local appcast, the local image feed, the GitHub mock, and the served F-Droid test repository, all on `127.0.0.1`. T2 has no Internet access. The #006 network test fetches from a server on the host, and its Internet half is a T3 network check ([../02-design/vm.md](../02-design/vm.md) §7).
 - A teardown that fails marks the machine dirty. The next suite starts with Reset Android ([runtime-daemon.md](../02-design/runtime-daemon.md) §9.5) and a new data root.
 
+### 3.10 Parallel VM runs
+
+Two VM runs on one Mac collide on the fixed resources in the table below. Every location is at the baseline `main` (eb23d2b), so the line numbers are the ones a reviewer sees in that commit. The lab rule of §3.6 still holds: until a maintainer accepts the parallel rule ([implementation-review.md](implementation-review.md) IR-525), one VM runs at a time, and the gates run under `lockf -k /tmp/apkrun-vm.lock`.
+
+**Shared resources at the baseline**
+
+| Resource | Where (baseline line) | What collides |
+|---|---|---|
+| Developer ADB host port `127.0.0.1:6520` | `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/RuntimeSupervisor.swift:120` (`developmentADBPort`), used at `:452` | A second developer-mode boot cannot bind the port (`VsockLoopbackForwarder.swift:314`), so it boots without ADB (`RuntimeSupervisor.swift:462-466`). Its `adb` commands then reach the first VM's forwarder, which is silent cross-talk. |
+| ADB endpoint constant | `Packages/RuntimeCore/Sources/RuntimeCore/Android/AdbClient.swift:98` (`developmentEndpoint`), the default at `:113`, passed by the supervisor at `RuntimeSupervisor.swift:473` | Same as above: every `adb -s 127.0.0.1:6520` command goes to whichever VM owns the port. |
+| ADB endpoint of the product CLI | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevAdb.swift:7` and `:21`; `CLI/apkrun/Dev/DevAdb.swift:9` (help text) | Product path, not a test path. It keeps the default port and is the reason the default stays 6520. |
+| Port in the T2 ADB test | `Tests/IntegrationTests/AndroidADBTests/AndroidADBTests.swift:12` (`port`), used at `:29`, `:44`, `:47`, `:58`, `:69`, `:70` | `lsof` on the port sees another run's listener, and the test's `adb` talks to the other VM. |
+| Port in every developer-mode boot | `Tests/IntegrationTests/AndroidSupport/AndroidBootSession.swift:62`, `Tests/IntegrationTests/AndroidBootTests/AndroidBootFixture.swift:74`, `Tests/AcceptanceTests/G2AndroidBoot/G2AndroidBootTests.swift:77` (`BootOptions`, no port, so the default 6520 is used) | Each boot with `developerMode: true` binds 6520. |
+| Port in the forwarder's comment | `Packages/VirtualMachineCore/Sources/VirtualMachineCore/Vsock/VsockLoopbackForwarder.swift:8` (comment only; the forwarder already takes `requestedPort` at `:19-20` and accepts `0`) | None; listed so that the port is not hard-coded again. |
+| Port in the error catalog | `Packages/DiagnosticsCore/ErrorCatalog/errors.json:1289` (documentation text of `runtime.adbConnectionUnavailable`) | None at run time; the text names the default port. |
+| Artifact directory, default | `scripts/run-gate.sh:44`; `scripts/build-test-initramfs.sh:7`; `scripts/fetch-test-linux.sh:7`; `scripts/build-test-android-bundle.sh:15`; `scripts/build-test-android-disks.sh:13`; `Tests/IntegrationTests/AndroidSupport/AndroidBootSession.swift:107`; `Tests/IntegrationTests/AndroidBootTests/AndroidBootFixture.swift:22`; `Tests/AcceptanceTests/G2AndroidBoot/G2AndroidBootTests.swift:223`; `CLI/apkrun/Dev/DevConsole.swift:43`; `CLI/apkrun/Dev/DevLinux.swift:80` | Every run and every `apkrun dev` command reads `/tmp/apkrun-test-linux` (`APKRUN_TEST_LINUX_DIR`). |
+| Artifact directory, rewritten by producers | `scripts/run-gate.sh:50` (deletes the gate's build and result bundles), `:91-100` (runs the producers and the verifier); `scripts/build-test-initramfs.sh:13` and `scripts/fetch-test-linux.sh:13` (`.artifacts.lock`, taken by producers only); `scripts/build-test-android-bundle.sh:33` and `scripts/build-test-android-disks.sh:23` (write without a lock) | A producer run rewrites the kernel, the initramfs, the bundle, and the disks while another run reads them. `ImageStore.install` copies the bundle and fails when the source changes during the copy (`Packages/ImageCore/Sources/ImageCore/Store/ImageStore.swift:166`), but `LinuxGuestHarness` reads the kernel and the initrd at each VM start. |
+| Artifact directory, build setting | `Tests/IntegrationTests/Host/Info.plist:19-20` (`APKRUN_TEST_LINUX_DIR` baked into the test host) | The host app carries the directory of the build that made it. |
+| Default APKRun home of the Debug build | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Paths/APKRunPaths.swift:52-64` (`~/Library/Application Support/APKRun-Dev`), used when `APKRUN_HOME` is unset; instance lock at `:131`, instance directory at `:140` | `apkrun dev boot` and any test without `APKRUN_HOME` share one instance, and `resetAndroid` changes it for everyone. |
+| `apkrun dev boot` home and lock | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift:110-111` (paths, instance lock) | The developer's dev instance. A test that uses the same home waits for the lock or reads the same instance. |
+| Test home, AndroidBootSession | `Tests/IntegrationTests/AndroidSupport/AndroidBootSession.swift:50-52` (`temporaryDirectory` plus a full UUID) | Unique per run, but the `$TMPDIR` path is too long for the developer console socket (see below). |
+| Test home, AndroidBootFixture and G2 | `Tests/IntegrationTests/AndroidBootTests/AndroidBootFixture.swift:53-57` (`/tmp/apkrun-android-` plus 8 hex digits); `Tests/AcceptanceTests/G2AndroidBoot/G2AndroidBootTests.swift:52` (`/tmp/apkrun-g2-` plus 8 hex digits) | Unique with high probability only (32 random bits). |
+| G2 capture output | `Tests/AcceptanceTests/G2AndroidBoot/G2AndroidBootTests.swift:135` (`$TMPDIR/apkrun-g2-capture-` plus 8 hex digits) | As above. |
+| Test home, LinuxGuest | `Tests/IntegrationTests/LinuxGuestTests/LinuxGuestHarness.swift:172-173` (full UUID), `:200` | None. Already per run. |
+| Developer console socket names | `Packages/RuntimeCore/Sources/RuntimeCore/Supervisor/RuntimeSupervisor.swift:387` (`hvc0`) and `:417` (`hvc1`); `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevConsoleSocket.swift:47` (`<name>.sock`) | The names are the product's and the CLI uses them, so they stay. Two servers on one directory collide. |
+| Developer console directory | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Paths/APKRunPaths.swift:146` (`Runtime/dev-console` under the home) | Follows the home. Per run when the home is per run. |
+| Console socket overwrite | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevConsoleSocket.swift:64-66` (removes an existing file at the socket path before bind) | A second server on the same directory silently removes the first socket. |
+| Console socket path limit | `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevConsoleSocket.swift:29` (103 bytes) | A home under `$TMPDIR` (about 50 bytes of prefix plus a full UUID) cannot hold the socket. |
+| Console server in tests | `Tests/AcceptanceTests/G2AndroidBoot/G2AndroidBootTests.swift:81` (serve) and `:133` (client of `hvc1.sock`); `Tests/IntegrationTests/AndroidBootTests/AndroidBootTests.swift:329` (serve); `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift:155` (serve, default home); `CLI/apkrun/Dev/DevConsole.swift:109-110` (client, default home) | Follows the home. |
+| T1 console socket test | `Packages/RuntimeHost/Tests/RuntimeHostSystemTests/DevConsoleSocketTests.swift:38` (`/tmp/apkrun-dcs-` plus 8 hex digits) | No VM. Unique with high probability only. |
+| Lock file | `/tmp/apkrun-vm.lock`, taken by the callers with `lockf -k` (for example `docs/04-plan/issues/M01-android-bring-up.md` lines 1632 and 1718) | Not in the repository, and this task does not change it. |
+| Xcode build products and result bundles | `scripts/run-gate.sh:108`, `:121`, `:133` (`-derivedDataPath`), `:122` and `:134` (`-resultBundlePath`); `.github/workflows/integration.yml:53` (`build/IntegrationDerivedData`) | Two `xcodebuild` runs that share a DerivedData path replace one test host app under the other, and two runs that share a result bundle path overwrite it. |
+| launchd label of apkrund | `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Build/BuildInfo.swift:33` (`io.apkrun.apkrund.dev` in Debug) | No current T2 suite starts apkrund (no match under `Tests/`). A suite that does must not run beside another. |
+| Fixed directories of T0 tests | `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/HealthTests.swift:385` (`/tmp/apkrun-health-tests`); `Packages/DiagnosticsCore/Tests/DiagnosticsCoreTests/HostChecksTests.swift:125` (`/tmp/apkrun-host-check-tests`) | Not a VM collision. Two concurrent `swift test` processes share them. |
+
+**Not shared.** The guest's vsock port 5555 and its `localabstract:` sockets belong to one VM each, because each VM has its own vsock device. The host side of each is the forwarder, which is covered above.
+
+**Per-run resources after this change (#098).** Each VM test run gets:
+
+- its own APKRUN home, `/tmp/apkrun-vm-<UUID>`, created by `VMRunResources` (`Tests/IntegrationTests/RunResources/VMRunResources.swift`). The instance, the logs, the image store, the console sockets, and the G2 capture are under that home, so nothing is shared;
+- a full UUID in the name, and a path check that keeps every console socket path under the 103-byte limit;
+- an ADB host port from `TEST_RUNNER_APKRUN_TEST_ADB_PORT` (read as `APKRUN_TEST_ADB_PORT` in the test process). When it is unset, the value is `0`, and the kernel chooses a free loopback port. The supervisor reports the bound port as `developmentADBHostPort`. The product default stays `6520` (`BootOptions.adbHostPort`).
+
+The console socket names stay `hvc0.sock` and `hvc1.sock`, because the CLI uses them. They are unique because their directory is per run. The artifact directory stays shared, which is why the coordinator rules below forbid producers during a parallel run.
+
+**Coordinator rules for parallel runs.** These hold while two or more VM runs are active:
+
+1. Every `xcodebuild` run passes its own `-derivedDataPath` and `-resultBundlePath`.
+2. No producer runs (`scripts/run-gate.sh`, `build-test-initramfs.sh`, `fetch-test-linux.sh`, `build-test-android-bundle.sh`, `build-test-android-disks.sh`). They rewrite `APKRUN_TEST_LINUX_DIR`.
+3. Gates (G1, G2) run alone, under the lock. Their evidence is not recorded in parallel.
+4. `TEST_RUNNER_APKRUN_TEST_ADB_PORT` is set only to a port that no other run uses. Leave it unset unless a test needs a fixed port.
+5. No two runs start apkrund at the same time.
+6. Check the host memory before a second Android VM starts. The sizing is `InstanceSizing.default`. The lab Mac has 16 GB (§3.1).
+
+**Notes: VM checks for the coordinator.** #098 does not run a VM. The coordinator runs these checks on the reviewed commit, one at a time first, then in parallel:
+
+1. `AndroidADBTests`, the developer-mode test, alone. Expect pass, `developmentADBHostPort` non-nil, and the `lsof` check to show only the run's port.
+2. The same test with `TEST_RUNNER_APKRUN_TEST_ADB_PORT=6520`, with no other ADB user running. Expect the behavior of `main`.
+3. `AndroidADBTests`, the developer-mode-off test, alone. Expect pass, `developmentADBHostPort` nil, and no TCP listener in the test host process.
+4. Two runs in parallel (`AndroidADBTests` and `AndroidBootTests`, each with its own DerivedData and result bundle, both with the default port). Expect both to pass, and `adb devices` to list two different `127.0.0.1` endpoints.
+5. `apkrun dev boot` (default home) while one test runs. Expect `127.0.0.1:6520` for the dev boot, and no effect on the test.
+6. The G2 gate after the change, under the lock. Expect the same report fields as before, with the developer console on `<home>/Runtime/dev-console`.
+7. After each run, no `/tmp/apkrun-vm-*` directory remains, because each test removes its home.
+
+**IR references.** The decisions for this section are IR-520 to IR-539 in [implementation-review.md](implementation-review.md).
+
 ---
 
 ## 4. Fixtures

@@ -329,6 +329,7 @@ the tested OS build, not a cross-version promise.
 
 - RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
 - If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
+- In developer mode the 20 s run from the start of the `reboot -p` request, which goes over ADB and over the serial shell when ADB fails. The wait runs whenever a channel was tried, even when its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. Outside developer mode no request is sent yet, so the stop forces at once until the Guest Agent `Shutdown` request is wired ([implementation-review.md](../04-plan/implementation-review.md) IR-560 to IR-562, IR-568). The rule is `AndroidStopSequence` in RuntimeCore.
 - A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
 - `requestGuestStop()` is required for the test Linux guest. Its initramfs discovers the PL061 GPIO chip with `gpiodetect`, confirms the active line request with `gpioinfo`, and maps a rising edge on offset 6 to `poweroff -f` (§12). The T2 log verified that event on `gpiochip0` offset 6 on macOS 27.0 (26A428).
 
@@ -436,7 +437,9 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | T1 | `ConsoleChannel` with real pipes (`.log` and `.silent` ports are never written); `ConsoleLogWriter` against a real directory (file modes, rotation on disk) | #004 |
 | T1 | the disk rules of §3 with real files and permissions | #005 |
 | T1 | `VsockConnection` over a `socketpair` | #007 |
+| T0 | The developer stop of §9.3: the forced stop after the deadline with the VM ending stopped, no forced stop when the graceful stop finishes in time, no forced wait without a request, the channel choice, and the 20 s deadline (`AndroidStopSequenceTests`) | #015 |
 | T2 | Linux test guest: boot + console marker | #003, #004 |
+| T2 | SIGINT to `apkrun dev boot` takes the graceful `reboot -p` path (script in #015 Notes, not a suite test) | #015 |
 | T2 | Start completion versus delegate callback after VZ machine construction, with a successful guest-stop positive control | #003 |
 | T2 | Linux test guest: persisted marker, three-port numbering, forced stop during flood, and kernel panic capture | #004 |
 | T2 | block read-only/read-write | #005 |
@@ -490,3 +493,4 @@ Filled in by the tasks. Each entry records the date, the macOS build, the guest 
 | Pause and resume across host sleep | #069 | pending (§9.4) |
 | `virtio_snd` in the stock kernel | #083 | pending (OQ-38) |
 | Microphone prompt timing | #084 | pending (OQ-29) |
+| Ctrl-C stop path and the forced fallback after 20 s | #015 | 2026-10-10 UTC, arm64 Mac, macOS 27.0.1 (26A434), Xcode 27.0: T0 `AndroidStopSequenceTests` passed, and a mutation that skips the wait failed its fallback and in-time tests. T2 SIGINT run on the embedded `apkrun dev boot` (signed with `apkrun-dev.entitlements`, guest APK from `scripts/build-guest.sh`): ready in 11.8 s, `sys.boot_completed` = 1 over ADB, SIGINT, exit 0 after 1.71 s, guest `reboot: Power down`. The forced fallback has no real-guest run (IR-563). See [M01 #015](../04-plan/issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) Notes |

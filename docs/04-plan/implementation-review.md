@@ -12758,3 +12758,17 @@ the real manifest.
 **Reason.** The 120 s bound is the one that IR-374 chose for the earlier shared loop. The AndroidNetwork configuration allows 900 s (`IntegrationTests.xctestplan`), and four stages at the bound plus the boot fit inside it. The 30 s reply timeout stops a silent shell from taking the 60 s default on every poll.
 
 **Consequence.** The 2026-10-10 run took 143.9 s (the XCTest duration), of which 120.5 s was the DNS stage.
+
+## IR-552: Fix the review's confirmed defects, and tighten the wording where a claim goes beyond its evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095; [android-image.md](../02-design/android-image.md) §7.4, §7.8; [IR-374](#ir-374-the-network-does-not-come-up-after-the-first-boot-so-095s-network-criterion-stays-open) |
+
+**Choice.** An adversarial review of `git diff main...HEAD` confirmed six defects. The run command in the test class comment named the bare configuration, which boots the Linux guests; it now names `-only-testing:IntegrationTests/AndroidNetworkTests` (d59edc3). The documentation claims that the run did not show are corrected (916f43c): the 20-port skip is the 2026-10-09 result, the `getent` error does not prove the binary is absent, the identity mapping is verified for ports 1 to 7 only, the §7.4 result is the 2026-10-08 spike, IR-374 gets a dated update, and IR-541 no longer says the check produces the device mapping. The reviewer's unconfirmed points about IR-547, IR-549, and IR-551 were also reworded, because their wording was stronger than the evidence.
+
+**Reason.** The criteria of #095 are judged on evidence, and a record that claims more than the run showed would mislead the next maintainer. Each correction keeps the run result as it was, and changes only the words that went beyond it.
+
+**Consequence.** No code behaviour changed in this step. The two commits change one comment and the documents. The T2 runs and the network run still describe the code that they ran.

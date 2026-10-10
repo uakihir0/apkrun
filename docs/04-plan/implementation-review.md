@@ -12282,6 +12282,13 @@ the real manifest.
 - **Remaining blocker.** After `Stopped the loopback forwarder on port 6520`, the runs with the real adb went silent until the 10-minute allowance expired. The fake-adb run did not reproduce the silence, and no sample of the stalled test host was taken. The teardown fix and its T0 test are not done.
 - **Single next step.** Run `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` once with the `/tmp` copy, and `sample` the test host while it is silent after the forwarder stop, to name the blocked wait.
 
+**Update (after the rebase onto main 3a0cc60).**
+- **T2 run deferred.** The T2 run of `GuestAgentTests` is deferred until the G2 gate ends and releases the VM lock. No VM test ran after the rebase.
+- **adb location.** The T2 run uses the approach of [IR-388](#ir-388) on main: `platform-tools` copied to `/tmp/apkrun-072-sdk` and passed as `APKRUN_ANDROID_HOME`. The committed test plan is unchanged.
+- **Teardown after a failed boot (8ce63de).** `VsockLoopbackForwarder.stopAndWait(timeout:)` waits for the listener on a dispatch thread, bounded by the timeout, and `RuntimeSupervisor` awaits it. The synchronous `stop()` keeps its contract. The T0 test `loopbackForwarderStopReturnsWhileAGuestConnectionNeverOpens` stops a forwarder whose guest connect never returns, and checks that the stop returns within its bound, closes the client, and frees the port. It passes on the host.
+- **Not proven.** The fake-adb run did not reproduce the silence, and no sample of the stalled test host was taken. Main's `AdbProcess` change (3a0cc60) also moves the pipe readers off the concurrency pool, which is the same starvation mechanism. The device run must show whether the silence is gone.
+- **Next step, when the lock is free.** Run `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` once with `APKRUN_ANDROID_HOME=/tmp/apkrun-072-sdk`. If the test host still goes silent after `Stopped the loopback forwarder`, `sample` it during the silence to name the blocked wait.
+
 ## IR-439: The test inputs are read from /tmp, and the entry's path is stale
 
 | Field | Value |

@@ -36,7 +36,7 @@ import Testing
                 "devConsoleOutputDropped", "devConsoleCleanupPending",
                 "devConsoleNotRunning", "devConsoleSocketUnavailable",
                 "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
-                "bootTimedOut", "bootStalled", "gpuProfileUnavailable",
+                "bootTimedOut", "bootStalled", "gpuProfileUnavailable", "graphics",
                 "guestAgent", "adb",
                 "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
                 "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",

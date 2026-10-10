@@ -2175,16 +2175,28 @@
         "ja": "このバージョンの APKRun では、{profile} のグラフィックスプロファイルを使えません。"
       },
       "remediation": {
-        "en": "Start Android in Graphics Safe Mode. This version of APKRun can't use the VirGL graphics profile yet.",
-        "ja": "グラフィックスセーフモードでAndroidを起動してください。このバージョンのAPKRunでは、VirGLのグラフィックスプロファイルはまだ使えません。"
+        "en": "Start Android in Graphics Safe Mode. If that doesn't help, update APKRun and create a diagnostics report.",
+        "ja": "グラフィックスセーフモードでAndroidを起動してください。解決しない場合は、APKRunをアップデートして診断レポートを作成してください。"
       },
       "action": "startGraphicsSafeMode",
       "cliExit": 1,
       "doc": {
         "case": "gpuProfileUnavailable(profile:)",
-        "when": "the boot profile needs a virtio-gpu feature that the device does not offer: drmVirgl until the VirGL renderer (#022)",
+        "when": "the bundle does not list the boot profile, or the device does not offer a virtio-gpu feature that the bundle requires for the profile (`virgl` or `edid`). The device of the drmVirgl profile offers `virgl` (graphics.md §9)",
         "raisedBy": "RuntimeSupervisor",
         "ref": "[../02-design/graphics.md](../02-design/graphics.md) §9; [../02-design/android-image.md](../02-design/android-image.md) §9.2"
+      }
+    },
+    {
+      "code": "runtime.graphics",
+      "parameters": [],
+      "transparent": true,
+      "cliExit": "cause",
+      "doc": {
+        "case": "graphics(GraphicsFailure)",
+        "when": "the host renderer of the boot profile fails to start before the VM is created, for example the VirGL renderer of drmVirgl. The cause names the stage",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/graphics.md](../02-design/graphics.md) §8, §13.1"
       }
     },
     {

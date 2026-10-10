@@ -12785,3 +12785,31 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The guest has `libc++.so` and no `libc++_shared.so` (the receipt, §5). A dynamic link to `libc++_shared.so` would need a library the image does not have, and a link to the system `libc++.so` would depend on an ABI the build does not check. The Mesa Android documentation uses the static runtime too. The term is on the app list, and the static code is what its notice covers.
 
 **Consequence.** The exception text is an excerpt that the NDK's notice contains, not the notice itself. The NDK's full notice files stay out of the lock (IR-486). The image also has to carry the Apache-2.0 text, which the Mesa licence folder already holds. The app-list failures of IR-483 are unchanged.
+
+## IR-494: The shipped libraries are stripped, and the unstripped build stays in the work area
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3) |
+| Affected documents | [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 3; [build-system.md](../05-development/build-system.md) §6.3 |
+
+**Choice.** `scripts/guest/build-mesa-android.sh` installs the shipped libraries with `meson install --strip`, which runs the NDK's `llvm-strip`. The debug sections are removed, and the dynamic symbol table stays, so the export and `DT_NEEDED` checks still apply. The unstripped libraries stay in `build-mesa` under the work area.
+
+**Reason.** A release image should not carry debug sections that the guest does not use. The stripped `libgallium_dri.so` is 18.2 MB, and the unstripped one is 22.7 MB. The work area keeps the symbols for a crash analysis.
+
+**Consequence.** A crash trace from the guest shows dynamic symbols only, unless the maintainer keeps a symbol package for each Mesa build. The choice is for the maintainer to confirm, together with the symbol policy of the image release.
+
+## IR-495: The default output is a symlink into the main checkout in this worktree
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.6 (caches) |
+
+**Choice.** The script writes to `ThirdParty/out/mesa-android` by default, and the work area to `ThirdParty/out/mesa-android-work`. Both are git-ignored. This task ran them with `--out` and `--work` set to `/tmp/apkrun-099/run/` instead, because `ThirdParty/out` and `build` are symlinks into `/Users/N3275/Documents/projects/apkrun` in this worktree. Writing there would change the main checkout, which the task forbids.
+
+**Reason.** The default follows the design (§6.6 keeps the output under `ThirdParty/out/`). The worktree layout is an environment fact, not a design choice.
+
+**Consequence.** The build output of this task is outside the repository. A maintainer rebuilds it in the main checkout (or the release machine) with `scripts/guest/build-mesa-android.sh`, and then runs the output check of IR-496.

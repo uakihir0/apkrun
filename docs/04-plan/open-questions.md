@@ -74,6 +74,7 @@ Rules:
 | OQ-39 | How does the EDID physical size affect the density of secondary displays? | Graphics | Verification | #067 (display 0), #028 (pool displays) | density set by `setDisplayPolicy` | open |
 | OQ-40 | Which license does APKRun's own code use? | Project | Decision | before #089, and in any case before the v0.4 public demo | no license header; nothing is published | open |
 | OQ-41 | Can the user restore the recovery point that Reset Android creates? | Runtime daemon | Decision | before #058 | no restore in v1; the point can be listed and deleted | open |
+| OQ-43 | Can APK updates run automatically on the stock Cuttlefish image, without the custom image's Store Agent? | Store and updates | Decision | before #037 | v1 asks the user to confirm each update through PackageInstaller's standard prompt, with no privileged agent | open |
 
 The scanout hotplug interrupt, the display ID after a mode change, and the other ways a design can fail are risks: R-01 and R-04 in [risks.md](risks.md).
 
@@ -139,6 +140,13 @@ The scanout hotplug interrupt, the display ID after a mode change, and the other
 - **Deadline.** Before #058, which builds the recovery point operations. [issues/M04-daemon-and-guest-protocol.md](issues/M04-daemon-and-guest-protocol.md) #066 leaves the restore to #058.
 - **Working default.** No restore in v1. `recoveryPoints` lists the point, `deleteRecoveryPoint` deletes it, and apkrund prunes it after 7 days. If the answer is yes, #058 adds the operation, the CLI command, and the Storage button, and the design documents in the same pull request.
 
+
+### OQ-43 Automatic APK updates on the stock image
+
+- **Question.** The design ([../02-design/guest-components.md](../02-design/guest-components.md) §1) runs unattended installs and updates in the Store Agent, a platform-signed privileged app. That needs the custom image (#035). Can the stock image do the same through Android's standard `PackageInstaller`, without a privileged agent, or with a path that does not need a user action each time?
+- **Deadline.** Before #037, which builds the LocalUpdateProvider and the install path.
+- **Working default.** The stock image is used as it is. v1 asks the user to confirm each update through PackageInstaller's standard prompt. Experiment 1 (the stock image, with no privileged component) decides whether a path without the prompt exists. If it does not, the default stays and the custom image is not needed for updates.
+- **Experiment.** Install a second APK version through `PackageInstaller` on the stock userdebug image, from an unprivileged test app, and record which steps need the user. Run it on the VM once the G-gate lock is free.
 ---
 
 ## 4. Verifications

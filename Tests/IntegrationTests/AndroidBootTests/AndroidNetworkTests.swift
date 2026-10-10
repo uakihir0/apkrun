@@ -34,25 +34,33 @@ final class AndroidNetworkTests: XCTestCase {
             let shellOrNil = await supervisor.shell
             let android = AndroidShellConsole(shell: try XCTUnwrap(shellOrNil))
             // The design (android-image.md §7.4) puts the guest on wlan0 (virt_wifi on eth2) with vmnet's DHCP.
-            // ICMP gets no reply through vmnet, so name resolution is checked with getent, not ping.
+            // ICMP gets no reply through vmnet, but `ping` prints the resolved address before it waits for a reply,
+            // and prints `unknown host` when the name does not resolve. The stock image has no getent or nslookup
+            // (IR-548), so name resolution is checked with the first line of `ping -c 1`.
             // DHCP and the first Wi-Fi join finish after `ready`, so the stages are polled for a bounded time.
             // Each stage is judged by its last value: the reply the poll stopped on.
             var address = ""
             var route = ""
             var resolved = ""
             var validated = ""
+            let resolvedPrefix = "PING connectivitycheck.gstatic.com ("
             let deadline = ContinuousClock.now + .seconds(120)
             repeat {
                 address = (try? await android.value("ip addr show wlan0 | grep 'inet '")) ?? ""
                 // IPv4 only: the router advertisement also gives an IPv6 default route on wlan0.
                 route = (try? await android.value("ip route show table all | grep 'default via 192'")) ?? ""
-                resolved = (try? await android.value("getent hosts connectivitycheck.gstatic.com")) ?? ""
+                // The first line only: the banner when the name resolves, or the error line, not the statistics.
+                resolved =
+                    (try? await android.value(
+                        "ping -c 1 -W 2 connectivitycheck.gstatic.com 2>&1 | head -n 1"
+                    )) ?? ""
                 validated =
                     (try? await android.value(
                         "dumpsys connectivity | grep NetworkAgentInfo | grep WIFI | grep VALIDATED | tail -n 1"
                     )) ?? ""
                 if address.contains("inet 192.168."), route.contains("default via 192.168."),
-                    !resolved.isEmpty, validated.contains("VALIDATED")
+                    resolved.hasPrefix(resolvedPrefix), validated.contains("VALIDATED"),
+                    !validated.contains("NOT_VALIDATED")
                 {
                     break
                 }
@@ -60,17 +68,21 @@ final class AndroidNetworkTests: XCTestCase {
             } while ContinuousClock.now < deadline
             XCTAssertTrue(address.contains("inet 192.168."), "wlan0 has the vmnet IPv4 address: \(address)")
             XCTAssertTrue(route.contains("default via 192.168."), "the default route goes through vmnet: \(route)")
-            XCTAssertFalse(resolved.isEmpty, "connectivitycheck.gstatic.com resolves")
+            XCTAssertTrue(resolved.hasPrefix(resolvedPrefix), "connectivitycheck.gstatic.com resolves: \(resolved)")
             XCTAssertTrue(
-                validated.contains("WIFI") && validated.contains("VALIDATED"),
+                validated.contains("WIFI") && validated.contains("VALIDATED") && !validated.contains("NOT_VALIDATED"),
                 "the WIFI NetworkAgentInfo line is VALIDATED: \(validated)"
             )
             // Diagnostics for the record: the Wi-Fi state, the links, the connectivity service's network
-            // agents, and the join's log lines.
+            // agents, the join's log lines, the resolver's first line, a loopback ping (its banner shows the
+            // format of a reply line without DNS), and the DNS addresses the connectivity service reports.
             let record = [
                 "wlan0:\n\(address)",
                 "routes:\n\(route)",
+                "resolved: \(resolved)",
                 "validated: \(validated)",
+                "loopback ping:\n\(try await android.run("ping -c 1 -W 2 127.0.0.1 2>&1 | head -n 1").output)",
+                "dns:\n\(try await android.run("dumpsys connectivity | grep -i dns | head -n 4 | cut -c1-200").output)",
                 "wifi agent:\n\(try await android.run("dumpsys connectivity | grep NetworkAgentInfo | grep WIFI | tail -n 1").output)",
                 "wifi:\n\(try await android.run("cmd wifi status | head -n 8").output)",
                 "links:\n\(try await android.run("ip -o link | cut -c1-90").output)",

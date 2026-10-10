@@ -632,9 +632,10 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 }
 
 #if APKRUN_TEST_READBACK
-    // DEBUG-READBACK: test-only seams for the replay of a recorded session (graphics.md §12, #022 step 3). They exist only
-    // in builds with the TestReadback trait. Both run on the render thread that owns the renderer, and neither touches
-    // `counters`: the test-only readback is not a host readback of the normal path (graphics.md §7).
+    // DEBUG-READBACK: test-only seams for the replay of a recorded session (graphics.md §14, M02-graphics.md
+    // #022 step 3). They exist only in builds with the TestReadback trait. Both run on the render thread that owns
+    // the renderer, and neither touches `counters`: the test-only readback is not a host readback of the normal
+    // path (graphics.md §7).
     extension VirtioGPUDevice {
         /// Replays `recording` on this device's renderer, in order. Returns the first call that failed, with its index,
         /// or `nil` when every call succeeded.

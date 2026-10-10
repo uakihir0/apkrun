@@ -89,7 +89,7 @@ private let syntheticBox = VirGLTransfer(
     depth: 1
 )
 
-/// The synthetic replay fixture, `Tests/Fixtures/graphics/synthetic-virgl-session.json` (graphics.md §12, #022 step 3).
+/// The synthetic replay fixture, `Tests/Fixtures/graphics/synthetic-virgl-session.json` (M02-graphics.md #022 step 3).
 /// It is synthetic: no Linux guest run has recorded the `kmscube` stream yet (IR-514).
 private func syntheticFixtureURL() -> URL {
     // This file is Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/VirGLRoundTripSystemTests.swift.

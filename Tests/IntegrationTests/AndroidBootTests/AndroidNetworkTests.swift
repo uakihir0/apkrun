@@ -37,6 +37,8 @@ final class AndroidNetworkTests: XCTestCase {
             // ICMP gets no reply through vmnet, but `ping` prints the resolved address before it waits for a reply,
             // and prints `unknown host` when the name does not resolve. The stock image has no getent or nslookup
             // (android-image.md §7.8), so name resolution is checked with the first line of `ping -c 1`.
+            // The check runs as root (`su 0`): the serial shell's user cannot reach netd's DNS proxy on this image,
+            // so its lookups fail before any query is sent (IR-555). Root resolves through the same network.
             // DHCP and the first Wi-Fi join finish after `ready`, so the stages are polled for a bounded time.
             // Each stage is judged by its last value: the reply the poll stopped on.
             var address = ""
@@ -52,7 +54,7 @@ final class AndroidNetworkTests: XCTestCase {
                 // The first line only: the banner when the name resolves, or the error line, not the statistics.
                 resolved =
                     (try? await android.value(
-                        "ping -c 1 -W 2 connectivitycheck.gstatic.com 2>&1 | head -n 1"
+                        "ping -c 1 -W 2 connectivitycheck.gstatic.com 2>&1 | head -n 1", root: true
                     )) ?? ""
                 validated =
                     (try? await android.value(

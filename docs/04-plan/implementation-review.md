@@ -12743,3 +12743,31 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The task asked for the candidate to be replaced. The feasibility record shows that the AOSP tree does not provide the libraries (IR-440 on that branch), and that its licence classification conflicts with the image rules (IR-444 on that branch).
 
 **Consequence.** The feasibility branch is not merged. Its IR-440 to IR-451 stay on that branch.
+
+## IR-491: The libdrm tarball has no licence file, so the lock copies the MIT notice of `xf86drm.c`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.1 (`licenseFiles`); [legal-and-licensing.md](../05-development/legal-and-licensing.md) §6.1 |
+
+**Choice.** The `libdrm` lock entry has `license` `MIT`, which `libdrm`'s `meson.build` declares, and `licenseFiles` `["MIT-notice-xf86drm.txt"]`. The file is lines 9 to 31 of `xf86drm.c` in the 2.4.123 tarball, which carry the copyright lines and the MIT permission notice.
+
+**Reason.** The 2.4.123 tarball has no `COPYING` or `LICENSE` file. Its README does not state a licence. The lock needs a licence file under `ThirdParty/licenses/`, and the notice is the only MIT text in the tarball.
+
+**Consequence.** The licence file is an excerpt, not a full copy of the upstream licence. libdrm is `ships: tooling`, so it is not in the image, and the excerpt does not affect the image. A maintainer who wants the upstream file copies it from the libdrm repository at the same commit.
+
+## IR-492: The lock group `guest-mesa` names the guest build's pins, and the build-third-party driver does not build it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §6.1 (`group`), §6.3; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decision 6 |
+
+**Choice.** The nine new entries (`mesa`, `libdrm`, `ninja`, `bison`, `meson`, `mako`, `markupsafe`, `packaging`, `ndk`) are in the group `guest-mesa`. `scripts/build-third-party.sh` does not build this group. `scripts/guest/build-mesa-android.sh` reads the `mesa` entry's `buildFlags` and the URL, commit, and SHA-256 of each tool from the lock.
+
+**Reason.** The group `virgl-runtime` builds the renderer with a driver of its own (`scripts/tools/build_third_party.py`), and the guest Mesa uses a different tool chain (the NDK and a cross file). A separate group keeps the renderer's lock hash (§6.1) unchanged by these entries. The `pyyaml` entry is reused from `virgl-runtime`, because it is the same pinned PyYAML.
+
+**Consequence.** A change to a `guest-mesa` entry does not change the `virgl-runtime` cache key. The maintainer decides whether the guest build should become a build group of §6.1 when the image is released.

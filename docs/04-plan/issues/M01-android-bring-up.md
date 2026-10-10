@@ -1391,7 +1391,7 @@ See [../test-strategy.md](../test-strategy.md).
 - [x] Each hvc port has a recorded role. No HAL crash-loops on a silent port.
 - [x] In-guest insecure KeyMint and Gatekeeper are selected by bootconfig, and vold mounts `/data`.
 - [x] The behaviour of each vsock client whose key is left out is recorded in [android-image.md](../../02-design/android-image.md) §7.3.
-- [ ] The guest has a working network: an address, a default route, DNS resolution, and a validated network in `dumpsys connectivity` (FR-VM-04). Open (IR-374): on the current first boot Wi-Fi reads as disabled after the first-boot settings, `wlan0` has no carrier, and no IPv4 address or DNS follows. `testNetwork` checks the design's configuration and records the state.
+- [ ] The guest has a working network: an address, a default route, DNS resolution, and a validated network in `dumpsys connectivity` (FR-VM-04). Open (IR-374, IR-555). On 2026-10-10 the boot had an address, a default route, and a VALIDATED WIFI network, but `ping -c 1 connectivitycheck.gstatic.com` printed `unknown host` (android-image.md §7.8). `testNetwork` uses that ping check, which replaces the `getent` call that the stock image does not have, and it records the state.
 - [x] LockSettings does not wait for Weaver. `testHostServiceSubstitutes` passes on the stock image: KeyMint and Gatekeeper are registered, `/data` is mounted, and `logcat` has no Weaver timeout or failure line.
 - [x] RIL, Bluetooth, NFC, UWB, GNSS, and sensors are kept unless they crash-loop, and the findings are recorded.
 

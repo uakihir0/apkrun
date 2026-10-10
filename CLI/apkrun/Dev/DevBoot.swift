@@ -12,7 +12,7 @@
 
         @Option(
             name: .long,
-            help: "GPU profile: `none` (headless, the default) or `swiftshader` (software rendering in the guest)."
+            help: "GPU profile: `none` (headless, the default), `swiftshader` (guest software rendering), or `virgl`."
         )
         var gpu = DevGPUProfile.none.rawValue
 

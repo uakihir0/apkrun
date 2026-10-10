@@ -824,6 +824,46 @@ run_gpu_hotplug_test() {
     return 1
 }
 
+# graphics.md §12 step 2 (#022): kmscube renders 60 frames headless on scanout 0 through
+# Mesa's virtio_gpu driver, which reports the virgl renderer. The host reads the
+# hostReadbacks counter of the device it attached.
+run_virgl_test() {
+    if ! wait_for_drm_path /sys/class/drm/card0-Virtual-1/status; then
+        printf 'APKRUN-TEST: virgl fail card0-Virtual-1 was not created\n'
+        return 1
+    fi
+    virgl_status=$(cat /sys/class/drm/card0-Virtual-1/status)
+    if [ "$virgl_status" != connected ]; then
+        printf 'APKRUN-TEST: virgl fail card0-Virtual-1 status is %s\n' "$virgl_status"
+        return 1
+    fi
+    virgl_log=/tmp/apkrun-kmscube.log
+    mkdir -p /tmp || return 1
+    if ! /usr/bin/kmscube -D /dev/dri/card0 -c 60 >"$virgl_log" 2>&1; then
+        sed 's/^/kmscube: /' "$virgl_log"
+        printf 'APKRUN-TEST: virgl fail kmscube exited with an error\n'
+        return 1
+    fi
+    sed 's/^/kmscube: /' "$virgl_log"
+    virgl_renderer=$(sed -n 's/^ *renderer: "\(.*\)"$/\1/p' "$virgl_log" | head -n 1)
+    virgl_frames=$(sed -n 's/^Rendered \([0-9][0-9]*\) frames .*$/\1/p' "$virgl_log" | head -n 1)
+    case "$virgl_renderer" in
+        *virgl*) ;;
+        *)
+            printf 'APKRUN-TEST: virgl fail renderer is not virgl: %s\n' "$virgl_renderer"
+            return 1
+            ;;
+    esac
+    # kmscube renders the requested frames, and its report leaves out the first one
+    # (drm-atomic.c and drm-legacy.c: frames = i - 1).
+    if [ "$virgl_frames" != 59 ]; then
+        printf 'APKRUN-TEST: virgl fail kmscube reported %s frames for -c 60, expected 59\n' \
+            "$virgl_frames"
+        return 1
+    fi
+    printf 'APKRUN-TEST: virgl ok renderer=%s requested=60 reported=%s\n' "$virgl_renderer" "$virgl_frames"
+}
+
 if [ -n "$requested_tests" ]; then
     previous_ifs=$IFS
     IFS=,
@@ -840,6 +880,9 @@ if [ -n "$requested_tests" ]; then
                 ;;
             gpu-hotplug)
                 run_gpu_hotplug_test
+                ;;
+            virgl)
+                run_virgl_test
                 ;;
             blk)
                 run_block_test

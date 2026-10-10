@@ -98,13 +98,10 @@ final class GPUDeviceTests: XCTestCase {
         return try XCTUnwrap(detail, "no ok record for \(name)")
     }
 
-    /// The golden EDID lives under `Tests/Fixtures/graphics/edid/` at the repository root.
-    private func goldenEDIDURL(named name: String) -> URL {
-        // This file is Tests/IntegrationTests/LinuxGuestTests/GPUDeviceTests.swift.
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 {
-            root.deleteLastPathComponent()
-        }
-        return root.appendingPathComponent("Tests/Fixtures/graphics/edid").appendingPathComponent(name)
+    /// The golden EDID block, which `scripts/build-test-initramfs.sh` copies beside the kernel. The test does not read
+    /// `Tests/Fixtures/graphics/edid/` in the checkout: a test process that reads ~/Documents waits on the macOS
+    /// approval prompt (IR-600).
+    private func goldenEDIDURL(named name: String) throws -> URL {
+        try LinuxGuestHarness.artifactURLs().kernel.deletingLastPathComponent().appendingPathComponent(name)
     }
 }

@@ -1,10 +1,11 @@
-# Alpine v3.24 packages that the virgl check of the Linux test guest unpacks
+# Alpine v3.23 packages that the virgl check of the Linux test guest unpacks
 # (graphics.md §12 step 1, #022). Each name is a prebuilt test-linux component of
-# ThirdParty/ThirdParty.lock.json. The closure is what apk resolves for kmscube,
-# Mesa's EGL, GBM, GLES, GL, and DRI packages, and libdrm. musl is not listed:
-# the pinned minirootfs already has musl 1.2.6-r2.
-# scripts/fetch-test-linux.sh downloads them, and scripts/build-test-initramfs.sh
-# unpacks them in this order and checks them with scripts/tools/initramfs-manifest.py.
+# ThirdParty/ThirdParty.lock.json. v3.23 is the newest Alpine release whose Mesa is built with
+# the virgl Gallium driver for aarch64; v3.24 dropped it. The closure is what apk resolves
+# for kmscube and Mesa's EGL, GBM, GLES, GL, and DRI packages, and libdrm. musl is not listed:
+# the pinned minirootfs has musl 1.2.6-r2, newer than the v3.23 musl 1.2.5.
+# scripts/fetch-test-linux.sh downloads them, and scripts/build-test-initramfs.sh unpacks them
+# in this order and checks them with scripts/tools/initramfs-manifest.py.
 alpine-hwdata-pci
 alpine-kmscube
 alpine-libbsd
@@ -25,7 +26,7 @@ alpine-libxext
 alpine-libxml2
 alpine-libxshmfence
 alpine-libxxf86vm
-alpine-llvm22-libs
+alpine-llvm21-libs
 alpine-mesa
 alpine-mesa-dri-gallium
 alpine-mesa-egl

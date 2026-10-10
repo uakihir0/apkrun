@@ -184,7 +184,7 @@ class TestVirglInputs(unittest.TestCase):
                 self.assertEqual(component["ships"], "tooling")
                 url = component["url"]
                 self.assertTrue(
-                    url.startswith("https://dl-cdn.alpinelinux.org/alpine/v3.24/"),
+                    url.startswith("https://dl-cdn.alpinelinux.org/alpine/v3.23/"),
                     url,
                 )
                 self.assertTrue(url.endswith(f"-{component['version']}.apk"), url)
@@ -204,7 +204,7 @@ class TestVirglInputs(unittest.TestCase):
             "alpine-mesa-dri-gallium",
             "alpine-mesa",
             "alpine-libdrm",
-            "alpine-llvm22-libs",
+            "alpine-llvm21-libs",
         ):
             with self.subTest(package=name):
                 self.assertIn(name, self.packages)

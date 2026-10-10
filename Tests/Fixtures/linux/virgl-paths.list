@@ -7,8 +7,8 @@ usr/lib/libEGL.so.1
 usr/lib/libGLESv2.so.2
 usr/lib/libgbm.so.1
 usr/lib/libdrm.so.2
-usr/lib/libgallium-26.1.6.so
+usr/lib/libgallium-25.2.7.so
 usr/lib/gbm/dri_gbm.so
 usr/lib/dri/virtio_gpu_dri.so
-usr/lib/libLLVM.so.22.1
+usr/lib/libLLVM.so.21.1
 usr/lib/libpng16.so.16

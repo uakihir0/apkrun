@@ -9,6 +9,26 @@ struct VirGLCapset: Equatable, Sendable {
     let bytes: [UInt8]
 }
 
+/// Counts the renderer operations that failed, and logs each one. The guest is not told (IR-460).
+final class RendererFailureLog: @unchecked Sendable {
+    private let logger = APKLogger(category: GraphicsLogCategory.device)
+    private let lock = NSLock()
+    private var count: UInt64 = 0
+
+    /// The number of failures recorded so far.
+    var total: UInt64 {
+        lock.withLock { count }
+    }
+
+    func record(_ failure: GraphicsFailure) {
+        lock.withLock { count += 1 }
+        logger.error(
+            "virtio-gpu renderer operation failed: \(failure.code, .public)",
+            errorCode: failure.qualifiedCode
+        )
+    }
+}
+
 /// The renderer side of the virtio-gpu device: the render thread, the engine that it owns,
 /// the cached capsets, and the queue of elements that wait for execution or a fence
 /// (graphics.md §4.5, §4.7, §5.2).
@@ -26,27 +46,23 @@ final class VirGLBackend: @unchecked Sendable {
     /// The capsets this device offers, in the order of `GET_CAPSET_INFO` indices.
     static let capsetIDs: [UInt32] = [GraphicsCapset.virgl, GraphicsCapset.virgl2]
 
-    private let logger = APKLogger(category: GraphicsLogCategory.device)
     private let renderThread: RenderThread
     private let engineBox: EngineBox
     private let completions: ControlCompletionQueue<PendingElementCompletionToken>
     private let capsetsByID: [UInt32: VirGLCapset]
-    private let failureLock = NSLock()
-    private var rendererFailureCount: UInt64 = 0
-
-    /// The fence number that virglrenderer takes for a guest fence ID, or `nil` when the ID does not fit in 32 bits.
-    static func fenceNumber(_ fenceID: UInt64) -> UInt32? {
-        UInt32(exactly: fenceID)
-    }
+    /// Shared with the render-thread closures, which must not capture the backend itself.
+    private let failures = RendererFailureLog()
+    private let stateLock = NSLock()
+    private var isShutDown = false
 
     /// The capsets, in `GET_CAPSET_INFO` index order.
     var capsets: [VirGLCapset] {
         Self.capsetIDs.compactMap { capsetsByID[$0] }
     }
 
-    /// The number of renderer operations that failed. The guest is not told: see IR-460.
+    /// The number of renderer operations that failed.
     var rendererFailures: UInt64 {
-        failureLock.withLock { rendererFailureCount }
+        failures.total
     }
 
     private init(
@@ -61,13 +77,18 @@ final class VirGLBackend: @unchecked Sendable {
         self.capsetsByID = capsetsByID
     }
 
+    deinit {
+        shutdown()
+    }
+
     /// Starts the render thread, creates the engine on it, and caches the capsets.
     ///
     /// - Parameter makeEngine: Creates the engine on the render thread. It receives the
     ///   callback that the engine calls for each fence it completes.
     static func make(
         name: String,
-        makeEngine: @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
+        makeEngine:
+            @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
     ) throws(GraphicsFailure) -> VirGLBackend {
         let renderThread = RenderThread(name: name)
         let completions = ControlCompletionQueue<PendingElementCompletionToken>()
@@ -102,6 +123,15 @@ final class VirGLBackend: @unchecked Sendable {
         }
         switch created {
         case .failure(let failure):
+            // A capset that is missing after the engine exists must still destroy it, or the next renderer
+            // in this process would be refused (IR-462 notes the one-renderer rule).
+            _ = renderThread.sync { () -> Bool in
+                if let engine = engineBox.engine {
+                    try? engine.destroy()
+                }
+                engineBox.engine = nil
+                return true
+            }
             renderThread.stop()
             throw failure
         case .success(let capsets):
@@ -122,10 +152,9 @@ final class VirGLBackend: @unchecked Sendable {
         }
     }
 
-    /// Appends a deferred element at the tail of the queue. Its response waits for the work
-    /// that the caller submits next, or for the fence it carries.
-    func appendWaiting(_ token: PendingElementCompletionToken) {
-        _ = completions.append(token, executed: false)
+    /// The fence number that virglrenderer takes for a guest fence ID, or `nil` when the ID does not fit in 32 bits.
+    static func fenceNumber(_ fenceID: UInt64) -> UInt32? {
+        UInt32(exactly: fenceID)
     }
 
     /// True when some element is still waiting, so a new response must wait its turn.
@@ -158,17 +187,19 @@ final class VirGLBackend: @unchecked Sendable {
         let ticket = completions.append(token, executed: false)
         let completions = self.completions
         let engineBox = self.engineBox
-        renderThread.submit { [self] in
+        let failures = self.failures
+        let renderThread = self.renderThread
+        renderThread.submit {
             var fenceForQueue = fence
             if let engine = engineBox.engine {
                 if let failure = operation(engine) {
-                    recordRendererFailure(failure)
+                    failures.record(failure)
                 }
                 if let fence {
                     do throws(GraphicsFailure) {
                         try engine.createFence(id: fence, context: context)
                     } catch {
-                        recordRendererFailure(error)
+                        failures.record(error)
                         fenceForQueue = nil
                     }
                 }
@@ -197,12 +228,13 @@ final class VirGLBackend: @unchecked Sendable {
     func reset() {
         let engineBox = self.engineBox
         let completions = self.completions
+        let failures = self.failures
         _ = renderThread.sync { () -> Bool in
             if let engine = engineBox.engine {
                 do throws(GraphicsFailure) {
                     try engine.reset()
                 } catch {
-                    self.recordRendererFailure(error)
+                    failures.record(error)
                 }
             }
             for token in completions.removeAll() {
@@ -212,10 +244,17 @@ final class VirGLBackend: @unchecked Sendable {
         }
     }
 
-    /// Destroys the engine and stops the render thread. Every waiting element is returned.
+    /// Destroys the engine and stops the render thread. Every waiting element is returned. Calling it again does nothing.
     func shutdown() {
+        let alreadyStopped = stateLock.withLock { () -> Bool in
+            let stopped = isShutDown
+            isShutDown = true
+            return stopped
+        }
+        guard !alreadyStopped else { return }
         let engineBox = self.engineBox
         let completions = self.completions
+        let failures = self.failures
         _ = renderThread.sync { () -> Bool in
             for token in completions.removeAll() {
                 token.complete()
@@ -224,20 +263,12 @@ final class VirGLBackend: @unchecked Sendable {
                 do throws(GraphicsFailure) {
                     try engine.destroy()
                 } catch {
-                    self.recordRendererFailure(error)
+                    failures.record(error)
                 }
             }
             engineBox.engine = nil
             return true
         }
         renderThread.stop()
-    }
-
-    private func recordRendererFailure(_ failure: GraphicsFailure) {
-        failureLock.withLock { rendererFailureCount += 1 }
-        logger.error(
-            "virtio-gpu renderer operation failed: \(failure.code, .public)",
-            errorCode: failure.qualifiedCode
-        )
     }
 }

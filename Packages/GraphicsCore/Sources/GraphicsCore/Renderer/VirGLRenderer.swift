@@ -230,18 +230,18 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
     }
 
     #if APKRUN_TEST_READBACK
-    // DEBUG-READBACK: test-only host readback for the replay and tearing tests (graphics.md §12). It exists only in
-    // builds with the TestReadback trait, and it never touches the device's counters, because the normal path has none.
-    func readResourceForTest(_ transfer: VirGLTransfer, byteCount: Int) throws(GraphicsFailure) -> [UInt8] {
-        let renderer = try live(operation: "readResourceForTest")
-        var data = [UInt8](repeating: 0, count: byteCount)
-        var args = transfer.bridgeArguments
-        let status = data.withUnsafeMutableBytes { bytes in
-            gb_transfer_read(renderer, &args, bytes.baseAddress, bytes.count)
+        // DEBUG-READBACK: test-only host readback for the replay and tearing tests (graphics.md §12). It exists only in
+        // builds with the TestReadback trait, and it never touches the device's counters, because the normal path has none.
+        func readResourceForTest(_ transfer: VirGLTransfer, byteCount: Int) throws(GraphicsFailure) -> [UInt8] {
+            let renderer = try live(operation: "readResourceForTest")
+            var data = [UInt8](repeating: 0, count: byteCount)
+            var args = transfer.bridgeArguments
+            let status = data.withUnsafeMutableBytes { bytes in
+                gb_transfer_read(renderer, &args, bytes.baseAddress, bytes.count)
+            }
+            try check(status, operation: "readResourceForTest")
+            return data
         }
-        try check(status, operation: "readResourceForTest")
-        return data
-    }
     #endif
 }
 

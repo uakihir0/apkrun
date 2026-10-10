@@ -410,6 +410,13 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             reportGuestError("command on the cursor queue is not implemented", command: header.type)
             return Reply(bytes: errorReply(code, answering: header), work: nil)
         }
+        // A fence beyond 32 bits cannot name a virglrenderer ctx0 fence (graphics.md §5.2, IR-461).
+        if backend != nil, header.flags & VirtioGPUProtocol.Flag.fence != 0,
+            VirGLBackend.fenceNumber(header.fenceID) == nil
+        {
+            reportGuestError("fence identifier exceeds 32 bits", command: header.type)
+            return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
+        }
         switch header.command {
         case .getDisplayInfo:
             guard request.count == VirtioGPUProtocol.headerByteCount else {
@@ -423,13 +430,6 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             break
         }
 
-        // A fence beyond 32 bits cannot name a virglrenderer ctx0 fence (graphics.md §5.2, IR-461).
-        if backend != nil, header.flags & VirtioGPUProtocol.Flag.fence != 0,
-            VirGLBackend.fenceNumber(header.fenceID) == nil
-        {
-            reportGuestError("fence identifier exceeds 32 bits", command: header.type)
-            return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
-        }
         let decoded: VirtioGPURequest
         do {
             decoded = try VirtioGPUProtocol.decodeRequest(request)

@@ -447,3 +447,37 @@ private func transfer(
         _ = try VirGLRecording.decoded(from: data)
     }
 }
+
+@Test func aFencedDisplayInfoBeyondThirtyTwoBitsIsAnInvalidParameter() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.getDisplayInfo, body: .getDisplayInfo, fence: 1 << 40)
+    ])
+    try await eventually { control.completionCounts == [1] }
+    #expect(gpuResponseType(control.writtenBuffers[0]) == VirtioGPUErrorCode.invalidParameter.rawValue)
+}
+
+@Test func aFenceAboveThirtyOneBitsIsCreatedAndWaitsForItsRelease() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), fence: 0x8000_0001, contextID: 1),
+    ])
+    try await eventually { harness.engineRef.engine.calls.contains(.fence(0x8000_0001, context: 1)) }
+    #expect(control.completionCounts == [1, 0])
+    harness.engineRef.engine.releaseFences()
+    try await eventually { control.completionCounts == [1, 1] }
+}
+
+@Test func aRendererThatFailsToStartIsDestroyedBeforeTheErrorIsThrown() throws {
+    let ref = EngineRef()
+    #expect(throws: GraphicsFailure.self) {
+        _ = try VirtioGPUDevice.makeVirgl { onFence throws(GraphicsFailure) -> any VirGLEngine in
+            let engine = FakeVirGLEngine(onFence: onFence)
+            engine.fail("capsetInfo")
+            ref.set(engine)
+            return engine
+        }
+    }
+    #expect(ref.engine.calls.contains(.destroy))
+}

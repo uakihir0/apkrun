@@ -480,7 +480,7 @@ Out of scope:
       build `16373615` is unchanged.
 - [ ] In the guest, `eglInitialize` succeeds on the VirGL display (`apkrun.test=egl`).
 - [ ] Every new artifact has recorded provenance, and every third-party component is pinned in the lock.
-- [ ] #064 is unaffected: its acceptance uses build `16373615`.
+- [x] #064 is unaffected: its acceptance uses build `16373615`. Checked on 2026-10-10: `git diff main...HEAD` changes no path under `Images/reference/16373615/`, `Images/manifests/16373615/`, or the M01 #064 entry.
 
 ### Notes
 
@@ -491,6 +491,15 @@ Out of scope:
   dependency is visible.
 - Filed on 2026-10-09 as GitHub issue #99. A new task takes its GitHub issue number, so
   the task number and the issue number are both #099 (IR-293 covers the earlier offset).
+- **Status (2026-10-10, host work only, no VM started).** The route is ADR-0018 (NDK, Mesa 26.1.8), accepted with the project owner's approval.
+  - Step 1 (the comparison and the receipt, IR-440 to IR-451) is on `task/099-mesa-virgl-guest-image`. It is not on this branch, and ADR-0018 cites it.
+  - Step 2, the Mesa libraries from locked sources, is done. `scripts/guest/build-mesa-android.sh` builds the four shipped libraries (`libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, `libgallium_dri.so`) from the pinned sources, and `ThirdParty/ThirdParty.lock.json` pins Mesa 26.1.8 and its build tools (group `guest-mesa`). The Android product fragment in `Guest/product/` is not done.
+  - Step 3, the corrected image with its own identity, is not done. No image is built. The build writes `manifest.json` next to the libraries, and it is the only provenance record so far.
+  - Step 4, the boot and `apkrun.test=egl`, is not done. It needs the VM and the image.
+  - Acceptance criterion 4 is checked (see above). Criteria 1 to 3 stay open. Criterion 1 needs the image, criterion 2 needs the VM, and criterion 3 needs the `flex` and `m4` pins (IR-485) and a maintainer decision on the app list (IR-483) and on the NDK licence (IR-486).
+  - Host checks that ran: `scripts/tests/test_guest_mesa_build.py` (28 tests, 6 of them on the built output), the lock checker on a copy of the lock inputs (XcodeGen is not installed, see the commit message), the existing third-party tests, and `shellcheck`.
+  - The output of the final build, with the NDK r28c, has the SHA-256 values `libEGL_mesa.so` `73cb1755…`, `libGLESv2_mesa.so` `7da942f6…`, `libGLESv1_CM_mesa.so` `2a082937…`, and `libgallium_dri.so` `a261e62b…`. Two builds with the same flags gave the same values. The output is outside the repository (IR-495).
+  - Open for the VM and the image (IR-487 to IR-489): the symbol contract of 37 imports from the stub libraries and libdrm (`GUEST_SYMBOL_CONTRACT`), the `libz.so` entry, and the placement of the libraries in `vendor/lib64/egl/`.
 
 ---
 

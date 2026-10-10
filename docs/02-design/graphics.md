@@ -432,6 +432,7 @@ Implementation notes:
 ### 5.3 What the guest gets
 
 - GLES 3.0 through Mesa virgl (`ro.opengles.version=196608`). There is no Vulkan (`ro.cpuvulkan.version=0`, and the Cuttlefish source says "No hardware Vulkan support, yet" for virgl). The bootconfig keys are in [android-image.md](android-image.md) §6.2.
+- The guest's Mesa userspace (EGL, GLES, and the `virgl` gallium driver) is built from Mesa 26.1.8 with the NDK r28c, outside the AOSP tree. The build is `scripts/guest/build-mesa-android.sh`, and the decision is [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md). The Mesa libraries are not yet in a runtime image (#099).
 - The GL renderer string seen by apps contains `virgl`. #022 checks it with `dumpsys SurfaceFlinger | grep -i GLES` and HelloGL's reported renderer.
 - ANGLE-imposed limits (for example on MSAA and some formats) show up as GLES 3.0 capability limits. Apps that require GLES 3.1+ or Vulkan land in a lower compatibility level ([../00-product/scope.md](../00-product/scope.md) §4).
 

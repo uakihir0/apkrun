@@ -299,6 +299,7 @@ to them are not allowed; wrap them in `apkrun_image` instead.
 | libc, log, android_logger crates | cargo | image | `Guest/vsockd/Cargo.lock`; the product build uses the same crates from AOSP `external/rust/crates` |
 | depot_tools (`f70835271105ca56d2cd5382a0118152bc2bdeea`) | source, pinned in `ThirdParty/ThirdParty.lock.json` | tooling | used only by the ANGLE build; in the `virgl-runtime` lock group so its revision changes the renderer cache key |
 | PyYAML 6.0.3 (`49790e73684bebad1df05ef8d828fa12f685bffb`) | source, pinned in `ThirdParty/ThirdParty.lock.json` | tooling | pure-Python module loaded from the pinned checkout for virglrenderer’s Meson configuration |
+| Guest Mesa (`mesa` 26.1.8), NDK r28c, Ninja, GNU Bison, Meson, mako, MarkupSafe, packaging, libdrm 2.4.123 | source, prebuilt, pinned in `ThirdParty/ThirdParty.lock.json` (group `guest-mesa`) | image (Mesa), tooling (the rest) | built by `scripts/guest/build-mesa-android.sh` into the guest image ([../01-architecture/decisions/0018-guest-mesa-ndk-build.md](../01-architecture/decisions/0018-guest-mesa-ndk-build.md)) |
 
 ### 6.6 Caches
 

@@ -13024,3 +13024,185 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` variables that name the lab certificate are not set in this shell, and the project file does not name a team. The VM tests need a signed test host, and the task's definition of done needs its T2 tier to run. The choice is the one identity on this Mac that matches the git account.
 
 **Consequence.** The result is valid for this Mac. It is not signed with the CI lab certificate. The maintainer should repeat the AndroidADB run with the lab identity if the lab certificate is required for the record.
+
+## IR-500: The virgl packages come from Alpine v3.23, not v3.24
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 1); [vm.md](../02-design/vm.md) §12; [build-system.md](../05-development/build-system.md) §3 (prebuilt inputs); [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3 |
+
+**Choice.** The Mesa virgl stack, kmscube, and their runtime closure of 32 packages come from the Alpine v3.23 `main` and `community` repositories: mesa 25.2.7, llvm21-libs 21.1.2, and the other packages that apk resolves for them. The kernel and the minirootfs stay on v3.24. musl is not unpacked from the closure, because the minirootfs musl (1.2.6-r2) is newer than the v3.23 musl (1.2.5).
+
+**Reason.** The Alpine v3.24 `mesa` APKBUILD builds aarch64 Mesa without `virgl` in `_gallium_drivers`. The pinned mesa 26.1.6 `libgallium-26.1.6.so` has no virgl winsys. The guest's `virtio_gpu` driver was the stub of `drm_helper.h`, which printed `virtio_gpu: driver missing`, so Mesa fell back to llvmpipe. The v3.23 APKBUILD lists `virgl` for aarch64. Its `libgallium-25.2.7.so` has no `virtio_gpu` stub message, and the guest run with it reports the virgl renderer.
+
+**Consequence.** The test guest runs Mesa 25.2.7 with LLVM 21. The closure unpacks to 220 MB, and the initramfs archive is 85.9 MB. This entry does not decide #099 or the product image (IR-240), which need their own Mesa build. A later Alpine release may drop `virgl` again, so the pins are checked against the APKBUILD at each update.
+
+## IR-501: License texts for the closure come from the verified upstream tarballs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §6.1; `ThirdParty/licenses/alpine-*/` |
+
+**Choice.** Each `licenseFiles` entry of the 32 new components is a copy of a file from the upstream source tarball of its Alpine origin. The tarball is the one named in the Alpine APKBUILD, and its SHA-512 matches the APKBUILD `sha512sums`. The lock's `repository` is the APKBUILD `url`, the project home page, because the sources are tarballs. The lock's `license` is the APKINDEX expression. The llvm text is taken from the 159 MB llvm-project tarball.
+
+**Reason.** The Alpine apk files carry no license texts: none of the 33 packages has a `usr/share/licenses` directory or a license-named file. The legal document requires a committed copy of each license text, and `scripts/tools/check-lock.swift` checks that each one exists.
+
+**Consequence.** The `licenseFiles` paths are paths in the upstream tree, as §6.1 says, except for the libdrm notice of IR-502.
+
+## IR-502: libdrm's MIT notice is copied from a source header
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §6.1 |
+
+**Choice.** The libdrm tarballs (2.4.131 and 2.4.134) have no license file. `ThirdParty/licenses/alpine-libdrm/xf86drm.c-notice.txt` is the notice that `xf86drm.c` carries, copied verbatim from the comment block that contains "Permission is hereby granted". The lock lists that file as the only `licenseFiles` entry of `alpine-libdrm`.
+
+**Reason.** Alpine gives libdrm the MIT license, and the header notice is the MIT text with its copyright holders. Another project's license text would be less accurate, and an invented file would not be upstream text.
+
+**Consequence.** This is the only lock license path that is not a file of the upstream tree. A reviewer should compare it with the notices of other libdrm sources.
+
+## IR-503: The #022 note that the initramfs needs the x86-64 builder is wrong
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2); #099 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022 Notes; [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** The Linux test initramfs is built on the Mac from aarch64 Alpine packages, with the existing builder. Step 2 needs no x86-64 builder, and the #022 note that names one is corrected.
+
+**Reason.** The builder only unpacks `.apk` tarballs with `tar`, `cpio`, and `gzip` from the base system, as environment-setup §4 already says. The virgl packages are aarch64 binaries from the v3.23 index. #099 is an Android image task (ImageCore, `Images/`), and it does not build the test initramfs.
+
+**Consequence.** The #022 notes no longer say that step 2 waits for #099. The product image still needs its own VirGL EGL work under #099.
+
+## IR-504: GET_CAPSET answers every version up to the cached maximum
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2 (`GET_CAPSET`); supersedes the version rule of IR-479 |
+
+**Choice.** `GET_CAPSET` answers a version from 0 up to the cached maximum with the cached capset. A version above the maximum gets `ERR_INVALID_PARAMETER`. The exact-version rule of IR-479 is replaced.
+
+**Reason.** The Linux kernel forwards the `cap_set_ver` that userspace passes. Mesa 25.2.7 (`virgl_drm_get_caps`) leaves it at 0 for capset 2. The exact-version rule answered with `ERR_INVALID_PARAMETER`, which the guest logged as `response 0x1205 (command 0x109)`, and Mesa fell back to llvmpipe. The pinned virglrenderer's `virgl_renderer_fill_caps` refuses only a version above the maximum, and it fills the same struct for the lower versions.
+
+**Consequence.** A guest that asks for an older version gets the cached bytes, which are the maximum version's bytes. The T0 test `getCapsetAnswersEveryVersionUpToTheCachedMaximum` pins the rule.
+
+## IR-505: The initramfs manifest check is part of the build
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [vm.md](../02-design/vm.md) §12; [test-strategy.md](../04-plan/test-strategy.md) §6 (T0) |
+
+**Choice.** `scripts/tools/initramfs-manifest.py` runs after the packages are unpacked and before the archive is moved into place. It fails the build unless each package matches its lock entry (the SHA-256 of the apk, and the version in its URL), each path of `virgl-paths.list` resolves to a regular file in the root through relative symlinks, and each DT_NEEDED soname of an ELF file that these packages install is a file in the root's `lib` or `usr/lib`. On success it writes `initramfs.manifest.json` with the package and file hashes, the needed sonames, and the archive hash.
+
+**Reason.** A missing library does not stop Mesa loudly. The driver falls back to llvmpipe, as this step showed. The check fails the build instead.
+
+**Consequence.** A soname is matched by file name, not by its DT_SONAME field. The closure has 42 needed sonames, and all of them resolve. A future package whose SONAME differs from its file name would fail the build, and the tool would need to read DT_SONAME.
+
+## IR-506: The virgl check passes on the renderer name and kmscube's frame report
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 2); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022 |
+
+**Choice.** The guest runs `kmscube -D /dev/dri/card0 -c 60`. The check passes only if kmscube's GL renderer string contains `virgl`, and its final report says `Rendered 59 frames`. The guest prints `requested=60 reported=59`. The host test also requires `hostReadbacks == 0`.
+
+**Reason.** kmscube's report counts `i - 1` frames, with the comment "first frame ignored" (drm-atomic.c and drm-legacy.c), so 60 requested frames are reported as 59. The check matches the report, which is what kmscube prints. A llvmpipe renderer string does not contain `virgl`, so the software fallback fails.
+
+**Consequence.** The check depends on kmscube's report text. A kmscube update that changes the report needs a matching change to the check. The lock pins kmscube, so this does not change by accident.
+
+## IR-507: `--tests virgl` attaches the virgl renderer device
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §8, §12 (#022 step 2) |
+
+**Choice.** `LinuxTestGuestRunner.customDevices(for:)` attaches `VirtioGPUDevice.virgl()` when the tests include `virgl`. The function throws, because the renderer can fail to start. `gpu-hotplug` is not combined with `virgl`: the virgl device has no hotplug spike, so the guest reports scanout 1 as not connected and this code does not enable it.
+
+**Reason.** The renderer must start before the VM, so a renderer failure is reported before any boot (graphics.md §8). The R-01 spike is a separate device setup, and combining it with the renderer is not part of this step.
+
+**Consequence.** `apkrun dev linux --tests virgl,gpu-hotplug` fails the hotplug check by design.
+
+## IR-508: The signing pair of the T2 run on this Mac
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** The hosted T2 run used `DEVELOPMENT_TEAM=QTXBTFA8BQ` and `CODE_SIGN_IDENTITY="Apple Development: Chihiro Tachinami (6JT3HP32BQ)"`, the pair in the last recorded T2 log of this host. The pair `Akihiro Urushihara (X4A37LMRPS)` failed for the package targets with "No certificate for team".
+
+**Reason.** The recorded pair ran the LinuxGuest suite before. The other pair could not sign the Swift package targets.
+
+**Consequence.** A maintainer should confirm which lab identity the T2 records use. The signing values are not committed.
+
+## IR-509: The hosted virgl test needs the runtime path through TEST_RUNNER
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [graphics.md](../02-design/graphics.md) §5.2 |
+
+**Choice.** `VirglTests` needs `TEST_RUNNER_APKRUN_VIRGL_RUNTIME_PATH` set to the verified cache, `ThirdParty/out/virgl-runtime/current`. The test does not set the path itself.
+
+**Reason.** The debug search of GraphicsBridge starts from the test host's executable, which lies in DerivedData, so it cannot reach the repository's cache. The T1 renderer test sets the variable from its source location, and the hosted test has no equivalent path.
+
+**Consequence.** Without the variable the test fails with `graphics.libraryMissing`. A maintainer may prefer the test to set the path from `#filePath`, as T1 does.
+
+## IR-510: The 1 GiB Linux test guest runs the virgl check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [vm.md](../02-design/vm.md) §12 |
+
+**Choice.** The Linux test guest keeps its 1 GiB of memory. The virgl check ran on it with the 85.9 MB initramfs, which unpacks to about 250 MB with the base image.
+
+**Reason.** The guest booted, Mesa loaded the virgl driver, and kmscube rendered in the observed run. Increasing the guest without a measured need would change a shared fixture.
+
+**Consequence.** Boot time and peak memory were not measured. The kernel log shows 83920K of initrd memory freed after unpacking. A later task that adds more to the guest should measure this.
+
+## IR-511: A download cache keyed by file name is kept
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [build-system.md](../05-development/build-system.md) (test artifacts) |
+
+**Choice.** `scripts/fetch-test-linux.sh` keeps its download cache keyed by file name, as before. A cached file with the same name and a different hash is reported as a mismatch, downloaded again, and verified against the lock.
+
+**Reason.** `zlib-1.3.2-r1.apk` and `zstd-libs-1.5.7-r2.apk` have the same names in v3.23 and v3.24, with different hashes. The re-download is correct, and the lock verifies it. Keying the cache by release would change the fetch script beyond this step.
+
+**Consequence.** The mismatch line is printed on the normal path after a pin change. It does not mean that the build failed.
+
+## IR-512: The third-party notice check did not run in this worktree
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §6.2 |
+
+**Choice.** `scripts/release/generate-notices.py --check` was not run for this change. It runs `check-lock --apply`, which refuses a source-checkout path that contains a symlink. The worktree's `ThirdParty/out` is a symlink to the main checkout, so the check stops there. Nothing was written.
+
+**Reason.** `--apply` writes patches into the source checkouts. Running it on the main checkout would change another checkout.
+
+**Consequence.** CI's third-party job must run this check on a real checkout before the task closes. The new components are `ships: tooling`, so they do not change the app notices.

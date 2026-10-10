@@ -13010,3 +13010,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** A cancelled `Task.sleep` returns at once. The first version of the wait broke out of its loop on cancellation, so the VM was forced at once. The VM still has to stop, and the runtime's operations survive the caller that started them. A cancelled sleep that is not replaced by a detached one would also spin until the deadline.
 
 **Consequence.** A stop that is cancelled takes the full deadline, as an uncancelled one does. No caller of the CLI cancels a stop today.
+
+## IR-572: Sign the AndroidADB test host with the maintainer's Apple Development identity
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (T2 AndroidADB configuration) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.8 (`APKRUN_TEST_DEVELOPMENT_TEAM`, `APKRUN_TEST_CODE_SIGN_IDENTITY`) |
+
+**Choice.** The AndroidADB run signs the test host with the Apple Development identity of the maintainer's git account. The team is `X4A37LMRPS`, and the identity is its SHA-1 fingerprint. It is passed as `DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` on the `xcodebuild` command line.
+
+**Reason.** The `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` variables that name the lab certificate are not set in this shell, and the project file does not name a team. The VM tests need a signed test host, and the task's definition of done needs its T2 tier to run. The choice is the one identity on this Mac that matches the git account.
+
+**Consequence.** The result is valid for this Mac. It is not signed with the CI lab certificate. The maintainer should repeat the AndroidADB run with the lab identity if the lab certificate is required for the record.

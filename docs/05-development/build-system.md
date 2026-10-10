@@ -381,7 +381,7 @@ The fixture catalog (apps, variants, keys, repositories, golden files) is [../04
 | `Tests/Fixtures/schemas/<file>/v<n>.json`, `v<n>.expected.json` | migration golden files ([../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §5) | committed |
 | `Tests/Fixtures/linux/` | `/init` of the test initramfs and the test disk scripts | committed; the kernel comes from `scripts/fetch-test-linux.sh`, the initramfs from `scripts/build-test-initramfs.sh` |
 | `Tests/Fixtures/fuzz/<target>/` | seed corpora and crash reproducers (§15.2) | committed |
-| `Tests/Fixtures/graphics/`, `Tests/Fixtures/compile-fail/` | the recorded `kmscube` command stream; compile-fail sources | committed |
+| `Tests/Fixtures/graphics/`, `Tests/Fixtures/compile-fail/` | the virgl replay fixture (synthetic until a Linux run records the `kmscube` stream, IR-514) and the golden virtio-gpu vectors; compile-fail sources | committed |
 | `Packages/GuestProtocol/testdata/frames/` | golden protocol frames | committed |
 
 A committed fixture file is at most 10 MiB. Larger inputs are generated at test time from a seed or kept in the runner cache with a pinned SHA-256 ([../04-plan/test-strategy.md](../04-plan/test-strategy.md) §4.1).

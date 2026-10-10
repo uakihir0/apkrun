@@ -383,31 +383,14 @@ if ! python3 "$script_dir/tools/initramfs-manifest.py" \
     rm -f "$temporary_initrd" "$temporary_manifest"
     exit 1
 fi
+# The hosted tests read their staged inputs from this directory, not from the checkout under ~/Documents (IR-600).
+# The stager checks every input before it writes, so a failure keeps the previous initramfs in place.
+if ! "$script_dir/tools/stage-hosted-test-inputs.sh" "$repo_root" "$output_dir"; then
+    rm -f "$temporary_initrd" "$temporary_manifest"
+    exit 1
+fi
 mv -f "$temporary_initrd" "$output_dir/initramfs.cpio.gz"
 mv -f "$temporary_manifest" "$output_dir/initramfs.manifest.json"
-
-# The hosted tests read these inputs from this directory, not from the checkout under ~/Documents. A test process
-# that reads ~/Documents waits on the macOS approval prompt, which an unattended gate cannot answer (IR-600).
-cp "$repo_root/Tests/Fixtures/graphics/edid/scanout-00-1024x768-60.edid" \
-    "$output_dir/scanout-00-1024x768-60.edid"
-
-# The runtime is the one that `ThirdParty/out/virgl-runtime/current` names, the same copy the debug lookup of
-# GraphicsBridge.m uses. Building it is `scripts/build-third-party.sh virgl-runtime`, which this script does not run.
-virgl_source="$repo_root/ThirdParty/out/virgl-runtime/current"
-temporary_virgl="$output_dir/virgl-runtime.partial.$$"
-rm -rf "$temporary_virgl"
-mkdir -p "$temporary_virgl"
-for library in libvirglrenderer.1.dylib libepoxy.0.dylib libEGL.dylib libGLESv2.dylib; do
-    if [[ ! -f "$virgl_source/$library" || -L "$virgl_source/$library" ]]; then
-        rm -rf "$temporary_virgl"
-        printf 'build-test-initramfs: VirGL runtime library is missing: %s\n' "$virgl_source/$library" >&2
-        printf 'build-test-initramfs: run scripts/build-third-party.sh virgl-runtime\n' >&2
-        exit 1
-    fi
-    /usr/bin/ditto "$virgl_source/$library" "$temporary_virgl/$library"
-done
-rm -rf "$output_dir/virgl-runtime"
-mv -f "$temporary_virgl" "$output_dir/virgl-runtime"
 
 printf 'build-test-initramfs: built %s/initramfs.cpio.gz\n' "$output_dir"
 shasum -a 256 "$output_dir/initramfs.cpio.gz"

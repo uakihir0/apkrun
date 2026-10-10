@@ -233,45 +233,118 @@ class TestVirglInputs(unittest.TestCase):
         self.assertIn("Tests/Fixtures/linux/virgl-paths.list", build)
 
 
-class TestHostedTestInputs(unittest.TestCase):
-    """The hosted test reads its inputs from the artifact directory, never from ~/Documents (#022, #019).
+STAGER = REPOSITORY_ROOT / "scripts" / "tools" / "stage-hosted-test-inputs.sh"
+GOLDEN_EDID = REPOSITORY_ROOT / "Tests" / "Fixtures" / "graphics" / "edid" / "scanout-00-1024x768-60.edid"
+RUNTIME_LIBRARIES = (
+    "libvirglrenderer.1.dylib",
+    "libepoxy.0.dylib",
+    "libEGL.dylib",
+    "libGLESv2.dylib",
+)
+GPU_TEST = REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "GPUDeviceTests.swift"
+VIRGL_TEST = REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "VirglTests.swift"
 
-    The test process cannot read the checkout under ~/Documents without a macOS approval prompt, and an
-    unattended gate stalls on that prompt (environment-setup.md, the artifact directory rules).
+
+class TestHostedTestInputs(unittest.TestCase):
+    """The hosted tests read their inputs from the artifact directory, never from ~/Documents (IR-600).
+
+    The stager runs on a fixture checkout: its inputs are the golden EDID block and the runtime that
+    ThirdParty/out/virgl-runtime/current names.
     """
 
-    def test_the_producer_stages_the_golden_edid_next_to_the_kernel(self) -> None:
-        build = BUILD.read_text(encoding="utf-8")
-        self.assertIn("Tests/Fixtures/graphics/edid/scanout-00-1024x768-60.edid", build)
-        self.assertTrue(
-            (REPOSITORY_ROOT / "Tests" / "Fixtures" / "graphics" / "edid" / "scanout-00-1024x768-60.edid").is_file()
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "repo"
+        self.artifacts = Path(temporary.name) / "artifacts"
+        self.artifacts.mkdir()
+        edid = self.root / "Tests" / "Fixtures" / "graphics" / "edid"
+        edid.mkdir(parents=True)
+        (edid / GOLDEN_EDID.name).write_bytes(GOLDEN_EDID.read_bytes())
+        runtime = self.root / "ThirdParty" / "out" / "virgl-runtime"
+        build = runtime / "key-one"
+        build.mkdir(parents=True)
+        for name in RUNTIME_LIBRARIES:
+            (build / name).write_bytes(f"runtime {name}\n".encode("utf-8"))
+        (runtime / "current").symlink_to("key-one")
+
+    def stage(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(STAGER), str(self.root), str(self.artifacts)],
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
-    def test_the_producer_stages_the_host_virgl_runtime_next_to_the_kernel(self) -> None:
+    def assert_nothing_staged(self) -> None:
+        self.assertFalse((self.artifacts / GOLDEN_EDID.name).exists())
+        self.assertFalse((self.artifacts / "virgl-runtime").exists())
+        self.assertEqual(list(self.artifacts.glob(".hosted-inputs.*")), [])
+
+    def test_stages_the_golden_block_and_the_four_runtime_libraries(self) -> None:
+        result = self.stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.artifacts / GOLDEN_EDID.name).read_bytes(),
+            GOLDEN_EDID.read_bytes(),
+        )
+        for name in RUNTIME_LIBRARIES:
+            with self.subTest(library=name):
+                staged = self.artifacts / "virgl-runtime" / name
+                self.assertEqual(
+                    staged.read_bytes(),
+                    (self.root / "ThirdParty" / "out" / "virgl-runtime" / "key-one" / name).read_bytes(),
+                )
+        self.assertEqual(list(self.artifacts.glob(".hosted-inputs.*")), [])
+
+    def test_a_missing_runtime_library_stops_before_anything_is_written(self) -> None:
+        (self.root / "ThirdParty" / "out" / "virgl-runtime" / "key-one" / RUNTIME_LIBRARIES[1]).unlink()
+        result = self.stage()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run scripts/build-third-party.sh virgl-runtime", result.stderr)
+        self.assert_nothing_staged()
+
+    def test_a_symlinked_runtime_library_is_rejected(self) -> None:
+        build = self.root / "ThirdParty" / "out" / "virgl-runtime" / "key-one"
+        target = build / RUNTIME_LIBRARIES[0]
+        moved = build / "moved.dylib"
+        target.rename(moved)
+        target.symlink_to(moved.name)
+        result = self.stage()
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_nothing_staged()
+
+    def test_a_missing_golden_block_stops_before_anything_is_written(self) -> None:
+        (self.root / "Tests" / "Fixtures" / "graphics" / "edid" / GOLDEN_EDID.name).unlink()
+        result = self.stage()
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_nothing_staged()
+
+    def test_a_stale_runtime_directory_is_replaced(self) -> None:
+        stale = self.artifacts / "virgl-runtime"
+        stale.mkdir()
+        (stale / "libold.dylib").write_bytes(b"old")
+        result = self.stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((stale / "libold.dylib").exists())
+        self.assertEqual(
+            sorted(path.name for path in stale.iterdir()),
+            sorted(RUNTIME_LIBRARIES),
+        )
+
+    def test_the_producer_stages_before_it_replaces_the_initramfs(self) -> None:
         build = BUILD.read_text(encoding="utf-8")
-        self.assertIn("ThirdParty/out/virgl-runtime/current", build)
-        for library in (
-            "libvirglrenderer.1.dylib",
-            "libepoxy.0.dylib",
-            "libEGL.dylib",
-            "libGLESv2.dylib",
-        ):
-            with self.subTest(library=library):
-                self.assertIn(library, build)
+        stager_call = build.index('"$script_dir/tools/stage-hosted-test-inputs.sh"')
+        initramfs_move = build.index('mv -f "$temporary_initrd" "$output_dir/initramfs.cpio.gz"')
+        self.assertLess(stager_call, initramfs_move)
 
-    def test_the_gpu_test_reads_the_golden_block_from_the_artifact_directory(self) -> None:
-        gpu = (
-            REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "GPUDeviceTests.swift"
-        ).read_text(encoding="utf-8")
-        self.assertIn("LinuxGuestHarness.artifactURLs()", gpu)
-        self.assertNotIn("URL(fileURLWithPath: #filePath)", gpu)
-
-    def test_the_virgl_test_loads_the_runtime_from_the_artifact_directory(self) -> None:
-        virgl = (
-            REPOSITORY_ROOT / "Tests" / "IntegrationTests" / "LinuxGuestTests" / "VirglTests.swift"
-        ).read_text(encoding="utf-8")
-        self.assertIn('"APKRUN_VIRGL_RUNTIME_PATH"', virgl)
-        self.assertIn("virgl-runtime", virgl)
+    def test_the_hosted_tests_read_the_staged_inputs_and_not_the_checkout(self) -> None:
+        for path in (GPU_TEST, VIRGL_TEST):
+            with self.subTest(test=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("URL(fileURLWithPath: #filePath)", text)
+                self.assertIn("LinuxGuestHarness.stagedInput(", text)
+        self.assertIn('"APKRUN_VIRGL_RUNTIME_PATH"', VIRGL_TEST.read_text(encoding="utf-8"))
 
 
 class TestManifestTool(InitramfsFixture):

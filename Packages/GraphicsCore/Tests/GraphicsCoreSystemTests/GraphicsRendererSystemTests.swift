@@ -281,7 +281,6 @@ struct VirGLRendererSuite {
     }
 }
 
-
 private typealias RendererOperation = @Sendable () throws(GraphicsFailure) -> Void
 
 private final class RendererBox: @unchecked Sendable {

@@ -13586,3 +13586,108 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The lab Mac runs VMs under the lock, and this task must not run a VM.
 
 **Consequence.** The change must not be merged as verified for T2 until the coordinator's checks pass. The decisions IR-520 to IR-539 remain open for the maintainer.
+
+## IR-553: Check name resolution with the first line of `ping -c 1`, because the stock image has no getent
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (step 5) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5 and criterion; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
+
+**Choice.** `AndroidNetworkTests.testNetwork` checks name resolution with `ping -c 1 -W 2 connectivitycheck.gstatic.com 2>&1 | head -n 1`, run as root (`su 0`), since the shell cannot reach the resolver (IR-555). The DNS stage passes only when that line starts with `PING connectivitycheck.gstatic.com (`. An error line such as `ping: unknown host ...` does not pass. The poll and its 120 s bound are unchanged.
+
+**Reason.** The stock image (build 16373615) has no `getent` or `nslookup` (android-image.md §7.8, read from the `system_a` partition and confirmed by `command -v` in the guest). `dumpsys dnsresolver` reported `Can't find service: dnsresolver` on the probe boot, `ndc resolver` printed nothing as the shell (and `500 0 Command not recognized` as root), and `getprop` has no DNS property. Of the candidates, only `ping` reports a name-resolution result, and M01 #095 step 5 already names `ping -c 1 connectivitycheck.gstatic.com` as the check.
+
+**Consequence.** The first run in which the name resolved is the root run of `11f93c7`: its `resolved:` line is `PING connectivitycheck.gstatic.com (142.251.150.120) 56(84) bytes of data.`, which has the prefix. The shell's runs (`806d07a`) never resolved, so only the root run shows the banner for a resolved name.
+
+## IR-554: The VALIDATED stage also rejects `NOT_VALIDATED`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (step 5) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The VALIDATED stage passes only when the WIFI `NetworkAgentInfo` line contains `VALIDATED` and does not contain `NOT_VALIDATED`. The loop's break condition and the final assertion use the same test.
+
+**Reason.** The stage on main is a substring match. IR-547 on `task/095-network-and-port-markers` records that a substring match can pass a line that the dump does not mark as validated. The network run of `806d07a` shows `VALIDATED` as a capability (`...&NOT_VPN&VALIDATED&NOT_ROAMING...`) and does not show `NOT_VALIDATED`, so this guard does not change the result of that run.
+
+**Consequence.** The stage keeps its meaning: it asks whether NetworkMonitor validated the Wi-Fi network. A dump that contains `NOT_VALIDATED` now fails the stage instead of passing it.
+
+## IR-555: The DNS failure is the serial shell's: it cannot reach netd's DNS proxy, while the network and the resolver work
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (step 5) |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 acceptance criteria; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
+
+**Choice.** The DNS stage runs its ping as root (`su 0`), commit `11f93c7`. The network is not changed. The shell's access to netd's DNS proxy is an image policy question, and it belongs to #035 (the APKRun AOSP product, which owns the image's SELinux policy; android-image.md §7.8 and §11). This task does not change the policy. The network criterion stays unchecked.
+
+**Reason.** The evidence is from probe boots on 2026-10-10 (20:29 to 21:22 JST, probes 1 to 8), each under `lockf`. The records are in scratch files outside the repository, and §7.8 summarises them.
+1. The servers of the LinkProperties line answer. `DnsAddresses: [ /fe80::fcb2:14ff:feba:7a64%wlan0,/192.168.64.1 ]`. A hand-built A query for `connectivitycheck.gstatic.com` from the guest (`toybox nc -u`) got RCODE 0 and `142.251.150.120` from `192.168.64.1` and from `fe80::fcb2:14ff:feba:7a64%wlan0` (`nc -6`). The control `8.8.8.8` also answered. ICMP to both servers got `100% packet loss`, which is the vmnet ICMP behaviour the design records.
+2. The host's query to the vmnet server works: `dig @192.168.64.1 connectivitycheck.gstatic.com A` returned `NOERROR` with `142.251.150.120` in 1 to 6 ms, and `dig @fe80::fcb2:14ff:feba:7a64%bridge100` did too. `dig +tcp` to `192.168.64.1` reported `end of file`.
+3. The resolver serves other clients on netid 100. The log shows `resolv_set_nameservers: netid = 100, addr = 192.168.64.1` and `addr = fe80::fcb2:14ff:feba:7a64%wlan0`. NetworkMonitor (uid 1000) logged `PROBE_DNS connectivitycheck.gstatic.com 9ms OK 142.251.150.120` and `PROBE_HTTP ... ret=204`. App uids 10029, 10066, and 10111 each got `doQuery: rcode=0` through netid 100.
+4. The shell cannot reach the resolver. The serial shell is `uid=2000(shell)` in `u:r:shell:s0`. `toybox nc -U /dev/socket/dnsproxyd` printed `nc: connect: Permission denied`, and `ls -lZ /dev/socket/dnsproxyd` printed `Permission denied`. The shell's lookups fail at once with no resolver log line: `ping` printed `ping: unknown host connectivitycheck.gstatic.com` (elapsed 0), and `toybox nc -z` printed `No address associated with hostname` (elapsed 0).
+5. Root connects and resolves. Root is `uid=0(root)` in `u:r:su:s0`. `toybox nc -U /dev/socket/dnsproxyd` returned `status=0`, and `su 0 ping -c 1 -W 2 connectivitycheck.gstatic.com` printed `PING connectivitycheck.gstatic.com (142.251.150.120) 56(84) bytes of data.` with `elapsed=2`.
+6. The earlier reading that the resolver service was absent was wrong. `service list` registers `dnsresolver: []` and `netd: []`. `dumpsys dnsresolver` (probes 1 and 6) and `dumpsys netd` (probe 5) print `Can't find service`, because the shell's service lookup is denied: `avc: denied { find } for pid=3977 uid=2000 name=dnsresolver scontext=u:r:shell:s0 tcontext=u:object_r:dnsresolver_service:s0 tclass=service_manager permissive=0`.
+7. Not separated: the log has no AVC line for the DNS-proxy connect, so whether SELinux or the socket's permissions refuse it is not shown. Not traced: the first probe boot (20:29 JST) also failed its root lookup. Its logs were not captured, so the cause of that failure is open.
+
+**Consequence.** The DNS stage can pass only as root, because the shell cannot resolve on this image. Run after the change (`AndroidNetwork`, `testNetwork`, once, under `lockf`): passed in 23.643 s. The `resolved:` line is `PING connectivitycheck.gstatic.com (142.251.150.120) 56(84) bytes of data.`, and the `validated:` line has `&VALIDATED&` and no `NOT_VALIDATED`. IR-374 keeps the network criterion unchecked until a run validates reliably or the host dependence is ruled out. One pass does neither, so the criterion stays unchecked. Follow-up, not implemented here, owner #035: decide whether the custom image should let the shell domain connect to `dnsproxyd`. The denial was observed on the stock build 16373615 under Virtualization.framework; whether a stock Cuttlefish device grants the shell this access was not tested. If the custom image should match the stock behaviour, the fix is in the image's policy. If the shell is meant to be denied, the test stays on root.
+
+## IR-556: The DNS pass recorded in IR-374 is unverified, and the old check could pass on an error line
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (follow-up of IR-374) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.4, §7.8; IR-374 (not edited) |
+
+**Choice.** IR-374 says that in the later runs the address, the route, and DNS passed within the poll. This entry does not rely on that statement. The DNS pass in those runs is treated as unverified.
+
+**Reason.** On main, the DNS check was `getent hosts connectivitycheck.gstatic.com` with `!resolved.isEmpty`, and `AndroidShellConsole.value` does not check the exit status. The stock image has no `getent`, so the shell's `getent: inaccessible or not found` line is the likely reply, and it is non-empty, so the check counted it as resolved. IR-547 on `task/095-network-and-port-markers` records the same gap. The probe boots and the network run of `806d07a` show the name not resolving with the shell's `ping`, and IR-555 gives the cause.
+
+**Consequence.** §7.4's 2026-10-08 DNS result is kept as the spike's record and marked as not reproduced on 2026-10-10 (IR-555). IR-374 is not edited. Its DNS statement should be read with this entry.
+
+## IR-557: This branch keeps main's test, so it conflicts with the stage walk on task/095-network-and-port-markers
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** `task/095-dns-probe` is created from main `0cb8900`, as the task asked, and changes the shared poll on main. The stage walk on `task/095-network-and-port-markers` (`ee171e1`; IR-546 to IR-552) changes the same file, by 143 insertions and 44 deletions, and it still calls `getent` (its line 55). The two branches cannot both merge without one choice.
+
+**Reason.** Both branches test the same criterion with the same file. The walk reports the stage that stopped it (IR-546), which this branch does not do. The ping stage has to replace the `getent` stage on the walk before that branch's network run can mean anything.
+
+**Consequence.** Decide the base for #095's test before either branch merges. If the walk is the base, port the ping stage and the `NOT_VALIDATED` guard (IR-553, IR-554) onto it. If this branch is the base, the walk's stage records are lost, and IR-546 to IR-552 need a new home.
+
+## IR-558: The image listing in §7.8 comes from a scratch reader, because `Images/tools` has no reader for the files in a filesystem
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 (step 5) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.8; [images tools](../../Images/tools/apkrun_image/) |
+
+**Choice.** The partition listing in §7.8 was read with a scratch EROFS directory walker in `/tmp`, not committed. The walker used the `liblp` reader in `Images/tools` (`lp.py`, `read_dynamic_partitions` on the sparse `super.img`) to extract `system_a`. `Images/tools` detects the filesystem type inside a logical partition (`inventory.py`, `_parse_filesystem_at`), but it has no reader for the files inside that filesystem.
+
+**Reason.** The task asks to check which commands exist on the image by reading its files. The repository has no way to list them, so the listing cannot be rerun from a checkout.
+
+**Consequence.** §7.8 records the result, not a command that reproduces it. Decision needed: whether to add a read-only listing command to `Images/tools` (EROFS now, ext4 for the other images), so that the listing is part of the image inventory. Until then, the scratch walker stays outside the repository.
+
+## IR-559: The commit scope table has no `plan` scope, but main uses `docs(plan)` and `docs(<area>)` for documentation commits
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [workflow.md](../05-development/workflow.md) §4.2 (scope table); [AGENTS.md](../../AGENTS.md) §13 |
+
+**Choice.** The documentation commits of this branch follow main: `docs(plan)` for the plan files and `docs(android)` for the Android image design. Neither scope is in the table in workflow §4.2, where `docs` covers `docs/`. This entry does not change the table.
+
+**Reason.** AGENTS.md §13 says a commit scope is one of the scopes in workflow §4.2. Main's history uses `docs(plan)` and `docs(<area>)` for documentation commits, for example `289e997` and `08fbd0f`. A reviewer applying the table literally would reject these commits, and applying main's practice breaks the table as written.
+
+**Consequence.** Decision needed: add `plan` to the table and state that `docs(<area>)` names the design area that a document describes, or use `docs` for these commits. Until then the commits follow main's practice and do not match the table as written.

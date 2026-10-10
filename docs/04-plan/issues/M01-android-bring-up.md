@@ -1500,7 +1500,7 @@ See [../test-strategy.md](../test-strategy.md).
 - [x] `BOOT_COMPLETED` is logged as a boot phase marker, and each boot has a `perf/boots.jsonl` record (the five G2 boots each wrote one, with `BOOT_COMPLETED` and `outcome` `ready`).
 - [x] Five cold boots in a row pass.
 - [x] The reference diff has no unexplained difference: 30 differences, all explained, exit 0 (the G2 run at `691e114`; `expected-differences.yaml` is read beside `Images/reference/16373615/`).
-- [ ] Gate G2 passes on the reference Mac with a clean build from `main`. The result is recorded in [android-image.md](../../02-design/android-image.md) §8 and in [../risks.md](../risks.md) (R-06, R-11, R-12). Passed from the task branch at `691e114` (IR-376); the clean-`main` run waits for the merge and runs with `scripts/run-gate.sh G2` in the main checkout.
+- [x] Gate G2 passes on the reference Mac with a clean build from `main`. The result is recorded in [android-image.md](../../02-design/android-image.md) §8 and in [../risks.md](../risks.md) (R-06, R-11, R-12). Passed on clean `main` at `70d81f3` on 2026-10-10 with `scripts/run-gate.sh G2`: five cold boots, each stable for 600 s, `sys.boot_completed=1` five times, 3062.7 s, 6 run / 3 skipped / 0 failures, report status passed (IR-376). The earlier pass on the task branch at `691e114` is superseded.
 
 ### Notes
 

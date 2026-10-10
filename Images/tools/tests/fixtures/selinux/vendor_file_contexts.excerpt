@@ -1,0 +1,5 @@
+# Excerpt of vendor_a:/etc/selinux/vendor_file_contexts (the stock image of build 16373615, sha256 of the full file edd6ac68ca739ca2601b78a274e026426e8d906e9597f2d6190f0c01941821b2).
+# The lines are copied verbatim; they are the rules the tests of selinux_labels use.
+/vendor/lib(64)?/dri/.*       u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libdrm.so  u:object_r:same_process_hal_file:s0
+/vendor/lib(64)?/libEGL_emulation\.so          u:object_r:same_process_hal_file:s0

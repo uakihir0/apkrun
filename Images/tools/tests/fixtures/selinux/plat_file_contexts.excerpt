@@ -1,0 +1,7 @@
+# Excerpt of system_a:/system/etc/selinux/plat_file_contexts (the stock image of build 16373615, sha256 of the full file bc6f2ee366442c84221049130b8052578f1d9873cfac8d40f90efacd76521d96).
+# The lines are copied verbatim; they are the rules the tests of selinux_labels use.
+/(vendor|system/vendor)(/.*)?                  u:object_r:vendor_file:s0
+/(vendor|system/vendor)/bin/sh                 u:object_r:vendor_shell_exec:s0
+/(vendor|system/vendor)/etc(/.*)?              u:object_r:vendor_configs_file:s0
+/(vendor|system/vendor)/lib(64)?/egl(/.*)?     u:object_r:same_process_hal_file:s0
+/(vendor|system/vendor)/lib(64)?/hw            u:object_r:vendor_hal_file:s0

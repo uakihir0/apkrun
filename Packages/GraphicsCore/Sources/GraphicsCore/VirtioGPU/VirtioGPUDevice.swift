@@ -140,9 +140,18 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         scanouts: ScanoutTable = ScanoutTable(),
         logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
-        engine makeEngine: @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
+        recorder: VirGLRecorder? = nil,
+        engine makeEngine:
+            @escaping @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine
     ) throws(GraphicsFailure) -> VirtioGPUDevice {
-        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.test-render", makeEngine: makeEngine)
+        let recordingEngine:
+            @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine = {
+                onFence throws(GraphicsFailure) in
+                let engine = try makeEngine(onFence)
+                guard let recorder else { return engine }
+                return RecordingVirGLEngine(wrapping: engine, recorder: recorder)
+            }
+        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.test-render", makeEngine: recordingEngine)
         return VirtioGPUDevice(
             path: .virgl,
             backend: backend,
@@ -416,7 +425,8 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
         // A fence beyond 32 bits cannot name a virglrenderer ctx0 fence (graphics.md §5.2, IR-461).
         if backend != nil, header.flags & VirtioGPUProtocol.Flag.fence != 0,
-            VirGLBackend.fenceNumber(header.fenceID) == nil {
+            VirGLBackend.fenceNumber(header.fenceID) == nil
+        {
             reportGuestError("fence identifier exceeds 32 bits", command: header.type)
             return Reply(bytes: errorReply(.invalidParameter, answering: header), work: nil)
         }

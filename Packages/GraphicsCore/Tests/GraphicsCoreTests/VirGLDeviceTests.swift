@@ -96,7 +96,9 @@ private func transfer(
     try await eventually { control.completionCounts == [1, 1, 1] }
     #expect(try body(control.writtenBuffers[0]) == .okCapsetInfo(id: GraphicsCapset.virgl, maxVersion: 1, maxSize: 4))
     #expect(try body(control.writtenBuffers[1]) == .okCapsetInfo(id: GraphicsCapset.virgl2, maxVersion: 2, maxSize: 8))
-    #expect(try body(control.writtenBuffers[2]) == .okCapset(data: (0..<8).map { UInt8(truncatingIfNeeded: 2 * 16 + 2 + $0) }))
+    #expect(
+        try body(control.writtenBuffers[2])
+            == .okCapset(data: (0..<8).map { UInt8(truncatingIfNeeded: 2 * 16 + 2 + $0) }))
 }
 
 @Test func contextsAndSubmissionsReachTheEngineInOrder() async throws {
@@ -127,14 +129,15 @@ private func transfer(
 @Test func aSubmitToAnUnknownContextIsAnInvalidContextError() async throws {
     let harness = try VirGLHarness()
     let control = harness.send([
-        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), contextID: 9),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), contextID: 9)
     ])
     try await eventually { control.completionCounts == [1] }
     #expect(gpuResponseType(control.writtenBuffers[0]) == VirtioGPUErrorCode.invalidContextID.rawValue)
-    #expect(!harness.engineRef.engine.calls.contains { call in
-        if case .submit = call { return true }
-        return false
-    })
+    #expect(
+        !harness.engineRef.engine.calls.contains { call in
+            if case .submit = call { return true }
+            return false
+        })
 }
 
 @Test func aSubmitThatIsNotWholeWordsIsInvalid() async throws {
@@ -249,10 +252,11 @@ private func transfer(
     ])
     try await eventually { control.completionCounts == [1, 1] }
     #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUErrorCode.invalidParameter.rawValue)
-    #expect(!harness.engineRef.engine.calls.contains { call in
-        if case .submit = call { return true }
-        return false
-    })
+    #expect(
+        !harness.engineRef.engine.calls.contains { call in
+            if case .submit = call { return true }
+            return false
+        })
 }
 
 @Test func theContextLimitAnswersWithUnspec() async throws {
@@ -269,7 +273,7 @@ private func transfer(
 @Test func aResetResetsTheRendererAndForgetsTheResources() async throws {
     let harness = try VirGLHarness()
     let first = harness.send([
-        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5)))
     ])
     try await eventually { first.completionCounts == [1] }
     harness.device.deviceWillReset()
@@ -293,11 +297,16 @@ private func transfer(
     #expect(device.hostCapabilities == ["edid"])
     guest.seed(address: 0x1000, bytes: (0..<64).map { UInt8($0) })
     let control = FakeVirtioQueue(elements: [
-        (readable: gpuRequest(.resourceCreate2D, body: .resourceCreate2D(resourceID: 3, format: 1, width: 4, height: 4)), writableByteCount: 4096),
+        (
+            readable: gpuRequest(
+                .resourceCreate2D, body: .resourceCreate2D(resourceID: 3, format: 1, width: 4, height: 4)),
+            writableByteCount: 4096
+        ),
         (
             readable: gpuRequest(
                 .resourceAttachBacking,
-                body: .resourceAttachBacking(resourceID: 3, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+                body: .resourceAttachBacking(
+                    resourceID: 3, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
             ),
             writableByteCount: 4096
         ),
@@ -322,7 +331,10 @@ private func transfer(
             ),
             writableByteCount: 4096
         ),
-        (readable: gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 1), writableByteCount: 4096),
+        (
+            readable: gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: []), contextID: 1),
+            writableByteCount: 4096
+        ),
         (readable: gpuRequest(.getCapsetInfo, body: .getCapsetInfo(index: 0)), writableByteCount: 4096),
     ])
     guest.replaceQueues([control, FakeVirtioQueue(elements: [])])
@@ -345,7 +357,11 @@ private func transfer(
     let context = VirtioDeviceContext(backend: guest, generation: 0)
     let device = VirtioGPUDevice.twoDimensional()
     let control = FakeVirtioQueue(elements: [
-        (readable: gpuRequest(.resourceCreate2D, body: .resourceCreate2D(resourceID: 3, format: 1, width: 4, height: 4)), writableByteCount: 4096),
+        (
+            readable: gpuRequest(
+                .resourceCreate2D, body: .resourceCreate2D(resourceID: 3, format: 1, width: 4, height: 4)),
+            writableByteCount: 4096
+        ),
         (
             readable: gpuRequest(
                 .setScanout,
@@ -357,4 +373,77 @@ private func transfer(
     guest.replaceQueues([control, FakeVirtioQueue(elements: [])])
     device.queueNotified(index: 0, context: context)
     #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUErrorCode.invalidParameter.rawValue)
+}
+
+@Test func aRecordedSessionReplaysToTheSameEngineCalls() async throws {
+    let recorder = VirGLRecorder()
+    let ref = EngineRef()
+    let device = try VirtioGPUDevice.makeVirgl(recorder: recorder) {
+        onFence throws(GraphicsFailure) -> any VirGLEngine in
+        let engine = FakeVirGLEngine(onFence: onFence)
+        ref.set(engine)
+        return engine
+    }
+    let guest = SeededGuestBackend(queues: [FakeVirtioQueue(elements: []), FakeVirtioQueue(elements: [])])
+    let context = VirtioDeviceContext(backend: guest, generation: 0)
+    guest.seed(address: 0x1000, bytes: (0..<64).map { UInt8($0) })
+    let control = FakeVirtioQueue(elements: [
+        (
+            readable: gpuRequest(
+                .ctxCreate, body: .ctxCreate(contextInit: 0, debugName: Array("rec".utf8)), contextID: 1),
+            writableByteCount: 4096
+        ),
+        (readable: gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))), writableByteCount: 4096),
+        (
+            readable: gpuRequest(
+                .resourceAttachBacking,
+                body: .resourceAttachBacking(
+                    resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+            ),
+            writableByteCount: 4096
+        ),
+        (
+            readable: gpuRequest(
+                .transferToHost3D, body: .transferToHost3D(transfer(resource: 5, box: gpuBox(width: 4, height: 4)))),
+            writableByteCount: 4096
+        ),
+        (
+            readable: gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), fence: 3, contextID: 1),
+            writableByteCount: 4096
+        ),
+        (
+            readable: gpuRequest(
+                .transferFromHost3D, body: .transferFromHost3D(transfer(resource: 5, box: gpuBox(width: 4, height: 4)))),
+            writableByteCount: 4096
+        ),
+    ])
+    guest.replaceQueues([control, FakeVirtioQueue(elements: [])])
+    device.queueNotified(index: 0, context: context)
+    try await eventually { ref.engine.calls.contains(.fence(3, context: 1)) }
+    ref.engine.releaseFences()
+    try await eventually { control.completionCounts.allSatisfy { $0 == 1 } }
+
+    let recording = recorder.recording
+    let decoded = try VirGLRecording.decoded(from: try recording.encoded())
+    #expect(decoded == recording)
+    #expect(decoded.operations.count == 6)
+
+    let replayed = FakeVirGLEngine(onFence: { _ in })
+    #expect(replay(decoded, onto: replayed) == nil)
+    let recordedCalls = ref.engine.calls.filter { call in
+        switch call {
+        case .capset, .poll: return false
+        default: return true
+        }
+    }
+    #expect(replayed.calls == recordedCalls)
+}
+
+@Test func aRecordingFromAnotherVersionIsRejected() throws {
+    var recording = VirGLRecording(operations: [.reset])
+    recording.version = 2
+    let data = try recording.encoded()
+    #expect(throws: VirGLRecordingFailure.unsupportedVersion(2)) {
+        _ = try VirGLRecording.decoded(from: data)
+    }
 }

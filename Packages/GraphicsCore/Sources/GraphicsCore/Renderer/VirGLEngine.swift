@@ -24,7 +24,7 @@ protocol VirGLEngine: AnyObject {
 }
 
 /// The arguments of a resource creation, as virglrenderer takes them.
-struct VirGLResourceArguments: Equatable, Sendable {
+struct VirGLResourceArguments: Codable, Equatable, Sendable {
     var resourceID: UInt32
     var target: UInt32
     var format: UInt32
@@ -58,7 +58,7 @@ struct VirGLResourceArguments: Equatable, Sendable {
 ///
 /// The host buffer begins at the resource origin. The caller gathers or scatters
 /// the guest bytes of the transfer, so the renderer always reads from offset 0.
-struct VirGLTransfer: Equatable, Sendable {
+struct VirGLTransfer: Codable, Equatable, Sendable {
     var resourceID: UInt32
     var contextID: UInt32
     var level: UInt32

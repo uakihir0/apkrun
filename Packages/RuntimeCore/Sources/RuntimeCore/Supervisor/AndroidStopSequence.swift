@@ -15,8 +15,8 @@ struct AndroidStopSequence: Sendable {
 
     /// Runs the sequence and returns when the VM has stopped.
     ///
-    /// - `requestPowerOff` sends the power-off request, and reports whether a channel accepted it. It is nil when
-    ///   no request is made. A refused request skips the wait, and the VM is stopped at once.
+    /// - `requestPowerOff` sends the power-off request, and reports whether a channel was tried (`sendPowerOff`).
+    ///   It is nil when no request is made. A request that no channel was tried for skips the wait.
     /// - `isStopped` reports whether the VM has stopped. It is polled during the wait.
     /// - `forceStop` stops the VM. It runs only when the VM is still running after the wait.
     func run(
@@ -43,5 +43,27 @@ struct AndroidStopSequence: Sendable {
         if await !isStopped() {
             await forceStop()
         }
+    }
+
+    /// Sends the power-off request over the first channel that takes it: ADB, then the serial shell. Each closure is
+    /// nil when its channel does not exist, and each reports whether its request succeeded. Returns whether a channel
+    /// was tried. A request that failed may still have reached Android (its reply can be lost), so a tried request
+    /// gets the full deadline, and only a request that no channel could try skips the wait.
+    static func sendPowerOff(
+        overADB adb: (@Sendable () async -> Bool)?,
+        overShell shell: (@Sendable () async -> Bool)?
+    ) async -> Bool {
+        var tried = false
+        if let adb {
+            tried = true
+            if await adb() {
+                return true
+            }
+        }
+        guard let shell else {
+            return tried
+        }
+        _ = await shell()
+        return true
     }
 }

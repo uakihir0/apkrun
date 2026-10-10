@@ -540,19 +540,24 @@ public actor RuntimeSupervisor {
     }
 
     /// Asks Android to power off with `reboot -p`: over ADB when it is connected, and over the serial shell
-    /// when the ADB request fails or ADB is not connected. Returns whether a channel accepted the request.
+    /// when the ADB request fails or ADB is not connected. Returns whether a channel was tried (vm.md §9.3).
     private func requestPowerOff() async -> Bool {
-        if isADBConnected, let adbClient {
-            logger.notice("Stopping Android with reboot -p over ADB")
-            if (try? await adbClient.rebootPowerOff()) != nil {
-                return true
+        let logger = logger
+        var adb: (@Sendable () async -> Bool)?
+        if isADBConnected, let client = adbClient {
+            adb = { @Sendable in
+                logger.notice("Stopping Android with reboot -p over ADB")
+                return (try? await client.rebootPowerOff()) != nil
             }
         }
-        guard let shell else {
-            return false
+        var serial: (@Sendable () async -> Bool)?
+        if let shell {
+            serial = { @Sendable in
+                logger.notice("Stopping Android with reboot -p over the serial shell")
+                return (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
+            }
         }
-        logger.notice("Stopping Android with reboot -p over the serial shell")
-        return (try? await shell.run("su 0 reboot -p", timeout: .seconds(2))) != nil
+        return await AndroidStopSequence.sendPowerOff(overADB: adb, overShell: serial)
     }
 
     /// Stops the Guest Agent of the boot. It runs before the guest powers off, so that the supervisor does not

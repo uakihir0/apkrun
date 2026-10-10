@@ -11694,7 +11694,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Needs maintainer review; the drmVirgl refusal is superseded by IR-580 |
 | Task | #021 (step 1) |
 | Affected documents | [M02](issues/M02-graphics.md) #021, #022; [graphics.md](../02-design/graphics.md) §9; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7; [error-catalog.md](../03-reference/error-catalog.md) §7.2 |
 
@@ -11703,6 +11703,8 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 **Reason.** Without the check, a `drmVirgl` boot would start without `VIRTIO_GPU_F_VIRGL`, although the profile's bootconfig selects Mesa's VirGL path (`androidboot.hardware.egl=mesa`). The problem would then surface inside the guest, not as a host error. The manifest already names the features a profile needs, so the check uses that vocabulary and does not hard-code a list of profiles.
 
 **Consequence.** `drmVirgl` cannot boot in this build, and `--gpu virgl` is refused (IR-382). #022 offers `VIRTIO_GPU_F_VIRGL` in the descriptor, and this check then passes without a change to it.
+
+**Superseded by IR-580 for drmVirgl.** The refusal of drmVirgl is removed, before its boot is verified on the VM, and `--gpu virgl` is offered (IR-584). The check itself stays: a profile whose bundle entry is missing, or whose device lacks a required feature, is still refused with `runtime.gpuProfileUnavailable` before the VM starts (IR-581). The text of the entry was changed by IR-587.
 
 ## IR-381: Append the GPU device in RuntimeSupervisor, for every caller
 
@@ -11722,7 +11724,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Needs maintainer review; `--gpu virgl` is superseded by IR-584 (the default question stays open there) |
 | Task | #021 (step 4) |
 | Affected documents | [cli.md](../02-design/cli.md) §5; [runtime-api.md](../03-reference/runtime-api.md) §15; [M02](issues/M02-graphics.md) #021 |
 
@@ -11731,6 +11733,8 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 **Reason.** A profile that the CLI offers must boot, and `virgl` cannot boot before #022 (IR-380). Keeping `none` as the default leaves the headless bring-up unchanged.
 
 **Consequence.** runtime-api.md §15 names `.virgl` and the default that follows #022 is `virgl`. cli.md §5 lists the values without a default. The maintainer should confirm when #022 changes the default.
+
+**Superseded by IR-584 for `virgl`.** `--gpu virgl` is offered now, and it maps to drmVirgl. The default stays `none`, because a default change needs the verified drmVirgl boot. The question of the default is still open, and IR-584 records it.
 
 ## IR-383: Keep the 1024×768 test mode on scanout 0 in #021
 
@@ -12335,7 +12339,7 @@ the real manifest.
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Needs maintainer review; superseded by IR-580 |
 | Task | #022 (step 4) |
 | Affected documents | [graphics.md](../02-design/graphics.md) §9; [IR-380](#ir-380-refuse-a-gpu-profile-that-the-device-does-not-offer), [IR-382](#ir-382-offer-only-the-gpu-profiles-of-this-build-in-apkrun-dev-boot---gpu) |
 
@@ -12344,6 +12348,8 @@ the real manifest.
 **Reason.** Removing the refusal starts a VM with the VirGL features. The `drmVirgl` boot has not run, and the task forbids a VM run here. IR-380 expected the check to pass by itself once the device offered VIRGL. That does not hold for the planner, which builds its own device, so the switch and the removal of the refusal must happen together, after a verified boot.
 
 **Consequence.** The `drmVirgl` acceptance criteria of #022 stay unmet (M02 #022). The follow-up is a one-line switch in `AndroidGraphicsDevices`, plus the removal of the refusal of IR-380 and IR-382, in the same commit as the verified boot.
+
+**Superseded by IR-580.** The switch and the removal of the refusal happened in code before the verified boot, as IR-580 records. The verified boot still gates the `drmVirgl` criteria of #022, but not the code path. The reasoning above, that the removal must follow the boot, is the part that IR-580 replaces.
 
 ## IR-463: Every VirGL context shares the root context's objects
 
@@ -13691,6 +13697,160 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** AGENTS.md §13 says a commit scope is one of the scopes in workflow §4.2. Main's history uses `docs(plan)` and `docs(<area>)` for documentation commits, for example `289e997` and `08fbd0f`. A reviewer applying the table literally would reject these commits, and applying main's practice breaks the table as written.
 
 **Consequence.** Decision needed: add `plan` to the table and state that `docs(<area>)` names the design area that a document describes, or use `docs` for these commits. Until then the commits follow main's practice and do not match the table as written.
+
+## IR-580: Remove the drmVirgl refusal before the drmVirgl boot is verified on the VM
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §8, §9, §12 (#022), §16; [M02](issues/M02-graphics.md) #022; supersedes the order of [IR-462](#ir-462-the-planner-still-refuses-drmvirgl-until-its-boot-is-verified) and the drmVirgl part of [IR-380](#ir-380-refuse-a-gpu-profile-that-the-device-does-not-offer) |
+
+**Choice.** RuntimeCore attaches the VirGL device (`VirtioGPUDevice.virgl()`) for `drmVirgl` now. The removal does not wait for the verified boot. The `drmVirgl` criteria of #022 (step 4 and criteria 1 to 4) stay open until the VM check runs, and no document marks them as met.
+
+**Reason.** The task asked for the host side of the profile to be enabled without a VM run, because the G2 gate holds the VM lock in the main checkout. IR-462 tied the removal to a verified boot. This entry supersedes that order, because the host side can now be tested at T0 and T1: the device list, the bootconfig against §9, and the real renderer start. The cost is that a `drmVirgl` boot that the VM check later rejects can now reach the VM. Before this change the host refused it, and the failure would have surfaced only in the guest, as a stall. The boot timeouts and stall limits of the supervisor (runtime-daemon.md §3.2) still bound such a boot.
+
+**Consequence.** `apkrun dev boot --gpu virgl`, and the default profile of `BootOptions` (drmVirgl, android-image.md §9.1), now start a VM with `VIRTIO_GPU_F_VIRGL` and a VirGL renderer that no VM check has run. Any caller that boots the default profile now reaches that path. The maintainer should confirm that no release path does so before the #022 VM check passes. The default of `apkrun dev boot` stays `none` (IR-584).
+
+## IR-581: A profile that the bundle does not list starts no renderer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §8, §9; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.7 |
+
+**Choice.** `AndroidGraphicsDevices.devices(for:requiredHostCapabilities:)` checks that the bundle lists the profile before it makes the device. The VirGL device is made by a factory parameter, so a T0 test counts the renderer starts (`drmVirglProfileStartsNoRendererWhenTheBundleDoesNotListIt`). A device that lacks a required feature is still refused, after the device is made, and the refused device is dropped at once.
+
+**Reason.** Making a VirGL device starts a render thread and creates a virglrenderer instance, and one process admits one instance at a time (graphics.md §5.2). A refusal must not hold that resource. Before this change the check came after a cheap EDID-only device was made, so the order did not matter.
+
+**Consequence.** The factory parameter exists for tests. The production overload passes `VirtioGPUDevice.virgl()`.
+
+## IR-582: A renderer failure ends the boot as the transparent `runtime.graphics`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §8, §13.1; [error-catalog.md](../03-reference/error-catalog.md) §7.2 |
+
+**Choice.** `RuntimeBootFailure` gets the case `graphics(GraphicsFailure)`. Its catalog entry `runtime.graphics` is transparent, with `cliExit` `cause`, so the CLI shows the `graphics.*` entry of the cause: `graphics.rendererInitFailed` with stage `virgl`, or `graphics.libraryMissing`.
+
+**Reason.** graphics.md §8 requires an EGL, ANGLE, or virglrenderer failure to be reported as a `GraphicsFailure` before Android boots. Mapping it to `runtime.gpuProfileUnavailable` would say the profile is unsupported, and mapping it to `runtime.androidBootFailed` would blame the guest. The transparent case follows the existing `image`, `vm`, and `guestAgent` cases.
+
+**Consequence.** The remediation shown depends on the cause. A `graphics.rendererInitFailed` gets the Graphics Safe Mode text. A `graphics.libraryMissing` gets "Reinstall APKRun.", and a `graphics.rendererOperationFailed` from the renderer start gets the restart text. The `runtime.graphics` entry itself has no remediation, because it is transparent.
+
+## IR-583: The integration test of the old refusal is removed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [M02](issues/M02-graphics.md) #021 ("Refusal check") and #022; [graphics.md](../02-design/graphics.md) §12 |
+
+**Choice.** `Tests/IntegrationTests/AndroidGraphicsTests/AndroidGraphicsRefusalTests.swift` is deleted. Its premise, that a `drmVirgl` boot is refused, no longer holds. Its refusal order is covered at T0 through the device factory. Its check that a refusal leaves the home directory unchanged is not replaced at the supervisor level.
+
+**Reason.** The test called `ensureReady` with `drmVirgl` in the AndroidGraphics configuration of the VM suite. With the refusal gone, that call would start a VM. A valid bundle must list `drmVirgl` and `guestSwiftshader` (`RuntimeImageManifestRules`), so an unlisted profile can only come from an invalid bundle. A supervisor-level replacement would need a renderer failure that the test forces, and that test would run in the VM suite, which this task does not run.
+
+**Consequence.** A supervisor-level check that a renderer failure leaves the instance untouched is open. A candidate for the VM suite: set `APKRUN_VIRGL_RUNTIME_PATH` to an empty directory, then expect `runtime.graphics` and no change under the home directory.
+
+## IR-584: `apkrun dev boot --gpu virgl` is offered, and the default stays `none`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [runtime-api.md](../03-reference/runtime-api.md) §15; [graphics.md](../02-design/graphics.md) §9; [IR-382](#ir-382-offer-only-the-gpu-profiles-of-this-build-in-apkrun-dev-boot---gpu) |
+
+**Choice.** `DevGPUProfile` has the case `virgl`, which maps to `drmVirgl`. The default of `apkrun dev boot` stays `none`, the headless bring-up.
+
+**Reason.** cli.md §5 and runtime-api.md §15 say that `virgl` becomes the default once #022 exists, and IR-382 left that switch to the maintainer. A default change would send every developer boot down the path that the VM has not verified, and it would replace the headless bring-up that the M1 checks use. Keeping `none` until the VM check passes is the rigorous option.
+
+**Consequence.** Developers select `--gpu virgl` on purpose until the maintainer changes the default. cli.md §5 and runtime-api.md §15 now say that the default is `none` until the check passes.
+
+## IR-585: The renderer tests name the built runtime, and run one at a time
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.2, §14 |
+
+**Choice.** `AndroidGraphicsDevicesRendererTests` finds `ThirdParty/out/virgl-runtime/current` from its source path, sets `APKRUN_VIRGL_RUNTIME_PATH` to it, and runs as a serialized suite. It is skipped without a Metal device or without the built cache.
+
+**Reason.** Without the variable, both renderer tests failed with `libraryMissing(name: "VirGLRuntime")` in the Swift Testing runner, and with the variable set they pass. The GraphicsCore suites set the same variable for the same reason. One process admits one virglrenderer instance (graphics.md §5.2), so when two renderer tests ran at once, one failed with `rendererInitFailed` (`a virglrenderer instance is already active in this process`).
+
+**Consequence.** The T1 tests live in RuntimeCoreTests, because RuntimeCore has no system-test target, and a new target would change Package.swift and the test plan. The cause of the missing lookup was not traced. The lookup in GraphicsBridge walks up from the executable, which the runner does not place inside the checkout. Whether the CLI executable finds the cache was not checked in this task.
+
+## IR-586: The drmVirgl bootconfig check includes the composer key
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9 (table); [android-image.md](../02-design/android-image.md) §6.2 |
+
+**Choice.** The T0 test `androidBootPlannerBuildsTheDrmVirglBootOfTheDesign` expects eight drmVirgl keys: the seven of §9 and `androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.ranchu`. §9 now lists the composer key.
+
+**Reason.** android-image.md §6.2 says the layout file is the source of truth, names the composer key as a GPU-profile key, and the committed layout sets it for drmVirgl. A check that left the key out of §9 would disagree with the layout and with §6.2.
+
+**Consequence.** If the maintainer wants the composer key out of drmVirgl, the layout, §9, and this test change together.
+
+## IR-587: The text of `runtime.gpuProfileUnavailable` describes the bundle and device check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) §7.2 (generated); `Packages/DiagnosticsCore/ErrorCatalog/errors.json` |
+
+**Choice.** The remediation no longer says that VirGL is unavailable in this version. It now says to start Android in Graphics Safe Mode, and if that does not help, to update APKRun and create a diagnostics report, in English and Japanese. The `when` text describes the bundle and device check. The message is unchanged.
+
+**Reason.** Once drmVirgl is attached, the old remediation is false for the drmVirgl case, and it would tell users to wait for a feature that is present. The Japanese text was written in this task without a native review.
+
+**Consequence.** The Japanese text of the remediation needs a native review before a release.
+
+## IR-588: The superseded entries are annotated, not rewritten
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [IR-380](#ir-380-refuse-a-gpu-profile-that-the-device-does-not-offer), [IR-382](#ir-382-offer-only-the-gpu-profiles-of-this-build-in-apkrun-dev-boot---gpu), [IR-462](#ir-462-the-planner-still-refuses-drmvirgl-until-its-boot-is-verified) |
+
+**Choice.** IR-380, IR-382, and IR-462 keep their Choice and Reason text. Each gets a Status note and a "Superseded" paragraph that names IR-580 or IR-584. The current state is in graphics.md §9 and §16 and in M02 #022.
+
+**Reason.** This file is the decision history, and the history stays. A reader who opens only IR-380 or IR-462 needs a pointer to the change.
+
+**Consequence.** The refusal check of IR-380 stays in the code for a profile that the bundle does not list or whose device cannot satisfy it (IR-581).
+
+## IR-589: A boot that fails releases its renderer through ARC and the stop hook
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.2, §8 (`WillStop`) |
+
+**Choice.** `RuntimeSupervisor.boot()` makes no explicit renderer stop when it fails. On a failure before the VM controller exists, the local device is released when `boot()` exits. On a failure after it exists, `fail()` stops the VM, which runs `VirtioGPUDevice.deviceWillStop()`, and then clears `controller`. In both cases `VirGLBackend.deinit` shuts the renderer down when the last reference goes. T1 `aReleasedVirglDeviceLetsTheNextBootStartItsRenderer` checks the release.
+
+**Reason.** The renderer is started before the instance is read, so the failure paths that follow have a live renderer to release. Adding a separate stop call on each path would duplicate the release that ARC already performs, and it would be a second owner of the renderer's lifetime.
+
+**Consequence.** The release depends on no other reference to the device surviving a failed boot. A future path that keeps the device alive would make the next boot fail with "a virglrenderer instance is already active". The T1 test is the guard.
+
+## IR-590: The format check fails on a file that this change does not touch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [workflow.md](../05-development/workflow.md) §4 (checks); `Tests/IntegrationTests/RunResources/VMRunResourcesTests.swift` |
+
+**Choice.** `scripts/check-format.sh` fails on `Tests/IntegrationTests/RunResources/VMRunResourcesTests.swift` (lines 143, 144, and 181, `LineLength`). The file is the same on main, so the failure predates this branch. It is not fixed here.
+
+**Reason.** The file is outside the #022 scope. Formatting it in this change would mix an unrelated edit into the task.
+
+**Consequence.** The repository-wide format check fails until someone formats that file. The modules check of `scripts/check-module-deps.sh` could not run in this checkout, because the pinned XcodeGen is not installed (`scripts/bootstrap`). Its rules for the new test imports were read, not run.
 
 ## IR-600: The G2 stall is most likely a hosted test blocked on a read under `~/Documents`, and the fix stages both inputs outside it
 

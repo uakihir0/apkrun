@@ -5,8 +5,9 @@ import XCTest
 /// Wi-Fi network.
 ///
 /// It is #095's open check, not a condition of gate G2 (#014; IR-374), so it runs in its own `AndroidNetwork`
-/// test-plan configuration of `IntegrationTests`. CI and the gate do not select that configuration; run it by hand
-/// with `-only-test-configuration AndroidNetwork`.
+/// test-plan configuration of `IntegrationTests`. CI and the gate do not select that configuration. Run it by hand
+/// with `-only-test-configuration AndroidNetwork -only-testing:IntegrationTests/AndroidNetworkTests`: the LinuxGuest
+/// classes do not check the suite variable, so the configuration alone would also boot Linux test guests (IR-545).
 final class AndroidNetworkTests: XCTestCase {
     /// One stage of the network check, in the order the guest reaches it.
     private struct Stage {

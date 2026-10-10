@@ -11455,6 +11455,14 @@ not depend on it, and the AndroidBoot configuration does not run it. #095's
 criterion for the validated network stays unchecked until a run validates
 reliably or the probe's dependence on the host is ruled out.
 
+**Update (2026-10-10, IR-545 to IR-549).** The DNS pass recorded above is not
+evidence. The check of that time accepted any non-empty reply, and the shell's
+error text is one such reply (IR-547). The run-command line above is superseded:
+the AndroidNetwork run also needs `-only-testing:IntegrationTests/AndroidNetworkTests`
+(IR-545). The 2026-10-10 run stopped at the `dns` stage, and `validated` was not
+polled (IR-546, IR-548). The validated result of the older runs was a substring
+match that also matches `NOT_VALIDATED` (IR-547), so it is not re-established here.
+
 ## IR-375: Record categories the launcher capture lacks as not compared, and read the reference command line from kernel.log
 
 | Field | Value |
@@ -12607,7 +12615,7 @@ the real manifest.
 
 **Choice.** The marker check is `ConsolePortMarkerCheck` in `VirtualMachineCore/TestGuest`, next to `TestGuestRecord`. It takes the plan that the port test attaches (`LinuxTestGuest.consolePorts(tests:consolePortCount:)`) and the parsed records. `ConsolePortPlan` in RuntimeCore is unchanged, and the boot path does not call it (IR-373).
 
-**Reason.** The check judges the records that the guest prints, and those types live in VirtualMachineCore. `ConsolePortPlan` reorders attachments from a mapping that the check produces, so it is a consumer of the check, not its owner. Placing the check in RuntimeCore would make the T2 test depend on the dev command's module.
+**Reason.** The check judges the records that the guest prints, and those types live in VirtualMachineCore. `ConsolePortPlan` takes the device number that each attachment's marker arrived on. That is evidence the port test produces, so `ConsolePortPlan` consumes it and does not own the record format. Placing the check in RuntimeCore would make the T2 test depend on the dev command's module.
 
 **Consequence.** `ConsolePortMarkerCheckTests` (6 tests in VirtualMachineCoreTests) and the T2 port tests call the same function, so the T0 verdict covers the rule that the T2 run applies.
 
@@ -12633,7 +12641,7 @@ the real manifest.
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 acceptance criteria; [android-image.md](../02-design/android-image.md) §7.8 |
 
-**Choice.** The criterion "All 20 console ports are attached. Their numbering is verified with the markers" stays unchecked. On 2026-10-10 the eight-port marker test passed, the 20-port test still skips at `/dev/hvc8` (IR-372), and the T0 tests check the host-side rule for 20 ports without a guest.
+**Choice.** The criterion "All 20 console ports are attached. Their numbering is verified with the markers" stays unchecked. On 2026-10-10 the eight-port marker test passed. The 20-port test skipped at `/dev/hvc8` on 2026-10-09 (IR-372) and was not run on 2026-10-10. The T0 tests check the host-side rule for 20 ports without a guest.
 
 **Reason.** The criterion is about the guest's numbering of all 20 ports. The eight-port run verifies ports 1 to 7, and the T0 tests start no guest. Ticking the box would count the host-side rule as guest evidence.
 
@@ -12677,7 +12685,7 @@ the real manifest.
 
 **Choice.** `testNetwork` polls address, route, dns, and validated in that order, each with its own 120 s bound. The walk stops at the first stage that does not pass. The later stages are not polled, and the record names the stopping stage and the stages that were not polled.
 
-**Reason.** The stages depend on each other in the design (android-image §7.4): a route is useless without an address, and VALIDATED needs the name service that the DNS stage checks. The task asks for the stage that stops the walk to be recorded.
+**Reason.** The stages depend on each other: a route needs an address, and the captive-portal probe of NetworkMonitor needs name resolution before it can validate. The task asks for the stage that stops the walk to be recorded.
 
 **Consequence.** When DNS fails, `validated` is not polled, so that run cannot answer the VALIDATED question of IR-374. This is what happened on 2026-10-10. Decision needed: whether later stages should be polled after an earlier failure, each reported on its own. Until then, a DNS failure hides the VALIDATED result.
 
@@ -12689,13 +12697,13 @@ the real manifest.
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
 
-**Choice.** The DNS stage requires a `getent` line that starts with an address and names `connectivitycheck.gstatic.com`. The VALIDATED stage requires the words WIFI and VALIDATED as whole words, where underscore joins a word, so `NOT_VALIDATED` does not count. The VALIDATED command writes its search words in brackets (`WIF[I]`, `VALID[A]TED`), so the echo of the command cannot match.
+**Choice.** The DNS stage requires a `getent` line that starts with an address and names `connectivitycheck.gstatic.com`. The VALIDATED stage requires the words WIFI and VALIDATED as whole words, where underscore joins a word, so `NOT_VALIDATED` does not count. The VALIDATED command writes its search words in brackets (`WIF[I]`, `VALID[A]TED`), so its echo does not contain the words unless the line editor drops the brackets.
 
 **Reason.** `AndroidSerialShell.run` removes only the lines that contain the sentinel. An echo of the command with line-editing artifacts can therefore remain in the reply, and the `wifi agent:` record of the 2026-10-10 run contains such a fragment. The old DNS check accepted any non-empty reply. The 2026-10-10 DNS reply was the shell error `getent: inaccessible or not found`, which that check would have counted as resolved. The old VALIDATED check was a substring match, which also matches `NOT_VALIDATED`.
 
 **Consequence.** The shell error and the echo fragments no longer pass a stage. The 2026-10-10 run showed the DNS stage failing on the error text, so this check is working as intended.
 
-## IR-548: The Android image has no `getent`, so the DNS stage cannot pass with the probe the test uses
+## IR-548: The shell cannot run `getent` on the image, so the DNS stage cannot pass with the probe the test uses
 
 | Field | Value |
 |---|---|
@@ -12703,11 +12711,11 @@ the real manifest.
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5 and criterion; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
 
-**Choice.** The DNS stage keeps `getent hosts connectivitycheck.gstatic.com`. The task does not replace it with another tool, because no substitute has been observed on this image. The 2026-10-09 note in §7.8 that `getent` "returns nothing" is withdrawn.
+**Choice.** The DNS stage keeps `getent hosts connectivitycheck.gstatic.com`. The task does not replace it with another tool, because no substitute has been observed on this image. The 2026-10-09 observation that `getent` "returns nothing" is not reproduced, and this entry does not rely on it.
 
-**Reason.** The 2026-10-10 run reported `/system/bin/sh: getent: inaccessible or not found`. The Android resolver lists `192.168.64.1` as its DNS server, so the failure is in the probe, not in the name service. A substitute (for example the resolved-address line that `ping` prints before any reply, or a resolver command) would have to be observed in one `AndroidNetwork` run, and this task allows one run.
+**Reason.** The 2026-10-10 run reported `/system/bin/sh: getent: inaccessible or not found`, so the shell could not run `getent`. The run did not look up the binary's path, so this entry does not claim the file is absent from the image. The Android resolver lists `192.168.64.1` as its DNS server, which points to the probe rather than the name service. A substitute (for example the resolved-address line that `ping` prints before any reply, or a resolver command) would have to be observed in one `AndroidNetwork` run, and this task allows one run.
 
-**Consequence.** Criterion (b) cannot pass until the probe is replaced, because the walk stops at DNS (IR-546). Decision needed: choose the probe, then verify it in one `AndroidNetwork` run.
+**Consequence.** Criterion (b) cannot pass until the probe is replaced, because the walk stops at DNS (IR-546). Decision needed: first check with `command -v getent` and `ls` whether the binary exists, then choose the probe and verify it in one `AndroidNetwork` run.
 
 ## IR-549: The post-walk diagnostic reading is not the VALIDATED stage, so criterion (b) stays open
 
@@ -12719,7 +12727,7 @@ the real manifest.
 
 **Choice.** The `dumpsys connectivity` line in the record after the walk (WIFI `CONNECTED`, `INTERNET` among the capabilities, no `VALIDATED`) is reported as one reading. It is not counted as the validated stage passing or failing.
 
-**Reason.** A stage is judged only by its polled values (IR-546), and the diagnostic runs once after the walk. The task says the criterion is met only if the VALIDATED stage passes, and it did not.
+**Reason.** A stage is judged only by its polled values (IR-546), and the diagnostic runs once after the walk. The task says the criterion is met only if the VALIDATED stage passes. That stage was not polled, so it did not pass.
 
 **Consequence.** Criterion (b) stays unchecked. The reading supports IR-374 (the network joins but is not validated), but it is not the stage result.
 
@@ -12749,4 +12757,4 @@ the real manifest.
 
 **Reason.** The 120 s bound is the one that IR-374 chose for the earlier shared loop. The AndroidNetwork configuration allows 900 s (`IntegrationTests.xctestplan`), and four stages at the bound plus the boot fit inside it. The 30 s reply timeout stops a silent shell from taking the 60 s default on every poll.
 
-**Consequence.** The 2026-10-10 run took 143.9 s, of which 120.5 s was the DNS stage.
+**Consequence.** The 2026-10-10 run took 143.9 s (the XCTest duration), of which 120.5 s was the DNS stage.

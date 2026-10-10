@@ -13220,3 +13220,87 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** f14faf8 is the fix that this entry asked the fixture owner for, so the branch takes it from main instead of making a second change.
 
 **Consequence.** One run of `run.sh` on the rebased tip stopped at a 30-second timeout in a `check-lock --apply` fixture, while the host's load average was about 24. A rerun on a quiet host passed. The timeout reflects host load and not the code, but a run on a loaded host can fail the same way.
+
+## IR-514: The #022 replay fixture is synthetic, because no Linux run recorded kmscube
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 2), §14, §16; [build-system.md](../05-development/build-system.md) §8; [test-strategy.md](../04-plan/test-strategy.md) §4; [M02-graphics.md](issues/M02-graphics.md) #022 |
+
+**Choice.** The replay input is `Tests/Fixtures/graphics/synthetic-virgl-session.json`. It is a `VirGLRecording` of six renderer calls that the existing helpers make: one context, one 16 × 16 BGRA target, a full upload, a 4 × 4 upload at (4, 4), and a fence. `RecordingVirGLEngine` records it around a real renderer. The file is not a `kmscube` capture, and the documents say so until a Linux run records the real stream.
+
+**Reason.** This step runs no VM. I checked the artifacts that the step named. `/private/tmp/apkrun-l22` holds the virgl run logs and xcresults. The hvc0 console of the successful run shows `renderer: "virgl"` and `Rendered 59 frames`, and it holds no command stream. `/private/tmp/apkrun-l22-linux/gpu-driver-trace.json` is the 2D `gpu` check of #019, with no `SUBMIT_3D`. The commit that added the run, d312886, names no artifact path: its test writes only the console and the xcresult. The main checkout's build area (`ThirdParty/out` links there) holds no file named like a recording. The run used `VirtioGPUDevice.virgl()`, which attaches no recorder (`LinuxTestGuestRunner.swift:55`), so no stream was written. IR-475 had already deferred the `kmscube` recording to a follow-up that needs the VM.
+
+**Consequence.** The replay checks the renderer's replay path and the test-only readback. It does not check the `kmscube` command set. The real capture is a follow-up that needs one Linux run with a recorder attached (IR-519). No pass is claimed for the `kmscube` stream.
+
+## IR-515: The replay runs on the device's render thread through test-only seams
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §7, §12 (#022 step 3), §14; [coding-conventions.md](../05-development/coding-conventions.md) (`DEBUG-READBACK`) |
+
+**Choice.** `VirtioGPUDevice` has two seams, compiled only under `#if APKRUN_TEST_READBACK`: `replayRecordingForTest(_:)` replays a recording on the device's renderer, and `readResourceForTest(_:byteCount:)` calls the renderer's test-only readback. Both run on the render thread, and neither touches `counters`. The T1 test replays the fixture on a `drmVirgl` device, reads the scanout through the device, and requires `hostReadbacks` and `guestReadbacks` to be 0.
+
+**Reason.** The entry requires the readback counter to stay at 0 on the normal path, and the test-only readback to be excluded from it. A bare `VirGLRenderer` has no counter, so a replay on it cannot show either. The seams put the replay on the device's own render thread and counters, with the smallest change. A later regression that counted the test readback in the device would fail the test.
+
+**Consequence.** The seams are production source under a test flag, and they can be removed with it. A maintainer who prefers no production seam can keep the engine-level replay that `aRecordedSessionReplaysOntoAFreshRenderer` already runs, and accept that the counter check is then vacuous. `hostReadbacks` has no increment in any code path, so the check guards future code only.
+
+## IR-516: The synthetic replay has zero tolerance and an independently pinned hash
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 3), §14 (T1) |
+
+**Choice.** The replayed scanout must equal the expected image byte for byte. The test counts the bytes that differ, and the tolerance is zero. The expected image is the recorded transfers applied by the box rule of virglrenderer's `read_transfer_data`. Its SHA-256, `41172b76…`, was computed from the fixture JSON by a separate Python script and pinned in the test. The script is not committed: it is the same nine-line loop as `expectedSyntheticScanout`, written in another language. The fixture's own SHA-256 is pinned too.
+
+**Reason.** The synthetic stream has no rasterization, so an exact match is the right criterion, and a tolerance would hide errors. The entry's "within tolerance" wording is for rendered output, where GPU rounding can differ. Pinning a value that a separate script computed means a mistake in the Swift rule cannot make the expectation match the output. A mutation that reversed the channel order failed the test, so the comparison is live.
+
+**Consequence.** The `kmscube` fixture needs a tolerance chosen from its own observed output, and then the pinned hash becomes a per-byte check rather than an exact one.
+
+## IR-517: A sub-box upload starts at the box origin, and the doc comments say otherwise
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §4.4; the `VirGLTransfer` and `TransferGeometry` doc comments in `Packages/GraphicsCore/Sources/GraphicsCore/Renderer/VirGLEngine.swift` and `Resources/TransferGeometry.swift` |
+
+**Choice.** No code changes. The synthetic 4 × 4 upload at (4, 4) has data that starts at the box's first pixel, with rows 64 bytes apart, so 208 bytes cover it. The replay matches that layout on the real renderer. The doc comments instead say that the host buffer begins at the resource origin, and that the offset is the byte offset of the resource origin in the guest backing. This entry records the discrepancy and leaves the wording to the maintainer.
+
+**Reason.** In the pinned virglrenderer (`src/vrend/vrend_renderer.c`), `read_transfer_data` reads row `h` from `offset + h * stride`, and `vrend_transfer_size` is `stride * (h - 1) + w * bpp`. The GL upload then places the data at `box.x` and `box.y`, so the box's pixels must be at the start of the data. The replay confirms this.
+
+**Consequence.** The device gathers from the guest's `offset` field, so a sub-box upload is correct only if the guest puts the box origin in that field. No trace in the repository has a sub-box transfer: the #019 and #022 traces are full-screen. This is unverified for non-zero x or y. A maintainer should check a guest trace with a non-zero box before the comments are corrected, or before a device test with a sub-box is added.
+
+## IR-518: The fixture is regenerated by an environment-gated test and checked byte for byte
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §8; [graphics.md](../02-design/graphics.md) §14 |
+
+**Choice.** `regenerateTheSyntheticReplayFixture` rewrites the fixture when `APKRUN_REGENERATE_FIXTURES=1` is set, and it is skipped otherwise. `theSyntheticReplayFixtureIsWhatItsGeneratorRecords` runs on every T1 pass. It records the same session and requires the committed bytes to equal it, and it pins the file's SHA-256.
+
+**Reason.** A committed recording that nobody can regenerate is opaque, and a script outside the test would drift from the generator. Keeping the generator and the check in one file, with byte equality, makes the fixture reproducible from its source.
+
+**Consequence.** The recording is JSON with sorted keys, so any change to `VirGLOperation` changes the bytes. The fixture must then be regenerated and its pinned hash updated. That forces a review of the fixture whenever the format changes.
+
+## IR-519: The synthetic stream has no SUBMIT_3D, and the kmscube capture is a follow-up
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3); a follow-up is needed |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 2), §14; [M02-graphics.md](issues/M02-graphics.md) #022 |
+
+**Choice.** The synthetic session uses only the context, resource, transfer, and fence calls. It has no `submit`, because the repository has no virgl command encoder, and writing one is new test code outside this step. The T1 check ran on this Mac, with and without the `TestReadback` trait, not on a CI runner. The `kmscube` capture is a follow-up: the Linux test runner must attach a `VirGLRecorder`, through a test-only seam or a development option, run `kmscube`, and commit the recording with its source and SHA-256.
+
+**Reason.** The step asks for a synthetic stream made by the existing helpers. Those helpers include no command-buffer encoder, so a `SUBMIT_3D` would need an encoder, which is a larger change than this step allows. The CI runner is not available from this worktree.
+
+**Consequence.** The T1 replay does not exercise virglrenderer's command decoder. Until the real capture exists, the `kmscube` check of step 2 is the only test of the decoder on real commands. The step 3 criteria that name the `kmscube` stream stay open.

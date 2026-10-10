@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Metal
@@ -52,7 +53,116 @@ private func box(width: UInt32, height: UInt32) -> VirGLTransfer {
     )
 }
 
+/// The target of the synthetic replay session: a 16 × 16 BGRA 2D texture, the arguments that `resourceCreate3D` builds.
+private let syntheticTarget = VirGLResourceArguments(
+    resourceID: 7,
+    target: 2,
+    format: 1,
+    bind: 2,
+    width: 16,
+    height: 16,
+    depth: 1,
+    arraySize: 1,
+    lastLevel: 0,
+    sampleCount: 0,
+    flags: 0
+)
+
+/// The full-target upload of the synthetic session: 1024 bytes, with rows 64 bytes apart.
+private let syntheticFullUpload = (0..<1024).map { UInt8(truncatingIfNeeded: $0 &* 7) }
+
+/// The upload of the 4 × 4 box at (4, 4) of the synthetic session. The data starts at the box's first pixel and its
+/// rows are 64 bytes apart, so 208 bytes cover it (`vrend_transfer_size`), as virglrenderer reads them.
+private let syntheticBoxUpload = (0..<208).map { UInt8(truncatingIfNeeded: $0 &* 13 &+ 5) }
+
+private let syntheticBox = VirGLTransfer(
+    resourceID: 7,
+    contextID: 0,
+    level: 0,
+    stride: 64,
+    layerStride: 0,
+    x: 4,
+    y: 4,
+    z: 0,
+    width: 4,
+    height: 4,
+    depth: 1
+)
+
+/// The synthetic replay fixture, `Tests/Fixtures/graphics/synthetic-virgl-session.json` (graphics.md §12, #022 step 3).
+/// It is synthetic: no Linux guest run has recorded the `kmscube` stream yet (IR-514).
+private func syntheticFixtureURL() -> URL {
+    // This file is Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/VirGLRoundTripSystemTests.swift.
+    var root = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 {
+        root.deleteLastPathComponent()
+    }
+    return root.appendingPathComponent("Tests/Fixtures/graphics/synthetic-virgl-session.json")
+}
+
+/// The renderer calls of the synthetic session, recorded on `engine`. It uses only the calls of the existing helpers.
+private func recordSyntheticSession(on engine: any VirGLEngine) throws -> VirGLRecording {
+    let recorder = VirGLRecorder()
+    let session = RecordingVirGLEngine(wrapping: engine, recorder: recorder)
+    try session.createContext(id: 1, name: "synthetic-scanout")
+    try session.createResource(syntheticTarget)
+    try session.attachResource(context: 1, resource: 7)
+    var fullUpload = syntheticFullUpload
+    try session.transferWrite(box(width: 16, height: 16), data: &fullUpload)
+    var boxUpload = syntheticBoxUpload
+    try session.transferWrite(syntheticBox, data: &boxUpload)
+    try session.createFence(id: 1, context: 1)
+    return recorder.recording
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+/// The SHA-256 of `Tests/Fixtures/graphics/synthetic-virgl-session.json`. Changing the fixture changes this value, so a
+/// fixture that is replaced without the generator fails the check.
+private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f8693c334519109cdb6380fd21"
+
 extension VirGLRendererSuite {
+    @Test(
+        .enabled(
+            if: MTLCreateSystemDefaultDevice() != nil && ProcessInfo.processInfo.environment["APKRUN_REGENERATE_FIXTURES"] == "1",
+            "Set APKRUN_REGENERATE_FIXTURES=1 to rewrite the synthetic replay fixture from its generator."
+        )
+    )
+    func regenerateTheSyntheticReplayFixture() throws {
+        guard let runtime = runtimeDirectory() else {
+            Issue.record("The built VirGL runtime cache is unavailable.")
+            return
+        }
+        #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+
+        let renderer = try VirGLRenderer(onFenceCompleted: { _ in })
+        defer { try? renderer.destroy() }
+        try recordSyntheticSession(on: renderer).encoded().write(to: syntheticFixtureURL(), options: .atomic)
+    }
+
+    @Test(
+        .enabled(
+            if: MTLCreateSystemDefaultDevice() != nil,
+            "This host does not provide a Metal device."
+        )
+    )
+    func theSyntheticReplayFixtureIsWhatItsGeneratorRecords() throws {
+        guard let runtime = runtimeDirectory() else {
+            Issue.record("The built VirGL runtime cache is unavailable.")
+            return
+        }
+        #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+
+        let renderer = try VirGLRenderer(onFenceCompleted: { _ in })
+        defer { try? renderer.destroy() }
+        let generated = try recordSyntheticSession(on: renderer).encoded()
+        let fixture = try Data(contentsOf: syntheticFixtureURL())
+        #expect(fixture == generated)
+        #expect(sha256Hex(fixture) == syntheticFixtureSHA256)
+    }
+
     @Test(
         .enabled(
             if: MTLCreateSystemDefaultDevice() != nil,

@@ -13417,19 +13417,19 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** The G2 report does not record the port.
 
-## IR-528: #098 needs a GitHub issue number before merge
+## IR-528: The GitHub issue of #098 is #100
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
-| Task | #098 (reserved for follow-ups, AGENTS §11) |
+| Task | #098 (GitHub issue #100; reserved for follow-ups, AGENTS §11) |
 | Affected documents | [../05-development/workflow.md](../05-development/workflow.md) §2.4; [issues/README.md](issues/README.md) §3 (not edited here) |
 
-**Choice.** The branch and the commits carry #098. Before merge, GitHub assigns the issue number, the commit `Refs` lines and the pull request take that number, and the entry goes into its milestone file and into `issues/README.md` §3 in the same pull request. This change does not edit `issues/README.md`, as the task requires.
+**Choice.** The task keeps the name #098 in the branch, the docs, and the commits. Its GitHub issue is #100, because GitHub skips #098. Before merge, the commit `Refs` lines and the pull request take #100, and the entry goes into its milestone file and into `issues/README.md` §3 in the same pull request. This change does not edit `issues/README.md`, as the task requires.
 
-**Reason.** workflow §2.4 says that GitHub gives each new task its number, so that two agents never take the same one.
+**Reason.** workflow §2.4 says that GitHub gives each new task its number, so that two agents never take the same one. GitHub did not issue #098 to this task, so the number of its issue is #100.
 
-**Consequence.** The branch cannot merge until the issue exists. The `Refs` lines are rewritten to the new number at that time.
+**Consequence.** The branch cannot merge until issue #100 exists. The `Refs` lines are rewritten from #098 to #100 at that time.
 
 ## IR-529: Parallel xcodebuild runs need their own DerivedData and result bundle paths
 

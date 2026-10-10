@@ -12842,3 +12842,129 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** `Images/tools/` is the `apkrun_image` package, which handles the image and its manifests (AGENTS §6.3). The Mesa build makes a third-party component and its provenance record, not an image. `ThirdParty/build/` holds the scripts that the virgl-runtime group runs through `scripts/tools/build_third_party.py`, and this group is not run by that driver (IR-492).
 
 **Consequence.** The maintainer decides the final location when the image integration (M02 step 2, the product fragment) is written. The M02 entry now lists `scripts/guest/` and `scripts/tests/`.
+
+## IR-560: Test the developer stop through AndroidStopSequence, not RuntimeSupervisor
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) |
+
+**Choice.** The bounded wait and the forced stop move out of `RuntimeSupervisor.stop()` into `AndroidStopSequence`, an internal type. It takes the power-off request, the VM's state check, and the forced stop as `@Sendable` closures, and its deadline is a parameter that defaults to 20 s. The T0 tests drive that type with a fake VM. The channel choice (ADB, then the serial shell) moves into `AndroidStopSequence.sendPowerOff`, which takes the two attempts as closures, so it can be tested too.
+
+**Reason.** `RuntimeSupervisor` reaches a running VM only through `ensureReady`, which needs an installed image, an instance, and the boot planner's manifest and disk files. The supervisor creates its `VMController` inside `boot()`, so no seam can be injected at that point. `VMController` has a `driverFactory` seam, but its fakes live in `VirtualMachineCoreTests`, which RuntimeCore tests cannot import. The smallest seam that makes the 20 s rule testable without a VM is the extracted decision.
+
+**Consequence.** The wiring from `RuntimeSupervisor.stop()` to the sequence is covered by reading and by the T2 graceful path, not by a T0 test that drives the real controller. The real forced stop is covered by the `VMController` stop-timeout tests.
+
+## IR-561: Give a developer power-off the full 20 s once a channel was tried
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** In developer mode the stop waits the full 20 s after the power-off request whenever a channel was tried, including when every channel failed. Only a stop that no channel could try (no ADB connection and no serial shell) forces the VM at once.
+
+**Reason.** The previous code forced at once when neither channel reported success. An ADB request that times out is killed after 5 s (`AdbProcess`), but Android may already have received it. The serial fallback can also fail while the guest is powering off. A forced stop then cuts a graceful power-off short. vm.md §9.3 gives Android 20 s after the request, and the criterion says "falls back to a forced stop after 20 s", so the immediate force did not match the spec. The graceful path that T2 checks does not change, because ADB accepts the request there.
+
+**Consequence.** A stop whose request was lost waits up to 20 s before the forced stop, where it previously forced at once. Developer mode has a serial shell from the start of the boot, so the no-channel case should not occur in practice.
+
+## IR-562: Force outside developer mode at once until a Shutdown request is sent
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** Outside developer mode `stop()` sends no request and forces the VM at once, as before this change.
+
+**Reason.** vm.md §9.3 names the Guest Agent `Shutdown` RPC as the production request. The message exists in `control.proto`, but RuntimeCore does not send it. Without a request, no graceful stop is running, so a 20 s wait would only delay the stop. Sending `Shutdown` belongs with the Guest Agent wiring, not with #015.
+
+**Consequence.** The production stop has no graceful step until the Guest Agent request lands. The CLI always boots in developer mode, so no CLI path is affected today.
+
+## IR-563: Tick criterion 5 on the T0 fallback and the T2 SIGINT run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock); [vm.md](../02-design/vm.md) §9.3, §17 |
+
+**Choice.** Criterion 5 is ticked on two results. The first is the T0 fallback in `AndroidStopSequenceTests`, which drives a VM that never finishes its graceful stop: the forced stop comes after the deadline, and the VM ends stopped. The second is the T2 SIGINT run, which takes the graceful `reboot -p` path. No fault hook that keeps a real guest running is added. The fallback test uses a 300 ms deadline, and a separate test checks that the production deadline is 20 s.
+
+**Reason.** The #015 note asked for "a test or fault hook that keeps Android running". A guest-side hook, for example one that stops init from powering off, changes the boot and the guest images, and no seam offers it today. The T0 test covers the logic that decides the fallback. The real forced stop is covered by the `VMController` stop-timeout tests, and the T2 run covers the path that SIGINT takes into the request.
+
+**Consequence.** The fallback has not run against a real guest that ignores `reboot -p`. A later fault hook would add that check.
+
+## IR-564: Run the T2 SIGINT check as a script, not in XCTest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) Notes; [cli.md](../02-design/cli.md) §3.5 |
+
+**Choice.** The SIGINT check is a shell script, run under `lockf -k /tmp/apkrun-vm.lock`. It starts the signed embedded `apkrun dev boot`, waits for "press Ctrl-C to stop Android", sends SIGINT with `kill -INT`, and then checks the exit status, the elapsed time, and the guest's `reboot: Power down` line. The script is kept outside the repository, and its steps are in #015 Notes.
+
+**Reason.** The SIGINT handler is in the `apkrun` executable (`CLI/apkrun/Dev/DevBoot.swift`), not in a library. The XCTest host runs `RuntimeSupervisor` in-process, so it never reaches that handler. A SIGINT sent to the XCTest host would end the host, because its disposition is the default. Only the real binary reaches the handler. The binary needs the virtualization entitlement, and the check needs a built guest APK and an installed test bundle, which the XCTest plans do not provide.
+
+**Consequence.** The check is manual and is not repeated by the T2 suites. It should become a repeatable check once a harness can launch the CLI.
+
+## IR-565: Map the headless launch of apkrun dev launch to the none GPU profile
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (build of the embedded CLI, outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev launch`) |
+
+**Choice.** `apkrun dev launch` passes `gpu: .none` to `DevBootOptions`. `DevGPUProfile.none` is documented as the development `headless` profile, so the launch keeps its headless profile. The change is one line in `CLI/apkrun/Dev/DevLaunch.swift`.
+
+**Reason.** `DevBootOptions` replaced its `headless` flag with `gpu` (commit 09d8824). `DevLaunch.swift` still passed `headless: true`, so the embedded runtime build of `apkrun` failed to compile on main. The Debug CLI that the app embeds is built with that trait, and the T2 SIGINT check needs it.
+
+**Consequence.** The embedded CLI builds again. `apkrun dev launch` has no new test, and its behavior is the same as the headless launch it was written for.
+
+## IR-566: Do not handle Ctrl-C while the dev boot is still booting
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §3.5, §5 (`apkrun dev boot`) |
+
+**Choice.** Not changed by #015. `DevBoot.execute` awaits `ensureReady` before it reads the stop stream, so a Ctrl-C during the boot is buffered and acts only after Android is ready. The boot runs to the end before anything happens. This was found by reading `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`. It was not run.
+
+**Reason.** The criterion covers the stop after the boot. Making Ctrl-C end a boot needs a test with a booting VM, and that is a separate task.
+
+**Consequence.** Ctrl-C during a boot (up to 180 s, or 900 s on a first boot) does not stop it. A follow-up should read the stop stream from the start and call `supervisor.stop()`, which already handles a stop during boot (`stopRequested`).
+
+## IR-567: Do not exit on a second Ctrl-C
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §3.5 |
+
+**Choice.** Not changed by #015. The dev boot takes the first SIGINT as the stop request, and it ignores later ones.
+
+**Reason.** cli.md §3.5 says a second Ctrl-C exits at once with status 130. The dev boot does not do that. The exit path interacts with the forced-stop bound, so it needs its own decision.
+
+**Consequence.** While the stop waits for Android (up to 20 s), a second Ctrl-C has no effect, so the user cannot skip the wait.
+
+## IR-568: Count the 20 s from the start of the power-off request
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** The deadline starts before the first channel is tried, so the ADB attempt (at most 5 s) and the serial attempt (2 s) count within the 20 s. The forced stop follows 20 s after the start of the request, not 20 s after its reply.
+
+**Reason.** The criterion says "after 20 s" from Ctrl-C, and the previous code measured this way (its comment said the deadline starts before the request). If the clock started after a 7 s channel failure, the stop could take 27 s.
+
+**Consequence.** After a failed ADB request, the wait for Android is shorter than 20 s by the time that request took.

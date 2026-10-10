@@ -12771,3 +12771,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The group `virgl-runtime` builds the renderer with a driver of its own (`scripts/tools/build_third_party.py`), and the guest Mesa uses a different tool chain (the NDK and a cross file). A separate group keeps the renderer's lock hash (§6.1) unchanged by these entries. The `pyyaml` entry is reused from `virgl-runtime`, because it is the same pinned PyYAML.
 
 **Consequence.** A change to a `guest-mesa` entry does not change the `virgl-runtime` cache key. The maintainer decides whether the guest build should become a build group of §6.1 when the image is released.
+
+## IR-493: The NDK's static C++ runtime is linked into the shipped library, and its licence term is in the Mesa entry
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2) |
+| Affected documents | [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.2, §7.1; [0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) Decisions 5 and 7 |
+
+**Choice.** The C++ objects are linked with `-static-libstdc++`. The NDK's libc++abi and libunwind code is therefore inside `libgallium_dri.so`: the unstripped build has 18 defined `__cxa_` and `_Unwind_` symbols, and it has no `std::__1` symbol. The Mesa entry's `license` adds `Apache-2.0 WITH LLVM-exception`. `ThirdParty/licenses/mesa/ndk-llvm-exception.txt` is the exception text, copied verbatim from `NOTICE.toolchain` of NDK r28c (lines 2040 to 2052).
+
+**Reason.** The guest has `libc++.so` and no `libc++_shared.so` (the receipt, §5). A dynamic link to `libc++_shared.so` would need a library the image does not have, and a link to the system `libc++.so` would depend on an ABI the build does not check. The Mesa Android documentation uses the static runtime too. The term is on the app list, and the static code is what its notice covers.
+
+**Consequence.** The exception text is an excerpt that the NDK's notice contains, not the notice itself. The NDK's full notice files stay out of the lock (IR-486). The image also has to carry the Apache-2.0 text, which the Mesa licence folder already holds. The app-list failures of IR-483 are unchanged.

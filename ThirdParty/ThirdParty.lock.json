@@ -505,8 +505,8 @@
       "repository": "https://gitlab.freedesktop.org/mesa/mesa.git",
       "commit": "0fadfea4f394211946f308458f614839ef253ee8",
       "version": "26.1.8",
-      "license": "MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2",
-      "licenseFiles": ["license.rst", "licenses/Apache-2.0", "licenses/BSL-1.0", "licenses/GPL-1.0-or-later", "licenses/GPL-2.0-only", "licenses/MIT", "licenses/SGI-B-2.0", "licenses/exceptions/Linux-Syscall-Note"],
+      "license": "MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND HPND AND (CC0-1.0 OR Apache-2.0) AND GPL-3.0-or-later WITH Bison-exception-2.2 AND Apache-2.0 WITH LLVM-exception",
+      "licenseFiles": ["license.rst", "licenses/Apache-2.0", "licenses/BSL-1.0", "licenses/GPL-1.0-or-later", "licenses/GPL-2.0-only", "licenses/MIT", "licenses/SGI-B-2.0", "licenses/exceptions/Linux-Syscall-Note", "ndk-llvm-exception.txt"],
       "buildFlags": [
         "--buildtype=release",
         "--wrap-mode=nodownload",

@@ -12893,7 +12893,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #015 (criterion 5) |
 | Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock); [vm.md](../02-design/vm.md) §9.3, §17 |
 
-**Choice.** Criterion 5 is ticked on two results. The first is the T0 fallback in `AndroidStopSequenceTests`, which drives a VM that never finishes its graceful stop: the forced stop comes after the deadline, and the VM ends stopped. The second is the T2 SIGINT run, which takes the graceful `reboot -p` path. No fault hook that keeps a real guest running is added. The fallback test uses a 300 ms deadline, and a separate test checks that the production deadline is 20 s.
+**Choice.** Criterion 5 is ticked on two results. The first is the T0 fallback in `AndroidStopSequenceTests`, which drives a VM that never finishes its graceful stop: the forced stop comes after the deadline, and the VM ends stopped. The second is the T2 SIGINT run, which stopped Android with `reboot -p` in 1.71 s. The files do not record the channel. The timing points to ADB, because a timed-out ADB call would take 5 s. No fault hook that keeps a real guest running is added. The fallback test uses a 300 ms deadline, and a separate test checks that the production deadline is 20 s.
 
 **Reason.** The #015 note asked for "a test or fault hook that keeps Android running". A guest-side hook, for example one that stops init from powering off, changes the boot and the guest images, and no seam offers it today. The T0 test covers the logic that decides the fallback. The real forced stop is covered by the `VMController` stop-timeout tests, and the T2 run covers the path that SIGINT takes into the request.
 
@@ -12968,3 +12968,45 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The criterion says "after 20 s" from Ctrl-C, and the previous code measured this way (its comment said the deadline starts before the request). If the clock started after a 7 s channel failure, the stop could take 27 s.
 
 **Consequence.** After a failed ADB request, the wait for Android is shorter than 20 s by the time that request took.
+
+## IR-569: Do not join a second stop to the first one
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (found by review; the same behavior is on main) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) §3 |
+
+**Choice.** Not changed by #015. `RuntimeSupervisor.stop()` does not record that a stop is under way, so a second call runs the sequence again.
+
+**Reason.** The first `stop()` awaits the power-off wait, and the actor can run the second call during that await. The `apkrun dev boot` command calls `stop()` once, so the second call is not reachable from the CLI. The rule for joining a second caller to the stop in progress belongs with the XPC client of the runtime daemon.
+
+**Consequence.** A second `stop()` during the wait sends a second `reboot -p`, and it can force the VM a second time. The VM still ends stopped.
+
+## IR-570: The serial shell does not support overlapping commands
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (found by review; the same code is on main) |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
+
+**Choice.** Not changed by #015. `AndroidSerialShell` keeps one `waiter` continuation and clears the received output at the start of each `run`, so two overlapping runs are not supported.
+
+**Reason.** A stop's power-off request can overlap the boot's `getprop` over the same shell when `stop()` runs during `confirmBootCompleted`. A second run would replace the first waiter, and the first continuation would then never resume. The reviewer found this by reading the code. It was not reproduced. `DevBoot` does not call `stop()` during the boot (IR-566), so the CLI does not reach it.
+
+**Consequence.** A `stop()` during the boot's readiness check can leave that check hung. A fix serializes the shell's commands, or joins the stop to the boot, and belongs with the runtime-daemon work.
+
+## IR-571: Keep the stop deadline when the stop task is cancelled
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) (operations survive the caller) |
+
+**Choice.** The developer stop's wait ignores the cancellation of the caller. The forced stop still comes after the 20 s deadline. The wait sleeps in a detached task, so the cancellation does not reach the sleep.
+
+**Reason.** A cancelled `Task.sleep` returns at once. The first version of the wait broke out of its loop on cancellation, so the VM was forced at once. The VM still has to stop, and the runtime's operations survive the caller that started them. A cancelled sleep that is not replaced by a detached one would also spin until the deadline.
+
+**Consequence.** A stop that is cancelled takes the full deadline, as an uncancelled one does. No caller of the CLI cancels a stop today.

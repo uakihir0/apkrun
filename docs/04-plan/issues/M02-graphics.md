@@ -574,7 +574,7 @@ Android's graphics stack initializes with Mesa virgl, minigbm gralloc, and the r
 See [../test-strategy.md](../test-strategy.md) §6.3.
 
 - **T0** (`Packages/GraphicsCore/Tests/GraphicsCoreTests/`): `ResourceTable` limits, overflow, backing validation, and reset clearing.
-- **T1** (`Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/`): the `kmscube` replay → a pool buffer hash within tolerance. It needs Metal.
+- **T1** (`Packages/GraphicsCore/Tests/GraphicsCoreSystemTests/`): the `kmscube` replay → a pool buffer hash within tolerance. It needs Metal. Until the `kmscube` capture exists, the replay runs on the synthetic fixture and compares the scanout resource exactly (IR-514, IR-516).
 - **T2:**
   - `LinuxGuestTests`, check `virgl`: `kmscube` with the `virgl` renderer and `hostReadbacks = 0`.
   - `AndroidGraphicsTests`: VirGL SurfaceFlinger, and `boot_completed` with `drmVirgl` and with `guestSwiftshader`.
@@ -595,9 +595,9 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - Earlier status (2026-10-10, host work only, no VM started). Criteria 1 to 5 were not met then, because each needed a VM run. Criterion 1 and criterion 3 need a `drmVirgl` boot, which RuntimeCore still refuses (IR-462). Criterion 2: [../../02-design/graphics.md](../../02-design/graphics.md) §9 documents the profile, and the committed image manifest carries the same seven keys, but the reproducible boot is not run. Criterion 4: the `drmVirgl` boot is refused, and the `guestSwiftshader` boot is not run here. Criterion 5 needed the Linux guest's `virgl` check (step 2). That check is now done (see the status above); the x86-64 builder of #099 was not needed (IR-503).
 - **Steps not done in the host pass:** step 2 (the Linux `virgl` run and its initramfs, and the kmscube recording; done later, see the status above); step 4 (the `drmVirgl` boot and the removal of the refusal of IR-380); step 5 (the `guestSwiftshader` boot check); step 6 (the HelloGL check on `drmVirgl`, although the fixture builds offline, IR-477).
 - **Met at T0 and T1 without a VM:** the 3D command set, contexts, resources, submit, transfers, fences, and polling (steps 1 and 3); the limits of §5.4 (criterion 6); the 2D path of `guestSwiftshader` as host memory (IR-474); the recorder and the replay (IR-475); and a round trip through the real renderer, which found the context-sharing defect now fixed in IR-463.
-- **Judgment records:** IR-460 to IR-479 (the host work), IR-500 to IR-512 (the Linux test guest step), and IR-514 to IR-519 (the step 3 replay), the entries added for this task. The renderer-failure rule (IR-460) and the readback on the device queue (IR-464) are the two that change what a guest can observe.
+- **Judgment records:** IR-460 to IR-479 (the host work), IR-500 to IR-513 (the Linux test guest step), and IR-514 to IR-519 (the step 3 replay), the entries added for this task. The renderer-failure rule (IR-460) and the readback on the device queue (IR-464) are the two that change what a guest can observe.
 - **Record:** the SurfaceFlinger result and the `kmscube` result in the #022 row and the `kmscube` row of [../../02-design/graphics.md](../../02-design/graphics.md) §16.
-- **Pitfall:** `hostReadbacks` counts every `gb_transfer_read` in the normal path. The replay test uses the test-only readback mode, which exists only in builds with the `APKRUN_TEST_READBACK` flag and is excluded from the counter.
+- **Pitfall:** `guestReadbacks` counts the `TRANSFER_FROM_HOST_3D` requests of the guest, which are the only readbacks of the normal path. `hostReadbacks` has no increment in any code path yet, so the replay test checks that it stays 0. The replay test uses the test-only readback mode, which exists only in builds with the `APKRUN_TEST_READBACK` flag and never touches either counter.
 - The ≥ 55 fps condition of the Linux integration step needs a window. It is measured in #023.
 - There is no automatic fallback from `drmVirgl` to `guestSwiftshader`. Graphics Safe Mode is the only switch (§9).
 

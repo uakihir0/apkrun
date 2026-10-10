@@ -65,7 +65,7 @@ The CI workflows and jobs that run each tier are in [../05-development/build-sys
   - processes: crash injection with `APKRUN_STORE_FAULT`, the instance lock between two processes, `aapt2` golden outputs, compile-fail tests;
   - the file system: `clonefile`, hole punching, and recovery points on a temporary APFS volume, file modes, registry atomic writes;
   - XPC: an in-process `NSXPCListener.anonymous()` with authorization per endpoint;
-  - Metal and windows: GraphicsBridge, the recorded `kmscube` replay, `IOSurfaceLayerView` screenshots;
+  - Metal and windows: GraphicsBridge, the virgl replay (the synthetic fixture until the `kmscube` capture exists, IR-514), `IOSurfaceLayerView` screenshots;
   - `codesign`: wrapper generation, validation, and approval;
   - local HTTP servers on `127.0.0.1`: the image downloader, a local feed, the GitHub REST mock;
   - UI: XCUITest against the embedded runtime fake;
@@ -509,7 +509,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #019 | `VirtioGPUProtocol` for every command with golden vectors; `ResourceTable`; display events; EDID | fuzz target (§7.2) | LinuxGuest `gpu`: probe, EDID, hotplug | — |
 | #020 | — | GraphicsBridge create, destroy, capsets (Metal) | — | — |
 | #021 | — | — | Android binds `virtio_gpu` | — |
-| #022 | `ResourceTable` limits | `kmscube` replay → scanout resource hash within tolerance | LinuxGuest `virgl` (`kmscube` headless); VirGL SurfaceFlinger; `boot_completed` with `drmVirgl` and with `guestSwiftshader` | — |
+| #022 | `ResourceTable` limits | `kmscube` replay → scanout resource hash within tolerance (on the synthetic fixture until the capture exists, with zero tolerance, IR-514 and IR-516) | LinuxGuest `virgl` (`kmscube` headless); VirGL SurfaceFlinger; `boot_completed` with `drmVirgl` and with `guestSwiftshader` | — |
 | #023 | frame scheduler, `SurfacePool` state machine | — | HelloGL in a window, counters; `kmscube` in a window | G3 check; v0.1 checklist |
 
 ### 6.4 M3 Input and basic runtime

@@ -13241,7 +13241,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 |---|---|
 | Status | Needs maintainer review |
 | Task | #022 (step 3) |
-| Affected documents | [graphics.md](../02-design/graphics.md) §7, §12 (#022 step 3), §14; [coding-conventions.md](../05-development/coding-conventions.md) (`DEBUG-READBACK`) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §7, §14; [M02-graphics.md](issues/M02-graphics.md) #022 step 3; [coding-conventions.md](../05-development/coding-conventions.md) (`DEBUG-READBACK`) |
 
 **Choice.** `VirtioGPUDevice` has two seams, compiled only under `#if APKRUN_TEST_READBACK`: `replayRecordingForTest(_:)` replays a recording on the device's renderer, and `readResourceForTest(_:byteCount:)` calls the renderer's test-only readback. Both run on the render thread, and neither touches `counters`. The T1 test replays the fixture on a `drmVirgl` device, reads the scanout through the device, and requires `hostReadbacks` and `guestReadbacks` to be 0.
 
@@ -13255,7 +13255,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 |---|---|
 | Status | Needs maintainer review |
 | Task | #022 (step 3) |
-| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 3), §14 (T1) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §14 (T1); [M02-graphics.md](issues/M02-graphics.md) #022 step 3 |
 
 **Choice.** The replayed scanout must equal the expected image byte for byte. The test counts the bytes that differ, and the tolerance is zero. The expected image is the recorded transfers applied by the box rule of virglrenderer's `read_transfer_data`. Its SHA-256, `41172b76…`, was computed from the fixture JSON by a separate Python script and pinned in the test. The script is not committed: it is the same nine-line loop as `expectedSyntheticScanout`, written in another language. The fixture's own SHA-256 is pinned too.
 

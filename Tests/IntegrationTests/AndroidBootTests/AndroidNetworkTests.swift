@@ -36,7 +36,7 @@ final class AndroidNetworkTests: XCTestCase {
             // The design (android-image.md §7.4) puts the guest on wlan0 (virt_wifi on eth2) with vmnet's DHCP.
             // ICMP gets no reply through vmnet, but `ping` prints the resolved address before it waits for a reply,
             // and prints `unknown host` when the name does not resolve. The stock image has no getent or nslookup
-            // (IR-548), so name resolution is checked with the first line of `ping -c 1`.
+            // (android-image.md §7.8), so name resolution is checked with the first line of `ping -c 1`.
             // DHCP and the first Wi-Fi join finish after `ready`, so the stages are polled for a bounded time.
             // Each stage is judged by its last value: the reply the poll stopped on.
             var address = ""
@@ -75,7 +75,8 @@ final class AndroidNetworkTests: XCTestCase {
             )
             // Diagnostics for the record: the Wi-Fi state, the links, the connectivity service's network
             // agents, the join's log lines, the resolver's first line, a loopback ping (its banner shows the
-            // format of a reply line without DNS), and the DNS addresses the connectivity service reports.
+            // format of a reply line without DNS), and the connectivity service's DNS lines, cut to 200 columns.
+            // The full DnsAddresses are in the validated line above.
             let record = [
                 "wlan0:\n\(address)",
                 "routes:\n\(route)",

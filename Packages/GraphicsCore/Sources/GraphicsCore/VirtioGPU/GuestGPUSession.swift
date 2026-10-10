@@ -360,9 +360,12 @@ final class GuestGPUSession {
         )
     }
 
+    /// Answers any version up to the cached maximum with the cached capset. virglrenderer's
+    /// `virgl_renderer_fill_caps` does the same (it refuses only a version above its maximum), and
+    /// the Linux driver passes the version from userspace: Mesa 25.2.7 passes 0 for capset 2 (IR-504).
     private func capset(id: UInt32, version: UInt32) -> GPUCommandReply {
         guard path == .virgl else { return failed(.unspec) }
-        guard let capset = capsets.first(where: { $0.id == id }), capset.version == version else {
+        guard let capset = capsets.first(where: { $0.id == id }), version <= capset.version else {
             return failed(.invalidParameter)
         }
         return GPUCommandReply(response: .okCapset(data: capset.bytes), renderWork: nil)

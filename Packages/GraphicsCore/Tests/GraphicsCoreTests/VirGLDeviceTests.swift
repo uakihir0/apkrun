@@ -101,6 +101,27 @@ private func transfer(
             == .okCapset(data: (0..<8).map { UInt8(truncatingIfNeeded: 2 * 16 + 2 + $0) }))
 }
 
+/// Mesa 25.2.7 requests capset 2 with version 0, and the kernel forwards the userspace version.
+/// The device answers every version up to the cached maximum and refuses a higher one.
+@Test func getCapsetAnswersEveryVersionUpToTheCachedMaximum() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl2, version: 2)),
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl2, version: 0)),
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl2, version: 1)),
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl2, version: 3)),
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl, version: 0)),
+        gpuRequest(.getCapset, body: .getCapset(id: GraphicsCapset.virgl, version: 1)),
+    ])
+    try await eventually { control.completionCounts == [1, 1, 1, 1, 1, 1] }
+    let capset2 = VirtioGPUResponseBody.okCapset(data: (0..<8).map { UInt8(truncatingIfNeeded: 2 * 16 + 2 + $0) })
+    #expect(try body(control.writtenBuffers[0]) == capset2)
+    #expect(try body(control.writtenBuffers[1]) == capset2)
+    #expect(try body(control.writtenBuffers[2]) == capset2)
+    #expect(try body(control.writtenBuffers[3]) == .error(.invalidParameter))
+    #expect(try body(control.writtenBuffers[4]) == body(control.writtenBuffers[5]))
+}
+
 @Test func contextsAndSubmissionsReachTheEngineInOrder() async throws {
     let harness = try VirGLHarness()
     let control = harness.send([

@@ -13599,7 +13599,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** The stock image (build 16373615) has no `getent` or `nslookup` (android-image.md §7.8, read from the `system_a` partition and confirmed by `command -v` in the guest). `dumpsys dnsresolver` reported `Can't find service: dnsresolver` on the probe boot, `ndc resolver` printed nothing as the shell (and `500 0 Command not recognized` as root), and `getprop` has no DNS property. Of the candidates, only `ping` reports a name-resolution result, and M01 #095 step 5 already names `ping -c 1 connectivitycheck.gstatic.com` as the check.
 
-**Consequence.** The first run in which the name resolved is the root run of `11f93c7`: its `resolved:` line is `PING connectivitycheck.gstatic.com (142.251.150.120) 56(84) bytes of data.`, which has the prefix. The shell's runs (`806d07a`) never resolved, so only the root run shows the banner for a resolved name.
+**Consequence.** The first run in which the name resolved is the root run of `11f93c7` (before the rebase onto main; `c839ef8` is the same change after it): its `resolved:` line is `PING connectivitycheck.gstatic.com (142.251.150.120) 56(84) bytes of data.`, which has the prefix. The shell's runs (`806d07a`, now `ed40540`) never resolved, so only the root run shows the banner for a resolved name.
 
 ## IR-554: The VALIDATED stage also rejects `NOT_VALIDATED`
 
@@ -13611,7 +13611,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Choice.** The VALIDATED stage passes only when the WIFI `NetworkAgentInfo` line contains `VALIDATED` and does not contain `NOT_VALIDATED`. The loop's break condition and the final assertion use the same test.
 
-**Reason.** The stage on main is a substring match. IR-547 on `task/095-network-and-port-markers` records that a substring match can pass a line that the dump does not mark as validated. The network run of `806d07a` shows `VALIDATED` as a capability (`...&NOT_VPN&VALIDATED&NOT_ROAMING...`) and does not show `NOT_VALIDATED`, so this guard does not change the result of that run.
+**Reason.** The stage on main is a substring match. IR-547 on `task/095-network-and-port-markers` records that a substring match can pass a line that the dump does not mark as validated. The network run of `806d07a` (now `ed40540`) shows `VALIDATED` as a capability (`...&NOT_VPN&VALIDATED&NOT_ROAMING...`) and does not show `NOT_VALIDATED`, so this guard does not change the result of that run.
 
 **Consequence.** The stage keeps its meaning: it asks whether NetworkMonitor validated the Wi-Fi network. A dump that contains `NOT_VALIDATED` now fails the stage instead of passing it.
 
@@ -13623,7 +13623,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #095 (step 5) |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 acceptance criteria; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
 
-**Choice.** The DNS stage runs its ping as root (`su 0`), commit `11f93c7`. The network is not changed. The shell's access to netd's DNS proxy is an image policy question, and it belongs to #035 (the APKRun AOSP product, which owns the image's SELinux policy; android-image.md §7.8 and §11). This task does not change the policy. The network criterion stays unchecked.
+**Choice.** The DNS stage runs its ping as root (`su 0`), commit `11f93c7` (now `c839ef8`). The network is not changed. The shell's access to netd's DNS proxy is an image policy question, and it belongs to #035 (the APKRun AOSP product, which owns the image's SELinux policy; android-image.md §7.8 and §11). This task does not change the policy. The network criterion stays unchecked.
 
 **Reason.** The evidence is from probe boots on 2026-10-10 (20:29 to 21:22 JST, probes 1 to 8), each under `lockf`. The records are in scratch files outside the repository, and §7.8 summarises them.
 1. The servers of the LinkProperties line answer. `DnsAddresses: [ /fe80::fcb2:14ff:feba:7a64%wlan0,/192.168.64.1 ]`. A hand-built A query for `connectivitycheck.gstatic.com` from the guest (`toybox nc -u`) got RCODE 0 and `142.251.150.120` from `192.168.64.1` and from `fe80::fcb2:14ff:feba:7a64%wlan0` (`nc -6`). The control `8.8.8.8` also answered. ICMP to both servers got `100% packet loss`, which is the vmnet ICMP behaviour the design records.
@@ -13646,7 +13646,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Choice.** IR-374 says that in the later runs the address, the route, and DNS passed within the poll. This entry does not rely on that statement. The DNS pass in those runs is treated as unverified.
 
-**Reason.** On main, the DNS check was `getent hosts connectivitycheck.gstatic.com` with `!resolved.isEmpty`, and `AndroidShellConsole.value` does not check the exit status. The stock image has no `getent`, so the shell's `getent: inaccessible or not found` line is the likely reply, and it is non-empty, so the check counted it as resolved. IR-547 on `task/095-network-and-port-markers` records the same gap. The probe boots and the network run of `806d07a` show the name not resolving with the shell's `ping`, and IR-555 gives the cause.
+**Reason.** On main, the DNS check was `getent hosts connectivitycheck.gstatic.com` with `!resolved.isEmpty`, and `AndroidShellConsole.value` does not check the exit status. The stock image has no `getent`, so the shell's `getent: inaccessible or not found` line is the likely reply, and it is non-empty, so the check counted it as resolved. IR-547 on `task/095-network-and-port-markers` records the same gap. The probe boots and the network run of `806d07a` (now `ed40540`) show the name not resolving with the shell's `ping`, and IR-555 gives the cause.
 
 **Consequence.** §7.4's 2026-10-08 DNS result is kept as the spike's record and marked as not reproduced on 2026-10-10 (IR-555). IR-374 is not edited. Its DNS statement should be read with this entry.
 

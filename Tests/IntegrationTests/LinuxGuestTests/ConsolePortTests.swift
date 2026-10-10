@@ -16,14 +16,12 @@ final class LinuxGuestConsolePortTests: XCTestCase {
         )
 
         XCTAssertEqual(result.records.last, .done)
-        for index in 1..<8 {
-            XCTAssertTrue(
-                result.records.contains(
-                    .check(name: "port-\(index)", result: .ok, detail: "APKRUN-PORT-\(index)")
-                ),
-                "port \(index) received its own marker on /dev/hvc\(index)"
-            )
-        }
+        let plan = LinuxTestGuest.consolePorts(tests: ["ports"], consolePortCount: 8)
+        XCTAssertEqual(
+            ConsolePortMarkerCheck.failures(in: result.records, plan: plan).map(\.description),
+            [],
+            "every port of the plan received its own marker"
+        )
     }
 
     /// #095 step 1 for all 20 ports. The pinned test kernel creates `/dev/hvc0` through `/dev/hvc7` only,
@@ -40,14 +38,12 @@ final class LinuxGuestConsolePortTests: XCTestCase {
                 extraCommandLine: ["apkrun.test.portcount=20"]
             )
             XCTAssertEqual(result.records.last, .done)
-            for index in 1..<20 {
-                XCTAssertTrue(
-                    result.records.contains(
-                        .check(name: "port-\(index)", result: .ok, detail: "APKRUN-PORT-\(index)")
-                    ),
-                    "port \(index) received its own marker on /dev/hvc\(index)"
-                )
-            }
+            let plan = LinuxTestGuest.consolePorts(tests: ["ports"], consolePortCount: 20)
+            XCTAssertEqual(
+                ConsolePortMarkerCheck.failures(in: result.records, plan: plan).map(\.description),
+                [],
+                "every port of the plan received its own marker"
+            )
         } catch LinuxGuestHarness.HarnessFailure.guestCheckFailed(let name, let detail)
             where name.hasPrefix("port-") && Self.isMissingConsoleNode(detail)
         {

@@ -13,17 +13,21 @@ struct AndroidStopSequence: Sendable {
         self.deadline = deadline
     }
 
-    /// Runs the sequence and returns when the VM has stopped.
+    /// Runs the sequence, and returns whether the VM had stopped by itself before the forced stop.
     ///
     /// - `requestPowerOff` sends the power-off request, and reports whether a channel was tried (`sendPowerOff`).
     ///   It is nil when no request is made. A request that no channel was tried for skips the wait.
     /// - `isStopped` reports whether the VM has stopped. It is polled during the wait.
     /// - `forceStop` stops the VM. It runs only when the VM is still running after the wait.
+    ///
+    /// The wait ignores the cancellation of the caller. A cancelled stop must not shorten the deadline (the VM still
+    /// has to stop), and a cancelled sleep would return at once and spin until the deadline.
+    @discardableResult
     func run(
         requestPowerOff: (@Sendable () async -> Bool)?,
         isStopped: @Sendable () async -> Bool,
         forceStop: @Sendable () async -> Void
-    ) async {
+    ) async -> Bool {
         if let requestPowerOff {
             let limit = ContinuousClock.now + deadline
             if await requestPowerOff() {
@@ -31,18 +35,20 @@ struct AndroidStopSequence: Sendable {
                     if await isStopped() {
                         break
                     }
-                    do {
-                        try await Task.sleep(for: .milliseconds(250))
-                    } catch {
-                        // The stop task was cancelled. Stop waiting, so the loop does not spin until the deadline.
-                        break
-                    }
+                    await Self.pause(for: .milliseconds(250))
                 }
             }
         }
-        if await !isStopped() {
-            await forceStop()
+        if await isStopped() {
+            return true
         }
+        await forceStop()
+        return false
+    }
+
+    /// Sleeps in a task that the caller's cancellation does not reach.
+    private static func pause(for duration: Duration) async {
+        await Task.detached { _ = try? await Task.sleep(for: duration) }.value
     }
 
     /// Sends the power-off request over the first channel that takes it: ADB, then the serial shell. Each closure is

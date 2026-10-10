@@ -59,6 +59,31 @@ func aForcedStopFollowsTheDeadlineWhenAndroidNeverPowersOff() async throws {
     #expect(await vm.state == .stopped)
 }
 
+/// Cancelling the stop task does not shorten the deadline: the VM still has to stop, so the forced stop comes after the
+/// deadline all the same.
+@Test(.timeLimit(.minutes(1)))
+func aCancelledStopStillWaitsOutTheDeadline() async throws {
+    let deadline = Duration.milliseconds(600)
+    let vm = FakeAndroidVM(powerOffDelay: nil)
+    let started = ContinuousClock.now
+
+    let stop = Task {
+        await AndroidStopSequence(deadline: deadline).run(
+            requestPowerOff: { await vm.requestPowerOff() },
+            isStopped: { await vm.isStopped() },
+            forceStop: { await vm.forceStop() }
+        )
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    stop.cancel()
+    await stop.value
+
+    #expect(await vm.forceCount == 1)
+    let forcedAt = try #require(await vm.forcedAt)
+    #expect(forcedAt - started >= deadline)
+    #expect(await vm.state == .stopped)
+}
+
 /// A graceful stop that finishes inside the deadline ends the wait, and no forced stop is made.
 @Test(.timeLimit(.minutes(1)))
 func aGracefulStopThatFinishesInTimeIsNotForced() async {

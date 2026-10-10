@@ -493,7 +493,7 @@ M0 (#003–#007, then #063 and #019) boots a small Linux guest before Android ([
 ```bash
 export APKRUN_TEST_LINUX_DIR="${TMPDIR:-/tmp}/apkrun-test-linux"
 scripts/fetch-test-linux.sh          # Alpine linux-virt kernel, hash from ThirdParty.lock.json, decompressed
-scripts/build-test-initramfs.sh      # pinned minirootfs + modules + socat + Tests/Fixtures/linux/init
+scripts/build-test-initramfs.sh      # pinned minirootfs + modules + socat + virgl packages (v3.23) + Tests/Fixtures/linux/init; writes initramfs.manifest.json
 xcodebuild test -scheme IntegrationTests \
   -only-test-configuration LinuxGuest \
   APKRUN_TEST_LINUX_DIR="$APKRUN_TEST_LINUX_DIR" \
@@ -503,6 +503,7 @@ xcodebuild test -scheme IntegrationTests \
 
 - Both scripts default to `/tmp/apkrun-test-linux/`. An `APKRUN_TEST_LINUX_DIR` override must be absolute and outside the current account's `~/Documents`, even when the shell overrides `HOME`. The scripts and hosted test reject direct paths and symlink aliases before looking up anything inside Documents or creating guest artifacts. The hosted test reads this path from `APKRunTestHost.app/Contents/Info.plist`; pass it as an `xcodebuild` build setting as shown, because Xcode does not forward the invoking shell's custom environment to the hosted test process. Keeping guest artifacts outside protected Documents prevents macOS file-access approval prompts for checkouts under `~/Documents`. The initramfs build runs on macOS with `cpio` and `gzip` from the base system and needs no Linux machine.
 - The tests look for `APKRUN-TEST: boot ok`, one `APKRUN-TEST: <name> ok` per requested check (`apkrun.test=blk,net,vsock,ports,rng,gpu,virgl`), and `APKRUN-TEST: done`, with `apkrun.test.poweroff=1`.
+- The `virgl` check (`VirglTests`) needs the verified VirGL runtime at run time. Pass `TEST_RUNNER_APKRUN_VIRGL_RUNTIME_PATH=<checkout>/ThirdParty/out/virgl-runtime/current` with `xcodebuild test-without-building` (IR-509). Run VM tests under `lockf -k /tmp/apkrun-vm.lock` on a shared host.
 - When the artifacts are missing, the tests skip with a message that names the two scripts. Pass `APKRUN_CI=1` as an `xcodebuild` build setting to make missing artifacts fail.
 - VM tests need `com.apple.security.virtualization`. They therefore run inside the signed test host `APKRunTestHost`, not under `swift test` ([build-system.md](build-system.md) §12.4). Set the two signing variables above to a matching lab development certificate and team.
 

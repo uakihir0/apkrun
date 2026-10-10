@@ -77,11 +77,13 @@ final class ControlCompletionQueue<Completion>: @unchecked Sendable {
         lock.withLock { drainReadyLocked() }
     }
 
-    /// Removes every element, ready or not. A reset or stop uses it, because the guest no longer waits for them.
+    /// Removes every element, ready or not, and forgets the completed fence. A reset or stop uses it: the guest no longer
+    /// waits, and the renderer's fence numbers start again, so an old high-water mark would complete new fences early.
     func removeAll() -> [Completion] {
         lock.withLock {
             let removed = entries.map(\.completion)
             entries.removeAll(keepingCapacity: false)
+            completedFence = nil
             return removed
         }
     }

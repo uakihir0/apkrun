@@ -66,3 +66,13 @@ import Testing
     #expect(queue.removeAll() == ["pending", "fenced"])
     #expect(queue.isEmpty)
 }
+
+@Test func aResetForgetsTheCompletedFence() {
+    let queue = ControlCompletionQueue<String>()
+    queue.recordCompletedFence(1_000)
+    _ = queue.removeAll()
+    let ticket = queue.append("after reset", executed: false)
+    #expect(queue.markExecuted(ticket, fence: 5).isEmpty)
+    queue.recordCompletedFence(5)
+    #expect(queue.drainReady() == ["after reset"])
+}

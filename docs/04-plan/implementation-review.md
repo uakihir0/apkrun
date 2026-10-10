@@ -13691,3 +13691,101 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** AGENTS.md §13 says a commit scope is one of the scopes in workflow §4.2. Main's history uses `docs(plan)` and `docs(<area>)` for documentation commits, for example `289e997` and `08fbd0f`. A reviewer applying the table literally would reject these commits, and applying main's practice breaks the table as written.
 
 **Consequence.** Decision needed: add `plan` to the table and state that `docs(<area>)` names the design area that a document describes, or use `docs` for these commits. Until then the commits follow main's practice and do not match the table as written.
+
+## IR-600: The G2 stall is a hosted test blocked on a read under `~/Documents`; the approval prompt is the likely cause, and the fix stages both inputs outside it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (and #019 for the EDID check) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4 (artifact directory); [graphics.md](../02-design/graphics.md) §12; `Tests/IntegrationTests/GuestAgentTests/GuestAgentTests.swift` (the policy comment) |
+
+**Choice.** Treat a read of the checkout under `~/Documents` by the hosted test as the cause of the stall, and remove those reads. The producer copies the golden EDID block and the host virgl runtime into the artifact directory (`7e428b7`), and the two tests read them from there (`31cc0ca`). The stall did not reproduce, so the cause is a hypothesis that the next gate run must confirm.
+
+**Reason.** At fa8df7f the EDID test wrote `gpu-driver-trace.json` (28 records) at 22:03:43 JST, the second the guest's VM stopped (22:03:43.437). So `run()` had returned, and the next statement that reads a file is `Data(contentsOf:)` on the golden block under `~/Documents`. Nothing failed before the timeout. The Virgl test never logged a VM start. In a debug build the runtime lookup of `GraphicsBridge.m` walks up from the test host to the checkout, and the gate's DerivedData sits inside the checkout, ten levels below the repository. `GuestAgentTests.swift` records that the test process cannot read the checkout's `Documents` folder. Four VM runs on fa8df7f did not reproduce the stall: runs 1, 2, and 4 passed, and run 3 failed fast because its DerivedData was outside the checkout, so the runtime was not found. Runs 5 and 6 passed on the fix. The prompt was not observed.
+
+**Consequence.** The next G2 run decides it. If either test still stalls, the next suspect is the DerivedData location (IR-603).
+
+## IR-601: No commit in `4961787..fa8df7f` is a deterministic culprit; no bisect was run, and d312886 is the candidate for the Virgl stall
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 |
+
+**Choice.** Record no culprit commit. The commit that first loads the host virgl runtime in the LinuxGuest stage is `d312886` (`test(tests): run kmscube through virgl on the Linux test guest`), which adds `VirglTests.swift`. That is the candidate for the Virgl stall. The EDID stall has no commit in the range: `GPUDeviceTests.swift`, `Tests/Fixtures/graphics/edid/`, `GraphicsBridge.m`, and `scripts/run-gate.sh` are unchanged between `4961787` and `fa8df7f`.
+
+**Reason.** A bisect needs a symptom that reproduces on a known-good commit. Neither hung test reproduced on `fa8df7f` in four VM runs, and the budget was eight runs for the whole task. Running `4961787` would have cost at least one more run and would show a pass unless the gate's process history or macOS consent differs, which no commit in the range changes.
+
+**Consequence.** If the stall returns after `7e428b7` and `31cc0ca`, bisect with the gate's own LinuxGuest stage, not a single test, because the stall depends on the process history of that stage.
+
+## IR-602: The debug runtime lookup walks up from the test host to the checkout, so a DerivedData inside the checkout loads the runtime from `~/Documents`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4; `Packages/GraphicsCore/Sources/GraphicsBridge/GraphicsBridge.m` (`gb_debug_repository_runtime`) |
+
+**Choice.** Keep the lookup for development builds. The hosted tests bypass it with `APKRUN_VIRGL_RUNTIME_PATH` (`31cc0ca`). Decision needed: whether the lookup should stop at the DerivedData boundary, or be removed in favour of an explicit path.
+
+**Reason.** The lookup finds the runtime for development app builds without an extra variable. Changing it changes the development app's path, which this branch does not need.
+
+**Consequence.** Until decided, any debug host whose DerivedData sits under `~/Documents` reads its runtime from there.
+
+## IR-603: The gate's DerivedData sits inside the checkout under `~/Documents`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | `scripts/run-gate.sh` (`gate_dir`, `-derivedDataPath`); [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** Keep `build/gates/<gate>/DerivedData` inside the checkout for this branch. Decision needed: move the gate's DerivedData, and so the test host bundle, to a path outside `~/Documents`, such as the artifact directory.
+
+**Reason.** The test host's own bundle loads from `~/Documents` in the gate, and the other LinuxGuest tests ran in the same stage after the stall, so the process can load its own bundle. Moving the DerivedData changes the gate's evidence layout and `verify-test-host-directory.sh`, which is a process change.
+
+**Consequence.** If the gate stalls again after `7e428b7` and `31cc0ca`, this is the next change to make.
+
+## IR-604: The virgl runtime that `current` names was built in an earlier environment, and this environment has no build of it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [build-system.md](../05-development/build-system.md) (third-party cache); [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** Do not rebuild the runtime on this branch. Decision needed: run `scripts/build-third-party.sh virgl-runtime` in the main checkout, and record the result as a gate input.
+
+**Reason.** `build-third-party.sh --print-cache-key virgl-runtime` gives `154fc…-de6cd9de…` in both the main checkout and the worktree, but `ThirdParty/out/virgl-runtime/current` names `154fc…-4808…`, built on 2026-10-08. The current key has no build, so a build compiles the runtime's sources. A build started in the worktree and was stopped, because the compile is long and changes the runtime under test.
+
+**Consequence.** The tests use the 2026-10-08 runtime. The stage passes with it (runs 4 and 6). A rebuild can change renderer behaviour (IR-605), so it needs its own gate run.
+
+## IR-605: The virgl test passes while the renderer rejects 61 operations, and the test does not check the rejects
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2, [graphics.md](../02-design/graphics.md) §12) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12; `Tests/IntegrationTests/LinuxGuestTests/VirglTests.swift` |
+
+**Choice.** Record it for review. This branch does not change the renderer or the test's assertions. Decision needed: after the rejected operations are identified, whether the test should also assert that the renderer failure count is zero.
+
+**Reason.** Runs 4 and 6 each log 61 `graphics renderer operation failed` messages, and the device logs each one again. In run 6 they fall within 130 ms before the renderer is destroyed, at the guest's shutdown. The log does not name the operations. The host readback count is zero, and the test passes.
+
+**Consequence.** The pass does not show that the rejected operations are harmless.
+
+## IR-606: A worktree needs a real `ThirdParty/out` and a copy of the pinned XcodeGen; a symlink into the main checkout writes into it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) (worktrees); `scripts/tools/build_third_party.py` (cache root check) |
+
+**Choice.** A worktree that runs the producer or a VM test gets its own `ThirdParty/out` directory, with the cached subtree copied in, and its own `build/tools/xcodegen-*`. Decision needed: write this in the environment setup, or have the worktree setup create it.
+
+**Reason.** `build_third_party.py` refuses a symlink at the cache root, and `scripts/check-lock.sh` needs the pinned XcodeGen under `build/tools`. The worktree `hang` had `ThirdParty/out` linked to the main checkout, so a copy into it wrote into the main checkout's runtime directory. One nested copy was removed, and the main checkout's `git status` is clean. A `build_third_party.py build virgl-runtime` started through that link also survived the kill of its wrapper and held `.artifacts.lock` for four minutes, until it was killed.
+
+**Consequence.** Worktree setup needs an explicit step, or the producer's lock can be held by a process the wrapper no longer tracks.

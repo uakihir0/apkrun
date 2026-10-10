@@ -237,7 +237,8 @@ public actor RuntimeSupervisor {
     private func boot() async throws(RuntimeBootFailure) {
         // The whole-boot limit counts from the start of the boot (runtime-daemon.md §3.2), VM start included.
         let bootStarted = ContinuousClock.now
-        // The GPU device is decided before anything is written, so a profile this build cannot run fails here (#021).
+        // The GPU device is decided before anything is written. For drmVirgl that starts the renderer, so a renderer
+        // failure ends the boot here, before the VM is created (#021, #022, graphics.md §8).
         let gpuDevices = try AndroidGraphicsDevices.devices(
             for: options.gpuProfile,
             requiredHostCapabilities: image.manifest.gpuProfiles[options.gpuProfile.rawValue]?.requiredHostCapabilities

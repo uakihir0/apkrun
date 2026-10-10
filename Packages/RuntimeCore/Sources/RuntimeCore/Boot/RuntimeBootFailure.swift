@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import GraphicsCore
 import ImageCore
 import VirtualMachineCore
 
@@ -23,8 +24,11 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
     case bootTimedOut(phase: BootPhase)
     /// No phase progress within the stall limit.
     case bootStalled(phase: BootPhase)
-    /// The boot profile needs a virtio-gpu feature that the device does not offer (graphics.md §9, #021).
+    /// The bundle does not list the boot profile, or the device does not offer a virtio-gpu feature that the bundle
+    /// requires for it (graphics.md §9, #021, #022).
     case gpuProfileUnavailable(profile: String)
+    /// The host renderer of the boot profile failed to start, before the VM was created (graphics.md §8, §13.1).
+    case graphics(GraphicsFailure)
     /// The development Guest Agent could not be installed, started, or reached (guest-components.md §3).
     case guestAgent(GuestAgentFailure)
 
@@ -42,6 +46,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .bootTimedOut: "bootTimedOut"
         case .bootStalled: "bootStalled"
         case .gpuProfileUnavailable: "gpuProfileUnavailable"
+        case .graphics: "graphics"
         case .guestAgent: "guestAgent"
         }
     }
@@ -62,6 +67,7 @@ public enum RuntimeBootFailure: APKRunError, Equatable {
         case .image(let failure): failure
         case .vmConfiguration(let failure): failure
         case .vm(let failure): failure
+        case .graphics(let failure): failure
         case .guestAgent(let failure): failure
         default: nil
         }

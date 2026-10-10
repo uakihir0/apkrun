@@ -12582,3 +12582,171 @@ the real manifest.
 **Reason.** The device queue must not call virglrenderer (§4.7), and a renderer build's capsets do not change while it runs. A renderer that cannot offer its capsets fails at creation, before the VM starts (§8).
 
 **Consequence.** A guest that asks for an older capset version gets `ERR_INVALID_PARAMETER`.
+
+## IR-540: Sign the 2026-10-10 T2 runs with the lab team that M00 names
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.8; [M00](issues/M00-repository-and-vm-foundation.md) acceptance pass (2026-10-08) |
+
+**Choice.** `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` were unset in this shell. The T2 runs passed `DEVELOPMENT_TEAM=QTXBTFA8BQ` and the SHA-1 of the Apple Development certificate whose organisational unit is `QTXBTFA8BQ`, on the `xcodebuild` command line only. Neither value is written to a file.
+
+**Reason.** M00 records that its 2026-10-08 runs used `DEVELOPMENT_TEAM=QTXBTFA8BQ` with the lab identity, and that certificate's OU field carries that team. This is the documented lab team, so it is preferred to the local-identity choice of IR-199. The fingerprint is not recorded here, because IR-041 keeps personal signing details out of the repository.
+
+**Consequence.** Each T2 run in this task was signed with the lab identity, and no shell profile or repository file changed.
+
+## IR-541: Check the port markers in VirtualMachineCore over the test guest's plan, not in ConsolePortPlan
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** The marker check is `ConsolePortMarkerCheck` in `VirtualMachineCore/TestGuest`, next to `TestGuestRecord`. It takes the plan that the port test attaches (`LinuxTestGuest.consolePorts(tests:consolePortCount:)`) and the parsed records. `ConsolePortPlan` in RuntimeCore is unchanged, and the boot path does not call it (IR-373).
+
+**Reason.** The check judges the records that the guest prints, and those types live in VirtualMachineCore. `ConsolePortPlan` reorders attachments from a mapping that the check produces, so it is a consumer of the check, not its owner. Placing the check in RuntimeCore would make the T2 test depend on the dev command's module.
+
+**Consequence.** `ConsolePortMarkerCheckTests` (6 tests in VirtualMachineCoreTests) and the T2 port tests call the same function, so the T0 verdict covers the rule that the T2 run applies.
+
+## IR-542: Port 0 takes no marker, and the check covers ports 1 to 19
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.8; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** The check covers attachment ports 1 to N-1 of the plan. Port 0 is the system console, which carries the `APKRUN-TEST` records, and it takes no marker.
+
+**Reason.** The guest prints every record on `/dev/hvc0`, so a marker sent there would mix into the stream that the check reads. The port test's own loop already starts at port 1 (`run_port_map_test` in `Tests/Fixtures/linux/init`). Port 0 is covered only indirectly, because the records arrive on it.
+
+**Consequence.** For the 20-port plan, 19 markers are checked. A marker check on port 0 would need a different channel.
+
+## IR-543: Leave criterion (a) unchecked, because the 20-port numbering is not verified on the guest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 acceptance criteria; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The criterion "All 20 console ports are attached. Their numbering is verified with the markers" stays unchecked. On 2026-10-10 the eight-port marker test passed, the 20-port test still skips at `/dev/hvc8` (IR-372), and the T0 tests check the host-side rule for 20 ports without a guest.
+
+**Reason.** The criterion is about the guest's numbering of all 20 ports. The eight-port run verifies ports 1 to 7, and the T0 tests start no guest. Ticking the box would count the host-side rule as guest evidence.
+
+**Consequence.** The criterion needs either a test kernel with 20 `hvc` nodes (a ThirdParty pin change, outside #095, IR-371) or a numbering method for the Android guest. Decision needed: which of the two closes it.
+
+## IR-544: Keep the 20-port test's skip, and do not change the pinned kernel in this task
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** `testTwentyConsolePorts` keeps its skip with the kernel's reason. The Alpine pin in `ThirdParty/ThirdParty.lock.json` is unchanged.
+
+**Reason.** A kernel change is a ThirdParty pin change with its own build and licence work, and IR-371 places it outside #095. The cause of the eight-node limit was not traced (IR-372), so a new pin chosen now would not rest on evidence.
+
+**Consequence.** No change to the lock file. The kernel decision belongs to the follow-up that IR-543 names.
+
+## IR-545: Run the AndroidNetwork configuration with `-only-testing:IntegrationTests/AndroidNetworkTests`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The one run of the AndroidNetwork configuration restricts the tests to `AndroidNetworkTests`.
+
+**Reason.** The LinuxGuest test classes do not check `APKRUN_INTEGRATION_SUITE`, so the configuration alone would also boot Linux test guests, which this task does not request. `AndroidNetworkTests` is the only class that the configuration's variable selects.
+
+**Consequence.** The run booted one Android guest and nothing else.
+
+## IR-546: The network walk stops at the first stage that does not pass, and the record names that stage
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
+
+**Choice.** `testNetwork` polls address, route, dns, and validated in that order, each with its own 120 s bound. The walk stops at the first stage that does not pass. The later stages are not polled, and the record names the stopping stage and the stages that were not polled.
+
+**Reason.** The stages depend on each other in the design (android-image §7.4): a route is useless without an address, and VALIDATED needs the name service that the DNS stage checks. The task asks for the stage that stops the walk to be recorded.
+
+**Consequence.** When DNS fails, `validated` is not polled, so that run cannot answer the VALIDATED question of IR-374. This is what happened on 2026-10-10. Decision needed: whether later stages should be polled after an earlier failure, each reported on its own. Until then, a DNS failure hides the VALIDATED result.
+
+## IR-547: Stage checks accept only the reply they name, because the shell reply can keep echo fragments
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The DNS stage requires a `getent` line that starts with an address and names `connectivitycheck.gstatic.com`. The VALIDATED stage requires the words WIFI and VALIDATED as whole words, where underscore joins a word, so `NOT_VALIDATED` does not count. The VALIDATED command writes its search words in brackets (`WIF[I]`, `VALID[A]TED`), so the echo of the command cannot match.
+
+**Reason.** `AndroidSerialShell.run` removes only the lines that contain the sentinel. An echo of the command with line-editing artifacts can therefore remain in the reply, and the `wifi agent:` record of the 2026-10-10 run contains such a fragment. The old DNS check accepted any non-empty reply. The 2026-10-10 DNS reply was the shell error `getent: inaccessible or not found`, which that check would have counted as resolved. The old VALIDATED check was a substring match, which also matches `NOT_VALIDATED`.
+
+**Consequence.** The shell error and the echo fragments no longer pass a stage. The 2026-10-10 run showed the DNS stage failing on the error text, so this check is working as intended.
+
+## IR-548: The Android image has no `getent`, so the DNS stage cannot pass with the probe the test uses
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5 and criterion; [android-image.md](../02-design/android-image.md) §7.4, §7.8 |
+
+**Choice.** The DNS stage keeps `getent hosts connectivitycheck.gstatic.com`. The task does not replace it with another tool, because no substitute has been observed on this image. The 2026-10-09 note in §7.8 that `getent` "returns nothing" is withdrawn.
+
+**Reason.** The 2026-10-10 run reported `/system/bin/sh: getent: inaccessible or not found`. The Android resolver lists `192.168.64.1` as its DNS server, so the failure is in the probe, not in the name service. A substitute (for example the resolved-address line that `ping` prints before any reply, or a resolver command) would have to be observed in one `AndroidNetwork` run, and this task allows one run.
+
+**Consequence.** Criterion (b) cannot pass until the probe is replaced, because the walk stops at DNS (IR-546). Decision needed: choose the probe, then verify it in one `AndroidNetwork` run.
+
+## IR-549: The post-walk diagnostic reading is not the VALIDATED stage, so criterion (b) stays open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 acceptance criteria; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The `dumpsys connectivity` line in the record after the walk (WIFI `CONNECTED`, `INTERNET` among the capabilities, no `VALIDATED`) is reported as one reading. It is not counted as the validated stage passing or failing.
+
+**Reason.** A stage is judged only by its polled values (IR-546), and the diagnostic runs once after the walk. The task says the criterion is met only if the VALIDATED stage passes, and it did not.
+
+**Consequence.** Criterion (b) stays unchecked. The reading supports IR-374 (the network joins but is not validated), but it is not the stage result.
+
+## IR-550: Run the AndroidNetwork configuration once, and record the result as it is
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** One run was made. It failed at `dns` after 120.5 s, and no retry was made.
+
+**Reason.** The task asks for one run on a shared host. The failure has its cause in the probe (IR-548), which a retry would repeat. A retry would also replace the record the task asks to keep.
+
+**Consequence.** The result in §7.8 is the only run for this code.
+
+## IR-551: Bound each network stage at 120 s, with 2 s between polls and 30 s per reply
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 5; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** `stageBound` is 120 s, `pollInterval` is 2 s, and `replyTimeout` is 30 s.
+
+**Reason.** The 120 s bound is the one that IR-374 chose for the earlier shared loop. The AndroidNetwork configuration allows 900 s (`IntegrationTests.xctestplan`), and four stages at the bound plus the boot fit inside it. The 30 s reply timeout stops a silent shell from taking the 60 s default on every poll.
+
+**Consequence.** The 2026-10-10 run took 143.9 s, of which 120.5 s was the DNS stage.

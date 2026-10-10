@@ -327,9 +327,9 @@ the tested OS build, not a cross-version promise.
 
 `requestGuestStop()` maps to `VZVirtualMachine.requestStop()`, which delivers a **power-button press** through the PL061 GPIO. Android interprets a short power press as "screen off", not "shut down". Therefore:
 
-- RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
-- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). A forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
-- In developer mode the 20 s run from the start of the `reboot -p` request, which goes over ADB and over the serial shell when ADB fails. The wait runs whenever a channel was tried, even when its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. Outside developer mode no request is sent yet, so the stop forces at once until the Guest Agent `Shutdown` request is wired ([implementation-review.md](../04-plan/implementation-review.md) IR-560 to IR-562, IR-568). The rule is `AndroidStopSequence` in RuntimeCore.
+- RuntimeCore stops Android through the Guest Agent (`Shutdown` RPC → `PowerManager.shutdown`) or, in development, `adb shell reboot -p`. RuntimeCore does not send the `Shutdown` RPC yet ([implementation-review.md](../04-plan/implementation-review.md) IR-562), so developer mode is the only graceful path today. Android powers off via PSCI `SYSTEM_OFF`, which VZ reports as `guestDidStop`.
+- If `guestDidStop` has not arrived after 20 s, RuntimeCore calls `VMController.stop()` (forced). In developer mode a forced stop is logged as a warning, and the next boot runs normally (f2fs/ext4 recover; Android's userdata checkpointing handles the rest).
+- In developer mode the 20 s run from the start of the `reboot -p` request, which goes over ADB and over the serial shell when ADB fails. The wait runs whenever a channel was tried, even when its reply was lost, because the request may have reached Android. Only a stop that no channel could try forces at once. A cancelled stop keeps the deadline, because the VM still has to stop ([implementation-review.md](../04-plan/implementation-review.md) IR-560, IR-568, IR-571). Outside developer mode no request is sent, so the stop forces at once (IR-562). The rule is `AndroidStopSequence` in RuntimeCore.
 - A forced stop that has not completed after 10 s fails with `VMFailure.stopTimedOut`, and the state becomes `failed` ([../01-architecture/state-machines.md](../01-architecture/state-machines.md) §1).
 - `requestGuestStop()` is required for the test Linux guest. Its initramfs discovers the PL061 GPIO chip with `gpiodetect`, confirms the active line request with `gpioinfo`, and maps a rising edge on offset 6 to `poweroff -f` (§12). The T2 log verified that event on `gpiochip0` offset 6 on macOS 27.0 (26A428).
 
@@ -437,7 +437,7 @@ Codes, messages, and remediations are listed in [../03-reference/error-catalog.m
 | T1 | `ConsoleChannel` with real pipes (`.log` and `.silent` ports are never written); `ConsoleLogWriter` against a real directory (file modes, rotation on disk) | #004 |
 | T1 | the disk rules of §3 with real files and permissions | #005 |
 | T1 | `VsockConnection` over a `socketpair` | #007 |
-| T0 | The developer stop of §9.3: the forced stop after the deadline with the VM ending stopped, no forced stop when the graceful stop finishes in time, no forced wait without a request, the channel choice, and the 20 s deadline (`AndroidStopSequenceTests`) | #015 |
+| T0 | The developer stop of §9.3: the forced stop after the deadline with the VM ending stopped, no forced stop when the graceful stop finishes in time, a cancelled stop keeping the deadline, no forced wait without a request, the channel choice, and the 20 s deadline (`AndroidStopSequenceTests`) | #015 |
 | T2 | Linux test guest: boot + console marker | #003, #004 |
 | T2 | SIGINT to `apkrun dev boot` takes the graceful `reboot -p` path (script in #015 Notes, not a suite test) | #015 |
 | T2 | Start completion versus delegate callback after VZ machine construction, with a successful guest-stop positive control | #003 |

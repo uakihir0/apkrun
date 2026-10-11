@@ -15872,7 +15872,7 @@ The console has 264 denials in all. Of them, 182 are `RenderThread` denials from
 
 **Verification.** The boot evidence is in IR-949 to IR-959 and in the #022 notes. The apps still abort on the uevent read of their own domain (IR-954), so this tick covers the stack initialization and boot, not the apps. A maintainer should confirm that the overlay route satisfies these criteria, since the product image (#035) is not built.
 
-## IR-970: The DRM path is documented to card0; the render node is left out because no tracked file names it
+## IR-970: The DRM path is documented to card0; the render node is left out because no capture, script, or source file names it
 
 | Field | Value |
 |---|---|
@@ -15880,7 +15880,7 @@ The console has 264 denials in all. Of them, 182 are `RenderThread` denials from
 | Task | #022 |
 | Affected documents | [graphics.md](../02-design/graphics.md) §9.1 (DRM path); [M02-graphics.md](issues/M02-graphics.md) #022 criterion 2 |
 
-**Choice.** §9.1 names the virtio-gpu device (ID 16, bound by the `virtio_gpu` driver) and its node `/dev/dri/card0`. The stock capture's kernel log shows the driver and the node, and init waits for the node. §9.1 does not name a render node. The brief listed `renderD128` as part of the DRM path, but `git grep` finds no tracked file with that name, in the docs, the code, the tools, or the captures.
+**Choice.** §9.1 names the virtio-gpu device (ID 16, bound by the `virtio_gpu` driver) and its node `/dev/dri/card0`. The stock capture's kernel log shows the driver and the node, and init waits for the node. §9.1 does not name a render node. The brief listed `renderD128` as part of the DRM path, but no capture, script, or source file in the repository names it. The name appears only in the review entries that discuss it.
 
 **Reason.** The brief requires that §9 not describe anything that the repository does not verify. A render node may exist in the guest, but nothing in the repository shows it. A later capture or VM run can add it.
 
@@ -15892,7 +15892,7 @@ The console has 264 denials in all. Of them, 182 are `RenderThread` denials from
 | Task | #022 |
 | Affected documents | [graphics.md](../02-design/graphics.md) §9.2; [IR-400](#ir-400-keep-the-unconfirmed-drm_virgl-values-and-leave-the-layer-2-criterion-open); `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
 
-**Choice.** §9.2 names `gpuProfiles.drmVirgl.bootconfig` in the committed layout as the source of the eight keys. It records the derivation file, `graphics-props-from-source.txt` (Cuttlefish `9bb9c72`, under the git-ignored `Images/work/16373615/`), as the origin of the values, and it does not commit that file.
+**Choice.** §9.2 names `gpuProfiles.drmVirgl.bootconfig` in the committed layout as the source of the eight keys. It records the derivation file, `graphics-props-from-source.txt` (Cuttlefish `9bb9c72`, under the git-ignored `Images/work/16373615/`), as the origin of seven of the values. The composer key comes from the stock launcher capture. The derivation file is not committed.
 
 **Reason.** The reproducibility claim needs one committed source, and the bundle reads the layout. A committed copy of the derivation would be a second source that no code reads. Whether the derivation must be committed is IR-400's decision, and this entry does not decide it.
 

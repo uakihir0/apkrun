@@ -15714,3 +15714,145 @@ The uevent denials are dated from the console log. The kernel's policy-load reco
 **Reason.** IR-763 recorded `boot-exit=0` for a SIGINT in another run. This run's status of 1 has no error line in the log, and its cause is not known. Whether a user stop should exit 0 is for the maintainer, under cli.md §5. The wrong target was a mistake in this run's shell, and it did not change the boot.
 
 **Consequence.** The stop path's exit status is an open question. The VM count was one boot of the two allowed.
+
+## IR-949: The boot-time variant is the #099 variant with the ODM precompiled policy edited and the ODM descriptor resealed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4, test-only, boot-time form of IR-946); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** `Experiments/sepolicy-022/odm_variant.py` builds `/tmp/apkrun-022-odm/bundle/android-bundle` from the #099 variant `/tmp/apkrun-099-vh-install-src/android-bundle`. The changes against that source are: the `odm_a` logical partition (a rebuilt erofs image in which `/etc/selinux/precompiled_sepolicy` has the same two allow calls as the runtime test, `allow surfaceflinger sysfs:file { open }` and then `{ read }`, sha256 `cbcad711…`, 911,749 bytes); the top-level `vbmeta_a` (the `odm` hashtree descriptor replaced, every other descriptor kept, the vendor one included); the bootconfig vbmeta values; `disks/os.img` and the super and vbmeta entries of its manifest. The ramdisk and the kernel are the stock ones (`boot/ramdisk.img` sha256 `3abc7297…`), so this variant does not depend on the ramdisk `/sepolicy` edit of IR-943.
+
+**Reason.** IR-946 applied the rule to a running policy. This variant puts the rule in the image, in the policy that `init` loads (IR-943). The source vendor partition and its descriptor are kept, so the only change on the ODM side is the policy file and its descriptor.
+
+**Consequence.** The manifest diff against the source changes only `boot/bootconfig.txt`, the `disks` entries of `os.img`, `super`, and `vbmeta_a`, and the matching file entries. The variant record is `/tmp/apkrun-022-odm/bundle/android-bundle.variant.json`.
+
+## IR-950: The ODM erofs is rebuilt with the vendor pipeline, and the only changed entry is the policy; the stock FEC is not reproduced
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (boot-time form of IR-946); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 and §6.6 |
+
+**Choice.** The stock `odm_a` (520,192 bytes; footer `NONE`; original image size 430,080; salt `16b6a5…`) is exported with `fsck.erofs --extract --xattrs` and rebuilt by the vendor pipeline's `_rebuild` (`mkfs.erofs --tar=f`) from tar members that keep the stock modes, owners, and labels. A plain rebuild reproduces the stock entries (`compare_entries`, no problem). The rebuild with the edited policy changes only `/etc/selinux/precompiled_sepolicy`, in its size and sha256. The image is sealed with `avbtool add_hashtree_footer` (`NONE`, the stock salt, `sha256`, 4096-byte blocks, no FEC) and checked with `avbtool verify_image`. The new ODM root digest is `1e9d1835e1bc6c3eeea587af5a015d3734a9861aa3d1f476e8951f8b1dbc7437`. The stock precompiled file in `odm_a` has the sha256 prefix `6a1f95da…`, the file the guest loaded at boot, so the image was the right base.
+
+**Reason.** The stock ODM footer has 2 FEC roots. The `fec` tool is not pinned (IR-740), so the variant has no FEC, as the vendor reseal does. The partition still verifies with `verify_image`, but the descriptor now differs from the stock one in its FEC fields. The maintainer should decide whether a test image without FEC is acceptable, because the boot test below depends on it.
+
+## IR-951: The `odm` descriptor in `vbmeta_a` matches the repacked ODM image, and this was checked before any install or boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (boot-time form of IR-946); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 and §6.6 |
+
+**Choice.** The source `vbmeta_a` (12,288 bytes) gets its `odm` hashtree descriptor from the new footer by `avbtool update_partition_descriptor` with `--algorithm NONE` and the stock rollback index `1780617600`, the same call as `vendor_reseal.refresh_vbmeta`, padded to the partition size. The checks were: `NONE` (IR-744); rollback index, rollback location, flags, and minimum libavb version unchanged; every descriptor except `odm` unchanged, including the vendor one; the `odm` descriptor fields equal to the new footer's. The `check` stage then read the bundle back: the `odm` root digest in `vbmeta_a` (`1e9d1835…`) equals the footer root digest of the `odm_a` in the variant super, `avbtool verify_image` passes on that partition, and the vendor footer matches the vendor descriptor in the same `vbmeta_a` (291,229,696 bytes).
+
+**Reason.** The check of the ODM root digest against the repacked image was required before any boot. `vbmeta_a` remains unsigned (IR-744), so the descriptor is the only link between the image and the chain.
+
+## IR-952: `build_variant` makes the bundle from the #099 variant, with a sparse copy of its super; the ramdisk is the stock one
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (boot-time form of IR-946); the bundle tool of #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** `bundle_variant.build_variant` is called without change, with the #099 variant as the stock bundle, a sparse image of its super, `partition='odm_a'`, the new ODM image, and a reseal record whose `stock.vbmetaSha256` is the sha256 of the source `vbmeta_a` (`64c4ea5c…`). The sparse image is made by `raw_to_sparse` in `odm_variant.py` (4096-byte blocks, zero blocks skipped); `build_variant` checks that its expansion equals the manifest's super sha (`66fb79ee…`), and the variant super sha is `fd6ccd3d…`. The tool verified the source bundle with the developer key (`~/.config/apkrun/dev-image-key`), checked the super outside `odm_a` unchanged, refreshed the bootconfig values, and signed the new manifest with that key, which Debug builds trust. The variant manifest sha256 is `1b1393a4…`.
+
+**Reason.** `build_variant` needs the stock super artifact, which the variant base does not match. A sparse image of the variant's own super is the base that the tool's checks accept, and the vendor change of #099 is kept.
+
+## IR-953: The variant was installed into a fresh home and checked before the boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (boot-time form of IR-946) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 |
+
+**Choice.** `apkrun dev image install` ran under `lockf` (no VM) into a fresh scratch home. Before the boot: `shasum -a 256 -c SHA256SUMS` passed for all six files of the bundle; the installed `manifest.json` is byte-equal to the bundle's; the installed `disks/os.img` has sha256 `eb839ab0…`, the value of the manifest; the installed `boot/ramdisk.img` has `3abc7297…`, the stock value. The IR-951 checks ran on the same bundle.
+
+**Reason.** One boot was allowed, and these checks ran before it. Nothing in this step starts a VM.
+
+## IR-954: The boot-time drmVirgl boot reached `ready` under enforcing, with no policy loaded at runtime
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 4 check, evidence only); #035 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 (Notes); [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** Boot 2 of 2, under the lock: `lockf -k /tmp/apkrun-vm.lock env APKRUN_HOME=<fresh home> APKRUN_GUEST_DIR=/tmp/apkrun-099-vh-guest APKRUN_VIRGL_RUNTIME_PATH=/tmp/apkrun-099-vh-virgl-runtime /tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, log `/tmp/apkrun-022-boot2.log`. The lines:
+
+- `state: ready`
+- `Android is ready after 16.03775225 seconds`
+- console: `init: processing action (sys.boot_completed=1)` at 13.74 s; `adb shell getprop sys.boot_completed` returns `1`
+- `adb shell getenforce` returns `Enforcing`
+- `dumpsys SurfaceFlinger`: `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`; the saved logcat `/tmp/apkrun-022-boot2-logs/logcat-20261011T153427Z.log`: `10-11 15:34:32.156 704 741 I SurfaceFlinger: renderer  : virgl`
+
+The first failing line: none. SurfaceFlinger (pid 704) started once and did not abort (no `received SIGABRT` line). The uevent denials of this boot: 36 `getattr` denials at 3.70 to 3.72 s, with no `open` or `read` denial, and they did not stop the boot.
+
+**Reason.** This is the first boot of an image whose policy holds the rule from the start. The uevent denials that stopped the first boot's SurfaceFlinger (IR-942) do not occur, and the boot ends in `ready`.
+
+## IR-955: The boot used a rule compiled into the image, and no rule was loaded at runtime
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 4 check, evidence only); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The rule was compiled into the image. The evidence: (1) the `odm_a` of the installed variant holds the edited policy (`check` read it back through the erofs export, sha256 `cbcad711…`), and init loads the ODM precompiled file (IR-943); (2) the kernel's policy-load records (`type=1403`) are at 0.51 s and 0.83 s only, during init, and none later; (3) this boot's adb session ran as uid 2000 (shell), with no `adb root`, and nothing was written to `/sys/fs/selinux/load`; (4) there is no `open` or `read` denial in the whole boot, so the policy in effect from the start allowed both.
+
+**Reason.** The first boot (IR-947) applied the rule by a runtime load, after the boot had started. This boot does not, and the coordinator asked for that difference to be stated.
+
+## IR-956: The boot was stopped with SIGINT, and its exit status was not captured
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (stop path of the experiment) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 |
+
+**Choice.** SIGINT was sent to pid 88870, which `ps` showed as `/tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, not the wrapper. The log then has `state: stopping` and `state: stopped`, and no error line. No apkrun, `lockf`, or Virtualization process was left. The boot was started as a shell background job, so its exit status was not captured.
+
+**Reason.** The exit-status question of IR-948 stays open; this run does not answer it.
+
+## IR-957: What this boot does not show
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 4 check, evidence only) |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 (Notes) |
+
+**Choice.** Not shown: (1) SurfaceFlinger's mapped libraries in this boot, because a shell-uid adb session cannot read `/proc/<pid>/maps` and no root was used (the library set is the one of IR-947); (2) the `getattr` denials are still there and non-fatal, so a product rule may need `getattr` for a clean log; (3) the stock ODM's FEC (IR-950), so a FEC-protected ODM was not tested; (4) repeatability: one boot, one image. No product criterion of #022 is ticked.
+
+**Reason.** Each item was either not in scope for the boot's check, or needs a means that this experiment does not use.
+
+## IR-958: Consequence for #035: the product rule goes into the policy that `init` loads, and the matching descriptor is resealed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #035 (the product sepolicy and its image build) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 and §6.6; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** On this image the product fix is a rule in the policy that the ODM partition loads (the precompiled file, built from the product's split inputs), with the `odm` (or `vendor`) hashtree descriptor resealed in `vbmeta_a`, as IR-744 and IR-746 describe for vendor. The ramdisk `/sepolicy` is not the route (IR-943). The product still needs the choice of IR-905 (a `genfscon` only for a new type) and the answer on `getattr` (IR-957).
+
+**Reason.** The boot-time test of this variant reaches `ready` with the rule in that place, under enforcing, without a runtime load (IR-954, IR-955).
+
+## IR-959: The experiment changes no tool in `Images/tools`; its helpers stay in `Experiments/sepolicy-022`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (test-only, AGENTS §11) |
+| Affected documents | none (test code in `Experiments/sepolicy-022/`) |
+
+**Choice.** `odm_variant.py` calls `apkrun_image` functions as they are: `bundle_variant.build_variant`, `vendor_inject._rebuild` and `compare_entries`, `erofs` export and tree functions, `vendor_reseal.parse_hashtrees` and `_copy_prefix`, and the LP reader. Two helpers are local to the experiment: `raw_to_sparse` and the ODM seal (the vendor seal in `vendor_inject.seal_partition` is written for the vendor name). No file of `Images/tools` changed.
+
+**Reason.** The experiment is test-only (AGENTS §11). A product path for the ODM partition (replacement and descriptor, with its own check) is a follow-up task, not part of #022. `vendor_reseal` is vendor-specific, and an ODM version was not added to it.

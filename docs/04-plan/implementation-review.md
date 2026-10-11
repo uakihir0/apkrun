@@ -16224,3 +16224,143 @@ Round 2 (after the third boot): a second reviewer found eight items, and each is
 
 **Verification.** The 13-port result and the 4-port exclusion are in IR-901, IR-907, and IR-899. The overlay results are in IR-949 to IR-999.
 
+
+## IR-1100: Present the scanout through an IOSurface pool shown as layer contents, not through a CAMetalLayer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.2, §6.3, §12 #023; [display-and-windowing.md](../02-design/display-and-windowing.md) §5.3; [ADR-0006](../01-architecture/decisions/0006-wrapper-owned-window-iosurface.md) |
+
+**Choice.** The scanout reaches the window through a three-buffer IOSurface pool. A GPU blit from the borrowed scanout texture writes the next free buffer, and the window sets that buffer as the contents of a plain layer. The window does not draw into a CAMetalLayer drawable. It is created for scanout 0 only.
+
+**Reason.** The design path (graphics.md §6, ADR-0006) gives the wrapper the same frames in #068, and the pool carries the latest-frame and no-overwrite rules of display-and-windowing.md §5.2. A drawable path would need a second present path that #068 would have to replace. The virgl resource is not an IOSurface, so some copy into an IOSurface is needed anyway, and here the copy is the GPU blit, not a CPU copy. The T1 test and the counters show no host readback.
+
+**Verification.** T0 `PresentStateTests` and `ScanoutPresenterTests`; T1 `aFlushOfTheVirGLRendererPresentsTheGuestPixelsInOrderWithTheirOrientation` (GraphicsCoreTests, not GraphicsCoreSystemTests: the request helpers that the test uses are in that target).
+
+## IR-1101: Check the blit fence on the render thread, not from a waiter thread
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.2 step 4, §12 #023; §4.5 (the 1 ms poll cadence) |
+
+**Choice.** The completion waiter asks the render thread for a poll of the blit's fence, and it polls again after 1 ms. Each 100 ms without a signal is counted as a stall. The poll runs with the root context current. The first design waited on the EGL sync from the waiter thread.
+
+**Reason.** ANGLE rejects `eglClientWaitSyncKHR` on a thread without the sync's context, with `EGL_BAD_CONTEXT` (0x3006). The first version of the T1 test failed with `failedBlits` 1 and no frame offered. A diagnostic log that the bridge wrote to a file showed the wait result 0 (EGL error) for every blit. The render-thread poll passes the same T1 test with pixel-exact frames.
+
+**Verification.** T1 passes after the change. T0 `aStalledFenceIsCountedAndWaitedOnUntilItSignals` covers the stall count.
+
+## IR-1102: The blit keeps the row order; no vertical flip is applied
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.2, §6.2 (the "Y-flip" wording, now corrected) |
+
+**Choice.** The blit maps source row y to destination row y. The design text that says the blit flips Y is not implemented, because it is not needed for this path.
+
+**Reason.** T1 compares every pixel of two pool buffers with the guest's rows: the first resource is red over blue, and the second is blue over red. The buffer rows match exactly. A window-only check without a VM showed buffer 0 with red on top in the window (`orientation-buffer0.png`), so the layer's orientation is also correct. That check used a test pattern, not an Android frame.
+
+**Verification.** T1 and the no-VM window capture.
+
+## IR-1103: Run the AppKit loop on the main thread before the entry point suspends
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §5.3 (updated); [runtime-api.md](../03-reference/runtime-api.md) §15 |
+
+**Choice.** When `apkrun dev boot --window` is requested, `APKRunCommand.main` enters `NSApplication.run` before its first `await`. The command runs on a detached task. The loop ends when the command ends, and closing the window stops the boot.
+
+**Reason.** Two earlier shapes failed. (a) `await MainActor.run { NSApplication.run }`: a harness run applied no frame, because the main-actor tasks that feed the window never ran. Boot 1 then stalled in `booting(systemServer)` with SIGINT ignored, and it was stopped with SIGKILL. The blocking job seems to hold the queue that the virtual machine uses. (b) A timer pump that does not block: the process ended, because the main run loop had no sources. The harness with the chosen shape applied and displayed 30 frames.
+
+**Verification.** The no-VM harness (30 frames displayed, window listed). `apkrun dev boot --gpu virgl --window` with an empty home exits with `image.noCurrentImage` and status 1, without hanging.
+
+## IR-1104: The development window is fixed-size, with aspect fit when it is resized
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 #023 step 3; [display-and-windowing.md](../02-design/display-and-windowing.md) §5.3, §7 |
+
+**Choice.** The window's content is the scanout's pixel size divided by the screen's backing scale, in points. The layer is placed with `DisplayGeometry.aspectFit` on each layout, so a resize scales the content and never changes the scanout. The mode is 1024 x 768 until #028 gives the image's default mode. Runtime resize waits for #067.
+
+**Reason.** This is the fixed-size behavior that graphics.md §12 #023 step 3 asks for. Five T0 cases cover the geometry (`WindowingCoreTests`). Live resizing was not exercised with an Android frame.
+
+**Verification.** T0 `WindowingCoreTests`; the window size in the screenshots.
+
+## IR-1105: A boot that is still starting cannot be stopped with SIGINT or the window's close button
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (found there), #016 (the stop path of `dev boot`) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`dev boot`) |
+
+**Choice.** Not changed by #023, because it is in the boot path. `DevBoot` reads its stop requests only after `ensureReady` returns, so SIGINT and the window's close do nothing while the guest is starting. Boot 2 ignored SIGINT for more than 25 s, and it was stopped with SIGKILL. The maintainer decides whether a stop cancels a boot that is still starting. That is a runtime change outside #023.
+
+**Reason.** A fix would change the boot's cancellation, which is outside the one risk of this task (AGENTS §11).
+
+**Verification.** Boot 2 (`/tmp/apkrun-023/evidence/boot2.err`).
+
+## IR-1106: The second boot stalled in SurfaceFlinger's EGL setup, before any present
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023, #099, #016 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (status); [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** Recorded as the #023 boot result. The guest's SurfaceFlinger aborts at start with `no suitable EGLConfig found, giving up (format: 1 ...)`, and init restarts it about every 5 s. The guest logs have no flush and no frame. The window showed no Android frame, so criterion 1 is not ticked and G3 is not reached. The minigbm capset and the skipped-format set match the reference ODM boot (the same seven formats). The one host change that runs before the guest starts is the presenter attach, which creates the pool and the targets and makes the root context current for them. That is not ruled out. No further boot is allowed, because two were used.
+
+**Reason.** The evidence supports "before any present path ran", and it does not separate the attach from the bundle. The next check is a boot from the same bundle without `--window`. That check needs the maintainer's go-ahead, because the two boots are used.
+
+**Verification.** `/tmp/apkrun-023/evidence/surfaceflinger-abort.txt`, `logcat-boot2.log`, `boot2.err`; the window capture `boot2-window-early.png` (dark, statistics line at 0).
+
+## IR-1107: The pool is BGRA8Unorm, tagged sRGB, and the bytes are copied unchanged
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §5.4; [graphics.md](../02-design/graphics.md) §6.3 |
+
+**Choice.** The surfaces use `MTLPixelFormatBGRA8Unorm` (not the `_sRGB` variant), and each IOSurface carries the serialized sRGB profile in `kIOSurfaceColorSpace`. The blit copies the guest's encoded values.
+
+**Reason.** An `_sRGB` texture would encode the values a second time, and the colors would wash out. §5.4 asks for BGRA with the sRGB tag, which is what is built. Byte equality is checked by T1. Color was not checked visually, because no Android frame was shown.
+
+**Verification.** T1 (exact bytes).
+
+## IR-1108: The statistics line, the failed-blit count, and the window title as the overlay
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §7; [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 steps 5 and criteria |
+
+**Choice.** `PresentStatistics` gains `failedBlits`. `--stats` writes one statistics line per second to standard error and sets the window title to it: fps, dropped frames, stalls, `hostReadbacks`, and `cpuPixelCopies`. The 60-second log under `io.apkrun.graphics` is not implemented yet.
+
+**Reason.** A title overlay is the on-screen form that criterion 5 asks for, and the one-second line is cheap. The 60-second log stays open, and so does the `guestReadbacks` line, which the title does not show yet.
+
+**Verification.** The window title in `boot2-window-final.png`: `hostReadbacks 0`, `cpuPixelCopies 0`.
+
+## IR-1109: What #023 leaves for later, and the names it chose
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023, #067, #068 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §5.2 (rules 4 to 6), §5.3 |
+
+**Choice.** #023 does not implement the back-pressure timeout and `visibilityChanged` (§5.2 rules 4 and 5), and it does not reallocate pools. The generation rule (rule 6) is covered at the consumer by `LayerFrameGate`, because #023 has one generation. The embedded names are `DevelopmentDisplay` (RuntimeCore) and `DeveloperDisplay` (RuntimeHost), where the design says `DeveloperService`.
+
+**Reason.** Each of these belongs to a later task (#067, #068) or is outside the one risk of #023. The names keep the module boundaries: RuntimeHost does not import GraphicsCore.
+
+**Verification.** T0 `LayerFrameGate` tests; the module-dependency check passes (`scripts/tools/check-module-deps.swift`, run with the main checkout's pinned XcodeGen).

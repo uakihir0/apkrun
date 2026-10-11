@@ -14805,3 +14805,18 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The task allowed two VM boots. One boot created a VM (IR-751). The attempts without the Guest Agent bundle and without `APKRUN_VIRGL_RUNTIME_PATH` failed with `runtime.guestAgentBundleMissing` and `runtime.graphics` before the VM existed, so they are not counted. No second boot was started, because the task says to stop at a failing boot.
 
 **Reason.** The error catalog says `runtime.graphics` is raised before the VM is created, and the logs show no VM for those attempts. Counting them would cost a boot the task may need for a fixed bundle.
+
+## IR-800: The permissive drmVirgl boot shows the Mesa renderer, and the product criteria stay open until the sepolicy rule lands
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022, #099 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 and #099; [android-image.md](../02-design/android-image.md) §11; #035 |
+
+**Choice.** Record the observed evidence of one drmVirgl boot of the resealed Mesa variant with `androidboot.selinux=permissive`, and do not tick the #022 criteria 1 to 3 for the product. The product needs the sepolicy rule of #035 first.
+
+**Reason.** The boot used a permissive experiment (the SELinux mode is set on the kernel line). The evidence: the guest reached `ready` in 10.3 s; `sys.boot_completed` is 1; `dumpsys SurfaceFlinger` names `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`; `ro.hardware.egl` is `mesa`; SurfaceFlinger maps `/vendor/lib64/egl/libEGL_mesa.so` and `libGLESv1_CM_mesa.so`; the count of mapped SwiftShader or ANGLE libraries is 0. The clean stop was a SIGINT, with exit 0. Under enforcing SELinux, SurfaceFlinger is denied the sysfs uevent read (IR-760), so the product result is different.
+
+**Verification.** The commands and their output lines are in the #022 and #099 Notes. The scratch home was removed, and the boot process and the lock were released.
+

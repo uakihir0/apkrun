@@ -15209,3 +15209,17 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** The protocol gains one requirement with a default, so other models are unaffected. The drain waits on the render thread, as the reset and stop already do. The adapter path needs the VZ framework, so no offline test covers it. The T0 test `theInvalidationDrainRunsTheRendererWorkQueuedBeforeIt` covers the drain, and IR-849 lists the VM check. The T0 reset test calls the device's reset directly, without the adapter's invalidation.
 
+## IR-860: The kmscube criterion of #022 is ticked on the VM after the attach_iov change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 criterion 5; IR-830 to IR-835; IR-836 |
+
+**Choice.** Tick criterion 5 on the VM result of the attach_iov change, and record the run.
+
+**Reason.** The LinuxGuest VirglTests kmscube test passed once on the VM after the change, with 0 failures, and the run log has no virglrenderer rejection. The test's own assertions (kmscube ran, the readback counter is 0) passed. Before the change, the replay rejected 61 submits (IR-830). The replay now rejects 0 (IR-836 and the attach_iov branch).
+
+**Verification.** One VM run under `lockf`. The command and the result line are in the #022 Notes.
+

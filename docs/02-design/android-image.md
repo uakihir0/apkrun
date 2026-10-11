@@ -70,6 +70,7 @@ Images/
 │   │   ├── bootconfig.py          # parse, merge, serialize, trailer (§6)
 │   │   ├── sparse.py              # Android sparse → raw (§4.3)
 │   │   ├── lp.py                  # liblp (super) metadata reader, read-only (§3.1)
+│   │   ├── lp_write.py            # replaces one linear partition in a sparse super (§4.6, #099)
 │   │   ├── avb.py                 # vbmeta digest via vendored avbtool (§6.2)
 │   │   ├── gpt.py                 # GPT writer and reader (§4.4)
 │   │   ├── layout.py              # data-driven disk plans (§4.2)
@@ -376,6 +377,18 @@ Notes:
 
 1. T2 with the Linux test guest ([vm.md](vm.md) §12): the two disks are attached, and `/init` prints `PARTNAME` from `/sys/class/block/vd*/uevent` and the size of each partition. The test compares them with `disks.json`.
 2. T2 with the Android kernel (#012): the console log shows `virtio_blk` detecting two disks with the expected partition counts (9 and 4).
+
+### 4.6 Super rewrite (#099)
+
+`apkrun_image.lp_write.replace_partition` writes a copy of the sparse `super.img` with one linear logical partition holding a new image. The offline injection uses it for `vendor_a`. The rules:
+
+- The partition keeps its size and its extents. The geometry, the metadata copies, the partition table, and every other partition stay byte-identical, so the metadata needs no checksum update. The writer verifies every copy in use (IR-681).
+- An image shorter than the partition is written at the start of the partition, and the rest is zero. An image larger than the partition fails with `PartitionTooLargeError`, because growing a partition changes the metadata, and the writer does not do that (IR-682).
+- The output stays sparse. `sparse.rewrite_ranges` keeps every chunk outside the replaced range and writes the new data as RAW runs of at most 256 blocks, with zero blocks as DONT_CARE (IR-680).
+- The writer refuses a raw super, a sparse image with a whole-image checksum or a CRC32 chunk, a non-linear extent, and an extent that is not aligned to the sparse block (IR-684).
+- The output is written beside the destination as a partial file. An existing destination is refused, and the partial file is removed on failure (IR-683).
+
+Before the output is renamed into place, the writer compares the partition table, the metadata bytes, the checksums of every metadata copy, the new data, and every other partition with the input. An unchanged super round-trips to identical bytes. The writer does not claim a boot. The top-level vbmeta is not signed again, so the output does not verify (IR-625, IR-650).
 
 ---
 

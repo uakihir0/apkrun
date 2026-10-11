@@ -27,6 +27,12 @@ enum {
     GB_E_SUBMIT_OPERATION = -16,
     GB_E_TRANSFER_OPERATION = -17,
     GB_E_FENCE_OPERATION = -18,
+    GB_E_PRESENT_OPERATION = -19,
+};
+
+enum {
+    /* Returned by gb_sync_wait when the timeout expires before the fence signals (#023). */
+    GB_SYNC_TIMEOUT = 1,
 };
 
 enum {
@@ -243,6 +249,61 @@ int gb_create_fence(gb_renderer *renderer, uint32_t fence_id, uint32_t ctx_id);
 
 /* Lets virglrenderer retire completed fences. Call on the render thread. */
 void gb_poll(gb_renderer *renderer);
+
+/*
+ * Presentation (graphics.md §6.2, §6.3; #023). A present target is a BGRA8Unorm texture on
+ * ANGLE's Metal device that is backed by an IOSurface. The bridge imports it once into GL, as
+ * the color attachment of a framebuffer. gb_present_target_create, gb_present_blit, and
+ * gb_present_target_destroy run on the render thread. They use the shared root context, so the
+ * framebuffers they create are not visible to the guest contexts, which keep their own.
+ */
+typedef struct gb_present_target gb_present_target;
+
+/*
+ * Creates a target for `iosurface`, a borrowed IOSurfaceRef of `width` x `height` pixels in
+ * BGRA8. The bridge retains the IOSurface's Metal texture until gb_present_target_destroy.
+ */
+int gb_present_target_create(
+    gb_renderer *renderer,
+    void *iosurface,
+    uint32_t width,
+    uint32_t height,
+    gb_present_target **out
+);
+
+/* Releases a target and its GL and Metal objects. Call on the render thread, before the renderer is destroyed. */
+void gb_present_target_destroy(gb_renderer *renderer, gb_present_target *target);
+
+/*
+ * Copies the rectangle (`x`, `y`, `width`, `height`) of the scanout resource `res_id` into the
+ * whole target, scaling when the sizes differ, and flushes the GL command stream. On success it
+ * stores an EGL fence in `out_sync` that signals when the copy has finished on the GPU. The
+ * caller waits with gb_sync_wait and releases the fence with gb_sync_destroy. The copy never
+ * maps a pixel into host memory. Call on the render thread, after the commands that wrote the
+ * resource. The call restores the GL state it changed and the EGL context that was current.
+ */
+int gb_present_blit(
+    gb_renderer *renderer,
+    uint32_t res_id,
+    uint32_t x,
+    uint32_t y,
+    uint32_t width,
+    uint32_t height,
+    gb_present_target *target,
+    void **out_sync
+);
+
+/*
+ * Checks a blit fence, waiting for at most `timeout_ns`. It returns GB_OK when the fence has
+ * signaled, GB_SYNC_TIMEOUT when it has not, and a negative status on error. ANGLE validates the
+ * wait against the current context, so the bridge makes the root context current for the call
+ * and restores the caller's context. Call it on the render thread. Pass zero for a poll. A longer
+ * timeout holds the render thread for that long.
+ */
+int gb_sync_wait(gb_renderer *renderer, void *sync, uint64_t timeout_ns);
+
+/* Releases a blit fence. Call it on the render thread, while the renderer is alive. */
+void gb_sync_destroy(gb_renderer *renderer, void *sync);
 
 #if defined(DEBUG)
 /* Test-only probe for the signed-app runtime locator. */

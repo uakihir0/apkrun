@@ -5,7 +5,12 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <EGL/eglext_angle.h>
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
 #include <virgl/virglrenderer.h>
+
+#import <IOSurface/IOSurface.h>
+#import <Metal/Metal.h>
 
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
@@ -61,6 +66,56 @@ struct gb_virgl_api {
         struct virgl_box *, uint64_t, struct iovec *, int);
     int (*create_fence)(int, uint32_t);
     void (*poll)(void);
+    /* Optional in older builds. The present path needs it (#023). */
+    int (*borrow_texture_for_scanout)(int, struct virgl_renderer_resource_info_ext *);
+};
+
+/* The GL entry points of the present path. ANGLE exports them from libGLESv2 (graphics.md §6.2). */
+struct gb_present_gl_api {
+    void (*bind_framebuffer)(GLenum, GLuint);
+    void (*gen_framebuffers)(GLsizei, GLuint *);
+    void (*delete_framebuffers)(GLsizei, const GLuint *);
+    void (*framebuffer_texture_2d)(GLenum, GLenum, GLenum, GLuint, GLint);
+    GLenum (*check_framebuffer_status)(GLenum);
+    void (*blit_framebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
+    void (*gen_textures)(GLsizei, GLuint *);
+    void (*delete_textures)(GLsizei, const GLuint *);
+    void (*bind_texture)(GLenum, GLuint);
+    void (*egl_image_target_texture_2d)(GLenum, GLeglImageOES);
+    void (*get_integerv)(GLenum, GLint *);
+    void (*get_booleanv)(GLenum, GLboolean *);
+    void (*enable)(GLenum);
+    void (*disable)(GLenum);
+    void (*color_mask)(GLboolean, GLboolean, GLboolean, GLboolean);
+    void (*flush)(void);
+};
+
+/* The EGL extension entry points of the present path (EGL_KHR_image_base, EGL_KHR_fence_sync). */
+struct gb_present_egl_api {
+    PFNEGLCREATEIMAGEKHRPROC create_image;
+    PFNEGLDESTROYIMAGEKHRPROC destroy_image;
+    PFNEGLCREATESYNCKHRPROC create_sync;
+    PFNEGLDESTROYSYNCKHRPROC destroy_sync;
+    PFNEGLCLIENTWAITSYNCKHRPROC client_wait_sync;
+    PFNEGLGETCURRENTCONTEXTPROC get_current_context;
+    PFNEGLGETCURRENTSURFACEPROC get_current_surface;
+};
+
+/* A present target: the Metal texture of one IOSurface, imported into GL as a framebuffer attachment. */
+struct gb_present_target {
+    void *metal_texture;
+    EGLImageKHR image;
+    GLuint texture;
+    GLuint framebuffer;
+    uint32_t width;
+    uint32_t height;
+};
+
+/* The EGL state of the calling thread, saved before the present path switches to the root context. */
+struct gb_present_saved_state {
+    EGLContext context;
+    EGLSurface draw;
+    EGLSurface read;
 };
 
 /* The iovec array that the bridge gave virglrenderer for the backing of one resource (IR-836). */
@@ -79,6 +134,12 @@ struct gb_renderer {
     void *virgl_library;
     struct gb_egl_api egl;
     struct gb_virgl_api virgl;
+    struct gb_present_gl_api gl;
+    struct gb_present_egl_api present_egl;
+    /* Set when every present entry point loaded. Only the render thread reads it. */
+    bool present_ready;
+    /* The framebuffer that reads the scanout texture in the root context. Created on first use (#023). */
+    GLuint present_source_framebuffer;
     struct virgl_renderer_callbacks virgl_callbacks;
     EGLDisplay display;
     EGLConfig config;
@@ -411,6 +472,9 @@ static bool gb_load_virgl_api(gb_renderer *renderer) {
         (int (*)(int, uint32_t))gb_symbol(renderer->virgl_library, "virgl_renderer_create_fence");
     renderer->virgl.poll =
         (void (*)(void))gb_symbol(renderer->virgl_library, "virgl_renderer_poll");
+    renderer->virgl.borrow_texture_for_scanout =
+        (int (*)(int, struct virgl_renderer_resource_info_ext *))
+            gb_symbol(renderer->virgl_library, "virgl_renderer_borrow_texture_for_scanout");
 
     return renderer->virgl.renderer_init != NULL
         && renderer->virgl.renderer_cleanup != NULL
@@ -791,9 +855,381 @@ const char *gb_status_description(int status) {
             return "virglrenderer rejected a transfer";
         case GB_E_FENCE_OPERATION:
             return "virglrenderer rejected a fence";
+        case GB_E_PRESENT_OPERATION:
+            return "the presentation blit failed";
+        case GB_SYNC_TIMEOUT:
+            return "the presentation fence has not signaled";
         default:
             return "unknown graphics bridge failure";
     }
+}
+
+/*
+ * Presentation (#023). The present functions use the root context, because the framebuffers they
+ * create belong to it. A framebuffer is not shared between GL contexts, and the guest's contexts
+ * share only the root's textures (IR-463). Each function saves the EGL context of the caller,
+ * switches to the root, and restores the previous context before it returns.
+ */
+
+/* Loads the present entry points. A missing entry point leaves `present_ready` false, and the renderer keeps working. */
+static void gb_load_present_api(gb_renderer *renderer) {
+    renderer->gl.bind_framebuffer =
+        (void (*)(GLenum, GLuint))gb_symbol(renderer->gles_library, "glBindFramebuffer");
+    renderer->gl.gen_framebuffers =
+        (void (*)(GLsizei, GLuint *))gb_symbol(renderer->gles_library, "glGenFramebuffers");
+    renderer->gl.delete_framebuffers =
+        (void (*)(GLsizei, const GLuint *))gb_symbol(renderer->gles_library, "glDeleteFramebuffers");
+    renderer->gl.framebuffer_texture_2d =
+        (void (*)(GLenum, GLenum, GLenum, GLuint, GLint))gb_symbol(renderer->gles_library, "glFramebufferTexture2D");
+    renderer->gl.check_framebuffer_status =
+        (GLenum (*)(GLenum))gb_symbol(renderer->gles_library, "glCheckFramebufferStatus");
+    renderer->gl.blit_framebuffer =
+        (void (*)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum))
+            gb_symbol(renderer->gles_library, "glBlitFramebuffer");
+    renderer->gl.gen_textures = (void (*)(GLsizei, GLuint *))gb_symbol(renderer->gles_library, "glGenTextures");
+    renderer->gl.delete_textures =
+        (void (*)(GLsizei, const GLuint *))gb_symbol(renderer->gles_library, "glDeleteTextures");
+    renderer->gl.bind_texture = (void (*)(GLenum, GLuint))gb_symbol(renderer->gles_library, "glBindTexture");
+    renderer->gl.egl_image_target_texture_2d =
+        (void (*)(GLenum, GLeglImageOES))gb_symbol(renderer->gles_library, "glEGLImageTargetTexture2DOES");
+    renderer->gl.get_integerv = (void (*)(GLenum, GLint *))gb_symbol(renderer->gles_library, "glGetIntegerv");
+    renderer->gl.get_booleanv = (void (*)(GLenum, GLboolean *))gb_symbol(renderer->gles_library, "glGetBooleanv");
+    renderer->gl.enable = (void (*)(GLenum))gb_symbol(renderer->gles_library, "glEnable");
+    renderer->gl.disable = (void (*)(GLenum))gb_symbol(renderer->gles_library, "glDisable");
+    renderer->gl.color_mask =
+        (void (*)(GLboolean, GLboolean, GLboolean, GLboolean))gb_symbol(renderer->gles_library, "glColorMask");
+    renderer->gl.flush = (void (*)(void))gb_symbol(renderer->gles_library, "glFlush");
+
+    renderer->present_egl.create_image = (PFNEGLCREATEIMAGEKHRPROC)gb_egl_symbol(renderer, "eglCreateImageKHR");
+    renderer->present_egl.destroy_image = (PFNEGLDESTROYIMAGEKHRPROC)gb_egl_symbol(renderer, "eglDestroyImageKHR");
+    renderer->present_egl.create_sync = (PFNEGLCREATESYNCKHRPROC)gb_egl_symbol(renderer, "eglCreateSyncKHR");
+    renderer->present_egl.destroy_sync = (PFNEGLDESTROYSYNCKHRPROC)gb_egl_symbol(renderer, "eglDestroySyncKHR");
+    renderer->present_egl.client_wait_sync =
+        (PFNEGLCLIENTWAITSYNCKHRPROC)gb_egl_symbol(renderer, "eglClientWaitSyncKHR");
+    renderer->present_egl.get_current_context =
+        (PFNEGLGETCURRENTCONTEXTPROC)gb_egl_symbol(renderer, "eglGetCurrentContext");
+    renderer->present_egl.get_current_surface =
+        (PFNEGLGETCURRENTSURFACEPROC)gb_egl_symbol(renderer, "eglGetCurrentSurface");
+
+    renderer->present_ready = renderer->gl.bind_framebuffer != NULL
+        && renderer->gl.gen_framebuffers != NULL
+        && renderer->gl.delete_framebuffers != NULL
+        && renderer->gl.framebuffer_texture_2d != NULL
+        && renderer->gl.check_framebuffer_status != NULL
+        && renderer->gl.blit_framebuffer != NULL
+        && renderer->gl.gen_textures != NULL
+        && renderer->gl.delete_textures != NULL
+        && renderer->gl.bind_texture != NULL
+        && renderer->gl.egl_image_target_texture_2d != NULL
+        && renderer->gl.get_integerv != NULL
+        && renderer->gl.get_booleanv != NULL
+        && renderer->gl.enable != NULL
+        && renderer->gl.disable != NULL
+        && renderer->gl.color_mask != NULL
+        && renderer->gl.flush != NULL
+        && renderer->present_egl.create_image != NULL
+        && renderer->present_egl.destroy_image != NULL
+        && renderer->present_egl.create_sync != NULL
+        && renderer->present_egl.destroy_sync != NULL
+        && renderer->present_egl.client_wait_sync != NULL
+        && renderer->present_egl.get_current_context != NULL
+        && renderer->present_egl.get_current_surface != NULL
+        && renderer->virgl.borrow_texture_for_scanout != NULL;
+}
+
+/* Saves the caller's EGL state and makes the root context current. It returns false when that fails. */
+static bool gb_present_enter_root(gb_renderer *renderer, struct gb_present_saved_state *saved) {
+    saved->context = renderer->present_egl.get_current_context();
+    saved->draw = renderer->present_egl.get_current_surface(EGL_DRAW);
+    saved->read = renderer->present_egl.get_current_surface(EGL_READ);
+    if (saved->context == renderer->root_context) {
+        return true;
+    }
+    return renderer->egl.make_current(
+        renderer->display,
+        renderer->surface,
+        renderer->surface,
+        renderer->root_context
+    ) == EGL_TRUE;
+}
+
+/* Restores the EGL state that `gb_present_enter_root` saved. */
+static void gb_present_leave_root(gb_renderer *renderer, const struct gb_present_saved_state *saved) {
+    if (saved->context == renderer->root_context) {
+        return;
+    }
+    (void)renderer->egl.make_current(renderer->display, saved->draw, saved->read, saved->context);
+}
+
+/* Releases the GL, EGL, and Metal objects of a target. The root context must be current. */
+static void gb_present_release_objects(gb_renderer *renderer, gb_present_target *target) {
+    if (target->framebuffer != 0) {
+        renderer->gl.delete_framebuffers(1, &target->framebuffer);
+        target->framebuffer = 0;
+    }
+    if (target->texture != 0) {
+        renderer->gl.delete_textures(1, &target->texture);
+        target->texture = 0;
+    }
+    if (target->image != EGL_NO_IMAGE_KHR) {
+        (void)renderer->present_egl.destroy_image(renderer->display, target->image);
+        target->image = EGL_NO_IMAGE_KHR;
+    }
+    if (target->metal_texture != NULL) {
+        (void)CFBridgingRelease(target->metal_texture);
+        target->metal_texture = NULL;
+    }
+}
+
+int gb_present_target_create(
+    gb_renderer *renderer,
+    void *iosurface,
+    uint32_t width,
+    uint32_t height,
+    gb_present_target **out
+) {
+    if (renderer == NULL || iosurface == NULL || out == NULL || width == 0 || height == 0) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (!gb_is_render_thread(renderer)) {
+        return GB_E_WRONG_THREAD;
+    }
+    if (!renderer->present_ready || renderer->metal_device == NULL) {
+        return GB_E_PRESENT_OPERATION;
+    }
+
+    struct gb_present_saved_state saved;
+    if (!gb_present_enter_root(renderer, &saved)) {
+        return GB_E_PRESENT_OPERATION;
+    }
+    gb_present_target *target = calloc(1, sizeof(*target));
+    if (target == NULL) {
+        gb_present_leave_root(renderer, &saved);
+        return GB_E_PRESENT_OPERATION;
+    }
+    target->image = EGL_NO_IMAGE_KHR;
+    target->width = width;
+    target->height = height;
+
+    GLint previous_draw = 0;
+    GLint previous_texture = 0;
+    renderer->gl.get_integerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw);
+    renderer->gl.get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+
+    int status = GB_OK;
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)renderer->metal_device;
+        MTLTextureDescriptor *descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:width
+                                                              height:height
+                                                           mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        id<MTLTexture> texture =
+            [device newTextureWithDescriptor:descriptor
+                                   iosurface:(IOSurfaceRef)iosurface
+                                       plane:0];
+        if (texture == nil) {
+            status = GB_E_PRESENT_OPERATION;
+        } else {
+            target->metal_texture = (__bridge_retained void *)texture;
+        }
+    }
+
+    if (status == GB_OK) {
+        EGLint attributes[] = { EGL_NONE };
+        target->image = renderer->present_egl.create_image(
+            renderer->display,
+            EGL_NO_CONTEXT,
+            EGL_METAL_TEXTURE_ANGLE,
+            (EGLClientBuffer)target->metal_texture,
+            attributes
+        );
+        if (target->image == EGL_NO_IMAGE_KHR) {
+            status = GB_E_PRESENT_OPERATION;
+        }
+    }
+    if (status == GB_OK) {
+        renderer->gl.gen_textures(1, &target->texture);
+        renderer->gl.bind_texture(GL_TEXTURE_2D, target->texture);
+        renderer->gl.egl_image_target_texture_2d(GL_TEXTURE_2D, (GLeglImageOES)target->image);
+        renderer->gl.gen_framebuffers(1, &target->framebuffer);
+        renderer->gl.bind_framebuffer(GL_DRAW_FRAMEBUFFER, target->framebuffer);
+        renderer->gl.framebuffer_texture_2d(
+            GL_DRAW_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            target->texture,
+            0
+        );
+        if (renderer->gl.check_framebuffer_status(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            status = GB_E_PRESENT_OPERATION;
+        }
+    }
+    renderer->gl.bind_framebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw);
+    renderer->gl.bind_texture(GL_TEXTURE_2D, (GLuint)previous_texture);
+
+    if (status != GB_OK) {
+        gb_present_release_objects(renderer, target);
+        free(target);
+    } else {
+        *out = target;
+    }
+    gb_present_leave_root(renderer, &saved);
+    return status;
+}
+
+void gb_present_target_destroy(gb_renderer *renderer, gb_present_target *target) {
+    if (renderer == NULL || target == NULL) {
+        return;
+    }
+    if (!gb_is_render_thread(renderer) || !renderer->present_ready) {
+        return;
+    }
+    struct gb_present_saved_state saved;
+    if (gb_present_enter_root(renderer, &saved)) {
+        gb_present_release_objects(renderer, target);
+        gb_present_leave_root(renderer, &saved);
+    }
+    free(target);
+}
+
+int gb_present_blit(
+    gb_renderer *renderer,
+    uint32_t res_id,
+    uint32_t x,
+    uint32_t y,
+    uint32_t width,
+    uint32_t height,
+    gb_present_target *target,
+    void **out_sync
+) {
+    if (renderer == NULL || target == NULL || out_sync == NULL || width == 0 || height == 0) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    *out_sync = NULL;
+    if (!gb_is_render_thread(renderer)) {
+        return GB_E_WRONG_THREAD;
+    }
+    if (!renderer->present_ready) {
+        return GB_E_PRESENT_OPERATION;
+    }
+
+    struct gb_present_saved_state saved;
+    if (!gb_present_enter_root(renderer, &saved)) {
+        return GB_E_PRESENT_OPERATION;
+    }
+
+    int status = GB_OK;
+    GLint previous_texture = 0;
+    renderer->gl.get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    struct virgl_renderer_resource_info_ext info;
+    memset(&info, 0, sizeof(info));
+    // The borrow binds the resource's GL texture and fixes its swizzle (virglrenderer, graphics.md §6.2).
+    if (renderer->virgl.borrow_texture_for_scanout((int)res_id, &info) != 0 || info.base.tex_id == 0) {
+        status = GB_E_RESOURCE_OPERATION;
+    } else if (x > info.base.width || width > info.base.width - x
+        || y > info.base.height || height > info.base.height - y) {
+        status = GB_E_INVALID_ARGUMENT;
+    }
+
+    if (status == GB_OK) {
+        GLint previous_read = 0;
+        GLint previous_draw = 0;
+        GLboolean previous_scissor = GL_FALSE;
+        GLboolean previous_mask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
+        if (renderer->present_source_framebuffer == 0) {
+            renderer->gl.gen_framebuffers(1, &renderer->present_source_framebuffer);
+        }
+        renderer->gl.get_integerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read);
+        renderer->gl.get_integerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw);
+        renderer->gl.get_booleanv(GL_SCISSOR_TEST, &previous_scissor);
+        renderer->gl.get_booleanv(GL_COLOR_WRITEMASK, previous_mask);
+
+        renderer->gl.bind_framebuffer(GL_READ_FRAMEBUFFER, renderer->present_source_framebuffer);
+        renderer->gl.framebuffer_texture_2d(
+            GL_READ_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            info.base.tex_id,
+            0
+        );
+        renderer->gl.bind_framebuffer(GL_DRAW_FRAMEBUFFER, target->framebuffer);
+        renderer->gl.disable(GL_SCISSOR_TEST);
+        renderer->gl.color_mask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        // The scaling blit is the only pixel work of the present path. Nothing reads the pixels back.
+        renderer->gl.blit_framebuffer(
+            (GLint)x,
+            (GLint)y,
+            (GLint)(x + width),
+            (GLint)(y + height),
+            0,
+            0,
+            (GLint)target->width,
+            (GLint)target->height,
+            GL_COLOR_BUFFER_BIT,
+            GL_NEAREST
+        );
+        renderer->gl.flush();
+        EGLSyncKHR sync = renderer->present_egl.create_sync(renderer->display, EGL_SYNC_FENCE_KHR, NULL);
+        if (sync == EGL_NO_SYNC_KHR) {
+            status = GB_E_PRESENT_OPERATION;
+        } else {
+            *out_sync = sync;
+        }
+
+        renderer->gl.bind_framebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read);
+        renderer->gl.bind_framebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw);
+        if (previous_scissor) {
+            renderer->gl.enable(GL_SCISSOR_TEST);
+        }
+        renderer->gl.color_mask(previous_mask[0], previous_mask[1], previous_mask[2], previous_mask[3]);
+    }
+    renderer->gl.bind_texture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    gb_present_leave_root(renderer, &saved);
+    return status;
+}
+
+int gb_sync_wait(gb_renderer *renderer, void *sync, uint64_t timeout_ns) {
+    if (renderer == NULL || sync == NULL || !renderer->present_ready) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    if (!gb_is_render_thread(renderer)) {
+        return GB_E_WRONG_THREAD;
+    }
+    // ANGLE validates a fence wait against the current context (EGL_BAD_CONTEXT otherwise), so the root context
+    // is current for the wait. A zero timeout is a poll, which the render thread runs between requests (graphics.md §6.2).
+    struct gb_present_saved_state saved;
+    if (!gb_present_enter_root(renderer, &saved)) {
+        return GB_E_PRESENT_OPERATION;
+    }
+    EGLint result = renderer->present_egl.client_wait_sync(
+        renderer->display,
+        (EGLSyncKHR)sync,
+        0,
+        (EGLTimeKHR)timeout_ns
+    );
+    gb_present_leave_root(renderer, &saved);
+    if (result == EGL_CONDITION_SATISFIED_KHR) {
+        return GB_OK;
+    }
+    if (result == EGL_TIMEOUT_EXPIRED_KHR) {
+        return GB_SYNC_TIMEOUT;
+    }
+    return GB_E_PRESENT_OPERATION;
+}
+
+void gb_sync_destroy(gb_renderer *renderer, void *sync) {
+    if (renderer == NULL || sync == NULL || !renderer->present_ready || !gb_is_render_thread(renderer)) {
+        return;
+    }
+    struct gb_present_saved_state saved;
+    if (!gb_present_enter_root(renderer, &saved)) {
+        return;
+    }
+    (void)renderer->present_egl.destroy_sync(renderer->display, (EGLSyncKHR)sync);
+    gb_present_leave_root(renderer, &saved);
 }
 
 int gb_renderer_create(const gb_callbacks *callbacks, void *user, gb_renderer **out) {
@@ -870,6 +1306,8 @@ int gb_renderer_create(const gb_callbacks *callbacks, void *user, gb_renderer **
         gb_release_renderer(renderer);
         return status;
     }
+    // The present entry points are optional for the 2D and 3D paths, so a missing one only disables presentation.
+    gb_load_present_api(renderer);
 
     renderer->virgl_callbacks.version = VIRGL_RENDERER_CALLBACKS_VERSION;
     renderer->virgl_callbacks.write_fence = gb_virgl_write_fence;

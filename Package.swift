@@ -110,6 +110,8 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedFramework("Foundation"),
+                .linkedFramework("IOSurface"),
+                .linkedFramework("Metal"),
                 // SwiftPM instruments C targets but omits the UBSan runtime at link time.
                 .unsafeFlags(
                     [

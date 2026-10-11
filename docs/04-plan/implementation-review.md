@@ -15487,3 +15487,75 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Reason.** The experiment boot (`Experiments/vz-android-boot`) passes an initial ramdisk file directly to `VZLinuxBootLoader` (`initialRamdiskURL`), with no AVB check on that file, so an edited `/sepolicy` in that file could reach the guest without an AOSP build. The repository has no policydb reader or writer, and a hand edit of the binary skips the neverallow check that the build runs (IR-902). That is a large expansion of scope (AGENTS §11), so it is a follow-up and not part of #022.
 
 **Consequence.** No ramdisk or vendor image is changed in this task.
+
+## IR-920: Add a debug-only ADB receiver for the counter, absent from release
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (criterion 1) |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 deliverables and criterion 1 |
+
+**Choice.** HelloText has a `DebugCounterReceiver`, registered only by `src/debug/AndroidManifest.xml`, so only the debug build has it. The receiver is exported, so that `adb shell am broadcast` (another uid) can reach it. It handles two actions, `io.apkrun.fixture.hellotext.debug.INCREMENT` and `...debug.READ`, and logs one line under the `APKRUN-FIXTURE` tag: `debug increment <n>` or `debug read <n>`. A refused save logs `debug increment not saved: <reason>` instead. The release build has no receiver and no manifest entry. The button and the receiver both open the counter through `MainActivity.openCounter(context)`, so they use one store construction.
+
+**Reason.** Criterion 1 is about persistence across a process restart. The headless profile draws no window and takes no input (the criterion 1 text of [M01](../04-plan/issues/M01-android-bring-up.md) #016 before this change), so a tap cannot advance the count. The hook changes the count only through `CounterStore.increment`, the path the button uses. A read after a relaunch then shows what the store kept. The export exists only in the debug APK. A debug build can be triggered by any app on the same device, which is acceptable for a test fixture that is never a product.
+
+## IR-921: Keep the counter commands in main so the release unit tests run them
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (step 1, the JVM test) |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 step 1 and tests |
+
+**Choice.** `DebugCounterCommands` (the action-to-log-line logic, with no Android types) is in `src/main`, and `DebugCounterCommandsTest` (5 tests) is in `src/test`. `:HelloText:testReleaseUnitTest` runs it with `CounterStoreTest`. The release APK contains the class, but no component calls it. The debug receiver is its only caller.
+
+**Reason.** AGP creates unit-test tasks only for `testBuildType`, which is `release` in `build.gradle.kts` ([IR-329](#ir-329-run-the-fixture-unit-tests-on-the-release-variant)). The task `:HelloText:testDebugUnitTest` does not exist (Gradle reported it as not found). A test of debug-only code would therefore never run in the task that #016 step 1 names. Setting `testBuildType` to debug would remove `testReleaseUnitTest` instead. An inert class in the release dex is the smaller deviation, and this entry records it.
+
+## IR-922: Sign the debug build with the fixture key and build it outside the script
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (step 2, the build script) |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 step 2; [build-system.md](../05-development/build-system.md) §8 |
+
+**Choice.** `buildTypes.debug` uses the `fixture` signing config, the same test-only key as release. The debug APK comes from `./gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, and its signer was checked with `apksigner verify --print-certs` (the pinned digest `a2f3…`). `scripts/build-fixtures.sh` is unchanged. It still builds and checks the release APK only, and `--check-reproducible` covers only the release APK. The release check was run again after the `MainActivity` change and matched.
+
+**Reason.** Without a signing config, AGP signs the debug build with the machine's debug keystore. The debug APK would then differ between machines, and `adb install -r` could not replace a release APK of the same package that the fixture key signed. A debug mode in the script would widen its scope for a test-only artifact, so the debug build stays a Gradle task. The reproducibility check therefore does not cover the debug APK, and this entry makes no claim about it.
+
+## IR-923: Boot the stock bundle through dev image install, with a guest-agent bundle built into /tmp
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (the device check); #017 (boot) |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [guest-components.md](../02-design/guest-components.md) §3 |
+
+**Choice.** The stock test bundle `/tmp/apkrun-test-linux/android-bundle` was installed as the current image with `apkrun dev image install`, in a scratch `APKRUN_HOME` (`/tmp/apkrun-016-home`, removed after the run). `apkrun dev boot --gpu none --guest-dir /tmp/apkrun-016-guest` then booted it. The guest-agent bundle came from `scripts/build-guest.sh --out /tmp/apkrun-016-guest`. Nothing was written to the default home or to the main checkout.
+
+**Reason.** This CLI has no `--bundle` option, so the bundle has to be the current image first. `dev boot` resolves a guest-agent directory on every run: `DevGuestAgentLocation.directory` always returns a URL, and `GuestAgentBundle.load` (`Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`, line 144) throws when `apkrun-guest.apk` or its record is missing. A boot without the bundle therefore cannot start. That disagrees with the doc comment on `guestAgentDirectory` ("Nil boots without the agent"), because the CLI never passes nil. The design text also lists `--wait-ready`, which the CLI does not accept. The boot prints `Android is ready after ...` instead. These are documentation and code drifts. This entry does not change the code, and the boot was not tried without the bundle, because the run allowed one boot.
+
+## IR-924: Tick the #016 counter criterion on the debug-hook persistence check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (criterion 1) |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 acceptance criterion 1; [issues/README.md](../04-plan/issues/README.md) |
+
+**Choice.** Criterion 1 of #016 is ticked. The tick rests on the device run of [IR-925](#ir-925-run-the-whole-vm-session-under-one-lockf-command): three increments through the debug hook, a read of 3, a force-stop and a relaunch, and a read of 3 from a new process. The tap of the `Button` is still not verified on the device. The criterion text now says what was checked, and that the tap waits for #026.
+
+**Reason.** The criterion asks for a counter that persists across process restarts. The device run shows that the store the button uses keeps the count across a kill and a relaunch. The old text said that the device check of persistence waited for #026. The hook makes that wait unnecessary for persistence, but it does not show that a tap increments the count. If the maintainer wants the tap covered, reopen it as a separate item for #026 and do not treat this tick as covering it.
+
+## IR-925: Run the whole VM session under one lockf command
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 (the device check); AGENTS §10 (the VM rule) |
+| Affected documents | [M01](../04-plan/issues/M01-android-bring-up.md) #016 verification notes |
+
+**Choice.** The image install ran alone under `lockf -k /tmp/apkrun-vm.lock`. The boot and the adb steps ran in one script, `/tmp/apkrun-016-session.sh`, started under `lockf -k /tmp/apkrun-vm.lock`. The boot started once and stopped with SIGINT. It exited 0 two seconds later, with no SIGKILL. The adb steps used `apkrun dev adb` with `ANDROID_HOME=/tmp/apkrun-016-sdk`. That directory holds symlinks into the main checkout's `build/android-sdk` (read only) and a copy of `platform-tools/adb`, so the adb under `~/Documents` was not used.
+
+**Reason.** A second `lockf` on the same file waits for the first. A `lockf` around each adb step would therefore wait for the boot, which holds the lock until it stops, and the steps need that boot. Running the steps inside the locked session keeps every VM command under the lock. The SDK facade reads only. After the runs, no file under the top two levels of the main `build/android-sdk` was newer than the first Gradle run.

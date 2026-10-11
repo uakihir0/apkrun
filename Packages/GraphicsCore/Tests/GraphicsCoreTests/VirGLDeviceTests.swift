@@ -26,9 +26,10 @@ private struct VirGLHarness {
     let guest: SeededGuestBackend
     let context: VirtioDeviceContext
 
-    init() throws {
+    init(recorder: VirGLRecorder? = nil) throws {
         let ref = EngineRef()
-        device = try VirtioGPUDevice.makeVirgl { onFence throws(GraphicsFailure) -> any VirGLEngine in
+        device = try VirtioGPUDevice.makeVirgl(recorder: recorder) {
+            onFence throws(GraphicsFailure) -> any VirGLEngine in
             let engine = FakeVirGLEngine(onFence: onFence)
             ref.set(engine)
             return engine
@@ -458,6 +459,70 @@ private func transfer(
         }
     }
     #expect(replayed.calls == recordedCalls)
+}
+
+/// Sends the same requests as `aRecorderDoesNotChangeTheResponsesOrTheEngineCalls`, with or without a recorder. It
+/// returns what the guest received and what the engine was asked to do.
+private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
+    responses: [[UInt8]], engineCalls: [FakeVirGLEngine.Call]
+) {
+    let harness = try VirGLHarness(recorder: recorder)
+    harness.engineRef.engine.fail("submit")
+    let control = harness.send([
+        gpuRequest(.ctxCreate, body: .ctxCreate(contextInit: 0, debugName: Array("gl".utf8)), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [1, 0, 0, 0]), contextID: 1),
+        gpuRequest(.submit3D, body: .submit3D(commandStream: [2, 0, 0, 0]), fence: 7, contextID: 1),
+        gpuRequest(.ctxDestroy, body: .ctxDestroy, contextID: 1),
+    ])
+    try await eventually { harness.engineRef.engine.calls.contains(.fence(7, context: 1)) }
+    harness.engineRef.engine.releaseFences()
+    try await eventually { control.completionCounts == [1, 1, 1, 1] }
+    // Capsets and polls depend on timing, and they change no renderer state, so they are left out.
+    let stateCalls = harness.engineRef.engine.calls.filter { call in
+        switch call {
+        case .capset, .poll: return false
+        default: return true
+        }
+    }
+    return (control.writtenBuffers, stateCalls)
+}
+
+@Test func aRecorderDoesNotChangeTheResponsesOrTheEngineCalls() async throws {
+    let plain = try await sessionResponses(recorder: nil)
+    let recorder = VirGLRecorder()
+    let recorded = try await sessionResponses(recorder: recorder)
+
+    #expect(recorded.responses == plain.responses)
+    #expect(recorded.engineCalls == plain.engineCalls)
+    // The rejected submit is recorded too, because the recorder sees the operation before the renderer decides on it.
+    #expect(recorder.recording.operations.count == 5)
+}
+
+@Test func aWrittenRecordingIsTheReplayFormat() throws {
+    let fake = FakeVirGLEngine(onFence: { _ in })
+    let recorder = VirGLRecorder()
+    let session = RecordingVirGLEngine(wrapping: fake, recorder: recorder)
+    try session.createContext(id: 1, name: "gl")
+    try session.submit(context: 1, commands: [1, 0, 0, 0])
+    try session.createFence(id: 2, context: 1)
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "apkrun-recorder-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("session.json")
+    try recorder.writeRecording(to: url)
+
+    // The file is a version-1 recording with an operations array, and it reads back as the recorded session.
+    let data = try Data(contentsOf: url)
+    let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(object?["version"] as? Int == VirGLRecording.currentVersion)
+    #expect(object?["operations"] is [Any])
+    let decoded = try VirGLRecording.decoded(from: data)
+    #expect(decoded == recorder.recording)
+    let replayed = FakeVirGLEngine(onFence: { _ in })
+    #expect(replay(decoded, onto: replayed) == nil)
+    #expect(replayed.calls == fake.calls)
 }
 
 @Test func aRecordingFromAnotherVersionIsRejected() throws {

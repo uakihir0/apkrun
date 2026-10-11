@@ -116,13 +116,18 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
 
     /// The device of the `drmVirgl` profile. It starts the render thread and creates virglrenderer on it, so a renderer
     /// failure is reported here, before the VM starts (graphics.md §8). It offers `VIRTIO_GPU_F_VIRGL` and two capsets.
+    ///
+    /// - Parameter recorder: Records the renderer operations for the replay test (graphics.md §14). The development
+    ///   `virgl` check passes one, and the production path passes `nil`, so nothing is recorded there.
     public static func virgl(
         scanouts: ScanoutTable = ScanoutTable(),
         logger: APKLogger = APKLogger(category: GraphicsLogCategory.device),
-        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+        recorder: VirGLRecorder? = nil
     ) throws(GraphicsFailure) -> VirtioGPUDevice {
-        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.render") { onFence throws(GraphicsFailure) in
-            try VirGLRenderer(onFenceCompleted: onFence)
+        let backend = try VirGLBackend.make(name: "io.apkrun.graphics.render") {
+            onFence throws(GraphicsFailure) -> any VirGLEngine in
+            recordedIfNeeded(try VirGLRenderer(onFenceCompleted: onFence), into: recorder)
         }
         return VirtioGPUDevice(
             path: .virgl,
@@ -147,9 +152,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         let recordingEngine:
             @Sendable (@escaping @Sendable (UInt32) -> Void) throws(GraphicsFailure) -> any VirGLEngine = {
                 onFence throws(GraphicsFailure) in
-                let engine = try makeEngine(onFence)
-                guard let recorder else { return engine }
-                return RecordingVirGLEngine(wrapping: engine, recorder: recorder)
+                recordedIfNeeded(try makeEngine(onFence), into: recorder)
             }
         let backend = try VirGLBackend.make(name: "io.apkrun.graphics.test-render", makeEngine: recordingEngine)
         return VirtioGPUDevice(
@@ -161,6 +164,13 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             traceObserver: nil,
             hotplugSpikeDelay: nil
         )
+    }
+
+    /// Wraps `engine` in a recorder when one is given. The wrapper forwards every call and returns its results, so the
+    /// device answers the guest in the same way with or without it (graphics.md §14).
+    private static func recordedIfNeeded(_ engine: any VirGLEngine, into recorder: VirGLRecorder?) -> any VirGLEngine {
+        guard let recorder else { return engine }
+        return RecordingVirGLEngine(wrapping: engine, recorder: recorder)
     }
 
     private init(

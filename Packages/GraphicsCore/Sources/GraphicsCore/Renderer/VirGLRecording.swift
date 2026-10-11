@@ -51,13 +51,23 @@ enum VirGLRecordingFailure: Error, Equatable, Sendable {
 }
 
 /// Collects the operations of the renderer engine it wraps. The lock makes it safe to read from another thread.
-final class VirGLRecorder: @unchecked Sendable {
+///
+/// The development Linux run attaches one through `VirtioGPUDevice.virgl(recorder:)` and writes the recording with
+/// `writeRecording(to:)`, so the `kmscube` stream can be replayed (graphics.md §14, M02-graphics.md #022 step 3).
+public final class VirGLRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var operations: [VirGLOperation] = []
+
+    public init() {}
 
     /// The operations recorded so far.
     var recording: VirGLRecording {
         VirGLRecording(operations: lock.withLock { operations })
+    }
+
+    /// Writes the operations recorded so far to `url`, in the replay format of `VirGLRecording` (version 1).
+    public func writeRecording(to url: URL) throws {
+        try recording.encoded().write(to: url, options: .atomic)
     }
 
     func record(_ operation: VirGLOperation) {

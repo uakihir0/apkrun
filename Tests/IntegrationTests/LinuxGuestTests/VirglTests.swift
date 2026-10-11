@@ -12,7 +12,16 @@ final class VirglTests: XCTestCase {
         // the checkout under ~/Documents (GraphicsBridge.m), which the test process must not read (IR-600, IR-602).
         let library = try LinuxGuestHarness.stagedInput("virgl-runtime/libvirglrenderer.1.dylib")
         XCTAssertEqual(setenv("APKRUN_VIRGL_RUNTIME_PATH", library.deletingLastPathComponent().path, 1), 0)
-        let device = try VirtioGPUDevice.virgl()
+        // The recorder is attached only when the environment names a file. It writes the renderer operations of the run
+        // in the replay format, for the replay test of graphics.md §14 (M02-graphics.md #022 step 3). The file must be
+        // under /tmp, so it stays out of the checkout and out of protected folders.
+        let recordingPath = ProcessInfo.processInfo.environment["APKRUN_TEST_VIRGL_RECORDING"]
+        if let recordingPath, !recordingPath.hasPrefix("/tmp/") {
+            XCTFail("APKRUN_TEST_VIRGL_RECORDING must name a file under /tmp: \(recordingPath)")
+            return
+        }
+        let recorder = recordingPath == nil ? nil : VirGLRecorder()
+        let device = try VirtioGPUDevice.virgl(recorder: recorder)
         let result = try await LinuxGuestHarness.run(
             testCase: self,
             stopBehavior: .guestPowerOff,
@@ -20,6 +29,9 @@ final class VirglTests: XCTestCase {
             tests: ["virgl"],
             customDevices: [device]
         )
+        if let recordingPath, let recorder {
+            try recorder.writeRecording(to: URL(fileURLWithPath: recordingPath))
+        }
 
         XCTAssertEqual(result.records.first, .bootOK)
         XCTAssertEqual(result.records.last, .done)

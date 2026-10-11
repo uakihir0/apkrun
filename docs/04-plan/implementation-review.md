@@ -14834,3 +14834,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Verification.** The boot log is `/tmp/apkrun-022-sw-boot.log` on the run's host, and the commands are in the same session. The drmVirgl half of criterion 4 still depends on the sepolicy rule of #035.
 
+## IR-810: The kmscube recording seam is a passive recorder on the public virgl factory, enabled by a test-host environment variable
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 (#022 step 2), §14; [M02-graphics.md](issues/M02-graphics.md) #022 step 3; [build-system.md](../05-development/build-system.md) §12.4 |
+
+**Choice.** `VirtioGPUDevice.virgl(recorder:)` takes an optional `VirGLRecorder`, which is now public with `writeRecording(to:)`. The production path passes `nil`. `VirglTests` reads `APKRUN_TEST_VIRGL_RECORDING`, requires an absolute path under `/tmp/`, attaches a recorder when the variable is set, and writes the recording with `writeRecording(to:)` after the run. The recorder is not behind `#if APKRUN_TEST_READBACK`. The file is the renderer-operation stream (`VirGLRecording`, version 1), not the raw virtio requests.
+
+**Reason.** The Linux run is hosted in the Xcode `IntegrationTests` target, which depends on the `APKRun` package without the `TestReadback` trait (`project.yml`, `Package.swift`). A flag-gated seam would not be compiled into that run. The replay consumes renderer operations, so recording at the engine level gives a file that `replay(_:onto:)` reads without a new format. `RecordingVirGLEngine` forwards every call and returns its result, so the device answers the guest the same way. T0 `aRecorderDoesNotChangeTheResponsesOrTheEngineCalls` checks this on a fake engine with an injected renderer failure. T0 `aWrittenRecordingIsTheReplayFormat` checks that the written file decodes as version 1 and replays onto a fresh engine. The environment variable is read only by the test host, so no production code path reads it.
+
+**Consequence.** The `GraphicsCore` public surface grows by `VirGLRecorder` and the factory parameter. The format is JSON with byte arrays, so a recording grows with the uploaded bytes, and its size is measured with the recording itself. A `kmscube` recording is produced only when the variable names a file under `/tmp/`, so a run without it is unchanged.
+

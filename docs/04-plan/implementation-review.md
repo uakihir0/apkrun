@@ -14524,12 +14524,12 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
-| Task | #099 (the first VM boot, step 4) |
+| Task | #099 (the task's step 4, the first VM boot) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §10.2; [cli.md](../02-design/cli.md) §5 |
 
 **Choice.** Nothing is installed. With a scratch `APKRUN_HOME`, `apkrun dev boot --gpu virgl` stops at `image.noCurrentImage` before any VM starts. No path sets the variant as `current`, including a symbolic link.
 
-**Reason.** The task states the decision "no install, so the stock image's name is not reused". The variant's `manifest.json` names the image `2026.10.0-cf16373615-arm64`, so an install would reuse that name. Its signatures verify (IR-722), so an install would succeed, and the decision is what blocks the boot. IR-700, which the task cites as answered here, is not in `docs/`, so the decision was applied from the task text.
+**Reason.** The task states the decision "no install, so the stock image's name is not reused", and cites IR-700 as answering it. IR-700 (on main, not in this branch's first base) asks where a development install of a variant is kept, and says the VM step cannot boot the variant until that is decided. The variant's `manifest.json` names the image `2026.10.0-cf16373615-arm64`, so an install would reuse that name. Its signatures verify (IR-722, and the developer-key signature of IR-702), so an install would succeed, and the decision is what blocks the boot.
 
 **Consequence.** Decision needed: whether a scratch-home install under `/tmp` is allowed for the first boot, or whether the variant needs another image name and a store entry first.
 
@@ -14541,7 +14541,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (the first VM boot, step 4) |
 | Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §6.1 |
 
-**Choice.** Before the boot attempt, `SHA256SUMS` was checked with `shasum -a 256 -c`, and `manifest.sig` with `openssl pkeyutl -verify -pubin -rawin` over the exact bytes of `manifest.json`. The key is the public half of the developer key (`~/.config/apkrun/dev-image-key.pub`). The variant and the stock test bundle both verify. The product check, `ImageStore.verify`, was not called, because the only CLI path to it is `dev image install`.
+**Choice.** Before the boot attempt, `SHA256SUMS` was checked with `shasum -a 256 -c`, and `manifest.sig` with `openssl pkeyutl -verify -pubin -rawin` over the exact bytes of `manifest.json`. The key is the public half of the developer key (`~/.config/apkrun/dev-image-key.pub`). The variant and the stock test bundle both verify. The product check, `ImageStore.verify`, was not called. `dev boot` reaches it only after `images.current()` succeeds (`DevBoot.swift` lines 120 and 121), and nothing is current in this run, while `dev image install` would install the bundle.
 
 **Reason.** The check shows that the variant is validly signed and that its hashes match, which a boot would need. It does not replace `ImageStore.verify` at quick depth. The store must still accept the bundle before any boot.
 
@@ -14552,10 +14552,10 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
-| Task | #099 (steps 3 and 7) |
-| Affected documents | [cli.md](../02-design/cli.md) §5 (`--guest-dir`) |
+| Task | #099 (the task's steps 3 and 7) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev boot`) |
 
-**Choice.** Step 3 (`scripts/build-guest.sh --out /tmp/apkrun-099-guest`) and step 7 (the guestSwiftshader control on the same variant) are not run.
+**Choice.** The task's step 3 (`scripts/build-guest.sh --out /tmp/apkrun-099-guest`) and step 7 (the guestSwiftshader control on the same variant) are not run.
 
 **Reason.** In `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`, the image check (`images.current()`, line 120) comes before the Guest Agent load (line 144). The guest build is needed only once an image exists. The control needs `current` too, and IR-721 keeps it unset.
 
@@ -14580,7 +14580,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
-| Task | #099 (found during step 4) |
+| Task | #099 (found in the task's step 4) |
 | Affected documents | [error-catalog.md](../03-reference/error-catalog.md) (`runtime.devConsoleNotRunning`, line 374); `Packages/DiagnosticsCore/ErrorCatalog/errors.json`; `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Errors/ErrorCatalog.generated.swift` |
 
 **Choice.** The remediation of `runtime.devConsoleNotRunning` still says "Start Android with `apkrun dev boot --bundle <dir>` in another terminal". This task does not change it.

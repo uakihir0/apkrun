@@ -1,7 +1,8 @@
 """Build a development bundle whose super carries a replaced logical partition (#099).
 
-The variant is the stock bundle with one logical partition of its `super` replaced. The stock
-bundle is read and never changed:
+The variant is the stock bundle with one logical partition of its `super` replaced and, when a
+reseal output is given, the GPT partition `vbmeta_a` replaced by the refreshed vbmeta (IR-744).
+The stock bundle is read and never changed:
 
 1. The stock bundle is checked first: its manifest validates, every file matches its entry,
    `SHA256SUMS` matches, `manifest.sig` verifies with the signing key, and the super partition
@@ -16,10 +17,11 @@ bundle is read and never changed:
    bundle module's own functions. The manifest is validated (runtime-image-manifest.md §5, §6).
 
 The variant keeps the stock `imageVersion` and `kind`, because the schema has no field for a
-variant and the rules fix `kind` to the origin (IR-700). Its top-level vbmeta is not signed
-again (IR-650), and no partition changes size (IR-682). `manifest.sig` is made with the
-developer image key, which Debug builds trust. The record next to the bundle names every
-input and output, and it is outside the bundle, because the bundle lists its own files.
+variant and the rules fix `kind` to the origin (IR-700). Its top-level vbmeta is unsigned (IR-744)
+when it is refreshed, and the stock vbmeta otherwise (IR-650). No partition changes size (IR-682).
+`manifest.sig` is made with the developer image key, which Debug builds trust. The record next to
+the bundle names every input and output, and it is outside the bundle, because the bundle lists its
+own files.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -41,7 +44,7 @@ from typing import Any, BinaryIO
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from apkrun_image import lp, vendor_reseal
-from apkrun_image.avb import AvbError, _chain_partitions, _read_vbmeta
+from apkrun_image.avb import AvbError, _chain_partitions, _read_vbmeta, calculate_vbmeta_bootconfig
 from apkrun_image.bundle import (
     BundleError,
     _checksums,
@@ -51,6 +54,7 @@ from apkrun_image.bundle import (
     _staging,
 )
 from apkrun_image.disks import DisksError, _hash_range
+from apkrun_image.erofs import load_component
 from apkrun_image.extract import ExtractError, _open_artifact, _role_artifact
 from apkrun_image.gpt import SECTOR_SIZE, GptError, read_gpt
 from apkrun_image.lp import LpMetadataError
@@ -59,12 +63,18 @@ from apkrun_image.manifest import (
     ManifestError,
     _archive_paths,
     _load_json,
+    _repository_root,
     _resolve_archive_root,
 )
 from apkrun_image.runtime_manifest import load_and_validate, validate
 from apkrun_image.sign import SignatureError, key_id_of, render_signature, verify_signature
 from apkrun_image.sparse import SparseImageError, expand_into, write_skipping_zeros
-from apkrun_image.vendor_inject import OUTPUT_RECORD
+from apkrun_image.vendor_inject import (
+    AVBTOOL_COMPONENT,
+    OUTPUT_RECORD,
+    run_avbtool,
+    verify_avbtool,
+)
 
 SCHEMA_VERSION = 1
 TASK = "#099"
@@ -366,54 +376,98 @@ def _load_record(path: Path) -> dict[str, Any]:
     return record
 
 
+def _section(document: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
+    """Return the object under `key` of a record, and refuse the record when it is not one."""
+    value = document.get(key)
+    if not isinstance(value, dict):
+        raise BundleVariantError(f"{path} has no {key} object")
+    return value
+
+
+def _text(value: object) -> str | None:
+    """Return `value` when it is a non-empty string, so two missing fields never compare equal."""
+    return value if isinstance(value, str) and value else None
+
+
 def _read_reseal_output(
     directory: Path, *, inject_directory: Path, partition: str, build_id: str
 ) -> _Refresh:
-    """Return the resealed vendor and refreshed vbmeta that `vendor-reseal` wrote for this inject.
+    """Return the resealed vendor and the refreshed vbmeta of `vendor-reseal` for this inject.
 
-    The reseal record must name the injected image of `inject-vendor` by its SHA-256 and the stock
-    vendor by its SHA-256, and both files must match their recorded hashes (IR-746).
+    The record must name the injected image (by its SHA-256, as inject.json records it) and the
+    stock vendor, and each file must match its recorded SHA-256. The descriptor in the refreshed
+    vbmeta must be the one of the resealed vendor image, read with the vendored avbtool (IR-746).
     """
     record_path = directory / vendor_reseal.OUTPUT_RECORD
     record = _load_record(record_path)
     if record.get("task") != TASK or record.get("schemaVersion") != vendor_reseal.SCHEMA_VERSION:
         raise BundleVariantError(f"{record_path} is not a #099 vendor-reseal record")
-    partition_record = record.get("partition")
-    if not isinstance(partition_record, dict) or partition_record.get("name") != partition:
+    if _section(record, "partition", record_path).get("name") != partition:
         raise BundleVariantError(f"{record_path} does not record the partition {partition}")
-    inject_record = _load_record(inject_directory / OUTPUT_RECORD)
+    inject_path = inject_directory / OUTPUT_RECORD
+    inject_record = _load_record(inject_path)
     if inject_record.get("buildId") != build_id:
         raise BundleVariantError(f"{inject_directory} was not made for build {build_id}")
-    injected = record.get("injected", {})
-    stock = record.get("stock", {})
-    if injected.get("sha256") != inject_record.get("output", {}).get("sha256"):
+    injected = _section(record, "injected", record_path)
+    stock = _section(record, "stock", record_path)
+    inject_output = _section(inject_record, "output", inject_path)
+    inject_stock = _section(inject_record, "stock", inject_path)
+    if _text(injected.get("sha256")) is None or (
+        injected.get("sha256") != inject_output.get("sha256")
+    ):
         raise BundleVariantError(f"{record_path} was not made from this inject-vendor output")
-    if stock.get("vendorSha256") != inject_record.get("stock", {}).get("sha256"):
+    if _text(stock.get("vendorSha256")) is None or (
+        stock.get("vendorSha256") != inject_stock.get("sha256")
+    ):
         raise BundleVariantError(f"{record_path} names another stock vendor_a")
+
     files: dict[str, Path] = {}
-    for role, key in (
+    entries: dict[str, dict[str, Any]] = {}
+    for role, file_name in (
         ("vendor", vendor_reseal.OUTPUT_IMAGE),
         ("vbmeta", vendor_reseal.OUTPUT_VBMETA),
     ):
-        entry = record.get(role)
-        name = entry.get("file") if isinstance(entry, dict) else None
-        if not isinstance(name, str) or Path(name).name != name or name != key:
-            raise BundleVariantError(f"{record_path} does not name its {role} file")
-        path = directory / name
+        entry = _section(record, role, record_path)
+        if entry.get("file") != file_name:
+            raise BundleVariantError(f"{record_path} does not name its {role} file {file_name}")
+        path = directory / file_name
         if not path.is_file():
             raise BundleVariantError(f"{path} is missing")
-        if _sha256(path) != entry.get("sha256"):
+        if _text(entry.get("sha256")) is None or _sha256(path) != entry["sha256"]:
             raise BundleVariantError(f"{path} does not match the SHA-256 in {record_path}")
         files[role] = path
-    vbmeta_record = record["vbmeta"]
-    if vbmeta_record.get("algorithm") != "NONE":
+        entries[role] = entry
+    if entries["vbmeta"].get("algorithm") != "NONE":
         raise BundleVariantError(
-            f"{record_path} names a signed vbmeta, which this tool does not make"
+            f"{record_path} names a signed vbmeta, which this tool does not make (IR-744)"
         )
-    if vbmeta_record.get("vendorDescriptor") != record["vendor"].get("descriptor"):
-        raise BundleVariantError(f"{record_path} does not match its vbmeta to its vendor image")
+    avbtool = verify_avbtool(_repository_root(), load_component(AVBTOOL_COMPONENT))
+    try:
+        vendor_descriptor = vendor_reseal.vendor_tree(
+            run_avbtool(avbtool, ["info_image", "--image", str(files["vendor"])]),
+            "the resealed vendor_a",
+        )
+        vbmeta_descriptor = vendor_reseal.vendor_tree(
+            run_avbtool(avbtool, ["info_image", "--image", str(files["vbmeta"])]),
+            "the refreshed vbmeta_a",
+        )
+    except (ValueError, OSError) as error:
+        raise BundleVariantError(f"{record_path}: the descriptors do not read: {error}") from None
+    if vbmeta_descriptor != vendor_descriptor:
+        raise BundleVariantError(
+            "the refreshed vbmeta_a does not carry the descriptor of the resealed vendor_a"
+        )
+    if entries["vendor"].get("descriptor") != vendor_descriptor:
+        raise BundleVariantError(f"{record_path} does not describe its vendor_a")
+    if entries["vbmeta"].get("vendorDescriptor") != vendor_descriptor:
+        raise BundleVariantError(
+            f"{record_path} does not describe the vendor descriptor of its vbmeta_a"
+        )
     return _Refresh(
-        vendor=files["vendor"], vbmeta=files["vbmeta"], record=record, record_path=record_path
+        vendor=files["vendor"],
+        vbmeta=files["vbmeta"],
+        record=record,
+        record_path=record_path,
     )
 
 
@@ -430,48 +484,72 @@ def _bootconfig_values(
     """Return the digest and size of the vbmeta chain, as calculate_vbmeta_bootconfig gives them.
 
     `vbmeta` is the top-level vbmeta partition. Its chained partitions are read from `stream` at
-    the offsets of `layout`: a chained `vbmeta_*` partition is read raw, and the others (`boot`,
-    `init_boot`) through their footers. The digest covers the top-level blob, then each chained
-    blob in descriptor order, and the size is the sum of the blob sizes (IR-747).
+    the offsets of `layout`, in the order of the top-level descriptors. The digest and the size
+    are the ones of avb.py, so the variant and the Android manifest agree (IR-747).
     """
-    hasher = hashlib.sha256()
     try:
-        top, _offset = _read_vbmeta(
-            io.BytesIO(vbmeta),
-            artifact_size=len(vbmeta),
-            artifact_name=VBMETA_LABEL,
-            hasher=hasher,
+        header, _offset = _read_vbmeta(
+            io.BytesIO(vbmeta), artifact_size=len(vbmeta), artifact_name=VBMETA_LABEL
         )
         chained = _chain_partitions(
-            io.BytesIO(vbmeta), header=top, vbmeta_offset=0, artifact_name=VBMETA_LABEL
+            io.BytesIO(vbmeta), header=header, vbmeta_offset=0, artifact_name=VBMETA_LABEL
         )
-        total = top.blob_size
-        for name in chained:
-            label = f"{name}_a"
-            if label not in layout:
-                raise BundleVariantError(f"the disk has no {label}, which the vbmeta chains")
-            base, size = layout[label]
-            header, _offset = _read_vbmeta(
-                _Window(stream, base, size),
-                artifact_size=size,
-                artifact_name=label,
-                hasher=hasher,
-                require_footer=not name.startswith("vbmeta"),
-            )
-            if header.flags != 0:
-                raise BundleVariantError(f"{label}: chained vbmeta images must have zero flags")
-            total += header.blob_size
+    except AvbError as error:
+        raise BundleVariantError(f"the top-level vbmeta does not read: {error}") from None
+    artifacts: list[dict[str, Any]] = [
+        {
+            "id": "vbmeta",
+            "partition": "vbmeta",
+            "kind": "vbmeta",
+            "file": VBMETA_LABEL,
+            "size": len(vbmeta),
+        }
+    ]
+    role_ids = ["vbmeta"]
+    for name in chained:
+        label = f"{name}_a"
+        if label not in layout:
+            raise BundleVariantError(f"the disk has no {label}, which the vbmeta chains")
+        # A chained vbmeta_* partition is a raw vbmeta; the others carry a footer (IR-747).
+        kind = "vbmeta" if name.startswith("vbmeta") else "image"
+        artifacts.append(
+            {
+                "id": name,
+                "partition": name,
+                "kind": kind,
+                "file": label,
+                "size": layout[label][1],
+            }
+        )
+        if kind == "vbmeta":
+            role_ids.append(name)
+    document = {"roles": {"vbmeta": role_ids}, "artifacts": artifacts}
+
+    @contextmanager
+    def open_artifact(artifact: Mapping[str, Any]) -> Iterator[BinaryIO]:
+        if artifact["partition"] == "vbmeta":
+            yield io.BytesIO(vbmeta)
+            return
+        base, size = layout[f"{artifact['partition']}_a"]
+        yield _Window(stream, base, size)
+
+    try:
+        values = calculate_vbmeta_bootconfig(document, open_artifact)
     except AvbError as error:
         raise BundleVariantError(f"the vbmeta chain does not read: {error}") from None
-    return {BOOTCONFIG_DIGEST: hasher.hexdigest(), BOOTCONFIG_SIZE: str(total)}
+    return {
+        BOOTCONFIG_DIGEST: values[BOOTCONFIG_DIGEST],
+        BOOTCONFIG_SIZE: values[BOOTCONFIG_SIZE],
+    }
 
 
 def _bootconfig_line(key: str) -> re.Pattern[str]:
-    return re.compile(rf'^({re.escape(key)} = ")([^"\n]*)(")\s*$', re.MULTILINE)
+    """Match the quoted value of `key` on its own line; the newline is never part of the match."""
+    return re.compile(rf'^({re.escape(key)} = ")([^"\n]*)(")([ \t]*)$', re.MULTILINE)
 
 
 def _read_bootconfig_values(text: str, keys: Sequence[str]) -> dict[str, str]:
-    """Return the quoted value of each key, which must appear exactly once."""
+    """Return the quoted value of each key, which must appear on exactly one line."""
     values: dict[str, str] = {}
     for key in keys:
         found = _bootconfig_line(key).findall(text)
@@ -482,14 +560,23 @@ def _read_bootconfig_values(text: str, keys: Sequence[str]) -> dict[str, str]:
 
 
 def _with_bootconfig_values(text: str, values: Mapping[str, str]) -> str:
-    """Return the bootconfig text with the quoted value of each key replaced."""
+    """Return the bootconfig text with the quoted value of each key replaced, and nothing else."""
     for key, value in values.items():
         text, count = _bootconfig_line(key).subn(
-            lambda match, value=value: f"{match.group(1)}{value}{match.group(3)}", text
+            lambda match, value=value: f"{match.group(1)}{value}{match.group(3)}{match.group(4)}",
+            text,
         )
         if count != 1:
             raise BundleVariantError(f"the bootconfig has {count} lines for {key}, not one")
     return text
+
+
+def _read_text(path: Path) -> str:
+    """Read a bootconfig file as UTF-8, and refuse it when it does not read."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleVariantError(f"{path} does not read as UTF-8 text: {error}") from None
 
 
 def _read_range(stream: BinaryIO, offset: int, size: int) -> bytes:
@@ -582,7 +669,7 @@ def build_variant(
             )
         if refresh.record["stock"].get("vbmetaSha256") != stock_vbmeta_sha:
             raise BundleVariantError("the reseal record names another stock vbmeta_a")
-        stock_text = (stock_bundle / bootconfig_path).read_text(encoding="utf-8")
+        stock_text = _read_text(stock_bundle / bootconfig_path)
         if _read_bootconfig_values(stock_text, tuple(stock_values)) != stock_values:
             raise BundleVariantError(
                 "the stock bootconfig does not carry the digest and size of the stock vbmeta chain"
@@ -599,6 +686,11 @@ def build_variant(
 
         variant_sparse = work / "variant-super.sparse"
         result = replace_partition(stock_super, partition, replacement, variant_sparse)
+        if refresh is not None and replacement.stat().st_size != result.partition_size:
+            raise BundleVariantError(
+                f"{replacement} is not the size of {partition}, so its footer would not end "
+                "the partition"
+            )
 
         bundle = stage / "bundle"
         for entry in manifest["files"]:
@@ -629,7 +721,7 @@ def build_variant(
                 vbmeta_sha = _hash_range(stream, vbmeta_offset, vbmeta_size)
                 values = _bootconfig_values(stream, layout, vbmeta_bytes)
         if vbmeta_bytes is not None:
-            text = (bundle / bootconfig_path).read_text(encoding="utf-8")
+            text = _read_text(bundle / bootconfig_path)
             (bundle / bootconfig_path).write_text(
                 _with_bootconfig_values(text, values), encoding="utf-8"
             )

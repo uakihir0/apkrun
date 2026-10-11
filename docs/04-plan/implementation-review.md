@@ -14733,3 +14733,27 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The bootconfig's two values are `androidboot.vbmeta.digest` and `androidboot.vbmeta.size`. They are computed the way `apkrun_image.avb.calculate_vbmeta_bootconfig` computes them: SHA-256 over the top-level blob, then over each chained blob in descriptor order (the footer-backed `boot` and `init_boot` from their footers, the raw `vbmeta_*` images from their start), and the size is the sum of the blob sizes. The chained partitions are read from the variant's own disk. Before the variant is built, the same computation over the stock disk must reproduce the stock bootconfig values, or the command refuses. The stock check gives digest `0db35717…` and size 22912 on the 16373615 bundle. The variant's values then replace the two lines in `boot/bootconfig.txt`, and the file's manifest entry is made again. Decision needed: whether `calculate_vbmeta_bootconfig` should take a vbmeta source instead of an Android manifest, so that one function serves both.
 
 **Reason.** The bootconfig value says which vbmeta the boot was made with. A stale digest would name the stock vbmeta, which the variant no longer uses (the M02 note on the stock digest was right only while `vbmeta_a` was unchanged). The formula was checked against the stock bundle with a script outside the repository before it was written here.
+
+## IR-748: The variant's bootconfig values come from `avb.calculate_vbmeta_bootconfig`, not from a copy of its formula
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-747; `docs/../Images/reference/16373615/expected-differences.yaml` (the digest note) |
+
+**Choice.** `bundle_variant._bootconfig_values` builds a document with one top-level artifact and the chained partitions of the variant's disk (the chained `vbmeta_*` partitions with the `vbmeta` kind, the others with the image kind), and it calls `avb.calculate_vbmeta_bootconfig` on it. The first version had its own loop, and a review found the two could drift. Decision needed: whether `calculate_vbmeta_bootconfig` should accept a vbmeta source directly, so that the document is not needed.
+
+**Reason.** The reference note of `expected-differences.yaml` says the digest is computed by `avb.py`, so the variant must use the same code. The result is the same on the stock bundle (digest `0db35717…`, size 22912), which the command checks before it writes anything.
+
+## IR-749: The review of the branch found six confirmed defects, four were fixed, and the variant-level test of the vbmeta path is still open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, review before the boot) |
+| Affected documents | IR-746; IR-747; [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** A reviewer read `c29aed5..HEAD` and reported these. Fixed: (1) a bootconfig value on the last line, or before a blank line, lost its newline, because the match consumed it; the pattern now stops at the closing quote and the newline is kept, with tests. (2) The reseal record's identity checks passed when two fields were both missing; each field must now be a non-empty string, and the descriptors are read from the two files with the vendored avbtool and compared with the record and with each other. (3) A record with a non-object field raised an `AttributeError`, and a bootconfig that is not UTF-8 raised a `UnicodeDecodeError`; both are now refused as `BundleVariantError`. (4) The docstrings of `bundle_variant.py` and `vendor_reseal.py` said the super only, or that nothing else is written; they are corrected. (5) `vendor-reseal` makes its output directory only after every check, and a failure while the files are moved removes the files that were moved. (6) The refreshed path refuses a replacement whose size is not the partition's size. Not fixed: the variant-level test. The synthetic stock bundle of `test_bundle_variant.py` has no valid `vbmeta_a`, so the GPT splice, the manifest hash, and the bootconfig rewrite of the variant are checked only on the real bundle (see M02 #099). Decision needed: whether a synthetic stock with a real vbmeta chain should be added to the suite.
+
+**Reason.** The first three defects can give a wrong or a silently accepted bundle, so they were fixed before the boot. The missing variant-level test is recorded, not added here, because it needs a fixture that carries a real vbmeta chain and a re-signed stock bundle, which is larger than this step.

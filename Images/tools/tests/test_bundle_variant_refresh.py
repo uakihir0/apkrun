@@ -16,10 +16,16 @@ from pathlib import Path
 import pytest
 
 from apkrun_image import bundle_variant as variant
+from apkrun_image import vendor_reseal
 from apkrun_image.bundle_variant import BundleVariantError
 from apkrun_image.erofs import load_component
 from apkrun_image.manifest import _repository_root
-from apkrun_image.vendor_inject import AVBTOOL_COMPONENT, run_avbtool, verify_avbtool
+from apkrun_image.vendor_inject import (
+    AVBTOOL_COMPONENT,
+    run_avbtool,
+    seal_partition,
+    verify_avbtool,
+)
 
 FIXTURE_RSA_KEY = _repository_root() / "Tests/Fixtures/signing/test-apkrun-image-fixture-rsa.pem"
 FIXTURE_BUILD = "16373615"
@@ -170,38 +176,95 @@ def test_the_bootconfig_values_are_replaced_once_each_and_a_missing_line_is_refu
         variant._read_bootconfig_values(text + text, ("androidboot.vbmeta.digest",))
 
 
+def test_the_bootconfig_newlines_survive_a_value_on_the_last_line_or_before_a_blank_line() -> None:
+    values = {"androidboot.vbmeta.size": "21312"}
+    last = 'androidboot.hardware = cuttlefish\nandroidboot.vbmeta.size = "22912"\n'
+    assert variant._with_bootconfig_values(last, values) == (
+        'androidboot.hardware = cuttlefish\nandroidboot.vbmeta.size = "21312"\n'
+    )
+    blank = 'androidboot.vbmeta.size = "22912"\n\nandroidboot.hardware = cuttlefish\n'
+    assert variant._with_bootconfig_values(blank, values) == (
+        'androidboot.vbmeta.size = "21312"\n\nandroidboot.hardware = cuttlefish\n'
+    )
+    no_final_newline = 'androidboot.vbmeta.size = "22912"'
+    assert variant._with_bootconfig_values(no_final_newline, values) == (
+        'androidboot.vbmeta.size = "21312"'
+    )
+
+
+def _sealed(avbtool: Path, tmp: Path, name: str, seed: str) -> Path:
+    """A real sealed partition with the vendored avbtool, small enough for the tests."""
+    scratch = tmp / f"seal-{name}"
+    scratch.mkdir()
+    fs_image = scratch / "fs.img"
+    fs_image.write_bytes(hashlib.sha256(seed.encode("utf-8")).digest() * 16384)
+    output = tmp / f"{name}.img"
+    seal_partition(
+        avbtool,
+        fs_image,
+        output,
+        partition_size=1024 * 1024,
+        salt="00" * 16,
+        scratch=scratch,
+    )
+    return output
+
+
+def _vbmeta_for(avbtool: Path, tmp: Path, name: str, vendor: Path) -> Path:
+    output = tmp / f"{name}-vbmeta.img"
+    run_avbtool(
+        avbtool,
+        [
+            "make_vbmeta_image",
+            "--output",
+            str(output),
+            "--algorithm",
+            "NONE",
+            "--include_descriptors_from_image",
+            str(vendor),
+            "--padding_size",
+            "4096",
+        ],
+    )
+    return output
+
+
 def _reseal_fixture(tmp_path: Path, **changes: object) -> tuple[Path, Path, Path, dict]:
     """Make an inject output and a reseal output that agree, and return them with the reseal record.
 
     `changes` replaces a field of the reseal record, named with dots (for example
-    "stock.vendorSha256").
+    "stock.vendorSha256"). The images are real: the vendored avbtool seals the vendor and makes
+    the vbmeta that carries its descriptor.
     """
+    avbtool = _avbtool()
     inject = tmp_path / "inject"
     inject.mkdir()
     reseal = tmp_path / "reseal"
     reseal.mkdir()
-    injected = b"injected vendor image"
-    vendor = b"resealed vendor image"
-    vbmeta = b"refreshed vbmeta"
-    stock_vendor = b"stock vendor image"
-    (inject / "vendor_a.img").write_bytes(injected)
-    (reseal / "vendor_a.img").write_bytes(vendor)
-    (reseal / "vbmeta_a.img").write_bytes(vbmeta)
-    descriptor = {"partition": "vendor", "rootDigest": "a373"}
+    stock_vendor = _sealed(avbtool, tmp_path, "stock", "stock")
+    injected = _sealed(avbtool, tmp_path, "injected", "injected")
+    (inject / "vendor_a.img").write_bytes(injected.read_bytes())
+    (reseal / "vendor_a.img").write_bytes(injected.read_bytes())
+    vbmeta = _vbmeta_for(avbtool, tmp_path, "reseal", reseal / "vendor_a.img")
+    (reseal / "vbmeta_a.img").write_bytes(vbmeta.read_bytes())
+    descriptor = vendor_reseal.vendor_tree(
+        run_avbtool(avbtool, ["info_image", "--image", str(reseal / "vendor_a.img")]),
+        "the test vendor",
+    )
     record = {
         "task": "#099",
         "schemaVersion": 1,
-        "partition": {"name": "vendor_a", "verityName": "vendor", "size": len(vendor)},
-        "injected": {"sha256": _sha(injected), "size": len(injected)},
-        "stock": {"vendorSha256": _sha(stock_vendor), "vbmetaSha256": "00"},
+        "partition": {"name": "vendor_a", "verityName": "vendor", "size": injected.stat().st_size},
+        "injected": {"sha256": _sha(injected.read_bytes()), "size": injected.stat().st_size},
+        "stock": {"vendorSha256": _sha(stock_vendor.read_bytes()), "vbmetaSha256": "00"},
         "vendor": {
             "file": "vendor_a.img",
-            "sha256": _sha(vendor),
+            "sha256": _sha((reseal / "vendor_a.img").read_bytes()),
             "descriptor": descriptor,
         },
         "vbmeta": {
             "file": "vbmeta_a.img",
-            "sha256": _sha(vbmeta),
+            "sha256": _sha((reseal / "vbmeta_a.img").read_bytes()),
             "algorithm": "NONE",
             "rollbackIndex": 1780617600,
             "vendorDescriptor": descriptor,
@@ -218,8 +281,8 @@ def _reseal_fixture(tmp_path: Path, **changes: object) -> tuple[Path, Path, Path
             {
                 "buildId": FIXTURE_BUILD,
                 "partition": {"name": "vendor_a"},
-                "output": {"file": "vendor_a.img", "sha256": _sha(injected)},
-                "stock": {"sha256": _sha(stock_vendor)},
+                "output": {"file": "vendor_a.img", "sha256": _sha(injected.read_bytes())},
+                "stock": {"sha256": _sha(stock_vendor.read_bytes())},
             }
         ),
         encoding="utf-8",
@@ -244,7 +307,11 @@ def test_a_reseal_output_for_the_same_inject_is_read(tmp_path: Path) -> None:
         ({"injected.sha256": "00"}, "was not made from this inject-vendor output"),
         ({"stock.vendorSha256": "00"}, "names another stock vendor_a"),
         ({"vbmeta.algorithm": "SHA256_RSA4096"}, "names a signed vbmeta"),
-        ({"vbmeta.vendorDescriptor": {"rootDigest": "other"}}, "does not match its vbmeta"),
+        (
+            {"vbmeta.vendorDescriptor": {"rootDigest": "other"}},
+            "does not describe the vendor descriptor of its vbmeta_a",
+        ),
+        ({"vendor.descriptor": {"rootDigest": "other"}}, "does not describe its vendor_a"),
         ({"partition.name": "system_a"}, "does not record the partition vendor_a"),
         ({"task": "#098"}, "is not a #099 vendor-reseal record"),
     ],
@@ -254,6 +321,20 @@ def test_a_reseal_record_that_does_not_match_its_inject_is_refused(
 ) -> None:
     inject, reseal, _path, _record = _reseal_fixture(tmp_path, **changes)
     with pytest.raises(BundleVariantError, match=message):
+        variant._read_reseal_output(
+            reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
+        )
+
+
+def test_a_refreshed_vbmeta_of_another_vendor_is_refused(tmp_path: Path) -> None:
+    inject, reseal, record_path, record = _reseal_fixture(tmp_path)
+    avbtool = _avbtool()
+    other = _sealed(avbtool, tmp_path, "other", "other")
+    other_vbmeta = _vbmeta_for(avbtool, tmp_path, "other", other)
+    (reseal / "vbmeta_a.img").write_bytes(other_vbmeta.read_bytes())
+    record["vbmeta"]["sha256"] = _sha(other_vbmeta.read_bytes())
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(BundleVariantError, match="does not carry the descriptor of the resealed"):
         variant._read_reseal_output(
             reseal, inject_directory=inject, partition="vendor_a", build_id=FIXTURE_BUILD
         )

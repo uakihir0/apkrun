@@ -1,8 +1,8 @@
 """Reseal the injected vendor partition and refresh its descriptor in the stock vbmeta (#099).
 
 The inputs are the `vendor_a.img` that `inject-vendor` writes, the stock `vendor_a` and the stock
-top-level `vbmeta_a` (both read from the stock bundle). The tool writes two images with the
-vendored avbtool (IR-624), and it writes nothing else:
+top-level `vbmeta_a` (both read from the stock bundle). The tool writes two images and a record of
+both, with the vendored avbtool (IR-624):
 
 1. `vendor_a.img`: the injected EROFS image, up to the original image size that its footer records,
    with a fresh hashtree footer. The data and hash block sizes, the hash algorithm, the salt, and
@@ -146,7 +146,7 @@ def _is_vendor_block(block: tuple[str, tuple[str, ...]]) -> bool:
     return names == [PARTITION]
 
 
-def _vendor_tree(info_text: str, what: str) -> dict[str, Any]:
+def vendor_tree(info_text: str, what: str) -> dict[str, Any]:
     """Return the complete vendor hashtree descriptor of an image, or refuse it."""
     tree = parse_hashtrees(info_text).get(PARTITION)
     if tree is None or any(field not in tree for field in DESCRIPTOR_FIELDS):
@@ -185,12 +185,12 @@ def reseal_vendor(
     stock_info = _info(avbtool, stock)
     if parse_top(stock_info).get("Algorithm") != ALGORITHM:
         raise ResealError("the stock vendor footer is not NONE, and this tool has no signing key.")
-    stock_tree = _vendor_tree(stock_info, "the stock vendor_a")
+    stock_tree = vendor_tree(stock_info, "the stock vendor_a")
     if stock_tree["imageSize"] != _original_size(stock_info, "the stock vendor_a"):
         raise ResealError("the stock hashtree does not cover the original image size.")
 
     injected_info = _info(avbtool, injected)
-    injected_tree = _vendor_tree(injected_info, "the injected vendor_a")
+    injected_tree = vendor_tree(injected_info, "the injected vendor_a")
     partition_size = stock.stat().st_size
     if injected.stat().st_size != partition_size:
         raise ResealError("the injected vendor_a is not the size of the stock partition.")
@@ -233,7 +233,7 @@ def reseal_vendor(
         raise ResealError("avbtool did not verify the new hashtree of the vendor partition.")
     if work.stat().st_size != partition_size:
         raise ResealError("the resealed vendor_a is not the size of the stock partition.")
-    sealed_tree = _vendor_tree(_info(avbtool, work), "the resealed vendor_a")
+    sealed_tree = vendor_tree(_info(avbtool, work), "the resealed vendor_a")
     if sealed_tree["fecRoots"] != 0 or sealed_tree["imageSize"] != fs_size:
         raise ResealError("the resealed vendor_a does not have a footer without FEC.")
     shutil.move(str(work), output)
@@ -250,7 +250,7 @@ def refresh_vbmeta(
     """Write the stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
     stock_info = _info(avbtool, stock_vbmeta)
     stock_top = parse_top(stock_info)
-    stock_tree = _vendor_tree(stock_info, "the stock vbmeta_a")
+    stock_tree = vendor_tree(stock_info, "the stock vbmeta_a")
     rollback = stock_top.get("Rollback Index")
     if rollback is None:
         raise ResealError("the stock vbmeta_a has no rollback index.")
@@ -286,9 +286,9 @@ def refresh_vbmeta(
     for key in ("Rollback Index", "Rollback Index Location", "Flags", "Minimum libavb version"):
         if new_top.get(key) != stock_top.get(key):
             raise ResealError(f"the refreshed vbmeta changed its {key}.")
-    vendor_tree = _vendor_tree(_info(avbtool, vendor), "the resealed vendor_a")
-    new_tree = _vendor_tree(new_info, "the refreshed vbmeta_a")
-    if new_tree != vendor_tree:
+    vendor_expected = vendor_tree(_info(avbtool, vendor), "the resealed vendor_a")
+    new_tree = vendor_tree(new_info, "the refreshed vbmeta_a")
+    if new_tree != vendor_expected:
         raise ResealError("the refreshed vbmeta does not carry the descriptor of the new footer.")
     stock_others = [b for b in descriptor_blocks(stock_info) if not _is_vendor_block(b)]
     new_others = [b for b in descriptor_blocks(new_info) if not _is_vendor_block(b)]
@@ -313,17 +313,16 @@ def reseal(
 ) -> dict[str, Any]:
     """Write `vendor_a.img`, `vbmeta_a.img`, and `reseal.json` to a new output directory."""
     root = _repository_root() if repository is None else repository
-    directory = _ensure_output(output_directory, root)
     avbtool = verify_avbtool(root, load_component(AVBTOOL_COMPONENT))
-    stock_footer_root = _vendor_tree(_info(avbtool, stock_vendor), "the stock vendor_a")[
+    stock_footer_root = vendor_tree(_info(avbtool, stock_vendor), "the stock vendor_a")[
         "rootDigest"
     ]
     if (
-        _vendor_tree(_info(avbtool, stock_vbmeta), "the stock vbmeta_a")["rootDigest"]
+        vendor_tree(_info(avbtool, stock_vbmeta), "the stock vbmeta_a")["rootDigest"]
         != stock_footer_root
     ):
         raise ResealError("the stock vendor footer and the stock vbmeta_a disagree on the root.")
-    injected_tree = _vendor_tree(_info(avbtool, injected), "the injected vendor_a")
+    injected_tree = vendor_tree(_info(avbtool, injected), "the injected vendor_a")
 
     with tempfile.TemporaryDirectory(prefix="apkrun-099-reseal-") as name:
         scratch = Path(name)
@@ -373,14 +372,28 @@ def reseal(
             },
             "verifiedByAvbtool": True,
         }
-        for file_name, source in ((OUTPUT_IMAGE, vendor_out), (OUTPUT_VBMETA, vbmeta_out)):
-            target = directory / file_name
-            if target.exists() or target.is_symlink():
-                raise ResealError(f"{target}: the output already exists")
-            shutil.move(str(source), target)
-        (directory / OUTPUT_RECORD).write_text(
-            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        # The directory is made only now, after every check, and a failure while the files are moved
+        # removes the files that were moved, so a refused run leaves no partial output.
+        existed = output_directory.expanduser().exists()
+        directory = _ensure_output(output_directory, root)
+        moved: list[Path] = []
+        try:
+            for file_name, source in ((OUTPUT_IMAGE, vendor_out), (OUTPUT_VBMETA, vbmeta_out)):
+                target = directory / file_name
+                if target.exists() or target.is_symlink():
+                    raise ResealError(f"{target}: the output already exists")
+                shutil.move(str(source), target)
+                moved.append(target)
+            (directory / OUTPUT_RECORD).write_text(
+                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            moved.append(directory / OUTPUT_RECORD)
+        except BaseException:
+            for target in moved:
+                target.unlink(missing_ok=True)
+            if not existed:
+                directory.rmdir()
+            raise
     return record
 
 

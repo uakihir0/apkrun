@@ -14217,7 +14217,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §4.6; the stock metadata of IR-686 |
 
-**Choice.** `replace_partition` keeps the metadata bytes, so no partition table, extent, or checksum changes, and it recomputes no checksum. Before the output is published, the writer compares the metadata region byte for byte with the input, and it parses every geometry copy and every metadata copy in use with the format's checksums (8 copies in the stock: two geometry and six metadata). This is the answer to the brief's "update the metadata checksums": nothing changes, so there is nothing to update, and every copy is verified. Decision needed: none for this size. If a later task shrinks a partition (IR-682), the tables and the header and tables checksums of every copy must be recomputed, and that change needs its own decision.
+**Choice.** `replace_partition` keeps the metadata bytes, so no partition table, extent, or checksum changes, and it recomputes no checksum. Before the output is published, the writer compares the metadata region byte for byte with the input, and it parses every geometry copy and every metadata copy that is not all zero with the format's checksums (8 copies in the stock: two geometry and six metadata). This is the answer to the brief's "update the metadata checksums": nothing changes, so there is nothing to update, and every copy is verified. Decision needed: none for this size. If a later task shrinks a partition (IR-682), the tables and the header and tables checksums of every copy must be recomputed, and that change needs its own decision.
 
 **Reason.** The injected `vendor_a` is exactly the size of its extent (291,229,696 bytes, IR-626), so the partition size does not change, and no table field changes. The liblp format has no checksum over partition data: its checksums cover the geometry, the header, and the tables. Recomputing checksums of unchanged bytes would add risk without changing the result.
 
@@ -14247,7 +14247,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** The injected `vendor_a` fits the stock size (IR-626), so the writer accepts it. A larger EROFS image cannot be written into the super through this writer.
 
-## IR-683: The output is published by rename after the checks, and an existing output is refused
+## IR-683: The output is linked into place after the checks, and an existing output is never overwritten
 
 | Field | Value |
 |---|---|
@@ -14265,9 +14265,9 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
 
-**Choice.** `replace_partition` writes `.<output name>.partial` beside the destination, runs the checks, and renames the file to the destination only after they pass. It removes the partial file on any failure. It refuses a destination that already exists, and it refuses the source file as the destination. Decision needed: none.
+**Choice.** `replace_partition` writes `.<output name>.partial` beside the destination, runs the checks, and links the file to the destination only after they pass. The link fails when the destination exists. It removes the partial file on any failure. It refuses a destination that already exists, and it refuses the source file as the destination. Decision needed: none.
 
-**Reason.** The injection writes into new directories (IR-633), and a failed write must not leave a file that could be taken for a super. A rename after the checks means that a file at the destination has passed every check.
+**Reason.** The injection writes into new directories (IR-633), and a failed write must not leave a file that could be taken for a super. A link after the checks, which fails on an existing name, means that a file at the destination has passed every check and that no file was overwritten.
 
 **Consequence.** A partial file stays only if the process stops between the write and the rename, and the next call removes it.
 
@@ -14289,7 +14289,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
 
-**Choice.** These inputs are refused with typed errors and no output: a raw super that is not sparse; a sparse image with a whole-image checksum or with a CRC32 chunk, because the checksum would be stale; a sparse image with a non-standard file or chunk header size; a chunk with no blocks; a partition extent that is not linear on the super device, is not aligned to the sparse block (4,096 bytes), or overlaps the metadata region. Decision needed: whether a whole-image checksum should be recomputed. The stock has none, and the injection's inputs have none either.
+**Choice.** These inputs are refused with typed errors and no output: a raw super that is not sparse; a sparse image with a whole-image checksum or with a CRC32 chunk, because the checksum would be stale; a sparse image with a non-standard file or chunk header size; bytes after the last chunk; a chunk with no blocks; a partition extent that is not linear on the super device, is not aligned to the sparse block (4,096 bytes), or overlaps the metadata region. Decision needed: whether a whole-image checksum should be recomputed. The stock has none, and the injection's inputs have none either.
 
 **Reason.** Each refusal avoids an output that the reader could accept while Android does not. The stock super has none of these properties, so no refusal affects the target.
 
@@ -14322,6 +14322,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 - An expander that does not use `apkrun_image` compared all 8,589,934,592 logical bytes. Every byte outside the range equals the stock byte, and the range equals the injected image followed by zeros.
 - The repository reader reads `vendor_a` back from the output with SHA-256 `2cc0857c…`. The reader sees the same 16 partitions and the 8 GiB block device.
 - The gated round-trip test passes on the stock file.
+- The same replacement, run again after the fixes of IR-681, IR-683, and IR-684, gives the same output bytes.
 
 **Consequence.** The vbmeta is not re-signed (IR-625), so the output does not verify with dm-verity on. The first boot, which needs the VM and was not run here, decides whether the mismatch blocks the boot (IR-650).
 
@@ -14379,7 +14380,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** AGENTS §10 keeps the T0 and T1 tiers offline, and the stock artifact is too large for the repository. The synthetic super exercises the paths that the stock one needs: chunk splits, the mapping across two extents, zero padding, and the backup copies.
 
-**Consequence.** CI checks the synthetic layout and the sparse encoder. The real-data check is manual, and its results are in IR-685.
+**Consequence.** CI checks the synthetic layout and the sparse encoder. The real-data check is manual, and its results are in IR-685. Each post-write check has a test that fails when the check is removed; that was confirmed by removing each check in a scratch copy.
 
 ## IR-689: The writer verifies every metadata copy, and the reader still reads slot 0 only
 
@@ -14389,7 +14390,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §3.1 (inventory of `lp.py`) |
 
-**Choice.** `lp_write` verifies the checksums of every geometry copy and every metadata copy in use. The reader `lp.py` still reads only slot 0 for the inventory. Decision needed: whether the reader should check the backup copies too, and fall back to a backup copy when slot 0 fails.
+**Choice.** `lp_write` verifies the checksums of every geometry copy and every metadata copy that is not all zero, and a slot that is not all zero must parse, so a damaged magic is refused rather than skipped. The reader `lp.py` still reads only slot 0 for the inventory. Decision needed: whether the reader should check the backup copies too, and fall back to a backup copy when slot 0 fails.
 
 **Reason.** A write must not carry a damaged copy forward, so the writer checks all of them. Changing the reader's fallback would change the inventory of damaged images, and this step needs only the stock copies to be correct.
 

@@ -40,7 +40,7 @@ from apkrun_image import vendor_inject as vi  # noqa: E402
 from apkrun_image import vendor_reseal as vr  # noqa: E402
 
 SRC = Path("/tmp/apkrun-099-vh-install-src/android-bundle")
-WORK = Path("/tmp/apkrun-022-odm")
+WORK = Path(os.environ.get("APKRUN_022_ODM_WORK", "/tmp/apkrun-022-odm"))
 TOOLS = Path("/tmp/apkrun-099-lp-erofs/tools")
 EDITOR = Path("/tmp/apkrun-022-sepol-bin/policy-edit")
 KEY = Path("~/.config/apkrun/dev-image-key").expanduser()
@@ -82,6 +82,8 @@ class Window:
 
     def read(self, count: int = -1) -> bytes:
         remaining = self._size - self._pos
+        if remaining <= 0:
+            return b""
         count = remaining if count is None or count < 0 else min(count, remaining)
         self._file.seek(self._base + self._pos)
         data = self._file.read(count)
@@ -134,13 +136,16 @@ def read_super_odm(os_img: Path, super_offset: int, super_size: int, out: Path) 
 
 
 def raw_to_sparse(os_img: Path, super_offset: int, super_size: int, out: Path) -> None:
-    """Write the raw super region as an Android sparse image (4096-byte blocks, zero blocks skipped).
+    """Write the raw super region as an Android sparse image, with 4096-byte blocks.
 
-    The chunks are streamed to `out`, so the data is never held in memory. The header's chunk count
-    is written last. `build_variant` checks the expansion of the result against the manifest.
+    Zero blocks become DONT_CARE chunks. Runs of other blocks become RAW chunks of at most one
+    CHUNK (64 MiB), so the memory use is bounded and no chunk size overflows its 32-bit field. The
+    chunks are streamed to `out`, and the chunk count is written into the header last.
+    `build_variant` checks that the expansion of the result is the manifest's super.
     """
     need(super_size % BLOCK == 0, "the super size is not a whole number of blocks")
     total_blocks = super_size // BLOCK
+    raw_limit = CHUNK // BLOCK
     zero_block = bytes(BLOCK)
     chunk_count = 0
     with os_img.open("rb") as source, out.open("wb") as handle:
@@ -162,19 +167,18 @@ def raw_to_sparse(os_img: Path, super_offset: int, super_size: int, out: Path) -
 
         def flush() -> None:
             nonlocal run_kind, run_blocks, run_data
-            if run_kind is None:
-                return
-            if run_kind == 0xCAC3:
-                write_chunk(0xCAC3, run_blocks, None)
-            else:
-                write_chunk(0xCAC1, run_blocks, b"".join(run_data))
+            if run_blocks:
+                if run_kind == 0xCAC3:
+                    write_chunk(0xCAC3, run_blocks, None)
+                else:
+                    write_chunk(0xCAC1, run_blocks, b"".join(run_data))
             run_kind, run_blocks, run_data = None, 0, []
 
         for _ in range(total_blocks):
             block = source.read(BLOCK)
             need(len(block) == BLOCK, "the super region is shorter than its size")
             kind = 0xCAC3 if block == zero_block else 0xCAC1
-            if kind != run_kind:
+            if kind != run_kind or (kind == 0xCAC1 and run_blocks >= raw_limit):
                 flush()
                 run_kind = kind
             run_blocks += 1
@@ -224,7 +228,7 @@ def seal_odm(avbtool: Path, data_image: Path, output: Path, *, partition_size: i
 
 
 def descriptor_key(tree: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(tree.get(k) for k in vr.DESCRIPTOR_FIELDS)
+    return tuple(tree[k] for k in vr.DESCRIPTOR_FIELDS)
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -312,11 +316,12 @@ def build(args: argparse.Namespace) -> None:
     ef.export_tree(tools, odm_fs, WORK / "tree-new")
     entries_new = ef.read_tree(tools, odm_fs, WORK / "tree-new")
     problems = vi.compare_entries(entries, entries_new, directory_sizes=True)
-    other = [p for p in problems if PRECOMPILED not in p]
-    need(not other, f"the rebuild changed more than the policy: {other[:3]}")
+    expected = {f"{PRECOMPILED}: sha256 differs", f"{PRECOMPILED}: size differs"}
+    need(set(problems) == expected,
+         f"the rebuild differs from the stock other than the policy's sha256 and size: {problems[:4]}")
     need(entries_new[PRECOMPILED].sha256 == sha256(WORK / "precompiled.new"),
          "the rebuilt policy is not the edited one")
-    print(f"rebuild changed only {PRECOMPILED} ({len(problems)} entry differences on it)")
+    print(f"rebuild changed only {PRECOMPILED}: sha256 and size (the compared fields)")
     shutil.rmtree(WORK / "tree-new")
 
     _, fs_blocks, _ = ef.image_geometry(tools, odm_fs)
@@ -432,14 +437,14 @@ def check(args: argparse.Namespace) -> None:
     verified = vi.run_avbtool(avbtool, ["verify_image", "--image", str(link)])
     need("Successfully verified sha256 hashtree" in verified, "the final odm hashtree did not verify")
     print("avbtool verify_image: odm hashtree verified")
-    if vb_vendor is not None:
-        vendor_bytes = read_super_partition(os_img, super_offset, super_size, "vendor_a",
-                                            WORK / "check" / "vendor_final.img")
-        vendor_info = info(avbtool, WORK / "check" / "vendor_final.img")
-        vendor_footer = vr.parse_hashtrees(vendor_info).get("vendor")
-        need(vendor_footer is not None and vendor_footer["rootDigest"] == vb_vendor["rootDigest"],
-             "the vendor descriptor in vbmeta does not match the vendor image")
-        print(f"vendor_a footer matches the vendor descriptor in vbmeta ({vendor_bytes} bytes)")
+    need(vb_vendor is not None, "the variant vbmeta_a has no vendor descriptor")
+    vendor_bytes = read_super_partition(os_img, super_offset, super_size, "vendor_a",
+                                        WORK / "check" / "vendor_final.img")
+    vendor_info = info(avbtool, WORK / "check" / "vendor_final.img")
+    vendor_footer = vr.parse_hashtrees(vendor_info).get("vendor")
+    need(vendor_footer is not None and vendor_footer["rootDigest"] == vb_vendor["rootDigest"],
+         "the vendor descriptor in vbmeta does not match the vendor image")
+    print(f"vendor_a footer matches the vendor descriptor in vbmeta ({vendor_bytes} bytes)")
     tools = ef.verify_tools(TOOLS, ef.load_component())
     fs_size = vr._original_size(odm_info, "the variant odm_a")
     vr._copy_prefix(WORK / "check" / "odm_final.img", WORK / "check" / "odm_final_fs.img", fs_size)

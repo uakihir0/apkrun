@@ -14504,3 +14504,87 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** The record of the injection is the only place that holds the injection's hash, so a file that is not that output is refused. The command is a development step, because a variant is a development bundle (IR-702).
 
+
+## IR-720: The Mesa variant is not booted through a direct bundle path, because `apkrun dev boot --bundle` no longer exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the first VM boot, step 4) |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [android-image.md](../02-design/android-image.md) §10.2 |
+
+**Choice.** Keep the CLI as it is. `apkrun dev boot` has no `--bundle` option, and this task does not add one. The variant is not booted through a direct path. Decision needed: whether a development boot from a bundle directory should return, and under which trust rules.
+
+**Reason.** #065 removed `--bundle` on purpose, together with the unsigned path (android-image.md §10.2). Restoring it would reopen a boot path that skips installation into the image store. That is a CLI and trust change, and AGENTS.md §11 and §15 keep such changes out of a VM check.
+
+**Consequence.** The first boot of the variant waits for the decision in IR-721 or for a design change. The `--bundle` form in the task text cannot be run.
+
+## IR-721: The variant is not installed, not even into a scratch APKRUN_HOME, because the install would reuse the stock image name
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the first VM boot, step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §10.2; [cli.md](../02-design/cli.md) §5 |
+
+**Choice.** Nothing is installed. With a scratch `APKRUN_HOME`, `apkrun dev boot --gpu virgl` stops at `image.noCurrentImage` before any VM starts. No path sets the variant as `current`, including a symbolic link.
+
+**Reason.** The task states the decision "no install, so the stock image's name is not reused". The variant's `manifest.json` names the image `2026.10.0-cf16373615-arm64`, so an install would reuse that name. Its signatures verify (IR-722), so an install would succeed, and the decision is what blocks the boot. IR-700, which the task cites as answered here, is not in `docs/`, so the decision was applied from the task text.
+
+**Consequence.** Decision needed: whether a scratch-home install under `/tmp` is allowed for the first boot, or whether the variant needs another image name and a store entry first.
+
+## IR-722: The bundle is checked by hand with OpenSSL, because no verify-only command exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the first VM boot, step 4) |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §6.1 |
+
+**Choice.** Before the boot attempt, `SHA256SUMS` was checked with `shasum -a 256 -c`, and `manifest.sig` with `openssl pkeyutl -verify -pubin -rawin` over the exact bytes of `manifest.json`. The key is the public half of the developer key (`~/.config/apkrun/dev-image-key.pub`). The variant and the stock test bundle both verify. The product check, `ImageStore.verify`, was not called, because the only CLI path to it is `dev image install`.
+
+**Reason.** The check shows that the variant is validly signed and that its hashes match, which a boot would need. It does not replace `ImageStore.verify` at quick depth. The store must still accept the bundle before any boot.
+
+**Consequence.** The claim "the signature verifies" rests on OpenSSL 4.0.3 and the developer key file, not on the product's verifier.
+
+## IR-723: The guest build and the control boot are not run, because the boot never reaches the guest check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (steps 3 and 7) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`--guest-dir`) |
+
+**Choice.** Step 3 (`scripts/build-guest.sh --out /tmp/apkrun-099-guest`) and step 7 (the guestSwiftshader control on the same variant) are not run.
+
+**Reason.** In `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`, the image check (`images.current()`, line 120) comes before the Guest Agent load (line 144). The guest build is needed only once an image exists. The control needs `current` too, and IR-721 keeps it unset.
+
+**Consequence.** No build time is spent on a boot that cannot start.
+
+## IR-724: IR-650 stays open, because this run never reached dm-verity
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; IR-650 (this file) |
+
+**Choice.** This run does not decide IR-650. The top-level vbmeta of the variant stays unsigned, and no boot result exists for it.
+
+**Reason.** The first boot was to decide IR-650, and no boot ran. The stock failure recorded in #022 (IR-661) is a missing Mesa EGL driver, not a verity error, so it does not decide IR-650 either.
+
+**Consequence.** IR-650 needs the first boot, which waits for IR-721 or a design change. The signing decision of IR-625 waits for it too.
+
+## IR-725: The stale `--bundle` remediation in the error catalog is left as it is
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (found during step 4) |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) (`runtime.devConsoleNotRunning`, line 374); `Packages/DiagnosticsCore/ErrorCatalog/errors.json`; `Packages/DiagnosticsCore/Sources/DiagnosticsCore/Errors/ErrorCatalog.generated.swift` |
+
+**Choice.** The remediation of `runtime.devConsoleNotRunning` still says "Start Android with `apkrun dev boot --bundle <dir>` in another terminal". This task does not change it.
+
+**Reason.** The catalog is generated, so a correction needs a regenerated catalog and a wording decision. Neither belongs in a VM check.
+
+**Consequence.** Decision needed: the maintainer should assign the wording fix to a follow-up, or to the next catalog change. Until then, a user who follows the remediation gets `cli.invalidArguments`.

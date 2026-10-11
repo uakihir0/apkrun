@@ -177,6 +177,7 @@ package final class VZCustomVirtioDeviceAdapter:
     package func customVirtioDeviceWillReset(_ device: VZCustomVirtioDevice) {
         assertOnDeviceQueue()
         guard !isReleased, !didNotifyStop, self.device === device else { return }
+        model.deviceWillInvalidateGuestMemory()
         invalidateGuestState()
         model.deviceWillReset()
     }
@@ -401,6 +402,7 @@ package final class VZCustomVirtioDeviceAdapter:
         assertOnDeviceQueue()
         guard !didNotifyStop else { return }
         didNotifyStop = true
+        model.deviceWillInvalidateGuestMemory()
         invalidateGuestState()
         model.deviceWillStop()
     }

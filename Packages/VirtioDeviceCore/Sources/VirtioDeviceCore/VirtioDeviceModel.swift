@@ -20,6 +20,12 @@ public protocol VirtioDeviceModel: AnyObject, Sendable {
 
     /// Called on the device queue before the VM stops.
     func deviceWillStop()
+
+    /// Called on the device queue before a reset, a stop, or a release invalidates the guest memory mappings.
+    ///
+    /// A model that gave host pointers into guest memory to another thread finishes that use here. The pointers are
+    /// not valid after the mappings are invalidated, and the reset and stop callbacks run after that.
+    func deviceWillInvalidateGuestMemory()
 }
 
 extension VirtioDeviceModel {
@@ -40,4 +46,7 @@ extension VirtioDeviceModel {
 
     /// Default no-op callback for models that do not need stop handling.
     public func deviceWillStop() {}
+
+    /// Default no-op callback for models that keep no host pointers into guest memory.
+    public func deviceWillInvalidateGuestMemory() {}
 }

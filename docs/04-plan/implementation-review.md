@@ -15548,3 +15548,27 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Consequence.** Criterion 1 can be verified only with a change that this decision excludes. One option is a test-only layout that gives the 17 ports host input, which changes their roles in the test. Another is a product change that lets a test-only role carry host input under the supervisor. The maintainer must choose. A layout that keeps hvc18's responder and changes the other roles would have the test run the responder on hvc18 itself, which writes the HAL's replies to hvc18 (IR-894).
 
 **Update (the coordinator's second option).** The second option is implemented in the test only. The 17 ports get a test-only role, `test-marker-<i>`, in the test's definition. The product layout, the product roles, and every product file are unchanged. The 17 ports are hvc2 to hvc17 and hvc19, not hvc1 to hvc17 and hvc19 as the decision lists. In the developer boot the planner gives hvc1 the `serial` service role (`AndroidBootPlanner.consolePorts`), so the product uses it, and the count of 17 holds without it. hvc1 keeps its product role. hvc0 keeps the system console role and is not marked in this check; it took its marker on 2026-10-11 (IR-877). hvc18 keeps its product role. The test runs the product's `SensorsResponder` on it through the public byte stream, as `RuntimeSupervisor` does. The responder's replies are HAL protocol written to hvc18 by the test, and the test writes no marker to hvc18. The public stream reserves no chunk capacity (`reservesDrainSlot: false`), so the test does not acknowledge it. The reader stop uses the recorded process ids (`pid-<i>`), and the guest power-off ends any child that survives. The nine T0 tests pass 9 of 9 on the final build. The role check reads the bundle manifest that the product boots, not the repository: a run stalled on a read of a repository file under `~/Documents`, and the cause was not confirmed. The IR range IR-890 to IR-899 is full, so this update extends IR-899. The second boot is not run. The coordinator's allowance is not the user's approval, and the user's rule for this task is one VM boot in total. Criterion 1 of #095 stays unticked until the user authorizes a boot that gives a result for the 17 ports.
+
+**Update 2 (the coordinator's run and the harness fix).** The coordinator ran the test under the lock, in the AndroidADB configuration, with `-test-timeouts-enabled NO` and `APKRUN_ANDROID_HOME` (log `/tmp/apkrun-095-ports2.log`). The guest's `sys.boot_completed` was `"1"`, and all 17 readers were ready. Thirteen ports received their full marker. The per-port lines, exactly as the test printed them:
+
+```text
+port-check hvc2 marker=APKRUN-PORT-2 reader-ready=yes received=["APKRUN-PORT-2"] ok
+port-check hvc3 marker=APKRUN-PORT-3 reader-ready=yes received=["APKRUN-PORT-3"] ok
+port-check hvc4 marker=APKRUN-PORT-4 reader-ready=yes received=["APKRUN-PORT-4"] ok
+port-check hvc5 marker=APKRUN-PORT-5 reader-ready=yes received=["PKRUN-PORT-5"] missing
+port-check hvc6 marker=APKRUN-PORT-6 reader-ready=yes received=["APKRUN-PORT-6"] ok
+port-check hvc7 marker=APKRUN-PORT-7 reader-ready=yes received=["APKRUN-PORT-7"] ok
+port-check hvc8 marker=APKRUN-PORT-8 reader-ready=yes received=["UN-PORT-8"] missing
+port-check hvc9 marker=APKRUN-PORT-9 reader-ready=yes received=["UN-PORT-9"] missing
+port-check hvc10 marker=APKRUN-PORT-10 reader-ready=yes received=["APKRUN-PORT-10"] ok
+port-check hvc11 marker=APKRUN-PORT-11 reader-ready=yes received=["APKRUN-PORT-11"] ok
+port-check hvc12 marker=APKRUN-PORT-12 reader-ready=yes received=["RUN-PORT-12"] missing
+port-check hvc13 marker=APKRUN-PORT-13 reader-ready=yes received=["APKRUN-PORT-13"] ok
+port-check hvc14 marker=APKRUN-PORT-14 reader-ready=yes received=["APKRUN-PORT-14"] ok
+port-check hvc15 marker=APKRUN-PORT-15 reader-ready=yes received=["APKRUN-PORT-15"] ok
+port-check hvc16 marker=APKRUN-PORT-16 reader-ready=yes received=["APKRUN-PORT-16"] ok
+port-check hvc17 marker=APKRUN-PORT-17 reader-ready=yes received=["APKRUN-PORT-17"] ok
+port-check hvc19 marker=APKRUN-PORT-19 reader-ready=yes received=["APKRUN-PORT-19"] ok
+```
+
+Four ports lost their first characters: hvc5 (`PKRUN-PORT-5`), hvc8 (`UN-PORT-8`), hvc9 (`UN-PORT-9`), and hvc12 (`RUN-PORT-12`). Each reader had written its ready file before the host wrote, so the loss happened after `ready-<i>`. Its cause is not known. The harness is changed as follows, without any product change. The reader opens its port on fd 3 and sets raw mode on that descriptor (`stty raw -echo <&3`), records the result in `raw-<i>`, and only then writes `ready-<i>`. The earlier `stty -F` call discarded its errors, so raw mode may never have been set on that run. The host writes each marker once, and only 2 s (`writeSettle`) after the ready file is first seen. The settle time is a hedge against a race with the port's first open. It is not verified. The run command keeps timeouts off. The T0 tests (12) pass 12 of 12 on the final build. The fixed harness has not been run on a boot. The user's rule is one VM boot in total, and the coordinator's allowance is not the user's approval. Criterion 1 of #095 stays unticked, because the coordinator's run gives 13 of 17 full markers and the fixed harness has no result yet.

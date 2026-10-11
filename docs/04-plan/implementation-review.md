@@ -15574,3 +15574,143 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Verification.** The permissive and the runtime-loaded sepolicy runs (IR-800, IR-948) are evidence for the overlay route. A boot of the ODM-overlay variant, with no runtime load, is the check still to run.
 
+## IR-940: The test editor is built from the pinned libsepol release, because no offline tool edits a compiled policy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4, test-only experiment); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The editor is `Experiments/sepolicy-022/policy_edit.c`, a C program of about 250 lines built against the libsepol 3.11 static library (pinned in IR-941). It reads a binary policy with `policydb_read`, adds or ORs one `allow` entry with `avtab_insert` and `avtab_search`, and writes the policy with `policydb_write`. Its `dump` mode lists every allow-type rule by name, and its `query` mode answers one question. Nothing else edits the policy.
+
+**Reason.** The routes named in the assignment do not edit a binary policy. `secilc` and `checkpolicy` compile text or CIL into binary, and no tool here decompiles it. The SELinux 3.11 release tarballs, `selinux-3.11.tar.gz` (the monorepo) and `policycoreutils-3.11.tar.gz`, contain no `sepolicy-inject` or other binary editor. The public libsepol API covers one rule. `build-libsepol.sh` builds the library with `DISABLE_CIL=y` (clang, no warnings). The tool was checked on the stock `/sepolicy` and on the running policy (IR-944). The build printed no warnings (`/tmp/apkrun-022-sepol-build3.log`).
+
+**Consequence.** The editor is test-only (AGENTS §11). It does not check neverallow rules, because a compiled policy does not carry them (IR-902), so it is not evidence that the rule passes the AOSP build of #035.
+
+## IR-941: libsepol is pinned as a release tarball in the lock, with the prebuilt kind and its licence text
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035 |
+| Affected documents | `ThirdParty/ThirdParty.lock.json` (entry `libsepol`); `ThirdParty/licenses/libsepol/LICENSE` |
+
+**Choice.** The lock gains `libsepol`: group `image-tooling`, kind `prebuilt`, version 3.11, URL `https://github.com/SELinuxProject/selinux/releases/download/3.11/libsepol-3.11.tar.gz`, sha256 `79f3d2c88f44b7eb5cf54d9792e03232297e17f97a179163f2750099a00f164d`, licence `LGPL-2.1-only`, licence file `ThirdParty/licenses/libsepol/LICENSE`. The sha256 equals the digest GitHub publishes for that release asset, and the downloaded file matches it. The `.asc` signature was not verified, because the SELinux release key is not pinned in the repository.
+
+**Reason.** The lock validator (`scripts/tools/check-lock.swift`) accepts no tarball kind. `source` requires a git commit, and the assignment asked for the release tarball, so `prebuilt` is the closest kind: it requires an HTTPS URL, a sha256, and licence files only. The validator passed (`check-lock: passed`). `scripts/check-lock.sh` needs the pinned XcodeGen under `build/tools`, which this worktree does not have, so the validator was run directly with `APKRUN_XCODEGEN` pointing at the main checkout's binary (a read-only `dump` call). That binary's sha256 is `a450f63b…`, and `scripts/tool-versions.env` records `XCODEGEN_SHA256=a2e905fb…`. The validator does not check that value, and the difference was not resolved. The component is test-only and not shipped, so it has no runtime impact.
+
+## IR-942: The rule is `allow surfaceflinger sysfs:file { open read }`, which the denial text of the boot shows, and no genfscon is added
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The experiment's rule is `allow surfaceflinger sysfs:file { open read };`, and nothing else. No `genfscon` line is added, because the node keeps its default label `sysfs` (inode 3405), so a file allow to `sysfs` reaches it without a relabel. For #035, IR-905 item 1 (a `genfscon` rule) applies only if the product gives the node a new type.
+
+**Reason.** The denial text in the #099 logs (`/tmp/apkrun-099-vh-logs/logcat-boot-1.log`, `boot-1.log`) shows only `{ read }` on `name="uevent"` with `scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0`. The boot of this experiment (IR-947) also shows `{ open }`: 34 open denials from 445.4 s to 525.5 s of guest time, 176 read denials from 4.9 s to 440.4 s, and 36 getattr denials in one burst at 530.5 s (count of the `comm="surfaceflinger"` lines in `/tmp/apkrun-022-sepol-boot.log`). The first rule, `read` alone, was therefore incomplete. The getattr burst came after the rule was loaded and did not stop the boot, so getattr is not in the rule.
+
+**Consequence.** A product rule for this node needs `open` and `read` on the type that the node carries, and the test used the default type.
+
+## IR-943: The guest loads `/odm/etc/selinux/precompiled_sepolicy`, not the ramdisk `/sepolicy`, so IR-900 and IR-905 are withdrawn on that point
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 (corrected in this change); IR-900, IR-901, IR-905, IR-906 (superseded on this point) |
+
+**Choice.** On this image, `init` loads `/odm/etc/selinux/precompiled_sepolicy`. The boot ramdisk's `/sepolicy` is not the policy in use. The statements that the monolithic branch applies (IR-900), that the ramdisk `/sepolicy` is the only policy the guest loads (IR-905 item 3), and that a rebuilt ramdisk is the route (IR-906) are withdrawn. IR-901's premise that the monolithic file needs the full AOSP source goes with them, and the lock now pins libsepol (IR-941). The design text in android-image.md §11.1 is corrected in this change.
+
+**Reason.** Evidence from the running guest in this boot. The lines marked *adb* are output of an adb session that was not saved as a file. The lines marked *saved* are files under `/tmp`.
+
+- *adb:* `/system/bin/secilc`, `/system/etc/selinux/plat_sepolicy.cil`, and `/odm/etc/selinux/precompiled_sepolicy` exist. The precompiled file's hash file (`precompiled_sepolicy.plat_sepolicy_and_mapping.sha256`) has the same content as `/system/etc/selinux/plat_sepolicy_and_mapping.sha256` (`26875725…`). A read of `/sys/fs/selinux/policy` from the shell user was refused, so the policy was read after `adb root`.
+- *saved:* `/tmp/apkrun-022-sepol-work/loaded/policy.bin` is the kernel's loaded policy (911,737 bytes, the same size as the policy-load record of the boot). `/tmp/apkrun-022-sepol-work/odm/precompiled_sepolicy` is the file that was pulled from the guest (911,737 bytes). Their allow-rule dumps (`policy_edit dump`) are identical, with zero differing lines. The bytes differ (sha256 `e7dc888c…` and `6a1f95da…`), because the kernel writes its own serialization, so the comparison is by dump.
+- *saved:* the monolithic `/sepolicy` of the ramdisk (930,777 bytes) has a different rule set. Its sorted dump differs from the loaded one in 13,394 lines of diff output.
+- *saved:* the instance's `boot/initrd.img`, cloned from the image's `boot/ramdisk.img` at provisioning, decompresses to the repacked cpio, and its `sepolicy` is the edited file (`cmp` equal). The edit reached the guest's initramfs and was not loaded.
+
+IR-900 said that the system holds the 14 vendor names and no `plat_sepolicy.cil`, and it called that unexpected. The running guest shows the `plat_*` set and `secilc`. The likely cause is an error in IR-900's extraction, but that was not checked. IR-760, IR-761, and IR-764 are on `task/022-egl-drm-diag`, not on main. The denial node they describe is the same, and their facts are not changed by this entry.
+
+- `/system/bin/secilc` exists, and so do `/system/etc/selinux/plat_sepolicy.cil` and `/odm/etc/selinux/precompiled_sepolicy` (911,737 bytes, sha256 `6a1f95da…`). The precompiled file's hash file equals `/system/etc/selinux/plat_sepolicy_and_mapping.sha256` (`26875725…`), so `init` uses the precompiled file.
+- The kernel's loaded policy, `/sys/fs/selinux/policy` (911,737 bytes), has the same rule dump as that file: zero differing lines.
+- The monolithic `/sepolicy` of the ramdisk (930,777 bytes) has a different rule set. Its sorted dump differs from the loaded one in 13,394 lines of diff output.
+- The instance's `boot/initrd.img`, cloned from the image's `boot/ramdisk.img` at provisioning, decompresses to the repacked cpio, and its `sepolicy` is the edited file (`cmp` equal). The edit reached the guest's initramfs and was not loaded.
+
+IR-900 said that the system holds the 14 vendor names and no `plat_sepolicy.cil`, and it called that unexpected. The running guest shows the `plat_*` set and `secilc`. The likely cause is an error in IR-900's extraction, but that was not checked. IR-760, IR-761, and IR-764 are on `task/022-egl-drm-diag`, not on main. The denial node they describe is the same, and their facts are not changed by this entry.
+
+**Consequence.** A sysfs rule reaches the guest only through the policy that `init` loads. On this image that is the ODM precompiled file, or the split CIL if the precompiled hash does not match. A change to the ramdisk `/sepolicy` alone has no effect (IR-946 tests the rule another way).
+
+## IR-944: The editor keeps the input's header word, and its round trip is checked by rule dump, not by bytes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4, test tool) |
+| Affected documents | none (test tool in `Experiments/sepolicy-022/`) |
+
+**Choice.** The editor writes the input's config word (offset 20) back into the output, because libsepol keeps only bits 0 to 2 (MLS and the unknown-handling bits `2` and `4`) and drops bits 30 and 31 (`0xc0000000` in the stock file). A round trip of the stock `/sepolicy` changes 490,104 bytes, and a second round trip of that output changes 490,137 bytes of the stock and 2,906 bytes against the first. libsepol writes its hash tables in an order that is not stable across runs, so the editor is checked by its rule dump, not by bytes. The rule dump of the stock file and of its round trip is identical (51,481 lines). The edit adds exactly one line, `avtab surfaceflinger sysfs file 0x0001 0x00000002`. The precompiled file gets `avtab surfaceflinger sysfs file 0x0001 0x00040002` for `open` and `read` (`open` is bit 0x00040000).
+
+**Reason.** The rule dump lists every allow-type rule (the avtab) by name, with the symbol counts and the header fields. It omits the conditional rules, and these policies have no booleans (symbol count 0), so they have none to omit. That is the decision data for one rule. A byte comparison would show ordering changes that do not alter a decision. The kernel accepted both edited policies, and its loaded dump matched (IR-947). The bits outside libsepol's mask are not used by libsepol, but restoring them keeps the header equal to the input's.
+
+## IR-945: The ramdisk is repacked and the bundle refreshed with the bundle tool's own functions, because no command replaces `boot/ramdisk.img`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4, test-only experiment) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** `Experiments/sepolicy-022/repack_ramdisk.py` splits the LZ4 legacy payload into its newc archives (two `TRAILER!!!` records, 561 entries). It replaces only the `sepolicy` entry (930,777 to 930,789 bytes, +12 for the avtab node), keeps every other byte, and compresses the cpio with `lz4 -l -12`, the legacy frame of the stock file. The repacked ramdisk is 21,807,361 bytes, sha256 `9f159a2a87a96101d5da63561bab8441dcb30821c7294b5572d500847ed74610`; the stock one is 21,808,479 bytes, sha256 `3abc7297…`. `Experiments/sepolicy-022/refresh_bundle.py` makes the bundle. It checks the source bundle first (its manifest signature verifies with the developer key, and its `SHA256SUMS` and entries match). It then replaces `boot/ramdisk.img` and rebuilds the file entries with `_file_entry`, the boot record and `validate`, `SHA256SUMS` with `_checksums`, and `manifest.sig` with `render_signature`, and it verifies the signature. The key is `~/.config/apkrun/dev-image-key`. The source is `/tmp/apkrun-099-vh-install-src/android-bundle`, the #099 variant. The output is `manifest.json` sha256 `cdf138fb…`, `SHA256SUMS` sha256 `169ad7a8…`, key id `55ab0dd032d0ce0e`. A shell `shasum -c` passes for all six files, and the manifest diff changes only the two `ramdisk` fields.
+
+**Reason.** `bundle-variant` replaces a logical partition in `super` and has no option for `boot/ramdisk.img` (`Images/tools/apkrun_image/bundle_variant.py`). Writing the hashes by hand is what the assignment forbids. The compressed bytes differ from the stock file, because the stock encoder is not known and level 12 gives the closest size. The frame format and the decompressed content are the same kind.
+
+## IR-946: The rule was applied to the running policy at runtime, because a boot-time image change needs an ODM partition and a `vbmeta_a` descriptor change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035; a follow-up task (number from GitHub, not filed here) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 and §6.6 |
+
+**Choice.** The boot ran the unedited image, so the guest loaded the stock ODM precompiled policy. The rule was applied afterwards, as root in the guest (`adb root`), by writing an edited policy to `/sys/fs/selinux/load` in one `dd` write. The first write was the monolithic edit with `read` only, a diagnostic (kernel policy-load record at 441.3 s). That edit was the running policy until the second write. The second write (kernel record at 527.3 s) was the ODM precompiled policy plus `open` and `read` (911,749 bytes, sha256 `cbcad711…`). That is the boot's precompiled policy plus exactly one rule (`avtab surfaceflinger sysfs file 0x0001 0x00040002`), and it is the policy in effect from 527.3 s. The boot-time route was not built. It would need the `odm_a` logical partition replaced and a refreshed hashtree descriptor for `odm` in `vbmeta_a`, since the top-level vbmeta carries one (`avbtool info_image` with the pinned avbtool). That is a larger change than this test, so it is a follow-up task (AGENTS §11).
+
+**Reason.** The assignment asked for a boot with the edited policy at boot time, which needs the ODM change. The live write gives the same rule in the same policy that the guest runs, so it tests the rule. It does not test the image. The SELinux mode was not changed: `getenforce` reported `Enforcing` before and after. `adb root` was used only to read the policy node and to write the load node. The load node takes one write, so `cat` failed with `EINVAL` (partial writes are refused) and `dd` with a single block succeeded.
+
+**Consequence.** #022 criterion 4 is not decided by this test. The boot-time image that the product needs is #035 or the follow-up.
+
+## IR-947: With the rule loaded at runtime, the drmVirgl boot reached `ready` under enforcing, which is evidence for #035 and not a criterion result
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 4, evidence only); #035 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 (Notes); [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The result is recorded as evidence for #035, and no criterion of #022 is ticked. The boot log is `/tmp/apkrun-022-sepol-boot.log`, from `apkrun dev boot --gpu virgl --console` (`APKRUN_HOME` a fresh scratch home with the repacked bundle installed, `APKRUN_GUEST_DIR=/tmp/apkrun-099-vh-guest`, `APKRUN_VIRGL_RUNTIME_PATH=/tmp/apkrun-099-vh-virgl-runtime`, the CLI copy `/tmp/apkrun-099-vh-bin/apkrun`). The lines:
+
+- `state: ready`
+- `Android is ready after 539.656809708 seconds`
+- `init: processing action (sys.boot_completed=1)` at 536.8 s (console log). `getprop sys.boot_completed` returned `1` in the adb session (output not saved).
+- `dumpsys SurfaceFlinger` (adb session, output not saved): `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`. The saved logcat has the same renderer from the surviving SurfaceFlinger process (pid 11814): `10-11 14:55:35.972 11814 11825 I SurfaceFlinger: renderer  : virgl` and `… version   : OpenGL ES 3.0 Mesa 26.1.8`.
+- Enforcement: the kernel records `type=1404 … enforcing=1` at boot (console lines 132 and 877 of the log) and no later change. `getenforce` in the adb session printed `Enforcing` (output not saved).
+- SurfaceFlinger maps `/vendor/lib64/egl/libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so` and `libgallium_dri.so`, and no SwiftShader or ANGLE library.
+
+The uevent denials are dated from the console log. The kernel's policy-load records (`type=1403`) are at 441.3 s (the first write) and 527.3 s (the second). The last `read` denial was at 440.4 s, just before the first write, and the `open` denials ran from 445.4 s to 525.5 s. SurfaceFlinger's last abort was at 525.5 s, after an `open` denial, and none followed it. The SurfaceFlinger process that started after the second write logged 36 `getattr` denials at 530.5 s, and they did not stop the boot. The `read` and `open` denials had stopped before the second write, because SurfaceFlinger was not running in that window; the cause of the earlier gap in the `open` denials (before 445.4 s) was not determined. The guest logcat is kept at `/tmp/apkrun-022-sepol-logs/logcat-20261011T144644Z.log`.
+
+**Reason.** One boot, under the lock, with the rule loaded at runtime. The result says that the rule added to the boot's precompiled policy is enough for SurfaceFlinger to start with the virgl renderer, under enforcing, in this boot. It is not a boot of a changed image, so criterion 4 of #022 (which names the drmVirgl boot) keeps its state.
+
+## IR-948: The boot was stopped with SIGINT to the apkrun process, and the exit status was 1; an earlier SIGINT went to a wrapper by mistake
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (stop path of the experiment) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (Ctrl-C stops Android gracefully) |
+
+**Choice.** The boot was stopped with SIGINT to `apkrun dev boot` (not to `lockf`). The log shows `state: stopping`, then the guest's `reboot: Power down`, then `state: stopped`. The task reported exit status 1, and the log has no error line. No apkrun, `lockf`, or Virtualization process was left. Earlier, a `pgrep` pattern also matched the zsh wrapper that started the boot (`lockf` was its child), so one SIGINT was sent to that wrapper. The boot did not stop on it and kept running until the SIGINT to the apkrun process.
+
+**Reason.** IR-763 recorded `boot-exit=0` for a SIGINT in another run. This run's status of 1 has no error line in the log, and its cause is not known. Whether a user stop should exit 0 is for the maintainer, under cli.md §5. The wrong target was a mistake in this run's shell, and it did not change the boot.
+
+**Consequence.** The stop path's exit status is an open question. The VM count was one boot of the two allowed.

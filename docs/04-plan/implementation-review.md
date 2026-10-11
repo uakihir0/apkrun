@@ -15399,7 +15399,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** An edited policy cannot be built or checked on this host. The check that matters is the AOSP build of #035.
 
-## IR-901: Four of the marked ports are read by product HALs, so the marker check cannot use them without a product change
+## IR-907: Four of the marked ports are read by product HALs, so the marker check cannot use them without a product change
 
 | Field | Value |
 |---|---|

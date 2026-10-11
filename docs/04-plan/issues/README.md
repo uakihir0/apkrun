@@ -245,7 +245,7 @@ drain before invalidation (`537731c`, `efc4fef`); the #099 offline Mesa injectio
 steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
 `4c6b7c0`); and the #016 PackageInstaller tick (`3d0031e`).
 
-**Note on IR-901.** Two entries use this number. The first, "No SELinux compiler is available
+**Note on IR-901.** The number IR-901 is used by the SELinux compiler entry only. The HAL-port entry was renumbered to IR-907 to remove the duplicate.
 offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product
 HALs", was added by `213984d`; its Affected documents cite IR-899, which does not exist. Both are
 kept as they are until a maintainer decides the numbering.

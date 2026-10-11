@@ -151,12 +151,12 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// The consumer displayed frame `sequence` (display-and-windowing.md §5.2, rule 2). Older buffers become reusable,
     /// and a held flush starts when a buffer is free.
     public func frameDisplayed(upTo sequence: UInt64) {
-        let work = lock.withLock { () -> VirGLRenderWork? in
+        lock.withLock {
             pool.consumerDisplayed(upTo: sequence)
-            return startPendingLocked()
-        }
-        if let work {
-            backend.submitRenderWork(work)
+            // Submitted under the lock, so a close that follows queues its target release after this blit.
+            if let work = startPendingLocked() {
+                backend.submitRenderWork(work)
+            }
         }
     }
 
@@ -272,29 +272,27 @@ public final class ScanoutPresenter: @unchecked Sendable {
 
     /// The blit of `index` finished on the GPU: the buffer is offered, and `frameReady` is emitted.
     private func blitCompleted(index: Int, sequence: UInt64) {
-        let work = lock.withLock { () -> VirGLRenderWork? in
+        lock.withLock {
             pool.markReady(index, sequence: sequence)
             scheduler.endBlit()
             statisticsValue.framesPresented &+= 1
             statisticsValue.droppedFrames = scheduler.droppedFrames
             continuation.yield(.frameReady(generation: pool.generation, bufferIndex: index, sequence: sequence))
-            return startPendingLocked()
-        }
-        if let work {
-            backend.submitRenderWork(work)
+            if let work = startPendingLocked() {
+                backend.submitRenderWork(work)
+            }
         }
     }
 
     /// The blit of `index` failed, so the buffer is free again and no frame is offered.
     private func blitFailed(index: Int) {
-        let work = lock.withLock { () -> VirGLRenderWork? in
+        lock.withLock {
             pool.abandon(index)
             scheduler.endBlit()
             statisticsValue.failedBlits &+= 1
-            return startPendingLocked()
-        }
-        if let work {
-            backend.submitRenderWork(work)
+            if let work = startPendingLocked() {
+                backend.submitRenderWork(work)
+            }
         }
     }
 }

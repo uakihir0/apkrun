@@ -110,6 +110,11 @@ struct LatestFrameScheduler<Request: Sendable>: Sendable {
             hold(request)
             return nil
         }
+        // A request that starts now supersedes the held one, which would otherwise run after the newest frame.
+        if pending != nil {
+            droppedFrames &+= 1
+            pending = nil
+        }
         return request
     }
 

@@ -198,6 +198,7 @@ final class GuestGPUSession {
         for (scanout, bound) in scanoutBindings where bound == id {
             scanoutBindings.removeValue(forKey: scanout)
             scanoutRects.removeValue(forKey: scanout)
+            presenters[scanout]?.guestReset()
         }
         guard path == .virgl else { return succeeded() }
         return succeeded(renderWork: { engine in
@@ -215,6 +216,8 @@ final class GuestGPUSession {
         guard scanout < UInt32(VirtioGPUProtocol.scanoutCount) else {
             return failed(.invalidScanoutID)
         }
+        // A held frame names the resource that this SET_SCANOUT replaces, so it is discarded (#023).
+        presenters[Int(scanout)]?.guestReset()
         if resource == 0 {
             scanoutBindings.removeValue(forKey: Int(scanout))
             scanoutRects.removeValue(forKey: Int(scanout))

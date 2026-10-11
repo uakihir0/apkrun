@@ -146,3 +146,15 @@ import Testing
     #expect(scheduler.pending == nil)
     #expect(scheduler.droppedFrames == 0)
 }
+
+@Test func aRequestThatStartsNowSupersedesAHeldOne() {
+    var scheduler = LatestFrameScheduler<Int>()
+    // A request was held while no buffer was free. A new request starts now, so the held one must not run later.
+    scheduler.hold(1)
+    let started = scheduler.submit(2)
+    #expect(started == 2)
+    #expect(scheduler.pending == nil)
+    #expect(scheduler.droppedFrames == 1)
+    let leftover = scheduler.takePending()
+    #expect(leftover == nil)
+}

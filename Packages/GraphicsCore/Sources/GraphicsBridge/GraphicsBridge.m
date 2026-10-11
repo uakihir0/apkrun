@@ -1091,6 +1091,17 @@ void gb_present_target_destroy(gb_renderer *renderer, gb_present_target *target)
     if (gb_present_enter_root(renderer, &saved)) {
         gb_present_release_objects(renderer, target);
         gb_present_leave_root(renderer, &saved);
+    } else {
+        // Without the root context the GL names cannot be deleted, but the EGL image and the Metal texture can
+        // still be released, so they do not leak.
+        if (target->image != EGL_NO_IMAGE_KHR) {
+            (void)renderer->present_egl.destroy_image(renderer->display, target->image);
+            target->image = EGL_NO_IMAGE_KHR;
+        }
+        if (target->metal_texture != NULL) {
+            (void)CFBridgingRelease(target->metal_texture);
+            target->metal_texture = NULL;
+        }
     }
     free(target);
 }

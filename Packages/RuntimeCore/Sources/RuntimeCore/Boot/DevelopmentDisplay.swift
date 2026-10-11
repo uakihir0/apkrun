@@ -102,8 +102,11 @@ public final class DevelopmentDisplay: @unchecked Sendable {
         )
     }
 
-    /// Ends the events. The device closes the presenter when the VM stops, and the boot calls this when it ends.
+    /// Ends the events, and closes the presenter. The boot calls this when it ends, so a boot that fails before the VM
+    /// starts releases the presenter's targets too. Closing twice is harmless.
     public func finish() {
+        let presenter = lock.withLock { self.presenter }
+        presenter?.close()
         continuation.finish()
     }
 }

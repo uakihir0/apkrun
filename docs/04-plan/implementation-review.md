@@ -16210,3 +16210,17 @@ Round 2 (after the third boot): a second reviewer found eight items, and each is
 
 **Reason.** The three boots did not reach these points, or they are outside this task.
 
+## IR-1000: Decide the #095 port scope and the AOSP builder without waiting for the user
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095, #035, #099 |
+| Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #095 criterion (a); IR-907; IR-960; [environment-setup.md](../05-development/environment-setup.md) §5 |
+
+**Choice.** (1) Keep #095 criterion (a) open. The four ports hvc5, hvc8, hvc9 and hvc12 stay in the criterion, and their markers are not checked, because a product HAL owns them. (2) Do not provision the AOSP builder now. Development continues on the stock image with overlays (IR-960). The builder is provisioned when a release image is needed.
+
+**Reason.** (1) Changing the criterion's definition would change the specification, and the markers cannot be read on those ports without stopping a product service, which is a product change. Keeping the criterion open is the rigorous choice. (2) The full Android build is needed only for a release, and the overlay route already reaches the drmVirgl boot, eglInitialize, and the tap checks on the test variant (IR-960 to IR-999).
+
+**Verification.** The 13-port result and the 4-port exclusion are in IR-901, IR-907, and IR-899. The overlay results are in IR-949 to IR-999.
+

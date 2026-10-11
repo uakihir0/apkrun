@@ -16432,3 +16432,19 @@ Counts in the same log: `no suitable EGLConfig found` 0, `F SurfaceFlinger` 0, `
 **Reason.** The coordinator set the rule before the boot: if the reference bundle prints the Mesa vendor and version with this build, the failure is the other bundle. The result matches, and no EGLConfig error appears in either boot of the build without the window.
 
 **Verification.** `/tmp/apkrun-023/evidence/boot4-sf-lines.txt` and `boot4.err`.
+
+## IR-1113: The Android display is visible in the development window on the reference bundle; criterion 1 of #023 is ticked
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 1, status); [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** Criterion 1 (the Android display is visible in a macOS window) is ticked. The screenshot shows the Android lock screen in the window, not the dark test surface of the earlier boots. The window was captured with `screencapture -x -o -l 9128`, and the file is `/tmp/apkrun-023/boot5-window-ready.png` (copy in `/tmp/apkrun-023/evidence/`). The screenshot shows, in order from the top: the window title bar (`APKRun display 0`, then the statistics text, truncated at the right edge); a status bar with a Wi-Fi icon and a battery at 85 percent with a charging bolt; a large clock reading 8:29; the date `Sun, Oct 11`; a notification card titled `Notification cooldown is now...` with the text `Your device volume and alerts are reduce...`; and at the bottom a lock icon with `Unlock for all features and data`. The text is upright, so the window's orientation is correct.
+
+Boot, `apkrun dev boot --gpu virgl --window --stats --console`, bundle `/tmp/apkrun-odmc/odm4/bundle/android-bundle` (IR-1112), built from the code of `0c9785e`. `state: ready` was reached. SurfaceFlinger printed `vendor    : Mesa` and `version   : OpenGL ES 3.0 Mesa 26.1.8` at 20:28:15.532, and `no suitable EGLConfig` did not occur. The statistics were read from the 101 `--stats` lines on standard error: the peak frame rate was 36 fps, and `dropped`, `stalls`, `hostReadbacks`, and `cpuPixelCopies` were 0 in every line. SIGINT stopped the boot (`stopping`, then `stopped`), and no VM process was left.
+
+**Caveats.** The displayed screen is the lock screen, reached after boot. HelloGL was not run, so the criteria that need it (2, 3 over a 60 s HelloGL run, 6, 7, and 8) are not ticked. The counter zeros are observed over the whole boot, not over the 60 s HelloGL run that criterion 3 asks for. Criterion 2's `drmVirgl` profile was used, but the HelloGL `renderer` event was not observed.
+
+**Reason.** The rule for this step is that the screenshot must show the Android display. The screenshot shows it, so the criterion is ticked on that evidence alone.

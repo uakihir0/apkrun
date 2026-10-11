@@ -54,7 +54,7 @@ enum ConsolePortMarkerPlan {
 
     /// The guest command that starts one reader per marked port in the background, and returns at once.
     ///
-    /// A reader opens its port (`exec 3<`) and then writes `ready-<port>`, so the host writes only after the port has a
+    /// A reader opens its port (`exec 3<`) and then writes `ready-<port>`, so a ready file shows that the port has a
     /// reader. The reader is `cat` under `timeout`: it copies what arrives into `out-<port>` and ends by itself.
     static func readerCommand(timeoutSeconds: Int) -> String {
         let readers = markedPorts.map { port in
@@ -135,13 +135,15 @@ enum ConsolePortCheckFailure: Error, CustomStringConvertible {
     case forwarderHasNoPort
     case guestNotReady(String)
     case controllerMissing
+    case adbBridgeMissing
 
     var description: String {
         switch self {
         case .instanceMissing: "the instance was not provisioned for the marker check"
         case .forwarderHasNoPort: "the loopback forwarder did not bind a port"
-        case .guestNotReady(let detail): "the Android guest did not finish booting: \(detail)"
+        case .guestNotReady(let detail): "the Android guest did not answer over ADB: \(detail)"
         case .controllerMissing: "the VM controller is not running"
+        case .adbBridgeMissing: "the ADB bridge is not running"
         }
     }
 }
@@ -150,11 +152,12 @@ enum ConsolePortCheckFailure: Error, CustomStringConvertible {
 ///
 /// The boot uses the product path up to the definition: the signed image, the instance, and the planner. The console
 /// roles are then changed in the test's definition only, so that the host can write to every marked port. The product
-/// layout and the supervisor are not changed. The ADB bridge is the supervisor's (RuntimeSupervisor.startADBBridge).
+/// layout and the supervisor are not changed. The ADB bridge copies the supervisor's (RuntimeSupervisor.startADBBridge,
+/// which is private).
 ///
-/// The supervisor's sensors responder on hvc18 is not run here. Its channel acknowledgements are package-scoped, so the
-/// test cannot run it faithfully, and without it the sensors HAL retries and the Android boot may not finish (IR-894).
-/// The marker check does not depend on the boot finishing.
+/// The supervisor's sensors responder on hvc18 is not run here, because its replies are written to hvc18, which this
+/// check does not write (IR-871). Without it the sensors HAL retries and the Android boot may not finish (IR-894). The
+/// marker check does not depend on the boot finishing.
 private final class ConsolePortMarkerBoot {
     /// The guest's ADB port on vsock, as the supervisor uses it (RuntimeSupervisor.developmentADBGuestPort).
     private static let guestADBPort: UInt32 = 5555
@@ -318,7 +321,7 @@ private final class ConsolePortMarkerBoot {
 
     private func requireADB() throws -> AdbClient {
         guard let adb else {
-            throw ConsolePortCheckFailure.guestNotReady("the ADB bridge is not running")
+            throw ConsolePortCheckFailure.adbBridgeMissing
         }
         return adb
     }
@@ -349,7 +352,7 @@ final class ConsolePortMarkerPlanTests: XCTestCase {
         XCTAssertEqual(Set(markers).count, markers.count)
     }
 
-    func testTestLayoutGivesHostInputOnlyToMarkedPorts() {
+    func testTestLayoutGivesHostInputToEveryMarkedPort() {
         let product: [ConsolePortDefinition] =
             [ConsolePortDefinition(role: .systemConsole)]
             + (1..<18).map { ConsolePortDefinition(role: .silent(name: "port-\($0)")) }

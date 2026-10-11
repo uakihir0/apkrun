@@ -19,6 +19,7 @@ COMMANDS = {
     "inspect": "Inspect an Android image file.",
     "keygen": "Create the Ed25519 key pair that signs runtime image bundles.",
     "manifest": "Generate or validate an Android image manifest.",
+    "vendor-reseal": "Reseal the injected vendor_a and refresh its descriptor in vbmeta_a (#099).",
 }
 
 # Command names that are not valid module names map to their module.
@@ -26,6 +27,7 @@ MODULES = {
     "bundle-variant": "bundle_variant",
     "erofs-tools": "erofs",
     "inject-vendor": "vendor_inject",
+    "vendor-reseal": "vendor_reseal",
 }
 
 

@@ -14673,3 +14673,39 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The footer is made with `--do_not_generate_fec` by the new `python3 -m apkrun_image vendor-reseal` (module `apkrun_image/vendor_reseal.py`), the same as `inject-vendor` (IR-624). The stock `vendor_a` has FEC with two roots, and the resealed one has no FEC fields. The tool takes the block size, hash algorithm, salt, and partition name from the stock footer, and the footer is `NONE`. Decision needed: whether a pinned `fec` tool is added (a third-party component with runtime impact, so it needs an ADR under §6.6), or whether the product verity stays without FEC.
 
 **Reason.** avbtool makes the FEC data with an external `fec` tool, and `ThirdParty/ThirdParty.lock.json` does not pin one. A hash tree that verifies needs no FEC, because FEC only repairs blocks that fail their hash. The FEC errors of the logging-mode boot (IR-727 and IR-728 on `task/099-vm-variant-check`) came from the stale descriptor of IR-741, not from a missing repair path. Verity is kept on, so the missing FEC is a loss of repair only, not of checking.
+
+## IR-743: The stock vbmeta's vendor descriptor is replaced by the new footer's with the vendored `update_partition_descriptor`, and the stock rollback index is passed explicitly
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 3) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-741 |
+
+**Choice.** `vendor_reseal.refresh_vbmeta` runs `avbtool update_partition_descriptor` on the stock `vbmeta_a`, with the resealed `vendor_a.img` as the partition image. The rollback index is the stock one (1,780,617,600), passed explicitly. The blob is padded with zeros to the size of the stock partition (12,288 bytes). The result must keep the stock rollback index, the flags, and the rollback index location, and every descriptor other than the vendor hashtree must be the stock one (chain partitions, the `vendor_boot` hash descriptor, and the properties). The vendor descriptor must equal the new footer's. Decision needed: none for the method; the rollback index is a value that the guest may compare later.
+
+**Reason.** The avbtool command replaces the descriptor with the encoder that wrote the stock vbmeta, so no byte of the header or of the descriptors is hand-edited. Its `--rollback_index` default is 0, which would lower the stock index, so the value is taken from the stock image. The record shows a blob of 7,936 bytes: the authentication block and the RSA public key (1,024 bytes of the auxiliary block) go away with the signature, and the rest is the stock descriptors.
+
+## IR-744: The refreshed top-level vbmeta is unsigned (`NONE`), and the signing choice of IR-650 stays open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 3; the boot of step 5 decides it) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; IR-650; IR-625 |
+
+**Choice.** The refreshed `vbmeta_a` is written with algorithm `NONE`, as the first try the task asks for. The stock vbmeta is `SHA256_RSA4096` with the AOSP test key (public key SHA-1 `2597c218…`). Its private key is not in this repository, so the vbmeta cannot be signed again here, and `NONE` is the only option without a key. The guest decides whether it accepts an unsigned top-level vbmeta, and step 5 records the answer. If it refuses `NONE`, the next choice is a key the guest trusts, or the test key, and that is a decision for the maintainer (IR-650), not for this run.
+
+**Reason.** IR-650 lists the key as a trust decision. The task asks to try `NONE` first and to record what the guest accepts only after a boot. The variant's `manifest.sig` is still made with the developer image key (IR-702), so the bundle's own integrity check is unchanged.
+
+## IR-745: The file-name guard allows `vbmeta_a.img` as the fixed output name of `vendor_reseal.py`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 3) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** `tests/test_no_file_names.py` lists `vbmeta_a.img` as the one fixed output name of `vendor_reseal.py`, next to `vendor_a.img` of `vendor_inject.py` (IR-633). The module's input names still come from the stock bundle and its manifest, and no input name is written in the code. Decision needed: whether the output names should move to one shared constant module.
+
+**Reason.** The guard exists to stop code that assumes the names of Android inputs. An output name chosen by the tool is the case the guard already allows for `vendor_a.img`, so the rule is kept, and only the new output is added.

@@ -1,27 +1,50 @@
-"""Reseal the injected vendor partition with a fresh hashtree footer (#099, step 2).
+"""Reseal the injected vendor partition and refresh its descriptor in the stock vbmeta (#099).
 
-The injected `vendor_a` that `inject-vendor` writes has a footer of its own. The tool takes the
-injected image up to the original image size that the footer records (the EROFS image), and it
-appends a fresh hashtree footer with the vendored avbtool (IR-624). The data and hash block sizes,
-the hash algorithm, the salt, and the partition name are the stock footer's, and the footer is
-`NONE`. No FEC is made, because the `fec` tool is not pinned (IR-740). The size of the partition is
-the size of the stock partition in `super`, so the super metadata does not change.
+The inputs are the `vendor_a.img` that `inject-vendor` writes, the stock `vendor_a` and the stock
+top-level `vbmeta_a` (both read from the stock bundle). The tool writes two images with the
+vendored avbtool (IR-624), and it writes nothing else:
 
-The new image is checked with `info_image` and `verify_image`. It is written only after the checks
-pass, and the tool never boots anything.
+1. `vendor_a.img`: the injected EROFS image, up to the original image size that its footer records,
+   with a fresh hashtree footer. The data and hash block sizes, the hash algorithm, the salt, and
+   the partition name are the stock footer's. The footer is `NONE`, and no FEC is made, because the
+   `fec` tool is not pinned (IR-740). The size is the size of the stock partition in `super`.
+2. `vbmeta_a.img`: the stock top-level vbmeta with its vendor hashtree descriptor replaced by the
+   descriptor of the new footer (`avbtool update_partition_descriptor`). The vbmeta is unsigned
+   (`NONE`, IR-744). It keeps the stock rollback index, and every other descriptor is kept. The
+   blob is padded with zeros to the size of the stock file.
+
+Both images are checked with `info_image`, and the new footer is checked with `verify_image`. The
+outputs are moved into the output directory only after every check passes. The tool never boots.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import shutil
+import sys
+import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from apkrun_image.erofs import sha256_file
-from apkrun_image.vendor_inject import VERITY_PARTITION, run_avbtool
+from apkrun_image.erofs import load_component, sha256_file
+from apkrun_image.manifest import _repository_root
+from apkrun_image.vendor_inject import (
+    AVBTOOL_COMPONENT,
+    OUTPUT_IMAGE,
+    VERITY_PARTITION,
+    _ensure_output,
+    run_avbtool,
+    verify_avbtool,
+)
 
+TASK = "#099"
+SCHEMA_VERSION = 1
 PARTITION = VERITY_PARTITION
 ALGORITHM = "NONE"
+OUTPUT_VBMETA = "vbmeta_a.img"
+OUTPUT_RECORD = "reseal.json"
 COPY_CHUNK = 64 * 1024 * 1024
 DESCRIPTOR_FIELDS = (
     "partition",
@@ -110,6 +133,14 @@ def descriptor_blocks(info_text: str) -> list[tuple[str, tuple[str, ...]]]:
             header, body = blocks[-1]
             blocks[-1] = (header, (*body, line))
     return blocks
+
+
+def _is_vendor_block(block: tuple[str, tuple[str, ...]]) -> bool:
+    header, body = block
+    if header != "Hashtree descriptor:":
+        return False
+    names = [line.partition(":")[2].strip() for line in body if line.startswith("Partition Name:")]
+    return names == [PARTITION]
 
 
 def _vendor_tree(info_text: str, what: str) -> dict[str, Any]:
@@ -210,3 +241,173 @@ def reseal_vendor(
     }
 
 
+def refresh_vbmeta(
+    avbtool: Path, stock_vbmeta: Path, vendor: Path, output: Path, scratch: Path
+) -> dict[str, Any]:
+    """Write the stock vbmeta with the descriptor of `vendor` to `output`; return the record."""
+    stock_info = _info(avbtool, stock_vbmeta)
+    stock_top = parse_top(stock_info)
+    stock_tree = _vendor_tree(stock_info, "the stock vbmeta_a")
+    rollback = stock_top.get("Rollback Index")
+    if rollback is None:
+        raise ResealError("the stock vbmeta_a has no rollback index.")
+    partition_size = stock_vbmeta.stat().st_size
+
+    raw = scratch / "vbmeta-raw.bin"
+    run_avbtool(
+        avbtool,
+        [
+            "update_partition_descriptor",
+            "--image",
+            str(stock_vbmeta),
+            "--partition_image",
+            str(vendor),
+            "--output",
+            str(raw),
+            "--algorithm",
+            ALGORITHM,
+            "--rollback_index",
+            rollback.split()[0],
+        ],
+    )
+    blob = raw.read_bytes()
+    if len(blob) > partition_size:
+        raise ResealError("the refreshed vbmeta is larger than the stock partition.")
+    padded = scratch / "vbmeta-padded.bin"
+    padded.write_bytes(blob + bytes(partition_size - len(blob)))
+
+    new_info = _info(avbtool, padded)
+    new_top = parse_top(new_info)
+    if new_top.get("Algorithm") != ALGORITHM:
+        raise ResealError("the refreshed vbmeta is not NONE.")
+    for key in ("Rollback Index", "Rollback Index Location", "Flags", "Minimum libavb version"):
+        if new_top.get(key) != stock_top.get(key):
+            raise ResealError(f"the refreshed vbmeta changed its {key}.")
+    vendor_tree = _vendor_tree(_info(avbtool, vendor), "the resealed vendor_a")
+    new_tree = _vendor_tree(new_info, "the refreshed vbmeta_a")
+    if new_tree != vendor_tree:
+        raise ResealError("the refreshed vbmeta does not carry the descriptor of the new footer.")
+    stock_others = [b for b in descriptor_blocks(stock_info) if not _is_vendor_block(b)]
+    new_others = [b for b in descriptor_blocks(new_info) if not _is_vendor_block(b)]
+    if stock_others != new_others:
+        raise ResealError("the refreshed vbmeta changed a descriptor other than the vendor one.")
+    shutil.move(str(padded), output)
+    return {
+        "rollbackIndex": int(rollback.split()[0]),
+        "blobSize": len(blob),
+        "previousVendorDescriptor": stock_tree,
+        "vendorDescriptor": new_tree,
+    }
+
+
+def reseal(
+    *,
+    injected: Path,
+    stock_vendor: Path,
+    stock_vbmeta: Path,
+    output_directory: Path,
+    repository: Path | None = None,
+) -> dict[str, Any]:
+    """Write `vendor_a.img`, `vbmeta_a.img`, and `reseal.json` to a new output directory."""
+    root = _repository_root() if repository is None else repository
+    directory = _ensure_output(output_directory, root)
+    avbtool = verify_avbtool(root, load_component(AVBTOOL_COMPONENT))
+    stock_footer_root = _vendor_tree(_info(avbtool, stock_vendor), "the stock vendor_a")[
+        "rootDigest"
+    ]
+    if (
+        _vendor_tree(_info(avbtool, stock_vbmeta), "the stock vbmeta_a")["rootDigest"]
+        != stock_footer_root
+    ):
+        raise ResealError("the stock vendor footer and the stock vbmeta_a disagree on the root.")
+    injected_tree = _vendor_tree(_info(avbtool, injected), "the injected vendor_a")
+
+    with tempfile.TemporaryDirectory(prefix="apkrun-099-reseal-") as name:
+        scratch = Path(name)
+        vendor_out = scratch / OUTPUT_IMAGE
+        vbmeta_out = scratch / OUTPUT_VBMETA
+        vendor = reseal_vendor(avbtool, injected, stock_vendor, vendor_out, scratch)
+        vbmeta = refresh_vbmeta(avbtool, stock_vbmeta, vendor_out, vbmeta_out, scratch)
+        record: dict[str, Any] = {
+            "schemaVersion": SCHEMA_VERSION,
+            "task": TASK,
+            "partition": {"name": PARTITION, "size": stock_vendor.stat().st_size},
+            "injected": {
+                "sha256": sha256_file(injected),
+                "size": injected.stat().st_size,
+                "originalImageSize": vendor["originalImageSize"],
+                "rootDigest": injected_tree["rootDigest"],
+            },
+            "stock": {
+                "vendorSha256": sha256_file(stock_vendor),
+                "vendorRootDigest": stock_footer_root,
+                "vbmetaSha256": sha256_file(stock_vbmeta),
+                "vbmetaSize": stock_vbmeta.stat().st_size,
+            },
+            "vendor": {
+                "file": OUTPUT_IMAGE,
+                "sha256": sha256_file(vendor_out),
+                "size": vendor_out.stat().st_size,
+                "originalImageSize": vendor["originalImageSize"],
+                "descriptor": vendor["tree"],
+                "identicalToInjected": vendor["identicalToInjected"],
+            },
+            "vbmeta": {
+                "file": OUTPUT_VBMETA,
+                "sha256": sha256_file(vbmeta_out),
+                "size": vbmeta_out.stat().st_size,
+                "algorithm": ALGORITHM,
+                **vbmeta,
+            },
+            "decisions": {
+                "fec": "not generated, because the fec tool is not pinned (IR-740)",
+                "topLevelSignature": "NONE, the vbmeta is not signed again (IR-744)",
+                "rollbackIndex": "kept from the stock vbmeta_a (IR-743)",
+            },
+            "verifiedByAvbtool": True,
+        }
+        for file_name, source in ((OUTPUT_IMAGE, vendor_out), (OUTPUT_VBMETA, vbmeta_out)):
+            target = directory / file_name
+            if target.exists() or target.is_symlink():
+                raise ResealError(f"{target}: the output already exists")
+            shutil.move(str(source), target)
+        (directory / OUTPUT_RECORD).write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return record
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command parser."""
+    parser = argparse.ArgumentParser(
+        prog="python -m apkrun_image vendor-reseal",
+        description="Reseal the injected vendor_a and refresh the vendor descriptor of vbmeta_a.",
+    )
+    parser.add_argument(
+        "--injected", type=Path, required=True, help="the vendor_a.img of inject-vendor"
+    )
+    parser.add_argument("--stock-vendor", type=Path, required=True, help="the stock vendor_a")
+    parser.add_argument("--stock-vbmeta", type=Path, required=True, help="the stock vbmeta_a")
+    parser.add_argument(
+        "--out", type=Path, required=True, help="a new or empty directory outside the repository"
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Reseal the vendor partition and print a summary."""
+    arguments = build_parser().parse_args(list(sys.argv[1:] if argv is None else argv))
+    try:
+        record = reseal(
+            injected=arguments.injected,
+            stock_vendor=arguments.stock_vendor,
+            stock_vbmeta=arguments.stock_vbmeta,
+            output_directory=arguments.out,
+        )
+    except (ValueError, OSError) as error:
+        # ResealError and InjectError are ValueErrors; the rest is I/O.
+        print(f"vendor-reseal: {error}", file=sys.stderr)
+        return 1
+    print(f"vendor-reseal: wrote {record['vendor']['file']} ({record['vendor']['size']} bytes)")
+    print(f"vendor-reseal: wrote {record['vbmeta']['file']} ({record['vbmeta']['size']} bytes)")
+    return 0

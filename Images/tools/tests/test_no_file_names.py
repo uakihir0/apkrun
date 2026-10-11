@@ -17,6 +17,9 @@ def test_apkrun_image_sources_do_not_embed_image_file_names() -> None:
         # The injected partition is written under this fixed name (#099, IR-633). No input name is
         # assumed; the output name is the tool's own.
         "vendor_inject.py": {"vendor_a.img"},
+        # The refreshed top-level vbmeta is written under this fixed name (#099, IR-745). The
+        # input names come from the stock bundle and the manifest, not from this name.
+        "vendor_reseal.py": {"vbmeta_a.img"},
     }
 
     for path in sorted(package_directory.glob("*.py")):

@@ -13,7 +13,12 @@
  *       Write <out> with "allow <source> <target>:<class> { <perm> };" added (ORed into an
  *       existing allow entry for the same key when one exists).
  *   policy_edit query <in> <source-type> <target-type> <class> <perm>
- *       Print ALLOWED or DENIED for the allow rule. Exit 0 when allowed, 1 when not.
+ *       Print ALLOWED or DENIED for the allow rule. A rule whose source or target is an attribute
+ *       counts for every type in it (the binary policy keeps attribute rules unexpanded, IR-990).
+ *       The matching rule is printed. Exit 0 when allowed, 1 when not.
+ *   policy_edit trans <in> <source-type> <target-type> <class>
+ *       Print the type_transition result of the three names (with attributes, as for query).
+ *       Exit 0 when a transition exists, 1 when not.
  */
 
 #include <errno.h>
@@ -24,6 +29,7 @@
 
 #include <sepol/handle.h>
 #include <sepol/policydb/avtab.h>
+#include <sepol/policydb/ebitmap.h>
 #include <sepol/policydb/hashtab.h>
 #include <sepol/policydb/policydb.h>
 
@@ -140,6 +146,15 @@ static void dump_policy(policydb_t *p)
 	}
 }
 
+/* True when a rule's type (a type or an attribute) covers the subject type: the subject is the
+ * rule's type, or the subject belongs to the attribute that the rule names. */
+static int type_matches(policydb_t *p, uint16_t subject, uint16_t rule_type)
+{
+	if (subject == rule_type)
+		return 1;
+	return ebitmap_get_bit(&p->type_attr_map[subject - 1], rule_type - 1);
+}
+
 static uint32_t type_value(policydb_t *p, const char *name)
 {
 	type_datum_t *type = hashtab_search(p->symtab[SYM_TYPES].table, name);
@@ -233,21 +248,68 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	if (argc == 7 && strcmp(argv[1], "query") == 0) {
-		avtab_datum_t *datum;
-		avtab_key_t key;
 		uint32_t bit;
-		int allowed;
+		uint16_t src, tgt, cls;
+		int allowed = 0;
+		uint32_t bucket;
 
 		p = load_policy(handle, argv[2]);
-		key = allow_key(p, argv[3], argv[4], argv[5]);
+		src = (uint16_t)type_value(p, argv[3]);
+		tgt = (uint16_t)type_value(p, argv[4]);
+		cls = (uint16_t)class_of(p, argv[5])->s.value;
 		bit = permission_bit(class_of(p, argv[5]), argv[6]);
-		datum = avtab_search(&p->te_avtab, &key);
-		allowed = datum && (datum->data & bit);
-		printf("%s allow %s %s:%s { %s }\n", allowed ? "ALLOWED" : "DENIED", argv[3],
-		       argv[4], argv[5], argv[6]);
+		for (bucket = 0; bucket < p->te_avtab.nslot && !allowed; bucket++) {
+			avtab_ptr_t node;
+
+			for (node = p->te_avtab.htable[bucket]; node && !allowed; node = node->next) {
+				if (node->key.specified != AVTAB_ALLOWED || node->key.target_class != cls)
+					continue;
+				if (!(node->datum.data & bit))
+					continue;
+				if (!type_matches(p, src, node->key.source_type) ||
+				    !type_matches(p, tgt, node->key.target_type))
+					continue;
+				printf("ALLOWED allow %s %s:%s { %s } by rule allow %s %s:%s\n", argv[3],
+				       argv[4], argv[5], argv[6],
+				       p->p_type_val_to_name[node->key.source_type - 1],
+				       p->p_type_val_to_name[node->key.target_type - 1], argv[5]);
+				allowed = 1;
+			}
+		}
+		if (!allowed)
+			printf("DENIED allow %s %s:%s { %s }\n", argv[3], argv[4], argv[5], argv[6]);
 		return allowed ? 0 : 1;
 	}
+	if (argc == 6 && strcmp(argv[1], "trans") == 0) {
+		uint16_t src, tgt, cls;
+		const char *result = NULL;
+		uint32_t bucket;
+
+		p = load_policy(handle, argv[2]);
+		src = (uint16_t)type_value(p, argv[3]);
+		tgt = (uint16_t)type_value(p, argv[4]);
+		cls = (uint16_t)class_of(p, argv[5])->s.value;
+		for (bucket = 0; bucket < p->te_avtab.nslot; bucket++) {
+			avtab_ptr_t node;
+
+			for (node = p->te_avtab.htable[bucket]; node; node = node->next) {
+				if (!(node->key.specified & AVTAB_TRANSITION) || node->key.target_class != cls)
+					continue;
+				if (!type_matches(p, src, node->key.source_type) ||
+				    !type_matches(p, tgt, node->key.target_type))
+					continue;
+				result = p->p_type_val_to_name[node->datum.data - 1];
+			}
+		}
+		if (result) {
+			printf("TRANSITION %s %s:%s -> %s\n", argv[3], argv[4], argv[5], result);
+			return 0;
+		}
+		printf("NO TRANSITION %s %s:%s\n", argv[3], argv[4], argv[5]);
+		return 1;
+	}
 	fprintf(stderr, "usage: policy_edit roundtrip <in> <out> | dump <in> | add <in> <out> "
-			"<src> <tgt> <class> <perm> | query <in> <src> <tgt> <class> <perm>\n");
+			"<src> <tgt> <class> <perm> | query <in> <src> <tgt> <class> <perm> | "
+			"trans <in> <src> <tgt> <class>\n");
 	return 2;
 }

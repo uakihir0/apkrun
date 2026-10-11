@@ -198,74 +198,56 @@ Gates G1–G9 are the project checkpoints. Their pass conditions are in [../road
 
 ## 5. Current progress
 
-**Updated:** 2026-10-09 UTC
-**Working branch:** `main` (this update: `task/064-vz-direct-boot`)
+**Updated:** 2026-10-11 UTC (state of `main` at `213984d`)
+**Working branch:** `main`
 
-Task entries remain the source of truth for scope and acceptance. This snapshot
-summarizes active work and review dependencies; acceptance checkboxes and
-verification records remain in each task entry.
-Every task with implementation, verification, or review work in progress must
-appear here. Update its row when a meaningful test, hostile review, blocker, or
-acceptance criterion changes, and keep implementation status separate from
-task completion.
+Task entries remain the source of truth for scope and acceptance. This section
+summarizes the work in progress on `main`. Its facts come from three sources:
+the acceptance checkboxes in each milestone file (counted per task by script),
+the IR entries that record open decisions, and the git log of `main`. The table
+lists every task in progress (some boxes ticked, some open), and #035 and #098,
+which have open decisions on `main` but no ticked box. The other 64 tasks with
+no ticked box are not listed. Tasks whose boxes are all ticked are listed in one
+line below the table.
 
-**Project position:** The repository is on GitHub (`uakihir0/apkrun`), and `main` is the
-working and default branch. Its CI runs are green (run `37759856146` onward; the final run on
-`9fea59c` passed all seven jobs). Branch protection requires the eight checks of IR-294. The
-task issues #001–#097 are mirrored as issues #2–#98 (IR-293). G1 passed from a clean `main`
-worktree (IR-272), and its evidence is on issue #4. #002 and #003 are closed as implemented with
-maintainer reviews open (IR-297). #062 criteria 1 and 13 are ticked. #061 waits only for OQ-04,
-which needs a standard account this host does not have. The Android chain is unblocked: the
-#064 stall was the nested-virtualization reference host, and the stock image boots directly on
-VZ. The 2026-10-08 spike (`Experiments/vz-android-boot/`) reached `VIRTUAL_DEVICE_BOOT_COMPLETED`
-in 7.5 s and passed the G2 conditions over five cold boots (IR-305, IR-306). #064 is re-scoped
-and no longer blocks #010, #011, or #013. On 2026-10-09 the product code (`apkrun dev boot`,
-ImageCore's boot planner, RuntimeCore's `RuntimeSupervisor`) passed the G2 conditions with
-five cold boots of 10 minutes each. That work is on the stacked, unpushed branches
-`task/064-vz-direct-boot` → `task/011-gpt-disks` → `task/012-android-kernel-boot`; the gate is
-recorded once the run passes from a clean `main` (`scripts/run-gate.sh G2`). #015 has not
-started.
+**Counts on `main`:** 96 tasks have a milestone entry (#001 to #095 and #099; #096 and
+#097 are post-v1 tracks). 22 have every box ticked, 9 are in progress
+(some boxes ticked and some open), and 65 have no ticked box. The IR log has 648
+entries, of which 635 are marked "Needs maintainer review". Two entries carry the number IR-901
+(see the note below the table).
 
-| Task | Status | Verified | Remaining |
+**Project position:** The task issues #001 to #097 are mirrored as issues #2 to #98 (IR-293).
+Branch protection on `main` requires the eight CI checks (IR-294). #002 and #003 are closed as
+implemented, with maintainer review open (IR-297). #014 (8 of 8) and #015 (6 of 6) are ticked on
+`main`; the clean-`main` G2 pass for #014 is recorded in `f064070`, and the final-`main` pass in
+`37a81b5`. The stock Android image boots directly on Virtualization.framework (IR-306).
+
+| Task | Boxes ticked on `main` | Open on `main` | IR records |
 |---|---|---|---|
-| #001 Bootstrap Xcode workspace | Implementation and recorded acceptance criteria complete | Full `swift test` suites passed with and without `--traits EmbeddedRuntime`, including the appropriate CLI root-help golden in each build; the original clean-checkout, Xcode build, and product smoke verification is recorded in M00 | No known implementation or acceptance gap |
-| #002 VMDefinition and VM validation | Implementation and acceptance complete; closed as implemented (IR-297). The hard dependency #061 step 4 is on `main` | Maintainer review of IR-242 |
-| #003 Boot minimal ARM64 Linux | Implementation and G1 gate complete; closed as implemented (IR-297). G1 ran from a clean `main` worktree at `bba2959`, report at `docs/04-plan/evidence/G1-bba2959-report.txt`, and is attached to issue #4. Ten G1 boots and the signed LinuxGuest suite passed 29/29 on `ef9b729` | The `linux-guest` CI box stays open (IR-295: no lab runner). Maintainer review of IR-243, IR-044, and IR-241 |
-| #061 Diagnostics foundation | Implementation complete on `codex`; 9 of 10 criteria ticked (commits `cebe49d` to `7e766b4`, plus `e49b888` for the CLI and GUI cause list rendering found by hostile review). `swift test` passed 90 DiagnosticsCore tests after the fix; the earlier full run passed 321 tests across 11 suites. `scripts/check-compile-fail.sh` passed on this Apple silicon host, and `apkrun logs`/`apkrun version` were verified. Earlier full-run evidence: a preceding run hit a VMController driver invariant assertion; the serial rerun passed without VMController changes. All six checks in `scripts/ci/run-checks.sh` passed when run alone; `scripts/check-compile-fail.sh`, generated Swift/Markdown checks, and `git diff --check` passed. Regressions cover redacted source URLs, repeated list codes with distinct per-item values, legacy generic fallback, transparent cause inheritance, and retired catalog entries. Live `apkrun version`, `apkrun logs`, and invalid-argument exit 64 were verified earlier. Detailed scope and acceptance: [M00 #061](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) | OQ-04 needs a standard (non-admin) account, which this host does not have, so it stays open. Maintainer review of IR-246/247 remains open. RuntimeAPI wire conversion and N−1 compatibility tests are assigned to #032. Keep #061 acceptance open until OQ-04 and maintainer review are complete. |
-| #020 Build graphics dependencies | All six criteria ticked in the task entry, from earlier work on `codex` | Acceptance evidence is recorded in M02 #020; no new evidence this session | Confirm the entry's Notes before formal closure | A preceding run hit a VMController driver invariant assertion; the serial rerun passed without VMController changes. All six checks in `scripts/ci/run-checks.sh` passed when run alone; `scripts/check-compile-fail.sh`, generated Swift/Markdown checks, and `git diff --check` passed. Regressions cover redacted source URLs, repeated list codes with distinct per-item values, legacy generic fallback, transparent cause inheritance, and retired catalog entries. Live `apkrun version`, `apkrun logs`, and invalid-argument exit 64 were verified earlier. Detailed scope and acceptance: [M00 #061](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) | OQ-04 still needs the non-admin `log show` observation and a recorded disposition. Maintainer review of IR-246/247 remains open. RuntimeAPI wire conversion and N−1 compatibility tests are assigned to #032. Keep #061 acceptance open until all criteria and maintainer review are complete. |
-| #033 Define GuestProtocol | Implemented on `main`: schema, Swift and Kotlin codecs, handshake rules, and golden frames. Review fixes are in. The hosted `lint` and `codegen` jobs passed on `9fea59c`, so the regeneration and `buf lint` box is ticked | Maintainer review of IR-260 to IR-268. The CI box is covered by the green `codegen` and `lint` jobs. The `ktfmtCheck` Kotlin job needs the Android SDK, which arrives with #015 |
-| #019 virtio-gpu device layer | Acceptance complete on `codex`: all seven criteria are ticked. Commits 4781b50 to 376bf4e carry the device model, codecs, scanout table, EDID generator, resource table, RuntimeCore attachment, `gpu` and `gpu-hotplug` checks, and the captured Linux driver trace. T0 and T1 pass (GraphicsCoreTests 69, GraphicsCoreSystemTests 4, RuntimeCoreTests 3). T2 `LinuxGuest` passed 29 of 29 on macOS 27.0.1 (26A434) after the pin bump (IR-258), on the final tree. R-01 spike positive for Linux. | Maintainer review of IR-248 to IR-257. R-01 stays open for Android (#028). |
-| #062 CI and module dependency checks | Complete on GitHub: branch protection on `main` requires the eight checks (IR-294), and the last full CI run on `9fea59c` passed all seven jobs. The negative test PR #1 failed `workflow-policy` as designed and was closed | Maintainer review of IR-273 to IR-292 (process and test-timing judgments). The `Integration tests` workflow needs a lab runner (IR-295) |
+| [#003 Boot minimal ARM64 Linux](M00-repository-and-vm-foundation.md#003-boot-minimal-arm64-linux) | 11 of 12 | The `linux-guest` T2 box stays open. There is no lab runner, and the decision is not to register one on this Mac. The lab workflows run on manual dispatch only. | IR-295, IR-313, IR-314, IR-297 |
+| [#010 Extract Android kernel and ramdisk](M01-android-bring-up.md#010-extract-android-kernel-and-ramdisk) | 6 of 7 | Each `(reference)` value must trace to a capture or a VZ observation. The `drm_virgl` values stay unconfirmed until #022 confirms them; the maintainer chooses between accepting the source-derived set and emptying it. | IR-400, IR-401, IR-404 |
+| [#016 Install HelloText APK](M01-android-bring-up.md#016-install-hellotext-apk) | 4 of 5 | The on-device check of the click and of the counter across a restart is not driven: the headless profile draws no window. The persistence contract is a JVM test (IR-333). No IR entry records the window problem; the criterion text is the record. | IR-333, IR-874, IR-875 |
+| [#022 Android VirGL](M02-graphics.md#022-android-virgl) | 2 of 6 | `dumpsys SurfaceFlinger` naming the virgl renderer, with no SwiftShader or ANGLE library; the §9 documentation and reproducibility; `sys.boot_completed=1` with `drmVirgl` (`guestSwiftshader` reached it, IR-801). The `drmVirgl` boot waits for the #035 sepolicy route. kmscube on the VM is ticked (IR-860). | IR-800, IR-801, IR-849, IR-850, IR-905 |
+| [#061 Diagnostics foundation](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) | 9 of 10 | OQ-04 (`log show` as a standard user) stays open. This host has no non-admin account. The limit is recorded in the [#061 Notes](M00-repository-and-vm-foundation.md#061-diagnostics-foundation) and in [open-questions.md](../open-questions.md). | IR-246, IR-247 (maintainer review pending) |
+| [#064 Reference boot capture](M01-android-bring-up.md#064-reference-boot-capture) | 2 of 6 | Re-scoped (IR-305). Open: the `default`, `target`, and `swiftshader` profiles with every §8.3 item (deferred); normalized captures with no serial numbers, MAC addresses, host paths, or keys; the serial-shell run of `guest-capture.txt` (part of #014 step 5); and a schema-version-3 `host.json` with path-free host-tool identities (deferred). | IR-305, IR-306, IR-269, IR-271, IR-184 |
+| [#072 Guest Agent bootstrap](M03-input-and-basic-runtime.md#072-guest-agent-bootstrap) | 3 of 7 | `apkrun dev boot` connects within 5 s of `sys.boot_completed`: not met as written, because the deadline starts after the install and the start. Reconnect and resync after a kill are T0 only, and the CLI does not show the error code. The signer case of replacement is T0 only. The isolation of a missing `SystemServices` method is T0 only. | IR-435, IR-438, IR-425, IR-431 |
+| [#095 Cuttlefish host-service substitution](M01-android-bring-up.md#095-cuttlefish-host-service-substitution) | 6 of 7 | Criterion 1 (all 20 console ports attached and numbered by `APKRUN-PORT` markers) stays open. The pinned test kernel exposes 8 `hvc` nodes, the `hvc` node is the marker channel, the 2026-10-11 run received two markers on the three host-input ports, and four marked ports are read by product HALs. | IR-372, IR-873, IR-877, IR-901 (second entry) |
+| [#099 Mesa-enabled VirGL guest image](M02-graphics.md#099-mesa-enabled-virgl-guest-image) | 1 of 4 | Open: the corrected image's own build identity, manifest, and hashes; `eglInitialize` on the VirGL display (`apkrun.test=egl`); and provenance and lock pins for every new artifact. dm-verity passes with the resealed descriptor, and the boot stops in SurfaceFlinger (IR-751). The top-level vbmeta stays unsigned. | IR-650, IR-727, IR-751, IR-800, IR-837 |
+| [#035 APKRun AOSP product](M05-custom-android-image.md#035-apkrun-aosp-product) | 0 of 10 | No product build yet. The required sepolicy content for SurfaceFlinger's sysfs label is a `genfscon` rule, an allow rule, a rebuilt ramdisk, and no permissive mode. #022 criterion 4 waits on it. | IR-900, IR-903, IR-905, IR-906 |
+| #098 Parallel VM runs (follow-up, GitHub issue #100) | not in §3 or a milestone file | The T2 behavior is unverified (IR-539). The one-VM rule (test-strategy §3.6) needs a maintainer decision (IR-525). | IR-525, IR-528, IR-539 |
 
-**Independent progress (roadmap §1.4):**
+Complete on the boxes, with maintainer review still open in the IR log:
+#001, #002, #004, #005, #006, #007, #008, #009, #011, #012, #013, #014, #015, #017, #018, #019, #020, #021, #033, #062, #063, #065. Their open item is the maintainer review of their IR entries.
 
-| Task | Current evidence | Still open |
-|---|---|---|
-| #008 Acquire and inventory ARM64 Cuttlefish artifacts; #009 AndroidImageManifest | Acceptance criteria are marked 7/7 and 6/6 on `codex`; the pinned build 16373615 manifest and inventory are present. | Workflow completion still requires reviewed integration to `main` and issue closure. |
-| #064 Reference boot capture | Re-scoped (IR-305): 2/6 acceptance criteria marked, 2 deferred until a non-nested arm64 Linux host exists. The nested reference host never completed a boot (62 records, about 100 times slower than VZ). The launcher captures under `Images/reference/16373615/incomplete/` are the reference for launcher outputs, and the boot markers were observed on VZ (IR-306). Record: [#064 notes](M01-android-bring-up.md#064-reference-boot-capture), [IR-305](../implementation-review.md#ir-305-re-scope-064-and-keep-virtualizationframework-instead-of-qemu). | Normalization of the retained captures, and the serial-shell run of `guest-capture.txt` (#014). No longer blocks #010, #011, #013, or G2. |
-| VZ direct-boot spike (`Experiments/vz-android-boot/`) | 2026-10-08: the stock image reached `VIRTUAL_DEVICE_BOOT_COMPLETED` in 7.5 s, and `g2_spike.py` passed five cold boots with 10 minutes of stability each. Findings: [IR-306](../implementation-review.md#ir-306-record-the-vz-direct-boot-spike-and-the-substitutes-it-needs) to IR-309, [android-image.md](../../02-design/android-image.md) §7 and §17. | Experiment only. #011–#014 built it into the product code (rows below). |
-| #010 Extract Android kernel and ramdisk | 6/7 acceptance criteria are marked; implementation and tests are recorded. The layer-2 values are now confirmed by the launcher capture and the VZ spike (IR-305). | Commit the confirmed layer-2 values in the layout file. |
-| #011 GPT disks and partition mapping | 7/7 acceptance criteria marked (2026-10-09): `gpt.py`, the sparse writer, the layout disk plan, the `disks` command, ImageCore `GPTDisk` and `InstanceDiskProvisioner`, and the signed Linux-guest disk-layout test, with `Images/reference/vz/26A434/topology.txt` (`task/011-gpt-disks`). The Android-kernel check passed with `apkrun dev boot`: `[vda]` with nine partitions, `[vdb]` with four. | Maintainer review of IR-311. Merge to `main`. |
-| #012 Boot the Android kernel | 7/9 criteria marked on `task/012-android-kernel-boot`: `apkrun_image bundle --unsigned`, ImageCore `DevelopmentImage`, `AndroidBootPlanner`, `BootconfigWriter`, `InstanceStore`, the VirtualMachineCore changes (20 console ports, NIC list, dev display), RuntimeCore `RuntimeSupervisor` and `BootPhaseDetector`, RuntimeHost `DevBoot`, and `apkrun dev boot` | `/proc/cmdline` (the `Kernel command line:` line never reaches hvc0 on VZ, so the criterion needs rewording) and `/proc/bootconfig` checks; the T2 `AndroidBootTests`. Maintainer review of IR-312. |
-| #013 Reach Android init | 3/6 criteria marked: `.init` and `ANDROID_INIT`, init service start, and the serial shell (`AndroidSerialShell`) | The `AndroidShellConsole` T2 checks (`dmesg`, `/proc/cmdline`, `/proc/bootconfig`, `/dev/rtc0`, `getenforce`, `by-name`) on the product path; `expected-differences.yaml` is still empty |
-| #095 Cuttlefish host-service substitution | 4/7 criteria marked: the port roles and no crash loop, `/data` with in-guest KeyMint, the vsock-client record, and the HAL findings. The sensors responder, the multiport console, three NICs, and the first-boot settings are in the product code | The `APKRUN-PORT-<i>` marker test, the network T2 checks inside Android, and the LockSettings/Weaver check |
-| #014 Reach system_server and boot_completed | G2 passed on clean `main` at `70d81f3` (2026-10-10, 3062.7 s, five cold boots, 600 s dwell each, report status passed). The gate criterion is ticked. | `perf/boots.jsonl`; T0 tests of the timeout and stall paths; the `compare_boot.py capture-vz` reference diff; the dev console sockets and `apkrun dev console --android-shell`; the T2 `AndroidBootTests` |
-| #015 ADB debugging over vsock | Not started. The design is read: `VsockLoopbackForwarder` (VirtualMachineCore, `NWListener` on `127.0.0.1`) does not exist yet, and `AdbClient` is new in RuntimeCore | Everything in the task entry |
-| #018 Analyze the RiftVM GPU prototype | The analysis now records command responses, the renderer-budget estimate limits, scanout behavior, profile/topology differences, and the current patch crosswalk. Final hostile review passed on 2026-10-07. | Maintainer review of the v0.6.1 source substitution remains open under IR-188; the #019/#020 dependency is not formally closed. |
+**Recent work on `main`** (git log, 2026-10-09 to 2026-10-11): #022 kmscube on the VM and the
+drain before invalidation (`537731c`, `efc4fef`); the #099 offline Mesa injection and the verity
+steps (`10f921e` to `ce7a21e`); the #095 port and marker results (`bfd0860`, `c217fc8`,
+`4c6b7c0`); and the #016 PackageInstaller tick (`3d0031e`).
 
-The #064 runs are diagnostic evidence only: the crosvm build is uncertified for
-Virgl and the captures are retained under `Images/reference/16373615/incomplete/`.
-They do not change the pinned Android image. The guest Mesa
-payload correction is explicitly outside #064; the proposed reusable-image
-follow-up is documented in IR-240, but cannot enter the numbered task index
-until GitHub initializes the required #001–#097 task sequence.
+**Note on IR-901.** Two entries use this number. The first, "No SELinux compiler is available
+offline", is the entry that IR-904 cites. The second, "Four of the marked ports are read by product
+HALs", was added by `213984d`; its Affected documents cite IR-899, which does not exist. Both are
+kept as they are until a maintainer decides the numbering.
 
-The unentitled validation result and host details are in [vm.md](../../02-design/vm.md)
-§3 and §17. The implementation judgment for the opt-in T1 probe is in
-[implementation-review.md](../implementation-review.md) IR-242. #003's design
-and recorded gate evidence are in [M00](M00-repository-and-vm-foundation.md)
-and [vm.md](../../02-design/vm.md) §§9, 17.
-
-**Latest broad SwiftPM checks:** complete default and `--traits EmbeddedRuntime`
-test suites passed after fixing the root-help golden mismatch. Default and
-embedded-runtime help outputs now have separate golden coverage.
+**Process gap.** #098 is not yet in §3 or in a milestone file, as AGENTS.md §11 requires for a
+follow-up task.

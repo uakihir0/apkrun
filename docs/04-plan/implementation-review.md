@@ -15559,3 +15559,18 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Choice.** The image install ran alone under `lockf -k /tmp/apkrun-vm.lock`. The boot and the adb steps ran in one script, `/tmp/apkrun-016-session.sh`, started under `lockf -k /tmp/apkrun-vm.lock`. The boot started once and stopped with SIGINT. It exited 0 two seconds later, with no SIGKILL. The adb steps used `apkrun dev adb` with `ANDROID_HOME=/tmp/apkrun-016-sdk`. That directory holds symlinks into the main checkout's `build/android-sdk` (read only) and a copy of `platform-tools/adb`, so the adb under `~/Documents` was not used.
 
 **Reason.** A second `lockf` on the same file waits for the first. A `lockf` around each adb step would therefore wait for the boot, which holds the lock until it stops, and the steps need that boot. Running the steps inside the locked session keeps every VM command under the lock. The SDK facade reads only. After the runs, no file under the top two levels of the main `build/android-sdk` was newer than the first Gradle run.
+
+## IR-960: Avoid the full AOSP build until a release needs it; develop on the stock image with overlays
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022, #035, #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11 and §11.1; [environment-setup.md](../05-development/environment-setup.md) §5; IR-442; IR-443; IR-901 |
+
+**Choice.** Do not run a full AOSP build for development. Develop on the stock Cuttlefish image with APKRun's components overlaid: the NDK-built Mesa (ADR-0018), the injected vendor (IR-620 to IR-634), the rebuilt verity descriptors (IR-740 to IR-753), and a policy rule in the ODM precompiled policy (IR-940 to IR-948). A full AOSP build (#035) is needed only when a release image must be built.
+
+**Reason.** The maintainer's direction is to avoid the full Android build unless it is really needed. The overlays already reach the drmVirgl boot in a test variant, so the AOSP build is not on the critical path for development. The release path (#035, #093) still needs a builder, and that decision stays open.
+
+**Verification.** The permissive and the runtime-loaded sepolicy runs (IR-800, IR-948) are evidence for the overlay route. A boot of the ODM-overlay variant, with no runtime load, is the check still to run.
+

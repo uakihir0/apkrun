@@ -14159,3 +14159,18 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** AGENTS §6.3 forbids assuming file names inside an artifact, and these paths are names inside a partition. The tool cannot label a file without the rules, and the manifest has no entry for them. The tool guards the paths: it refuses an image whose contexts do not reproduce the stock labels (IR-623), and it records their SHA-256 in the output.
 
 **Consequence.** A different AOSP layout (for example a moved contexts file) makes the tool stop with a missing-file error, and it writes no output.
+
+## IR-650: The injected image's top-level vbmeta stays unsigned until the first boot shows whether dm-verity blocks it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md); IR-625 |
+
+**Choice.** Do not re-sign the injected image's top-level vbmeta yet. Run the first boot of the injected image with the mismatch in place. If dm-verity blocks the boot, record the failure, then choose the signing key for the development image: a new RSA key that the guest trusts, or a development boot with verity off. The second option changes design §11.4 and needs an ADR.
+
+**Reason.** The vendored avbtool supports only NONE and RSA signatures (`Images/tools/vendor/avb/avbtool.py`). The developer key is Ed25519, so it cannot sign the top-level vbmeta. Any RSA key changes the guest's trust chain, which IR-625 lists as a trust decision. The first boot answers whether the mismatch matters, without making that trust decision in advance.
+
+**Verification.** The vendored avbtool's algorithms were read from the file. The boot itself has not run.
+

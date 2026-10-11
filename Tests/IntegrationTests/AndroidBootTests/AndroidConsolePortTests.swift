@@ -1,30 +1,30 @@
 import DiagnosticsCore
 import Foundation
 import ImageCore
-import RuntimeCore
 import XCTest
 
+@testable import RuntimeCore
 @testable import VirtualMachineCore
 
-/// The marker plan of #095 step 1 for the 20 console ports of the Android dev boot (vm.md §6.2,
-/// android-image.md §7.1).
+/// The marker plan of #095 step 1 for the console ports of the Android dev boot (vm.md §6.2, android-image.md §7.1).
 ///
 /// The host writes `APKRUN-PORT-<i>` into attachment port `i`, and a guest reader on `/dev/hvc<i>` must receive
-/// exactly that line. So the guest numbers the ports as the host attaches them. hvc18 is the sensors port. The check
-/// never writes it, because the sensors responder would read the bytes as HAL protocol (IR-871).
+/// exactly that line, so the guest numbers the ports as the host attaches them. This check marks the 17 ports that
+/// the developer boot leaves unused: hvc2 to hvc17 and hvc19 (IR-899). hvc0 is the system console and hvc1 the
+/// developer serial service, so neither is marked. hvc18 is the sensors port: it keeps its product role and its
+/// responder, and it is never marked, because the responder would read a marker as HAL protocol (IR-871).
 enum ConsolePortMarkerPlan {
     /// The console ports of the Android dev boot (android-image.md §7.1).
     static let portCount = 20
 
-    /// The ports that get no marker, with the reason.
-    static let excludedPorts: [Int: String] = [
-        18: "sensors_control: the sensors responder would read a marker as HAL protocol (IR-871)"
-    ]
+    /// The sensors port, which keeps its product role and its responder.
+    static let sensorsPort = 18
 
-    /// The ports that get a marker, in attachment order: hvc0 to hvc19 without hvc18.
-    static var markedPorts: [Int] {
-        (0..<portCount).filter { excludedPorts[$0] == nil }
-    }
+    /// The product role of the sensors port. The responder serves this role (RuntimeSupervisor, `sensors_control`).
+    static let sensorsRole: ConsoleRole = .service(name: "sensors_control")
+
+    /// The ports that get a marker, in attachment order: hvc2 to hvc17 and hvc19.
+    static let markedPorts: [Int] = (2..<portCount).filter { $0 != sensorsPort }
 
     /// The line the host writes into `port`, and the line that the guest reader of `port` must receive.
     static func marker(for port: Int) -> String {
@@ -36,37 +36,43 @@ enum ConsolePortMarkerPlan {
         "/dev/hvc\(port)"
     }
 
-    /// The role of a marked port in the test layout. hvc0 stays the system console, and every other marked port becomes
-    /// a test service that accepts host input. The product roles of the silent ports are not used by the check.
+    /// The test-only role of a marked port. It exists only in this test target, and the product layout never names it.
+    /// It is a service role, which permits host input.
     static func testRole(for port: Int) -> ConsoleRole {
-        port == 0 ? .systemConsole : .service(name: "test-\(port)")
+        .service(name: "test-marker-\(port)")
     }
 
-    /// The product port list with the marked ports made writable. The excluded ports keep their product role.
+    /// The product port list with the marked ports given a test-only role. Every other port keeps its product role.
     static func testLayout(product: [ConsolePortDefinition]) -> [ConsolePortDefinition] {
         product.enumerated().map { index, definition in
             markedPorts.contains(index) ? ConsolePortDefinition(role: testRole(for: index)) : definition
         }
     }
 
-    /// The guest directory that holds the reader files.
+    /// The guest directory that holds the reader files and the reader process ids.
     static let guestDirectory = "/data/local/tmp/apkrun-port-check"
 
     /// The guest command that starts one reader per marked port in the background, and returns at once.
     ///
     /// A reader opens its port (`exec 3<`) and then writes `ready-<port>`, so a ready file shows that the port has a
-    /// reader. The reader is `cat` under `timeout`: it copies what arrives into `out-<port>` and ends by itself.
+    /// reader. The reader is `cat` under `timeout`, which copies what arrives into `out-<port>` and ends by itself. Its
+    /// process id goes into `pid-<port>`, so that `stopReadersCommand` can end it.
     static func readerCommand(timeoutSeconds: Int) -> String {
         let readers = markedPorts.map { port in
             "( stty -F \(device(for: port)) raw -echo 2>/dev/null; exec 3<\(device(for: port)); "
                 + "echo ready > \(guestDirectory)/ready-\(port); "
                 + "if command -v timeout >/dev/null 2>&1; then "
                 + "exec timeout \(timeoutSeconds) cat <&3 > \(guestDirectory)/out-\(port); "
-                + "else exec cat <&3 > \(guestDirectory)/out-\(port); fi ) </dev/null >/dev/null 2>&1 &"
+                + "else exec cat <&3 > \(guestDirectory)/out-\(port); fi ) </dev/null >/dev/null 2>&1 & "
+                + "echo $! > \(guestDirectory)/pid-\(port);"
         }
         return ["rm -rf \(guestDirectory)", "mkdir -p \(guestDirectory)"].joined(separator: "; ")
             + "; " + readers.joined(separator: " ") + " echo started"
     }
+
+    /// The guest command that ends every reader that `readerCommand` started.
+    static let stopReadersCommand =
+        "for f in \(guestDirectory)/pid-*; do kill $(cat $f) 2>/dev/null; done; echo stopped"
 
     /// The guest command that prints each marked port's reader file, under a `PORT <n>` header.
     static func collectCommand() -> String {
@@ -150,14 +156,11 @@ enum ConsolePortCheckFailure: Error, CustomStringConvertible {
 
 /// One Android developer boot that the marker check drives (#095 step 1).
 ///
-/// The boot uses the product path up to the definition: the signed image, the instance, and the planner. The console
-/// roles are then changed in the test's definition only, so that the host can write to every marked port. The product
-/// layout and the supervisor are not changed. The ADB bridge copies the supervisor's (RuntimeSupervisor.startADBBridge,
-/// which is private).
-///
-/// The supervisor's sensors responder on hvc18 is not run here, because its replies are written to hvc18, which this
-/// check does not write (IR-871). Without it the sensors HAL retries and the Android boot may not finish (IR-894). The
-/// marker check does not depend on the boot finishing.
+/// The boot uses the product path up to the definition: the signed image, the instance, and the planner. The 17
+/// unused ports then get a test-only role in the test's definition, so that the host can write to them (IR-899).
+/// Every other port keeps its product role, including hvc18 with its sensors responder. The product layout and the
+/// supervisor are not changed. The ADB bridge copies the supervisor's (RuntimeSupervisor.startADBBridge, which is
+/// private). The responder is the one RuntimeCore runs for the supervisor, driven through the public byte stream.
 private final class ConsolePortMarkerBoot {
     /// The guest's ADB port on vsock, as the supervisor uses it (RuntimeSupervisor.developmentADBGuestPort).
     private static let guestADBPort: UInt32 = 5555
@@ -166,12 +169,14 @@ private final class ConsolePortMarkerBoot {
     private var controller: VMController?
     private var forwarder: VsockLoopbackForwarder?
     private var adb: AdbClient?
+    private var responder: Task<Void, Never>?
 
     init(run: VMRunResources) {
         self.run = run
     }
 
-    /// Installs the image, provisions the instance, starts the VM with the test roles, and starts the ADB bridge.
+    /// Installs the image, provisions the instance, starts the VM with the test roles, starts the sensors responder,
+    /// and starts the ADB bridge.
     func start(bundle: URL) async throws {
         let paths = run.paths
         let diagnostics = DiagnosticsContext.live(paths: paths)
@@ -196,6 +201,11 @@ private final class ConsolePortMarkerBoot {
         self.controller = controller
         try await controller.start()
 
+        // The sensors responder answers the HAL on hvc18, as RuntimeSupervisor does for the sensors_control role.
+        let sensors = controller.console(ConsolePortMarkerPlan.sensorsRole)
+        let sensorsStream = sensors.makeByteStream()
+        responder = Task { await Self.runSensorsResponder(channel: sensors, stream: sensorsStream) }
+
         let forwarder = VsockLoopbackForwarder(
             requestedPort: run.adbHostPort,
             guestPort: Self.guestADBPort,
@@ -214,6 +224,23 @@ private final class ConsolePortMarkerBoot {
             endpoint: AdbClient.loopbackEndpoint(port: hostPort),
             logSink: diagnostics.logSink
         )
+    }
+
+    /// Answers the sensors HAL with the responder's replies, as RuntimeSupervisor does. The stream is not acknowledged:
+    /// the public `makeByteStream()` reserves no chunk capacity, so unacknowledged output is not dropped
+    /// (ConsoleChannel.swift), and the acknowledgement calls are package-scoped (IR-894).
+    private static func runSensorsResponder(channel: ConsoleChannel, stream: ConsoleByteStream) async {
+        var responder = SensorsResponder()
+        for await bytes in stream.stream {
+            if bytes.isEmpty {
+                continue
+            }
+            let reply = responder.consume(bytes)
+            if reply.isEmpty {
+                continue
+            }
+            try? channel.writeHostInput(reply)
+        }
     }
 
     /// Waits for ADB to answer, takes root (the holder listing and the readers need it), and waits up to `bootBudget`
@@ -300,9 +327,11 @@ private final class ConsolePortMarkerBoot {
         }
     }
 
-    /// Powers Android off, then stops the VM, and stops the ADB bridge. The run's home is removed by the caller.
+    /// Ends the readers, powers Android off, stops the VM, and stops the responder and the ADB bridge. The caller
+    /// removes the run's home.
     func finish() async {
         if let adb {
+            _ = try? await adb.shell(ConsolePortMarkerPlan.stopReadersCommand, timeout: .seconds(20))
             _ = try? await adb.rebootPowerOff()
         }
         if let controller {
@@ -314,6 +343,7 @@ private final class ConsolePortMarkerBoot {
                 try? await controller.stop()
             }
         }
+        responder?.cancel()
         if let forwarder {
             await forwarder.stopAndWait()
         }
@@ -336,51 +366,104 @@ private final class ConsolePortMarkerBoot {
 
 /// The T0 checks of the marker plan. They need no VM and run in every configuration.
 final class ConsolePortMarkerPlanTests: XCTestCase {
-    func testMarkedPortsAreEveryPortButHvc18() {
+    /// Whether the reader command opens `/dev/hvc<port>`. The device name is matched as a whole word, so hvc1 does not
+    /// match hvc18 or hvc19.
+    private func opens(_ command: String, device port: Int) -> Bool {
+        command.contains("/dev/hvc\(port) ") || command.contains("/dev/hvc\(port);")
+    }
+
+    func testMarkedPortsAreTheUnusedPortsWithoutTheSensorsPort() {
         XCTAssertEqual(ConsolePortMarkerPlan.portCount, 20)
-        XCTAssertEqual(ConsolePortMarkerPlan.markedPorts, Array(0..<20).filter { $0 != 18 })
-        XCTAssertEqual(ConsolePortMarkerPlan.markedPorts.count, 19)
-        XCTAssertEqual(Set(ConsolePortMarkerPlan.excludedPorts.keys), [18])
-        XCTAssertTrue(ConsolePortMarkerPlan.excludedPorts[18]?.contains("IR-871") == true)
+        XCTAssertEqual(ConsolePortMarkerPlan.markedPorts, Array(2...17) + [19])
+        XCTAssertEqual(ConsolePortMarkerPlan.markedPorts.count, 17)
+        XCTAssertFalse(ConsolePortMarkerPlan.markedPorts.contains(ConsolePortMarkerPlan.sensorsPort))
+        XCTAssertFalse(ConsolePortMarkerPlan.markedPorts.contains(0), "hvc0 is the system console")
+        XCTAssertFalse(ConsolePortMarkerPlan.markedPorts.contains(1), "hvc1 is the developer serial service")
     }
 
     func testMarkersAndReaderDevicesAreExactAndUnique() {
-        XCTAssertEqual(ConsolePortMarkerPlan.marker(for: 0), "APKRUN-PORT-0")
+        XCTAssertEqual(ConsolePortMarkerPlan.marker(for: 2), "APKRUN-PORT-2")
         XCTAssertEqual(ConsolePortMarkerPlan.marker(for: 19), "APKRUN-PORT-19")
         XCTAssertEqual(ConsolePortMarkerPlan.device(for: 5), "/dev/hvc5")
         let markers = ConsolePortMarkerPlan.markedPorts.map(ConsolePortMarkerPlan.marker(for:))
         XCTAssertEqual(Set(markers).count, markers.count)
     }
 
-    func testTestLayoutGivesHostInputToEveryMarkedPort() {
-        let product: [ConsolePortDefinition] =
-            [ConsolePortDefinition(role: .systemConsole)]
-            + (1..<18).map { ConsolePortDefinition(role: .silent(name: "port-\($0)")) }
+    /// The developer boot's product layout as the planner gives it: hvc1 is the serial service, hvc2 to hvc17 and hvc19
+    /// are silent, and hvc18 is the sensors service.
+    private var developerBootLayout: [ConsolePortDefinition] {
+        [ConsolePortDefinition(role: .systemConsole), ConsolePortDefinition(role: .service(name: "serial"))]
+            + (2..<18).map { ConsolePortDefinition(role: .silent(name: "port-\($0)")) }
             + [
                 ConsolePortDefinition(role: .service(name: "sensors_control")),
                 ConsolePortDefinition(role: .silent(name: "sensors_data")),
             ]
+    }
+
+    func testTestLayoutGivesHostInputToEveryMarkedPortAndKeepsEveryOtherRole() {
+        let product = developerBootLayout
         let layout = ConsolePortMarkerPlan.testLayout(product: product)
 
         XCTAssertEqual(layout.count, 20)
-        XCTAssertEqual(layout[0].role, .systemConsole)
         for port in ConsolePortMarkerPlan.markedPorts {
-            switch layout[port].role {
-            case .systemConsole, .service: continue
-            case .log, .silent: XCTFail("port \(port) takes no host input in the test layout")
+            XCTAssertEqual(layout[port].role, ConsolePortMarkerPlan.testRole(for: port))
+            if case .service = layout[port].role {
+                continue
             }
+            XCTFail("port \(port) must accept host input in the test layout")
         }
-        XCTAssertEqual(layout[18], product[18], "hvc18 keeps its product role and is never written")
+        for port in [0, 1, ConsolePortMarkerPlan.sensorsPort] {
+            XCTAssertEqual(layout[port], product[port], "hvc\(port) keeps its product role")
+        }
     }
 
-    func testReaderCommandStartsOneReaderPerMarkedPortAndNeverOpensHvc18() {
+    func testSensorsPortKeepsItsResponderRole() {
+        XCTAssertEqual(ConsolePortMarkerPlan.sensorsPort, 18)
+        XCTAssertEqual(ConsolePortMarkerPlan.sensorsRole, .service(name: "sensors_control"))
+        XCTAssertFalse(ConsolePortMarkerPlan.markedPorts.contains(18))
+        let layout = ConsolePortMarkerPlan.testLayout(product: developerBootLayout)
+        XCTAssertEqual(layout[18].role, ConsolePortMarkerPlan.sensorsRole)
+    }
+
+    func testProductBootLayoutNamesNoTestRoleAndKeepsTheSensorsResponder() throws {
+        // The layout is the one in the bundle that the product boots. The bundle is outside the repository, so the test
+        // host reads it without a file-access prompt (the repository is under ~/Documents).
+        let bundle = try AndroidBootSession.bundleDirectory()
+        let data = try Data(contentsOf: bundle.appendingPathComponent("manifest.json"))
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("test-marker-"), "the product layout names no test role")
+
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let ports = try XCTUnwrap(manifest["consolePorts"] as? [[String: Any]])
+        XCTAssertEqual(ports.count, 20)
+        for port in ports {
+            let index = try XCTUnwrap(port["index"] as? Int)
+            let role = port["role"] as? String
+            if index == ConsolePortMarkerPlan.sensorsPort {
+                XCTAssertEqual(role, "service")
+                XCTAssertEqual(port["name"] as? String, "sensors_control")
+            } else if ConsolePortMarkerPlan.markedPorts.contains(index) {
+                XCTAssertEqual(role, "silent", "the product leaves hvc\(index) unused")
+            }
+        }
+    }
+
+    func testReaderCommandStartsOneReaderPerMarkedPortAndOpensNoOtherPort() {
         let command = ConsolePortMarkerPlan.readerCommand(timeoutSeconds: 180)
         for port in ConsolePortMarkerPlan.markedPorts {
-            XCTAssertTrue(command.contains("exec 3</dev/hvc\(port);"), "port \(port) has a reader")
+            XCTAssertTrue(opens(command, device: port) || command.contains("exec 3</dev/hvc\(port);"))
+            XCTAssertTrue(command.contains("echo $! > /data/local/tmp/apkrun-port-check/pid-\(port);"))
         }
-        XCTAssertFalse(command.contains("hvc18"))
+        for port in [0, 1, ConsolePortMarkerPlan.sensorsPort] {
+            XCTAssertFalse(opens(command, device: port), "the reader command never opens hvc\(port)")
+        }
         XCTAssertTrue(command.contains("exec timeout 180 cat <&3"))
         XCTAssertTrue(command.hasSuffix("echo started"))
+    }
+
+    func testStopCommandEndsTheRecordedReaders() {
+        XCTAssertTrue(ConsolePortMarkerPlan.stopReadersCommand.contains("pid-*"))
+        XCTAssertTrue(ConsolePortMarkerPlan.stopReadersCommand.contains("kill $(cat $f)"))
     }
 
     func testCollectedLinesAreParsedPerPort() {
@@ -394,7 +477,7 @@ final class ConsolePortMarkerPlanTests: XCTestCase {
     }
 
     func testReadyPortsComeFromTheReaderListing() {
-        XCTAssertEqual(ConsolePortMarkerPlan.readyPorts("out-3\nready-3\nready-19\nready-18\n"), [3, 19, 18])
+        XCTAssertEqual(ConsolePortMarkerPlan.readyPorts("out-3\nready-3\nready-19\nready-18\npid-3\n"), [3, 19, 18])
     }
 }
 
@@ -411,7 +494,7 @@ final class AndroidConsolePortTests: XCTestCase {
     }
 
     /// Every marked port of the dev boot passes its own marker through to its reader. hvc18 is excluded by design
-    /// (ConsolePortMarkerPlan.excludedPorts).
+    /// (ConsolePortMarkerPlan.sensorsPort).
     func testMarkersReachTheirReadersOnEveryMarkedPort() async throws {
         let bundle = try AndroidBootSession.bundleDirectory()
         print("port-check adb \(try AndroidTestEnvironment.adbExecutable().path)")

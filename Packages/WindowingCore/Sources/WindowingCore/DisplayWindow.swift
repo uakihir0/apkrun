@@ -1,0 +1,124 @@
+import AppKit
+import Dispatch
+
+/// A development window for one display (display-and-windowing.md §7, #023).
+///
+/// The window is created at the scanout's size, so the surface shows at its native density, and it is never resized
+/// by the guest. The window consumes the frames of its source on the main actor, applies the layer's frame gate, and
+/// reports each displayed frame back to the source.
+@MainActor
+public final class DisplayWindow: NSObject, NSWindowDelegate {
+    /// Runs when the user closes the window. The owner stops the runtime, which is the close action of the window.
+    public var onClose: (@MainActor () -> Void)?
+
+    private let window: NSWindow
+    private let layerView: IOSurfaceLayerView
+    private let source: any FrameSource
+    private var gate: LayerFrameGate
+    private var consumer: Task<Void, Never>?
+
+    /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
+    public init(source: any FrameSource, title: String, backingScale: CGFloat) {
+        self.source = source
+        gate = LayerFrameGate(generation: source.generation)
+        let size = DisplayGeometry.contentSize(
+            pixelWidth: source.pixelWidth,
+            pixelHeight: source.pixelHeight,
+            backingScale: backingScale
+        )
+        layerView = IOSurfaceLayerView(
+            frame: NSRect(origin: .zero, size: size),
+            contentSize: size,
+            contentScale: backingScale
+        )
+        window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        super.init()
+        window.title = title
+        window.isReleasedWhenClosed = false
+        window.contentView = layerView
+        window.delegate = self
+        window.setContentSize(size)
+        window.center()
+    }
+
+    /// Shows the window, and starts applying the frames of the source.
+    public func show() {
+        window.makeKeyAndOrderFront(nil)
+        consumer = Task { [source] in
+            for await event in source.frames {
+                self.apply(event)
+            }
+        }
+    }
+
+    /// Changes the window title, which the development display uses for its statistics line.
+    public func setTitle(_ title: String) {
+        window.title = title
+    }
+
+    /// Closes the window without asking. The owner calls it when the boot ends.
+    public func close() {
+        window.close()
+    }
+
+    /// Stops the frames, and tells the owner that the user closed the window.
+    public func windowWillClose(_ notification: Notification) {
+        consumer?.cancel()
+        consumer = nil
+        onClose?()
+    }
+
+    private func apply(_ event: FrameSourceEvent) {
+        switch event {
+        case .frameReady(let generation, let bufferIndex, let sequence):
+            guard gate.accept(generation: generation, sequence: sequence),
+                source.surfaces.indices.contains(bufferIndex)
+            else {
+                return
+            }
+            let source = source
+            layerView.show(source.surfaces[bufferIndex]) {
+                source.frameDisplayed(sequence: sequence)
+            }
+        }
+    }
+}
+
+/// The AppKit event loop of the development display. It runs on the main thread.
+public enum DisplayApplication {
+    /// Runs the event loop on the calling thread, after `setup`, until `stop()`. Call it on the main thread.
+    @MainActor
+    public static func run(setup: @MainActor () -> Void) {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        setup()
+        application.activate(ignoringOtherApps: true)
+        application.run()
+    }
+
+    /// Stops the event loop. Any thread may call it. The loop returns after the current event.
+    public static func stop() {
+        DispatchQueue.main.async {
+            NSApplication.shared.stop(nil)
+            // A posted event wakes the loop, so it sees the stop at once.
+            if let event = NSEvent.otherEvent(
+                with: .applicationDefined,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                subtype: 0,
+                data1: 0,
+                data2: 0
+            ) {
+                NSApplication.shared.postEvent(event, atStart: true)
+            }
+        }
+    }
+}

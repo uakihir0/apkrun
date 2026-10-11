@@ -14534,6 +14534,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** Decision needed: whether a scratch-home install under `/tmp` is allowed for the first boot, or whether the variant needs another image name and a store entry first.
 
 ## IR-722: The bundle is checked by hand with OpenSSL, because no verify-only command exists
+## IR-741: The stale part of the injected vendor is the vendor hashtree descriptor in the top-level vbmeta, and the injected footer is already fresh
 
 | Field | Value |
 |---|---|
@@ -14548,6 +14549,14 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The claim "the signature verifies" rests on OpenSSL 4.0.3 and the developer key file, not on the product's verifier.
 
 ## IR-723: The guest build and the control boot are not run, because the boot never reaches the guest check
+| Task | #099 (the verity step, step 1 of the regeneration) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
+
+**Choice.** The read was done with the vendored avbtool (`Images/tools/vendor/avb/avbtool.py`, run through the image tools venv as `python3 -B avbtool.py info_image --image FILE`). The stock `vendor_a` (copied from the stock bundle's `super`, SHA-256 `a3ff3fb1…`, 291,229,696 bytes) has footer algorithm `NONE`, a hashtree with data and hash block size 4096, hash algorithm `sha256`, salt `16b6a5f2…162e`, and root digest `d8895f6a…83a5a`. It keeps FEC with 2 roots. The stock `vbmeta_a` (SHA256_RSA4096, key SHA-1 `2597c218…`) carries the same vendor descriptor. The injected `vendor_a` (`2cc0857c…`) has its own footer with an original image size of 185,974,784 bytes, a tree at 185,974,784, root digest `a373fc52…`, and no FEC, and `verify_image` passes on it. The defect is therefore the vendor descriptor in `vbmeta_a`: its image size, tree offset, FEC fields, and root digest all describe the stock layout. The fix takes the descriptor from the new footer.
+
+**Reason.** The kernel builds its table from the descriptor, so it reads the hash tree at the stock offset of 285,683,712 bytes. That is block 69,747, which matches the `metadata block 69747` message. The injected image has zeros there, and the block is reported as corrupted. A new tree in the image does not help while the descriptor points at the old layout. The earlier note that the footer was stale (M02 #099) is corrected here: the footer was made again by inject-vendor (IR-624), and only the vbmeta was not.
+
+## IR-742: This branch does not carry IR-727 and IR-728, so the entries of this task start at IR-740
 
 | Field | Value |
 |---|---|
@@ -14646,3 +14655,9 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** In both boots the guest kept rebooting (boot A) or stalled in the `/vendor` mount (boot B), so the graceful stop never completed. The run had a limit of two boots, and a retry would repeat the same state. The SIGKILL ends the VM with its guest unshut, which is acceptable only for a scratch instance that is removed.
 
 **Consequence.** The Ctrl-C path of [cli.md](../02-design/cli.md) §5 was not verified for a stuck guest. It needs a check in a follow-up. The wrapper status of both boots is `EXIT=70`.
+| Task | #099 (the verity step) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
+
+**Choice.** The entries of this task use IR-740 to IR-759. IR-727 and IR-728 are not in `docs/04-plan/implementation-review.md` on `main` at `c29aed5`. They are on `task/099-vm-variant-check` (commit `a970951` and later), together with IR-720 to IR-726 and IR-729. The content of IR-727 (no signing choice, the first Mesa boot stopped by dm-verity) and of IR-728 (the `logging` experiment) was read from that branch, and this task does not depend on any of their numbers. Decision needed: when the two branches are merged, the numbering must be reconciled before any IR-740 to IR-759 entry is kept.
+
+**Reason.** The task starts from `main` at `c29aed5`, and a number that is already taken on another branch would collide when the branches meet. The IR-740 to IR-759 range was given for this run, so the entries stay inside it.

@@ -18,6 +18,8 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
         case detach(context: UInt32, resource: UInt32)
         case submit(context: UInt32, bytes: [UInt8])
         case createResource(VirGLResourceArguments)
+        case attachBacking(resource: UInt32, ranges: [VirGLBackingRange])
+        case detachBacking(resource: UInt32)
         case unref(UInt32)
         case transferWrite(VirGLTransfer, [UInt8])
         case transferRead(VirGLTransfer)
@@ -121,6 +123,14 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
 
     func unrefResource(id: UInt32) {
         lock.withLock { recorded.append(.unref(id)) }
+    }
+
+    func attachBacking(resource: UInt32, ranges: [VirGLBackingRange]) throws(GraphicsFailure) {
+        try record(.attachBacking(resource: resource, ranges: ranges), operation: "resourceAttachBacking")
+    }
+
+    func detachBacking(resource: UInt32) {
+        lock.withLock { recorded.append(.detachBacking(resource: resource)) }
     }
 
     func transferWrite(_ transfer: VirGLTransfer, data: inout [UInt8]) throws(GraphicsFailure) {

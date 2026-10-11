@@ -15,6 +15,11 @@ protocol VirGLEngine: AnyObject {
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure)
     func createResource(_ arguments: VirGLResourceArguments) throws(GraphicsFailure)
     func unrefResource(id: UInt32)
+    /// Gives the renderer guest pages as the backing of `resource`. The renderer uses the pages, not a copy, until
+    /// `detachBacking` or `unrefResource` (graphics.md §4.4, IR-836).
+    func attachBacking(resource: UInt32, ranges: [VirGLBackingRange]) throws(GraphicsFailure)
+    /// Releases the backing of `resource`, if it has any. Call while the guest pages are still mapped.
+    func detachBacking(resource: UInt32)
     func transferWrite(_ transfer: VirGLTransfer, data: inout [UInt8]) throws(GraphicsFailure)
     func transferRead(_ transfer: VirGLTransfer, into data: inout [UInt8]) throws(GraphicsFailure)
     func createFence(id: UInt32, context: UInt32) throws(GraphicsFailure)
@@ -51,6 +56,25 @@ struct VirGLResourceArguments: Codable, Equatable, Sendable {
             sample_count: sampleCount,
             flags: flags
         )
+    }
+}
+
+/// One range of guest pages that backs a resource (graphics.md §4.4, IR-836).
+///
+/// The memory is the guest's RAM. It stays valid until the device resets or stops, which is also the end of the
+/// renderer's use of it: the renderer releases the range before then, through `detachBacking`, `unrefResource`, or
+/// the renderer's reset.
+// UNCHECKED-SENDABLE: the range names guest memory that the device mapped on its queue. The render thread reads it
+// only while the renderer holds the backing, and the lifetime above keeps the memory valid for that span.
+struct VirGLBackingRange: Equatable, @unchecked Sendable {
+    let base: UnsafeMutableRawPointer
+    let count: Int
+
+    /// The range of `memory`, or `nil` when it is empty.
+    init?(_ memory: UnsafeMutableRawBufferPointer) {
+        guard let base = memory.baseAddress, memory.count > 0 else { return nil }
+        self.base = base
+        count = memory.count
     }
 }
 

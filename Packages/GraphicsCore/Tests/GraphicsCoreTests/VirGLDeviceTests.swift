@@ -229,6 +229,112 @@ private func transfer(
     #expect(statistics.hostReadbacks == 0)
 }
 
+/// The backing calls that reach the engine, as "attach 5", "detach 5", or "unref 5", in order.
+private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
+    engine.calls.compactMap { call -> String? in
+        switch call {
+        case .attachBacking(let resource, _): "attach \(resource)"
+        case .detachBacking(let resource): "detach \(resource)"
+        case .unref(let resource): "unref \(resource)"
+        default: nil
+        }
+    }
+}
+
+@Test func attachBackingHandsTheGuestPagesToTheRendererWithoutCopying() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(
+                resourceID: 5,
+                entries: [
+                    VirtioGPUMemoryEntry(address: 0x1000, length: 64),
+                    VirtioGPUMemoryEntry(address: 0x2000, length: 32),
+                ]
+            )
+        ),
+    ])
+    try await eventually { control.completionCounts == [1, 1] }
+    #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUResponseType.okNoData.rawValue)
+
+    let attached = harness.engineRef.engine.calls.compactMap { call -> [VirGLBackingRange]? in
+        if case .attachBacking(5, let ranges) = call { return ranges }
+        return nil
+    }
+    let ranges = try #require(attached.first)
+    #expect(ranges.map(\.count) == [64, 32])
+    // The renderer receives the host memory of each guest view, so it reads and writes the guest's own bytes.
+    let first = try #require(harness.guest.memory(at: 0x1000))
+    let second = try #require(harness.guest.memory(at: 0x2000))
+    #expect(ranges[0].base == (try first.hostMemory().baseAddress))
+    #expect(ranges[1].base == (try second.hostMemory().baseAddress))
+}
+
+@Test func backingIsReleasedOnDetachAndUnrefOnlyWhenTheResourceHadIt() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 6))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+        gpuRequest(.resourceDetachBacking, body: .resourceDetachBacking(resourceID: 5)),
+        // The second detach finds no backing, so the renderer is not called.
+        gpuRequest(.resourceDetachBacking, body: .resourceDetachBacking(resourceID: 5)),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 6, entries: [VirtioGPUMemoryEntry(address: 0x2000, length: 64)])
+        ),
+        gpuRequest(.resourceUnref, body: .resourceUnref(resourceID: 6)),
+        gpuRequest(.resourceUnref, body: .resourceUnref(resourceID: 5)),
+    ])
+    try await eventually { control.completionCounts == [1, 1, 1, 1, 1, 1, 1, 1] }
+    for index in control.writtenBuffers.indices {
+        #expect(gpuResponseType(control.writtenBuffers[index]) == VirtioGPUResponseType.okNoData.rawValue, "\(index)")
+    }
+    // Unref releases the backing before the resource goes. A resource without backing only goes.
+    #expect(
+        backingCalls(harness.engineRef.engine)
+            == ["attach 5", "detach 5", "attach 6", "detach 6", "unref 6", "unref 5"]
+    )
+}
+
+@Test func resetLeavesTheRendererBackingToTheRendererWithoutDetaching() async throws {
+    let harness = try VirGLHarness()
+    let control = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+    ])
+    try await eventually { control.completionCounts == [1, 1] }
+
+    // A reset runs after the guest pages may be invalid, so it must not write through them (IR-843).
+    harness.device.deviceWillReset()
+    #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
+    #expect(harness.engineRef.engine.calls.last == .reset)
+}
+
+@Test func aRendererFailureOnAttachLeavesTheGuestResponseUnchanged() async throws {
+    let harness = try VirGLHarness()
+    harness.engineRef.engine.fail("resourceAttachBacking")
+    let control = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+    ])
+    try await eventually { control.completionCounts == [1, 1] }
+    // As for every renderer failure, the guest is answered as before, and the failure is counted (IR-460).
+    #expect(gpuResponseType(control.writtenBuffers[1]) == VirtioGPUResponseType.okNoData.rawValue)
+    try await eventually { harness.device.statistics.rendererFailures == 1 }
+}
+
 @Test func aFencedResponseWaitsForItsFence() async throws {
     let harness = try VirGLHarness()
     let control = harness.send([
@@ -452,9 +558,10 @@ private func transfer(
 
     let replayed = FakeVirGLEngine(onFence: { _ in })
     #expect(replay(decoded, onto: replayed).failures.isEmpty)
+    // Backing is not in the recording, and its ranges name live guest pages, so the replay does not make these calls.
     let recordedCalls = ref.engine.calls.filter { call in
         switch call {
-        case .capset, .poll: return false
+        case .capset, .poll, .attachBacking, .detachBacking: return false
         default: return true
         }
     }

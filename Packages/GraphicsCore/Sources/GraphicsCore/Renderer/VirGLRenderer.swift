@@ -191,6 +191,22 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
         gb_resource_unref(renderer, id)
     }
 
+    func attachBacking(resource: UInt32, ranges: [VirGLBackingRange]) throws(GraphicsFailure) {
+        let renderer = try live(operation: "resourceAttachBacking")
+        let bridgeRanges = ranges.map { range in
+            gb_backing_range(base: range.base, length: range.count)
+        }
+        let status = bridgeRanges.withUnsafeBufferPointer { buffer in
+            gb_resource_attach_backing(renderer, resource, buffer.baseAddress, buffer.count)
+        }
+        try check(status, operation: "resourceAttachBacking")
+    }
+
+    func detachBacking(resource: UInt32) {
+        guard let renderer else { return }
+        gb_resource_detach_backing(renderer, resource)
+    }
+
     func attachResource(context: UInt32, resource: UInt32) throws(GraphicsFailure) {
         let renderer = try live(operation: "contextAttachResource")
         try check(

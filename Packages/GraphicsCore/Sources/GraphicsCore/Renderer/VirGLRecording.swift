@@ -138,6 +138,16 @@ final class RecordingVirGLEngine: VirGLEngine {
         inner.unrefResource(id: id)
     }
 
+    /// Backing is forwarded but not recorded. The pages belong to the guest, and the recording does not hold them.
+    /// A replay supplies its own pages (IR-845).
+    func attachBacking(resource: UInt32, ranges: [VirGLBackingRange]) throws(GraphicsFailure) {
+        try inner.attachBacking(resource: resource, ranges: ranges)
+    }
+
+    func detachBacking(resource: UInt32) {
+        inner.detachBacking(resource: resource)
+    }
+
     func transferWrite(_ transfer: VirGLTransfer, data: inout [UInt8]) throws(GraphicsFailure) {
         recorder.record(.transferWrite(transfer, data: data))
         try inner.transferWrite(transfer, data: &data)

@@ -175,13 +175,17 @@ final class GuestGPUSession {
         } catch {
             return failed(error.errorCode)
         }
-        backings.removeValue(forKey: id)
+        let hadBacking = backings.removeValue(forKey: id) != nil
         shadows.removeValue(forKey: id)
         for (scanout, bound) in scanoutBindings where bound == id {
             scanoutBindings.removeValue(forKey: scanout)
         }
         guard path == .virgl else { return succeeded() }
         return succeeded(renderWork: { engine in
+            // The renderer releases the pages before the resource goes, so it never keeps them past it (IR-844).
+            if hadBacking {
+                engine.detachBacking(resource: id)
+            }
             engine.unrefResource(id: id)
             return nil
         })
@@ -311,12 +315,21 @@ final class GuestGPUSession {
     ) -> GPUCommandReply {
         guard is2DCapable else { return failed(.unspec) }
         var views: [GuestMemory] = []
+        // The host memory of each entry, for the renderer. Only the virgl path gives it to the renderer (IR-836).
+        var ranges: [VirGLBackingRange] = []
         var mappingFailed = false
         do {
             try resources.attachBacking(id: resource, entries: entries) { entry in
                 do throws(VirtioFailure) {
                     let range = GuestPhysicalRange(address: entry.address, length: UInt64(entry.length))
-                    views.append(try context.mapGuestMemory(range))
+                    let view = try context.mapGuestMemory(range)
+                    if path == .virgl {
+                        guard let host = VirGLBackingRange(try view.hostMemory()) else {
+                            throw .guestMemoryRangeInvalid
+                        }
+                        ranges.append(host)
+                    }
+                    views.append(view)
                     return true
                 } catch {
                     mappingFailed = true
@@ -330,7 +343,12 @@ final class GuestGPUSession {
             return failed(.invalidParameter)
         }
         backings[resource] = GuestBacking(entries: entries, views: views)
-        return succeeded()
+        guard path == .virgl else { return succeeded() }
+        let renderRanges = ranges
+        return succeeded(
+            renderWork: work { engine throws(GraphicsFailure) in
+                try engine.attachBacking(resource: resource, ranges: renderRanges)
+            })
     }
 
     private func detachBacking(resource: UInt32) -> GPUCommandReply {
@@ -340,8 +358,13 @@ final class GuestGPUSession {
         } catch {
             return failed(error.errorCode)
         }
-        backings.removeValue(forKey: resource)
-        return succeeded()
+        // Only a resource with backing has pages in the renderer, so only it reaches the renderer (IR-843).
+        let hadBacking = backings.removeValue(forKey: resource) != nil
+        guard hadBacking, path == .virgl else { return succeeded() }
+        return succeeded(renderWork: { engine in
+            engine.detachBacking(resource: resource)
+            return nil
+        })
     }
 
     // MARK: - Capsets

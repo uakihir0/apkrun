@@ -15105,11 +15105,11 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #022 (step 3) |
 | Affected documents | [graphics.md](../02-design/graphics.md) §4.4; [IR-836](#ir-836-the-guest-backing-reaches-virglrenderer-through-attach_iov-decided-for-ir-834) |
 
-**Choice.** `VirtioGPUDevice.deviceWillReset` and `deviceWillStop` do not detach the backing. `gb_renderer_reset` and `gb_release_renderer` free the bridge's arrays after the renderer has dropped its resources. Before either runs, `VirGLBackend.reset` and `shutdown` wait on the render thread (`renderThread.sync`) for the work already queued.
+**Choice.** `VirtioGPUDevice.deviceWillReset` and `deviceWillStop` do not detach the backing. `gb_renderer_reset` and `gb_release_renderer` free the bridge's arrays after the renderer has dropped its resources. `VirGLBackend.reset` and `shutdown` wait on the render thread (`renderThread.sync`) for the work already queued. **Corrected by IR-850:** the device also drains the render thread before the adapter invalidates the guest mappings, not after.
 
 **Reason.** A detach can write into guest memory. For a buffer with `VIRGL_BIND_CUSTOM`, `virgl_renderer_resource_detach_iov` copies the renderer's storage back into the pages (`vrend_pipe_resource_detach_iov`, `src/vrend/vrend_renderer.c` lines 7561 to 7573). At a reset or a stop, the adapter has already called `invalidateGuestState()` (`Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/VZAdapter/VZCustomVirtioDeviceAdapter.swift`, lines 177 to 181), so the device's mappings are no longer valid. `virgl_renderer_reset` and the destruction of a resource do not touch the iovecs (`src/virglrenderer.c`, `vrend_renderer_resource_destroy` at `src/vrend/vrend_renderer.c` line 9082).
 
-**Consequence.** The safety rests on the VZ reset and stop callbacks running before the VM remaps the guest RAM. The VZ header says the memory is invalidated when the VM "is rebooted or shutdown", so the drain inside the callback comes first. This is not checked on a VM (IR-849).
+**Consequence.** The renderer's queued work finishes before the mappings are invalidated (IR-850). The pages then stay valid until the VM reboots or stops, which the VZ header states. This is not checked on a VM (IR-849).
 
 ## IR-844: Unref detaches the backing before the resource goes, in the device and in the bridge
 
@@ -15189,9 +15189,23 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #022 (criterion 5) |
 | Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022; [graphics.md](../02-design/graphics.md) §14 |
 
-**Choice.** The next step is the kmscube run on the VM with this build. The run must check three things that the offline tests cannot: (1) the host pointer of an attached range reads and writes the guest's bytes, so a buffer the guest writes reaches the transfer; (2) a reset and a stop after an attach complete without a fault, which exercises the drain inside the VZ callbacks (IR-843); (3) the attach of resource 4 receives the guest's own entries, so the replay's zeroed pages are no longer needed.
+**Choice.** The next step is the kmscube run on the VM with this build. The run must check three things that the offline tests cannot: (1) the host pointer of an attached range reads and writes the guest's bytes, so a buffer the guest writes reaches the transfer; (2) a reset and a stop after an attach complete without a fault, which exercises the drain before the invalidation (IR-850); (3) the attach of resource 4 receives the guest's own entries, so the replay's zeroed pages are no longer needed.
 
 **Reason.** No VM runs in this task. The pointer is checked only against the SDK header and the code (IR-841). The T1 replay uses zeroed pages, so it proves the renderer accepts the calls, not the guest's bytes.
 
 **Consequence.** Criterion 5 stays unmet until the VM run. This entry is the checklist for that run.
+
+## IR-850: The renderer drains before the guest mappings are invalidated, through a new model callback
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3; the review of this branch) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4; [IR-843](#ir-843-reset-and-stop-free-the-attached-arrays-without-a-detach-and-the-render-thread-finishes-its-queued-work-first) |
+
+**Choice.** `VirtioDeviceModel` gains `deviceWillInvalidateGuestMemory()`, with a no-op default. The VZ adapter calls it on the device queue before `invalidateGuestState()`, at a reset and at a stop. `VirtioGPUDevice` implements it by draining the render thread (`VirGLBackend.drain()`), so the renderer's queued work finishes before the guest mappings are invalidated. The order of the adapter's invalidation and the model's reset and stop callbacks is unchanged.
+
+**Reason.** A review of this branch found that the adapter invalidated the mappings before the render thread drained, which IR-843 had said was not the case. The queued renderer work reads guest pages through raw pointers, and the device does not check those pointers. So the drain must come first. The adapter's order cannot be swapped to fix this, because `EntropyTestDevice` checks in its reset and stop callbacks that the mappings are already invalid (`verifyGuestMemoryMappingInvalidated`). A new callback keeps that contract, and it runs only where a model holds such pointers.
+
+**Consequence.** The protocol gains one requirement with a default, so other models are unaffected. The drain waits on the render thread, as the reset and stop already do. The adapter path needs the VZ framework, so no offline test covers it. The T0 test `theInvalidationDrainRunsTheRendererWorkQueuedBeforeIt` covers the drain, and IR-849 lists the VM check. The T0 reset test calls the device's reset directly, without the adapter's invalidation.
 

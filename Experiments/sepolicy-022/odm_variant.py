@@ -1,10 +1,17 @@
-"""Boot-time ODM variant for the #022 sepolicy experiment (test only, never a product image).
+"""Boot-time ODM variant for the sepolicy overlay and the #099 eglInitialize check (test only).
 
-The variant is the #099 variant bundle (`install-src`, vendor replaced and resealed) with one more
-change: the ODM logical partition `odm_a` holds a copy of `/etc/selinux/precompiled_sepolicy` that
-has the same single allow rule as the runtime test (`allow surfaceflinger sysfs:file { open read }`).
-The top-level `vbmeta_a` carries the new `odm` hashtree descriptor. The bundle is made by the bundle
-tool's `build_variant`, which needs a sparse super and a reseal record.
+The variant is the #099 variant bundle (`install-src`, vendor replaced and resealed) with these
+changes, all in the ODM logical partition `odm_a` unless stated:
+
+- the precompiled policy holds the rules of RULES: the SurfaceFlinger rule of #022 and the uevent
+  and the uevent and DRM-device rules of the app domains (IR-991);
+- the test binary `/bin/apkrun_egl_test` and its init rc `/etc/init/apkrun_egl_test.rc`;
+- the top-level `vbmeta_a` carries the new `odm` hashtree descriptor;
+- `boot/cmdline.txt` ends with `apkrun.test=egl` (set after `build_variant`, with the bundle
+  tool's own functions, as refresh_bundle.py does for the ramdisk).
+
+The bundle is made by the bundle tool's `build_variant`, which needs a sparse super and a reseal
+record.
 
 Stages (each one is checked, and the script stops at the first failed check):
 
@@ -38,11 +45,15 @@ from apkrun_image import erofs as ef  # noqa: E402
 from apkrun_image import lp  # noqa: E402
 from apkrun_image import vendor_inject as vi  # noqa: E402
 from apkrun_image import vendor_reseal as vr  # noqa: E402
+from apkrun_image.runtime_manifest import validate  # noqa: E402
+from apkrun_image.sign import key_id_of, render_signature, verify_signature  # noqa: E402
+from apkrun_image.bundle import _checksums, _file_entry, _load_signing_key  # noqa: E402
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat  # noqa: E402
 
 SRC = Path("/tmp/apkrun-099-vh-install-src/android-bundle")
 WORK = Path(os.environ.get("APKRUN_022_ODM_WORK", "/tmp/apkrun-022-odm"))
 TOOLS = Path("/tmp/apkrun-099-lp-erofs/tools")
-EDITOR = Path("/tmp/apkrun-022-sepol-bin/policy-edit")
+EDITOR = Path(os.environ.get("APKRUN_022_POLICY_EDIT", "/tmp/apkrun-022-sepol-bin/policy-edit"))
 KEY = Path("~/.config/apkrun/dev-image-key").expanduser()
 PARTITION = "odm_a"
 VERITY = "odm"
@@ -51,7 +62,37 @@ UUID = "0220220a-0220-4220-8220-022022022022"
 CHUNK = 64 * 1024 * 1024
 BLOCK = 4096
 PART_PRECOMPILED_STOCK_SHA = "6a1f95dad28bdf50"  # prefix of the file the guest loaded at boot
-PART_PRECOMPILED_EDIT_SHA = "cbcad7113c3acf70"  # prefix of the boot policy plus open and read
+# The rules added to the stock precompiled policy: (source type, target type, class, permission).
+# SurfaceFlinger: the rule of #022 (IR-942). platform_app: the uevent read that aborted platform_app
+# RenderThreads (IR-954; requested for this variant). untrusted_app: the domain of HelloText, which
+# targets SDK 37 with the test key (seapp_contexts: `minTargetSdkVersion=37 domain=untrusted_app`,
+# IR-991). The DRM-device rules copy what SurfaceFlinger's EGL uses on the same node; the app
+# domains have only getattr there. The last rule lets init run the shell of the eglInitialize check
+# in its own domain (egl_check/apkrun_egl_test.rc, IR-992).
+RULES = (
+    ("surfaceflinger", "sysfs", "file", "open"),
+    ("surfaceflinger", "sysfs", "file", "read"),
+    ("platform_app", "sysfs", "file", "open"),
+    ("platform_app", "sysfs", "file", "read"),
+    ("untrusted_app", "sysfs", "file", "open"),
+    ("untrusted_app", "sysfs", "file", "read"),
+    ("untrusted_app", "graphics_device", "chr_file", "open"),
+    ("untrusted_app", "graphics_device", "chr_file", "read"),
+    ("untrusted_app", "graphics_device", "chr_file", "write"),
+    ("untrusted_app", "graphics_device", "chr_file", "ioctl"),
+    ("untrusted_app", "graphics_device", "chr_file", "map"),
+    ("init", "shell_exec", "file", "execute_no_trans"),
+)
+EGL_DIR = REPO / "Experiments" / "sepolicy-022" / "egl_check"
+EGL_BINARY = Path(os.environ.get("APKRUN_022_EGL_BIN", "/tmp/apkrun-odmc/egl/apkrun_egl_test"))
+EGL_BIN_PATH = "/bin/apkrun_egl_test"
+EGL_BIN_LABEL = "u:object_r:surfaceflinger_exec:s0"  # init then starts it in the surfaceflinger domain
+EGL_DIR_LABEL = "u:object_r:vendor_file:s0"  # the label of /odm itself
+EGL_RC_PATH = "/etc/init/apkrun_egl_test.rc"
+EGL_RC_LABEL = "u:object_r:vendor_configs_file:s0"  # the label of the other /odm/etc files
+ETC_INIT_DIR_LABEL = "u:object_r:vendor_configs_file:s0"
+CMDLINE_PATH = "boot/cmdline.txt"
+CMDLINE_TOKEN = "apkrun.test=egl"
 
 
 class Check(SystemExit):
@@ -272,6 +313,85 @@ def prepare(args: argparse.Namespace) -> None:
     print("prepare: ok")
 
 
+def policy_entries(text: str) -> dict[tuple[str, str, str, str], int]:
+    """Map each avtab key of a `policy_edit dump` to its allow data (`specified` is part of the key)."""
+    entries: dict[tuple[str, str, str, str], int] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 6 and parts[0] == "avtab":
+            entries[(parts[1], parts[2], parts[3], parts[4])] = int(parts[5], 16)
+    return entries
+
+
+def policy_changes(before: Path, after: Path) -> dict[tuple[str, str, str, str], tuple[int, int]]:
+    """Return every avtab key whose data differs between two policies, as (before, after)."""
+    old = policy_entries(subprocess.run([str(EDITOR), "dump", str(before)], check=True,
+                                        capture_output=True, text=True).stdout)
+    new = policy_entries(subprocess.run([str(EDITOR), "dump", str(after)], check=True,
+                                        capture_output=True, text=True).stdout)
+    return {key: (old.get(key, 0), new.get(key, 0))
+            for key in set(old) | set(new) if old.get(key, 0) != new.get(key, 0)}
+
+
+def expected_policy_changes(before: Path, after: Path) -> None:
+    """Check that the edit added exactly the bits of RULES: one key per (source, target, class)."""
+    keys: dict[tuple[str, str, str], int] = {}
+    for src, tgt, cls, _perm in RULES:
+        keys[(src, tgt, cls)] = keys.get((src, tgt, cls), 0) + 1
+    changes = policy_changes(before, after)
+    expected = {(src, tgt, cls, "0x0001") for src, tgt, cls in keys}
+    need(set(changes) == expected,
+         f"the policy edit changed other avtab keys than the rules: {sorted(set(changes) ^ expected)[:4]}")
+    for (src, tgt, cls, _spec), (old, new) in changes.items():
+        added = new & ~old
+        need(new & old == old, f"{src} {tgt}:{cls} lost an allow bit")
+        need(bin(added).count("1") == keys[(src, tgt, cls)],
+             f"{src} {tgt}:{cls} gained {bin(added).count('1')} bits, expected {keys[(src, tgt, cls)]}")
+    print(f"policy edit: {len(changes)} avtab keys changed, the bits are the {len(RULES)} rules")
+
+
+def overlay_members() -> list[ef.TarMember]:
+    """The new ODM entries: /bin and /etc/init, the test binary, and its init rc."""
+    stamp = vi.BUILD_TIMESTAMP
+    return [
+        ef.TarMember(path="/bin", kind=ef.DIRECTORY, mode=0o755, uid=0, gid=0, mtime=stamp,
+                     label=EGL_DIR_LABEL),
+        ef.TarMember(path=EGL_BIN_PATH, kind=ef.REGULAR_FILE, mode=0o755, uid=0, gid=0,
+                     mtime=stamp, label=EGL_BIN_LABEL, source=EGL_BINARY),
+        ef.TarMember(path="/etc/init", kind=ef.DIRECTORY, mode=0o755, uid=0, gid=0, mtime=stamp,
+                     label=ETC_INIT_DIR_LABEL),
+        ef.TarMember(path=EGL_RC_PATH, kind=ef.REGULAR_FILE, mode=0o644, uid=0, gid=0,
+                     mtime=stamp, label=EGL_RC_LABEL, source=EGL_DIR / "apkrun_egl_test.rc"),
+    ]
+
+
+def set_command_line(bundle: Path) -> None:
+    """Append the test token to boot/cmdline.txt and refresh the manifest, the checksums, and the signature."""
+    key = _load_signing_key(KEY)
+    public_key = key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    keys = {key_id_of(public_key): public_key}
+    manifest = json.loads((bundle / "manifest.json").read_bytes())
+    path = bundle / CMDLINE_PATH
+    text = path.read_text(encoding="ascii")
+    need(CMDLINE_TOKEN not in text.split(), "the command line already has the test token")
+    had_newline = text.endswith("\n")
+    line = text.rstrip("\n") + " " + CMDLINE_TOKEN + ("\n" if had_newline else "")
+    path.write_text(line, encoding="ascii")
+    files = [_file_entry(bundle, entry["path"]) for entry in manifest["files"]]
+    by_path = {entry["path"]: entry for entry in files}
+    manifest["boot"]["cmdline"] = by_path[CMDLINE_PATH]
+    manifest["files"] = files
+    violations = validate(manifest)
+    need(not violations, f"the refreshed manifest fails {violations[0] if violations else ''}")
+    new_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (bundle / "manifest.json").write_bytes(new_bytes)
+    (bundle / "SHA256SUMS").write_text(_checksums(files), encoding="ascii")
+    signature = render_signature(new_bytes, key)
+    (bundle / "manifest.sig").write_bytes(signature)
+    verify_signature(new_bytes, signature, keys)
+    print(f"command line: {line.strip()}")
+
+
 def build(args: argparse.Namespace) -> None:
     avbtool = avbtool_path()
     manifest = json.loads((SRC / "manifest.json").read_text())
@@ -286,14 +406,16 @@ def build(args: argparse.Namespace) -> None:
     entries = ef.read_tree(tools, WORK / "odm_fs_stock.img", WORK / "tree-stock")
     tree_stock = WORK / "tree-stock"
 
-    # 1. Edit the precompiled policy with the same two allow calls as the runtime test.
+    # 1. Edit the precompiled policy with one `add` per rule of RULES (the stock file is the base).
     shutil.copyfile(tree_stock / PRECOMPILED.lstrip("/"), WORK / "precompiled.orig")
-    for step, src, dst in (("open", "precompiled.orig", "precompiled.step1"),
-                           ("read", "precompiled.step1", "precompiled.new")):
-        subprocess.run([str(EDITOR), "add", str(WORK / src), str(WORK / dst),
-                        "surfaceflinger", "sysfs", "file", step], check=True, capture_output=True)
-    need(sha256(WORK / "precompiled.new").startswith(PART_PRECOMPILED_EDIT_SHA),
-         "the edited precompiled policy is not the boot policy plus open and read")
+    current = "precompiled.orig"
+    for index, (src, tgt, cls, perm) in enumerate(RULES):
+        target = f"precompiled.step{index}"
+        subprocess.run([str(EDITOR), "add", str(WORK / current), str(WORK / target),
+                        src, tgt, cls, perm], check=True, capture_output=True)
+        current = target
+    shutil.copyfile(WORK / current, WORK / "precompiled.new")
+    expected_policy_changes(WORK / "precompiled.orig", WORK / "precompiled.new")
     print(f"edited precompiled sha256 {sha256(WORK / 'precompiled.new')}")
 
     # 2. Rebuild the erofs image with the vendor pipeline; the stock round trip must reproduce it.
@@ -312,16 +434,24 @@ def build(args: argparse.Namespace) -> None:
         if member.path == PRECOMPILED:
             member = dataclasses.replace(member, source=WORK / "precompiled.new")
         members.append(member)
+    overlay = overlay_members()
+    members = sorted(members + overlay, key=lambda member: member.path)
     odm_fs = vi._rebuild(tools, members, WORK, "odm", UUID)
     ef.export_tree(tools, odm_fs, WORK / "tree-new")
     entries_new = ef.read_tree(tools, odm_fs, WORK / "tree-new")
-    problems = vi.compare_entries(entries, entries_new, directory_sizes=True)
+    problems = vi.compare_entries(entries, entries_new, added=[m.path for m in overlay])
     expected = {f"{PRECOMPILED}: sha256 differs", f"{PRECOMPILED}: size differs"}
     need(set(problems) == expected,
-         f"the rebuild differs from the stock other than the policy's sha256 and size: {problems[:4]}")
+         f"the rebuild differs from the stock other than the policy and the overlay: {problems[:4]}")
     need(entries_new[PRECOMPILED].sha256 == sha256(WORK / "precompiled.new"),
          "the rebuilt policy is not the edited one")
-    print(f"rebuild changed only {PRECOMPILED}: sha256 and size (the compared fields)")
+    for member in overlay:
+        got = entries_new[member.path]
+        need(got.label == member.label and got.mode == member.mode and got.uid == 0 and got.gid == 0,
+             f"{member.path}: label, mode, or owner is not the one set")
+        if member.source is not None:
+            need(got.sha256 == sha256(member.source), f"{member.path}: content differs from the source")
+    print(f"rebuild added {[m.path for m in overlay]} and changed only {PRECOMPILED} (sha256 and size)")
     shutil.rmtree(WORK / "tree-new")
 
     _, fs_blocks, _ = ef.image_geometry(tools, odm_fs)
@@ -387,6 +517,7 @@ def build(args: argparse.Namespace) -> None:
     )
     print(f"bundle written: {out}")
     print(f"variant manifest sha256 {result['variantManifestSHA256']}")
+    set_command_line(out)
     print("build: ok")
 
 
@@ -452,7 +583,27 @@ def check(args: argparse.Namespace) -> None:
                     WORK / "check" / "precompiled_final")
     got = sha256(WORK / "check" / "precompiled_final")
     print(f"precompiled in the variant odm sha256 {got}")
-    need(got.startswith(PART_PRECOMPILED_EDIT_SHA), "the variant odm does not carry the edited policy")
+    expected_policy_changes(WORK / "tree-stock" / PRECOMPILED.lstrip("/"), WORK / "check" / "precompiled_final")
+    for member in overlay_members():
+        if member.source is not None:
+            destination = WORK / "check" / "overlay" / member.path.lstrip("/")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            ef.extract_file(tools, WORK / "check" / "odm_final_fs.img", member.path, destination)
+    need(sha256(WORK / "check" / "overlay" / EGL_BIN_PATH.lstrip("/")) == sha256(EGL_BINARY),
+         "the binary in the variant odm is not the built one")
+    need(sha256(WORK / "check" / "overlay" / EGL_RC_PATH.lstrip("/")) == sha256(EGL_DIR / "apkrun_egl_test.rc"),
+         "the rc in the variant odm is not the committed one")
+    print("odm overlay: the test binary and the rc are in the variant odm")
+    manifest_bytes = (out / "manifest.json").read_bytes()
+    key = _load_signing_key(KEY)
+    public_key = key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    verify_signature(manifest_bytes, (out / "manifest.sig").read_bytes(),
+                     {key_id_of(public_key): public_key})
+    need(_checksums(manifest["files"]) == (out / "SHA256SUMS").read_text(encoding="ascii"),
+         "the SHA256SUMS does not match the manifest")
+    need(CMDLINE_TOKEN in (out / CMDLINE_PATH).read_text(encoding="ascii").split(),
+         "the variant command line lacks the test token")
+    print(f"manifest.sig verified; {CMDLINE_PATH}: {(out / CMDLINE_PATH).read_text(encoding='ascii').strip()}")
     print("check: ok")
 
 

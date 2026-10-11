@@ -14942,3 +14942,87 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** A record that says the host read no pixels, or that the counters are zero, is not supported by these checks. The checks stay as guards, which will catch a readback only once an increment is wired.
 
+## IR-830: The first rejected submit returns EINVAL, with three virglrenderer messages
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3); follows [IR-813](#ir-813-the-host-renderer-rejects-all-61-submit_3d-of-the-kmscube-context-so-the-linux-virgl-check-does-not-show-host-rendering) |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 criterion 5; [graphics.md](../02-design/graphics.md) §4.5, §14 |
+
+**Choice.** The first rejected submit is recording operation 16, the 5896-byte stream of context 2. `virgl_renderer_submit_cmd` returns **22 (`EINVAL`)**. virglrenderer logs three messages for it, in this order: `vrend_renderer_transfer_iov: context error reported 2 "kmscube" Illegal resource 4`, `context 2 failed to dispatch TRANSFER3D: 22`, and `vrend_decode_ctx_submit_cmd: context error reported 2 "kmscube" Illegal command buffer 852011`. The replay test pins the code and the messages (commit 20a64d0).
+
+**Reason.** The bridge maps the value to `GB_E_SUBMIT_OPERATION` and drops it (IR-813), so the value and the messages come from the test-only path that commit 20a64d0 adds, and not from the normal path. The third message names the header dword `0x000D002B`, which is `TRANSFER3D` (0x2B) with length 13. The three messages match the first failure in the live log (`vm-run1.log`, lines 42 to 44), so the replay reproduces that failure. The value 22 is `EINVAL` in the SDK's `errno.h`.
+
+**Consequence.** For the first rejection, IR-813's statement that the cause is not visible no longer holds in the test path. The normal path still reports only `GB_E_SUBMIT_OPERATION`, and its behaviour is unchanged. The cause is IR-831.
+
+## IR-831: The first rejected submit is a TRANSFER3D to a buffer that the renderer has no guest backing for
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, steps 2 and 3); IR-813 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §4.5, §14 (T1); [IR-465](#ir-465-backing-is-gathered-by-copies-not-handed-to-the-renderer) |
+
+**Choice.** The owner is the host graphics path: GraphicsCore's device, which keeps the guest backing and never gives it to the renderer (IR-465), and the bridge. It is not virglrenderer, which behaves as its contract requires, and it is not the guest, whose stream is legal virgl. The cause: the first command of operation 16 is a `TRANSFER3D` to resource 4 (a buffer, `target` 0, 864 bytes, bind 16) with direction TO_HOST, and the renderer has no iov for resource 4.
+
+**Reason.** The raw dwords are `000d002b 00000004 00000000 0000000a 00000000 00000000 00000000 00000000 00000000 00000360 00000001 00000001 00000000 00000001`. Resource 4 is attached to context 2 at operation 15, so the context lookup in `vrend_renderer_transfer_iov` (`src/vrend/vrend_renderer.c`, line 10224) succeeds. The check that fails is `check_transfer_iovec` (line 9236), which accepts a transfer only when the call has an iovec or the resource has `res->iov`. An in-stream `TRANSFER3D` passes no iovec (`vrend_decode_transfer3d` in `src/vrend/vrend_decode.c` line 1495 leaves it zero), and resource 4 is not an EGL image, so the exception at line 10238 does not apply. The only code that sets `res->iov` is the backing-attach API, which the bridge never calls, and the recording has no backing operation. An experiment confirms it. A temporary test, which was not committed and was deleted, replayed the stream with only that `TRANSFER3D` removed from operation 16. It attempted all 149 operations and had 0 failures, so the 61 rejections depend on this one command.
+
+**Consequence.** Criterion 5 is not met on this stream. IR-465's reason says that the attached iovec is not needed for transfers, which holds for the explicit `TRANSFER_TO_HOST` command of virtio-gpu. It does not hold for the in-stream `TRANSFER3D` of `SUBMIT_3D`, which virglrenderer serves from `res->iov`. This is not a small host bug. The fix options are in IR-834.
+
+## IR-832: The other 60 rejections are DRAW_VBO calls that fail with ENOTRECOVERABLE, because the first failure marks the context in error
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §14 (T1) |
+
+**Choice.** Count the 61 rejections as one cause and 60 consequences. Operations 21 to 139 (odd) each fail in `DRAW_VBO` with **104**, which is `ENOTRECOVERABLE` in the SDK's `errno.h`. Each logs `context 2 failed to dispatch DRAW_VBO: 104`. The replay test pins this as well.
+
+**Reason.** `vrend_report_context_error_internal` (`src/vrend/vrend_renderer.c`, line 1134) sets `ctx->in_error = true` when the first `TRANSFER3D` fails. `vrend_draw_vbo` (line 5965) returns `ENOTRECOVERABLE` at its start when `ctx->in_error` is set (line 5976). The later submits pass the context switch because context 2 stays the current context with no switch pending, and `vrend_hw_switch_context` returns true before its `in_error` check in that case. The experiment in IR-831 removes all 60 rejections when the first command is removed, which matches this reading.
+
+**Consequence.** The count 61 mixes one cause with 60 consequences. A fix for the first command clears the rest, but that is shown only by removing the command in a test, not by a fix. The live log (`vm-run1.log`) has no virgl message for these 60 calls, which is discussed in IR-835.
+
+## IR-833: The test-only exposure keeps the bridge status path and the normal submit path unchanged
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3); IR-813 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §5.2, §14 (T1), §16 |
+
+**Choice.** The bridge keeps the raw result of the last `virgl_renderer_submit_cmd` in the renderer (`gb_last_submit_result`). The store is unconditional, and no code path reads it except the test. The messages and the list of rejections are compiled only with `APKRUN_TEST_READBACK` (`VirGLSubmitDiagnostics.swift`, `VirGLRenderer.submit`, `VirtioGPUDevice.submitRejectionsForTest`). Production builds record nothing new, and the status mapping, the logging and the counters are unchanged.
+
+**Reason.** The bridge is the only place that sees the raw value (IR-813). The messages arrive through the per-renderer log callback, so the test sink lives in the callback context. The Swift importer does not see the `#if` of a C file, so the declaration is compiled in every build, and only the test calls it. The replay test still pins the 61 indices, and it now pins the code and the messages of the first and the later rejections.
+
+**Consequence.** The rejected count is 61 before this step and 61 after it. The step changes no behaviour, and it fixes nothing. `gb_last_submit_result` is public in the bridge header, so a later use for production logging needs its own IR entry.
+
+## IR-834: The host fix needs a design decision on backing for in-stream transfers, so #022 stops here
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, steps 2 and 3); IR-465 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §4.5, §15; [IR-465](#ir-465-backing-is-gathered-by-copies-not-handed-to-the-renderer); [ADR index](../01-architecture/decisions/README.md) |
+
+**Choice.** No host fix in #022. Criterion 5 stays unmet, and the criterion itself is not changed (per the brief). The owner is the host graphics path. Three options need a maintainer decision: (a) zero-copy, where `VirtioDeviceCore` gains a pointer API and `virgl_renderer_resource_attach_iov` receives views of guest memory, with lifetime rules across reset and stop (the follow-up of IR-465); (b) a staged copy, where the device gathers the backing of the resources that a stream transfers into host buffers attached as iovecs before `submit`, and copies back after `FROM_HOST` transfers, so the renderer never sees guest memory; (c) a rewrite of the in-stream `TRANSFER3D` into `RESOURCE_INLINE_WRITE` with the gathered bytes, which changes the stream length.
+
+**Reason.** Option (a) reverses the rule that the renderer never holds a pointer into guest memory (IR-465, graphics.md §4.4). AGENTS.md §15 requires an ADR before a change to an architectural decision. Option (b) adds a stream scan to the submit path, and option (c) rewrites the guest's commands. None is a small or clear host bug, so the brief's rule for a fix does not apply.
+
+**Consequence.** The replay test keeps pinning the 61 rejections, so a fix shows up as a change. The first step of the decision is which option the maintainer chooses. Option (a) or (b) would need an ADR and an update of graphics.md §4.4.
+
+## IR-835: The live log shows the first failure's messages only, and the reason for the rest is not established
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3); IR-813 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §7, §14 (T1) |
+
+**Choice.** Record the difference and make no change. Do not count virgl messages in the live log as a record of the later failures.
+
+**Reason.** `vm-run1.log` holds seven `VirGL:` lines in total. Three belong to the first failure, and four to the start of the renderer. Each of the 60 later failures has only the `graphics renderer operation failed` line. The replay sink records `context 2 failed to dispatch DRAW_VBO: 104` for each of them. The live run went through the device queue, and the replay calls the renderer directly. The cause of the difference is not established, and this task did not check it. It may be in the logging path, the build, or the stream.
+
+**Consequence.** The replay is the record for the messages of the later calls, and the live log is not a complete record. IR-813's note that the live log does not name the calls still holds for the later calls.
+

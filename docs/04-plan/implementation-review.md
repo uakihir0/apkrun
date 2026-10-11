@@ -14396,3 +14396,111 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** A file with a damaged backup copy is refused by the writer (a test covers this), but `read_dynamic_partitions` still accepts it.
 
+## IR-700: The variant keeps the stock `imageVersion` and `kind`, so a development install of it would take the stock entry's name
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.2 (`kind`), §7.2 (S1, S2, S13); [android-image.md](../02-design/android-image.md) §4.6, §10.3 |
+
+**Choice.** The variant's manifest keeps `imageVersion` `2026.10.0-cf16373615-arm64` and `kind` `stock`. Its identity is its path, the super partition hash in its manifest, and its record. Decision needed: whether a variant gets an identity of its own (a version, a kind, or a field), and where a development install of a variant is kept.
+
+**Reason.** The manifest has `additionalProperties: false`, S1 requires the base of `imageVersion` to equal `cf<buildId>`, and S2 fixes `kind` to the origin, so there is no slot for a variant. The consequence is concrete: `apkrun dev image install <dir>` renames the install to `Images/<imageVersion>/` and sets `current` (§10.3), so installing the variant that way would take the stock entry's name, and `apkrun dev boot` boots `current`. The VM step cannot boot the variant until this decision is made.
+
+## IR-701: The variant copies `os.img` and writes the expanded super into it, and `build_disks` is not changed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.5, §4.6 |
+
+**Choice.** `apkrun_image.bundle_variant.build_variant` writes a new `disks/os.img` of the stock size. Outside the super partition it copies the stock bytes, with all-zero blocks left as holes. Inside the super partition it writes the writer's sparse output, expanded at the partition's offset. It then compares the copy with the stock: every byte outside the replaced extents of `vendor_a` is equal, and `vendor_a` reads back as the replacement followed by zeros. Decision needed: whether `bundle` should accept a replacement artifact for a later build. This step does not change it.
+
+**Reason.** `build_disks` takes every partition from an artifact of the archive, and no artifact can name a replacement, so the disk cannot be rebuilt with the new super without a new artifact kind. A clone of the stock disk, overwritten by the expansion, would keep stock bytes wherever the replacement is zero, because `write_skipping_zeros` does not write zero blocks. A new file avoids that.
+
+## IR-702: The development variant is unsigned at the top level (IR-650), and its manifest is signed with the developer key
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline; IR-650) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.2 (`kind`: `stock` is development only), §6.1 |
+
+**Choice.** The variant is a development bundle. Its top-level vbmeta (`vbmeta_a` in `os.img`) is the stock partition and is not signed again, so the vendor descriptor still holds the stock root digest (IR-625). The bootconfig keeps the stock vbmeta digest, which is right because `vbmeta_a` is unchanged. `manifest.sig` is made with `~/.config/apkrun/dev-image-key` (key ID `55ab0dd032d0ce0e`), because the bundle format requires a signature and Debug builds trust that key. The first boot decides whether dm-verity blocks the replaced `vendor_a` (IR-650).
+
+**Reason.** The vendored avbtool signs only with RSA (IR-650), and the developer key is Ed25519. The bundle signature and the top-level vbmeta are separate signatures, and only the bundle signature is made here. The reference states that `stock` is development only, so a stock-kind variant is no wider than the stock bundle it comes from.
+
+## IR-703: The replaced partition keeps its size, so `vendor_a` does not grow and the disk layout does not change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline; IR-682) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** The variant replaces `vendor_a` with the injected image, which is exactly the partition's size, 291,229,696 bytes, at byte 1,468,006,400 of the super (byte 1,615,855,616 of `os.img`). The writer refuses a larger image. The GPT, the partition table, the metadata copies, and every other partition keep their bytes. Decision needed: none for this step. The growth question of IR-682 stays open.
+
+**Reason.** The injected image fits its extent (IR-626), and growing a partition changes the metadata, which this writer does not do (IR-682).
+
+## IR-704: The stock super is taken from the archive the bundle was built from, and the bundle's super must expand from it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.6; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.5 (`disks`) |
+
+**Choice.** `bundle-variant` opens the super artifact of the Android image manifest from the archive, which checks its SHA-256 and size, and expands it. It refuses the variant unless the expansion has the SHA-256 of the bundle's super partition (`7dd80d27…`). The writer then works on that sparse artifact, so the variant is the stock super with one partition replaced.
+
+**Reason.** The claim of the variant is that the stock bundle changes in one partition only. That holds only if the bundle's super is the archive's super. The check costs one more expansion of the 8 GiB super, and it does not change the output.
+
+## IR-705: The variant record is written beside the bundle, not inside it, because the bundle lists every file it holds
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.10 (`files`), §7.2 (S3), §13 (T1, the install cases) |
+
+**Choice.** The record `<bundle>.variant.json` (here `/tmp/apkrun-099-bundle-mesa/android-bundle.variant.json`) names the stock and variant manifest hashes, the replacement's SHA-256, the writer's counts, and the decisions IR-650, IR-682, and IR-700. It sits next to the bundle directory. Decision needed: whether a bundle should carry such a record. That needs a schema field, which is a change to §4 of the reference.
+
+**Reason.** `files` must name every file of the bundle except the three metadata files, and S3 rejects an entry that no block names. The install tests of the reference include an extra file. A record inside the bundle would fail both.
+
+## IR-706: The tests build their stock bundle from a copy of the fixture archive with a synthetic super, not from the fixture's own super
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [AGENTS.md](../../AGENTS.md) §10; IR-665; IR-686 |
+
+**Choice.** `Images/tools/tests/test_bundle_variant.py` builds one stock bundle per module. It uses a copy of the fixture archive whose `super.img` is the synthetic stock-like super of `test_lp_write.py`, with the manifest and the fetch record given the copy's sizes and hashes. It makes the inventory with the inventory tool, because the fixture's inventory describes the fixture super. The eight tests take about 41 s. The real `vendor_a` is not in the test suite; it was checked once outside the repository (the status in M02 #099). Decision needed: whether the fixture set should hold a super without a checksum, which would remove the copy.
+
+**Reason.** The writer refuses a sparse super with a whole-image checksum (IR-665), and the fixture's super has one. The stock super has none (IR-686). The fixture's inventory describes the fixture super, so the manifest check would refuse the copy with it.
+
+## IR-707: The variant is a module of its own, and it reuses the bundle's private helpers rather than adding a mode to `bundle.py`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [modules.md](../01-architecture/modules.md) (the image tools); [android-image.md](../02-design/android-image.md) §10 (bundle) |
+
+**Choice.** The variant is `Images/tools/apkrun_image/bundle_variant.py`, and it imports the bundle module's `_file_entry`, `_checksums`, `_load_signing_key`, `_sha256`, and `_staging`, and the disk module's `_hash_range`, and the extraction helpers `_open_artifact` and `_role_artifact`. `bundle.py` is unchanged. Decision needed: whether the shared helpers should become public names in a module of their own.
+
+**Reason.** A mode in `bundle.py` would make the stock build and the variant share one path that is easy to change without noticing. The existing modules already import each other's private helpers (`bundle.py` imports `_archive_paths` from `manifest.py`), so this follows the code that is there.
+
+## IR-708: `bundle-variant` takes its replacement only from an `inject-vendor` output, and it checks the file against that output's record
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 3, offline) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (the development commands); IR-620; IR-633 |
+
+**Choice.** The command is `python3 -m apkrun_image bundle-variant`, a command of the image tools, not of `apkrun`. Its `--inject-output` directory is the output of `inject-vendor`. The command refuses the replacement unless `inject.json` names the partition and the SHA-256 of the file. Decision needed: whether the command stays a development tool, or whether `apkrun dev` gets a command that builds a variant (its install then needs IR-700).
+
+**Reason.** The record of the injection is the only place that holds the injection's hash, so a file that is not that output is refused. The command is a development step, because a variant is a development bundle (IR-702).
+

@@ -16049,7 +16049,7 @@ HelloText is not `platform_app`. Its seapp line is `user=_app minTargetSdkVersio
 
 **Reason.** The denial of IR-954 was one read of the sysfs `uevent` node. The kernel checks the read during path lookup, before the open check, so `open` and `read` are both needed. The first boot's console had no platform_app read or open denial after the rules, only `getattr`. The third boot's logcat has one `untrusted_app` denial, `getattr` on a PCI `uevent` node, and no card0 denial. The DRM-device rules are therefore a prediction that no boot has confirmed (IR-999).
 
-**Verification.** The build compares the stock and the edited policy dumps: four avtab keys change, and each gains the bits of its rules (eleven rules). `check` reads the policy back from the variant's `odm_a`, verifies `manifest.sig` with the developer key, and checks `SHA256SUMS`. The installed image passes `shasum -a 256 -c` for its six files.
+**Verification.** The build compares the stock and the edited policy dumps: four avtab keys change, and each gains the bits of its rules (eleven rules). `check` reads the policy back from the variant's `odm_a`, verifies `manifest.sig` with the developer key, and checks `SHA256SUMS`. The installed image passes `shasum -a 256 -c` for its six files (checked after each install; the outputs were not saved).
 
 ## IR-992: The eglInitialize check runs the binary directly as a service with `seclabel u:r:surfaceflinger:s0`, with no shell and no gate
 
@@ -16075,7 +16075,7 @@ on property:sys.boot_completed=1
 
 **Reason.** Boot 1 (IR-994) refused a service without a label whose executable has no domain transition from init. Boot 2 (IR-995) used a shell in the init domain to gate on `/proc/cmdline`; it got past that check with `seclabel u:r:init:s0`, but init refused to expand `$l` in the rc text. The coordinator asked for the third boot to run the binary directly, with no shell and no gate. An explicit `seclabel` skips the no-transition check, and the rights needed are the ones that SurfaceFlinger already has. The policy of this boot allows `init` to set its own exec context, to execute and to read and map the binary's file, to transition to `surfaceflinger`, and `surfaceflinger` to enter the binary (`policy_edit query` and `trans`, IR-990). The shell rule `init shell_exec:file { execute_no_trans }` is removed with the shell (IR-991).
 
-**Consequence.** The service started in the surfaceflinger domain (`started service 'apkrun_egl_test' has pid 3301`) and exited with status 0 after 46 ms. The log line is missing from logcat, which leaves criterion 2 open (IR-997).
+**Consequence.** The service started in the surfaceflinger domain (`started service 'apkrun_egl_test' has pid 3301`) and exited with status 0 after 46 ms. Its log line is in the guest's logcat capture, but not in the adb dumps, which is why criterion 2 was checked against the capture (IR-997). After the boot, the rc's first comment line was changed to drop the old token name. init ignores comments, and the rest of the file is the booted text.
 
 ## IR-993: The command-line gate and its `apkrun.test=egl` token are removed for the third boot; this is a test-only change
 
@@ -16087,9 +16087,9 @@ on property:sys.boot_completed=1
 
 **Choice.** The gate is removed, and the test runs once on `sys.boot_completed`. `set_command_line` and its constants are deleted from `odm_variant.py`, and `build` no longer changes `boot/cmdline.txt`. The third variant's `boot/cmdline.txt` is byte-identical to the #099 variant's, so no kernel argument is passed. This is a test-variant change only. It is not a product change, and the test now runs on every boot that reaches `sys.boot_completed`.
 
-**Reason.** The coordinator asked for the third boot to remove the `$` expansion and the command-line gate (IR-990 range). The token was the gate's only input, and `apkrun dev boot` has no kernel-argument option (`CLI/apkrun/Dev/DevBoot.swift`), so keeping it would have meant an edit of the bundle that nothing reads. The record of IR-993's first version, that the variant record is rewritten with the final manifest hash, is no longer needed for the token, and `check` still asserts that the record hashes the final manifest.
+**Reason.** The coordinator asked for the third boot to remove the `$` expansion and the command-line gate (IR-990 range). The token was the gate's only input. `apkrun dev boot` has no kernel-argument option: its options are `--gpu`, `--cpus`, `--memory-gib`, `--userdata-gib`, `--console`, `--reset`, `--stop-when-ready`, and `--guest-dir` (`CLI/apkrun/Dev/DevBoot.swift`), and none sets a kernel argument. So a token could only come from editing the bundle, which nothing would read once the gate is gone. `check` still asserts that the variant record hashes the final manifest, which the rewrite of the second variant made true (IR-998).
 
-**Verification.** `cmp` of the third variant's `boot/cmdline.txt` against the #099 variant's, which is equal. After the install, `shasum -a 256 -c SHA256SUMS` passes for six files, and the installed `manifest.json` is byte-equal to the bundle's. The logs of the third boot show the service started by `sys.boot_completed` with no gate line.
+**Verification.** `cmp` of the third variant's `boot/cmdline.txt` against the #099 variant's, which is equal. After each install, `shasum -a 256 -c SHA256SUMS` passed for six files and the installed `manifest.json` was byte-equal to the bundle's (checked after each install; the outputs were not saved). The logs of the third boot show the service started by `sys.boot_completed` with no gate line.
 
 ## IR-994: Boot 1 reached `sys.boot_completed` in 15 s; init refused the eglInitialize service, and the tap step found no HelloText node
 
@@ -16105,6 +16105,8 @@ on property:sys.boot_completed=1
 - The first failing line for #099 is `init: Command 'start apkrun_egl_test' action=sys.boot_completed=1 (/odm/etc/init/apkrun_egl_test.rc:14) took 1ms and failed: Could not start service: File /system/bin/sh(labeled "u:object_r:shell_exec:s0") has incorrect label or no domain transition from u:r:init:s0 to another SELinux domain defined.` `apkrun-test.txt` is empty.
 - For #016: `adb install -r` printed `Success`, and `am start -W` printed `Status: ok` and `LaunchState: COLD`. logcat has `ActivityTaskManager: Displayed io.apkrun.fixture.hellotext/.MainActivity`, and the process runs as `u:r:untrusted_app:s0:c123,c256,c512,c768`. `uiautomator dump` returned 70 `com.android.systemui` nodes and no HelloText node, so no button position was available, and no tap was sent.
 - The console has no platform_app read or open denial on `uevent`, so the rules of IR-991 removed them. Only `getattr` denials remain for the app domains.
+- The dump's text contains `Unlock for all features and data`, the lock screen (`session1/ui.xml`).
+- The guest's logcat (`session1/logcat-end.txt`) has 278 `F libc : Fatal signal 6 (SIGABRT)` lines from `droid.launcher3`, each with the abort message `Failed to create context, error = EGL_NOT_INITIALIZED`. The app was not examined further (IR-999).
 - Stop: SIGINT at 16:52:37, exit status 0 at 16:52:48, and no VM process left (`vm-processes-after-stop.txt` is empty).
 
 **Reason.** The second boot was used only after a fix that the boot-1 line justifies (IR-992), as the instruction allows.
@@ -16135,7 +16137,7 @@ on property:sys.boot_completed=1
 | Task | #016 |
 | Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #016 (acceptance criteria and Notes) |
 
-**Choice.** The tap criterion is ticked, on the ODM-overlay variant (IR-960), on the third boot. The steps ran in one locked session (`/tmp/apkrun-odmc/session3`), in this order:
+**Choice.** The tap criterion is ticked, on the ODM-overlay variant (IR-960), on the third boot. The steps ran in one locked session (`/tmp/apkrun-odmc/session3`). Step 1 allowed up to three attempts; the first attempt was enough:
 
 1. After `sys.boot_completed=1`: `input keyevent 82`, then `wm dismiss-keyguard`, then `dumpsys window | grep -i keyguard`. The first attempt printed `isKeyguardShowing=false` (`keyguard-attempt1.txt`), and `keyguard-attempt1.png` shows HelloText in front. The taps waited for this check.
 2. `uiautomator dump` after the keyguard was gone. Its node `io.apkrun.fixture.hellotext:id/increment_button` (`android.widget.Button`, text `INCREMENT`) has `bounds="[48,134][253,230]"`, so the centre is (150, 182). The screenshot agrees.
@@ -16146,7 +16148,7 @@ on property:sys.boot_completed=1
 
 **Verification.** The log lines above, in `clicks-after-tap1..3.txt` and `read-logcat.txt`. The session then sent SIGINT at 17:37:21, its exit status was 0 at 17:37:31, and no VM process was left (`vm-processes-after-stop.txt` is empty).
 
-## IR-997: #099 criterion 2 stays open: the third boot's binary exited with status 0, but no `APKRUN-TEST` line reached logcat
+## IR-997: #099 criterion 2 is ticked: the guest's logcat capture of the third boot holds `egl ok: eglInitialize 1.5`, although the adb dumps did not
 
 | Field | Value |
 |---|---|
@@ -16154,15 +16156,15 @@ on property:sys.boot_completed=1
 | Task | #099 |
 | Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099 (criteria and Notes) |
 
-**Choice.** Criterion 2 (`eglInitialize` succeeds on the VirGL display, with `apkrun.test=egl`) is not ticked, on the ODM-overlay variant (IR-960). The observations of the third boot (`/tmp/apkrun-odmc/session3`):
+**Choice.** Criterion 2 (`eglInitialize` succeeds on the VirGL display, with the test named `apkrun.test=egl`) is ticked, on the ODM-overlay variant (IR-960), on the third boot. The evidence is the guest's logcat capture, `home-logs/guest/logcat-20261011T173129Z.log` under `/tmp/apkrun-odmc/session3`, line 45512: `10-11 17:31:38.856 3301 3301 I APKRUN-TEST: egl ok: eglInitialize 1.5, EGL_VENDOR Android, EGL_VERSION 1.5 Android META-EGL`. Process 3301 is the one that init started at 17:31:38.826 from `/odm/etc/init/apkrun_egl_test.rc:14`, and it exited with status 0 after 46 ms.
 
-- Console, at 9.394 s: `started service 'apkrun_egl_test' has pid 3301`. At 9.440 s: `Service 'apkrun_egl_test' (pid 3301) exited with status 0 oneshot service took 0.046000 seconds`.
-- The binary returns 0 only after `eglInitialize` returned `EGL_TRUE`, so the success path ran. But `logcat -d -s APKRUN-TEST:V` printed nothing (`apkrun-test.txt` is empty for 4 minutes), the full `logcat-end.txt` matches the tag only in the adb request line, and the console has no such line.
-- One denial came from the process: `avc: denied { read } for comm="apkrun_egl_test" name="bin" ... scontext=u:r:surfaceflinger:s0 tcontext=u:object_r:vendor_file:s0 tclass=dir`, on a `faccessat` (syscall 48, exit -13), at 9.398 s.
+The adb dumps (`logcat -d -s APKRUN-TEST:V`, every 15 s from 17:31:44) did not contain the line. The first dump came about 5 s after it. The capture is the logcat stream that apkrun keeps, and it received the line. The adb miss was not diagnosed; it is consistent with the logd buffer having rotated before the dump.
 
-**Reason.** The criterion needs a logged successful `eglInitialize`, and the log line is missing. The exit status is evidence of the success path, but it is not the criterion's evidence. The cause of the lost line is not determined. The denial is a candidate, and it has not been shown to be the cause. No further boot is allowed, so the cause stays open (IR-999).
+**Reason.** The coordinator's rule is that the criterion is ticked only if logcat shows a successful eglInitialize, and the capture does. Two limits are recorded for the maintainer to judge. (1) The test prints `EGL_VENDOR` and `EGL_VERSION`, not the GL renderer. The default display is the one SurfaceFlinger uses: in the same boot `dumpsys SurfaceFlinger` reports `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8` (`after-boot.txt`), and `ro.hardware.egl` is `mesa`. The VirGL part therefore rests on that evidence, not on the test's own output. (2) The adb logcat path did not show the line, so a later check should read the renderer and keep the buffer.
 
-## IR-998: One reviewer found five confirmed defects in the branch, and all five are fixed
+**Verification.** `grep -a APKRUN-TEST` on the guest logcat capture (above). The console has the service's start and exit lines (`boot.log`, 9.394 s and 9.440 s).
+
+## IR-998: Two reviewers found confirmed defects in the branch; all are fixed, and one finding changed a criterion
 
 | Field | Value |
 |---|---|
@@ -16170,19 +16172,22 @@ on property:sys.boot_completed=1
 | Task | #016, #099 |
 | Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #016; [M02-graphics.md](issues/M02-graphics.md) #099; IR-991 to IR-997 and IR-999 |
 
-**Choice.** One reviewer read the branch diff against the logs, read only, with no VM or build. The confirmed defects and their fixes:
+**Choice.** Round 1 (before the third boot): one reviewer found five confirmed defects, and all are fixed. The counter was said to read 0 in both boots (boot 1 had no read); init was said to expand `$l` where it refuses to; `droid.launcher3` was named platform_app (it is priv_app); the variant record hash was stale; the DevBoot options were incompletely listed.
 
-1. The #016 criterion and its note said the counter read 0 in both boots. Boot 1 had no button position and no read. The text now says so (IR-996).
-2. Several entries said that init expanded `$l`. The log says init refused to expand it (`cannot expand arguments`). The entries and the commit message now say so (IR-992, IR-995, IR-997, IR-999).
-3. IR-999 named `droid.launcher3` as platform_app. Its audit lines show `priv_app`, and system_app's card0 denial is `getattr`. Both are corrected.
-4. The variant record kept the manifest hash from before the command-line token, because `build_variant` wrote it first. `build()` now rewrites the record from the final manifest, and `check()` asserts it (IR-993).
-5. IR-993 said that DevBoot has only some options. The list is now given, and none of them sets a kernel argument.
+Round 2 (after the third boot): a second reviewer found eight items, and each is fixed or recorded here:
 
-The reviewer's other points were not confirmed and are not recorded as defects. The rebuild from the committed code is byte-identical to the booted bundle: `manifest.json`, `SHA256SUMS`, `manifest.sig`, `disks/os.img`, and `boot/cmdline.txt` match.
+1. IR-997 said that no `APKRUN-TEST` line reached logcat. The guest's logcat capture has one (line 45512), and criterion 2 is now ticked (IR-997).
+2. The statements that the installed image passes `shasum` and is byte-equal to the bundle were restored with the caveat that the outputs were not saved (IR-991, IR-993).
+3. The DevBoot option list is restored in IR-993.
+4. The launcher's 278 aborts and the boot-1 lock screen are now recorded in IR-994. IR-999 and the #016 note cited them without a record.
+5. The lock-screen citation in the #016 note is now supported by IR-994.
+6. IR-996 now says that up to three keyguard attempts were allowed and the first sufficed.
+7. The comments of the rc, the C source, and the build script no longer name the removed gate. The C source and the build script change no binary bytes (sha256 `a0a455ce…` before and after). The rc's first comment line changed, which init ignores (IR-992).
+8. A broken anchor in M01 (`#ir-336-refuse-a--in-…`) already exists on main, outside this branch's change. It is left as an open item (IR-999).
 
-**Reason.** The fixes follow the reviewer's evidence, which the logs confirm. The rebuild is the check that the corrected code reproduces what was booted. The branch name `task/016-099-odm-checks` covers two tasks, although AGENTS §13 asks for one task per branch. The user gave the name, so it is kept, and the pull request should be split if it is merged.
+**Reason.** The fixes follow the reviewers' evidence, which the logs confirm. Item 1 changed a criterion, and that is the reason for the round-2 review. The branch name `task/016-099-odm-checks` covers two tasks, which AGENTS §13 does not normally allow. The user specified it, so it is kept.
 
-**Verification.** `/tmp/apkrun-odmc/pipeline3.log` (prepare, build, and check on a fresh work directory) and the `cmp` results above.
+**Verification.** `/tmp/apkrun-odmc/pipeline3.log` (round 1: a rebuild byte-identical to the booted second bundle), the `cmp` results recorded in IR-993, and `grep -a` of the guest logcat capture (IR-997).
 
 ## IR-999: Open for the maintainer after the third boot
 
@@ -16194,13 +16199,14 @@ The reviewer's other points were not confirmed and are not recorded as defects. 
 
 **Choice.** These stay open, with the entry that raised each:
 
-1. #099 criterion 2: the binary exited with status 0, but its log line never reached logcat (IR-997). The next step is a host-side check of the logd path for this process, or a boot with a file write in the binary, as a maintainer decides.
-2. The untrusted_app DRM-device rules are a prediction (IR-991). No boot logged a card0 denial for an app, so the rules are unconfirmed.
-3. `droid.launcher3` (`priv_app`) aborted 278 times in boot 1 with `Failed to create context, error = EGL_NOT_INITIALIZED` (IR-994). Its cause was not examined. system_app still reads `uevent` and is denied `getattr` on `/dev/dri/card0`. Both are outside the request.
-4. The app domains' `getattr` denials on PCI sysfs nodes were not fatal in these boots, and no rule covers them.
+1. #099 criterion 2 is ticked on the logcat line (IR-997). Its limit is that the test does not print the GL renderer. A check that prints `GL_RENDERER` on a pbuffer context, and keeps the logcat buffer, would show the VirGL display directly.
+2. The untrusted_app DRM-device rules are a prediction (IR-991). No boot logged a card0 denial for an app.
+3. `droid.launcher3` (`priv_app`) aborted 278 times in boot 1 with `EGL_NOT_INITIALIZED` (IR-994), and it was not examined. system_app still reads `uevent` and is denied `getattr` on `/dev/dri/card0`. Both are outside the request.
+4. The app domains' `getattr` denials on PCI sysfs nodes were not fatal, and no rule covers them.
 5. The ODM image has no FEC (IR-950). The rules are not checked against neverallow (IR-902, IR-940).
 6. The screenshot does not show the counter, because the title bar covers the counter text. The debug hook is the reader (IR-996). A layout change is outside this task.
-7. The third variant has no command-line token, and its test runs on every boot that reaches `sys.boot_completed` (IR-993). This is test-only.
+7. The test runs on every boot that reaches `sys.boot_completed`, with no gate (IR-993). This is a test-variant change only.
+8. Pre-existing on main: a link in M01 to `#ir-336-refuse-a--in-…` does not match its heading, because the `$` leaves a double space. It is not changed here.
 
 **Reason.** The three boots did not reach these points, or they are outside this task.
 

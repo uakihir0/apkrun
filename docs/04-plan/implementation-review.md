@@ -15224,6 +15224,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Verification.** One VM run under `lockf`. The command and the result line are in the #022 Notes.
 
 ## IR-900: The guest loads one monolithic sepolicy from the boot ramdisk, so the vendor partition's policy text has no runtime effect
+## IR-870: Show the console ports as both hvc and vport nodes, and judge each marker on the node that receives it
 
 | Field | Value |
 |---|---|
@@ -15240,6 +15241,14 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Consequence.** A sysfs label or an allow rule reaches the guest only through a rebuilt `/sepolicy`. The supported route is the AOSP build of #035 (IR-905). The context files that libselinux and init read at runtime, such as `vendor_file_contexts` and `vndservice_contexts`, still apply, but a sysfs label does not come from them.
 
 ## IR-901: No SELinux compiler is available offline, and the lock has none, so the policy cannot be rebuilt in this task
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The port check counts both node classes. A port is present when it has `/dev/hvc<N>`, a `/dev/vport<card>p<port>` node, or both. The marker check judges each attachment on the node that receives `APKRUN-PORT-<i>`, and the record names that node. The plan is not reordered from the hvc numbering alone; `ConsolePortPlan` keeps taking the observed mapping (IR-373).
+
+**Reason.** `VZConfigurationBuilder` attaches ports 0 to 9 as single-port devices, and ports 10 to 19 as the console ports of one multiport device with `isConsole` set (lines 78 to 105). An `hvc` node exists when the kernel allocates a console for a port, and the Alpine test kernel stops at eight (IR-372). The Linux virtio console driver names each port's character node `vport<card>p<port>`, so that node class can show a port whose `hvc` node is missing. Expecting every port to have a vport node is an assumption that this boot checks. Judging by the node that receives the marker covers both classes, and it matches the `observedDevice` input of `ConsolePortPlan`. Checking only `hvc` leaves the eight-node limit unverified. Checking only `vport` drops the hvc numbers that the Android holder list uses (hvc1, hvc2, hvc18).
+
+## IR-871: The Android layout gives the marker three host-writable ports, so its 20-port marker check cannot pass
 
 | Field | Value |
 |---|---|
@@ -15254,6 +15263,14 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Consequence.** An edited policy cannot be built or checked on this host. The check that matters is the AOSP build of #035.
 
 ## IR-902: No present neverallow rule blocks a sysfs read by SurfaceFlinger, but the platform's private neverallow set is not in the image
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** On the dev Android boot, the marker check covers the ports that accept host input: port 0 (`hvc0`, the system console), port 1 (`hvc1`, the serial shell of the developer console), and nothing else. Port 18 (`hvc18`, the sensors responder) gets no marker, because the responder reads its bytes as the sensors HAL protocol. The other 17 ports are `.silent` or `.log` and get no marker. Criterion 1 of #095 is not ticked from this layout. The 20-port marker verdict needs a layout where every port accepts host input, which is the Linux test layout with `apkrun.test.portcount=20`.
+
+**Reason.** `ConsoleRole.permitsHostInput` is true only for `.systemConsole` and `.service` roles (`ConsoleChannel.swift`, lines 882 to 889). `RuntimeSupervisor` serves a developer console only for `hvc0` and `hvc1` (lines 395 and 425), and runs the sensors responder on `sensors_control` (line 398). A marker needs host input to its port, so a silent port cannot show one. Changing the roles to make every port a service would change the product layout of #095 step 2, which is outside this check. A marker written to the sensors port would test the HAL's protocol handling, not the port numbering.
+
+## IR-872: The boot holds the VM lock for its whole life, and the port and install checks run under that hold
 
 | Field | Value |
 |---|---|
@@ -15327,4 +15344,10 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Reason.** The experiment boot (`Experiments/vz-android-boot`) passes an initial ramdisk file directly to `VZLinuxBootLoader` (`initialRamdiskURL`), with no AVB check on that file, so an edited `/sepolicy` in that file could reach the guest without an AOSP build. The repository has no policydb reader or writer, and a hand edit of the binary skips the neverallow check that the build runs (IR-902). That is a large expansion of scope (AGENTS §11), so it is a follow-up and not part of #022.
 
 **Consequence.** No ramdisk or vendor image is changed in this task.
+| Task | #095, #016 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5; [test-strategy.md](test-strategy.md) §2.7 |
+
+**Choice.** The development boot runs as the holder of `/tmp/apkrun-vm.lock` (`lockf -k`) for its whole life. The `adb` and developer-console commands of the two checks run while that hold is active, and they do not start a second `lockf`. The lock is released when `lockf` exits after the SIGINT stop.
+
+**Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the rule "every VM command runs under `lockf`" as covering the process that owns the VM. The maintainer should confirm this reading.
 

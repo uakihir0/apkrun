@@ -48,6 +48,8 @@ struct gb_virgl_api {
     void (*set_log_callback)(virgl_log_callback_type, void *, virgl_free_data_callback_type);
     int (*resource_create)(struct virgl_renderer_resource_create_args *, struct iovec *, uint32_t);
     void (*resource_unref)(uint32_t);
+    int (*resource_attach_iov)(int, struct iovec *, int);
+    void (*resource_detach_iov)(int, struct iovec **, int *);
     void (*ctx_attach_resource)(int, int);
     void (*ctx_detach_resource)(int, int);
     int (*submit_cmd)(void *, int, int);
@@ -59,6 +61,13 @@ struct gb_virgl_api {
         struct virgl_box *, uint64_t, struct iovec *, int);
     int (*create_fence)(int, uint32_t);
     void (*poll)(void);
+};
+
+/* The iovec array that the bridge gave virglrenderer for the backing of one resource (IR-836). */
+struct gb_backing_record {
+    uint32_t res_id;
+    struct iovec *iov;
+    struct gb_backing_record *next;
 };
 
 struct gb_renderer {
@@ -81,6 +90,8 @@ struct gb_renderer {
     bool log_callback_registered;
     bool owns_process_slot;
     pthread_t render_thread;
+    /* The attached backings. The bridge frees each array when its backing is released (IR-836). */
+    struct gb_backing_record *backings;
 };
 
 static pthread_mutex_t gb_renderer_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -378,6 +389,10 @@ static bool gb_load_virgl_api(gb_renderer *renderer) {
             gb_symbol(renderer->virgl_library, "virgl_renderer_resource_create");
     renderer->virgl.resource_unref =
         (void (*)(uint32_t))gb_symbol(renderer->virgl_library, "virgl_renderer_resource_unref");
+    renderer->virgl.resource_attach_iov =
+        (int (*)(int, struct iovec *, int))gb_symbol(renderer->virgl_library, "virgl_renderer_resource_attach_iov");
+    renderer->virgl.resource_detach_iov =
+        (void (*)(int, struct iovec **, int *))gb_symbol(renderer->virgl_library, "virgl_renderer_resource_detach_iov");
     renderer->virgl.ctx_attach_resource =
         (void (*)(int, int))gb_symbol(renderer->virgl_library, "virgl_renderer_ctx_attach_resource");
     renderer->virgl.ctx_detach_resource =
@@ -407,6 +422,8 @@ static bool gb_load_virgl_api(gb_renderer *renderer) {
         && renderer->virgl.set_log_callback != NULL
         && renderer->virgl.resource_create != NULL
         && renderer->virgl.resource_unref != NULL
+        && renderer->virgl.resource_attach_iov != NULL
+        && renderer->virgl.resource_detach_iov != NULL
         && renderer->virgl.ctx_attach_resource != NULL
         && renderer->virgl.ctx_detach_resource != NULL
         && renderer->virgl.submit_cmd != NULL
@@ -641,6 +658,41 @@ static int gb_initialize_egl(gb_renderer *renderer) {
     return GB_OK;
 }
 
+/*
+ * Frees the arrays of every attached backing, without calling virglrenderer. Reset and destroy drop the
+ * resources themselves. A detach would copy into guest memory that the reset or the stop may have invalidated
+ * (IR-843).
+ */
+static void gb_free_backing_records(gb_renderer *renderer) {
+    struct gb_backing_record *record = renderer->backings;
+    while (record != NULL) {
+        struct gb_backing_record *next = record->next;
+        free(record->iov);
+        free(record);
+        record = next;
+    }
+    renderer->backings = NULL;
+}
+
+/*
+ * Releases the backing of one resource through virglrenderer, then frees the array that the bridge gave it.
+ * A resource without backing is left alone. Call only while the guest memory is still mapped (IR-843).
+ */
+static void gb_detach_backing_record(gb_renderer *renderer, uint32_t res_id) {
+    struct gb_backing_record **link = &renderer->backings;
+    while (*link != NULL && (*link)->res_id != res_id) {
+        link = &(*link)->next;
+    }
+    struct gb_backing_record *record = *link;
+    if (record == NULL) {
+        return;
+    }
+    *link = record->next;
+    renderer->virgl.resource_detach_iov((int)res_id, NULL, NULL);
+    free(record->iov);
+    free(record);
+}
+
 static void gb_release_renderer(gb_renderer *renderer) {
     if (renderer == NULL) {
         return;
@@ -650,6 +702,7 @@ static void gb_release_renderer(gb_renderer *renderer) {
         renderer->virgl.renderer_cleanup(renderer);
         renderer->virgl_initialized = false;
     }
+    gb_free_backing_records(renderer);
     if (renderer->log_callback_registered && renderer->virgl.set_log_callback != NULL) {
         renderer->virgl.set_log_callback(NULL, NULL, NULL);
         renderer->log_callback_registered = false;
@@ -859,6 +912,7 @@ int gb_renderer_reset(gb_renderer *renderer) {
         return GB_E_WRONG_THREAD;
     }
     renderer->virgl.renderer_reset();
+    gb_free_backing_records(renderer);
     return GB_OK;
 }
 
@@ -1071,7 +1125,66 @@ void gb_resource_unref(gb_renderer *renderer, uint32_t res_id) {
     if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
         return;
     }
+    gb_detach_backing_record(renderer, res_id);
     renderer->virgl.resource_unref(res_id);
+}
+
+int gb_resource_attach_backing(
+    gb_renderer *renderer,
+    uint32_t res_id,
+    const gb_backing_range *ranges,
+    size_t count
+) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return status;
+    }
+    if (res_id == 0 || res_id > INT32_MAX || ranges == NULL || count == 0 || count > INT32_MAX) {
+        return GB_E_INVALID_ARGUMENT;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (ranges[i].base == NULL || ranges[i].length == 0) {
+            return GB_E_INVALID_ARGUMENT;
+        }
+    }
+    for (struct gb_backing_record *record = renderer->backings; record != NULL; record = record->next) {
+        if (record->res_id == res_id) {
+            return GB_E_RESOURCE_OPERATION;
+        }
+    }
+
+    struct gb_backing_record *record = calloc(1, sizeof(*record));
+    struct iovec *iov = calloc(count, sizeof(*iov));
+    if (record == NULL || iov == NULL) {
+        free(record);
+        free(iov);
+        return GB_E_RESOURCE_OPERATION;
+    }
+    for (size_t i = 0; i < count; i++) {
+        iov[i].iov_base = ranges[i].base;
+        iov[i].iov_len = ranges[i].length;
+    }
+    if (renderer->virgl.resource_attach_iov((int)res_id, iov, (int)count) != 0) {
+        free(record);
+        free(iov);
+        return GB_E_RESOURCE_OPERATION;
+    }
+    record->res_id = res_id;
+    record->iov = iov;
+    record->next = renderer->backings;
+    renderer->backings = record;
+    return GB_OK;
+}
+
+void gb_resource_detach_backing(gb_renderer *renderer, uint32_t res_id) {
+    int status = GB_OK;
+    if (!gb_renderer_is_ready_on_this_thread(renderer, &status)) {
+        return;
+    }
+    if (res_id == 0 || res_id > INT32_MAX) {
+        return;
+    }
+    gb_detach_backing_record(renderer, res_id);
 }
 
 int gb_transfer_write(

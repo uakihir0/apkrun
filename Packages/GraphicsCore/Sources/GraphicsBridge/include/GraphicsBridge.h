@@ -72,8 +72,9 @@ int gb_renderer_create(const gb_callbacks *cb, void *user, gb_renderer **out);
 int gb_renderer_destroy(gb_renderer *renderer);
 
 /*
- * Resets all renderer-owned contexts and resources. Call on the render thread;
- * the caller must discard every guest-derived renderer ID after reset.
+ * Resets all renderer-owned contexts and resources, and releases their backing
+ * without touching the guest memory. Call on the render thread; the caller must
+ * discard every guest-derived renderer ID after reset.
  */
 int gb_renderer_reset(gb_renderer *renderer);
 
@@ -111,8 +112,9 @@ int gb_ctx_destroy(gb_renderer *renderer, uint32_t ctx_id);
 /*
  * Resource and context calls. Every buffer passed in is borrowed for the call
  * only: virglrenderer copies or reads it before returning, and keeps no
- * pointer into it. The caller sizes each buffer to the bytes the renderer will
- * touch (graphics.md §4.4, §5.4).
+ * pointer into it, except for the backing of a resource (see
+ * gb_resource_attach_backing). The caller sizes each buffer to the bytes the
+ * renderer will touch (graphics.md §4.4, §5.4).
  */
 
 /* Binds a resource to a context (CTX_ATTACH_RESOURCE). */
@@ -159,8 +161,40 @@ typedef struct {
 /* Creates a resource (RESOURCE_CREATE_2D or RESOURCE_CREATE_3D). */
 int gb_resource_create(gb_renderer *renderer, const gb_resource_args *args);
 
-/* Destroys a resource and detaches it from every context. */
+/* Destroys a resource and detaches it from every context. It releases the backing first. */
 void gb_resource_unref(gb_renderer *renderer, uint32_t res_id);
+
+/* One range of guest memory that backs a resource. */
+typedef struct {
+    void *base;
+    size_t length;
+} gb_backing_range;
+
+/*
+ * Attaches guest memory as the backing of a resource (RESOURCE_ATTACH_BACKING,
+ * virgl_renderer_resource_attach_iov). The bridge copies `ranges`, and the copy
+ * belongs to the bridge. The memory of the ranges is not copied: virglrenderer
+ * reads and writes it in place, so it must stay mapped and valid until the
+ * backing is released by gb_resource_detach_backing, gb_resource_unref,
+ * gb_renderer_reset, or gb_renderer_destroy, whichever comes first. Each range
+ * has a non-NULL base and a nonzero length. The resource must exist and must
+ * not have backing yet, or the call returns GB_E_RESOURCE_OPERATION. Call on
+ * the render thread (IR-836).
+ */
+int gb_resource_attach_backing(
+    gb_renderer *renderer,
+    uint32_t res_id,
+    const gb_backing_range *ranges,
+    size_t count
+);
+
+/*
+ * Releases the backing of a resource, if it has any (RESOURCE_DETACH_BACKING).
+ * For some buffers, virglrenderer copies the renderer's data back into the
+ * guest memory, so call this while that memory is still mapped. Call on the
+ * render thread. A resource without backing is left alone.
+ */
+void gb_resource_detach_backing(gb_renderer *renderer, uint32_t res_id);
 
 typedef struct {
     uint32_t resource_id;

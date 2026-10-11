@@ -269,6 +269,12 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         }
     }
 
+    /// Waits for the renderer's queued work before the guest memory is invalidated, because that work may read guest
+    /// pages that the renderer holds (IR-843, IR-850).
+    public func deviceWillInvalidateGuestMemory() {
+        backend?.drain()
+    }
+
     /// Clears the guest session and resets the renderer. Host scanout configuration is kept.
     public func deviceWillReset() {
         clearGuestSession()

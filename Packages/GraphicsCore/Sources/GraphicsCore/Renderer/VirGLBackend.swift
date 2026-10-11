@@ -224,6 +224,14 @@ final class VirGLBackend: @unchecked Sendable {
         return result ?? nil
     }
 
+    /// Waits until the render thread has run the work queued before this call. A renderer work item can read guest
+    /// pages, so the device calls this before the guest memory is invalidated (IR-850).
+    func drain() {
+        let stopped = stateLock.withLock { isShutDown }
+        guard !stopped else { return }
+        _ = renderThread.sync { () -> Bool in true }
+    }
+
     /// Resets the renderer. Every waiting element is returned, because the guest reset and no longer waits.
     func reset() {
         let engineBox = self.engineBox

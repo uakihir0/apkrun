@@ -335,6 +335,23 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     try await eventually { harness.device.statistics.rendererFailures == 1 }
 }
 
+@Test func theInvalidationDrainRunsTheRendererWorkQueuedBeforeIt() throws {
+    let harness = try VirGLHarness()
+    harness.guest.seed(address: 0x1000, bytes: [UInt8](repeating: 0, count: 64))
+    _ = harness.send([
+        gpuRequest(.resourceCreate3D, body: .resourceCreate3D(resource3D(id: 5))),
+        gpuRequest(
+            .resourceAttachBacking,
+            body: .resourceAttachBacking(resourceID: 5, entries: [VirtioGPUMemoryEntry(address: 0x1000, length: 64)])
+        ),
+    ])
+    // The attach is queued on the render thread, which may read the pages through it. The drain returns only after
+    // the renderer has run the attach, so no renderer work can read the pages once the guest memory is invalidated
+    // (IR-850).
+    harness.device.deviceWillInvalidateGuestMemory()
+    #expect(backingCalls(harness.engineRef.engine) == ["attach 5"])
+}
+
 @Test func aReplaySuppliesZeroedBackingForEachCreatedResourceAndReleasesIt() throws {
     func resource(_ id: UInt32) -> VirGLResourceArguments {
         VirGLResourceArguments(

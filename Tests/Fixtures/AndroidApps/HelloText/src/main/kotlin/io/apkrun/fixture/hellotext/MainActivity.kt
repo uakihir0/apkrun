@@ -1,6 +1,7 @@
 package io.apkrun.fixture.hellotext
 
 import android.app.Activity
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.ContextMenu
@@ -21,7 +22,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        counter = CounterStore(PreferencesKeyValueStore(getSharedPreferences(PREFERENCES, MODE_PRIVATE)))
+        counter = openCounter(this)
         counterText = findViewById(R.id.counter_text)
         showCount(counter.current())
         findViewById<Button>(R.id.increment_button).setOnClickListener { click() }
@@ -63,6 +64,13 @@ class MainActivity : Activity() {
     companion object {
         /** The SharedPreferences file of the counter. */
         const val PREFERENCES = "hellotext"
+
+        /**
+         * Opens the counter over the fixture's SharedPreferences file. The button and the debug-only receiver
+         * (src/debug) both open it here, so they use the same store.
+         */
+        fun openCounter(context: Context): CounterStore =
+            CounterStore(PreferencesKeyValueStore(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)))
 
         /** The logcat tag of the click lines. */
         const val LOG_TAG = "APKRUN-FIXTURE"

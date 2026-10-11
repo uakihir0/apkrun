@@ -29,6 +29,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // The debug build adds the ADB receiver of src/debug (IR-920). It is signed with the same test-only key
+            // as the release build, so its signature does not depend on the machine's debug keystore. AGP makes unit
+            // tests only for testBuildType (release), so the command class is in main and its test in src/test.
+            signingConfig = signingConfigs.getByName("fixture")
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("fixture")

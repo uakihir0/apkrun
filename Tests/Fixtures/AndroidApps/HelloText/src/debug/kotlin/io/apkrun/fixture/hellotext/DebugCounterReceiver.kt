@@ -1,0 +1,17 @@
+package io.apkrun.fixture.hellotext
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+
+/**
+ * Debug build only, registered in src/debug/AndroidManifest.xml (IR-920). It runs [DebugCounterCommands] for an
+ * ADB broadcast and logs the result under the `APKRUN-FIXTURE` tag.
+ */
+class DebugCounterReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val line = DebugCounterCommands(MainActivity.openCounter(context)).run(intent.action) ?: return
+        Log.i(MainActivity.LOG_TAG, line)
+    }
+}

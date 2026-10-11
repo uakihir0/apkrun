@@ -15365,6 +15365,30 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. The open results were printed in the session and were not saved to a file. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
 
+## IR-874: The install log shows a PackageInstaller session for HelloText, so the #016 criterion is ticked on that log
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #016 criterion 2; [package-store.md](../02-design/package-store.md) §6.1; IR-332 |
+
+**Choice.** Tick the #016 criterion that the install is a PackageInstaller session, on the guest logcat of the 2026-10-11 boot. IR-332 still holds for the T2 test, which does not assert the session.
+
+**Reason.** The `adb install -r` of `HelloText.apk` reported `Success` in the session's adb output, which was not saved to a file. The guest logcat has these lines in order: adbd's `abb_exec:package` request at 12:10:15.425, with `StartCommandInProcess(7061636b61676500696e7374616c6c00 package.install.` (the hex decodes to `package` and `install`); `I PackageManager: installation completed for package:io.apkrun.fixture.hellotext. Final code path: ...` at 12:10:15.584 on system_server thread 967; and `D PackageInstallerSession: Marking session 373923930 as applied` at 12:10:15.585 on the same thread. A second `adb install -r` gave the same sequence with session 2027986201 (12:10:59.209, 12:10:59.410, and 12:10:59.429). Those lines were printed by `logcat -d` in the session and were not saved to a file. The session line does not name the package. It ties to the install by its thread: it is on thread 967, the thread that logged the package's `installation completed` line four lines earlier (lines 28 and 32 of the dump). The `dumpsys package` read after the first install (`firstInstallTime=2026-10-11 12:10:15`) reports `versionCode=1`, `versionName=1.0`, `minSdk=29`, `targetSdk=37`, `installerPackageName=null`, `initiatingPackageName=com.android.shell`, and `packageSource=1`. It was printed in the session and not saved to a file.
+
+## IR-875: The T2 suite gets no session assertion in this branch, and the session file fails to rename on the image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #016 tests; [test-strategy.md](test-strategy.md) §2.4 |
+
+**Choice.** No T2 assertion for the session line is added in this branch. The #016 follow-up adds one, and it runs in the next T2 run of `AndroidPackageTests`.
+
+**Reason.** AGENTS.md §10 requires every test of a task to pass before the task is done. This branch has only the single boot, so a new assertion would not have run. The session line ties to the package by position on one thread, so a T2 check would need a `logcat -c` before the install and a `logcat -d` after it. During the first install, the same boot logged `E AtomicFile: Failed to rename /data/system/install_sessions.xml.new to /data/system/install_sessions.xml` at 12:10:15.448 and 12:10:15.602. The install still reported `Success`, so the session record may not persist on this image. That error is Android's, and it is recorded here, not fixed, because the product is unchanged.
+
 ## IR-876: The local checks build and sign the dev CLI and the Guest Agent in the worktree, with the SDK parts copied to /tmp
 
 | Field | Value |

@@ -870,6 +870,23 @@ remain in #063 with the adapter.
 that the builder does not attach, so describing those checks as part of #002
 would claim coverage the implementation cannot provide.
 
+## IR-038: Keep VZ descriptions in the private diagnostic path
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [vm.md](../02-design/vm.md) §13–§14; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
+
+**Choice.** `VMFailure` stores a `VZErrorInfo` value copy containing the
+framework error's domain, code, and localized description. The catalog-facing
+`underlying` value exposes only domain and code; the description is reserved
+for private diagnostic logs.
+
+**Reason.** Keeping the description supports useful framework diagnostics
+without adding potentially path-bearing text to user-visible error parameters
+or copied catalog details.
+
 ## IR-039: Bound console buffering and drain after VZ release
 
 | Field | Value |
@@ -892,23 +909,6 @@ from using a different queue or reusing closed handles. Releasing the VZ
 objects before closing pipe endpoints avoids racing file handles that the VM
 still uses, and EOF draining preserves the last bytes emitted before guest
 shutdown.
-
-## IR-038: Keep VZ descriptions in the private diagnostic path
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #003 |
-| Affected documents | [vm.md](../02-design/vm.md) §13–§14; [M00](issues/M00-repository-and-vm-foundation.md) #003 |
-
-**Choice.** `VMFailure` stores a `VZErrorInfo` value copy containing the
-framework error's domain, code, and localized description. The catalog-facing
-`underlying` value exposes only domain and code; the description is reserved
-for private diagnostic logs.
-
-**Reason.** Keeping the description supports useful framework diagnostics
-without adding potentially path-bearing text to user-visible error parameters
-or copied catalog details.
 
 ## IR-040: Bound incomplete test-guest console records
 
@@ -1051,36 +1051,6 @@ the test host's Info.plist makes the selected artifact directory and CI
 strictness explicit. A signed T2 boot passed after both checkout and default
 temporary artifact paths were moved aside, confirming that the host used the
 selected temporary directory.
-
-## IR-061: Reject T2 artifacts inside protected Documents
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #003 |
-| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003; [environment-setup.md](../05-development/environment-setup.md) §4; [build-system.md](../05-development/build-system.md) §12.4; `scripts/{fetch-test-linux,build-test-initramfs,run-gate}.sh`; `LinuxGuestHarness.swift` |
-
-**Choice.** Keep the `/tmp` and CI temporary-directory defaults. Reject an
-absolute artifact-directory override inside the current account's
-`~/Documents`, regardless of an overridden `HOME`, in both artifact
-preparation scripts and the signed test host. Check the lexical path first,
-then resolve symlink components while stopping before any filesystem lookup
-inside protected Documents. Resolve the Swift default path through the same
-check, so a `/tmp` symlink cannot bypass it. Fail before creating or opening
-guest artifacts.
-
-**Reason.** A stale or explicit override into Documents is a reproducible
-source of macOS file-access prompts. The exact path behind the reported
-interruption was not established, so this guard covers both direct paths and
-symlink aliases without claiming that they caused that particular prompt.
-Using the account database home prevents a caller-controlled `HOME` from
-disabling the check. The `/tmp` defaults keep normal local and CI runs
-unprompted and preserve custom artifact paths elsewhere.
-
-**Residual risk.** A same-user process could rename or replace an ancestor
-after validation and before a later shell or Virtualization.framework open.
-The guard is intended to prevent accidental TCC prompts from configured paths;
-it does not claim to protect against a concurrent same-user path swap.
 
 ## IR-047: Handle VZ power input through the PL061 GPIO character device
 
@@ -1392,6 +1362,36 @@ replaceable sidecar lock and the macOS `O_CREAT|O_NOFOLLOW` race reproduced
 with concurrent lock-file creation. It does serialize different outputs under
 the same parent. Quarantine cleanup avoids deleting a replacement that
 appears between an inode check and unlink.
+
+## IR-061: Reject T2 artifacts inside protected Documents
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #003 |
+| Affected documents | [M00](issues/M00-repository-and-vm-foundation.md) #003; [environment-setup.md](../05-development/environment-setup.md) §4; [build-system.md](../05-development/build-system.md) §12.4; `scripts/{fetch-test-linux,build-test-initramfs,run-gate}.sh`; `LinuxGuestHarness.swift` |
+
+**Choice.** Keep the `/tmp` and CI temporary-directory defaults. Reject an
+absolute artifact-directory override inside the current account's
+`~/Documents`, regardless of an overridden `HOME`, in both artifact
+preparation scripts and the signed test host. Check the lexical path first,
+then resolve symlink components while stopping before any filesystem lookup
+inside protected Documents. Resolve the Swift default path through the same
+check, so a `/tmp` symlink cannot bypass it. Fail before creating or opening
+guest artifacts.
+
+**Reason.** A stale or explicit override into Documents is a reproducible
+source of macOS file-access prompts. The exact path behind the reported
+interruption was not established, so this guard covers both direct paths and
+symlink aliases without claiming that they caused that particular prompt.
+Using the account database home prevents a caller-controlled `HOME` from
+disabling the check. The `/tmp` defaults keep normal local and CI runs
+unprompted and preserve custom artifact paths elsewhere.
+
+**Residual risk.** A same-user process could rename or replace an ancestor
+after validation and before a later shell or Virtualization.framework open.
+The guard is intended to prevent accidental TCC prompts from configured paths;
+it does not claim to protect against a concurrent same-user path swap.
 
 ## IR-062: Derive the pinned manifest from inspected build metadata
 
@@ -2784,30 +2784,6 @@ baseline. The path guard binds the report to the documented input; validating
 the private copies also catches files changed between staging and provenance
 collection, including a source file restored before host verification.
 
-## IR-109: Derive experiment source provenance from Git
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #064 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
-
-**Choice.** Pin the baseline commit instead of resolving the latest commit
-touching its host record. Derive experiment-tool source hashes from the
-observed committed Git revision, require clean tracked working copies, and
-compare the private copies and runtime `capture_bounded.py` and
-`capture_processes.py` copies against those committed bytes. Before host
-identity exists, run `experiment_support.py` only after loading its source
-from `HEAD` and matching the private copy to it.
-
-**Reason.** A later commit could otherwise move the baseline's provenance
-without changing the baseline path. A transient edit copied and then restored
-could also let the initial verifier report a self-generated hash for different
-bytes. Runtime helper copies are separate from the experiment-tool directory,
-so checking that directory alone did not verify the files actually invoked.
-Tests pin a synthetic baseline commit, reject a copied-and-restored verifier,
-and reject a modified runtime helper.
-
 ## IR-108: Execute digest-verified publication snapshots
 
 | Field | Value |
@@ -2831,6 +2807,30 @@ execution binds each Python invocation to the bytes that passed its digest
 check, while the sealed rules file prevents replacement between validation
 and normalization. Regression tests replace the on-disk script after snapshot
 loading and verify execution still uses the checked bytes.
+
+## IR-109: Derive experiment source provenance from Git
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #064 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #064, [GPU-none diagnosis README](../../Experiments/cuttlefish-boot-diagnosis/README.md) |
+
+**Choice.** Pin the baseline commit instead of resolving the latest commit
+touching its host record. Derive experiment-tool source hashes from the
+observed committed Git revision, require clean tracked working copies, and
+compare the private copies and runtime `capture_bounded.py` and
+`capture_processes.py` copies against those committed bytes. Before host
+identity exists, run `experiment_support.py` only after loading its source
+from `HEAD` and matching the private copy to it.
+
+**Reason.** A later commit could otherwise move the baseline's provenance
+without changing the baseline path. A transient edit copied and then restored
+could also let the initial verifier report a self-generated hash for different
+bytes. Runtime helper copies are separate from the experiment-tool directory,
+so checking that directory alone did not verify the files actually invoked.
+Tests pin a synthetic baseline commit, reject a copied-and-restored verifier,
+and reject a modified runtime helper.
 
 ## IR-110: Execute the verified capture snapshot under its private tool root
 
@@ -7129,27 +7129,6 @@ The configured command and expected executable are separate because a diagnostic
 
 **Verification.** The focused identity suite passed 13 tests, including ELF32/ELF64, little- and big-endian notes, missing and malformed Build IDs, short non-ELF files, mutation during inspection, and unavailable/non-regular paths. The full image-tool suite passed 572 tests with four platform-specific skips. `scripts/ci/run-checks.sh` passed all six checks, and the final adversarial review found no remaining actionable issues. The helper run directly on the Lima host reproduced the crosvm and gfxstream Build IDs and SHA-256 values above. The configured `$CVD_HOST_DIR` files resolve to the installed package files, confirming current configured-file identity but not, by itself, the executable used by a historical process. IR-158 separately records that Apport named `/usr/lib/cuttlefish-common/bin/crosvm` for the older crosvm PID 1397163. Do not transfer that path claim to IR-170's later PID 1573779. No new Cuttlefish boot was attempted; #064 remains open.
 
-## IR-188: Pin the available RiftVM source for #018
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #018 |
-| Affected files | [graphics.md](../02-design/graphics.md) §2; [riftvm-analysis.md](../02-design/riftvm-analysis.md); [M02 graphics](issues/M02-graphics.md) #018; [M12 legal compliance](issues/M12-v1-release.md) #093; [build-system.md](../05-development/build-system.md) §3.1, §6.1, §6.5; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §4, §5, §6; `scripts/tools/check-lock.swift`; `scripts/tests/run.sh`; `ThirdParty/ThirdParty.lock.json`; `ThirdParty/licenses/riftvm/LICENSE` |
-
-**Choice.** Use the public `riftvm-v0.6.1` tag as the source-only reference for #018, pinned to commit `51f19193b1d3326b2e164d37a2a59e9970375170`. Analyze its `Experiments/VZVirtioGPUPrototype`, its production-facing app integration and lifecycle, and the source/build files named in the analysis. Classify the pin as `ships: reference` because no RiftVM code or binary is built, copied, or distributed. Treat this tag as a current technical reference, not as a replacement equivalent to the planned v1.0.4.
-
-**Reason.** The upstream tag listing checked on 2026-10-05 contains `riftvm-v0.6.1` but no `v1.0.4` or `riftvm-v1.0.4` ref. The pinned tag retains the low-level macOS custom virtio-gpu prototype needed by #018. Adversarial review found that this is not an isolated experiment: the main RiftVM app links `RiftVMVirGLRuntime`, and `VMCustomVirGLGraphicsBackend` constructs and shuts down that runtime in the ordinary VM path. The maintained architecture supports general Linux VMs as well as an Omarchy integration; the detailed end-to-end results cited in the source are specifically Omarchy/Hyprland. `ships: derived` would falsely claim that #018 copies or adapts RiftVM code and would force an incorrect app notice. A dedicated `reference` classification preserves the pin and license evidence while excluding it from build inputs and redistribution notices. The upstream tag is unsigned and its GitHub release is not immutable, so the lock stores the full commit rather than trusting a tag for content identity; that does not independently authenticate the publisher. The upstream release-notice document also conflicts with its source-build documentation and release script about which renderer artifacts are packaged. The analysis therefore relies on the exact source, pinned build scripts, and recipe checksums at the locked commit, and makes no claim about which binaries a published RiftVM release shipped. RiftVM's root MIT license covers its own source; renderer libraries and build-recipe inputs retain separate license/provenance entries when APKRun later adopts them.
-
-**Verification.** The remote tag ref peels to the locked commit, and the read-only checkout is at that exact commit. The root `LICENSE` is copied to `ThirdParty/licenses/riftvm/LICENSE`. The lock entry is in the `graphics-reference` group with empty build flags and patches; renderer build-group processing and `check-lock.sh --apply` exclude it. The future `generate-notices.py --check` may fetch it solely to verify the committed license copy; it does not build RiftVM or include it in generated notices. Lock tests accept the repository entry and reject reference entries with a non-source kind, build flags, patches, or an unknown classification. The build/legal documentation excludes reference entries from renderer build groups and redistribution notices while retaining the identified license and a committed copy of the upstream license. Adversarial review identified lifecycle, reference-validation, and licensing-scope gaps; those fixes passed a full CI check run. Follow-up reviews corrected the license-file path description, notice scope, and license-check fetch description; the final adversarial review found no remaining actionable issues. `git diff --check` passed, and the committed RiftVM license copy matches the pinned root license. No RiftVM code or renderer binary is copied or built for this task. The source choice, unsigned tag provenance, and v1.0.4 substitution remain for maintainer review.
-
-**Follow-up hostile review (2026-10-06).** A read-only subagent review of
-the #018 criteria, analysis, lock entry, and graphics design found no
-additional actionable documentation or lock inconsistencies. The pinned
-RiftVM source tree was not available in that review workspace, so it did not
-independently recheck the source-level claims; those remain supported by the
-pinned-checkout review recorded above. Maintainer review remains pending.
-
 ## IR-185: Verify Mesa driver payload in the pinned Cuttlefish image
 
 | Field | Value |
@@ -7227,6 +7206,27 @@ slot explanation therefore remain hypotheses; the recovered missing
 `virgl_renderer` build feature is the demonstrated cause of the panic itself.
 The unavailable Apport record for the later PID remains unconfirmed; do not
 transfer the executable path recorded for the earlier PID to it.
+
+## IR-188: Pin the available RiftVM source for #018
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #018 |
+| Affected files | [graphics.md](../02-design/graphics.md) §2; [riftvm-analysis.md](../02-design/riftvm-analysis.md); [M02 graphics](issues/M02-graphics.md) #018; [M12 legal compliance](issues/M12-v1-release.md) #093; [build-system.md](../05-development/build-system.md) §3.1, §6.1, §6.5; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §4, §5, §6; `scripts/tools/check-lock.swift`; `scripts/tests/run.sh`; `ThirdParty/ThirdParty.lock.json`; `ThirdParty/licenses/riftvm/LICENSE` |
+
+**Choice.** Use the public `riftvm-v0.6.1` tag as the source-only reference for #018, pinned to commit `51f19193b1d3326b2e164d37a2a59e9970375170`. Analyze its `Experiments/VZVirtioGPUPrototype`, its production-facing app integration and lifecycle, and the source/build files named in the analysis. Classify the pin as `ships: reference` because no RiftVM code or binary is built, copied, or distributed. Treat this tag as a current technical reference, not as a replacement equivalent to the planned v1.0.4.
+
+**Reason.** The upstream tag listing checked on 2026-10-05 contains `riftvm-v0.6.1` but no `v1.0.4` or `riftvm-v1.0.4` ref. The pinned tag retains the low-level macOS custom virtio-gpu prototype needed by #018. Adversarial review found that this is not an isolated experiment: the main RiftVM app links `RiftVMVirGLRuntime`, and `VMCustomVirGLGraphicsBackend` constructs and shuts down that runtime in the ordinary VM path. The maintained architecture supports general Linux VMs as well as an Omarchy integration; the detailed end-to-end results cited in the source are specifically Omarchy/Hyprland. `ships: derived` would falsely claim that #018 copies or adapts RiftVM code and would force an incorrect app notice. A dedicated `reference` classification preserves the pin and license evidence while excluding it from build inputs and redistribution notices. The upstream tag is unsigned and its GitHub release is not immutable, so the lock stores the full commit rather than trusting a tag for content identity; that does not independently authenticate the publisher. The upstream release-notice document also conflicts with its source-build documentation and release script about which renderer artifacts are packaged. The analysis therefore relies on the exact source, pinned build scripts, and recipe checksums at the locked commit, and makes no claim about which binaries a published RiftVM release shipped. RiftVM's root MIT license covers its own source; renderer libraries and build-recipe inputs retain separate license/provenance entries when APKRun later adopts them.
+
+**Verification.** The remote tag ref peels to the locked commit, and the read-only checkout is at that exact commit. The root `LICENSE` is copied to `ThirdParty/licenses/riftvm/LICENSE`. The lock entry is in the `graphics-reference` group with empty build flags and patches; renderer build-group processing and `check-lock.sh --apply` exclude it. The future `generate-notices.py --check` may fetch it solely to verify the committed license copy; it does not build RiftVM or include it in generated notices. Lock tests accept the repository entry and reject reference entries with a non-source kind, build flags, patches, or an unknown classification. The build/legal documentation excludes reference entries from renderer build groups and redistribution notices while retaining the identified license and a committed copy of the upstream license. Adversarial review identified lifecycle, reference-validation, and licensing-scope gaps; those fixes passed a full CI check run. Follow-up reviews corrected the license-file path description, notice scope, and license-check fetch description; the final adversarial review found no remaining actionable issues. `git diff --check` passed, and the committed RiftVM license copy matches the pinned root license. No RiftVM code or renderer binary is copied or built for this task. The source choice, unsigned tag provenance, and v1.0.4 substitution remain for maintainer review.
+
+**Follow-up hostile review (2026-10-06).** A read-only subagent review of
+the #018 criteria, analysis, lock entry, and graphics design found no
+additional actionable documentation or lock inconsistencies. The pinned
+RiftVM source tree was not available in that review workspace, so it did not
+independently recheck the source-level claims; those remain supported by the
+pinned-checkout review recorded above. Maintainer review remains pending.
 
 ## IR-189: Preflight pinned patch series before applying
 
@@ -10839,8 +10839,6 @@ For each pinned keystore, the app bundle and the image bundle (the second argume
 
 ## IR-340: Store the developer image key as PKCS#8 PEM, with a base64 public file
 
-## IR-360: Check the kernel command line over the serial shell, not on hvc0
-
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
@@ -11088,6 +11086,11 @@ For each pinned keystore, the app bundle and the image bundle (the second argume
 
 **Follow-up: writable instance clones (IR-337, branch fix/065-writable-instance-clones, cbaaf36).** Choice 5 made the installed tree read-only, and `clonefile(2)` carries the mode of the template into each clone. Provisioning and the initrd write then failed with EACCES. Every clone that is written after it is made is now cloned with `FileCloner.cloneWritable`, which adds the owner's write bit and keeps the read bits: the instance disk (`InstanceDiskProvisioner`) and the initrd, including its copy fallback (`AndroidBootPlanner.writeInitrd`). The installed templates and the installed ramdisk stay read-only, because the store clones them with the plain clone and never writes the copy. The install staging clones are not written either, so they stay read-only as well. The owner's write bit is the only bit added, so a clone keeps the read bits of its source. Tests clone a read-only template, write to the clone, and check the mode of both files. The provisioning and initrd tests failed on the old code with `cloneFailed` (`NSPOSIXErrorDomain`), which is the reported regression.
 
+## IR-360: Check the kernel command line over the serial shell, not on hvc0
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
 | Task | #012, #013 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #012, #013; [android-image.md](../02-design/android-image.md) §6.4, §13 |
 
@@ -11634,62 +11637,6 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 
 **Consequence.** #014 does not claim that a stop during VM start works.
 
-## IR-410: Copied RiftVM MSAA code ships under a reference pin
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #018, #020 |
-| Affected documents | `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/ThirdParty.lock.json` (`riftvm`, `virglrenderer`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4, §5; [graphics.md](../02-design/graphics.md) §5.1; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §3.2, §4.1 |
-
-**Choice.** Treat `virglrenderer/0002` as copied RiftVM MIT code. Reclassify the `riftvm` lock entry from `ships: reference` to `ships: derived`, and add the RiftVM MIT text and the marked file list to the generated notices, as [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 requires. The patch header keeps the `f615e16` origin and also cites the pinned commit `51f19193`. The rule as written requires this change, so this entry records it as the choice. The alternative is an independent rewrite of the downgrade, which would keep the `reference` pin. That needs new code and review, so it is not chosen here. #018 does not make the change, because its acceptance criteria require the pin to stay source-only and IR-188 chose `reference`. Release artifacts that contain the runtime wait for the change.
-
-**Reason.** `virglrenderer/0002` carries RiftVM's `virglrenderer-msaa-downgrade.patch`. Its added lines equal the code of `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` at the pinned commit, apart from blank-line placement, and its comments say "RiftVM:". The patch is shipped in APKRun's virglrenderer dylib (`ships: app`). So it is copied RiftVM code, and [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1 defines `reference` as "not built, copied, linked, or distributed". §3.1 requires the lock entry to become `ships: derived` when APKRun copies RiftVM code. IR-188 chose `reference` on the premise that no RiftVM code is copied, and that premise does not hold for this patch. The header cites `f615e16`, not the pinned commit, so the §3.1 marker does not match the pin either. §3.2 keeps the original `From:` author, who matches the author of `f615e16`, so attribution is right. The gap is the notice and the classification.
-
-**Verification.** On 2026-10-10 the added lines of `0002` were compared with the pinned file, `f615e16` was confirmed to exist upstream (2026-09-19, same author as the patch's `From:` line), and the shipped code was confirmed to carry the `RiftVM:` comments. `scripts/check-lock.sh` passes because it does not inspect code for copies. The `scripts/check-licenses.sh` checker that would test the marker is planned for #093 and is not in this checkout.
-
-## IR-411: ANGLE patch omits the Vulkan-backend hunk of the recipe
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #020; follow-up to the Vulkan track (#096) |
-| Affected documents | `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
-
-**Choice.** Keep `angle/0001` without the recipe's `VertexArrayVk.cpp` hunk for v1. Record that the hunk, or an equivalent fix, must be applied before the ANGLE Vulkan backend is enabled, and that the Vulkan track (#096) owns that step. #018 changes no patch.
-
-**Reason.** The recipe's `angle-changes-main.patch` changes four files. APKRun's `angle/0001` changes three, and it leaves out `src/libANGLE/renderer/vulkan/VertexArrayVk.cpp`, where the recipe replaces `bufferVk->getSize()` with `bufferHelper.getSize()` in the `padVertexAttribBufferSizeIfNeeded` call. The pinned Vulkan renderer's `BUILD.gn` asserts `angle_enable_vulkan`, and the lock sets `angle_enable_vulkan=false`, so the Metal-only library does not compile that file. The omission therefore does not change the v1 library. But no record shows that the omission was intended, and a later Vulkan build would differ from the recipe.
-
-**Verification.** On 2026-10-10 the two sequences were applied to copies of the pinned ANGLE files that the patches touch. The only difference was that one line. The `BUILD.gn` assertion was read from the pinned archive. #020's build evidence (IR-191) does not cover a Vulkan build.
-
-## IR-412: Carried patch headers do not record upstream status
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #020 |
-| Affected documents | `ThirdParty/patches/virglrenderer/0001-add-macos-metal-support.patch`; `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; `ThirdParty/patches/libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, `0003-enable-egl-platform-display.patch`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 |
-
-**Choice.** Each carried patch header gets one line that states whether the patch was sent upstream, and where. This is a follow-up to the #020 patch set. #018 does not edit patch files.
-
-**Reason.** §3.2 requires the patch header to keep the author, the reason, and whether the patch was sent upstream. `virglrenderer/0003` states "Upstream: not submitted". The carried patches state only their recipe or RiftVM origin. The libepoxy headers are series patches (`[PATCH n/3]`) and do not say whether they were merged or submitted. Without that line, a reviewer cannot check the upstream status of these patches from the files.
-
-**Verification.** On 2026-10-10 each of the six headers was read. None of them states an upstream status. The one APKRun patch that does, `virglrenderer/0003`, is not in this list.
-
-## IR-413: Renderer flags that RiftVM does not pass
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #020 |
-| Affected documents | `ThirdParty/ThirdParty.lock.json` (`buildFlags` of `virglrenderer`, `libepoxy`, and `angle`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
-
-**Choice.** Keep the three flags that RiftVM does not pass: virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`. The maintainer confirms them at the next #020 build review. #018 changes no build input.
-
-**Reason.** The flags match the v1 scope, which is a macOS 27 Metal-only renderer. For virglrenderer, RiftVM's default `platforms=auto` already selects EGL on macOS when libepoxy reports it, as the pinned `meson.build` shows. So `-Dplatforms=egl` makes a missing EGL a build error instead of a silent omission, and it does not change the compiled winsys. For libepoxy, `-Dglx=no` removes GLX, which is not used on macOS; the expected effect is nil, but libepoxy's `meson.build` was not read for this entry. For ANGLE, RiftVM's GN arguments do not set `mac_deployment_target`, so the minimum OS of the shipped libraries follows the SDK default. The lock sets 27.0 to match the product minimum. The effect of the default was not measured.
-
-**Verification.** On 2026-10-10 the flags were compared with the pinned `build-virgl-runtime-from-source.sh` and with the lock. The virglrenderer `platforms` handling was read from the pinned `meson.build` with the recipe patch applied. #018 ran no build. The #020 build (IR-191) ran with these flags; whether they change the runtime's behavior is not established.
-
 ## IR-380: Refuse a GPU profile that the device does not offer
 
 | Field | Value |
@@ -11851,6 +11798,7 @@ part of #014's readiness work. The rest are noted for the owner tasks.
 ## IR-400: Keep the unconfirmed drm_virgl values and leave the layer-2 criterion open
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #010, #022 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #010 and #022; [android-image.md](../02-design/android-image.md) §6.2; [graphics.md](../02-design/graphics.md) §9; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
@@ -11877,6 +11825,7 @@ decision also decides when #011 starts.
 ## IR-401: Leave display_framebuffer_format out of the drm_virgl set
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #022 (from #010) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §6.2; [graphics.md](../02-design/graphics.md) §9; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
@@ -11900,6 +11849,7 @@ headless sets, not `drmVirgl`.
 ## IR-402: Check the layer-2 values in the tests, not only in the layout's sources text
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #010, #012 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #010 (acceptance and Tests); [android-image.md](../02-design/android-image.md) §6.2; `Images/tools/tests/test_layout.py` |
@@ -11925,6 +11875,7 @@ the test in the same change.
 ## IR-403: Worktree test runs must put the worktree's apkrun_image first
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #010; parallel work ([workflow.md](../05-development/workflow.md)) |
 | Affected documents | [workflow.md](../05-development/workflow.md) (parallel work); `Images/tools/.venv` |
@@ -11949,6 +11900,7 @@ worktrees that use the same venv have the same risk until the maintainer decides
 ## IR-404: Confirm androidboot.hypervisor.vm.supported=0 on a reference boot, or record it as a spike choice
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #010, #013 |
 | Affected documents | [android-image.md](../02-design/android-image.md) §6.2; `Images/tools/layouts/cuttlefish-phone-arm64.json` (`bootconfig.sources.decided`); `Images/reference/16373615/incomplete/default-20261001T120904-49816/kernel.log` (line 1154) |
@@ -11972,6 +11924,7 @@ layout's decided note say why.
 ## IR-405: The reference record has no expected-differences entry for androidboot.serialno
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #013 (record), #010 |
 | Affected documents | `Images/reference/16373615/expected-differences.yaml`; [android-image.md](../02-design/android-image.md) §6.2; [IR-367](#ir-367-derive-the-reference-differences-from-the-launchers-bootconfig-and-command-line) |
@@ -11990,6 +11943,7 @@ entry in that file.
 ## IR-406: The complete manifest example still shows the 157-byte command line
 
 | Field | Value |
+|---|---|
 | Status | Needs maintainer review |
 | Task | #065, #010 |
 | Affected documents | [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.1 (complete example) and §6.2 (`SHA256SUMS` example); [android-image.md](../02-design/android-image.md) §4.1 |
@@ -12006,6 +11960,62 @@ the pinned build. Regenerating them by hand would invent values, and #065 writes
 the real manifest.
 
 **Consequence.** Until then, a reader can take the sample sizes as measured.
+## IR-410: Copied RiftVM MSAA code ships under a reference pin
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #018, #020 |
+| Affected documents | `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/ThirdParty.lock.json` (`riftvm`, `virglrenderer`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4, §5; [graphics.md](../02-design/graphics.md) §5.1; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1, §3.2, §4.1 |
+
+**Choice.** Treat `virglrenderer/0002` as copied RiftVM MIT code. Reclassify the `riftvm` lock entry from `ships: reference` to `ships: derived`, and add the RiftVM MIT text and the marked file list to the generated notices, as [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.1 requires. The patch header keeps the `f615e16` origin and also cites the pinned commit `51f19193`. The rule as written requires this change, so this entry records it as the choice. The alternative is an independent rewrite of the downgrade, which would keep the `reference` pin. That needs new code and review, so it is not chosen here. #018 does not make the change, because its acceptance criteria require the pin to stay source-only and IR-188 chose `reference`. Release artifacts that contain the runtime wait for the change.
+
+**Reason.** `virglrenderer/0002` carries RiftVM's `virglrenderer-msaa-downgrade.patch`. Its added lines equal the code of `scripts/virgl-patches/virglrenderer-msaa-downgrade.patch` at the pinned commit, apart from blank-line placement, and its comments say "RiftVM:". The patch is shipped in APKRun's virglrenderer dylib (`ships: app`). So it is copied RiftVM code, and [legal-and-licensing.md](../05-development/legal-and-licensing.md) §4.1 defines `reference` as "not built, copied, linked, or distributed". §3.1 requires the lock entry to become `ships: derived` when APKRun copies RiftVM code. IR-188 chose `reference` on the premise that no RiftVM code is copied, and that premise does not hold for this patch. The header cites `f615e16`, not the pinned commit, so the §3.1 marker does not match the pin either. §3.2 keeps the original `From:` author, who matches the author of `f615e16`, so attribution is right. The gap is the notice and the classification.
+
+**Verification.** On 2026-10-10 the added lines of `0002` were compared with the pinned file, `f615e16` was confirmed to exist upstream (2026-09-19, same author as the patch's `From:` line), and the shipped code was confirmed to carry the `RiftVM:` comments. `scripts/check-lock.sh` passes because it does not inspect code for copies. The `scripts/check-licenses.sh` checker that would test the marker is planned for #093 and is not in this checkout.
+
+## IR-411: ANGLE patch omits the Vulkan-backend hunk of the recipe
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020; follow-up to the Vulkan track (#096) |
+| Affected documents | `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+
+**Choice.** Keep `angle/0001` without the recipe's `VertexArrayVk.cpp` hunk for v1. Record that the hunk, or an equivalent fix, must be applied before the ANGLE Vulkan backend is enabled, and that the Vulkan track (#096) owns that step. #018 changes no patch.
+
+**Reason.** The recipe's `angle-changes-main.patch` changes four files. APKRun's `angle/0001` changes three, and it leaves out `src/libANGLE/renderer/vulkan/VertexArrayVk.cpp`, where the recipe replaces `bufferVk->getSize()` with `bufferHelper.getSize()` in the `padVertexAttribBufferSizeIfNeeded` call. The pinned Vulkan renderer's `BUILD.gn` asserts `angle_enable_vulkan`, and the lock sets `angle_enable_vulkan=false`, so the Metal-only library does not compile that file. The omission therefore does not change the v1 library. But no record shows that the omission was intended, and a later Vulkan build would differ from the recipe.
+
+**Verification.** On 2026-10-10 the two sequences were applied to copies of the pinned ANGLE files that the patches touch. The only difference was that one line. The `BUILD.gn` assertion was read from the pinned archive. #020's build evidence (IR-191) does not cover a Vulkan build.
+
+## IR-412: Carried patch headers do not record upstream status
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020 |
+| Affected documents | `ThirdParty/patches/virglrenderer/0001-add-macos-metal-support.patch`; `ThirdParty/patches/virglrenderer/0002-downgrade-unsupported-msaa.patch`; `ThirdParty/patches/angle/0001-fix-metal-boolean-mix.patch`; `ThirdParty/patches/libepoxy/0001-improve-library-detection.patch`, `0002-disable-desktop-extensions-on-gles.patch`, `0003-enable-egl-platform-display.patch`; [legal-and-licensing.md](../05-development/legal-and-licensing.md) §3.2 |
+
+**Choice.** Each carried patch header gets one line that states whether the patch was sent upstream, and where. This is a follow-up to the #020 patch set. #018 does not edit patch files.
+
+**Reason.** §3.2 requires the patch header to keep the author, the reason, and whether the patch was sent upstream. `virglrenderer/0003` states "Upstream: not submitted". The carried patches state only their recipe or RiftVM origin. The libepoxy headers are series patches (`[PATCH n/3]`) and do not say whether they were merged or submitted. Without that line, a reviewer cannot check the upstream status of these patches from the files.
+
+**Verification.** On 2026-10-10 each of the six headers was read. None of them states an upstream status. The one APKRun patch that does, `virglrenderer/0003`, is not in this list.
+
+## IR-413: Renderer flags that RiftVM does not pass
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #020 |
+| Affected documents | `ThirdParty/ThirdParty.lock.json` (`buildFlags` of `virglrenderer`, `libepoxy`, and `angle`); [riftvm-analysis.md](../02-design/riftvm-analysis.md) §4; [graphics.md](../02-design/graphics.md) §5.1 |
+
+**Choice.** Keep the three flags that RiftVM does not pass: virglrenderer `-Dplatforms=egl`, libepoxy `-Dglx=no`, and ANGLE `mac_deployment_target="27.0"`. The maintainer confirms them at the next #020 build review. #018 changes no build input.
+
+**Reason.** The flags match the v1 scope, which is a macOS 27 Metal-only renderer. For virglrenderer, RiftVM's default `platforms=auto` already selects EGL on macOS when libepoxy reports it, as the pinned `meson.build` shows. So `-Dplatforms=egl` makes a missing EGL a build error instead of a silent omission, and it does not change the compiled winsys. For libepoxy, `-Dglx=no` removes GLX, which is not used on macOS; the expected effect is nil, but libepoxy's `meson.build` was not read for this entry. For ANGLE, RiftVM's GN arguments do not set `mac_deployment_target`, so the minimum OS of the shipped libraries follows the SDK default. The lock sets 27.0 to match the product minimum. The effect of the default was not measured.
+
+**Verification.** On 2026-10-10 the flags were compared with the pinned `build-virgl-runtime-from-source.sh` and with the lock. The virglrenderer `platforms` handling was read from the pinned `meson.build` with the recipe patch applied. #018 ran no build. The #020 build (IR-191) ran with these flags; whether they change the runtime's behavior is not established.
+
 ## IR-420: The development agent's version record is apkrun-guest.json
 
 | Field | Value |
@@ -12849,188 +12859,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** The maintainer decides the final location when the image integration (M02 step 2, the product fragment) is written. The M02 entry now lists `scripts/guest/` and `scripts/tests/`.
 
-## IR-560: Test the developer stop through AndroidStopSequence, not RuntimeSupervisor
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3; [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) |
-
-**Choice.** The bounded wait and the forced stop move out of `RuntimeSupervisor.stop()` into `AndroidStopSequence`, an internal type. It takes the power-off request, the VM's state check, and the forced stop as `@Sendable` closures, and its deadline is a parameter that defaults to 20 s. The T0 tests drive that type with a fake VM. The channel choice (ADB, then the serial shell) moves into `AndroidStopSequence.sendPowerOff`, which takes the two attempts as closures, so it can be tested too.
-
-**Reason.** `RuntimeSupervisor` reaches a running VM only through `ensureReady`, which needs an installed image, an instance, and the boot planner's manifest and disk files. The supervisor creates its `VMController` inside `boot()`, so no seam can be injected at that point. `VMController` has a `driverFactory` seam, but its fakes live in `VirtualMachineCoreTests`, which RuntimeCore tests cannot import. The smallest seam that makes the 20 s rule testable without a VM is the extracted decision.
-
-**Consequence.** The wiring from `RuntimeSupervisor.stop()` to the sequence is covered by reading and by the T2 graceful path, not by a T0 test that drives the real controller. The real forced stop is covered by the `VMController` stop-timeout tests.
-
-## IR-561: Give a developer power-off the full 20 s once a channel was tried
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
-
-**Choice.** In developer mode the stop waits the full 20 s after the power-off request whenever a channel was tried, including when every channel failed. Only a stop that no channel could try (no ADB connection and no serial shell) forces the VM at once.
-
-**Reason.** The previous code forced at once when neither channel reported success. An ADB request that times out is killed after 5 s (`AdbProcess`), but Android may already have received it. The serial fallback can also fail while the guest is powering off. A forced stop then cuts a graceful power-off short. vm.md §9.3 gives Android 20 s after the request, and the criterion says "falls back to a forced stop after 20 s", so the immediate force did not match the spec. The graceful path that T2 checks does not change, because ADB accepts the request there.
-
-**Consequence.** A stop whose request was lost waits up to 20 s before the forced stop, where it previously forced at once. Developer mode has a serial shell from the start of the boot, so the no-channel case should not occur in practice.
-
-## IR-562: Force outside developer mode at once until a Shutdown request is sent
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
-
-**Choice.** Outside developer mode `stop()` sends no request and forces the VM at once, as before this change.
-
-**Reason.** vm.md §9.3 names the Guest Agent `Shutdown` RPC as the production request. The message exists in `control.proto`, but RuntimeCore does not send it. Without a request, no graceful stop is running, so a 20 s wait would only delay the stop. Sending `Shutdown` belongs with the Guest Agent wiring, not with #015.
-
-**Consequence.** The production stop has no graceful step until the Guest Agent request lands. The CLI always boots in developer mode, so no CLI path is affected today.
-
-## IR-563: Tick criterion 5 on the T0 fallback and the T2 SIGINT run
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock); [vm.md](../02-design/vm.md) §9.3, §17 |
-
-**Choice.** Criterion 5 is ticked on two results. The first is the T0 fallback in `AndroidStopSequenceTests`, which drives a VM that never finishes its graceful stop: the forced stop comes after the deadline, and the VM ends stopped. The second is the T2 SIGINT run, which stopped Android with `reboot -p` in 1.71 s. The files do not record the channel. The timing points to ADB, because a timed-out ADB call would take 5 s. No fault hook that keeps a real guest running is added. The fallback test uses a 300 ms deadline, and a separate test checks that the production deadline is 20 s.
-
-**Reason.** The #015 note asked for "a test or fault hook that keeps Android running". A guest-side hook, for example one that stops init from powering off, changes the boot and the guest images, and no seam offers it today. The T0 test covers the logic that decides the fallback. The real forced stop is covered by the `VMController` stop-timeout tests, and the T2 run covers the path that SIGINT takes into the request.
-
-**Consequence.** The fallback has not run against a real guest that ignores `reboot -p`. A later fault hook would add that check.
-
-## IR-564: Run the T2 SIGINT check as a script, not in XCTest
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) Notes; [cli.md](../02-design/cli.md) §3.5 |
-
-**Choice.** The SIGINT check is a shell script, run under `lockf -k /tmp/apkrun-vm.lock`. It starts the signed embedded `apkrun dev boot`, waits for "press Ctrl-C to stop Android", sends SIGINT with `kill -INT`, and then checks the exit status, the elapsed time, and the guest's `reboot: Power down` line. The script is kept outside the repository, and its steps are in #015 Notes.
-
-**Reason.** The SIGINT handler is in the `apkrun` executable (`CLI/apkrun/Dev/DevBoot.swift`), not in a library. The XCTest host runs `RuntimeSupervisor` in-process, so it never reaches that handler. A SIGINT sent to the XCTest host would end the host, because its disposition is the default. Only the real binary reaches the handler. The binary needs the virtualization entitlement, and the check needs a built guest APK and an installed test bundle, which the XCTest plans do not provide.
-
-**Consequence.** The check is manual and is not repeated by the T2 suites. It should become a repeatable check once a harness can launch the CLI.
-
-## IR-565: Map the headless launch of apkrun dev launch to the none GPU profile
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (build of the embedded CLI, outside criterion 5) |
-| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev launch`) |
-
-**Choice.** `apkrun dev launch` passes `gpu: .none` to `DevBootOptions`. `DevGPUProfile.none` is documented as the development `headless` profile, so the launch keeps its headless profile. The change is one line in `CLI/apkrun/Dev/DevLaunch.swift`.
-
-**Reason.** `DevBootOptions` replaced its `headless` flag with `gpu` (commit 09d8824). `DevLaunch.swift` still passed `headless: true`, so the embedded runtime build of `apkrun` failed to compile on main. The Debug CLI that the app embeds is built with that trait, and the T2 SIGINT check needs it.
-
-**Consequence.** The embedded CLI builds again. `apkrun dev launch` has no new test, and its behavior is the same as the headless launch it was written for.
-
-## IR-566: Do not handle Ctrl-C while the dev boot is still booting
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (outside criterion 5) |
-| Affected documents | [cli.md](../02-design/cli.md) §3.5, §5 (`apkrun dev boot`) |
-
-**Choice.** Not changed by #015. `DevBoot.execute` awaits `ensureReady` before it reads the stop stream, so a Ctrl-C during the boot is buffered and acts only after Android is ready. The boot runs to the end before anything happens. This was found by reading `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`. It was not run.
-
-**Reason.** The criterion covers the stop after the boot. Making Ctrl-C end a boot needs a test with a booting VM, and that is a separate task.
-
-**Consequence.** Ctrl-C during a boot (up to 180 s, or 900 s on a first boot) does not stop it. A follow-up should read the stop stream from the start and call `supervisor.stop()`, which already handles a stop during boot (`stopRequested`).
-
-## IR-567: Do not exit on a second Ctrl-C
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (outside criterion 5) |
-| Affected documents | [cli.md](../02-design/cli.md) §3.5 |
-
-**Choice.** Not changed by #015. The dev boot takes the first SIGINT as the stop request, and it ignores later ones.
-
-**Reason.** cli.md §3.5 says a second Ctrl-C exits at once with status 130. The dev boot does not do that. The exit path interacts with the forced-stop bound, so it needs its own decision.
-
-**Consequence.** While the stop waits for Android (up to 20 s), a second Ctrl-C has no effect, so the user cannot skip the wait.
-
-## IR-568: Count the 20 s from the start of the power-off request
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
-
-**Choice.** The deadline starts before the first channel is tried, so the ADB attempt (at most 5 s) and the serial attempt (2 s) count within the 20 s. The forced stop follows 20 s after the start of the request, not 20 s after its reply.
-
-**Reason.** The criterion says "after 20 s" from Ctrl-C, and the previous code measured this way (its comment said the deadline starts before the request). If the clock started after a 7 s channel failure, the stop could take 27 s.
-
-**Consequence.** After a failed ADB request, the wait for Android is shorter than 20 s by the time that request took.
-
-## IR-569: Do not join a second stop to the first one
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (found by review; the same behavior is on main) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) §3 |
-
-**Choice.** Not changed by #015. `RuntimeSupervisor.stop()` does not record that a stop is under way, so a second call runs the sequence again.
-
-**Reason.** The first `stop()` awaits the power-off wait, and the actor can run the second call during that await. The `apkrun dev boot` command calls `stop()` once, so the second call is not reachable from the CLI. The rule for joining a second caller to the stop in progress belongs with the XPC client of the runtime daemon.
-
-**Consequence.** A second `stop()` during the wait sends a second `reboot -p`, and it can force the VM a second time. The VM still ends stopped.
-
-## IR-570: The serial shell does not support overlapping commands
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (found by review; the same code is on main) |
-| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
-
-**Choice.** Not changed by #015. `AndroidSerialShell` keeps one `waiter` continuation and clears the received output at the start of each `run`, so two overlapping runs are not supported.
-
-**Reason.** A stop's power-off request can overlap the boot's `getprop` over the same shell when `stop()` runs during `confirmBootCompleted`. A second run would replace the first waiter, and the first continuation would then never resume. The reviewer found this by reading the code. It was not reproduced. `DevBoot` does not call `stop()` during the boot (IR-566), so the CLI does not reach it.
-
-**Consequence.** A `stop()` during the boot's readiness check can leave that check hung. A fix serializes the shell's commands, or joins the stop to the boot, and belongs with the runtime-daemon work.
-
-## IR-571: Keep the stop deadline when the stop task is cancelled
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (criterion 5) |
-| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) (operations survive the caller) |
-
-**Choice.** The developer stop's wait ignores the cancellation of the caller. The forced stop still comes after the 20 s deadline. The wait sleeps in a detached task, so the cancellation does not reach the sleep.
-
-**Reason.** A cancelled `Task.sleep` returns at once. The first version of the wait broke out of its loop on cancellation, so the VM was forced at once. The VM still has to stop, and the runtime's operations survive the caller that started them. A cancelled sleep that is not replaced by a detached one would also spin until the deadline.
-
-**Consequence.** A stop that is cancelled takes the full deadline, as an uncancelled one does. No caller of the CLI cancels a stop today.
-
-## IR-572: Sign the AndroidADB test host with the maintainer's Apple Development identity
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #015 (T2 AndroidADB configuration) |
-| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.8 (`APKRUN_TEST_DEVELOPMENT_TEAM`, `APKRUN_TEST_CODE_SIGN_IDENTITY`) |
-
-**Choice.** The AndroidADB run signs the test host with the Apple Development identity of the maintainer's git account. The team is `X4A37LMRPS`, and the identity is its SHA-1 fingerprint. It is passed as `DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` on the `xcodebuild` command line.
-
-**Reason.** The `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` variables that name the lab certificate are not set in this shell, and the project file does not name a team. The VM tests need a signed test host, and the task's definition of done needs its T2 tier to run. The choice is the one identity on this Mac that matches the git account.
-
-**Consequence.** The result is valid for this Mac. It is not signed with the CI lab certificate. The maintainer should repeat the AndroidADB run with the lab identity if the lab certificate is required for the record.
-
 ## IR-500: The virgl packages come from Alpine v3.23, not v3.24
 
 | Field | Value |
@@ -13698,6 +13526,188 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Consequence.** Decision needed: add `plan` to the table and state that `docs(<area>)` names the design area that a document describes, or use `docs` for these commits. Until then the commits follow main's practice and do not match the table as written.
 
+## IR-560: Test the developer stop through AndroidStopSequence, not RuntimeSupervisor
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) |
+
+**Choice.** The bounded wait and the forced stop move out of `RuntimeSupervisor.stop()` into `AndroidStopSequence`, an internal type. It takes the power-off request, the VM's state check, and the forced stop as `@Sendable` closures, and its deadline is a parameter that defaults to 20 s. The T0 tests drive that type with a fake VM. The channel choice (ADB, then the serial shell) moves into `AndroidStopSequence.sendPowerOff`, which takes the two attempts as closures, so it can be tested too.
+
+**Reason.** `RuntimeSupervisor` reaches a running VM only through `ensureReady`, which needs an installed image, an instance, and the boot planner's manifest and disk files. The supervisor creates its `VMController` inside `boot()`, so no seam can be injected at that point. `VMController` has a `driverFactory` seam, but its fakes live in `VirtualMachineCoreTests`, which RuntimeCore tests cannot import. The smallest seam that makes the 20 s rule testable without a VM is the extracted decision.
+
+**Consequence.** The wiring from `RuntimeSupervisor.stop()` to the sequence is covered by reading and by the T2 graceful path, not by a T0 test that drives the real controller. The real forced stop is covered by the `VMController` stop-timeout tests.
+
+## IR-561: Give a developer power-off the full 20 s once a channel was tried
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** In developer mode the stop waits the full 20 s after the power-off request whenever a channel was tried, including when every channel failed. Only a stop that no channel could try (no ADB connection and no serial shell) forces the VM at once.
+
+**Reason.** The previous code forced at once when neither channel reported success. An ADB request that times out is killed after 5 s (`AdbProcess`), but Android may already have received it. The serial fallback can also fail while the guest is powering off. A forced stop then cuts a graceful power-off short. vm.md §9.3 gives Android 20 s after the request, and the criterion says "falls back to a forced stop after 20 s", so the immediate force did not match the spec. The graceful path that T2 checks does not change, because ADB accepts the request there.
+
+**Consequence.** A stop whose request was lost waits up to 20 s before the forced stop, where it previously forced at once. Developer mode has a serial shell from the start of the boot, so the no-channel case should not occur in practice.
+
+## IR-562: Force outside developer mode at once until a Shutdown request is sent
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** Outside developer mode `stop()` sends no request and forces the VM at once, as before this change.
+
+**Reason.** vm.md §9.3 names the Guest Agent `Shutdown` RPC as the production request. The message exists in `control.proto`, but RuntimeCore does not send it. Without a request, no graceful stop is running, so a 20 s wait would only delay the stop. Sending `Shutdown` belongs with the Guest Agent wiring, not with #015.
+
+**Consequence.** The production stop has no graceful step until the Guest Agent request lands. The CLI always boots in developer mode, so no CLI path is affected today.
+
+## IR-563: Tick criterion 5 on the T0 fallback and the T2 SIGINT run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock); [vm.md](../02-design/vm.md) §9.3, §17 |
+
+**Choice.** Criterion 5 is ticked on two results. The first is the T0 fallback in `AndroidStopSequenceTests`, which drives a VM that never finishes its graceful stop: the forced stop comes after the deadline, and the VM ends stopped. The second is the T2 SIGINT run, which stopped Android with `reboot -p` in 1.71 s. The files do not record the channel. The timing points to ADB, because a timed-out ADB call would take 5 s. No fault hook that keeps a real guest running is added. The fallback test uses a 300 ms deadline, and a separate test checks that the production deadline is 20 s.
+
+**Reason.** The #015 note asked for "a test or fault hook that keeps Android running". A guest-side hook, for example one that stops init from powering off, changes the boot and the guest images, and no seam offers it today. The T0 test covers the logic that decides the fallback. The real forced stop is covered by the `VMController` stop-timeout tests, and the T2 run covers the path that SIGINT takes into the request.
+
+**Consequence.** The fallback has not run against a real guest that ignores `reboot -p`. A later fault hook would add that check.
+
+## IR-564: Run the T2 SIGINT check as a script, not in XCTest
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [M01 #015](issues/M01-android-bring-up.md#015-adb-debugging-over-vsock) Notes; [cli.md](../02-design/cli.md) §3.5 |
+
+**Choice.** The SIGINT check is a shell script, run under `lockf -k /tmp/apkrun-vm.lock`. It starts the signed embedded `apkrun dev boot`, waits for "press Ctrl-C to stop Android", sends SIGINT with `kill -INT`, and then checks the exit status, the elapsed time, and the guest's `reboot: Power down` line. The script is kept outside the repository, and its steps are in #015 Notes.
+
+**Reason.** The SIGINT handler is in the `apkrun` executable (`CLI/apkrun/Dev/DevBoot.swift`), not in a library. The XCTest host runs `RuntimeSupervisor` in-process, so it never reaches that handler. A SIGINT sent to the XCTest host would end the host, because its disposition is the default. Only the real binary reaches the handler. The binary needs the virtualization entitlement, and the check needs a built guest APK and an installed test bundle, which the XCTest plans do not provide.
+
+**Consequence.** The check is manual and is not repeated by the T2 suites. It should become a repeatable check once a harness can launch the CLI.
+
+## IR-565: Map the headless launch of apkrun dev launch to the none GPU profile
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (build of the embedded CLI, outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev launch`) |
+
+**Choice.** `apkrun dev launch` passes `gpu: .none` to `DevBootOptions`. `DevGPUProfile.none` is documented as the development `headless` profile, so the launch keeps its headless profile. The change is one line in `CLI/apkrun/Dev/DevLaunch.swift`.
+
+**Reason.** `DevBootOptions` replaced its `headless` flag with `gpu` (commit 09d8824). `DevLaunch.swift` still passed `headless: true`, so the embedded runtime build of `apkrun` failed to compile on main. The Debug CLI that the app embeds is built with that trait, and the T2 SIGINT check needs it.
+
+**Consequence.** The embedded CLI builds again. `apkrun dev launch` has no new test, and its behavior is the same as the headless launch it was written for.
+
+## IR-566: Do not handle Ctrl-C while the dev boot is still booting
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §3.5, §5 (`apkrun dev boot`) |
+
+**Choice.** Not changed by #015. `DevBoot.execute` awaits `ensureReady` before it reads the stop stream, so a Ctrl-C during the boot is buffered and acts only after Android is ready. The boot runs to the end before anything happens. This was found by reading `Packages/RuntimeHost/Sources/RuntimeHost/Dev/DevBoot.swift`. It was not run.
+
+**Reason.** The criterion covers the stop after the boot. Making Ctrl-C end a boot needs a test with a booting VM, and that is a separate task.
+
+**Consequence.** Ctrl-C during a boot (up to 180 s, or 900 s on a first boot) does not stop it. A follow-up should read the stop stream from the start and call `supervisor.stop()`, which already handles a stop during boot (`stopRequested`).
+
+## IR-567: Do not exit on a second Ctrl-C
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (outside criterion 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §3.5 |
+
+**Choice.** Not changed by #015. The dev boot takes the first SIGINT as the stop request, and it ignores later ones.
+
+**Reason.** cli.md §3.5 says a second Ctrl-C exits at once with status 130. The dev boot does not do that. The exit path interacts with the forced-stop bound, so it needs its own decision.
+
+**Consequence.** While the stop waits for Android (up to 20 s), a second Ctrl-C has no effect, so the user cannot skip the wait.
+
+## IR-568: Count the 20 s from the start of the power-off request
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3 |
+
+**Choice.** The deadline starts before the first channel is tried, so the ADB attempt (at most 5 s) and the serial attempt (2 s) count within the 20 s. The forced stop follows 20 s after the start of the request, not 20 s after its reply.
+
+**Reason.** The criterion says "after 20 s" from Ctrl-C, and the previous code measured this way (its comment said the deadline starts before the request). If the clock started after a 7 s channel failure, the stop could take 27 s.
+
+**Consequence.** After a failed ADB request, the wait for Android is shorter than 20 s by the time that request took.
+
+## IR-569: Do not join a second stop to the first one
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (found by review; the same behavior is on main) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) §3 |
+
+**Choice.** Not changed by #015. `RuntimeSupervisor.stop()` does not record that a stop is under way, so a second call runs the sequence again.
+
+**Reason.** The first `stop()` awaits the power-off wait, and the actor can run the second call during that await. The `apkrun dev boot` command calls `stop()` once, so the second call is not reachable from the CLI. The rule for joining a second caller to the stop in progress belongs with the XPC client of the runtime daemon.
+
+**Consequence.** A second `stop()` during the wait sends a second `reboot -p`, and it can force the VM a second time. The VM still ends stopped.
+
+## IR-570: The serial shell does not support overlapping commands
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (found by review; the same code is on main) |
+| Affected documents | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 |
+
+**Choice.** Not changed by #015. `AndroidSerialShell` keeps one `waiter` continuation and clears the received output at the start of each `run`, so two overlapping runs are not supported.
+
+**Reason.** A stop's power-off request can overlap the boot's `getprop` over the same shell when `stop()` runs during `confirmBootCompleted`. A second run would replace the first waiter, and the first continuation would then never resume. The reviewer found this by reading the code. It was not reproduced. `DevBoot` does not call `stop()` during the boot (IR-566), so the CLI does not reach it.
+
+**Consequence.** A `stop()` during the boot's readiness check can leave that check hung. A fix serializes the shell's commands, or joins the stop to the boot, and belongs with the runtime-daemon work.
+
+## IR-571: Keep the stop deadline when the stop task is cancelled
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (criterion 5) |
+| Affected documents | [vm.md](../02-design/vm.md) §9.3; [runtime-daemon.md](../02-design/runtime-daemon.md) (operations survive the caller) |
+
+**Choice.** The developer stop's wait ignores the cancellation of the caller. The forced stop still comes after the 20 s deadline. The wait sleeps in a detached task, so the cancellation does not reach the sleep.
+
+**Reason.** A cancelled `Task.sleep` returns at once. The first version of the wait broke out of its loop on cancellation, so the VM was forced at once. The VM still has to stop, and the runtime's operations survive the caller that started them. A cancelled sleep that is not replaced by a detached one would also spin until the deadline.
+
+**Consequence.** A stop that is cancelled takes the full deadline, as an uncancelled one does. No caller of the CLI cancels a stop today.
+
+## IR-572: Sign the AndroidADB test host with the maintainer's Apple Development identity
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #015 (T2 AndroidADB configuration) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.8 (`APKRUN_TEST_DEVELOPMENT_TEAM`, `APKRUN_TEST_CODE_SIGN_IDENTITY`) |
+
+**Choice.** The AndroidADB run signs the test host with the Apple Development identity of the maintainer's git account. The team is `X4A37LMRPS`, and the identity is its SHA-1 fingerprint. It is passed as `DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` on the `xcodebuild` command line.
+
+**Reason.** The `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` variables that name the lab certificate are not set in this shell, and the project file does not name a team. The VM tests need a signed test host, and the task's definition of done needs its T2 tier to run. The choice is the one identity on this Mac that matches the git account.
+
+**Consequence.** The result is valid for this Mac. It is not signed with the CI lab certificate. The maintainer should repeat the AndroidADB run with the lab identity if the lab certificate is required for the record.
+
 ## IR-580: Remove the drmVirgl refusal before the drmVirgl boot is verified on the VM
 
 | Field | Value |
@@ -14175,7 +14185,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Verification.** The vendored avbtool's algorithms were read from the file. The boot itself has not run.
 
 ## IR-660: The drmVirgl boot fails in libEGL because the test bundle has no Mesa EGL driver, not in the host renderer
-## IR-680: The writer keeps the super sparse and rewrites only the chunks that the replacement touches
 
 | Field | Value |
 |---|---|
@@ -14190,16 +14199,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The drmVirgl boot check (step 4) stays open. The result does not show a host renderer failure.
 
 ## IR-661: The drmVirgl boot is not made to pass in #022, because the Mesa libraries belong to the #099 image
-| Task | #099 (step 2, offline) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.5, §4.6 |
-
-**Choice.** The replaced super is a sparse image in the form that the manifest records. `sparse.rewrite_ranges` writes every chunk outside the replaced range again from its parsed record, and it encodes the new data as chunks: zero blocks become DONT_CARE, and other blocks become RAW runs of at most 256 blocks. The writer does not expand the super. Decision needed: whether the super that the disk assembly reads (§4.5) stays sparse, as this entry assumes, or whether the rewrite should produce an expanded image instead.
-
-**Reason.** The manifest records `super.img` as a sparse artifact with its own size and SHA-256 (1,746,554,644 bytes, `Images/manifests/16373615/android-image.json`). The disk assembly already expands it (§4.3), so a sparse output keeps the same interface. Rewriting with no replacement reproduces the stock bytes exactly (278 chunks), so the chunk encoder is faithful on this image.
-
-**Consequence.** The output has its own size and SHA-256 (IR-685). No manifest records it, so the step that uses it must record it as a new artifact.
-
-## IR-681: The metadata is not rewritten, because the partition keeps its size, and the writer verifies every copy
 
 | Field | Value |
 |---|---|
@@ -14214,16 +14213,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** Step 4 of #022 waits for the #099 image. The evidence is in the #022 Notes.
 
 ## IR-662: The drmVirgl stall is reported as `bootStalled` at `systemServer`, and the message hides the SurfaceFlinger abort loop
-| Task | #099 (step 2, offline) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; the stock metadata of IR-686 |
-
-**Choice.** `replace_partition` keeps the metadata bytes, so no partition table, extent, or checksum changes, and it recomputes no checksum. Before the output is published, the writer compares the metadata region byte for byte with the input, and it parses every geometry copy and every metadata copy that is not all zero with the format's checksums (8 copies in the stock: two geometry and six metadata). This is the answer to the brief's "update the metadata checksums": nothing changes, so there is nothing to update, and every copy is verified. Decision needed: none for this size. If a later task shrinks a partition (IR-682), the tables and the header and tables checksums of every copy must be recomputed, and that change needs its own decision.
-
-**Reason.** The injected `vendor_a` is exactly the size of its extent (291,229,696 bytes, IR-626), so the partition size does not change, and no table field changes. The liblp format has no checksum over partition data: its checksums cover the geometry, the header, and the tables. Recomputing checksums of unchanged bytes would add risk without changing the result.
-
-**Consequence.** The backup copies stay exactly as the stock has them.
-
-## IR-682: A larger image is refused, and the writer does not grow a partition
 
 | Field | Value |
 |---|---|
@@ -14238,16 +14227,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The maintainer chooses the owner and any new error code. A new code needs its entry in [error-catalog.md](../03-reference/error-catalog.md) with a remediation.
 
 ## IR-663: The reproduction builds the Guest Agent outside the repository and points the boot at it with `APKRUN_GUEST_DIR`
-| Task | #099 (step 2, offline; blocks any injection that grows vendor_a) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.2 rule 4, §4.6 |
-
-**Choice.** An image larger than its partition fails with `PartitionTooLargeError`, a subclass of `LpWriteError` that records the image size and the partition size. Nothing is written. Decision needed: how a partition grows when its image is larger. The candidates are (a) a second extent in free space, (b) moving the partitions that follow, and (c) a larger super. Facts for the choice, from the stock table: `vendor_a` ends at sector 3,436,008, and the next extent (`vendor_dlkm_a`) starts at sector 3,436,544, so only 536 sectors (274,432 bytes) are free after `vendor_a`. The group `google_vendor_dynamic_partitions_a` allows 1,472,200,704 bytes, and its four partitions use 293,793,792 bytes.
-
-**Reason.** §4.2 rule 4 requires a partition's size to equal its image's size, and growth changes the table and the group accounting, which this writer does not change. The task says not to grow partitions.
-
-**Consequence.** The injected `vendor_a` fits the stock size (IR-626), so the writer accepts it. A larger EROFS image cannot be written into the super through this writer.
-
-## IR-683: The output is linked into place after the checks, and an existing output is never overwritten
 
 | Field | Value |
 |---|---|
@@ -14262,16 +14241,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** A fresh worktree cannot run `apkrun dev boot` until the agent is built. The maintainer decides whether environment-setup.md says so.
 
 ## IR-664: The control is a guestSwiftshader boot on the same bundle, not a boot of the injected vendor partition
-| Task | #099 (step 2, offline) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
-
-**Choice.** `replace_partition` writes `.<output name>.partial` beside the destination, runs the checks, and links the file to the destination only after they pass. The link fails when the destination exists. It removes the partial file on any failure. It refuses a destination that already exists, and it refuses the source file as the destination. Decision needed: none.
-
-**Reason.** The injection writes into new directories (IR-633), and a failed write must not leave a file that could be taken for a super. A link after the checks, which fails on an existing name, means that a file at the destination has passed every check and that no file was overwritten.
-
-**Consequence.** A partial file stays only if the process stops between the write and the rename, and the next call removes it.
-
-## IR-684: The writer refuses the inputs whose structure it cannot reproduce exactly
 
 | Field | Value |
 |---|---|
@@ -14286,16 +14255,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The control shows that this bundle boots without the Mesa driver. It does not show that a Mesa-enabled image boots, because no such image exists yet. #099 must run that check.
 
 ## IR-665: A drmVirgl boot on a bundle without the Mesa EGL driver should fail before the VM starts, with a typed error
-| Task | #099 (step 2, offline) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
-
-**Choice.** These inputs are refused with typed errors and no output: a raw super that is not sparse; a sparse image with a whole-image checksum or with a CRC32 chunk, because the checksum would be stale; a sparse image with a non-standard file or chunk header size; bytes after the last chunk; a chunk with no blocks; a partition extent that is not linear on the super device, is not aligned to the sparse block (4,096 bytes), or overlaps the metadata region. Decision needed: whether a whole-image checksum should be recomputed. The stock has none, and the injection's inputs have none either.
-
-**Reason.** Each refusal avoids an output that the reader could accept while Android does not. The stock super has none of these properties, so no refusal affects the target.
-
-**Consequence.** The writer covers the stock layout and the same layout with other data. A super that carries a checksum needs the follow-up in IR-684's decision.
-
-## IR-685: The stock super round-trips, and the injected vendor_a reads back in the rebuilt super, which is not a boot result
 
 | Field | Value |
 |---|---|
@@ -14310,6 +14269,94 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The maintainer decides whether the check belongs in #022 or in #099, and whether the inventory must list the Mesa libraries first.
 
 ## IR-666: The allocator's unsupported-format errors are recorded and not pursued in #022
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #023 (the display buffers of the allocator); #099 (the image) |
+| Affected documents | [M02](issues/M02-graphics.md) #022 Notes |
+
+**Choice.** Record the errors and defer them. The allocator service logs `Failed to convert descriptor. Unsupported format 0x3c` 478 times in the drmVirgl run and 10 times in the control run. Decision needed: whether #023 or #099 owns them.
+
+**Reason.** The first error is at 02:55:22, after SurfaceFlinger's first abort at 02:55:17. The control logs 10 of them, so the count alone does not point at the virgl path. The source of the errors is not identified in this run, and SurfaceFlinger aborts at `eglGetDisplay`, which comes before its display setup. A boot that passes EGL (#099) is needed before the errors can be read in context.
+
+**Consequence.** The #022 Notes list the errors as an open item. No code changes.
+
+## IR-680: The writer keeps the super sparse and rewrites only the chunks that the replacement touches
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.5, §4.6 |
+
+**Choice.** The replaced super is a sparse image in the form that the manifest records. `sparse.rewrite_ranges` writes every chunk outside the replaced range again from its parsed record, and it encodes the new data as chunks: zero blocks become DONT_CARE, and other blocks become RAW runs of at most 256 blocks. The writer does not expand the super. Decision needed: whether the super that the disk assembly reads (§4.5) stays sparse, as this entry assumes, or whether the rewrite should produce an expanded image instead.
+
+**Reason.** The manifest records `super.img` as a sparse artifact with its own size and SHA-256 (1,746,554,644 bytes, `Images/manifests/16373615/android-image.json`). The disk assembly already expands it (§4.3), so a sparse output keeps the same interface. Rewriting with no replacement reproduces the stock bytes exactly (278 chunks), so the chunk encoder is faithful on this image.
+
+**Consequence.** The output has its own size and SHA-256 (IR-685). No manifest records it, so the step that uses it must record it as a new artifact.
+
+## IR-681: The metadata is not rewritten, because the partition keeps its size, and the writer verifies every copy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; the stock metadata of IR-686 |
+
+**Choice.** `replace_partition` keeps the metadata bytes, so no partition table, extent, or checksum changes, and it recomputes no checksum. Before the output is published, the writer compares the metadata region byte for byte with the input, and it parses every geometry copy and every metadata copy that is not all zero with the format's checksums (8 copies in the stock: two geometry and six metadata). This is the answer to the brief's "update the metadata checksums": nothing changes, so there is nothing to update, and every copy is verified. Decision needed: none for this size. If a later task shrinks a partition (IR-682), the tables and the header and tables checksums of every copy must be recomputed, and that change needs its own decision.
+
+**Reason.** The injected `vendor_a` is exactly the size of its extent (291,229,696 bytes, IR-626), so the partition size does not change, and no table field changes. The liblp format has no checksum over partition data: its checksums cover the geometry, the header, and the tables. Recomputing checksums of unchanged bytes would add risk without changing the result.
+
+**Consequence.** The backup copies stay exactly as the stock has them.
+
+## IR-682: A larger image is refused, and the writer does not grow a partition
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline; blocks any injection that grows vendor_a) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.2 rule 4, §4.6 |
+
+**Choice.** An image larger than its partition fails with `PartitionTooLargeError`, a subclass of `LpWriteError` that records the image size and the partition size. Nothing is written. Decision needed: how a partition grows when its image is larger. The candidates are (a) a second extent in free space, (b) moving the partitions that follow, and (c) a larger super. Facts for the choice, from the stock table: `vendor_a` ends at sector 3,436,008, and the next extent (`vendor_dlkm_a`) starts at sector 3,436,544, so only 536 sectors (274,432 bytes) are free after `vendor_a`. The group `google_vendor_dynamic_partitions_a` allows 1,472,200,704 bytes, and its four partitions use 293,793,792 bytes.
+
+**Reason.** §4.2 rule 4 requires a partition's size to equal its image's size, and growth changes the table and the group accounting, which this writer does not change. The task says not to grow partitions.
+
+**Consequence.** The injected `vendor_a` fits the stock size (IR-626), so the writer accepts it. A larger EROFS image cannot be written into the super through this writer.
+
+## IR-683: The output is linked into place after the checks, and an existing output is never overwritten
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** `replace_partition` writes `.<output name>.partial` beside the destination, runs the checks, and links the file to the destination only after they pass. The link fails when the destination exists. It removes the partial file on any failure. It refuses a destination that already exists, and it refuses the source file as the destination. Decision needed: none.
+
+**Reason.** The injection writes into new directories (IR-633), and a failed write must not leave a file that could be taken for a super. A link after the checks, which fails on an existing name, means that a file at the destination has passed every check and that no file was overwritten.
+
+**Consequence.** A partial file stays only if the process stops between the write and the rename, and the next call removes it.
+
+## IR-684: The writer refuses the inputs whose structure it cannot reproduce exactly
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** These inputs are refused with typed errors and no output: a raw super that is not sparse; a sparse image with a whole-image checksum or with a CRC32 chunk, because the checksum would be stale; a sparse image with a non-standard file or chunk header size; bytes after the last chunk; a chunk with no blocks; a partition extent that is not linear on the super device, is not aligned to the sparse block (4,096 bytes), or overlaps the metadata region. Decision needed: whether a whole-image checksum should be recomputed. The stock has none, and the injection's inputs have none either.
+
+**Reason.** Each refusal avoids an output that the reader could accept while Android does not. The stock super has none of these properties, so no refusal affects the target.
+
+**Consequence.** The writer covers the stock layout and the same layout with other data. A super that carries a checksum needs the follow-up in IR-684's decision.
+
+## IR-685: The stock super round-trips, and the injected vendor_a reads back in the rebuilt super, which is not a boot result
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-625; IR-650 |
 
@@ -14331,14 +14378,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
-| Task | #022 (step 4); #023 (the display buffers of the allocator); #099 (the image) |
-| Affected documents | [M02](issues/M02-graphics.md) #022 Notes |
-
-**Choice.** Record the errors and defer them. The allocator service logs `Failed to convert descriptor. Unsupported format 0x3c` 478 times in the drmVirgl run and 10 times in the control run. Decision needed: whether #023 or #099 owns them.
-
-**Reason.** The first error is at 02:55:22, after SurfaceFlinger's first abort at 02:55:17. The control logs 10 of them, so the count alone does not point at the virgl path. The source of the errors is not identified in this run, and SurfaceFlinger aborts at `eglGetDisplay`, which comes before its display setup. A boot that passes EGL (#099) is needed before the errors can be read in context.
-
-**Consequence.** The #022 Notes list the errors as an open item. No code changes.
 | Task | #099 (step 2, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §3.1, §4.6; IR-626 |
 
@@ -14534,7 +14573,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** Decision needed: whether a scratch-home install under `/tmp` is allowed for the first boot, or whether the variant needs another image name and a store entry first.
 
 ## IR-722: The bundle is checked by hand with OpenSSL, because no verify-only command exists
-## IR-741: The stale part of the injected vendor is the vendor hashtree descriptor in the top-level vbmeta, and the injected footer is already fresh
 
 | Field | Value |
 |---|---|
@@ -14549,14 +14587,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The claim "the signature verifies" rests on OpenSSL 4.0.3 and the developer key file, not on the product's verifier.
 
 ## IR-723: The guest build and the control boot are not run, because the boot never reaches the guest check
-| Task | #099 (the verity step, step 1 of the regeneration) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
-
-**Choice.** The read was done with the vendored avbtool (`Images/tools/vendor/avb/avbtool.py`, run through the image tools venv as `python3 -B avbtool.py info_image --image FILE`). The stock `vendor_a` (copied from the stock bundle's `super`, SHA-256 `a3ff3fb1…`, 291,229,696 bytes) has footer algorithm `NONE`, a hashtree with data and hash block size 4096, hash algorithm `sha256`, salt `16b6a5f2…162e`, and root digest `d8895f6a…83a5a`. It keeps FEC with 2 roots. The stock `vbmeta_a` (SHA256_RSA4096, key SHA-1 `2597c218…`) carries the same vendor descriptor. The injected `vendor_a` (`2cc0857c…`) has its own footer with an original image size of 185,974,784 bytes, a tree at 185,974,784, root digest `a373fc52…`, and no FEC, and `verify_image` passes on it. The defect is therefore the vendor descriptor in `vbmeta_a`: its image size, tree offset, FEC fields, and root digest all describe the stock layout. The fix takes the descriptor from the new footer.
-
-**Reason.** The kernel builds its table from the descriptor, so it reads the hash tree at the stock offset of 285,683,712 bytes. That is block 69,747, which matches the `metadata block 69747` message. The injected image has zeros there, and the block is reported as corrupted. A new tree in the image does not help while the descriptor points at the old layout. The earlier note that the footer was stale (M02 #099) is corrected here: the footer was made again by inject-vendor (IR-624), and only the vbmeta was not.
-
-## IR-742: This branch does not carry IR-727 and IR-728, so the entries of this task start at IR-740
 
 | Field | Value |
 |---|---|
@@ -14655,12 +14685,6 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** In both boots the guest kept rebooting (boot A) or stalled in the `/vendor` mount (boot B), so the graceful stop never completed. The run had a limit of two boots, and a retry would repeat the same state. The SIGKILL ends the VM with its guest unshut, which is acceptable only for a scratch instance that is removed.
 
 **Consequence.** The Ctrl-C path of [cli.md](../02-design/cli.md) §5 was not verified for a stuck guest. It needs a check in a follow-up. The wrapper status of both boots is `EXIT=70`.
-| Task | #099 (the verity step) |
-| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
-
-**Choice.** The entries of this task use IR-740 to IR-759. IR-727 and IR-728 are not in `docs/04-plan/implementation-review.md` on `main` at `c29aed5`. They are on `task/099-vm-variant-check` (commit `a970951` and later), together with IR-720 to IR-726 and IR-729. The content of IR-727 (no signing choice, the first Mesa boot stopped by dm-verity) and of IR-728 (the `logging` experiment) was read from that branch, and this task does not depend on any of their numbers. Decision needed: when the two branches are merged, the numbering must be reconciled before any IR-740 to IR-759 entry is kept.
-
-**Reason.** The task starts from `main` at `c29aed5`, and a number that is already taken on another branch would collide when the branches meet. The IR-740 to IR-759 range was given for this run, so the entries stay inside it.
 
 ## IR-740: The resealed vendor footer has no FEC, because no `fec` tool is pinned
 
@@ -14673,6 +14697,30 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The footer is made with `--do_not_generate_fec` by the new `python3 -m apkrun_image vendor-reseal` (module `apkrun_image/vendor_reseal.py`), the same as `inject-vendor` (IR-624). The stock `vendor_a` has FEC with two roots, and the resealed one has no FEC fields. The tool takes the block size, hash algorithm, salt, and partition name from the stock footer, and the footer is `NONE`. Decision needed: whether a pinned `fec` tool is added (a third-party component with runtime impact, so it needs an ADR under §6.6), or whether the product verity stays without FEC.
 
 **Reason.** avbtool makes the FEC data with an external `fec` tool, and `ThirdParty/ThirdParty.lock.json` does not pin one. A hash tree that verifies needs no FEC, because FEC only repairs blocks that fail their hash. The FEC errors of the logging-mode boot (IR-727 and IR-728 on `task/099-vm-variant-check`) came from the stale descriptor of IR-741, not from a missing repair path. Verity is kept on, so the missing FEC is a loss of repair only, not of checking.
+
+## IR-741: The stale part of the injected vendor is the vendor hashtree descriptor in the top-level vbmeta, and the injected footer is already fresh
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 1 of the regeneration) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
+
+**Choice.** The read was done with the vendored avbtool (`Images/tools/vendor/avb/avbtool.py`, run through the image tools venv as `python3 -B avbtool.py info_image --image FILE`). The stock `vendor_a` (copied from the stock bundle's `super`, SHA-256 `a3ff3fb1…`, 291,229,696 bytes) has footer algorithm `NONE`, a hashtree with data and hash block size 4096, hash algorithm `sha256`, salt `16b6a5f2…162e`, and root digest `d8895f6a…83a5a`. It keeps FEC with 2 roots. The stock `vbmeta_a` (SHA256_RSA4096, key SHA-1 `2597c218…`) carries the same vendor descriptor. The injected `vendor_a` (`2cc0857c…`) has its own footer with an original image size of 185,974,784 bytes, a tree at 185,974,784, root digest `a373fc52…`, and no FEC, and `verify_image` passes on it. The defect is therefore the vendor descriptor in `vbmeta_a`: its image size, tree offset, FEC fields, and root digest all describe the stock layout. The fix takes the descriptor from the new footer.
+
+**Reason.** The kernel builds its table from the descriptor, so it reads the hash tree at the stock offset of 285,683,712 bytes. That is block 69,747, which matches the `metadata block 69747` message. The injected image has zeros there, and the block is reported as corrupted. A new tree in the image does not help while the descriptor points at the old layout. The earlier note that the footer was stale (M02 #099) is corrected here: the footer was made again by inject-vendor (IR-624), and only the vbmeta was not.
+
+## IR-742: This branch does not carry IR-727 and IR-728, so the entries of this task start at IR-740
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #099 |
+
+**Choice.** The entries of this task use IR-740 to IR-759. IR-727 and IR-728 are not in `docs/04-plan/implementation-review.md` on `main` at `c29aed5`. They are on `task/099-vm-variant-check` (commit `a970951` and later), together with IR-720 to IR-726 and IR-729. The content of IR-727 (no signing choice, the first Mesa boot stopped by dm-verity) and of IR-728 (the `logging` experiment) was read from that branch, and this task does not depend on any of their numbers. Decision needed: when the two branches are merged, the numbering must be reconciled before any IR-740 to IR-759 entry is kept.
+
+**Reason.** The task starts from `main` at `c29aed5`, and a number that is already taken on another branch would collide when the branches meet. The IR-740 to IR-759 range was given for this run, so the entries stay inside it.
 
 ## IR-743: The stock vbmeta's vendor descriptor is replaced by the new footer's with the vendored `update_partition_descriptor`, and the stock rollback index is passed explicitly
 
@@ -15223,8 +15271,105 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Verification.** One VM run under `lockf`. The command and the result line are in the #022 Notes.
 
-## IR-900: The guest loads one monolithic sepolicy from the boot ramdisk, so the vendor partition's policy text has no runtime effect
 ## IR-870: Show the console ports as both hvc and vport nodes, and judge each marker on the node that receives it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review; partly superseded by IR-873 |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Superseded in part by IR-873.** The `vport` branch of this choice is withdrawn.
+
+**Choice.** The port check counts both node classes. A port is present when it has `/dev/hvc<N>`, a `/dev/vport<card>p<port>` node, or both. The marker check judges each attachment on the node that receives `APKRUN-PORT-<i>`, and the record names that node. The plan is not reordered from the hvc numbering alone; `ConsolePortPlan` keeps taking the observed mapping (IR-373).
+
+**Reason.** `VZConfigurationBuilder` attaches ports 0 to 9 as single-port devices, and ports 10 to 19 as the console ports of one multiport device with `isConsole` set (lines 78 to 105). An `hvc` node exists when the kernel allocates a console for a port, and the Alpine test kernel stops at eight (IR-372). The Linux virtio console driver names each port's character node `vport<card>p<port>`, so that node class can show a port whose `hvc` node is missing. Expecting every port to have a vport node is an assumption that this boot checks. Judging by the node that receives the marker covers both classes, and it matches the `observedDevice` input of `ConsolePortPlan`. Checking only `hvc` leaves the eight-node limit unverified. Checking only `vport` drops the hvc numbers that the Android holder list uses (hvc1, hvc2, hvc18).
+
+## IR-871: The Android layout gives the marker three host-writable ports, so its 20-port marker check cannot pass
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** On the dev Android boot, the marker check covers the ports that accept host input: port 0 (`hvc0`, the system console), port 1 (`hvc1`, the serial shell of the developer console), and nothing else. Port 18 (`hvc18`, the sensors responder) gets no marker, because the responder reads its bytes as the sensors HAL protocol. The other 17 ports are `.silent` or `.log` and get no marker. Criterion 1 of #095 is not ticked from this layout. The 20-port marker verdict needs a layout where every port takes host input. IR-877 places it on the Android kernel, because the pinned Linux test kernel has eight `hvc` nodes (IR-372).
+
+**Reason.** `ConsoleRole.permitsHostInput` is true only for `.systemConsole` and `.service` roles (`ConsoleChannel.swift`, lines 882 to 889). `RuntimeSupervisor` serves a developer console only for `hvc0` and `hvc1` (lines 395 and 425), and runs the sensors responder on `sensors_control` (line 398). A marker needs host input to its port, so a silent port cannot show one. Changing the roles to make every port a service would change the product layout of #095 step 2, which is outside this check. A marker written to the sensors port would test the HAL's protocol handling, not the port numbering.
+
+## IR-872: The boot holds the VM lock for its whole life, and the port and install checks run under that hold
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095, #016 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
+
+**Choice.** The development boot runs as the holder of `/tmp/apkrun-vm.lock` (`lockf -k`) for its whole life. The `adb` and developer-console commands of the two checks run while that hold is active, and they do not start a second `lockf`. The lock is released when `lockf` exits after the SIGINT stop.
+
+**Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the standing task rule that every VM command runs under `lockf` as covering the process that owns the VM. The maintainer should confirm this reading.
+
+## IR-873: The vport nodes refuse to open, so the marker channel is the hvc node, and the vport nodes show presence only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The marker check uses the `hvc` node of each port. The `vport` nodes count toward presence only. IR-870's branch that reads a `vport` node in place of a missing `hvc` node is withdrawn.
+
+**Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. The open results were printed in the session and were not saved to a file. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
+
+## IR-874: The install log shows a PackageInstaller session for HelloText, so the #016 criterion is ticked on that log
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #016 criterion 2; [package-store.md](../02-design/package-store.md) §6.1; IR-332 |
+
+**Choice.** Tick the #016 criterion that the install is a PackageInstaller session, on the guest logcat of the 2026-10-11 boot. IR-332 still holds for the T2 test, which does not assert the session.
+
+**Reason.** The `adb install -r` of `HelloText.apk` reported `Success` in the session's adb output, which was not saved to a file. The guest logcat has these lines in order: adbd's `abb_exec:package` request at 12:10:15.425, with `StartCommandInProcess(7061636b61676500696e7374616c6c00 package.install.` (the hex decodes to `package` and `install`); `I PackageManager: installation completed for package:io.apkrun.fixture.hellotext. Final code path: ...` at 12:10:15.584 on system_server thread 967; and `D PackageInstallerSession: Marking session 373923930 as applied` at 12:10:15.585 on the same thread. A second `adb install -r` gave the same sequence with session 2027986201 (12:10:59.209, 12:10:59.410, and 12:10:59.429). Those lines were printed by `logcat -d` in the session and were not saved to a file. The session line does not name the package. It ties to the install by its thread: it is on thread 967, the thread that logged the package's `installation completed` line four lines earlier (lines 28 and 32 of the dump). The `dumpsys package` read after the first install (`firstInstallTime=2026-10-11 12:10:15`) reports `versionCode=1`, `versionName=1.0`, `minSdk=29`, `targetSdk=37`, `installerPackageName=null`, `initiatingPackageName=com.android.shell`, and `packageSource=1`. It was printed in the session and not saved to a file.
+
+## IR-875: The T2 suite gets no session assertion in this branch, and the session file fails to rename on the image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #016 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #016 tests; [test-strategy.md](test-strategy.md) §2.4 |
+
+**Choice.** No T2 assertion for the session line is added in this branch. The #016 follow-up adds one, and it runs in the next T2 run of `AndroidPackageTests`.
+
+**Reason.** AGENTS.md §10 requires every test of a task to pass before the task is done. This branch has only the single boot, so a new assertion would not have run. The session line ties to the package by position on one thread, so a T2 check would need a `logcat -c` before the install and a `logcat -d` after it. During the first install, the same boot logged `E AtomicFile: Failed to rename /data/system/install_sessions.xml.new to /data/system/install_sessions.xml` at 12:10:15.448 and 12:10:15.602. The install still reported `Success`, so the session record may not persist on this image. That error is Android's, and it is recorded here, not fixed, because the product is unchanged.
+
+## IR-876: The local checks build and sign the dev CLI and the Guest Agent in the worktree, with the SDK parts copied to /tmp
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095, #016 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [environment-setup.md](../05-development/environment-setup.md) §2.5 |
+
+**Choice.** The dev CLI is built with `scripts/build/embed-cli.sh` and signed with the developer's own Apple Development identity on this Mac. The Guest Agent is built with `scripts/build-guest.sh`. Both fixture and guest builds use `ANDROID_HOME=/tmp/apkrun-acc-sdk`, which holds copies of build-tools 37.0.0, platform android-37.0, and the SDK licenses. The fixture build also installed Build-Tools 36.0.0 into that copy, and no file in the main checkout's SDK changed during the session.
+
+**Reason.** The embed script signs a Debug CLI with the virtualization entitlement, so the CLI needs a signing identity. The fixture and guest builds need `ANDROID_HOME`. Pointing it at the main checkout's SDK would let Gradle write through the `build/android-sdk` symlink into the main checkout, which this task forbids, so the parts were copied. The signing identity is local to this Mac and is not recorded in the repository.
+
+## IR-877: Criterion 1 of #095 stays open, and its marker verdict needs host input on every port of the Android kernel's 20 hvc nodes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; IR-372 |
+
+**Choice.** Criterion 1 of #095 stays unticked. The 2026-10-11 result is two markers received on the three ports that take host input: `APKRUN-PORT-0` reached `hvc0`, and `APKRUN-PORT-1` reached `hvc1`. `hvc18` was not written, and 17 ports take no host input. The next marker check uses the `hvc` nodes on a layout where every port takes host input, on the Android kernel. The `vport` route is not used (IR-873).
+
+**Reason.** The Android kernel's 20 `hvc` nodes open (printed in the session, not saved to a file), so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
+
+## IR-900: The guest loads one monolithic sepolicy from the boot ramdisk, so the vendor partition's policy text has no runtime effect
 
 | Field | Value |
 |---|---|
@@ -15241,16 +15386,6 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Consequence.** A sysfs label or an allow rule reaches the guest only through a rebuilt `/sepolicy`. The supported route is the AOSP build of #035 (IR-905). The context files that libselinux and init read at runtime, such as `vendor_file_contexts` and `vndservice_contexts`, still apply, but a sysfs label does not come from them.
 
 ## IR-901: No SELinux compiler is available offline, and the lock has none, so the policy cannot be rebuilt in this task
-| Task | #095 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
-
-**Superseded in part by IR-873.** The `vport` branch of this choice is withdrawn.
-
-**Choice.** The port check counts both node classes. A port is present when it has `/dev/hvc<N>`, a `/dev/vport<card>p<port>` node, or both. The marker check judges each attachment on the node that receives `APKRUN-PORT-<i>`, and the record names that node. The plan is not reordered from the hvc numbering alone; `ConsolePortPlan` keeps taking the observed mapping (IR-373).
-
-**Reason.** `VZConfigurationBuilder` attaches ports 0 to 9 as single-port devices, and ports 10 to 19 as the console ports of one multiport device with `isConsole` set (lines 78 to 105). An `hvc` node exists when the kernel allocates a console for a port, and the Alpine test kernel stops at eight (IR-372). The Linux virtio console driver names each port's character node `vport<card>p<port>`, so that node class can show a port whose `hvc` node is missing. Expecting every port to have a vport node is an assumption that this boot checks. Judging by the node that receives the marker covers both classes, and it matches the `observedDevice` input of `ConsolePortPlan`. Checking only `hvc` leaves the eight-node limit unverified. Checking only `vport` drops the hvc numbers that the Android holder list uses (hvc1, hvc2, hvc18).
-
-## IR-871: The Android layout gives the marker three host-writable ports, so its 20-port marker check cannot pass
 
 | Field | Value |
 |---|---|
@@ -15264,15 +15399,21 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** An edited policy cannot be built or checked on this host. The check that matters is the AOSP build of #035.
 
-## IR-902: No present neverallow rule blocks a sysfs read by SurfaceFlinger, but the platform's private neverallow set is not in the image
+## IR-901: Four of the marked ports are read by product HALs, so the marker check cannot use them without a product change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
 | Task | #095 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1; [vm.md](../02-design/vm.md) §6.2 |
+| Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #095 criterion (a); IR-871; IR-899 |
 
-**Choice.** On the dev Android boot, the marker check covers the ports that accept host input: port 0 (`hvc0`, the system console), port 1 (`hvc1`, the serial shell of the developer console), and nothing else. Port 18 (`hvc18`, the sensors responder) gets no marker, because the responder reads its bytes as the sensors HAL protocol. The other 17 ports are `.silent` or `.log` and get no marker. Criterion 1 of #095 is not ticked from this layout. The 20-port marker verdict needs a layout where every port takes host input. IR-877 places it on the Android kernel, because the pinned Linux test kernel has eight `hvc` nodes (IR-372).
+**Choice.** Keep criterion (a) of #095 open. Record the 13 ports that receive their full marker (hvc2, 3, 4, 6, 7, 10, 11, 13 to 17, and 19). The four ports hvc5, hvc8, hvc9 and hvc12 stay open, and the maintainer decides whether the criterion covers ports that a product HAL owns.
 
-**Reason.** `ConsoleRole.permitsHostInput` is true only for `.systemConsole` and `.service` roles (`ConsoleChannel.swift`, lines 882 to 889). `RuntimeSupervisor` serves a developer console only for `hvc0` and `hvc1` (lines 395 and 425), and runs the sensors responder on `sensors_control` (line 398). A marker needs host input to its port, so a silent port cannot show one. Changing the roles to make every port a service would change the product layout of #095 step 2, which is outside this check. A marker written to the sensors port would test the HAL's protocol handling, not the port numbering.
+**Reason.** The reader results show that the first bytes of each marker on hvc5, hvc8, hvc9 and hvc12 are consumed by the product HAL that holds the port: bluetooth (pid 663) on hvc5, drmrpc (pid 706) on hvc8, uwb (pid 660) on hvc9, and nfc (pid 685) on hvc12. The raw-mode change and the 2 s wait did not change the result (IR-899, updates 2 and 3). IR-871 assumed these ports were free, which was wrong. A marker check on them would stop a product service, which is a product change.
 
-## IR-872: The boot holds the VM lock for its whole life, and the port and install checks run under that hold
+**Verification.** Two boots with the AndroidADB configuration, under the lock, with the per-port `holders` lines in the test log. The 13 ports pass in both runs.
+
+## IR-902: No present neverallow rule blocks a sysfs read by SurfaceFlinger, but the platform's private neverallow set is not in the image
 
 | Field | Value |
 |---|---|
@@ -15346,84 +15487,3 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Reason.** The experiment boot (`Experiments/vz-android-boot`) passes an initial ramdisk file directly to `VZLinuxBootLoader` (`initialRamdiskURL`), with no AVB check on that file, so an edited `/sepolicy` in that file could reach the guest without an AOSP build. The repository has no policydb reader or writer, and a hand edit of the binary skips the neverallow check that the build runs (IR-902). That is a large expansion of scope (AGENTS §11), so it is a follow-up and not part of #022.
 
 **Consequence.** No ramdisk or vendor image is changed in this task.
-| Task | #095, #016 |
-| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
-
-**Choice.** The development boot runs as the holder of `/tmp/apkrun-vm.lock` (`lockf -k`) for its whole life. The `adb` and developer-console commands of the two checks run while that hold is active, and they do not start a second `lockf`. The lock is released when `lockf` exits after the SIGINT stop.
-
-**Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the standing task rule that every VM command runs under `lockf` as covering the process that owns the VM. The maintainer should confirm this reading.
-
-## IR-873: The vport nodes refuse to open, so the marker channel is the hvc node, and the vport nodes show presence only
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #095 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
-
-**Choice.** The marker check uses the `hvc` node of each port. The `vport` nodes count toward presence only. IR-870's branch that reads a `vport` node in place of a missing `hvc` node is withdrawn.
-
-**Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. The open results were printed in the session and were not saved to a file. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
-
-## IR-874: The install log shows a PackageInstaller session for HelloText, so the #016 criterion is ticked on that log
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #016 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #016 criterion 2; [package-store.md](../02-design/package-store.md) §6.1; IR-332 |
-
-**Choice.** Tick the #016 criterion that the install is a PackageInstaller session, on the guest logcat of the 2026-10-11 boot. IR-332 still holds for the T2 test, which does not assert the session.
-
-**Reason.** The `adb install -r` of `HelloText.apk` reported `Success` in the session's adb output, which was not saved to a file. The guest logcat has these lines in order: adbd's `abb_exec:package` request at 12:10:15.425, with `StartCommandInProcess(7061636b61676500696e7374616c6c00 package.install.` (the hex decodes to `package` and `install`); `I PackageManager: installation completed for package:io.apkrun.fixture.hellotext. Final code path: ...` at 12:10:15.584 on system_server thread 967; and `D PackageInstallerSession: Marking session 373923930 as applied` at 12:10:15.585 on the same thread. A second `adb install -r` gave the same sequence with session 2027986201 (12:10:59.209, 12:10:59.410, and 12:10:59.429). Those lines were printed by `logcat -d` in the session and were not saved to a file. The session line does not name the package. It ties to the install by its thread: it is on thread 967, the thread that logged the package's `installation completed` line four lines earlier (lines 28 and 32 of the dump). The `dumpsys package` read after the first install (`firstInstallTime=2026-10-11 12:10:15`) reports `versionCode=1`, `versionName=1.0`, `minSdk=29`, `targetSdk=37`, `installerPackageName=null`, `initiatingPackageName=com.android.shell`, and `packageSource=1`. It was printed in the session and not saved to a file.
-
-## IR-875: The T2 suite gets no session assertion in this branch, and the session file fails to rename on the image
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #016 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #016 tests; [test-strategy.md](test-strategy.md) §2.4 |
-
-**Choice.** No T2 assertion for the session line is added in this branch. The #016 follow-up adds one, and it runs in the next T2 run of `AndroidPackageTests`.
-
-**Reason.** AGENTS.md §10 requires every test of a task to pass before the task is done. This branch has only the single boot, so a new assertion would not have run. The session line ties to the package by position on one thread, so a T2 check would need a `logcat -c` before the install and a `logcat -d` after it. During the first install, the same boot logged `E AtomicFile: Failed to rename /data/system/install_sessions.xml.new to /data/system/install_sessions.xml` at 12:10:15.448 and 12:10:15.602. The install still reported `Success`, so the session record may not persist on this image. That error is Android's, and it is recorded here, not fixed, because the product is unchanged.
-
-## IR-876: The local checks build and sign the dev CLI and the Guest Agent in the worktree, with the SDK parts copied to /tmp
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #095, #016 |
-| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [environment-setup.md](../05-development/environment-setup.md) §2.5 |
-
-**Choice.** The dev CLI is built with `scripts/build/embed-cli.sh` and signed with the developer's own Apple Development identity on this Mac. The Guest Agent is built with `scripts/build-guest.sh`. Both fixture and guest builds use `ANDROID_HOME=/tmp/apkrun-acc-sdk`, which holds copies of build-tools 37.0.0, platform android-37.0, and the SDK licenses. The fixture build also installed Build-Tools 36.0.0 into that copy, and no file in the main checkout's SDK changed during the session.
-
-**Reason.** The embed script signs a Debug CLI with the virtualization entitlement, so the CLI needs a signing identity. The fixture and guest builds need `ANDROID_HOME`. Pointing it at the main checkout's SDK would let Gradle write through the `build/android-sdk` symlink into the main checkout, which this task forbids, so the parts were copied. The signing identity is local to this Mac and is not recorded in the repository.
-
-## IR-877: Criterion 1 of #095 stays open, and its marker verdict needs host input on every port of the Android kernel's 20 hvc nodes
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #095 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; IR-372 |
-
-**Choice.** Criterion 1 of #095 stays unticked. The 2026-10-11 result is two markers received on the three ports that take host input: `APKRUN-PORT-0` reached `hvc0`, and `APKRUN-PORT-1` reached `hvc1`. `hvc18` was not written, and 17 ports take no host input. The next marker check uses the `hvc` nodes on a layout where every port takes host input, on the Android kernel. The `vport` route is not used (IR-873).
-
-**Reason.** The Android kernel's 20 `hvc` nodes open (printed in the session, not saved to a file), so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
-
-## IR-901: Four of the marked ports are read by product HALs, so the marker check cannot use them without a product change
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #095 |
-| Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #095 criterion (a); IR-871; IR-899 |
-
-**Choice.** Keep criterion (a) of #095 open. Record the 13 ports that receive their full marker (hvc2, 3, 4, 6, 7, 10, 11, 13 to 17, and 19). The four ports hvc5, hvc8, hvc9 and hvc12 stay open, and the maintainer decides whether the criterion covers ports that a product HAL owns.
-
-**Reason.** The reader results show that the first bytes of each marker on hvc5, hvc8, hvc9 and hvc12 are consumed by the product HAL that holds the port: bluetooth (pid 663) on hvc5, drmrpc (pid 706) on hvc8, uwb (pid 660) on hvc9, and nfc (pid 685) on hvc12. The raw-mode change and the 2 s wait did not change the result (IR-899, updates 2 and 3). IR-871 assumed these ports were free, which was wrong. A marker check on them would stop a product service, which is a product change.
-
-**Verification.** Two boots with the AndroidADB configuration, under the lock, with the per-port `holders` lines in the test log. The 13 ports pass in both runs.
-

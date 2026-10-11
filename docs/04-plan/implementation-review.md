@@ -14709,3 +14709,27 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** `tests/test_no_file_names.py` lists `vbmeta_a.img` as the one fixed output name of `vendor_reseal.py`, next to `vendor_a.img` of `vendor_inject.py` (IR-633). The module's input names still come from the stock bundle and its manifest, and no input name is written in the code. Decision needed: whether the output names should move to one shared constant module.
 
 **Reason.** The guard exists to stop code that assumes the names of Android inputs. An output name chosen by the tool is the case the guard already allows for `vendor_a.img`, so the rule is kept, and only the new output is added.
+
+## IR-746: The variant replaces `vbmeta_a` in the disk, and its manifest entry follows the new blob
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) (the disk partition hashes) |
+
+**Choice.** `python3 -m apkrun_image bundle-variant` takes a new required `--reseal-output` directory (the output of `vendor-reseal`), next to `--inject-output`. The variant replaces the `super` logical partition `vendor_a` with the resealed image, and it writes the refreshed `vbmeta_a.img` into the GPT partition `vbmeta_a` of `disks/os.img` at its offset, with nothing else of the disk changed. The manifest's `vbmeta_a` partition hash is made from the bytes that were written. Every byte outside the `super` extents and the `vbmeta_a` range must equal the stock disk, and the range must read back as the new blob. The command refuses a reseal output whose inject identity, stock identity, or vendor descriptor does not match. Decision needed: whether the variant keeps `vbmeta_a` replaceable for other partitions later, or whether a second replacement gets its own record.
+
+**Reason.** The guest reads the top-level vbmeta from disk, not from the bundle's manifest, so a new vendor descriptor with the stock `vbmeta_a` would still fail (IR-741). Changing the GPT partition is the only place the disk carries it. The bundle tool already checks and splices a replacement, so the vbmeta uses the same checks and no hash is edited by hand. The library function keeps the old behaviour when no reseal output is given, because the existing variant tests use it, and the command always passes one.
+
+## IR-747: The bootconfig's `androidboot.vbmeta.digest` and `.size` are recomputed from the variant's vbmeta chain, and the stock values are checked first
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.1 and §10.1 (the bootconfig values); IR-746 |
+
+**Choice.** The bootconfig's two values are `androidboot.vbmeta.digest` and `androidboot.vbmeta.size`. They are computed the way `apkrun_image.avb.calculate_vbmeta_bootconfig` computes them: SHA-256 over the top-level blob, then over each chained blob in descriptor order (the footer-backed `boot` and `init_boot` from their footers, the raw `vbmeta_*` images from their start), and the size is the sum of the blob sizes. The chained partitions are read from the variant's own disk. Before the variant is built, the same computation over the stock disk must reproduce the stock bootconfig values, or the command refuses. The stock check gives digest `0db35717…` and size 22912 on the 16373615 bundle. The variant's values then replace the two lines in `boot/bootconfig.txt`, and the file's manifest entry is made again. Decision needed: whether `calculate_vbmeta_bootconfig` should take a vbmeta source instead of an Android manifest, so that one function serves both.
+
+**Reason.** The bootconfig value says which vbmeta the boot was made with. A stale digest would name the stock vbmeta, which the variant no longer uses (the M02 note on the stock digest was right only while `vbmeta_a` was unchanged). The formula was checked against the stock bundle with a script outside the repository before it was written here.

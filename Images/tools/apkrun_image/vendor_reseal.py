@@ -38,6 +38,9 @@ from apkrun_image.vendor_inject import (
     run_avbtool,
     verify_avbtool,
 )
+from apkrun_image.vendor_inject import (
+    PARTITION as LOGICAL_PARTITION,
+)
 
 TASK = "#099"
 SCHEMA_VERSION = 1
@@ -331,7 +334,11 @@ def reseal(
         record: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
             "task": TASK,
-            "partition": {"name": PARTITION, "size": stock_vendor.stat().st_size},
+            "partition": {
+                "name": LOGICAL_PARTITION,
+                "verityName": PARTITION,
+                "size": stock_vendor.stat().st_size,
+            },
             "injected": {
                 "sha256": sha256_file(injected),
                 "size": injected.stat().st_size,

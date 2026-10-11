@@ -26,18 +26,22 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from apkrun_image import lp
+from apkrun_image import lp, vendor_reseal
+from apkrun_image.avb import AvbError, _chain_partitions, _read_vbmeta
 from apkrun_image.bundle import (
     BundleError,
     _checksums,
@@ -74,6 +78,9 @@ RECORD_NAME = "variant.json"
 RECORD_SUFFIX = ".variant.json"
 COPY_SIZE = 4 * 1024 * 1024
 COMPARE_SIZE = 8 * 1024 * 1024
+VBMETA_LABEL = "vbmeta_a"
+BOOTCONFIG_DIGEST = "androidboot.vbmeta.digest"
+BOOTCONFIG_SIZE = "androidboot.vbmeta.size"
 
 
 class BundleVariantError(ValueError):
@@ -262,8 +269,13 @@ def _verify_variant(
     size: int,
     partition: str,
     replacement: Path,
+    extra: Sequence[tuple[int, bytes]] = (),
 ) -> None:
-    """Check the variant disk against the stock disk and the replacement, byte for byte."""
+    """Check the variant disk against the stock disk and the replacement, byte for byte.
+
+    `extra` lists the other ranges that the variant replaces (the refreshed `vbmeta_a`), and each
+    must read back as its bytes. Every other byte of the disk must equal the stock disk (IR-746).
+    """
     with stock_disk.open("rb") as stock, variant_disk.open("rb") as variant:
         stock_super = _Window(stock, offset, size)
         variant_super = _Window(variant, offset, size)
@@ -280,7 +292,12 @@ def _verify_variant(
         excluded = [
             (offset + extent.target_data * SECTOR_SIZE, extent.size) for extent in target.extents
         ]
+        excluded += [(start, len(data)) for start, data in extra]
         _same_outside(stock, variant, stock_disk.stat().st_size, excluded)
+        for start, data in extra:
+            variant.seek(start)
+            if variant.read(len(data)) != data:
+                raise BundleVariantError(f"the variant disk does not hold the bytes at {start}")
 
         image_size = replacement.stat().st_size
         with replacement.open("rb") as image:
@@ -329,6 +346,179 @@ def _read_inject_output(directory: Path, partition: str, build_id: str) -> Path:
     return path
 
 
+@dataclass(frozen=True)
+class _Refresh:
+    """The resealed vendor and the refreshed top-level vbmeta, with their vendor-reseal record."""
+
+    vendor: Path
+    vbmeta: Path
+    record: dict[str, Any]
+    record_path: Path
+
+
+def _load_record(path: Path) -> dict[str, Any]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise BundleVariantError(f"{path} is not a JSON record: {error}") from None
+    if not isinstance(record, dict):
+        raise BundleVariantError(f"{path} is not a JSON object")
+    return record
+
+
+def _read_reseal_output(
+    directory: Path, *, inject_directory: Path, partition: str, build_id: str
+) -> _Refresh:
+    """Return the resealed vendor and refreshed vbmeta that `vendor-reseal` wrote for this inject.
+
+    The reseal record must name the injected image of `inject-vendor` by its SHA-256 and the stock
+    vendor by its SHA-256, and both files must match their recorded hashes (IR-746).
+    """
+    record_path = directory / vendor_reseal.OUTPUT_RECORD
+    record = _load_record(record_path)
+    if record.get("task") != TASK or record.get("schemaVersion") != vendor_reseal.SCHEMA_VERSION:
+        raise BundleVariantError(f"{record_path} is not a #099 vendor-reseal record")
+    partition_record = record.get("partition")
+    if not isinstance(partition_record, dict) or partition_record.get("name") != partition:
+        raise BundleVariantError(f"{record_path} does not record the partition {partition}")
+    inject_record = _load_record(inject_directory / OUTPUT_RECORD)
+    if inject_record.get("buildId") != build_id:
+        raise BundleVariantError(f"{inject_directory} was not made for build {build_id}")
+    injected = record.get("injected", {})
+    stock = record.get("stock", {})
+    if injected.get("sha256") != inject_record.get("output", {}).get("sha256"):
+        raise BundleVariantError(f"{record_path} was not made from this inject-vendor output")
+    if stock.get("vendorSha256") != inject_record.get("stock", {}).get("sha256"):
+        raise BundleVariantError(f"{record_path} names another stock vendor_a")
+    files: dict[str, Path] = {}
+    for role, key in (
+        ("vendor", vendor_reseal.OUTPUT_IMAGE),
+        ("vbmeta", vendor_reseal.OUTPUT_VBMETA),
+    ):
+        entry = record.get(role)
+        name = entry.get("file") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or Path(name).name != name or name != key:
+            raise BundleVariantError(f"{record_path} does not name its {role} file")
+        path = directory / name
+        if not path.is_file():
+            raise BundleVariantError(f"{path} is missing")
+        if _sha256(path) != entry.get("sha256"):
+            raise BundleVariantError(f"{path} does not match the SHA-256 in {record_path}")
+        files[role] = path
+    vbmeta_record = record["vbmeta"]
+    if vbmeta_record.get("algorithm") != "NONE":
+        raise BundleVariantError(
+            f"{record_path} names a signed vbmeta, which this tool does not make"
+        )
+    if vbmeta_record.get("vendorDescriptor") != record["vendor"].get("descriptor"):
+        raise BundleVariantError(f"{record_path} does not match its vbmeta to its vendor image")
+    return _Refresh(
+        vendor=files["vendor"], vbmeta=files["vbmeta"], record=record, record_path=record_path
+    )
+
+
+def _gpt_partitions(stock_disk: Path, logical_size: int) -> dict[str, tuple[int, int]]:
+    """Return the byte offset and size of every GPT partition of a disk, by label."""
+    with stock_disk.open("rb") as stream:
+        table = read_gpt(stream, logical_size)
+    return {item.label: (item.first_lba * SECTOR_SIZE, item.size) for item in table.partitions}
+
+
+def _bootconfig_values(
+    stream: BinaryIO, layout: Mapping[str, tuple[int, int]], vbmeta: bytes
+) -> dict[str, str]:
+    """Return the digest and size of the vbmeta chain, as calculate_vbmeta_bootconfig gives them.
+
+    `vbmeta` is the top-level vbmeta partition. Its chained partitions are read from `stream` at
+    the offsets of `layout`: a chained `vbmeta_*` partition is read raw, and the others (`boot`,
+    `init_boot`) through their footers. The digest covers the top-level blob, then each chained
+    blob in descriptor order, and the size is the sum of the blob sizes (IR-747).
+    """
+    hasher = hashlib.sha256()
+    try:
+        top, _offset = _read_vbmeta(
+            io.BytesIO(vbmeta),
+            artifact_size=len(vbmeta),
+            artifact_name=VBMETA_LABEL,
+            hasher=hasher,
+        )
+        chained = _chain_partitions(
+            io.BytesIO(vbmeta), header=top, vbmeta_offset=0, artifact_name=VBMETA_LABEL
+        )
+        total = top.blob_size
+        for name in chained:
+            label = f"{name}_a"
+            if label not in layout:
+                raise BundleVariantError(f"the disk has no {label}, which the vbmeta chains")
+            base, size = layout[label]
+            header, _offset = _read_vbmeta(
+                _Window(stream, base, size),
+                artifact_size=size,
+                artifact_name=label,
+                hasher=hasher,
+                require_footer=not name.startswith("vbmeta"),
+            )
+            if header.flags != 0:
+                raise BundleVariantError(f"{label}: chained vbmeta images must have zero flags")
+            total += header.blob_size
+    except AvbError as error:
+        raise BundleVariantError(f"the vbmeta chain does not read: {error}") from None
+    return {BOOTCONFIG_DIGEST: hasher.hexdigest(), BOOTCONFIG_SIZE: str(total)}
+
+
+def _bootconfig_line(key: str) -> re.Pattern[str]:
+    return re.compile(rf'^({re.escape(key)} = ")([^"\n]*)(")\s*$', re.MULTILINE)
+
+
+def _read_bootconfig_values(text: str, keys: Sequence[str]) -> dict[str, str]:
+    """Return the quoted value of each key, which must appear exactly once."""
+    values: dict[str, str] = {}
+    for key in keys:
+        found = _bootconfig_line(key).findall(text)
+        if len(found) != 1:
+            raise BundleVariantError(f"the bootconfig has {len(found)} lines for {key}, not one")
+        values[key] = found[0][1]
+    return values
+
+
+def _with_bootconfig_values(text: str, values: Mapping[str, str]) -> str:
+    """Return the bootconfig text with the quoted value of each key replaced."""
+    for key, value in values.items():
+        text, count = _bootconfig_line(key).subn(
+            lambda match, value=value: f"{match.group(1)}{value}{match.group(3)}", text
+        )
+        if count != 1:
+            raise BundleVariantError(f"the bootconfig has {count} lines for {key}, not one")
+    return text
+
+
+def _read_range(stream: BinaryIO, offset: int, size: int) -> bytes:
+    """Read exactly `size` bytes at `offset` of a disk."""
+    stream.seek(offset)
+    data = stream.read(size)
+    if len(data) != size:
+        raise BundleVariantError(f"the disk ends inside the range at {offset}")
+    return data
+
+
+def _write_range(path: Path, offset: int, data: bytes) -> None:
+    """Write `data` into an existing file at `offset`, and flush it to the disk."""
+    with path.open("r+b") as handle:
+        handle.seek(offset)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _disk_partition(manifest: Mapping[str, Any], label: str) -> dict[str, Any]:
+    """Return the manifest record of the GPT partition `label` of the OS disk."""
+    for disk in manifest["disks"]:
+        for partition in disk["partitions"]:
+            if partition["label"] == label:
+                return partition
+    raise BundleVariantError(f"the stock manifest has no {label} partition")
+
+
 def build_variant(
     *,
     stock_bundle: Path,
@@ -337,11 +527,15 @@ def build_variant(
     replacement: Path,
     output: Path,
     sign_key: Path,
+    refresh: _Refresh | None = None,
 ) -> dict[str, Any]:
     """Write the variant bundle `output` and its record beside it, and return the record.
 
-    `stock_super` is the sparse super artifact that the stock bundle was built from. Nothing is
-    written when a check fails, and an existing `output` or record is never replaced.
+    `stock_super` is the sparse super artifact that the stock bundle was built from. With `refresh`
+    the variant also replaces `vbmeta_a` with the refreshed top-level vbmeta, and it recomputes the
+    bootconfig's vbmeta values (IR-746, IR-747). Without it the vbmeta is the stock one, so the
+    replaced vendor partition does not verify (IR-650). Nothing is written when a check fails, and
+    an existing `output` or record is never replaced.
     """
     key = _load_signing_key(sign_key)
     public_key = key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
@@ -363,6 +557,36 @@ def build_variant(
             raise BundleVariantError(
                 f"the super partition of {stock_disk} differs from its manifest entry"
             )
+    layout = _gpt_partitions(stock_disk, disk["logicalSize"])
+    bootconfig_path = str(manifest["boot"]["bootconfig"]["path"])
+    vbmeta_offset = vbmeta_size = 0
+    vbmeta_bytes: bytes | None = None
+    if refresh is not None:
+        if VBMETA_LABEL not in layout:
+            raise BundleVariantError(f"the stock disk has no {VBMETA_LABEL} partition")
+        vbmeta_offset, vbmeta_size = layout[VBMETA_LABEL]
+        vbmeta_bytes = refresh.vbmeta.read_bytes()
+        if len(vbmeta_bytes) != vbmeta_size:
+            raise BundleVariantError(
+                f"{refresh.vbmeta} is {len(vbmeta_bytes)} bytes, not the {vbmeta_size} of "
+                f"{VBMETA_LABEL}"
+            )
+        stock_vbmeta_sha = _disk_partition(manifest, VBMETA_LABEL)["sha256"]
+        with stock_disk.open("rb") as stream:
+            if _hash_range(stream, vbmeta_offset, vbmeta_size) != stock_vbmeta_sha:
+                raise BundleVariantError(
+                    f"{VBMETA_LABEL} of {stock_disk} differs from the manifest"
+                )
+            stock_values = _bootconfig_values(
+                stream, layout, _read_range(stream, vbmeta_offset, vbmeta_size)
+            )
+        if refresh.record["stock"].get("vbmetaSha256") != stock_vbmeta_sha:
+            raise BundleVariantError("the reseal record names another stock vbmeta_a")
+        stock_text = (stock_bundle / bootconfig_path).read_text(encoding="utf-8")
+        if _read_bootconfig_values(stock_text, tuple(stock_values)) != stock_values:
+            raise BundleVariantError(
+                "the stock bootconfig does not carry the digest and size of the stock vbmeta chain"
+            )
 
     with _staging(output) as stage:
         work = stage / "work"
@@ -382,17 +606,40 @@ def build_variant(
             target.parent.mkdir(parents=True, exist_ok=True)
             if entry["path"] == disk_path:
                 _splice(stock_disk, variant_sparse, target, super_offset, super_size)
+                if vbmeta_bytes is not None:
+                    _write_range(target, vbmeta_offset, vbmeta_bytes)
             else:
                 shutil.copyfile(stock_bundle / entry["path"], target)
         variant_disk = bundle / disk_path
-        _verify_variant(stock_disk, variant_disk, super_offset, super_size, partition, replacement)
+        extra = [(vbmeta_offset, vbmeta_bytes)] if vbmeta_bytes is not None else []
+        _verify_variant(
+            stock_disk,
+            variant_disk,
+            super_offset,
+            super_size,
+            partition,
+            replacement,
+            extra=extra,
+        )
         with variant_disk.open("rb") as stream:
             super_sha = _hash_range(stream, super_offset, super_size)
+            vbmeta_sha = None
+            values: dict[str, str] = {}
+            if vbmeta_bytes is not None:
+                vbmeta_sha = _hash_range(stream, vbmeta_offset, vbmeta_size)
+                values = _bootconfig_values(stream, layout, vbmeta_bytes)
+        if vbmeta_bytes is not None:
+            text = (bundle / bootconfig_path).read_text(encoding="utf-8")
+            (bundle / bootconfig_path).write_text(
+                _with_bootconfig_values(text, values), encoding="utf-8"
+            )
 
         files = [_file_entry(bundle, entry["path"]) for entry in manifest["files"]]
         by_path = {entry["path"]: entry for entry in files}
         variant_manifest: dict[str, Any] = json.loads(manifest_bytes)
         _super_record(variant_manifest)[1]["sha256"] = super_sha
+        if vbmeta_sha is not None:
+            _disk_partition(variant_manifest, VBMETA_LABEL)["sha256"] = vbmeta_sha
         for name in BOOT_FILES:
             variant_manifest["boot"][name] = by_path[variant_manifest["boot"][name]["path"]]
         variant_manifest["files"] = files
@@ -409,6 +656,11 @@ def build_variant(
         (bundle / SIGNATURE_NAME).write_bytes(signature)
         verify_signature(new_bytes, signature, {key_id_of(public_key): public_key})
 
+        top_level_decision = (
+            "replaced by the refreshed vbmeta_a, unsigned (IR-744)"
+            if refresh is not None
+            else "not signed again (IR-650)"
+        )
         record_out: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
             "task": TASK,
@@ -436,12 +688,29 @@ def build_variant(
             },
             "variantDiskSHA256": by_path[disk_path]["sha256"],
             "decisions": {
-                "topLevelVbmeta": "not signed again (IR-650)",
+                "topLevelVbmeta": top_level_decision,
                 "partitionSize": "unchanged, the writer does not grow a partition (IR-682)",
                 "identity": "stock imageVersion and kind kept (IR-700)",
                 "manifestSignature": "developer image key, trusted by Debug builds",
             },
         }
+        if refresh is not None and vbmeta_sha is not None:
+            record_out["vbmeta"] = {
+                "partition": VBMETA_LABEL,
+                "stockSHA256": _disk_partition(manifest, VBMETA_LABEL)["sha256"],
+                "variantSHA256": vbmeta_sha,
+                "size": vbmeta_size,
+                "algorithm": "NONE",
+                "rollbackIndex": refresh.record["vbmeta"]["rollbackIndex"],
+                "resealRecordSHA256": _sha256(refresh.record_path),
+            }
+            record_out["bootconfig"] = {
+                "path": bootconfig_path,
+                "stockDigest": stock_values[BOOTCONFIG_DIGEST],
+                "stockSize": stock_values[BOOTCONFIG_SIZE],
+                "variantDigest": values[BOOTCONFIG_DIGEST],
+                "variantSize": values[BOOTCONFIG_SIZE],
+            }
         (stage / RECORD_NAME).write_text(
             json.dumps(record_out, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -481,6 +750,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="the output directory of inject-vendor (the replacement and inject.json)",
     )
+    parser.add_argument(
+        "--reseal-output",
+        type=Path,
+        help="the output directory of vendor-reseal (the resealed vendor and vbmeta_a)",
+    )
     parser.add_argument("--partition", default="vendor_a", help="logical partition to replace")
     parser.add_argument(
         "--sign-key",
@@ -503,7 +777,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_id = source.get("buildId") if isinstance(source, dict) else None
         if not isinstance(build_id, str):
             raise BundleVariantError("manifest source.buildId is missing.")
-        replacement = _read_inject_output(arguments.inject_output, arguments.partition, build_id)
+        # The injected image is checked against its record. The vendor is the reseal (IR-746).
+        _read_inject_output(arguments.inject_output, arguments.partition, build_id)
+        if arguments.reseal_output is None:
+            raise BundleVariantError(
+                "--reseal-output is required: the variant must carry the refreshed vbmeta_a "
+                "that vendor-reseal makes (IR-746)"
+            )
+        refresh = _read_reseal_output(
+            arguments.reseal_output,
+            inject_directory=arguments.inject_output,
+            partition=arguments.partition,
+            build_id=build_id,
+        )
         root = _resolve_archive_root(document, source=arguments.source)
         archives = _archive_paths(root, document["source"]["archives"])
         artifact = _role_artifact(document, "super")
@@ -522,9 +808,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stock_bundle=arguments.bundle,
                 stock_super=stock_super,
                 partition=arguments.partition,
-                replacement=replacement,
+                replacement=refresh.vendor,
                 output=output,
                 sign_key=arguments.sign_key,
+                refresh=refresh,
             )
     except (
         BundleError,

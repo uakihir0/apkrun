@@ -636,7 +636,7 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - [ ] Mesa, VirGL, gralloc, the HWC, and the DRM path are documented in §9 and reproducible from the committed bootconfig.
 - [ ] SurfaceFlinger loads no SwiftShader or in-guest ANGLE library.
 - [ ] Android reaches `sys.boot_completed=1` with `drmVirgl` and with `guestSwiftshader`.
-- [x] `kmscube` runs on the Linux test guest through virgl with `hostReadbacks = 0`.
+- [ ] `kmscube` runs on the Linux test guest through virgl with `hostReadbacks = 0`. Not met: the host renderer rejects the in-stream transfer of the first submit (no guest backing for resource 4), so the draw calls that follow fail too (IR-830 to IR-835, IR-834 for the design decision).
 - [x] Guest-controlled sizes and IDs are checked against the limits of §5.4.
 
 ### Notes

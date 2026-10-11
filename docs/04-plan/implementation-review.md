@@ -15857,3 +15857,18 @@ The console has 264 denials in all. Of them, 182 are `RenderThread` denials from
 **Choice.** `odm_variant.py` calls `apkrun_image` functions as they are: `bundle_variant.build_variant`, `vendor_inject._rebuild` and `compare_entries`, the erofs export and tree functions, `vendor_reseal.parse_hashtrees`, `_original_size` and `_copy_prefix`, and the LP reader. The helpers local to the experiment are `Window`, `read_super_odm`, `read_super_partition`, `raw_to_sparse`, and `seal_odm` (the vendor seal in `vendor_inject.seal_partition` is written for the vendor name). No file of `Images/tools` changed. The committed script reproduces the booted bundle: the rerun gave a `manifest.json`, `SHA256SUMS`, and `manifest.sig` that are byte-equal to the booted bundle's.
 
 **Reason.** The experiment is test-only (AGENTS §11). A product path for the ODM partition (replacement and descriptor, with its own check) is a follow-up task, not part of #022. `vendor_reseal` is vendor-specific, and an ODM version was not added to it.
+
+## IR-961: Criteria 1 and 4 of #022 are ticked on the ODM-overlay variant, and criterion 3 on its third boot
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 criteria 1, 3, and 4; IR-960; IR-948; IR-949 to IR-959 |
+
+**Choice.** Tick criterion 1 (the virgl GLES renderer is named) and criterion 4 (boot with drmVirgl and with guestSwiftshader). Criterion 3 was already ticked from the third boot of the ODM variant. The drmVirgl evidence comes from the ODM-overlay variant, which is the development route of IR-960, not from the product image.
+
+**Reason.** The ODM variant, with the rule compiled into its precompiled policy and no runtime load, reached `sys.boot_completed=1` under enforcing SELinux in about 16 s, and `dumpsys SurfaceFlinger` names `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`. The guestSwiftshader boot reached `sys.boot_completed=1` on the stock image under enforcing SELinux (IR-801). Both halves of criterion 4 are therefore observed. Criterion 2 (documentation of the Mesa, VirGL, gralloc, HWC, and DRM path) is not claimed here.
+
+**Verification.** The boot evidence is in IR-949 to IR-959 and in the #022 notes. The apps still abort on the uevent read of their own domain (IR-954), so this tick covers the stack initialization and boot, not the apps. A maintainer should confirm that the overlay route satisfies these criteria, since the product image (#035) is not built.
+

@@ -632,10 +632,10 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 
 ### Acceptance criteria
 
-- [ ] The guest graphics stack initializes, and software rendering is not the normal path: `dumpsys SurfaceFlinger` names the virgl GLES renderer.
+- [x] The guest graphics stack initializes, and software rendering is not the normal path: `dumpsys SurfaceFlinger` names the virgl GLES renderer. Observed on the ODM-overlay variant (IR-961).
 - [ ] Mesa, VirGL, gralloc, the HWC, and the DRM path are documented in §9 and reproducible from the committed bootconfig.
 - [x] SurfaceFlinger loads no SwiftShader or in-guest ANGLE library.
-- [ ] Android reaches `sys.boot_completed=1` with `drmVirgl` and with `guestSwiftshader`.
+- [x] Android reaches `sys.boot_completed=1` with `drmVirgl` and with `guestSwiftshader`. drmVirgl observed on the ODM-overlay variant, and guestSwiftshader on the stock image (IR-961).
 - [x] `kmscube` runs on the Linux test guest through virgl with `hostReadbacks = 0`. Observed on 2026-10-11: `VirglTests.testKmscubeRendersHeadlesslyThroughVirglWithoutHostReadbacks` passed in the LinuxGuest configuration (1.235 s, 0 failures), and the run log has no virglrenderer rejection (IR-860). The replay of the recorded stream rejects 0 submits after the attach_iov change (IR-836).
 - [x] Guest-controlled sizes and IDs are checked against the limits of §5.4.
 

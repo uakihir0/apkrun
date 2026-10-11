@@ -15525,3 +15525,16 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Reason.** The instructions for this task require a copy of the SDK adb under `/tmp`, not the SDK under `~/Documents`. The probe read `ANDROID_ADB_SERVER_PORT=15037` from the test plan and resolved `/tmp/apkrun-p20-sdk/platform-tools/adb`. The probe test was removed after it ran.
 
+## IR-899: The 17 unused ports cannot take a host marker or be read under the product roles, so the requested second boot is not made
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** The coordinator's decision for this task is to keep the product layout, to give the 17 unused ports a guest reader and a host marker, to keep hvc18 with the product's sensors responder, and to boot once with `-test-timeouts-enabled NO`. This task does not carry it out. No second VM boot is started. The user's rule for this task is one VM boot in total, and the coordinator's message does not carry the user's approval. Criterion 1 of #095 stays unticked, and the 17 ports have no marker result.
+
+**Reason.** Under the product roles the host can neither write to nor read the 17 ports. `ConsoleChannel.writeHostInput` refuses `.silent` and `.log` roles (`ConsoleChannel.swift` lines 580 and 581, with `permitsHostInput` at lines 881 to 889). The byte stream of a `.silent` port is finished (line 472), and its guest output is counted and dropped (line 762). A reader on such a port therefore sees no marker, because the host has no way to send one, and the guest's own output cannot be read. The supervisor gives the host no endpoint for these ports: its `devConsole` endpoints are hvc0 and hvc1 only (RuntimeSupervisor.swift lines 395 and 425). The responder on hvc18 needs the supervisor path, and that path gives no host writes to the other ports. So the markers this decision asks for are excluded by the product roles on any boot, and a boot could not show them.
+
+**Consequence.** Criterion 1 can be verified only with a change that this decision excludes. One option is a test-only layout that gives the 17 ports host input, which changes their roles in the test. Another is a product change that lets a test-only role carry host input under the supervisor. The maintainer must choose. A layout that keeps hvc18's responder and changes the other roles would have the test run the responder on hvc18 itself, which writes the HAL's replies to hvc18 (IR-894).

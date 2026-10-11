@@ -1387,7 +1387,7 @@ See [../test-strategy.md](../test-strategy.md).
 
 ### Acceptance criteria
 
-- [ ] All 20 console ports are attached. Their numbering is verified with the `APKRUN-PORT-<i>` markers, and `ConsolePortPlan` is applied if needed. Open (IR-372): the pinned test kernel creates eight `hvc` nodes, so the marker check passes for eight ports (`testConsolePortMarkersMatchTheirNumbers`) and the 20-port check skips with that reason. The Android kernel creates `hvc0` through `hvc19` with the 20 ports, and the VZ capture shows their holders; no marker test runs there.
+- [ ] All 20 console ports are attached. Their numbering is verified with the `APKRUN-PORT-<i>` markers, and `ConsolePortPlan` is applied if needed. Open (IR-372): the pinned test kernel creates eight `hvc` nodes, so the marker check passes for eight ports (`testConsolePortMarkersMatchTheirNumbers`) and the 20-port check skips with that reason. The Android kernel creates `hvc0` through `hvc19` with the 20 ports, and the VZ capture shows their holders. On 2026-10-11 (IR-873, IR-877) the Android dev boot showed those 20 `hvc` nodes open and 20 `vport` nodes that refuse to open, and the markers reached `hvc0` and `hvc1` only (2 of 20). The layout gives host input to three ports, so the marker check for all 20 needs a layout where every port takes host input.
 - [x] Each hvc port has a recorded role. No HAL crash-loops on a silent port.
 - [x] In-guest insecure KeyMint and Gatekeeper are selected by bootconfig, and vold mounts `/data`.
 - [x] The behaviour of each vsock client whose key is left out is recorded in [android-image.md](../../02-design/android-image.md) §7.3.

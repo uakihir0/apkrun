@@ -15351,3 +15351,38 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the rule "every VM command runs under `lockf`" as covering the process that owns the VM. The maintainer should confirm this reading.
 
+## IR-873: The vport nodes refuse to open, so the marker channel is the hvc node, and the vport nodes show presence only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** The marker check uses the `hvc` node of each port. The `vport` nodes count toward presence only. IR-870's branch that reads a `vport` node in place of a missing `hvc` node is withdrawn.
+
+**Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
+
+## IR-876: The local checks build and sign the dev CLI and the Guest Agent in the worktree, with the SDK parts copied to /tmp
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095, #016 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [environment-setup.md](../05-development/environment-setup.md) §2.5 |
+
+**Choice.** The dev CLI is built with `scripts/build/embed-cli.sh` and signed with the developer's own Apple Development identity on this Mac. The Guest Agent is built with `scripts/build-guest.sh`. Both fixture and guest builds use `ANDROID_HOME=/tmp/apkrun-acc-sdk`, which holds copies of build-tools 37.0.0, platform android-37.0, and the SDK licenses.
+
+**Reason.** The embed script signs a Debug CLI with the virtualization entitlement, so the CLI needs a signing identity. The fixture and guest builds need `ANDROID_HOME`. Pointing it at the main checkout's SDK would let Gradle write through the `build/android-sdk` symlink into the main checkout, which this task forbids, so the parts were copied. The signing identity is local to this Mac and is not recorded in the repository.
+
+## IR-877: Criterion 1 of #095 stays open, and its marker verdict needs host input on every port of the Android kernel's 20 hvc nodes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; IR-372; IR-543 |
+
+**Choice.** Criterion 1 of #095 stays unticked. The 2026-10-11 result is two of 20 markers: `APKRUN-PORT-0` reached `hvc0`, and `APKRUN-PORT-1` reached `hvc1`. The next marker check uses the `hvc` nodes on a layout where every port takes host input, on the Android kernel. The `vport` route is not used (IR-873).
+
+**Reason.** The Android kernel's 20 `hvc` nodes are open, so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.

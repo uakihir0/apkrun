@@ -15413,3 +15413,17 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Reason.** The Android kernel's 20 `hvc` nodes open (printed in the session, not saved to a file), so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
 
+## IR-901: Four of the marked ports are read by product HALs, so the marker check cannot use them without a product change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #095 criterion (a); IR-871; IR-899 |
+
+**Choice.** Keep criterion (a) of #095 open. Record the 13 ports that receive their full marker (hvc2, 3, 4, 6, 7, 10, 11, 13 to 17, and 19). The four ports hvc5, hvc8, hvc9 and hvc12 stay open, and the maintainer decides whether the criterion covers ports that a product HAL owns.
+
+**Reason.** The reader results show that the first bytes of each marker on hvc5, hvc8, hvc9 and hvc12 are consumed by the product HAL that holds the port: bluetooth (pid 663) on hvc5, drmrpc (pid 706) on hvc8, uwb (pid 660) on hvc9, and nfc (pid 685) on hvc12. The raw-mode change and the 2 s wait did not change the result (IR-899, updates 2 and 3). IR-871 assumed these ports were free, which was wrong. A marker check on them would stop a product service, which is a product change.
+
+**Verification.** Two boots with the AndroidADB configuration, under the lock, with the per-port `holders` lines in the test log. The 13 ports pass in both runs.
+

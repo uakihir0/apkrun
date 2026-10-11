@@ -14805,3 +14805,71 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The task allowed two VM boots. One boot created a VM (IR-751). The attempts without the Guest Agent bundle and without `APKRUN_VIRGL_RUNTIME_PATH` failed with `runtime.guestAgentBundleMissing` and `runtime.graphics` before the VM existed, so they are not counted. No second boot was started, because the task says to stop at a failing boot.
 
 **Reason.** The error catalog says `runtime.graphics` is raised before the VM is created, and the logs show no VM for those attempts. Counting them would cost a boot the task may need for a fixed bundle.
+
+## IR-760: The drmVirgl EGL failure is SurfaceFlinger's denied read of the PCI uevent, not a missing render node
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the drmVirgl boot check); #099 (the verity step, step 5) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9 (the drmVirgl profile); [android-image.md](../02-design/android-image.md) §11 (the APKRun AOSP product and its SELinux policy) |
+
+**Choice.** The guest's `Failed to open any DRM device` means the Mesa EGL loader found no DRM device to open. The cause is SELinux. SurfaceFlinger's `openat` of `/sys/devices/platform/40000000.pci/pci0000:00/0000:00:14.0/uevent` (inode 3405, label `sysfs`) is denied, and libdrm then drops the virtio-gpu device, because it needs `PCI_SLOT_NAME` from that file. The chain is: `drmGetDevices2` (`src/egl/main/egldevice.c:441–448`) → `drmProcessPciDevice` (`subprojects/libdrm-2.4.123/xf86drm.c:4094–4112`) → `drmParsePciBusInfo` (`xf86drm.c:3726–3735`), which fails with `-ENOENT`, so the device is not added → `droid_open_device` (`src/egl/drivers/dri2/platform_android.c:1098–1171`) sees an empty device list and prints `Failed to open any DRM device` (line 1166).
+
+**Reason.** The evidence:
+
+- The live `/dev/dri` holds `card0` (226,0) and `renderD128` (226,128), both `crw-rw-rw- system graphics`, with the labels `graphics_device` and `gpu_device`. A missing node or a wrong node mode is not the cause.
+- The per-node message `Failed to open DRM device <node>` (`platform_android.c:1129`) appears 0 times in the earlier boot (`/private/tmp/apkrun-099-vh-logs/logcat-boot-1.log`) and 0 times in this task's boot. No node was ever opened.
+- Each failure follows a denial of inode 3405. Earlier boot: the denial at 08:17:17.280, the first `Failed to open any DRM device` at 08:17:17.286. This task's boot (the host copy `Logs/guest/logcat-20261011T084543Z.log`): the denial at 08:45:50.020, the failure at 08:45:50.021. The denials are `comm="surfaceflinger"`, `permissive=0`, `tcontext=u:object_r:sysfs:s0`; 438 log lines in the earlier boot and 74 in this one.
+- Inode 3405 is that uevent file, and it holds `PCI_SLOT_NAME=0000:00:14.0`, the value that libdrm needs.
+- With SELinux set to permissive in the guest, the next SurfaceFlinger start does not fail (IR-762). That test changes only the enforcement mode.
+
+The driver name is not the cause (IR-764). The three `Failed to open any DRM device` lines of each EGL start are the three passes of `eglapi.c` (IR-764).
+
+## IR-761: The fix is a SELinux rule in the APKRun AOSP product, owned by #035; the test bundle, the Mesa build, and libdrm are not changed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #035 (the APKRun AOSP product and its SELinux policy); #022 and #099 (the drmVirgl boot) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.6 (no permissive workaround is set) and §11 (`device/apkrun/apkrun_arm64/sepolicy`); [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The fix is a rule in the product's sepolicy. Either allow `surfaceflinger` to read the PCI device's `uevent`, or add a file-context rule that gives that sysfs node a type the policy allows. The maintainer chooses between them. This task changes no code and no bundle. Two shortcuts are not chosen: a boot flag that sets SELinux to permissive, and a libdrm patch that accepts a PCI device whose `uevent` cannot be read.
+
+**Reason.** Permissive mode turns enforcement off for every domain of the guest, not only for this read, and android-image.md §6.6 records that no permissive workaround is set. A libdrm patch would hide a gap in the policy inside a pinned third-party component (AGENTS §6.6). AGENTS §15 ranks the existing Android mechanism, the policy, above a custom one. The `shell` domain is denied the same node in this boot (`read` of `uevent`), so the rule is a policy decision for the image, not a change to one process.
+
+## IR-762: The one permissive run tested the cause; the second allowed boot was not used, and no fix is in this branch
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the drmVirgl boot check) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9 (the drmVirgl check) |
+
+**Choice.** In the one boot of this task, `adb root` and `setenforce 0` were run in the guest, as a diagnostic. The next SurfaceFlinger start (pid 2719, at 08:47:19.987) did not abort. `dumpsys SurfaceFlinger` then reported `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`, and `sys.boot_completed` was `1` at 08:49:13. The three enforcing starts before it (08:47:04, 08:47:09, 08:47:15) aborted with `no suitable EGLConfig found`. The bundle, the images, and the code were not changed, and the second boot was not used, because the fix lies in the image policy (IR-761).
+
+**Reason.** Changing only the enforcement mode isolates the denial from the rest of the guest, and the EGL path works once the read is allowed. This is evidence for the cause. It is not a product result: it does not meet a gate (G3 is not reached, AGENTS §5), and permissive mode is not a valid product setting.
+
+## IR-763: The stop path: SIGINT stopped the drmVirgl boot once Android had booted, and SIGKILL was not needed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the drmVirgl boot check) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (Ctrl-C stops Android gracefully) |
+
+**Choice.** `kill -INT` was sent to the `apkrun dev boot` process, not to the `lockf` wrapper. The process exited within 20 seconds. The boot log ends with `state: stopping`, `state: stopped`, and `boot-exit=0`. No Virtualization or apkrun process was left, and SIGKILL was not used.
+
+**Reason.** IR-752 found a boot in a zygote loop that did not stop, and it asked whether a stuck guest needs its own stop path. This boot was in a SurfaceFlinger loop until the permissive test, and it had `sys.boot_completed=1` when it was stopped. This run therefore does not answer the IR-752 question, which stays open.
+
+## IR-764: The logs do not list the DRM nodes; the render node exists, the driver name is not the cause, and the Mesa node order is renderD* then card*
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the drmVirgl boot check) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The node names, owners, and modes come from a live `ls -l /dev/dri`, not from the boot logs. The only DRM line about nodes in the logs is `[drm] Initialized virtio_gpu 0.1.0 for 0000:00:14.0 on minor 0` (`boot-1.log` line 35). It names the primary node `card0`. No log line names `renderD128`. On the hardware path Mesa scans only render nodes (`renderD*`, `DRM_NODE_RENDER`, `platform_android.c:1109–1111`; `EGL_FORCE_RENDERNODE` is not defined in the tree). The software retry scans primary nodes (`card*`, `DRM_NODE_PRIMARY`, line 1111). That retry is reached through the Zink retry and then the `ForceSoftware` retry in `src/egl/main/eglapi.c:698–708`. The driver name is not the cause. The kernel reports `virtio_gpu`. `loader_get_driver_for_fd` (`src/loader/loader.c:764`) uses the PCI id map, whose entry for `0x1af4` is `virtio_gpu` (`src/loader/pci_id_driver_map.h:65`), and `platform_android.c:1035` compares the same name.
+
+**Reason.** A missing `renderD128` line does not show a missing node, because the live listing shows it with mode `0666`. The name Mesa expects is `virtio_gpu`, not `virtio`. The driver is chosen only after a device has been opened (`platform_android.c:1025`, after `droid_open_device` at line 1190), so no driver-name mismatch can have caused this failure.

@@ -15055,3 +15055,143 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Verification.** IR-753 records the boot. Release signing is not exercised by any test yet.
 
+## IR-840: The guest-memory pointer is valid until the view is invalidated, not only for one request
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2: the pointer API for the backing of IR-836) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4; [IR-465](#ir-465-backing-is-gathered-by-copies-not-handed-to-the-renderer); [IR-836](#ir-836-the-guest-backing-reaches-virglrenderer-through-attach_iov-decided-for-ir-834) |
+
+**Choice.** `GuestMemory.hostMemory()` returns the host memory of the whole mapped range. The pointer is valid while the view is valid, so until the device resets or stops. It is not a scoped closure that ends with the request.
+
+**Reason.** `virgl_renderer_resource_attach_iov` keeps the pointer after the request returns, and it reads and writes the pages at later transfers. A request-scoped API could not serve `RESOURCE_ATTACH_BACKING`. IR-836 asks for the pointer and not a copy, so the pointer's lifetime must match the mapping's. The consumer releases the pointer before a reset or a stop, and the bridge does (IR-843).
+
+**Consequence.** The safety of the pointer depends on the consumer's release, which `hostMemory()` documents. `FakeGuestMemory` now keeps its bytes in a fixed allocation, so a pointer keeps its address in the T0 tests.
+
+## IR-841: The VZ adapter provides host pointers, so the device layer is not blocked
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 2) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4; [IR-465](#ir-465-backing-is-gathered-by-copies-not-handed-to-the-renderer) |
+
+**Choice.** There is no blocker. The VZ storage returns the host pointer of its mapping, `VZGuestMemoryMapping.mutableBytes`, through `GuestMemory.hostMemory()` (`Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/VZAdapter/VZCustomVirtioDeviceAdapter.swift`, line 900).
+
+**Reason.** The SDK header `VZGuestMemoryMapping.h` declares `mutableBytes` as a `void *` property, and it says that the mapping gives read and write access to the guest's DRAM. The header also says that the mapping is invalid after the VM reboots or shuts down. The adapter already reads and writes through `mutableBytes` (lines 882 and 895), and it creates each mapping with `guestMemoryMappingAtPhysicalAddress:length:` (line 264). It drops the mappings in `invalidateGuestState`. This task runs no VM, so the pointer is checked against the header and the code, and not on a guest.
+
+**Consequence.** The VM run must read and write an attached range through the pointer (IR-849).
+
+## IR-842: The bridge copies the range list into an array that it owns, and frees the array on detach, unref, reset, or destroy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3: the bridge) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §5.2; `Packages/GraphicsCore/Sources/GraphicsBridge/include/GraphicsBridge.h` |
+
+**Choice.** `gb_resource_attach_backing` copies each `gb_backing_range` into a `struct iovec` array that the bridge allocates, and gives that array to `virgl_renderer_resource_attach_iov`. The guest memory itself is not copied. The renderer keeps a record per attached resource. `gb_resource_detach_backing` and `gb_resource_unref` call virglrenderer's detach, which returns the array, and the bridge frees it. The header documents this as the exception to the rule that every buffer is borrowed for one call.
+
+**Reason.** virglrenderer stores the `iov` pointer, and it neither copies nor frees the array (`src/virglrenderer.c` lines 419 to 443, `src/virgl_resource.c` lines 249 to 281, in the pinned source). The bridge therefore owns the array's lifetime. The record gives the bridge the array at detach, and lets it free the rest at reset and destroy, which do not detach (IR-843). The bridge refuses a second attach to a resource that has backing, so virglrenderer's `EINVAL` for that case is not reached.
+
+**Consequence.** An attach allocates one array per resource, and a failed attach leaves no record. The records are used only on the render thread.
+
+## IR-843: Reset and stop free the attached arrays without a detach, and the render thread finishes its queued work first
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4; [IR-836](#ir-836-the-guest-backing-reaches-virglrenderer-through-attach_iov-decided-for-ir-834) |
+
+**Choice.** `VirtioGPUDevice.deviceWillReset` and `deviceWillStop` do not detach the backing. `gb_renderer_reset` and `gb_release_renderer` free the bridge's arrays after the renderer has dropped its resources. Before either runs, `VirGLBackend.reset` and `shutdown` wait on the render thread (`renderThread.sync`) for the work already queued.
+
+**Reason.** A detach can write into guest memory. For a buffer with `VIRGL_BIND_CUSTOM`, `virgl_renderer_resource_detach_iov` copies the renderer's storage back into the pages (`vrend_pipe_resource_detach_iov`, `src/vrend/vrend_renderer.c` lines 7561 to 7573). At a reset or a stop, the adapter has already called `invalidateGuestState()` (`Packages/VirtioDeviceCore/Sources/VirtioDeviceCore/VZAdapter/VZCustomVirtioDeviceAdapter.swift`, lines 177 to 181), so the device's mappings are no longer valid. `virgl_renderer_reset` and the destruction of a resource do not touch the iovecs (`src/virglrenderer.c`, `vrend_renderer_resource_destroy` at `src/vrend/vrend_renderer.c` line 9082).
+
+**Consequence.** The safety rests on the VZ reset and stop callbacks running before the VM remaps the guest RAM. The VZ header says the memory is invalidated when the VM "is rebooted or shutdown", so the drain inside the callback comes first. This is not checked on a VM (IR-849).
+
+## IR-844: Unref detaches the backing before the resource goes, in the device and in the bridge
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4 |
+
+**Choice.** `GuestGPUSession.unref` queues `engine.detachBacking` before `engine.unrefResource`, for a resource that had backing. `gb_resource_unref` also releases a backing that is still attached, before virglrenderer's unref.
+
+**Reason.** `virgl_renderer_resource_unref` does not detach (`src/virglrenderer.c` lines 167 to 180). It drops the resource, so the array would leak, and a `VIRGL_BIND_CUSTOM` buffer would skip its copy-back. The device sends the detach explicitly, so the renderer's record follows the device's. The bridge's release is a guard at the C boundary.
+
+**Consequence.** Both releases are idempotent: a second detach finds no record and does nothing.
+
+## IR-845: The replay gives each created resource zeroed guest pages, because the pinned recording holds no backing
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3: the replay of IR-812) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §14; [IR-812](#ir-812-the-kmscube-recording-is-kept-under-tmp-with-its-hash-and-command-and-its-replay-test-reads-it-from-a-variable); [IR-831](#ir-831-the-first-rejected-submit-is-a-transfer3d-to-a-buffer-that-the-renderer-has-no-guest-backing-for) |
+
+**Choice.** `replay(_:onto:suppliesBacking:)` gives each resource that a `createResource` operation creates zeroed pages, counted as `ResourceTable` counts the level-0 bytes. It releases them in the renderer before the resource goes, and again at the end of the replay. The test-only device replay passes `suppliesBacking: true`. The recorder forwards the backing calls without recording them, and the record-and-replay test leaves them out of its comparison.
+
+**Reason.** The `kmscube` recording has a pinned SHA-256 (IR-812), and it holds renderer operations only. The in-stream `TRANSFER3D` reads its guest backing (IR-831), so a replay without pages cannot show the effect. The recorder does not record the backing, because its ranges name live guest memory. The pages hold no guest data, so the replay checks the renderer's calls and not the pixels, as IR-814 already says.
+
+**Consequence.** The T1 test shows that the host renderer accepts the stream once it has backing. It does not show what the guest draws. The T0 tests cover the guest path with a fake engine and fake guest memory.
+
+## IR-846: The kmscube replay now pins zero rejections, and the 61-index pin is removed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §14 (T1); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022 |
+
+**Choice.** `theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` expects no failed call and no rejected submit. It no longer pins the 61 indices or the first rejection's messages. The rejected count is **61 before** the attach (the baseline run of this task, and IR-830 to IR-832) and **0 after**. No rejection remains, so no first rejection is recorded.
+
+**Reason.** The replay attempts all 149 operations (the test checks `attempted`), and with the pages attached `failures` and `submitRejectionsForTest()` are empty. IR-831 found the first rejection to be the `TRANSFER3D` to resource 4, and IR-832 found that the 60 later `DRAW_VBO` rejections followed from it. Those earlier experiments removed the command. This change attaches the pages, and the result shows the same effect.
+
+**Consequence.** Criterion 5 stays unmet until the VM kmscube run confirms this on the guest. The criterion is not changed (IR-834).
+
+## IR-847: The attach runs on the virgl path only, and a renderer failure leaves the guest's response unchanged
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4, §7 |
+
+**Choice.** `RESOURCE_ATTACH_BACKING` gives the pages to the renderer only on the `virgl` path. The `guestSwiftshader` path keeps its copies. The host pointers are taken on the device queue, inside the mapping closure, so a bad entry leaves no partial backing. A renderer failure on attach is logged and counted, and the guest is answered `OK_NODATA`.
+
+**Reason.** The 2D path has no renderer. The mapping closure is the one place where the views are valid, and it runs before `ResourceTable` records the entries. A renderer failure on attach follows the rule for every other renderer call (IR-460), so the guest is answered as before, and the failure is counted in `rendererFailures`.
+
+**Consequence.** A guest can receive `OK_NODATA` for an attach that the renderer refused. The effect shows in later submits, as it does for other refused calls. The T0 test `aRendererFailureOnAttachLeavesTheGuestResponseUnchanged` pins this.
+
+## IR-848: The copy at attach and detach applies to VIRGL_BIND_CUSTOM buffers, which the kmscube stream does not use
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.4 |
+
+**Choice.** There is no code change. The risk is recorded. For a buffer with `VIRGL_BIND_CUSTOM`, virglrenderer writes its host storage into the guest pages at attach, and copies the renderer's data back into them at detach. Resource 4 of the kmscube stream has bind 16, which is `VIRGL_BIND_VERTEX_BUFFER`, so it is not affected.
+
+**Reason.** `vrend_pipe_resource_attach_iov` writes with `vrend_write_to_iovec` for resources with `VREND_STORAGE_HOST_SYSTEM_MEMORY` storage (`src/vrend/vrend_renderer.c` lines 7545 to 7558). That storage is chosen only for `VIRGL_BIND_CUSTOM` (lines 8469 to 8471). In the pinned `src/virgl_hw.h`, `VIRGL_BIND_VERTEX_BUFFER` is `1 << 4` (line 638) and `VIRGL_BIND_CUSTOM` is `1 << 17` (line 647).
+
+**Consequence.** A guest that attaches a CUSTOM buffer after writing its contents would lose them at attach. A detach would have the renderer write into pages that the guest may already have reused. Before a CUSTOM buffer reaches a guest path, this needs a check.
+
+## IR-849: The VM run must confirm the pointer and the reset ordering, which this task could not check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #022; [graphics.md](../02-design/graphics.md) §14 |
+
+**Choice.** The next step is the kmscube run on the VM with this build. The run must check three things that the offline tests cannot: (1) the host pointer of an attached range reads and writes the guest's bytes, so a buffer the guest writes reaches the transfer; (2) a reset and a stop after an attach complete without a fault, which exercises the drain inside the VZ callbacks (IR-843); (3) the attach of resource 4 receives the guest's own entries, so the replay's zeroed pages are no longer needed.
+
+**Reason.** No VM runs in this task. The pointer is checked only against the SDK header and the code (IR-841). The T1 replay uses zeroed pages, so it proves the renderer accepts the calls, not the guest's bytes.
+
+**Consequence.** Criterion 5 stays unmet until the VM run. This entry is the checklist for that run.
+

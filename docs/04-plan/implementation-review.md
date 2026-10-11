@@ -14616,3 +14616,33 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** IR-650 asks to record the failure first and then choose the key. The key choice changes the guest's trust chain, and IR-650 lists it as a trust decision. Turning verity off is a design change. A second boot with the same vbmeta would repeat the same failure.
 
 **Consequence.** The record is the `dm-verity device corrupted` reboot loop of the #099 entry. The boot ended at `failed(runtime.vm)` after about 431 s, with 646 guest reboots.
+
+
+## IR-728: dm-verity off is an experiment-only change of the test variant, and the guest accepts only `logging` as a relaxed mode
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the task's steps 1 to 4, the no-verity experiment) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; [ADR index](../01-architecture/decisions/README.md) |
+
+**Choice.** dm-verity off is an experiment-only change of the test variant `/tmp/apkrun-099-bundle-mesa-noverity`, not a product setting. The change is in `boot/cmdline.txt` only, and the manifest, `SHA256SUMS`, and `manifest.sig` are regenerated with the bundle module's functions. The guest refuses `androidboot.veritymode=disabled` (`Unknown androidboot.veritymode: disabled`), so the experiment uses `androidboot.veritymode=logging`, which logs corruption and continues. Design §11.4 keeps dm-verity on in development, so any product use needs an ADR. The product path is to regenerate the vendor hash tree (and its FEC data), which is a separate follow-up.
+
+**Reason.** The request was "off", but `disabled` is not a mode of this guest's `libfs_mgr`, so off is not reachable by the command line. `logging` keeps the hash checks and changes only the reaction to a mismatch, which is the narrowest change that lets a boot continue. The stock control is unchanged (its hashes are the same before and after, see the #099 notes).
+
+**Consequence.** The `logging` boot mounts `/system`, `/odm`, `/product`, and `/system_ext`, but the injected `/vendor` does not mount, because its FEC reads fail. So the verity mismatch is not the only obstacle, and a boot with the regenerated vendor tree is the next experiment. Until a maintainer decides otherwise, the experiment bundle is not a development image.
+
+
+## IR-729: A boot that ignores SIGINT and SIGTERM is stopped with SIGKILL, and no further boot follows
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the task's steps 3 and 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev boot` stops Android gracefully on Ctrl-C) |
+
+**Choice.** When a boot does not exit after SIGINT (and SIGTERM, in boot A), the apkrun process is stopped with SIGKILL, and the Virtualization service process is checked afterwards. No third boot followed, and both scratch homes were removed.
+
+**Reason.** In both boots the guest kept rebooting (boot A) or stalled in the `/vendor` mount (boot B), so the graceful stop never completed. The run had a limit of two boots, and a retry would repeat the same state. The SIGKILL ends the VM with its guest unshut, which is acceptable only for a scratch instance that is removed.
+
+**Consequence.** The Ctrl-C path of [cli.md](../02-design/cli.md) §5 was not verified for a stuck guest. It needs a check in a follow-up. The wrapper status of both boots is `EXIT=70`.

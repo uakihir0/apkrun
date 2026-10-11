@@ -1,12 +1,11 @@
-# apkrun.test=egl (#099). Test only; this is not a product service.
+# apkrun.test=egl (#099). Test variant only; this is not a product service.
 #
-# The service runs one shell line. The explicit seclabel keeps the shell in the init domain, which may
-# read /proc/cmdline (init has no domain transition to the shell, and init fails the service without
-# a label). The shell execs the test binary only when the command line holds apkrun.test=egl. The
-# binary has the surfaceflinger_exec label, so the exec moves it into the surfaceflinger domain, which
-# has the DRM and logd rights.
-service apkrun_egl_test /system/bin/sh -c "read -r l < /proc/cmdline; case $l in *apkrun.test=egl*) exec /odm/bin/apkrun_egl_test;; esac"
-    seclabel u:r:init:s0
+# The service runs the test binary directly, with no shell and no command-line gate (IR-993). The
+# binary has the surfaceflinger_exec label, and the explicit seclabel is the domain that SurfaceFlinger
+# runs in, so the rights of SurfaceFlinger (DRM device, logd) apply. The test runs once on
+# sys.boot_completed.
+service apkrun_egl_test /odm/bin/apkrun_egl_test
+    seclabel u:r:surfaceflinger:s0
     user system
     group graphics
     oneshot

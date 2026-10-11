@@ -4,11 +4,10 @@ The variant is the #099 variant bundle (`install-src`, vendor replaced and resea
 changes, all in the ODM logical partition `odm_a` unless stated:
 
 - the precompiled policy holds the rules of RULES: the SurfaceFlinger rule of #022 and the uevent
-  and the uevent and DRM-device rules of the app domains (IR-991);
-- the test binary `/bin/apkrun_egl_test` and its init rc `/etc/init/apkrun_egl_test.rc`;
-- the top-level `vbmeta_a` carries the new `odm` hashtree descriptor;
-- `boot/cmdline.txt` ends with `apkrun.test=egl` (set after `build_variant`, with the bundle
-  tool's own functions, as refresh_bundle.py does for the ramdisk).
+  and DRM-device rules of the app domains (IR-991);
+- the test binary `/bin/apkrun_egl_test` and its init rc `/etc/init/apkrun_egl_test.rc`, which runs
+  the binary once on sys.boot_completed (test variant only; no command-line gate, IR-993);
+- the top-level `vbmeta_a` carries the new `odm` hashtree descriptor.
 
 The bundle is made by the bundle tool's `build_variant`, which needs a sparse super and a reseal
 record.
@@ -45,9 +44,8 @@ from apkrun_image import erofs as ef  # noqa: E402
 from apkrun_image import lp  # noqa: E402
 from apkrun_image import vendor_inject as vi  # noqa: E402
 from apkrun_image import vendor_reseal as vr  # noqa: E402
-from apkrun_image.runtime_manifest import validate  # noqa: E402
-from apkrun_image.sign import key_id_of, render_signature, verify_signature  # noqa: E402
-from apkrun_image.bundle import _checksums, _file_entry, _load_signing_key  # noqa: E402
+from apkrun_image.sign import key_id_of, verify_signature  # noqa: E402
+from apkrun_image.bundle import _checksums, _load_signing_key  # noqa: E402
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat  # noqa: E402
 
 SRC = Path("/tmp/apkrun-099-vh-install-src/android-bundle")
@@ -67,8 +65,7 @@ PART_PRECOMPILED_STOCK_SHA = "6a1f95dad28bdf50"  # prefix of the file the guest 
 # RenderThreads (IR-954; requested for this variant). untrusted_app: the domain of HelloText, which
 # targets SDK 37 with the test key (seapp_contexts: `minTargetSdkVersion=37 domain=untrusted_app`,
 # IR-991). The DRM-device rules copy what SurfaceFlinger's EGL uses on the same node; the app
-# domains have only getattr there. The last rule lets init run the shell of the eglInitialize check
-# in its own domain (egl_check/apkrun_egl_test.rc, IR-992).
+# domains have only getattr there.
 RULES = (
     ("surfaceflinger", "sysfs", "file", "open"),
     ("surfaceflinger", "sysfs", "file", "read"),
@@ -81,7 +78,6 @@ RULES = (
     ("untrusted_app", "graphics_device", "chr_file", "write"),
     ("untrusted_app", "graphics_device", "chr_file", "ioctl"),
     ("untrusted_app", "graphics_device", "chr_file", "map"),
-    ("init", "shell_exec", "file", "execute_no_trans"),
 )
 EGL_DIR = REPO / "Experiments" / "sepolicy-022" / "egl_check"
 EGL_BINARY = Path(os.environ.get("APKRUN_022_EGL_BIN", "/tmp/apkrun-odmc/egl/apkrun_egl_test"))
@@ -91,8 +87,6 @@ EGL_DIR_LABEL = "u:object_r:vendor_file:s0"  # the label of /odm itself
 EGL_RC_PATH = "/etc/init/apkrun_egl_test.rc"
 EGL_RC_LABEL = "u:object_r:vendor_configs_file:s0"  # the label of the other /odm/etc files
 ETC_INIT_DIR_LABEL = "u:object_r:vendor_configs_file:s0"
-CMDLINE_PATH = "boot/cmdline.txt"
-CMDLINE_TOKEN = "apkrun.test=egl"
 
 
 class Check(SystemExit):
@@ -370,33 +364,6 @@ def variant_record_path(bundle: Path) -> Path:
     return bundle.with_name(bundle.name + bv.RECORD_SUFFIX)
 
 
-def set_command_line(bundle: Path) -> None:
-    """Append the test token to boot/cmdline.txt and refresh the manifest, the checksums, and the signature."""
-    key = _load_signing_key(KEY)
-    public_key = key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
-    keys = {key_id_of(public_key): public_key}
-    manifest = json.loads((bundle / "manifest.json").read_bytes())
-    path = bundle / CMDLINE_PATH
-    text = path.read_text(encoding="ascii")
-    need(CMDLINE_TOKEN not in text.split(), "the command line already has the test token")
-    had_newline = text.endswith("\n")
-    line = text.rstrip("\n") + " " + CMDLINE_TOKEN + ("\n" if had_newline else "")
-    path.write_text(line, encoding="ascii")
-    files = [_file_entry(bundle, entry["path"]) for entry in manifest["files"]]
-    by_path = {entry["path"]: entry for entry in files}
-    manifest["boot"]["cmdline"] = by_path[CMDLINE_PATH]
-    manifest["files"] = files
-    violations = validate(manifest)
-    need(not violations, f"the refreshed manifest fails {violations[0] if violations else ''}")
-    new_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    (bundle / "manifest.json").write_bytes(new_bytes)
-    (bundle / "SHA256SUMS").write_text(_checksums(files), encoding="ascii")
-    signature = render_signature(new_bytes, key)
-    (bundle / "manifest.sig").write_bytes(signature)
-    verify_signature(new_bytes, signature, keys)
-    print(f"command line: {line.strip()}")
-
-
 def build(args: argparse.Namespace) -> None:
     avbtool = avbtool_path()
     manifest = json.loads((SRC / "manifest.json").read_text())
@@ -520,18 +487,8 @@ def build(args: argparse.Namespace) -> None:
         sign_key=KEY,
         refresh=refresh,
     )
-    set_command_line(out)
-    # build_variant wrote its record from the manifest before the command line changed. The record
-    # is a hard link to a staging file, so it is replaced, and its manifest hash is the one computed
-    # from the final manifest (not typed).
-    record_path = variant_record_path(out)
-    record = json.loads(record_path.read_text())
-    final_sha = sha256(out / "manifest.json")
-    record["variantManifestSHA256"] = final_sha
-    record_path.unlink()
-    record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(f"bundle written: {out}")
-    print(f"variant manifest sha256 {final_sha} (build_variant's first value {result['variantManifestSHA256']})")
+    print(f"variant manifest sha256 {result['variantManifestSHA256']}")
     print("build: ok")
 
 
@@ -615,13 +572,11 @@ def check(args: argparse.Namespace) -> None:
                      {key_id_of(public_key): public_key})
     need(_checksums(manifest["files"]) == (out / "SHA256SUMS").read_text(encoding="ascii"),
          "the SHA256SUMS does not match the manifest")
-    need(CMDLINE_TOKEN in (out / CMDLINE_PATH).read_text(encoding="ascii").split(),
-         "the variant command line lacks the test token")
     record = json.loads(variant_record_path(out).read_text())
     need(record.get("variantManifestSHA256") == sha256(out / "manifest.json"),
          "the variant record does not hash the final manifest")
     print("variant record hashes the final manifest")
-    print(f"manifest.sig verified; {CMDLINE_PATH}: {(out / CMDLINE_PATH).read_text(encoding='ascii').strip()}")
+    print("manifest.sig verified")
     print("check: ok")
 
 

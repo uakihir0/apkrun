@@ -3,7 +3,7 @@
  *
  * It calls eglGetDisplay(EGL_DEFAULT_DISPLAY) and eglInitialize, logs one line with the fixed tag
  * APKRUN-TEST to logcat, and exits 0 only when eglInitialize succeeds. The init rc
- * (apkrun_egl_test.rc) starts it only when the kernel command line has apkrun.test=egl.
+ * (apkrun_egl_test.rc) runs it once on sys.boot_completed (test variant; no command-line gate, IR-993).
  */
 
 #include <EGL/egl.h>

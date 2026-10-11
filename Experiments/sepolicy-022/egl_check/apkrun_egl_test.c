@@ -1,5 +1,5 @@
 /*
- * apkrun_egl_test: the eglInitialize check of #099 (`apkrun.test=egl`). Test only, never a product binary.
+ * apkrun_egl_test: the eglInitialize check of #099. Test only, never a product binary.
  *
  * It calls eglGetDisplay(EGL_DEFAULT_DISPLAY) and eglInitialize, logs one line with the fixed tag
  * APKRUN-TEST to logcat, and exits 0 only when eglInitialize succeeds. The init rc

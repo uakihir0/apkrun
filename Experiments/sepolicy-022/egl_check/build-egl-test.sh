@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the eglInitialize test binary of #099 (apkrun.test=egl) with the pinned NDK r28c.
+# Build the eglInitialize test binary of #099 with the pinned NDK r28c.
 #
 # Usage: build-egl-test.sh <output file>
 # The NDK is the one of ADR-0018 (revision 28.2.13676358, r28c), found under the Android SDK of the

@@ -1,4 +1,4 @@
-# apkrun.test=egl (#099). Test variant only; this is not a product service.
+# The eglInitialize check (#099). Test variant only; this is not a product service.
 #
 # The service runs the test binary directly, with no shell and no command-line gate (IR-993). The
 # binary has the surfaceflinger_exec label, and the explicit seclabel is the domain that SurfaceFlinger

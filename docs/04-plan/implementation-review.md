@@ -15435,6 +15435,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1; [vm.md](../02-design/vm.md) §6.2 |
 
+**Superseded in part by IR-899 (update):** the marked ports are now hvc2 to hvc17 and hvc19, 17 ports, and the ready files are 17, not 19.
+
 **Choice.** The guest command starts one background reader per marked port. Each reader runs `stty -F /dev/hvc<i> raw -echo`, opens `/dev/hvc<i>` on fd 3, writes `ready-<i>`, and then runs `timeout 180 cat <&3 > out-<i>`. The host waits up to 60 s for the 19 `ready-<i>` files, then writes `APKRUN-PORT-<i>` followed by a newline into each port with `VMController.console(role).writeHostInput`. A port passes when `out-<i>` holds exactly that one line. The open file descriptors of every `/dev/hvc*` node are listed before the readers start and again after they are ready.
 
 **Reason.** The host waits up to 60 s for the ready files and then writes to every marked port. A ready file shows that the reader opened its port before the write. A port without one is still written and is recorded as `reader-ready=no`, so its result shows what happened. Whether a tty without an open reader keeps input was not checked on this image. `timeout` ends each reader. The holder listing shows a competing reader. On the developer boot, the Android console shell runs on hvc1 (`androidboot.console=hvc1`), so a marker written to hvc1 can reach that shell instead of the reader, and the listing names it. A reader that receives another port's marker fails, which is how a numbering difference shows.
@@ -15446,6 +15448,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Status | Needs maintainer review |
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1 |
+
+**Superseded in part by IR-899 (update):** the marked ports are 17 (hvc2 to hvc17 and hvc19), not 19. hvc0 and hvc1 are not marked either. The exclusion of hvc18 stands.
 
 **Choice.** `ConsolePortMarkerPlan.excludedPorts` lists hvc18 with its reason (IR-871). The 19 marked ports are hvc0 to hvc19 without hvc18. The test never writes to hvc18, opens no reader on it, and runs no sensors responder (IR-894). The T0 test `testReaderCommandStartsOneReaderPerMarkedPortAndNeverOpensHvc18` checks the reader command.
 
@@ -15470,6 +15474,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Status | Needs maintainer review |
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 steps 1 and 2, criterion 1; [android-image.md](../02-design/android-image.md) §7.1 |
+
+**Superseded in part by IR-899 (update):** the test now runs the sensors responder on hvc18 through the public byte stream, which it does not acknowledge. The reasons in the Reason paragraph below still hold for the acknowledgement.
 
 **Choice.** The T2 runs no responder on hvc18. It waits up to 120 s for `sys.boot_completed`, records the value, and goes on to the marker check whether or not the boot has finished. Whether the responder may run in this check is a decision for the maintainer, because its replies are written to hvc18.
 
@@ -15496,6 +15502,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Status | Needs maintainer review |
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 tests; [test-strategy.md](test-strategy.md) |
+
+**Superseded in part by IR-899 (update):** there are nine T0 tests now, and they pass 9 of 9 on the final build.
 
 **Choice.** `ConsolePortMarkerPlanTests` (six T0 tests) passes 6 of 6 on the final build. They cover: 19 marked ports with hvc18 excluded and its reason cited; exact markers and reader devices; the test layout's roles (host input on every marked port, hvc18 unchanged); the reader command (one reader per marked port, none on hvc18); the parsing of collected lines and the pass rule; and the ready-port listing. The T2 has compiled and has not run to its marker step (IR-893).
 
@@ -15538,3 +15546,5 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 **Reason.** Under the product roles the host can neither write to nor read the 17 ports. `ConsoleChannel.writeHostInput` refuses `.silent` and `.log` roles (`ConsoleChannel.swift` lines 580 and 581, with `permitsHostInput` at lines 881 to 889). The byte stream of a `.silent` port is finished (line 472), and its guest output is counted and dropped (line 762). A reader on such a port therefore sees no marker, because the host has no way to send one, and the guest's own output cannot be read. The supervisor gives the host no endpoint for these ports: its `devConsole` endpoints are hvc0 and hvc1 only (RuntimeSupervisor.swift lines 395 and 425). The responder on hvc18 needs the supervisor path, and that path gives no host writes to the other ports. So the markers this decision asks for are excluded by the product roles on any boot, and a boot could not show them.
 
 **Consequence.** Criterion 1 can be verified only with a change that this decision excludes. One option is a test-only layout that gives the 17 ports host input, which changes their roles in the test. Another is a product change that lets a test-only role carry host input under the supervisor. The maintainer must choose. A layout that keeps hvc18's responder and changes the other roles would have the test run the responder on hvc18 itself, which writes the HAL's replies to hvc18 (IR-894).
+
+**Update (the coordinator's second option).** The second option is implemented in the test only. The 17 ports get a test-only role, `test-marker-<i>`, in the test's definition. The product layout, the product roles, and every product file are unchanged. The 17 ports are hvc2 to hvc17 and hvc19, not hvc1 to hvc17 and hvc19 as the decision lists. In the developer boot the planner gives hvc1 the `serial` service role (`AndroidBootPlanner.consolePorts`), so the product uses it, and the count of 17 holds without it. hvc1 keeps its product role. hvc0 keeps the system console role and is not marked in this check; it took its marker on 2026-10-11 (IR-877). hvc18 keeps its product role. The test runs the product's `SensorsResponder` on it through the public byte stream, as `RuntimeSupervisor` does. The responder's replies are HAL protocol written to hvc18 by the test, and the test writes no marker to hvc18. The public stream reserves no chunk capacity (`reservesDrainSlot: false`), so the test does not acknowledge it. The reader stop uses the recorded process ids (`pid-<i>`), and the guest power-off ends any child that survives. The nine T0 tests pass 9 of 9 on the final build. The role check reads the bundle manifest that the product boots, not the repository: a run stalled on a read of a repository file under `~/Documents`, and the cause was not confirmed. The IR range IR-890 to IR-899 is full, so this update extends IR-899. The second boot is not run. The coordinator's allowance is not the user's approval, and the user's rule for this task is one VM boot in total. Criterion 1 of #095 stays unticked until the user authorizes a boot that gives a result for the 17 ports.

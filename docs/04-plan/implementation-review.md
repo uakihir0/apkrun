@@ -15777,7 +15777,7 @@ The uevent denials are dated from the console log. The kernel's policy-load reco
 
 **Reason.** One boot was allowed, and these checks ran before it. Nothing in this step starts a VM.
 
-## IR-954: The boot-time drmVirgl boot reached `ready` under enforcing, with no policy loaded at runtime
+## IR-954: The boot-time drmVirgl boot reached `ready` under enforcing, but apps abort on the same uevent read, so the SurfaceFlinger rule alone does not give a working UI
 
 | Field | Value |
 |---|---|
@@ -15785,17 +15785,18 @@ The uevent denials are dated from the console log. The kernel's policy-load reco
 | Task | #022 (criterion 4 check, evidence only); #035 |
 | Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 (Notes); [android-image.md](../02-design/android-image.md) §11.1 |
 
-**Choice.** Boot 2 of 2, under the lock: `lockf -k /tmp/apkrun-vm.lock env APKRUN_HOME=<fresh home> APKRUN_GUEST_DIR=/tmp/apkrun-099-vh-guest APKRUN_VIRGL_RUNTIME_PATH=/tmp/apkrun-099-vh-virgl-runtime /tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, log `/tmp/apkrun-022-boot2.log`. The lines:
+**Choice.** Boot 2 of 2, under the lock: `lockf -k /tmp/apkrun-vm.lock env APKRUN_HOME=<fresh home> APKRUN_GUEST_DIR=/tmp/apkrun-099-vh-guest APKRUN_VIRGL_RUNTIME_PATH=/tmp/apkrun-099-vh-virgl-runtime /tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, log `/tmp/apkrun-022-boot2.log`. The recorded lines:
 
-- `state: ready`
-- `Android is ready after 16.03775225 seconds`
-- console: `init: processing action (sys.boot_completed=1)` at 13.74 s; `adb shell getprop sys.boot_completed` returns `1`
-- `adb shell getenforce` returns `Enforcing`
-- `dumpsys SurfaceFlinger`: `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`; the saved logcat `/tmp/apkrun-022-boot2-logs/logcat-20261011T153427Z.log`: `10-11 15:34:32.156 704 741 I SurfaceFlinger: renderer  : virgl`
+- `state: ready`, then `Android is ready after 16.03775225 seconds`
+- console: `init: processing action (sys.boot_completed=1)` at 13.74 s; `getprop sys.boot_completed` (adb, shell uid) returns `1`
+- `getenforce` (adb, shell uid): `Enforcing`
+- SurfaceFlinger (pid 704): `dumpsys SurfaceFlinger` gives `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`; the saved logcat has `10-11 15:34:32.156 704 741 I SurfaceFlinger: renderer  : virgl`
 
-The first failing line: none. SurfaceFlinger (pid 704) started once and did not abort (no `received SIGABRT` line). The uevent denials of this boot: 36 `getattr` denials at 3.70 to 3.72 s, with no `open` or `read` denial, and they did not stop the boot.
+The first failing line, in the order of the boot: console line at 8.356532 s, `avc: denied { read } for comm="RenderThread" name="uevent" dev="sysfs" ino=3405 scontext=u:r:platform_app:s0:c512,c768 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0`. The first app abort follows at 15:34:36.865 (logcat): `F libc : Fatal signal 6 (SIGABRT) ... in tid 2920 (RenderThread), pid 2892 (droid.provision)`, with `libhwui.so` `EglManager::createContext` under `__android_log_assert`. The logcat has 609 such aborts, from 15:34:36.865 to 15:36:00.404: launcher3 380, systemui 206, settings 22, SetupWizard (`droid.provision`) 1. SurfaceFlinger (pid 704) did not abort, and the console has no SurfaceFlinger `received SIGABRT` line.
 
-**Reason.** This is the first boot of an image whose policy holds the rule from the start. The uevent denials that stopped the first boot's SurfaceFlinger (IR-942) do not occur, and the boot ends in `ready`.
+The console has 264 denials in all. Of them, 182 are `RenderThread` denials from `platform_app` (138) and `system_app` (44), 160 of which are reads of `uevent`. The other denials are 36 SurfaceFlinger `getattr` (3.70 to 3.72 s, on the PCI sysfs files: `vendor` 9, `device` 9, `uevent` 6, `subsystem_vendor` 6, `subsystem_device` 6), 20 binder and 20 `android.system.` reads, and a few others.
+
+**Reason.** The rule of IR-942 is the one SurfaceFlinger needs, and SurfaceFlinger starts with the virgl renderer. The apps are other domains (`platform_app`, `system_app`) that read the same node. The stock policy does not allow that read, so their EGL context creation fails and they abort. `ready` therefore shows the system and SurfaceFlinger, not a working UI. A separate decision is needed for the app domains (IR-958).
 
 ## IR-955: The boot used a rule compiled into the image, and no rule was loaded at runtime
 
@@ -15805,11 +15806,11 @@ The first failing line: none. SurfaceFlinger (pid 704) started once and did not 
 | Task | #022 (criterion 4 check, evidence only); #035 |
 | Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
 
-**Choice.** The rule was compiled into the image. The evidence: (1) the `odm_a` of the installed variant holds the edited policy (`check` read it back through the erofs export, sha256 `cbcad711…`), and init loads the ODM precompiled file (IR-943); (2) the kernel's policy-load records (`type=1403`) are at 0.51 s and 0.83 s only, during init, and none later; (3) this boot's adb session ran as uid 2000 (shell), with no `adb root`, and nothing was written to `/sys/fs/selinux/load`; (4) there is no `open` or `read` denial in the whole boot, so the policy in effect from the start allowed both.
+**Choice.** The rule was compiled into the image. The evidence: (1) the `odm_a` of the installed variant holds the edited policy (`check` read it back through the erofs export, sha256 `cbcad711…`), and init loads the ODM precompiled file (IR-943); (2) the kernel's policy-load records (`type=1403`) are at 0.51 s and 0.83 s only, during init, and none later; (3) the adb session of this boot ran as uid 2000 (shell), with no `adb root`, and nothing was written to `/sys/fs/selinux/load`; (4) SurfaceFlinger had no `open` or `read` denial in this boot, from its first start. The read denials of the other domains are in IR-954 and are not affected by this point.
 
-**Reason.** The first boot (IR-947) applied the rule by a runtime load, after the boot had started. This boot does not, and the coordinator asked for that difference to be stated.
+**Reason.** The first boot (IR-947) applied the rule by a runtime load, after the boot had started. This boot does not, and the difference is stated here as the coordinator asked.
 
-## IR-956: The boot was stopped with SIGINT, and its exit status was not captured
+## IR-956: The boot was stopped with SIGINT; its exit status was not captured, and the stop phase logged a vold failure
 
 | Field | Value |
 |---|---|
@@ -15817,9 +15818,9 @@ The first failing line: none. SurfaceFlinger (pid 704) started once and did not 
 | Task | #022 (stop path of the experiment) |
 | Affected documents | [cli.md](../02-design/cli.md) §5 |
 
-**Choice.** SIGINT was sent to pid 88870, which `ps` showed as `/tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, not the wrapper. The log then has `state: stopping` and `state: stopped`, and no error line. No apkrun, `lockf`, or Virtualization process was left. The boot was started as a shell background job, so its exit status was not captured.
+**Choice.** SIGINT was sent to pid 88870, which `ps` had shown as `/tmp/apkrun-099-vh-bin/apkrun dev boot --gpu virgl --console`, not the wrapper. The log then has `state: stopping`, `state: stopped`, and no apkrun error line. No apkrun, `lockf`, or Virtualization process was left. After `state: stopping`, the guest logged `rust_binder` allocation errors (106.4 to 107.2 s) and init's `Service vold has 'reboot_on_failure' option and failed, shutting down system.` (107.21 s), then `reboot: Power down` (108.03 s). The boot was started as a shell background job, so the exit status was not captured.
 
-**Reason.** The exit-status question of IR-948 stays open; this run does not answer it.
+**Reason.** The exit-status question of IR-948 stays open. The vold line is in the guest's shutdown, after the stop request; the cause of the vold failure during shutdown was not examined.
 
 ## IR-957: What this boot does not show
 
@@ -15829,11 +15830,11 @@ The first failing line: none. SurfaceFlinger (pid 704) started once and did not 
 | Task | #022 (criterion 4 check, evidence only) |
 | Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 (Notes) |
 
-**Choice.** Not shown: (1) SurfaceFlinger's mapped libraries in this boot, because a shell-uid adb session cannot read `/proc/<pid>/maps` and no root was used (the library set is the one of IR-947); (2) the `getattr` denials are still there and non-fatal, so a product rule may need `getattr` for a clean log; (3) the stock ODM's FEC (IR-950), so a FEC-protected ODM was not tested; (4) repeatability: one boot, one image. No product criterion of #022 is ticked.
+**Choice.** Not shown: (1) SurfaceFlinger's mapped libraries in this boot, because a shell-uid adb session cannot read `/proc/<pid>/maps` (the library set of IR-947 is the one of the first boot); (2) any app that renders, since the apps abort (IR-954); (3) a clean log: the 36 SurfaceFlinger `getattr` denials are non-fatal, and the rule has no `getattr`; (4) the stock ODM's FEC (IR-950), so a FEC-protected ODM was not tested; (5) repeatability: one boot, one image. No product criterion of #022 is ticked.
 
-**Reason.** Each item was either not in scope for the boot's check, or needs a means that this experiment does not use.
+**Reason.** Each item needs a means this experiment does not use, or is outside the boot's check.
 
-## IR-958: Consequence for #035: the product rule goes into the policy that `init` loads, and the matching descriptor is resealed
+## IR-958: Consequence for #035: the SurfaceFlinger rule is in the place that `init` loads, but the app domains need a decision too
 
 | Field | Value |
 |---|---|
@@ -15841,9 +15842,9 @@ The first failing line: none. SurfaceFlinger (pid 704) started once and did not 
 | Task | #035 (the product sepolicy and its image build) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §11.1 and §6.6; [graphics.md](../02-design/graphics.md) §9 |
 
-**Choice.** On this image the product fix is a rule in the policy that the ODM partition loads (the precompiled file, built from the product's split inputs), with the `odm` (or `vendor`) hashtree descriptor resealed in `vbmeta_a`, as IR-744 and IR-746 describe for vendor. The ramdisk `/sepolicy` is not the route (IR-943). The product still needs the choice of IR-905 (a `genfscon` only for a new type) and the answer on `getattr` (IR-957).
+**Choice.** Two findings for #035. First, a rule for the SurfaceFlinger domain alone is not enough: `platform_app` and `system_app` read the same `uevent` node and abort in EGL context creation (IR-954). Second, the place for the rule is the ODM precompiled policy that `init` loads, with the `odm` hashtree descriptor resealed in `vbmeta_a` (IR-955, IR-949 to IR-951). The ramdisk `/sepolicy` is not the place (IR-943). Untested hypothesis for #035 to check: the stock policy already grants `platform_app`, `priv_app`, `untrusted_app` and others read, getattr and open on `sysfs_gpu` (IR-902, the vendor CIL lines 3682 to 4126). A `genfscon` that labels this PCI node `sysfs_gpu` (IR-905 item 1) could let those existing rules apply. That is not shown here, and the grant that SurfaceFlinger holds on `sysfs_gpu` was not read (IR-902).
 
-**Reason.** The boot-time test of this variant reaches `ready` with the rule in that place, under enforcing, without a runtime load (IR-954, IR-955).
+**Reason.** The boot shows the SurfaceFlinger rule works from the image, and the apps still fail on the same node. The product decision is therefore about the app domains as well.
 
 ## IR-959: The experiment changes no tool in `Images/tools`; its helpers stay in `Experiments/sepolicy-022`
 
@@ -15853,6 +15854,6 @@ The first failing line: none. SurfaceFlinger (pid 704) started once and did not 
 | Task | #022 (test-only, AGENTS §11) |
 | Affected documents | none (test code in `Experiments/sepolicy-022/`) |
 
-**Choice.** `odm_variant.py` calls `apkrun_image` functions as they are: `bundle_variant.build_variant`, `vendor_inject._rebuild` and `compare_entries`, `erofs` export and tree functions, `vendor_reseal.parse_hashtrees` and `_copy_prefix`, and the LP reader. Two helpers are local to the experiment: `raw_to_sparse` and the ODM seal (the vendor seal in `vendor_inject.seal_partition` is written for the vendor name). No file of `Images/tools` changed.
+**Choice.** `odm_variant.py` calls `apkrun_image` functions as they are: `bundle_variant.build_variant`, `vendor_inject._rebuild` and `compare_entries`, the erofs export and tree functions, `vendor_reseal.parse_hashtrees`, `_original_size` and `_copy_prefix`, and the LP reader. The helpers local to the experiment are `Window`, `read_super_odm`, `read_super_partition`, `raw_to_sparse`, and `seal_odm` (the vendor seal in `vendor_inject.seal_partition` is written for the vendor name). No file of `Images/tools` changed. The committed script reproduces the booted bundle: the rerun gave a `manifest.json`, `SHA256SUMS`, and `manifest.sig` that are byte-equal to the booted bundle's.
 
 **Reason.** The experiment is test-only (AGENTS §11). A product path for the ODM partition (replacement and descriptor, with its own check) is a follow-up task, not part of #022. `vendor_reseal` is vendor-specific, and an ODM version was not added to it.

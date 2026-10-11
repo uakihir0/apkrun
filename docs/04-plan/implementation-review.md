@@ -15026,3 +15026,32 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** The replay is the record for the messages of the later calls, and the live log is not a complete record. IR-813's note that the live log does not name the calls still holds for the later calls.
 
+## IR-836: The guest backing reaches virglrenderer through attach_iov, decided for IR-834
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §4.2, §5, §6; IR-465; IR-834 |
+
+**Choice.** Take the standard virtio-gpu path. On `RESOURCE_ATTACH_BACKING`, pass the guest pages to `virgl_renderer_resource_attach_iov`; on detach, call the matching detach. Add a guest-memory pointer API to VirtioDeviceCore for this, as the follow-up of IR-465.
+
+**Reason.** virglrenderer reads and writes the guest pages through this API, so no copy is made, which matches graphics.md §6. It uses the existing virtio-gpu model rather than a new mechanism, which AGENTS §15 prefers. The alternatives in IR-834 either copy the data on the CPU in the normal path or rewrite the transfer, which the design does not allow or would make bespoke.
+
+**Verification.** The replay of the recorded kmscube stream (IR-830) is the test that must pass after the change: the rejected count must drop to 0. The VM kmscube run follows.
+
+
+## IR-837: The development top-level vbmeta stays NONE, and the release key is #093
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 |
+| Affected documents | IR-650; IR-727; IR-753; [legal-and-licensing.md](../05-development/legal-and-licensing.md) |
+
+**Choice.** A development variant keeps the unsigned NONE top-level vbmeta. A release image is signed with a release key, which is the scope of #093.
+
+**Reason.** The guest accepted the NONE vbmeta in a verified boot (IR-753: `/vendor` mounts with verity on and no corruption). No key is needed to boot a development image, so signing was never the blocker. The release key does not exist, and creating it is a legal and custody decision for #093.
+
+**Verification.** IR-753 records the boot. Release signing is not exercised by any test yet.
+

@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 
 import apkrun_image.bundle as bundle_module
-from apkrun_image.bootconfig import parse_bootconfig_text
+from apkrun_image.bootconfig import (
+    BootconfigLayer,
+    merge_bootconfig_layers,
+    parse_bootconfig_text,
+    serialize_bootconfig,
+)
 from apkrun_image.bundle import BundleError, build_bundle, main
 from apkrun_image.runtime_manifest import validate
 from apkrun_image.sign import decode_public_key, key_id_of, parse_signature, verify_signature
@@ -230,6 +235,49 @@ def test_bootconfig_file_has_the_vendor_and_image_sections(tmp_path: Path) -> No
     command_line = (output / "boot/cmdline.txt").read_text(encoding="ascii")
     assert not command_line.endswith("\n")
     assert "bootconfig" in command_line.split()
+
+
+# The drmVirgl values that graphics.md §9 documents: Mesa (EGL and GLES), minigbm (gralloc),
+# ranchu (HWC, composer APEX), client composition, the DRM display finder, and GLES 3.0.
+# A change here, in the layout, or in the merge changes the documented profile.
+DRM_VIRGL_STACK = {
+    "androidboot.cpuvulkan.version": "0",
+    "androidboot.hardware.egl": "mesa",
+    "androidboot.hardware.gralloc": "minigbm",
+    "androidboot.hardware.hwcomposer": "ranchu",
+    "androidboot.hardware.hwcomposer.display_finder_mode": "drm",
+    "androidboot.hardware.hwcomposer.mode": "client",
+    "androidboot.opengles.version": "196608",
+    "androidboot.vendor.apex.com.android.hardware.graphics.composer": (
+        "com.android.hardware.graphics.composer.ranchu"
+    ),
+}
+DRM_VIRGL_GOLDEN = TESTS / "fixtures/gpu-profiles/drm-virgl-bootconfig.txt"
+
+
+def test_the_drm_virgl_bootconfig_follows_from_the_committed_layout(tmp_path: Path) -> None:
+    """#022 criterion 2: the drmVirgl bootconfig is reproducible from the committed layout."""
+    output = tmp_path / "bundle"
+    manifest = _build(tmp_path, output)
+
+    layout = json.loads(PINNED_LAYOUT.read_text(encoding="utf-8"))
+    profile = layout["gpuProfiles"]["drmVirgl"]["bootconfig"]
+    assert manifest["gpuProfiles"]["drmVirgl"]["bootconfig"] == profile
+    assert {key: profile[key] for key in DRM_VIRGL_STACK} == DRM_VIRGL_STACK
+
+    # The layers of AndroidBootPlanner.prepareBoot, without the platform and instance layers.
+    text = (output / "boot/bootconfig.txt").read_text(encoding="ascii")
+    vendor_part, image_part = text.split("[image]\n")
+    vendor = parse_bootconfig_text(vendor_part.removeprefix("[vendor]\n"), layer_name="vendor")
+    image = parse_bootconfig_text(image_part, layer_name="image")
+    merged = merge_bootconfig_layers(
+        [
+            BootconfigLayer("vendor", vendor),
+            BootconfigLayer("image", image),
+            BootconfigLayer("gpu:drmVirgl", profile),
+        ]
+    )
+    assert serialize_bootconfig(merged) == DRM_VIRGL_GOLDEN.read_bytes()
 
 
 def test_two_builds_are_identical(tmp_path: Path) -> None:

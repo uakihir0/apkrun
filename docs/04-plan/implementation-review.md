@@ -14805,3 +14805,75 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The task allowed two VM boots. One boot created a VM (IR-751). The attempts without the Guest Agent bundle and without `APKRUN_VIRGL_RUNTIME_PATH` failed with `runtime.guestAgentBundleMissing` and `runtime.graphics` before the VM existed, so they are not counted. No second boot was started, because the task says to stop at a failing boot.
 
 **Reason.** The error catalog says `runtime.graphics` is raised before the VM is created, and the logs show no VM for those attempts. Counting them would cost a boot the task may need for a fixed bundle.
+
+## IR-780: The Mesa bundle in `/tmp` predates the `vbmeta_a` replacement, so its vendor descriptor is the stock one, and the permissive boot stopped in dm-verity before Android started
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, criteria 1 to 3); #099 (the verity step, IR-746) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The bundle that the task names, `/tmp/apkrun-099-bundle-mesa/android-bundle`, is not the regenerated variant. Its `disks/os.img` was written at 15:07 local time, and its `android-bundle.variant.json` at 15:08, which is before commits 9f606b3 (16:35, the vendor descriptor refresh) and ee43d27 (16:51, the `vbmeta_a` replacement). Reading its `vbmeta_a` with the vendored avbtool gives the `vendor` root digest `d8895f6a…`, which is the stock root (IR-741 names this descriptor as stale). The injected `vendor_a` does not match it. The boot used that descriptor. The first stage stopped with `device-mapper: verity: 254:6: metadata block 69747 is corrupted` and `reboot: Restarting system with command 'dm-verity device corrupted'` (console log line 94, kernel time 0.52 s). The guest restarted 604 times until the stop, and the scratch logcat is 0 bytes. The run tested nothing about SELinux or the renderer.
+
+**Reason.** IR-746 says the guest reads the top-level vbmeta from disk, so a stock `vbmeta_a` fails against the injected vendor, as IR-741 found. The installed `disks/os.img` is byte-identical to the bundle's (`cmp`), so the install did not change the disk. A boot of this bundle cannot test the flag, and this run allowed one boot. The next test needs a variant made with `bundle-variant --reseal-output` (IR-746) and a new run.
+
+## IR-781: The test variant adds `androidboot.selinux=permissive` to `boot/cmdline.txt` and regenerates its metadata with the bundle module's functions, as an experiment-only change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment); #035 (the product sepolicy rule that the flag stands in for) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.6 (no permissive workaround is set); [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** The test variant is `/tmp/apkrun-022-perm-bundle/android-bundle`, a clone of the bundle of IR-780 with ` androidboot.selinux=permissive` appended to `boot/cmdline.txt`, which keeps the file's lack of a final newline. The new hashes are: `boot/cmdline.txt` `9d9f34a7304c008be78b0c2f54f049ca54f3953b0fea82e843613d43b8983efc` (203 bytes, was 172); `manifest.json` `e84668877ba2dd6e62327a6cb95e7b74c1c355300327ab54e4ea27a17849102d`; `SHA256SUMS` `1272126bc1c8deba093b2a340bd4cb421dcadd9b2d80cf803905a99d230db1b7`; `manifest.sig` `f9f687beda6239bc2c7d31c50228bd5fce4cbe943add91da3f3793554cebe3fd`. The disk `disks/os.img` (`6232d85e…`) is unchanged. The three metadata files were rendered by `bundle._checksums`, `sign.render_signature`, and `runtime_manifest.validate`, and `sign.verify_signature` accepts the signature under key ID `55ab0dd032d0ce0e`. Before the change, the same functions reproduced the stored manifest and `SHA256SUMS` bytes exactly.
+
+**Reason.** IR-761 says the product fix is a sepolicy rule, and a boot flag that sets permissive mode turns enforcement off for every domain, so the flag stays a change of the test variant. IR-762 called the earlier permissive run diagnostic for the same reason. The metadata goes through the bundle module, as the task requires. The flag's effect is not verified: no guest userspace ran, so `getenforce` was never read (IR-780).
+
+## IR-782: SIGINT stopped the boot within about 100 seconds although the guest was in a restart loop, so SIGKILL was not needed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, step f) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (Ctrl-C stops Android gracefully) |
+
+**Choice.** `kill -INT` was sent to the `apkrun dev boot` process (pid 86633, a child of the `lockf` process 86632) about five minutes after the start at 18:13:53 local time. The CLI then printed `state: failed(runtime.vm)`, `error: Android stopped unexpectedly.`, `hint: Restart Android.`, `code: runtime.vm`, and `BOOT-EXIT=1`. It had exited when checked about 100 seconds after the signal. No VM process was left, and SIGKILL was not used.
+
+**Reason.** IR-752 recorded a restart loop in which SIGINT did not stop the boot within about 3.5 minutes. This boot was also in a restart loop, but in the first stage (604 restarts, IR-780), and the signal stopped it within about 100 seconds. The two outcomes differ, and this run does not explain the difference, so IR-752's question stays open for the zygote-loop case.
+
+## IR-783: The VM lock covers the whole boot, so the adb checks could not run under `lockf` and were not run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, step d) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev boot`, `apkrun dev adb`) |
+
+**Choice.** The one boot ran as `lockf -k /tmp/apkrun-vm.lock ./.build/debug/apkrun dev boot`, so the lock was held until the boot exited. The adb checks were not wrapped in `lockf`, because a wrapped check would wait until the boot ended. They were also not run without the lock, because the guest never reached adbd: the restarts begin at kernel time 0.52 s (IR-780). No output exists for `getprop sys.boot_completed`, `dumpsys SurfaceFlinger`, `getprop ro.hardware.egl`, or `ls -l /vendor/lib64/egl`.
+
+**Reason.** The lock serializes VM commands across runs, and a boot holds it for its whole life, so a check cannot take it while the guest is up. Running the checks without the lock would ignore the rule the task sets. Decision needed: the maintainer chooses a lock rule for a booted guest, for example releasing the lock after `ready`, or taking a short lock for each check.
+
+## IR-784: No criterion of #022 is ticked, and #099's `eglInitialize` is not recorded, because this boot never reached SurfaceFlinger's EGL setup
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (acceptance criteria 1 to 3 in M02); #099 (the `eglInitialize` record) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) (the #022 acceptance criteria) |
+
+**Choice.** The acceptance criteria of #022 in [M02-graphics.md](../04-plan/issues/M02-graphics.md) are unchanged. Criterion 1 (`dumpsys SurfaceFlinger` names the virgl GLES renderer) and criterion 3 (no SwiftShader or in-guest ANGLE library loaded) were not seen in this boot, so they stay open. Criterion 2 (the documentation of §9 and a reproducible bootconfig) was not checked in this run. Criterion 4 (`guestSwiftshader`) and the kmscube item are unchanged. #099's `eglInitialize` is not recorded as observed.
+
+**Reason.** A criterion is ticked only for evidence seen in the same boot. This boot stopped in the first stage, before SurfaceFlinger and adbd existed (IR-780), so it produced no such evidence. The permissive run stays a diagnostic, as IR-762 says, and not a product result.
+
+## IR-785: The CLI, the guest APK, the SDK, and the VirGL runtime are built or cloned under `/tmp`, and the Debug `dev` commands need the `EmbeddedRuntime` trait
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, steps b and c) |
+| Affected documents | [build-system.md](../05-development/build-system.md) (the `EmbeddedRuntime` trait and the `embed-cli.sh` row) |
+
+**Choice.** The first `swift build -c debug --product apkrun` gave a CLI with no `dev` subcommand (`apkrun dev --help` lists only `version` and `logs`). The CLI was therefore rebuilt with `--traits EmbeddedRuntime`, as build-system.md gives for Debug, and signed with `CLI/apkrun/apkrun-dev.entitlements`. The guest APK came from `scripts/build-guest.sh --out /tmp/apkrun-022-perm-guest`, with `ANDROID_HOME` set to an APFS clone of the SDK at `/tmp/apkrun-022-perm-sdk`. The VirGL runtime is an APFS clone of the `ThirdParty/out/virgl-runtime` directory at `/tmp/apkrun-022-perm-virgl`, and its `libvirglrenderer.1.dylib` matches the source. The adb binary is the clone's `platform-tools/adb`. Nothing was written into the main checkout's `build/android-sdk` or `ThirdParty/out`.
+
+**Reason.** The `dev` commands are compiled only under `APKRUN_EMBEDDED_RUNTIME` (`CLI/apkrun/Dev/DevImage.swift`), so the first build could not run the install. The debug override that the boot reads, `APKRUN_VIRGL_RUNTIME_PATH` (`GraphicsBridge.m`), takes a runtime directory, and the clone supplies it without changing any file. The clones keep the SDK and runtime writes out of the main checkout.

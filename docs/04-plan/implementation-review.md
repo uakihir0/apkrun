@@ -14452,9 +14452,9 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 3, offline) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.6; [runtime-image-manifest.md](../03-reference/runtime-image-manifest.md) §4.5 (`disks`) |
 
-**Choice.** `bundle-variant` opens the super artifact of the Android image manifest from the archive, which checks its SHA-256 and size, and expands it. It refuses the variant unless the expansion has the SHA-256 of the bundle's super partition (`7dd80d27…`). The writer then works on that sparse artifact, so the variant is the stock super with one partition replaced.
+**Choice.** `bundle-variant` checks the bundle's super partition against its manifest entry (`7dd80d27…`). It then opens the super artifact of the Android image manifest from the archive, which checks its SHA-256 and size, and expands it. It refuses the variant unless the expansion has the same SHA-256. The writer then works on that sparse artifact, so the variant is the stock super with one partition replaced.
 
-**Reason.** The claim of the variant is that the stock bundle changes in one partition only. That holds only if the bundle's super is the archive's super. The check costs one more expansion of the 8 GiB super, and it does not change the output.
+**Reason.** The claim of the variant is that the stock bundle changes in one partition only. That holds only if the bundle's super is the archive's super. The checks cost one read of the 8 GiB super and one more expansion of it, and they do not change the output.
 
 ## IR-705: The variant record is written beside the bundle, not inside it, because the bundle lists every file it holds
 
@@ -14476,7 +14476,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 3, offline) |
 | Affected documents | [AGENTS.md](../../AGENTS.md) §10; IR-665; IR-686 |
 
-**Choice.** `Images/tools/tests/test_bundle_variant.py` builds one stock bundle per module. It uses a copy of the fixture archive whose `super.img` is the synthetic stock-like super of `test_lp_write.py`, with the manifest and the fetch record given the copy's sizes and hashes. It makes the inventory with the inventory tool, because the fixture's inventory describes the fixture super. The eight tests take about 41 s. The real `vendor_a` is not in the test suite; it was checked once outside the repository (the status in M02 #099). Decision needed: whether the fixture set should hold a super without a checksum, which would remove the copy.
+**Choice.** `Images/tools/tests/test_bundle_variant.py` builds one stock bundle per module. It uses a copy of the fixture archive whose `super.img` is the synthetic stock-like super of `test_lp_write.py`, with the manifest and the fetch record given the copy's sizes and hashes. It makes the inventory with the inventory tool, because the fixture's inventory describes the fixture super. The 18 tests take about 60 s. The real `vendor_a` is not in the test suite; it was checked once outside the repository (the status in M02 #099). Decision needed: whether the fixture set should hold a super without a checksum, which would remove the copy.
 
 **Reason.** The writer refuses a sparse super with a whole-image checksum (IR-665), and the fixture's super has one. The stock super has none (IR-686). The fixture's inventory describes the fixture super, so the manifest check would refuse the copy with it.
 
@@ -14488,7 +14488,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 3, offline) |
 | Affected documents | [modules.md](../01-architecture/modules.md) (the image tools); [android-image.md](../02-design/android-image.md) §10 (bundle) |
 
-**Choice.** The variant is `Images/tools/apkrun_image/bundle_variant.py`, and it imports the bundle module's `_file_entry`, `_checksums`, `_load_signing_key`, `_sha256`, and `_staging`, and the disk module's `_hash_range`, and the extraction helpers `_open_artifact` and `_role_artifact`. `bundle.py` is unchanged. Decision needed: whether the shared helpers should become public names in a module of their own.
+**Choice.** The variant is `Images/tools/apkrun_image/bundle_variant.py`, and it imports the bundle module's `_file_entry`, `_checksums`, `_load_signing_key`, `_sha256`, and `_staging`, the disk module's `_hash_range`, the extraction helpers `_open_artifact` and `_role_artifact`, and the manifest module's `_archive_paths`, `_load_json`, and `_resolve_archive_root`, and it takes the record name from `vendor_inject.OUTPUT_RECORD`. `bundle.py` is unchanged. Decision needed: whether the shared helpers should become public names in a module of their own.
 
 **Reason.** A mode in `bundle.py` would make the stock build and the variant share one path that is easy to change without noticing. The existing modules already import each other's private helpers (`bundle.py` imports `_archive_paths` from `manifest.py`), so this follows the code that is there.
 
@@ -14500,7 +14500,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #099 (step 3, offline) |
 | Affected documents | [cli.md](../02-design/cli.md) §5 (the development commands); IR-620; IR-633 |
 
-**Choice.** The command is `python3 -m apkrun_image bundle-variant`, a command of the image tools, not of `apkrun`. Its `--inject-output` directory is the output of `inject-vendor`. The command refuses the replacement unless `inject.json` names the partition and the SHA-256 of the file. Decision needed: whether the command stays a development tool, or whether `apkrun dev` gets a command that builds a variant (its install then needs IR-700).
+**Choice.** The command is `python3 -m apkrun_image bundle-variant`, a command of the image tools, not of `apkrun`. Its `--inject-output` directory is the output of `inject-vendor`. The command refuses the replacement unless `inject.json` names the partition, the build ID of the stock manifest, and the SHA-256 of the file. Decision needed: whether the command stays a development tool, or whether `apkrun dev` gets a command that builds a variant (its install then needs IR-700).
 
 **Reason.** The record of the injection is the only place that holds the injection's hash, so a file that is not that output is refused. The command is a development step, because a variant is a development bundle (IR-702).
 

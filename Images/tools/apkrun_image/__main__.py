@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 COMMANDS = {
     "bundle": "Build and sign a runtime image bundle.",
+    "bundle-variant": "Build a development bundle whose super carries a replaced partition (#099).",
     "disks": "Build the raw GPT disks of a device layout.",
     "erofs-tools": "Fetch and verify the pinned erofs-utils tools.",
     "extract": "Extract verified Android boot artifacts.",
@@ -21,7 +22,11 @@ COMMANDS = {
 }
 
 # Command names that are not valid module names map to their module.
-MODULES = {"erofs-tools": "erofs", "inject-vendor": "vendor_inject"}
+MODULES = {
+    "bundle-variant": "bundle_variant",
+    "erofs-tools": "erofs",
+    "inject-vendor": "vendor_inject",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14661,3 +14661,15 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The entries of this task use IR-740 to IR-759. IR-727 and IR-728 are not in `docs/04-plan/implementation-review.md` on `main` at `c29aed5`. They are on `task/099-vm-variant-check` (commit `a970951` and later), together with IR-720 to IR-726 and IR-729. The content of IR-727 (no signing choice, the first Mesa boot stopped by dm-verity) and of IR-728 (the `logging` experiment) was read from that branch, and this task does not depend on any of their numbers. Decision needed: when the two branches are merged, the numbering must be reconciled before any IR-740 to IR-759 entry is kept.
 
 **Reason.** The task starts from `main` at `c29aed5`, and a number that is already taken on another branch would collide when the branches meet. The IR-740 to IR-759 range was given for this run, so the entries stay inside it.
+
+## IR-740: The resealed vendor footer has no FEC, because no `fec` tool is pinned
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 2) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [ThirdParty.lock.json](../../ThirdParty/ThirdParty.lock.json) (no `fec` entry) |
+
+**Choice.** The footer is made with `--do_not_generate_fec` by the new `python3 -m apkrun_image vendor-reseal` (module `apkrun_image/vendor_reseal.py`), the same as `inject-vendor` (IR-624). The stock `vendor_a` has FEC with two roots, and the resealed one has no FEC fields. The tool takes the block size, hash algorithm, salt, and partition name from the stock footer, and the footer is `NONE`. Decision needed: whether a pinned `fec` tool is added (a third-party component with runtime impact, so it needs an ADR under §6.6), or whether the product verity stays without FEC.
+
+**Reason.** avbtool makes the FEC data with an external `fec` tool, and `ThirdParty/ThirdParty.lock.json` does not pin one. A hash tree that verifies needs no FEC, because FEC only repairs blocks that fail their hash. The FEC errors of the logging-mode boot (IR-727 and IR-728 on `task/099-vm-variant-check`) came from the stale descriptor of IR-741, not from a missing repair path. Verity is kept on, so the missing FEC is a loss of repair only, not of checking.

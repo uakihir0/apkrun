@@ -16404,4 +16404,31 @@ The renderer line was never printed: SurfaceFlinger aborted before `vendor` and 
 
 **Verification.** `/tmp/apkrun-023/evidence/boot3-sf-lines.txt`, `logcat-boot3-no-window.log`, `boot3.err`. SIGINT was ignored for 25 s (the boot never reached ready, IR-1105), so the boot was stopped with SIGKILL. No VM process is left, the lock is free, and the scratch home was removed.
 
-**Reason.** The window is not the trigger, which answers the question asked of this boot. Whether the cause is the user-named bundle or the build cannot be separated without one more boot: the reference bundle `odm4` with this build, without `--window`. That boot needs the maintainer's approval, because the allowance was for this diagnosis only.
+**Reason.** The window is not the trigger, which answers the question asked of this boot. **Settled by IR-1112:** the reference bundle boots this build, so the cause is the other bundle. Whether the cause is the user-named bundle or the build cannot be separated without one more boot: the reference bundle `odm4` with this build, without `--window`. That boot needs the maintainer's approval, because the allowance was for this diagnosis only.
+
+## IR-1112: The reference bundle boots this build without the EGLConfig abort, so the other bundle is the cause of IR-1111
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023, #099, #016 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (status); IR-1111 |
+
+**Choice.** The rule for this boot decides it: the reference bundle `/tmp/apkrun-odmc/odm4/bundle/android-bundle` boots with this build, without `--window`, and SurfaceFlinger prints the Mesa vendor and version. The failure is therefore the other bundle (`/tmp/apkrun-022-sepol-work/bundle/android-bundle`), which is the cause of IR-1111. The build does not cause the EGLConfig abort.
+
+Guest logcat, `logcat-20261011T202507Z.log` in `/tmp/apkrun-023/home4` (removed; the lines are copied to the evidence folder), from `/tmp/apkrun-023/bin/apkrun` built from the code of `0c9785e` (the commits between `7b9ee61` and `0c9785e` change only documentation):
+
+```
+10-11 20:25:04.574   445   460 I keystore2: ... monitoring for sys.boot_completed=1
+10-11 20:25:07.132   703   703 D SurfaceFlinger: Threaded RenderEngine with SkiaGL Backend (Ganesh)
+10-11 20:25:07.174   703   748 I SurfaceFlinger: vendor    : Mesa
+10-11 20:25:07.174   703   748 I SurfaceFlinger: version   : OpenGL ES 3.0 Mesa 26.1.8
+```
+
+Counts in the same log: `no suitable EGLConfig found` 0, `F SurfaceFlinger` 0, `Using HWComposer service` 1. The boot reached `state: ready`. SIGINT stopped it (`state: stopping`, then `state: stopped`), so SIGKILL was not needed.
+
+**Caveat.** This boot did not use `--window`, so the presenter was not attached. The windowed path on the working bundle is not yet booted. That is the next check, and it needs the maintainer's approval, because the approved boots are used.
+
+**Reason.** The coordinator set the rule before the boot: if the reference bundle prints the Mesa vendor and version with this build, the failure is the other bundle. The result matches, and no EGLConfig error appears in either boot of the build without the window.
+
+**Verification.** `/tmp/apkrun-023/evidence/boot4-sf-lines.txt` and `boot4.err`.

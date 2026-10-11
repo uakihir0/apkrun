@@ -14174,3 +14174,86 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Verification.** The vendored avbtool's algorithms were read from the file. The boot itself has not run.
 
+## IR-660: The drmVirgl boot fails in libEGL because the test bundle has no Mesa EGL driver, not in the host renderer
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #099 (the image that carries the Mesa libraries) |
+| Affected documents | [M02](issues/M02-graphics.md) #022 Notes and #099; [graphics.md](../02-design/graphics.md) §9 (the drmVirgl bootconfig) |
+
+**Choice.** The cause of the failed drmVirgl boot on the test bundle is the image. The stock build 16373615 has no Mesa EGL or GLES library, and the drmVirgl bootconfig (`ro.hardware.egl=mesa`) names one. SurfaceFlinger's RenderEngine calls `eglGetDisplay` first, libEGL cannot load a `mesa` driver, and the process aborts with SIGABRT. The owner is #099.
+
+**Reason.** The guest logcat has `D libEGL : Failed to load drivers from property ro.hardware.egl with value mesa` and then `F libEGL : couldn't find an OpenGL ES implementation`. The backtrace runs through `libEGL.so` (`android::Loader::open`) into `eglGetDisplay`, and the guest has no `libEGL_mesa.so`, `libGLESv2_mesa.so`, `libGLESv1_CM_mesa.so`, or `/vendor/lib64/dri/`. The same bundle with `--gpu swiftshader` reaches `sys.boot_completed=1` with no abort (IR-664), so neither the boot plan nor the host is the cause. The guest's virtio-gpu driver initializes with `+virgl` and cap sets 1 and 2, and its logcat has no virtio-gpu error. The abort happens before any GL call, so the host renderer was not exercised.
+
+**Consequence.** The drmVirgl boot check (step 4) stays open. The result does not show a host renderer failure.
+
+## IR-661: The drmVirgl boot is not made to pass in #022, because the Mesa libraries belong to the #099 image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #099 (step 2 and the corrected image) |
+| Affected documents | [M02](issues/M02-graphics.md) #022 and #099; [android-image.md](../02-design/android-image.md) §3 and §8 (image identity); [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** Stop at the diagnosis. Do not copy Mesa libraries into the test bundle, do not change the drmVirgl bootconfig, and do not change the EGL property in the harness.
+
+**Reason.** The four Mesa libraries exist only in the output of the #099 vendor injection (`vendor_inject.py`, the partition under `/tmp/apkrun-099-inject-out-final3/`). That partition is unsigned, its top-level vbmeta still holds the stock vendor root digest (IR-625), and the super image and manifest must be rebuilt to carry it (IR-626). That is the corrected-image work of #099. A change to the harness or the boot plan cannot supply the libraries, so there is no small, clear fix inside #022.
+
+**Consequence.** Step 4 of #022 waits for the #099 image. The evidence is in the #022 Notes.
+
+## IR-662: The drmVirgl stall is reported as `bootStalled` at `systemServer`, and the message hides the SurfaceFlinger abort loop
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #012 (BootPhaseDetector, the stall rule); #022 (step 4, where it showed) |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) (`runtime.bootStalled`); [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 and §3.3; [AGENTS.md](../../AGENTS.md) §8 |
+
+**Choice.** Record a diagnostic gap, and do not change the supervisor in this task. Decision needed: should the supervisor report a native process that exits before boot completes (init's `process with updatable components 'surfaceflinger' exited 4 times before boot completed`) as a graphics failure, with its own error code and a remediation, instead of waiting for the stall rule?
+
+**Reason.** AGENTS §8 requires that a user can tell a graphics failure from an Android boot failure without reading source code. `Android stopped making progress while starting (systemServer)` does not do that. The cause is in the guest logcat and the init log, but the supervisor's failure names neither. The stall rule waits 600 s on a first boot, and the abort repeated 123 times in that wait.
+
+**Consequence.** The maintainer chooses the owner and any new error code. A new code needs its entry in [error-catalog.md](../03-reference/error-catalog.md) with a remediation.
+
+## IR-663: The reproduction builds the Guest Agent outside the repository and points the boot at it with `APKRUN_GUEST_DIR`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4 check) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) (the dev boot prerequisites); [cli.md](../02-design/cli.md) §5 (`dev boot`) |
+
+**Choice.** Build the Guest Agent with `scripts/build-guest.sh --out /tmp/apkrun-022-sf-guest`, and pass `APKRUN_GUEST_DIR=/tmp/apkrun-022-sf-guest`. Commit no APK.
+
+**Reason.** `apkrun dev boot` loads the bundle in `DevBoot.swift` before the supervisor starts. Without `apkrun-guest.apk` and its record, the command stops with `runtime.guestAgentBundleMissing` before any VM starts. No built agent exists in the repository or under `/tmp` on this machine, so the build was needed.
+
+**Consequence.** A fresh worktree cannot run `apkrun dev boot` until the agent is built. The maintainer decides whether environment-setup.md says so.
+
+## IR-664: The EGL driver is isolated with a guestSwiftshader boot on the same bundle, not with a boot of the injected vendor partition
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (steps 4 and 5) |
+| Affected documents | [M02](issues/M02-graphics.md) #022 Notes; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** Run one control boot: the same bundle, host, and instance, with `--gpu swiftshader`. Do not boot the #099 injected partition for this check.
+
+**Reason.** The control changes only the GPU profile. It reaches `sys.boot_completed=1` with no abort, and its GLES renderer is ANGLE on SwiftShader, so the EGL driver is what differs. A boot with the injected partition would need a rebuilt super image and a signed vbmeta (IR-625, IR-626), which is #099's work.
+
+**Consequence.** The control shows that the Mesa libraries are the difference. It does not show that a Mesa-enabled image boots, because no such image exists yet. #099 must run that check.
+
+## IR-665: A drmVirgl boot on a bundle without the Mesa EGL driver should fail before the VM starts, with a typed error
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #099 |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) (the `runtime.gpuProfileUnavailable` text, IR-587); [android-image.md](../02-design/android-image.md) §3 (manifest access); [AGENTS.md](../../AGENTS.md) §6.3 |
+
+**Choice.** A proposal, not implemented. Decision needed: `apkrun dev boot --gpu virgl` should check the bundle before the VM starts, and refuse a bundle that lacks the Mesa EGL library with a typed error and a remediation (install a Mesa-enabled image, #099).
+
+**Reason.** The current run spends about 10 minutes to report a stall, and names no cause. The check would fail in seconds. The manifest does not index the files of a partition (IR-634), so the check needs an inventory change first. It must not read file names outside `AndroidImageManifest` (AGENTS §6.3).
+
+**Consequence.** The maintainer decides whether the check belongs in #022 or in #099, and whether the inventory must list the Mesa libraries first.

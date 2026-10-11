@@ -16364,3 +16364,17 @@ Round 2 (after the third boot): a second reviewer found eight items, and each is
 **Reason.** Each of these belongs to a later task (#067, #068) or is outside the one risk of #023. The names keep the module boundaries: RuntimeHost does not import GraphicsCore.
 
 **Verification.** T0 `LayerFrameGate` tests; the module-dependency check passes (`scripts/tools/check-module-deps.swift`, run with the main checkout's pinned XcodeGen).
+
+## IR-1110: Review of the #023 branch: five confirmed defects, fixed
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.2 (present path); [display-and-windowing.md](../02-design/display-and-windowing.md) §5.2 |
+
+**Choice.** One reviewer read the branch diff against `e09291b`, read-only. It confirmed five defects, and each one is fixed in `17731be`: (1, medium) a render-thread submit ran after the presenter's lock was released, so a close could destroy a target that a queued blit still used; the submits now run under the lock. (2, low) a held frame survived a rebind or an unref of its scanout; the session now discards it on SET_SCANOUT and on unref. (3, low) a request that started directly left a stale held request, which would run after the newest frame; the scheduler now supersedes it and counts it as dropped, with a T0 test. (4, low) the bridge's target destroy leaked the Metal texture and the EGL image when the root context was unavailable; they are released without GL calls. (5, low) a boot that failed after the attach never closed the presenter; finishing the development display now closes it. Items the reviewer could not verify were checked: the pinned virglrenderer header has `width`, `height`, and `tex_id` in the base info, and the device's presenter list is read on the device queue only.
+
+**Reason.** Each finding was verified against the code before the fix. The fixes keep the normal path's counters at zero and do not add a readback. The T0 suite is 175 passing, and the T1 test still passes.
+
+**Verification.** `swift test --filter GraphicsCoreTests` (175 passed), `--filter WindowingCoreTests` (10 passed), `--filter RuntimeCoreTests` (145 passed, after the fix), `swift build --build-tests` (exit 0 after the fix).

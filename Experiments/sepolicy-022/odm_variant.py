@@ -365,6 +365,11 @@ def overlay_members() -> list[ef.TarMember]:
     ]
 
 
+def variant_record_path(bundle: Path) -> Path:
+    """The record that build_variant writes next to the bundle (bundle_variant.py, RECORD_SUFFIX)."""
+    return bundle.with_name(bundle.name + bv.RECORD_SUFFIX)
+
+
 def set_command_line(bundle: Path) -> None:
     """Append the test token to boot/cmdline.txt and refresh the manifest, the checksums, and the signature."""
     key = _load_signing_key(KEY)
@@ -515,9 +520,18 @@ def build(args: argparse.Namespace) -> None:
         sign_key=KEY,
         refresh=refresh,
     )
-    print(f"bundle written: {out}")
-    print(f"variant manifest sha256 {result['variantManifestSHA256']}")
     set_command_line(out)
+    # build_variant wrote its record from the manifest before the command line changed. The record
+    # is a hard link to a staging file, so it is replaced, and its manifest hash is the one computed
+    # from the final manifest (not typed).
+    record_path = variant_record_path(out)
+    record = json.loads(record_path.read_text())
+    final_sha = sha256(out / "manifest.json")
+    record["variantManifestSHA256"] = final_sha
+    record_path.unlink()
+    record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    print(f"bundle written: {out}")
+    print(f"variant manifest sha256 {final_sha} (build_variant's first value {result['variantManifestSHA256']})")
     print("build: ok")
 
 
@@ -603,6 +617,10 @@ def check(args: argparse.Namespace) -> None:
          "the SHA256SUMS does not match the manifest")
     need(CMDLINE_TOKEN in (out / CMDLINE_PATH).read_text(encoding="ascii").split(),
          "the variant command line lacks the test token")
+    record = json.loads(variant_record_path(out).read_text())
+    need(record.get("variantManifestSHA256") == sha256(out / "manifest.json"),
+         "the variant record does not hash the final manifest")
+    print("variant record hashes the final manifest")
     print(f"manifest.sig verified; {CMDLINE_PATH}: {(out / CMDLINE_PATH).read_text(encoding='ascii').strip()}")
     print("check: ok")
 

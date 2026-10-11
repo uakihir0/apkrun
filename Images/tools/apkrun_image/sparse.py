@@ -579,3 +579,209 @@ def read_ranges(stream: BinaryIO, ranges: Sequence[tuple[int, int]]) -> list[byt
             output[segment_index][relative_offset : relative_offset + requested_size]
         )
     return result
+
+
+@dataclass(frozen=True)
+class RangeReplacement:
+    """Replace `size` expanded bytes at `offset` with new data (#099, IR-680).
+
+    The new bytes are the `source_size` bytes of `source` that start at `source_offset`, followed by
+    zeros up to `size`. `source` may be None only when `source_size` is zero.
+    """
+
+    offset: int
+    size: int
+    source: BinaryIO | None = None
+    source_offset: int = 0
+    source_size: int = 0
+
+
+MAX_REPLACEMENT_RAW_BLOCKS = 256
+
+
+def _copy_at(stream: BinaryIO, offset: int, size: int, out: BinaryIO) -> None:
+    """Copy a payload range while the chunk walk keeps its own stream position."""
+    saved = stream.tell()
+    try:
+        stream.seek(offset)
+        remaining = size
+        while remaining:
+            piece = _read_exact(stream, min(COPY_SIZE, remaining), "rewritten raw chunk")
+            out.write(piece)
+            remaining -= len(piece)
+    finally:
+        stream.seek(saved)
+
+
+def _write_record_header(
+    out: BinaryIO, chunk_type: int, block_count: int, payload_size: int
+) -> None:
+    """Write one 12-byte chunk header for the standard chunk layout."""
+    out.write(struct.pack("<HHII", chunk_type, 0, block_count, CHUNK_HEADER_SIZE + payload_size))
+
+
+def _write_kept(
+    out: BinaryIO,
+    stream: BinaryIO,
+    chunk: SparseChunk,
+    block_size: int,
+    first: int,
+    last: int,
+) -> None:
+    """Write blocks [first, last) of an input chunk as a chunk of the same type.
+
+    The offsets are relative to the start of `chunk`.
+    """
+    count = last - first
+    if chunk.chunk_type == CHUNK_RAW:
+        _write_record_header(out, CHUNK_RAW, count, count * block_size)
+        _copy_at(stream, chunk.payload_offset + first * block_size, count * block_size, out)
+    elif chunk.chunk_type == CHUNK_FILL:
+        if chunk.fill_pattern is None:
+            raise SparseImageError("fill sparse chunk has no pattern")
+        _write_record_header(out, CHUNK_FILL, count, len(chunk.fill_pattern))
+        out.write(chunk.fill_pattern)
+    elif chunk.chunk_type == CHUNK_DONT_CARE:
+        _write_record_header(out, CHUNK_DONT_CARE, count, 0)
+    else:
+        raise SparseImageError(f"unsupported Android sparse chunk type 0x{chunk.chunk_type:04x}")
+
+
+def _replacement_blocks(replacement: RangeReplacement, block_size: int) -> Iterator[bytes]:
+    """Yield the blocks of a replacement: its source bytes, then zeros."""
+    remaining = replacement.source_size
+    source = replacement.source
+    if source is not None and remaining:
+        source.seek(replacement.source_offset)
+    for _ in range(replacement.size // block_size):
+        wanted = min(block_size, remaining)
+        if not wanted:
+            yield bytes(block_size)
+            continue
+        if source is None:
+            raise SparseImageError("replacement has source bytes but no source")
+        data = source.read(wanted)
+        if len(data) != wanted:
+            raise SparseImageError("replacement source is shorter than its declared size")
+        remaining -= wanted
+        yield data + bytes(block_size - wanted)
+
+
+def _write_replacement(out: BinaryIO, replacement: RangeReplacement, block_size: int) -> int:
+    """Encode a replacement's blocks: zero runs as DONT_CARE, the rest as RAW runs.
+
+    Return the number of chunks written.
+    """
+    zero_block = bytes(block_size)
+    chunks = 0
+    run_kind: int | None = None
+    run_blocks = 0
+    run_payload = bytearray()
+
+    def flush() -> int:
+        if run_kind is None:
+            return 0
+        if run_kind == CHUNK_RAW:
+            _write_record_header(out, CHUNK_RAW, run_blocks, len(run_payload))
+            out.write(run_payload)
+        else:
+            _write_record_header(out, CHUNK_DONT_CARE, run_blocks, 0)
+        return 1
+
+    for block in _replacement_blocks(replacement, block_size):
+        kind = CHUNK_DONT_CARE if block == zero_block else CHUNK_RAW
+        if kind != run_kind or (kind == CHUNK_RAW and run_blocks == MAX_REPLACEMENT_RAW_BLOCKS):
+            chunks += flush()
+            run_kind = kind
+            run_blocks = 0
+            run_payload = bytearray()
+        run_blocks += 1
+        if kind == CHUNK_RAW:
+            run_payload += block
+    return chunks + flush()
+
+
+def rewrite_ranges(
+    stream: BinaryIO, out: BinaryIO, replacements: Sequence[RangeReplacement]
+) -> int:
+    """Write a sparse copy of `stream` with each replacement range replaced (#099, IR-680).
+
+    Chunks that the replacements do not touch are written again from their parsed records, so an
+    empty `replacements` gives back the input bytes. A chunk cut by a replacement keeps its type on
+    both sides of the cut. `out` must be a new, empty, seekable stream. Return the chunk count.
+
+    Only the standard 28-byte file header and 12-byte chunk headers are accepted, and an image with
+    a whole-image checksum or CRC32 chunks is refused, because those values would have to be
+    recomputed.
+    """
+    header = read_header(stream)
+    if header.file_header_size != FILE_HEADER_SIZE or header.chunk_header_size != CHUNK_HEADER_SIZE:
+        raise SparseImageError("only the standard sparse header sizes can be rewritten")
+    if header.image_checksum:
+        raise SparseImageError("a sparse image with an image checksum cannot be rewritten")
+    block_size = header.block_size
+
+    spans: list[tuple[int, int, RangeReplacement]] = []
+    for replacement in sorted(replacements, key=lambda item: item.offset):
+        if replacement.offset < 0 or replacement.size <= 0:
+            raise SparseImageError("replacement range must start at 0 or later and have a size")
+        if not 0 <= replacement.source_size <= replacement.size:
+            raise SparseImageError("replacement source size exceeds the replacement size")
+        if replacement.source_size and replacement.source is None:
+            raise SparseImageError("replacement has source bytes but no source")
+        if replacement.offset % block_size or replacement.size % block_size:
+            raise SparseImageError("replacement range is not aligned to the sparse block size")
+        if replacement.offset + replacement.size > header.logical_size:
+            raise SparseImageError("replacement range extends past the expanded image")
+        first = replacement.offset // block_size
+        last = first + replacement.size // block_size
+        if spans and first < spans[-1][1]:
+            raise SparseImageError("replacement ranges overlap")
+        spans.append((first, last, replacement))
+
+    out.seek(0)
+    out.write(bytes(FILE_HEADER_SIZE))
+    chunk_count = 0
+    cursor = 0
+    index = 0
+    for chunk in iter_chunks(stream, header):
+        if chunk.chunk_type == CHUNK_CRC32:
+            raise SparseImageError("a sparse image with CRC32 chunks cannot be rewritten")
+        if chunk.block_count == 0:
+            raise SparseImageError("a sparse chunk with no blocks cannot be rewritten")
+        first_block = chunk.logical_offset // block_size
+        end_block = first_block + chunk.block_count
+        if end_block <= cursor:
+            continue
+        cursor = max(cursor, first_block)
+        while cursor < end_block:
+            if index < len(spans) and spans[index][0] < cursor:
+                raise SparseImageError("replacement ranges overlap")
+            if index < len(spans) and spans[index][0] == cursor:
+                chunk_count += _write_replacement(out, spans[index][2], block_size)
+                cursor = spans[index][1]
+                index += 1
+                continue
+            stop = end_block if index == len(spans) else min(end_block, spans[index][0])
+            _write_kept(out, stream, chunk, block_size, cursor - first_block, stop - first_block)
+            chunk_count += 1
+            cursor = stop
+
+    if cursor != header.total_blocks:
+        raise SparseImageError("sparse chunks do not cover the declared output size")
+    out.seek(0)
+    out.write(
+        struct.pack(
+            "<I4H4I",
+            SPARSE_MAGIC,
+            header.major_version,
+            header.minor_version,
+            FILE_HEADER_SIZE,
+            CHUNK_HEADER_SIZE,
+            block_size,
+            header.total_blocks,
+            chunk_count,
+            0,
+        )
+    )
+    return chunk_count

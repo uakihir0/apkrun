@@ -17,6 +17,7 @@ from apkrun_image.sparse import (
     CHUNK_FILL,
     CHUNK_RAW,
     SPARSE_MAGIC,
+    RangeReplacement,
     SparseImageError,
     _update_repeated,
     expand_into,
@@ -24,6 +25,7 @@ from apkrun_image.sparse import (
     read_header,
     read_range,
     read_ranges,
+    rewrite_ranges,
     validate,
 )
 
@@ -299,3 +301,181 @@ def test_zero_blocks_stay_holes_and_the_bytes_read_back(tmp_path: Path) -> None:
     assert data[start : start + 4096] == b"\x05" * 4096
     assert data[start + 4096 : start + len(payload)] == bytes(8 * megabyte)
     assert data[start + len(payload) :] == bytes(size - start - len(payload))
+
+
+BLOCK = 4
+
+
+def block_sparse(*chunks: tuple[int, int, bytes | None]) -> tuple[bytes, bytes]:
+    """Build a sparse image of 4-byte blocks from (type, block count, payload) and its expansion."""
+    records = []
+    expanded = bytearray()
+    for chunk_type, count, payload in chunks:
+        if chunk_type == CHUNK_RAW:
+            assert payload is not None and len(payload) == count * BLOCK
+            records.append(struct.pack("<HHII", chunk_type, 0, count, 12 + len(payload)) + payload)
+            expanded += payload
+        elif chunk_type == CHUNK_FILL:
+            assert payload is not None and len(payload) == 4
+            records.append(struct.pack("<HHII", chunk_type, 0, count, 16) + payload)
+            expanded += payload * count
+        else:
+            records.append(struct.pack("<HHII", CHUNK_DONT_CARE, 0, count, 12))
+            expanded += bytes(count * BLOCK)
+    header = struct.pack(
+        "<I4H4I", SPARSE_MAGIC, 1, 0, 28, 12, BLOCK, len(expanded) // BLOCK, len(records), 0
+    )
+    return header + b"".join(records), bytes(expanded)
+
+
+def rewritten(raw: bytes, replacements: list) -> bytes:
+    """Rewrite a sparse image and return the output bytes."""
+    out = io.BytesIO()
+    rewrite_ranges(io.BytesIO(raw), out, replacements)
+    return out.getvalue()
+
+
+def expanded_of(raw: bytes) -> bytes:
+    """Return the expanded bytes of a sparse image."""
+    stream = io.BytesIO(raw)
+    return read_range(stream, 0, read_header(stream).logical_size)
+
+
+def test_rewrite_without_replacements_gives_back_the_input_bytes() -> None:
+    """Each chunk is written from its parsed record, so an unchanged image is identical."""
+    raw, expanded = block_sparse(
+        (CHUNK_RAW, 2, b"A" * 8),
+        (CHUNK_FILL, 3, b"efgh"),
+        (CHUNK_DONT_CARE, 2, None),
+        (CHUNK_RAW, 1, b"zzzz"),
+    )
+    out = io.BytesIO()
+    chunks = rewrite_ranges(io.BytesIO(raw), out, [])
+    assert out.getvalue() == raw
+    assert chunks == 4
+    assert expanded_of(raw) == expanded
+
+
+def test_replacement_splits_chunks_on_both_sides_and_keeps_their_types() -> None:
+    """A range that starts inside a FILL chunk and ends inside a RAW chunk cuts both of them."""
+    raw, expanded = block_sparse(
+        (CHUNK_FILL, 4, b"efgh"),
+        (CHUNK_RAW, 3, b"1111" + b"2222" + b"3333"),
+        (CHUNK_DONT_CARE, 2, None),
+    )
+    new = b"NEWN" * 4
+    replacement = RangeReplacement(
+        offset=2 * BLOCK,
+        size=4 * BLOCK,
+        source=io.BytesIO(new),
+        source_offset=0,
+        source_size=len(new),
+    )
+    result = rewritten(raw, [replacement])
+    assert expanded_of(result) == expanded[: 2 * BLOCK] + new + expanded[6 * BLOCK :]
+    chunks = list(iter_chunks(io.BytesIO(result)))
+    assert chunks[0].chunk_type == CHUNK_FILL, "the FILL piece before the cut keeps its type"
+    assert chunks[0].block_count == 2
+    assert chunks[0].fill_pattern == b"efgh"
+    assert chunks[-2].chunk_type == CHUNK_RAW, "the RAW piece after the cut keeps its type"
+    assert chunks[-2].block_count == 1
+    assert chunks[-1].chunk_type == CHUNK_DONT_CARE
+
+
+def test_replacement_encodes_zero_blocks_as_dont_care_and_splits_long_raw_runs() -> None:
+    """Zero blocks become DONT_CARE; a run of non-zero blocks is cut into RAW runs of 256 blocks."""
+    raw, _expanded = block_sparse((CHUNK_DONT_CARE, 602, None))
+    data = bytes(BLOCK) + b"".join(bytes([1 + index % 200]) * BLOCK for index in range(600))
+    data += bytes(BLOCK)
+    replacement = RangeReplacement(
+        offset=0,
+        size=len(data),
+        source=io.BytesIO(data),
+        source_offset=0,
+        source_size=len(data),
+    )
+    out = io.BytesIO()
+    chunk_count = rewrite_ranges(io.BytesIO(raw), out, [replacement])
+    assert expanded_of(out.getvalue()) == data
+    chunks = list(iter_chunks(io.BytesIO(out.getvalue())))
+    assert chunk_count == len(chunks) == 5
+    assert [(chunk.chunk_type, chunk.block_count) for chunk in chunks] == [
+        (CHUNK_DONT_CARE, 1),
+        (CHUNK_RAW, 256),
+        (CHUNK_RAW, 256),
+        (CHUNK_RAW, 88),
+        (CHUNK_DONT_CARE, 1),
+    ]
+
+
+def test_short_replacement_source_is_padded_with_zeros() -> None:
+    """Bytes past the source are zero, including the rest of a partial last block."""
+    raw, expanded = block_sparse((CHUNK_FILL, 3, b"abcd"))
+    replacement = RangeReplacement(
+        offset=BLOCK,
+        size=2 * BLOCK,
+        source=io.BytesIO(b"xyz"),
+        source_offset=0,
+        source_size=3,
+    )
+    result = rewritten(raw, [replacement])
+    assert (
+        expanded_of(result)
+        == expanded[:BLOCK] + b"xyz" + bytes(2 * BLOCK - 3) + expanded[3 * BLOCK :]
+    )
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        (RangeReplacement(offset=1, size=BLOCK), "not aligned"),
+        (RangeReplacement(offset=0, size=3), "not aligned"),
+        (RangeReplacement(offset=0, size=0), "must start at 0 or later"),
+        (RangeReplacement(offset=3 * BLOCK, size=2 * BLOCK), "past the expanded image"),
+        (
+            RangeReplacement(
+                offset=0, size=BLOCK, source=io.BytesIO(b"x" * 5), source_size=BLOCK + 1
+            ),
+            "exceeds the replacement size",
+        ),
+        (RangeReplacement(offset=0, size=BLOCK, source=None, source_size=1), "no source"),
+    ],
+)
+def test_invalid_replacements_are_refused(replacement: RangeReplacement, message: str) -> None:
+    """Ranges that are misaligned, empty, outside the image, or without their source are refused."""
+    raw, _expanded = block_sparse((CHUNK_FILL, 3, b"abcd"))
+    with pytest.raises(SparseImageError, match=message):
+        rewritten(raw, [replacement])
+
+
+def test_overlapping_replacements_are_refused() -> None:
+    """Two ranges that share a block cannot both be written."""
+    raw, _expanded = block_sparse((CHUNK_FILL, 3, b"abcd"))
+    first = RangeReplacement(offset=0, size=2 * BLOCK)
+    second = RangeReplacement(offset=BLOCK, size=BLOCK)
+    with pytest.raises(SparseImageError, match="overlap"):
+        rewritten(raw, [first, second])
+
+
+def test_images_with_checksums_or_crc_chunks_are_refused() -> None:
+    """A whole-image checksum or a CRC32 chunk would be stale after a rewrite, so both refuse."""
+    raw, _expanded = sparse_fixture()
+    with pytest.raises(SparseImageError, match="image checksum"):
+        rewritten(raw, [])
+    fill_then_crc = (
+        struct.pack("<I4H4I", SPARSE_MAGIC, 1, 0, 28, 12, 4, 1, 2, 0)
+        + struct.pack("<HHII", CHUNK_FILL, 0, 1, 16)
+        + b"abcd"
+        + struct.pack("<HHII", CHUNK_CRC32, 0, 0, 16)
+        + struct.pack("<I", zlib.crc32(b"abcd"))
+    )
+    with pytest.raises(SparseImageError, match="CRC32"):
+        rewritten(fill_then_crc, [])
+
+
+def test_nonstandard_header_sizes_are_refused() -> None:
+    """Only the standard 28-byte file header and 12-byte chunk headers are rewritten."""
+    raw, _expanded = block_sparse((CHUNK_FILL, 1, b"abcd"))
+    extended = raw[:8] + struct.pack("<H", 32) + raw[10:28] + bytes(4) + raw[28:]
+    with pytest.raises(SparseImageError, match="standard sparse header sizes"):
+        rewritten(extended, [])

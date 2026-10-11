@@ -15872,3 +15872,146 @@ The console has 264 denials in all. Of them, 182 are `RenderThread` denials from
 
 **Verification.** The boot evidence is in IR-949 to IR-959 and in the #022 notes. The apps still abort on the uevent read of their own domain (IR-954), so this tick covers the stack initialization and boot, not the apps. A maintainer should confirm that the overlay route satisfies these criteria, since the product image (#035) is not built.
 
+## IR-970: The DRM path is documented to card0; the render node is left out because no tracked file names it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.1 (DRM path); [M02-graphics.md](issues/M02-graphics.md) #022 criterion 2 |
+
+**Choice.** §9.1 names the virtio-gpu device (ID 16, bound by the `virtio_gpu` driver) and its node `/dev/dri/card0`. The stock capture's kernel log shows the driver and the node, and init waits for the node. §9.1 does not name a render node. The brief listed `renderD128` as part of the DRM path, but `git grep` finds no tracked file with that name, in the docs, the code, the tools, or the captures.
+
+**Reason.** The brief requires that §9 not describe anything that the repository does not verify. A render node may exist in the guest, but nothing in the repository shows it. A later capture or VM run can add it.
+
+## IR-971: The layout is the source of truth for the eight drmVirgl keys; the derivation file stays uncommitted
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.2; [IR-400](#ir-400-keep-the-unconfirmed-drm_virgl-values-and-leave-the-layer-2-criterion-open); `Images/tools/layouts/cuttlefish-phone-arm64.json` (`gpuProfiles.drmVirgl`) |
+
+**Choice.** §9.2 names `gpuProfiles.drmVirgl.bootconfig` in the committed layout as the source of the eight keys. It records the derivation file, `graphics-props-from-source.txt` (Cuttlefish `9bb9c72`, under the git-ignored `Images/work/16373615/`), as the origin of the values, and it does not commit that file.
+
+**Reason.** The reproducibility claim needs one committed source, and the bundle reads the layout. A committed copy of the derivation would be a second source that no code reads. Whether the derivation must be committed is IR-400's decision, and this entry does not decide it.
+
+## IR-972: The reproduction has two checks with different scopes, and criterion 2 counts both
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.2; [M02-graphics.md](issues/M02-graphics.md) #022 criterion 2 |
+
+**Choice.** The committed check is the T0 golden in `Images/tools/tests/test_bundle.py`, which builds the committed fixture bundle and runs in CI. The stock check is offline and uses the pinned archive (SHA-256 `051caf80…`). The archive is not in the repository, so its hashes are recorded in §9.2 and are not a CI check. Criterion 2 is ticked on both.
+
+**Reason.** The stock archive is about 1 GiB and is not committed, so a T0 test cannot compare the stock values. The fixture test catches changes to the layout, to the merge, and to the bundle path. The stock hashes show that the real inputs produce the documented bootconfig and that two builds agree.
+
+## IR-973: No command is added for the three-layer merge; the stock record used a one-off script
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.2; `Images/tools/apkrun_image/bootconfig.py` |
+
+**Choice.** The offline merge of the vendor, image, and GPU layers lives in the T0 test. §9.2 records the stock merge hash, but the script that produced it was a one-off in `/tmp`, and it is not committed. No new `apkrun_image` subcommand was added.
+
+**Reason.** A new subcommand would change the tool's interface, and it would need its own tests and documentation, which go beyond criterion 2. If the maintainer wants anyone to reproduce the stock hash without writing a script, that subcommand is the follow-up.
+
+## IR-974: Three statements of the brief do not match the repository
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.1 |
+
+**Choice.** §9.1 records what the repository shows, which differs from three statements of the brief. (a) The stock EGL is not minigbm. The stock `vendor_a` has `libEGL_emulation.so`, `libGLESv1_CM_emulation.so`, and `libGLESv2_emulation.so` in `/vendor/lib64/egl/`, and `system_a` has the ANGLE set (`guest-egl-diagnostic.txt` on `main`, and the #099 receipt for `system_a`). minigbm is the gralloc. (b) All four Mesa libraries are installed in `/vendor/lib64/egl/` (`MESA_TARGET_DIRECTORY` in `vendor_inject.py`). The build output stages them under `vendor/lib64/`, which is a staging path. (c) IR-836 is the `attach_iov` decision for guest backing. The host attach of the drmVirgl device is IR-580.
+
+**Reason.** The design document describes the repository, so it follows the records and not the brief. The maintainer should confirm that the brief's wording is not a decision that the repository should change.
+
+## IR-975: The #099 receipt is cited only as a cross-reference, because it is not on main
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.1 (gralloc, EGL); ADR-0018 (cites the receipt) |
+
+**Choice.** The gralloc library names in §9.1 come from `Images/reference/16373615/mesa-payload-receipt.txt` on branch `task/099-mesa-virgl-guest-image`, which is not on `main`. §9.1 says so. The EGL facts come from `guest-egl-diagnostic.txt`, which is on `main`.
+
+**Reason.** The branch of this task cannot depend on a file that is not in its tree. The receipt becomes a `main` record if #099 merges.
+
+## IR-976: The T0 golden's image layer is the fixture's, and the test sits in test_bundle.py
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | `Images/tools/tests/test_bundle.py`; `Images/tools/tests/fixtures/gpu-profiles/drm-virgl-bootconfig.txt`; [graphics.md](../02-design/graphics.md) §9.2 |
+
+**Choice.** The golden has 15 keys: one vendor key, six image keys (the slot suffix and the fixed AVB values), and the eight drmVirgl keys. The `_layout` helper of the bundle tests pins only the GPU profiles and the command line, so the image layer is not the full committed `bootconfig.image`. The test sits in `test_bundle.py` because it reuses that module's fixture helpers.
+
+**Reason.** Changing `_layout` to pin the full image layer would change the expectations of other bundle tests. The stock hashes cover the committed image layer, so the gap is recorded and not closed here.
+
+## IR-977: §9.1 names ranchu as the drmVirgl HWC, without checking the drm_hwcomposer APEX of the stock
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.1 (HWC) |
+
+**Choice.** §9.1 names `ranchu` (the composer APEX key of the drmVirgl profile) as the HWC. It records that the stock also ships `com.android.hardware.graphics.composer.drm_hwcomposer.apex`, and that how init treats that APEX was not checked.
+
+**Reason.** The layout's composer key selects ranchu. The repository does not show what the stock init does with the second APEX, and criterion 2 does not ask for it.
+
+## IR-978: The Linux test guest's Mesa is a separate build, and §9.1 says so
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.1 (Mesa); `ThirdParty/ThirdParty.lock.json` (`alpine-mesa*`, group `test-linux`) |
+
+**Choice.** §9.1 notes that the `alpine-mesa*` entries of group `test-linux` are Mesa for the Linux test guest. The Android guest's Mesa is the `mesa` entry of group `guest-mesa`.
+
+**Reason.** The lock holds two Mesa builds, and a reviewer could take one for the other. The criterion names only the Android guest's Mesa.
+
+## IR-979: The sentence that kept the drmVirgl criteria open is replaced with a pointer to the #022 notes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9 (the paragraph after the table); [M02-graphics.md](issues/M02-graphics.md) #022 Notes |
+
+**Choice.** The `Built in #022` paragraph at the end of §9 said that the drmVirgl criteria stay open until the VM check. It now points to the #022 notes for the drmVirgl boot results, and §9 restates none of them.
+
+**Reason.** The sentence was out of date after IR-961, and the VM facts belong in the #022 notes. The brief asks that the design section carry no VM result.
+
+## IR-980: Criterion 2 of #022 is ticked; the render node and the derivation of the eight values stay open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 criterion 2 and the Notes; [graphics.md](../02-design/graphics.md) §9.1 and §9.2; `Images/tools/tests/test_bundle.py` |
+
+**Choice.** Criterion 2 is ticked. §9.1 documents the five components with their sources, and §9.2 reproduces the drmVirgl bootconfig from the committed layout by the T0 test and by two offline stock builds. The render node (IR-970) and the derivation of the eight values (IR-971, IR-400) stay open. The criterion's wording names neither of them, but the brief names the render node, so IR-970 records that gap.
+
+**Reason.** The assignment set two conditions: (b) §9 is written with its sources, and (c) the reproduction is checked and passes. The T0 test passes, and it fails when a drmVirgl value of the layout changes (checked with a temporary edit that was then restored). The two stock builds agree with each other and with the test's merge. The change adds no traceability entry: no requirement, task, or section was added or renamed, and §9.1 and §9.2 are subsections of §9.
+
+## IR-981: The stock build read the untrusted archive with `python3 -I`, from a private copy
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §9.2 (the stock build command) |
+
+**Choice.** The stock build ran with `python3 -I` on a private copy of the archive and its `fetch.json`, in `/tmp/apkrun-022-doc-input`. Isolated mode ignores the current directory, so the package was imported through an explicit `sys.path` entry. The entry point is `apkrun_image.bundle.main`, which `python3 -m apkrun_image bundle` dispatches to. The verification scripts are in `/tmp/apkrun-022-doc-scripts`, not in the repository. The main checkout's `Images/work` was only read.
+
+**Reason.** The archive is a fetched artifact, which the working rules treat as untrusted input, so the isolated mode applies. The copy keeps the main checkout unchanged. The command in §9.2 is the documented module command, and both reach the same function.

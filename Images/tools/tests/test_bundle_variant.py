@@ -4,7 +4,7 @@ The stock bundle is built once for the module with `build_bundle`, from a copy o
 archive whose `super.img` is the synthetic super of test_lp_write.py. The fixture archive's own
 super carries a whole-image checksum, which the writer refuses (IR-665), and the stock super has
 none (IR-686). Every test writes only under its own `tmp_path`. The replacement is synthetic: the
-real vendor_a is checked by a gated test.
+real vendor_a is checked outside the suite (IR-706).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import io
 import json
 import shutil
 import zipfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -31,14 +31,25 @@ from test_bundle import (
 from test_lp_write import STOCK_LIKE, VENDOR_SIZE, make_super
 
 import apkrun_image.bundle as bundle_module
-from apkrun_image import lp
+from apkrun_image import bundle_variant, lp
 from apkrun_image.bundle import build_bundle
-from apkrun_image.bundle_variant import BundleVariantError, _read_inject_output, build_variant
+from apkrun_image.bundle_variant import (
+    BundleVariantError,
+    _read_inject_output,
+    build_variant,
+    main,
+)
 from apkrun_image.gpt import SECTOR_SIZE, read_gpt
 from apkrun_image.inventory import inventory
 from apkrun_image.lp_write import LpWriteError, replace_partition
 from apkrun_image.runtime_manifest import validate
-from apkrun_image.sign import decode_public_key, key_id_of, verify_signature
+from apkrun_image.sign import (
+    decode_public_key,
+    key_id_of,
+    load_private_key,
+    render_signature,
+    verify_signature,
+)
 
 VENDOR = "vendor_a"
 STOCK_SUPER = "stock-super.sparse"
@@ -294,15 +305,219 @@ def test_the_inject_record_must_name_the_replacement_it_wrote(tmp_path: Path) ->
     directory.mkdir()
     (directory / "vendor_a.img").write_bytes(replacement.read_bytes())
     record: dict[str, object] = {
+        "buildId": "16373615",
         "partition": {"name": VENDOR},
         "output": {"file": "vendor_a.img", "sha256": _sha256(b"other")},
     }
     (directory / "inject.json").write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(BundleVariantError, match="does not match the SHA-256"):
-        _read_inject_output(directory, VENDOR)
+        _read_inject_output(directory, VENDOR, "16373615")
 
     record["output"] = {"file": "vendor_a.img", "sha256": _sha256(replacement.read_bytes())}
     (directory / "inject.json").write_text(json.dumps(record), encoding="utf-8")
-    assert _read_inject_output(directory, VENDOR) == directory / "vendor_a.img"
+    assert _read_inject_output(directory, VENDOR, "16373615") == directory / "vendor_a.img"
     with pytest.raises(BundleVariantError, match="does not record the partition"):
-        _read_inject_output(directory, "system_a")
+        _read_inject_output(directory, "system_a", "16373615")
+    with pytest.raises(BundleVariantError, match="was made for build"):
+        _read_inject_output(directory, VENDOR, "99999999")
+
+
+def test_an_inject_record_whose_partition_is_not_an_object_is_refused(tmp_path: Path) -> None:
+    directory = tmp_path / "inject"
+    directory.mkdir()
+    record = {"buildId": "16373615", "partition": "vendor_a"}
+    (directory / "inject.json").write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(BundleVariantError, match="does not record the partition"):
+        _read_inject_output(directory, VENDOR, "16373615")
+
+
+def test_the_command_reports_a_bad_inject_record_and_exits_2(
+    tmp_path: Path, stock_bundle: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    directory = tmp_path / "inject"
+    directory.mkdir()
+    record = {"buildId": "16373615", "partition": {"name": "system_a"}}
+    (directory / "inject.json").write_text(json.dumps(record), encoding="utf-8")
+    exit_code = main(
+        [
+            "--bundle",
+            str(stock_bundle),
+            "--manifest",
+            str(FIXTURE_MANIFEST),
+            "--inject-output",
+            str(directory),
+            "--sign-key",
+            str(TEST_KEY),
+            "--out",
+            str(tmp_path / "variant"),
+        ]
+    )
+    assert exit_code == 2
+    assert "does not record the partition vendor_a" in capsys.readouterr().err
+    assert not (tmp_path / "variant").exists()
+
+
+def test_a_stock_bundle_whose_signature_does_not_verify_is_refused(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    damaged = tmp_path / "damaged"
+    shutil.copytree(stock_bundle, damaged)
+    # One space keeps the JSON valid and the files unchanged, so only the signature fails.
+    (damaged / "manifest.json").write_bytes((damaged / "manifest.json").read_bytes() + b" ")
+    with pytest.raises(BundleVariantError, match="does not verify"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+    assert not (tmp_path / "variant").exists()
+
+
+def test_an_extra_file_or_a_changed_checksum_list_in_the_stock_is_refused(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    damaged = tmp_path / "damaged"
+    shutil.copytree(stock_bundle, damaged)
+    (damaged / "extra.txt").write_text("extra", encoding="utf-8")
+    with pytest.raises(BundleVariantError, match="holds \\['extra.txt'\\]"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+    (damaged / "extra.txt").unlink()
+    (damaged / "SHA256SUMS").write_bytes(b"\xff\n")
+    with pytest.raises(BundleVariantError, match="is not ASCII"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+    (damaged / "SHA256SUMS").write_text("0" * 64 + "  boot/kernel\n", encoding="ascii")
+    with pytest.raises(BundleVariantError, match="SHA256SUMS does not match"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+
+
+def _stock_with_manifest_edit(
+    tmp_path: Path, stock_bundle: Path, edit: Callable[[dict[str, Any]], None]
+) -> Path:
+    """A copy of the stock whose manifest is edited and signed again with the test key.
+
+    The files and the checksum list are unchanged, so only the check that `edit` touches fails.
+    """
+    damaged = tmp_path / "damaged"
+    shutil.copytree(stock_bundle, damaged)
+    manifest = json.loads((damaged / "manifest.json").read_text(encoding="utf-8"))
+    edit(manifest)
+    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (damaged / "manifest.json").write_bytes(manifest_bytes)
+    (damaged / "manifest.sig").write_bytes(
+        render_signature(manifest_bytes, load_private_key(TEST_KEY))
+    )
+    return damaged
+
+
+def _super_partition(manifest: dict[str, Any]) -> dict[str, Any]:
+    return next(item for item in manifest["disks"][0]["partitions"] if item["label"] == "super")
+
+
+def test_a_super_hash_that_the_manifest_does_not_match_is_refused(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    def edit(manifest: dict[str, Any]) -> None:
+        _super_partition(manifest)["sha256"] = "0" * 64
+
+    damaged = _stock_with_manifest_edit(tmp_path, stock_bundle, edit)
+    with pytest.raises(BundleVariantError, match="differs from its manifest entry"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+
+
+def test_a_super_size_that_the_gpt_does_not_have_is_refused(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    def edit(manifest: dict[str, Any]) -> None:
+        # One MiB less keeps the schema and the partition order valid, so the GPT check is reached.
+        _super_partition(manifest)["size"] -= 1048576
+
+    damaged = _stock_with_manifest_edit(tmp_path, stock_bundle, edit)
+    with pytest.raises(BundleVariantError, match="differs from the manifest"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )
+
+
+def test_a_replacement_of_exactly_the_partition_size_reads_back_without_padding(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    replacement = _payload(tmp_path, size=VENDOR_SIZE)
+    _variant(stock_bundle, replacement, tmp_path / "variant")
+    _, region = _super_region(tmp_path / "variant")
+    target, _ = _vendor_extents(region)
+    assert target.size == VENDOR_SIZE
+    assert lp.read_partition_range(io.BytesIO(region), target, 0, target.size) == (
+        replacement.read_bytes()
+    )
+
+
+@pytest.mark.parametrize(
+    ("where", "message"),
+    [("outside", "differs from the stock bundle"), ("inside", "does not read back")],
+)
+def test_a_splice_that_changes_one_byte_is_refused_and_nothing_is_written(
+    tmp_path: Path,
+    stock_bundle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+    message: str,
+) -> None:
+    offset, region = _super_region(stock_bundle)
+    _, extents = _vendor_extents(region)
+    position = 0 if where == "outside" else offset + extents[0][0]
+    original = bundle_variant._splice
+
+    def corrupt(stock_disk: Path, sparse: Path, destination: Path, start: int, size: int) -> None:
+        original(stock_disk, sparse, destination, start, size)
+        with destination.open("r+b") as stream:
+            stream.seek(position)
+            byte = stream.read(1)
+            stream.seek(position)
+            stream.write(bytes([byte[0] ^ 0xFF]))
+
+    monkeypatch.setattr(bundle_variant, "_splice", corrupt)
+    with pytest.raises(BundleVariantError, match=message):
+        _variant(stock_bundle, _payload(tmp_path), tmp_path / "variant")
+    assert not (tmp_path / "variant").exists()
+    assert not (tmp_path / "variant.variant.json").exists()
+
+
+def test_a_symbolic_link_in_the_stock_bundle_is_refused_before_anything_is_read(
+    tmp_path: Path, stock_bundle: Path
+) -> None:
+    # The link points at a regular file, so a missing check would fail on the size, not hang.
+    damaged = tmp_path / "damaged"
+    shutil.copytree(stock_bundle, damaged)
+    (damaged / "templates/userdata.img").unlink()
+    (damaged / "templates/userdata.img").symlink_to(damaged / "boot/cmdline.txt")
+    with pytest.raises(BundleVariantError, match="not a regular file"):
+        _variant(
+            damaged,
+            _payload(tmp_path),
+            tmp_path / "variant",
+            stock_super=stock_bundle.parent / STOCK_SUPER,
+        )

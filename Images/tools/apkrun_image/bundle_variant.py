@@ -128,6 +128,14 @@ def _super_record(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str
 
 def _verify_stock(bundle: Path, public_key: bytes) -> tuple[bytes, dict[str, Any]]:
     """Check the stock bundle against its manifest, its checksums, and its signature."""
+    # Symbolic links are refused before anything is read, so a link cannot make the hashing
+    # read a device or leave the bundle.
+    for path in bundle.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise BundleVariantError(
+                f"the stock bundle holds {path.relative_to(bundle).as_posix()}, which is not a "
+                "regular file or directory"
+            )
     manifest_bytes = (bundle / MANIFEST_NAME).read_bytes()
     violations = load_and_validate(manifest_bytes)
     if violations:
@@ -149,7 +157,11 @@ def _verify_stock(bundle: Path, public_key: bytes) -> tuple[bytes, dict[str, Any
             f"the stock bundle holds {sorted(present - listed)} outside its manifest and lacks "
             f"{sorted(listed - present)}"
         )
-    if (bundle / CHECKSUMS_NAME).read_text(encoding="ascii") != _checksums(files):
+    try:
+        checksums = (bundle / CHECKSUMS_NAME).read_text(encoding="ascii")
+    except UnicodeDecodeError:
+        raise BundleVariantError("the stock bundle's SHA256SUMS is not ASCII") from None
+    if checksums != _checksums(files):
         raise BundleVariantError("the stock bundle's SHA256SUMS does not match its manifest")
     try:
         verify_signature(
@@ -290,15 +302,20 @@ def _verify_variant(
                     )
 
 
-def _read_inject_output(directory: Path, partition: str) -> Path:
-    """Return the replacement image that inject-vendor wrote, after its record checks it."""
+def _read_inject_output(directory: Path, partition: str, build_id: str) -> Path:
+    """Return the replacement that inject-vendor wrote for this build (its record is checked)."""
     record_path = directory / OUTPUT_RECORD
     try:
         record = json.loads(record_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise BundleVariantError(f"{record_path} is not an inject-vendor record: {error}") from None
-    if not isinstance(record, dict) or (record.get("partition") or {}).get("name") != partition:
+    partition_record = record.get("partition") if isinstance(record, dict) else None
+    if not isinstance(partition_record, dict) or partition_record.get("name") != partition:
         raise BundleVariantError(f"{record_path} does not record the partition {partition}")
+    if record.get("buildId") != build_id:
+        raise BundleVariantError(
+            f"{record_path} was made for build {record.get('buildId')}, not build {build_id}"
+        )
     output = record.get("output")
     name = output.get("file") if isinstance(output, dict) else None
     recorded = output.get("sha256") if isinstance(output, dict) else None
@@ -341,6 +358,11 @@ def build_variant(
     disk_path = str(disk["path"])
     stock_disk = stock_bundle / disk_path
     super_offset, super_size = _super_location(stock_disk, disk, record)
+    with stock_disk.open("rb") as stream:
+        if _hash_range(stream, super_offset, super_size) != record["sha256"]:
+            raise BundleVariantError(
+                f"the super partition of {stock_disk} differs from its manifest entry"
+            )
 
     with _staging(output) as stage:
         work = stage / "work"
@@ -423,8 +445,19 @@ def build_variant(
         (stage / RECORD_NAME).write_text(
             json.dumps(record_out, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        os.replace(bundle, output)
-        os.replace(stage / RECORD_NAME, record_path)
+        # The record is linked first, because a link fails on an existing name. The bundle is
+        # then renamed into place, and if that fails the record is removed again.
+        try:
+            os.link(stage / RECORD_NAME, record_path)
+        except FileExistsError:
+            raise BundleVariantError(f"{record_path}: the output already exists") from None
+        try:
+            if output.exists() or output.is_symlink():
+                raise BundleVariantError(f"{output}: the output already exists")
+            os.replace(bundle, output)
+        except BaseException:
+            record_path.unlink(missing_ok=True)
+            raise
     return record_out
 
 
@@ -466,7 +499,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         document = _load_json(arguments.manifest, description="manifest")
         if not isinstance(document, dict):
             raise BundleVariantError("manifest: top level must be an object.")
-        replacement = _read_inject_output(arguments.inject_output, arguments.partition)
+        source = document.get("source")
+        build_id = source.get("buildId") if isinstance(source, dict) else None
+        if not isinstance(build_id, str):
+            raise BundleVariantError("manifest source.buildId is missing.")
+        replacement = _read_inject_output(arguments.inject_output, arguments.partition, build_id)
         root = _resolve_archive_root(document, source=arguments.source)
         archives = _archive_paths(root, document["source"]["archives"])
         artifact = _role_artifact(document, "super")

@@ -300,7 +300,7 @@ extension VirGLRendererSuite {
 
         let recording = try VirGLRecording.decoded(from: try recorder.recording.encoded())
         let fresh = try VirGLRenderer(onFenceCompleted: { _ in })
-        #expect(replay(recording, onto: fresh).isEmpty)
+        #expect(replay(recording, onto: fresh).failures.isEmpty)
         var readBack = [UInt8](repeating: 0, count: 16 * 16 * 4)
         try fresh.transferRead(box(width: 16, height: 16), into: &readBack)
         #expect(readBack == pattern)
@@ -347,7 +347,7 @@ extension VirGLRendererSuite {
             let device = try VirtioGPUDevice.virgl()
             defer { device.deviceWillStop() }
             let recording = try VirGLRecording.decoded(from: Data(contentsOf: syntheticFixtureURL()))
-            #expect(device.replayRecordingForTest(recording).isEmpty)
+            #expect(device.replayRecordingForTest(recording).failures.isEmpty)
 
             let expected = expectedSyntheticScanout(from: recording)
             #expect(sha256Hex(Data(expected)) == syntheticScanoutSHA256)
@@ -384,10 +384,12 @@ extension VirGLRendererSuite {
 
             let device = try VirtioGPUDevice.virgl()
             defer { device.deviceWillStop() }
-            let failures = device.replayRecordingForTest(recording)
-            #expect(failures.map(\.index) == kmscubeReplayFailures)
+            let outcome = device.replayRecordingForTest(recording)
+            // Every operation runs, so a replay that stopped early fails here, even if its failures match.
+            #expect(outcome.attempted == recording.operations.count)
+            #expect(outcome.failures.map(\.index) == kmscubeReplayFailures)
             #expect(
-                failures.allSatisfy { failure in
+                outcome.failures.allSatisfy { failure in
                     if case .submit = recording.operations[failure.index] { return true }
                     return false
                 })

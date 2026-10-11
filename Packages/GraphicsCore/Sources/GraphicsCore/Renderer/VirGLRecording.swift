@@ -46,8 +46,10 @@ struct VirGLRecording: Codable, Equatable, Sendable {
 }
 
 /// A failure to read a recording.
-enum VirGLRecordingFailure: Error, Equatable, Sendable {
+public enum VirGLRecordingFailure: Error, Equatable, Sendable {
     case unsupportedVersion(Int)
+    /// The recording could not be encoded or written to the file at `path`.
+    case writeFailed(path: String)
 }
 
 /// Collects the operations of the renderer engine it wraps. The lock makes it safe to read from another thread.
@@ -67,8 +69,12 @@ public final class VirGLRecorder: @unchecked Sendable {
     }
 
     /// Writes the operations recorded so far to `url`, in the replay format of `VirGLRecording` (version 1).
-    public func writeRecording(to url: URL) throws {
-        try recording.encoded().write(to: url, options: .atomic)
+    public func writeRecording(to url: URL) throws(VirGLRecordingFailure) {
+        do {
+            try recording.encoded().write(to: url, options: .atomic)
+        } catch {
+            throw VirGLRecordingFailure.writeFailed(path: url.path)
+        }
     }
 
     func record(_ operation: VirGLOperation) {
@@ -161,15 +167,23 @@ final class RecordingVirGLEngine: VirGLEngine {
     }
 }
 
+/// The result of a replay: how many operations ran, and each failing one with its position in the recording.
+struct VirGLReplayOutcome {
+    /// The operations that the replay ran. It equals the recording's count when the replay reached the end.
+    let attempted: Int
+    /// The failing operations, in order.
+    let failures: [(index: Int, failure: GraphicsFailure)]
+}
+
 /// Replays a recording on `engine`, in order. Like the device, it goes on after a failing call: the device counts the
 /// failure and still answers the guest (IR-460), so a stream with rejected calls replays the same way (IR-811).
 ///
-/// It returns every failing call, with its position in the recording. An empty result means every call succeeded.
-func replay(
-    _ recording: VirGLRecording, onto engine: any VirGLEngine
-) -> [(index: Int, failure: GraphicsFailure)] {
+/// The failures are returned, not counted in the device's counters, so a replay leaves the renderer failure count alone.
+func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> VirGLReplayOutcome {
     var failures: [(index: Int, failure: GraphicsFailure)] = []
+    var attempted = 0
     for (index, operation) in recording.operations.enumerated() {
+        attempted += 1
         do throws(GraphicsFailure) {
             switch operation {
             case .createContext(let id, let name):
@@ -200,5 +214,5 @@ func replay(
             failures.append((index, error))
         }
     }
-    return failures
+    return VirGLReplayOutcome(attempted: attempted, failures: failures)
 }

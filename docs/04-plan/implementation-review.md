@@ -14856,11 +14856,11 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 | Task | #022 (step 3) |
 | Affected documents | [graphics.md](../02-design/graphics.md) §14 (T1); [M02-graphics.md](issues/M02-graphics.md) #022 step 3 |
 
-**Choice.** `replay(_:onto:)` no longer stops at the first failing call. It returns every failing call with its index, and an empty array when all calls succeed. `replayRecordingForTest(_:)` returns the same array. The synthetic and fresh-renderer tests check `isEmpty`. The T0 test `aReplayGoesOnPastAFailingCall` checks that a failed submit does not stop the destroy after it.
+**Choice.** `replay(_:onto:)` no longer stops at the first failing call. It returns a `VirGLReplayOutcome`: `attempted`, the number of operations that ran, and `failures`, every failing call with its index. `replayRecordingForTest(_:)` returns the same outcome. The replay does not count its failures in the device counters. The synthetic and fresh-renderer tests check `failures.isEmpty`. The `kmscube` test checks `attempted` against the recording's count, so a replay that stops early fails. The T0 test `aReplayGoesOnPastAFailingCall` checks that a failed submit does not stop the destroy after it.
 
 **Reason.** The device counts a renderer failure and still answers the guest (IR-460), so it runs the calls after a failure. Under the old contract, the `kmscube` replay would stop at index 16, the first rejected submit, and leave the other 132 calls unreplayed. Stopping there would also make the replay disagree with the device.
 
-**Consequence.** The helper's contract changes, and only the tests call it. A stream that has rejected calls now replays in full, and the caller decides what the failures mean. The `kmscube` test pins them (IR-813).
+**Consequence.** The helper's contract changes, and only the tests call it. A stream that has rejected calls now replays in full, and the caller decides what the failures mean. The `kmscube` test pins them (IR-813). The device's `rendererFailures` count is not driven by a replay, so a replay does not reproduce the count of the live run.
 
 ## IR-812: The kmscube recording is kept under /tmp, with its hash and command, and its replay test reads it from a variable
 
@@ -14882,7 +14882,7 @@ APKRUN_TEST_KMSCUBE_RECORDING=/tmp/apkrun-022-kms/kmscube-recording.json swift t
 
 The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkrun-test-linux`, built earlier and checked with `verify-test-host-directory.sh`.
 
-**Reason.** The file is over the 10 MiB limit, so the rule of the step keeps it under `/tmp`. The format stores each byte as a JSON number, which accounts for the size. Only one VM run was allowed, so the file was not produced a second time, and its bytes are not shown to be reproducible. The command is recorded so that a later run can be compared with it.
+**Reason.** The file is over the 10 MiB limit of the fixture rule ([test-strategy.md](test-strategy.md) §4.1). That rule's alternative for larger inputs is a runner cache with a pinned SHA-256, so the file stays under `/tmp`. The test host was built from commit `0cf122b`, the recorder seam. Later commits change the replay and the path check, not the recording. The format stores each byte as a JSON number, which accounts for the size. Only one VM run was allowed, so the file was not produced a second time, and its bytes are not shown to be reproducible. The command is recorded so that a later run can be compared with it.
 
 **Consequence.** A fresh checkout runs the replay test only after the file is produced again, and the test skips without it. The hash pins one run. A maintainer who wants the stream in the repository needs a smaller encoding, which is a format change, or a decision to accept the size.
 
@@ -14896,9 +14896,9 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Choice.** Record the finding and do not change code for it. Decision needed: whether criterion 5 (`kmscube` on the Linux test guest through virgl with `hostReadbacks = 0`) keeps its tick, and whether `VirglTests` should also assert that the renderer failure count is zero.
 
-**Reason.** On replay of the recording, the renderer rejects exactly 61 calls, at indices 16, 21, and 23 to 139 (odd). All 61 are `submit` calls in context 2, the kmscube context, and no other call fails. The live run logged 122 lines `renderer operation failed` (each failure is logged once by the renderer and once by the device), which is 61 failures, the same count as the submits (IR-605). The live log does not name the calls, so the identity of the live rejects is not shown. The bridge `gb_submit` returns `GB_E_SUBMIT_OPERATION` for any nonzero result of `virgl_renderer_submit_cmd` and drops that result, so the cause is not visible in the log. The guest still sees success: the device answers the guest and does not report renderer failures (IR-460). That is why the Linux check passes with `Rendered 59 frames` and `hostReadbacks = 0`.
+**Reason.** On replay of the recording, the renderer rejects exactly 61 calls, at indices 16, 21, and 23 to 139 (odd). All 61 are `submit` calls in context 2, the kmscube context, and no other call fails. The live run's log (`/tmp/apkrun-022-kms/vm-run1.log`) holds 122 lines `renderer operation failed`, two for each failure, so 61 failures, the same count as the submits. IR-605 reports the same two-line pattern for runs 4 and 6. The live log does not name the calls, so the identity of the live rejects is not shown. The bridge `gb_submit` returns `GB_E_SUBMIT_OPERATION` for any nonzero result of `virgl_renderer_submit_cmd` and drops that result, so the cause is not visible in the log. The guest still sees success: the device answers the guest and does not report renderer failures (IR-460). That is why the Linux check passes with `Rendered 59 frames`. Its `hostReadbacks = 0` assertion cannot fail in this code either (IR-816).
 
-**Consequence.** The `kmscube` pass proves the guest-side driver path, the device, and that the host read no pixels. It does not show that virglrenderer decoded or drew any of the submitted command streams. A follow-up needs to name the virglrenderer error for `submit` (for example by returning the status of `virgl_renderer_submit_cmd` from the bridge) and find why the context rejects the stream. The replay test pins the 61 rejects, so a fix shows up as a change, and the test does not claim rendering.
+**Consequence.** The `kmscube` pass proves the guest-side driver path and that the device answered the guest. It does not show that virglrenderer decoded or drew any of the submitted command streams, and its `hostReadbacks` assertion is not a measurement (IR-816). A follow-up needs to name the virglrenderer error for `submit` (for example by returning the status of `virgl_renderer_submit_cmd` from the bridge) and find why the context rejects the stream. The replay test pins the 61 rejects, so a fix shows up as a change, and the test does not claim rendering.
 
 ## IR-814: The step 3 check is met for the replay with zero readbacks, and the kmscube pixels are not compared
 
@@ -14908,7 +14908,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #022 (step 3) |
 | Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 step 3; [graphics.md](../02-design/graphics.md) §14 (T1), §16 |
 
-**Choice.** Step 3's check is updated to what was observed: the real `kmscube` stream replays through the device, the replay delivers all 149 calls, the renderer's 61 rejects are the pinned `submit` calls (IR-813), and `hostReadbacks` and `guestReadbacks` are 0. The step's pixel comparison, the hash of the scanout within tolerance, is not done for the `kmscube` stream. The synthetic fixture still covers the exact comparison.
+**Choice.** Step 3's check is updated to what was observed: the real `kmscube` stream replays through the device, the replay delivers all 149 calls, the renderer's 61 rejects are the pinned `submit` calls (IR-813), and `hostReadbacks` and `guestReadbacks` are 0, which cannot move on this path (IR-816). The step's pixel comparison, the hash of the scanout within tolerance, is not done for the `kmscube` stream. The synthetic fixture still covers the exact comparison.
 
 **Reason.** There is no reference image for the `kmscube` output, and the renderer draws nothing for the rejected submits, so a pixel hash would pin an output that the device did not make. Pinning the hash of an unverified image would be a false check.
 
@@ -14922,9 +14922,23 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #022 (step 2 and 3) |
 | Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4; [build-system.md](../05-development/build-system.md) §12.4 |
 
-**Choice.** `VirglTests` passed in one run (`Test Case '-[IntegrationTests.VirglTests testKmscubeRendersHeadlesslyThroughVirglWithoutHostReadbacks]' passed (1.257 seconds)` and `** TEST EXECUTE SUCCEEDED **`, in `/tmp/apkrun-022-kms/vm-run1.log`). The test prints neither the guest's `virgl` detail nor the value of `hostReadbacks`, so the lines `renderer=virgl ` and `requested=60 reported=59` and `hostReadbacks == 0` are shown only by the passing assertions. The run is a T2 check of the Linux guest, so it is not a boot result.
+**Choice.** `VirglTests` passed in one run (`Test Case '-[IntegrationTests.VirglTests testKmscubeRendersHeadlesslyThroughVirglWithoutHostReadbacks]' passed (1.257 seconds)` and `** TEST EXECUTE SUCCEEDED **`, in `/tmp/apkrun-022-kms/vm-run1.log`). The test prints neither the guest's `virgl` detail nor the value of `hostReadbacks`, so the lines `renderer=virgl ` and `requested=60 reported=59` and `hostReadbacks == 0` are shown only by the passing assertions. The `hostReadbacks == 0` assertion cannot fail in this code (IR-816). The run is a T2 check of the Linux guest, so it is not a boot result.
 
 **Reason.** The step allows one VM run, and the first run did not fail, so no second run was made to capture the detail. The assertions are the same ones that the step names, and they fail if any of the three strings or the count differs.
 
 **Consequence.** The record of step 2 and step 3 cites the assertions, not the guest lines. If the lines are needed in the output, the test would have to attach them, which is a change for a later run. The worktree needed two setup steps: a copy of the pinned XcodeGen under its own `build/tools` (the main checkout's copy was not written to), and `scripts/generate-project.sh`, which generates the ignored `APKRun.xcodeproj`.
+
+## IR-816: The host readback counter has no increment path, so its zero checks cannot fail
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (criterion 5, step 3) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §7 (counters), §14 (T1); [M02-graphics.md](issues/M02-graphics.md) #022 |
+
+**Choice.** Keep the `hostReadbacks == 0` and `guestReadbacks == 0` assertions of the T2 and T1 checks, and state in every record that they cannot fail in this code. Do not add an increment in #022. Decision needed: when `hostReadbacks` is wired, and what counts as a host readback there.
+
+**Reason.** `hostReadbacks` appears only as a declaration (`GraphicsCounters.swift:7`), and no code path increments it. A host-initiated readback does not exist on the normal path, so the counter cannot move. `guestReadbacks` moves only on the guest's `TRANSFER_FROM_HOST_3D` in the device path, and the replay does not go through that path, so its zero is not a measurement for the replay either. The design text of graphics.md §7 says that every path that could read back increments the counter, which this code does not do. That text predates this step.
+
+**Consequence.** A record that says the host read no pixels, or that the counters are zero, is not supported by these checks. The checks stay as guards, which will catch a readback only once an increment is wired.
 

@@ -451,7 +451,7 @@ private func transfer(
     #expect(decoded.operations.count == 6)
 
     let replayed = FakeVirGLEngine(onFence: { _ in })
-    #expect(replay(decoded, onto: replayed).isEmpty)
+    #expect(replay(decoded, onto: replayed).failures.isEmpty)
     let recordedCalls = ref.engine.calls.filter { call in
         switch call {
         case .capset, .poll: return false
@@ -474,9 +474,11 @@ private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
         gpuRequest(.submit3D, body: .submit3D(commandStream: [2, 0, 0, 0]), fence: 7, contextID: 1),
         gpuRequest(.ctxDestroy, body: .ctxDestroy, contextID: 1),
     ])
-    try await eventually { harness.engineRef.engine.calls.contains(.fence(7, context: 1)) }
-    harness.engineRef.engine.releaseFences()
-    try await eventually { control.completionCounts == [1, 1, 1, 1] }
+    // The fence is created on the render thread after its submit, so the release repeats until every response is done.
+    try await eventually {
+        harness.engineRef.engine.releaseFences()
+        return control.completionCounts == [1, 1, 1, 1]
+    }
     // Capsets and polls depend on timing, and they change no renderer state, so they are left out.
     let stateCalls = harness.engineRef.engine.calls.filter { call in
         switch call {
@@ -521,7 +523,7 @@ private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
     let decoded = try VirGLRecording.decoded(from: data)
     #expect(decoded == recorder.recording)
     let replayed = FakeVirGLEngine(onFence: { _ in })
-    #expect(replay(decoded, onto: replayed).isEmpty)
+    #expect(replay(decoded, onto: replayed).failures.isEmpty)
     #expect(replayed.calls == fake.calls)
 }
 
@@ -534,10 +536,11 @@ private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
     ])
     let fake = FakeVirGLEngine(onFence: { _ in })
     fake.fail("submit")
-    let failures = replay(recording, onto: fake)
+    let outcome = replay(recording, onto: fake)
 
     // Both submits fail, and the destroy after them still runs, as it does on the device (IR-460).
-    #expect(failures.map(\.index) == [1, 2])
+    #expect(outcome.attempted == 4)
+    #expect(outcome.failures.map(\.index) == [1, 2])
     #expect(
         fake.calls == [
             .createContext(1, "gl"),

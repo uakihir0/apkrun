@@ -14877,3 +14877,51 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The first `swift build -c debug --product apkrun` gave a CLI with no `dev` subcommand (`apkrun dev --help` lists only `version` and `logs`). The CLI was therefore rebuilt with `--traits EmbeddedRuntime`, as build-system.md gives for Debug, and signed with `CLI/apkrun/apkrun-dev.entitlements`. The guest APK came from `scripts/build-guest.sh --out /tmp/apkrun-022-perm-guest`, with `ANDROID_HOME` set to an APFS clone of the SDK at `/tmp/apkrun-022-perm-sdk`. The VirGL runtime is an APFS clone of the `ThirdParty/out/virgl-runtime` directory at `/tmp/apkrun-022-perm-virgl`, and its `libvirglrenderer.1.dylib` matches the source. The adb binary is the clone's `platform-tools/adb`. Nothing was written into the main checkout's `build/android-sdk` or `ThirdParty/out`.
 
 **Reason.** The `dev` commands are compiled only under `APKRUN_EMBEDDED_RUNTIME` (`CLI/apkrun/Dev/DevImage.swift`), so the first build could not run the install. The debug override that the boot reads, `APKRUN_VIRGL_RUNTIME_PATH` (`GraphicsBridge.m`), takes a runtime directory, and the clone supplies it without changing any file. The clones keep the SDK and runtime writes out of the main checkout.
+
+## IR-786: The resealed variant is built from the stock bundle and the reseal output, and its `vbmeta_a` carries the regenerated vendor root `a373fc52…`, not `d8895f6a…`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, redo); #099 (the verity step, IR-746) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4 |
+
+**Choice.** The variant is `/tmp/apkrun-022-resealed/variant/android-bundle`. It was made with `python3 -m apkrun_image bundle-variant` from the stock bundle `/tmp/apkrun-test-linux/android-bundle`, the image manifest `Images/manifests/16373615/android-image.json`, the archive under `Images/work/16373615/download` (read only), the inject output `/tmp/apkrun-099-inject-out-final3`, and the `vendor-reseal` output `/tmp/apkrun-022-resealed/reseal`. The stock inputs were checked first: the stock `vendor_a` (extracted from the archive's super) is `a3ff3fb1…`, as IR-741 records, and the stock `vbmeta_a` matches `/tmp/apkrun-099-avb/stock/vbmeta.img`. Before any boot, the gate passed: the vendored `avbtool info_image` on the reseal output and on the variant's `vbmeta_a` both give the `vendor` root digest `a373fc52…`, and `d8895f6a…` is not the vendor digest. The variant's `vbmeta_a` SHA-256 is `64c4ea5c…`, the same as the reseal output. The variant's `disks/os.img` is `2486e86f…`, and the replacement `vendor_a` is `2cc0857c…`, as in IR-746.
+
+**Reason.** The variant of IR-780 was written at 15:08, before commits 9f606b3 and ee43d27, so its `vbmeta_a` kept the stock descriptor. The regenerated descriptor is written only by `bundle-variant --reseal-output` (IR-746). Checking the descriptor offline costs no boot, and it rules out a second stale-descriptor failure before a boot is spent.
+
+## IR-787: The permissive flag is added to the resealed variant's `boot/cmdline.txt`, and its metadata is regenerated with the bundle module's functions, as an experiment-only change
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, redo); #035 (the product sepolicy rule that the flag stands in for) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §6.6 (no permissive workaround is set); [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** ` androidboot.selinux=permissive` is appended to `boot/cmdline.txt` of the variant of IR-786, which keeps the file without a final newline. The metadata is rendered by `bundle._checksums`, `sign.render_signature`, and `runtime_manifest.validate`, and `sign.verify_signature` accepts it under key ID `55ab0dd032d0ce0e`. Before the change, the same functions reproduced the variant's stored `manifest.json` and `SHA256SUMS` bytes exactly. The new hashes are: `boot/cmdline.txt` `9d9f34a7…` (203 bytes, was 172); `manifest.json` `cc004208…`; `SHA256SUMS` `f3c05ba8…`; `manifest.sig` `62919b2a…`. The record `android-bundle.variant.json` still names the pre-flag manifest `e9c51aab…`, which is the variant tool's output. The variant's disk is unchanged. An install of the flagged variant into a fresh scratch home passed the product's checks (`installed image 2026.10.0-cf16373615-arm64`, exit 0, no boot).
+
+**Reason.** IR-761 says the product fix is a sepolicy rule, and a boot flag that sets permissive mode turns enforcement off for every domain, so the flag stays a change of the test variant. IR-762 called the earlier permissive run diagnostic for the same reason. The metadata goes through the bundle module, as the task requires. The flag's effect on SELinux is not verified, because no boot of this variant has run.
+
+## IR-788: The permissive boot is not run, because the one-boot budget of this task was spent by the boot of IR-780 to IR-782, and a second boot needs the user's own approval
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, redo: boot, ready, adb checks, stop) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev boot`) |
+
+**Choice.** The coordinator asked for one more boot of the variant of IR-786. The task's rule is "You may start ONE VM boot in total", and the one boot was used in IR-780. No second boot was started. The coordinator's message does not give the user's approval for a second boot, so the boot waits for the user. The steps that need no VM ran: the variant (IR-786), the flag and the metadata (IR-787), and an install into a fresh scratch home, which was then removed with no boot. The ready wait, the adb checks (`sys.boot_completed`, the SurfaceFlinger renderer line, `ro.hardware.egl`, the Mesa libraries under `/vendor/lib64/egl`), and the SIGINT stop were not run.
+
+**Reason.** A boot is the only way to test the flag, and the budget that the user set is one boot. An agent message cannot lift a limit that the user set, so the decision belongs to the user. The variant and its hashes are ready, so a boot can run as soon as the user approves it, and it takes one run under the lock.
+
+## IR-789: No criterion of #022 is ticked, and the permissive run is recorded as not run, so it gives no evidence for criteria 1 to 3
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (acceptance criteria 1 to 3 in M02); #099 (the `eglInitialize` record) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) (the #022 acceptance criteria) |
+
+**Choice.** The acceptance criteria of #022 in [M02-graphics.md](../04-plan/issues/M02-graphics.md) are unchanged. Criterion 1 (`dumpsys SurfaceFlinger` names the virgl GLES renderer), criterion 2 (the documentation of §9 and a reproducible bootconfig), and criterion 3 (no SwiftShader or in-guest ANGLE library loaded) were not seen in a boot of the resealed variant, so they stay open. Criterion 4 (`guestSwiftshader`) and the kmscube item are unchanged. #099's `eglInitialize` is not recorded as observed. The permissive run is recorded only as the variant of IR-787, which has not been booted.
+
+**Reason.** A criterion is ticked only for evidence seen in the same boot, and no boot of the resealed variant has run (IR-788). Any later result of a permissive boot is an experiment, not a product result (IR-762), and it does not replace the sepolicy rule of IR-761.

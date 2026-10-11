@@ -14175,6 +14175,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Verification.** The vendored avbtool's algorithms were read from the file. The boot itself has not run.
 
 ## IR-660: The drmVirgl boot fails in libEGL because the test bundle has no Mesa EGL driver, not in the host renderer
+## IR-680: The writer keeps the super sparse and rewrites only the chunks that the replacement touches
 
 | Field | Value |
 |---|---|
@@ -14189,6 +14190,16 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The drmVirgl boot check (step 4) stays open. The result does not show a host renderer failure.
 
 ## IR-661: The drmVirgl boot is not made to pass in #022, because the Mesa libraries belong to the #099 image
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.3, §4.5, §4.6 |
+
+**Choice.** The replaced super is a sparse image in the form that the manifest records. `sparse.rewrite_ranges` writes every chunk outside the replaced range again from its parsed record, and it encodes the new data as chunks: zero blocks become DONT_CARE, and other blocks become RAW runs of at most 256 blocks. The writer does not expand the super. Decision needed: whether the super that the disk assembly reads (§4.5) stays sparse, as this entry assumes, or whether the rewrite should produce an expanded image instead.
+
+**Reason.** The manifest records `super.img` as a sparse artifact with its own size and SHA-256 (1,746,554,644 bytes, `Images/manifests/16373615/android-image.json`). The disk assembly already expands it (§4.3), so a sparse output keeps the same interface. Rewriting with no replacement reproduces the stock bytes exactly (278 chunks), so the chunk encoder is faithful on this image.
+
+**Consequence.** The output has its own size and SHA-256 (IR-685). No manifest records it, so the step that uses it must record it as a new artifact.
+
+## IR-681: The metadata is not rewritten, because the partition keeps its size, and the writer verifies every copy
 
 | Field | Value |
 |---|---|
@@ -14203,6 +14214,16 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** Step 4 of #022 waits for the #099 image. The evidence is in the #022 Notes.
 
 ## IR-662: The drmVirgl stall is reported as `bootStalled` at `systemServer`, and the message hides the SurfaceFlinger abort loop
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; the stock metadata of IR-686 |
+
+**Choice.** `replace_partition` keeps the metadata bytes, so no partition table, extent, or checksum changes, and it recomputes no checksum. Before the output is published, the writer compares the metadata region byte for byte with the input, and it parses every geometry copy and every metadata copy in use with the format's checksums (8 copies in the stock: two geometry and six metadata). This is the answer to the brief's "update the metadata checksums": nothing changes, so there is nothing to update, and every copy is verified. Decision needed: none for this size. If a later task shrinks a partition (IR-682), the tables and the header and tables checksums of every copy must be recomputed, and that change needs its own decision.
+
+**Reason.** The injected `vendor_a` is exactly the size of its extent (291,229,696 bytes, IR-626), so the partition size does not change, and no table field changes. The liblp format has no checksum over partition data: its checksums cover the geometry, the header, and the tables. Recomputing checksums of unchanged bytes would add risk without changing the result.
+
+**Consequence.** The backup copies stay exactly as the stock has them.
+
+## IR-682: A larger image is refused, and the writer does not grow a partition
 
 | Field | Value |
 |---|---|
@@ -14217,6 +14238,16 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The maintainer chooses the owner and any new error code. A new code needs its entry in [error-catalog.md](../03-reference/error-catalog.md) with a remediation.
 
 ## IR-663: The reproduction builds the Guest Agent outside the repository and points the boot at it with `APKRUN_GUEST_DIR`
+| Task | #099 (step 2, offline; blocks any injection that grows vendor_a) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.2 rule 4, §4.6 |
+
+**Choice.** An image larger than its partition fails with `PartitionTooLargeError`, a subclass of `LpWriteError` that records the image size and the partition size. Nothing is written. Decision needed: how a partition grows when its image is larger. The candidates are (a) a second extent in free space, (b) moving the partitions that follow, and (c) a larger super. Facts for the choice, from the stock table: `vendor_a` ends at sector 3,436,008, and the next extent (`vendor_dlkm_a`) starts at sector 3,436,544, so only 536 sectors (274,432 bytes) are free after `vendor_a`. The group `google_vendor_dynamic_partitions_a` allows 1,472,200,704 bytes, and its four partitions use 293,793,792 bytes.
+
+**Reason.** §4.2 rule 4 requires a partition's size to equal its image's size, and growth changes the table and the group accounting, which this writer does not change. The task says not to grow partitions.
+
+**Consequence.** The injected `vendor_a` fits the stock size (IR-626), so the writer accepts it. A larger EROFS image cannot be written into the super through this writer.
+
+## IR-683: The output is published by rename after the checks, and an existing output is refused
 
 | Field | Value |
 |---|---|
@@ -14231,6 +14262,16 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** A fresh worktree cannot run `apkrun dev boot` until the agent is built. The maintainer decides whether environment-setup.md says so.
 
 ## IR-664: The control is a guestSwiftshader boot on the same bundle, not a boot of the injected vendor partition
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** `replace_partition` writes `.<output name>.partial` beside the destination, runs the checks, and renames the file to the destination only after they pass. It removes the partial file on any failure. It refuses a destination that already exists, and it refuses the source file as the destination. Decision needed: none.
+
+**Reason.** The injection writes into new directories (IR-633), and a failed write must not leave a file that could be taken for a super. A rename after the checks means that a file at the destination has passed every check.
+
+**Consequence.** A partial file stays only if the process stops between the write and the rename, and the next call removes it.
+
+## IR-684: The writer refuses the inputs whose structure it cannot reproduce exactly
 
 | Field | Value |
 |---|---|
@@ -14245,6 +14286,16 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The control shows that this bundle boots without the Mesa driver. It does not show that a Mesa-enabled image boots, because no such image exists yet. #099 must run that check.
 
 ## IR-665: A drmVirgl boot on a bundle without the Mesa EGL driver should fail before the VM starts, with a typed error
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** These inputs are refused with typed errors and no output: a raw super that is not sparse; a sparse image with a whole-image checksum or with a CRC32 chunk, because the checksum would be stale; a sparse image with a non-standard file or chunk header size; a chunk with no blocks; a partition extent that is not linear on the super device, is not aligned to the sparse block (4,096 bytes), or overlaps the metadata region. Decision needed: whether a whole-image checksum should be recomputed. The stock has none, and the injection's inputs have none either.
+
+**Reason.** Each refusal avoids an output that the reader could accept while Android does not. The stock super has none of these properties, so no refusal affects the target.
+
+**Consequence.** The writer covers the stock layout and the same layout with other data. A super that carries a checksum needs the follow-up in IR-684's decision.
+
+## IR-685: The stock super round-trips, and the injected vendor_a reads back in the rebuilt super, which is not a boot result
 
 | Field | Value |
 |---|---|
@@ -14259,6 +14310,22 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Consequence.** The maintainer decides whether the check belongs in #022 or in #099, and whether the inventory must list the Mesa libraries first.
 
 ## IR-666: The allocator's unsupported-format errors are recorded and not pursued in #022
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-625; IR-650 |
+
+**Choice.** The round trip and the replacement are recorded as verified offline. The rebuilt super is the candidate for the first boot (IR-650). This task makes no boot claim.
+
+**Reason.** The checks ran on the stock `super.img` (SHA-256 `54052b9f…`, 1,746,554,644 bytes) and on the injected `vendor_a.img` (SHA-256 `2cc0857c…`, 291,229,696 bytes; `inject.json` records 45,404 of 71,101 blocks used and a vbmeta that does not match):
+
+- A rewrite with no replacement is byte-identical to the stock file (278 chunks), in 1.8 s.
+- The replacement of `vendor_a` has one physical range, at offset 1,468,006,400. The output has 350 chunks and 1,645,830,556 bytes, with SHA-256 `9bd8bb68…`. The writer checked 8 geometry and metadata copies and compared the 8 other partitions with data, in 2.5 s.
+- An expander that does not use `apkrun_image` compared all 8,589,934,592 logical bytes. Every byte outside the range equals the stock byte, and the range equals the injected image followed by zeros.
+- The repository reader reads `vendor_a` back from the output with SHA-256 `2cc0857c…`. The reader sees the same 16 partitions and the 8 GiB block device.
+- The gated round-trip test passes on the stock file.
+
+**Consequence.** The vbmeta is not re-signed (IR-625), so the output does not verify with dm-verity on. The first boot, which needs the VM and was not run here, decides whether the mismatch blocks the boot (IR-650).
+
+## IR-686: The stock super's liblp layout, with the source of each number
 
 | Field | Value |
 |---|---|
@@ -14271,3 +14338,60 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The first error is at 02:55:22, after SurfaceFlinger's first abort at 02:55:17. The control logs 10 of them, so the count alone does not point at the virgl path. The source of the errors is not identified in this run, and SurfaceFlinger aborts at `eglGetDisplay`, which comes before its display setup. A boot that passes EGL (#099) is needed before the errors can be read in context.
 
 **Consequence.** The #022 Notes list the errors as an open item. No code changes.
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1, §4.6; IR-626 |
+
+**Choice.** The writer's assumptions are the layout below. A script that reads the liblp tables itself produced each number from the stock `super.img`, and the repository reader gives the same partition and extent values. The zip `aosp_cf_arm64_only_phone-img-16373615.zip` has SHA-256 `051caf80…`, which matches `Images/work/16373615/download/fetch.json`, and it contains `super.img` (1,746,554,644 bytes, SHA-256 `54052b9f…`, the manifest's value).
+
+- Sparse header: 28-byte file header, 12-byte chunk header, version 1.0, block size 4,096, 2,097,152 blocks (logical size 8,589,934,592), 278 chunks (124 FILL, 144 RAW, 10 DONT_CARE), image checksum 0.
+- Geometry: primary at offset 4,096 and backup at 8,192, magic `0x616C4467`, struct size 52, checksum valid, metadata maximum size 65,536, three metadata slots, logical block size 4,096.
+- Metadata: six copies, all with the same bytes. Primary at 12,288, 77,824, and 143,360; backup at 208,896, 274,432, and 339,968. Version 10.2, a 256-byte header with flags word 1 at offset 128, and tables of 1,352 bytes. The tables hold 16 partitions (52 bytes each), 9 extents (24), 5 groups (48), and 1 block device (64).
+- Block device `super`: first logical sector 2,048 (1 MiB), alignment 1 MiB, size 8,589,934,592.
+- Groups: `default` (maximum 0), `google_system_dynamic_partitions_a` and `_b` (6,845,104,128 each), `google_vendor_dynamic_partitions_a` and `_b` (1,472,200,704 each).
+- `vendor_a`: attributes 1, group `google_vendor_dynamic_partitions_a`, one extent. The extent is linear (target type 0) on device 0, 568,808 sectors (291,229,696 bytes), starting at sector 2,867,200 (byte 1,468,006,400). The sparse file starts a RAW chunk at block 358,400, which is the extent's first block, and the extent ends at a chunk boundary (block 429,501).
+- Other partitions with data: `product_a` 232,157,184 bytes, `system_a` 959,066,112, `system_b` 4,747,264, `system_ext_a` 258,179,072, `system_dlkm_a` 8,568,832, `odm_a` 520,192, `vendor_dlkm_a` 1,695,744, `odm_dlkm_a` 348,160. The other seven partitions have size 0.
+
+**Consequence.** These are the values the writer uses, and the tests cover the same structure. A super with a different layout needs the same reading before the writer runs on it.
+
+## IR-687: The Mesa build and the injection were run again under /tmp, and the four library hashes match ADR-0018
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [ADR-0018](../01-architecture/decisions/0018-guest-mesa-ndk-build.md) (Verification); IR-620 |
+
+**Choice.** For this check, the Mesa build, erofs-utils, and the injection were run again from the worktree, with every output under `/tmp/apkrun-099-lp-*`. The erofs-utils tree came from `erofs-tools --out`, and the injection wrote to a new directory under `/tmp`. The tests ran in a virtualenv under `/tmp`, because the worktree's `Images/tools/.venv` links into the main checkout (IR-631). The zip was read from the main checkout's `Images/work`, and nothing was written there. No VM was started. Decision needed: where the verified `vendor_a.img` is kept for the next step, as IR-620 asks.
+
+**Reason.** The earlier output is not on this machine (IR-620). The four libraries match ADR-0018's SHA-256 values: `libEGL_mesa.so` `73cb1755…`, `libGLESv2_mesa.so` `7da942f6…`, `libGLESv1_CM_mesa.so` `2a082937…`, and `libgallium_dri.so` `a261e62b…`. erofs-utils 1.9.4 was fetched from the pinned bottle and verified.
+
+**Consequence.** The `vendor_a.img` of IR-685 has SHA-256 `2cc0857c…`. The next rebuild must reproduce it, or the difference must be recorded.
+
+## IR-688: The tests use a synthetic super, and the stock file is covered by a gated test only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [AGENTS.md](../../AGENTS.md) §10; [android-image.md](../02-design/android-image.md) §4.6 |
+
+**Choice.** `Images/tools/tests/test_lp_write.py` builds an 8 MiB super in the stock layout: primary and backup geometry, three metadata slots with backup copies, version 10.2 headers, empty A/B-style partitions, a two-extent `vendor_a` that the replacement spans, and a sparse container with RAW, FILL, and DONT_CARE chunks cut away from the extent edges. The stock `super.img` (1.7 GB, not in the repository) runs only when `APKRUN_LP_STOCK_SUPER` names it. Decision needed: whether CI should receive the stock super, or the real-data round trip stays a manual check recorded in IR-685.
+
+**Reason.** AGENTS §10 keeps the T0 and T1 tiers offline, and the stock artifact is too large for the repository. The synthetic super exercises the paths that the stock one needs: chunk splits, the mapping across two extents, zero padding, and the backup copies.
+
+**Consequence.** CI checks the synthetic layout and the sparse encoder. The real-data check is manual, and its results are in IR-685.
+
+## IR-689: The writer verifies every metadata copy, and the reader still reads slot 0 only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (step 2, offline) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §3.1 (inventory of `lp.py`) |
+
+**Choice.** `lp_write` verifies the checksums of every geometry copy and every metadata copy in use. The reader `lp.py` still reads only slot 0 for the inventory. Decision needed: whether the reader should check the backup copies too, and fall back to a backup copy when slot 0 fails.
+
+**Reason.** A write must not carry a damaged copy forward, so the writer checks all of them. Changing the reader's fallback would change the inventory of damaged images, and this step needs only the stock copies to be correct.
+
+**Consequence.** A file with a damaged backup copy is refused by the writer (a test covers this), but `read_dynamic_partitions` still accepts it.
+

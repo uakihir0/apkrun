@@ -135,15 +135,6 @@ private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f869
     /// The SHA-256 of the `kmscube` recording that the Linux run wrote (IR-812). The run's command is in the IR entry.
     private let kmscubeRecordingSHA256 = "0f7010c7bd0e10228900420859a1d8d035fe47be2733a40d656b71886c0df46a"
 
-    /// The positions of the 61 calls that the renderer rejects on replay. They are exactly the `submit` calls of the
-    /// recording, the SUBMIT_3D of the kmscube context (IR-813). The live run logged 61 renderer failures too (IR-605).
-    /// The test pins them, so a change in either direction is visible. It does not claim that the renderer draws.
-    private let kmscubeReplayFailures: [Int] = [
-        16, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55, 57, 59, 61, 63, 65, 67, 69,
-        71, 73, 75, 77, 79, 81, 83, 85, 87, 89, 91, 93, 95, 97, 99, 101, 103, 105, 107, 109, 111, 113, 115, 117,
-        119, 121, 123, 125, 127, 129, 131, 133, 135, 137, 139,
-    ]
-
     /// The largest difference that a replayed byte may have from the expected byte. The synthetic session has no
     /// rasterization, so its uploads must match exactly (IR-516).
     private let syntheticScanoutTolerance = 0
@@ -387,30 +378,11 @@ extension VirGLRendererSuite {
             let outcome = device.replayRecordingForTest(recording)
             // Every operation runs, so a replay that stopped early fails here, even if its failures match.
             #expect(outcome.attempted == recording.operations.count)
-            #expect(outcome.failures.map(\.index) == kmscubeReplayFailures)
-            #expect(
-                outcome.failures.allSatisfy { failure in
-                    if case .submit = recording.operations[failure.index] { return true }
-                    return false
-                })
-
-            // The first rejected submit is the cause. Its TRANSFER3D names resource 4, which the renderer has no guest
-            // backing for. virglrenderer then marks the context in error, and each later DRAW_VBO of that context returns
-            // ENOTRECOVERABLE (IR-830, IR-831). Removing the first TRANSFER3D clears all of them (IR-831).
-            let rejections = device.submitRejectionsForTest()
-            #expect(rejections.count == kmscubeReplayFailures.count)
-            #expect(rejections.first?.virglResult == EINVAL)
-            #expect(
-                rejections.first?.messages == [
-                    "vrend_renderer_transfer_iov: context error reported 2 \"kmscube\" Illegal resource 4",
-                    "context 2 failed to dispatch TRANSFER3D: 22",
-                    "vrend_decode_ctx_submit_cmd: context error reported 2 \"kmscube\" Illegal command buffer 852011",
-                ])
-            #expect(
-                rejections.dropFirst().allSatisfy { rejection in
-                    rejection.virglResult == ENOTRECOVERABLE
-                        && rejection.messages == ["context 2 failed to dispatch DRAW_VBO: 104"]
-                })
+            // The replay gives each resource its guest pages (IR-845), so the in-stream TRANSFER3D of resource 4 reads
+            // them (IR-831) and the renderer rejects no submit. Before the pages were attached, it rejected 61, and the
+            // first rejection was that TRANSFER3D (IR-830, IR-831).
+            #expect(outcome.failures.isEmpty)
+            #expect(device.submitRejectionsForTest().isEmpty)
 
             // The replay runs through the device's renderer. The normal-path counters must stay at zero (graphics.md §7).
             let counters = device.statistics

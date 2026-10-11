@@ -335,6 +335,45 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
     try await eventually { harness.device.statistics.rendererFailures == 1 }
 }
 
+@Test func aReplaySuppliesZeroedBackingForEachCreatedResourceAndReleasesIt() throws {
+    func resource(_ id: UInt32) -> VirGLResourceArguments {
+        VirGLResourceArguments(
+            resourceID: id,
+            target: 2,
+            format: 1,
+            bind: 2,
+            width: 4,
+            height: 4,
+            depth: 1,
+            arraySize: 1,
+            lastLevel: 0,
+            sampleCount: 0,
+            flags: 0
+        )
+    }
+    let recording = VirGLRecording(operations: [
+        .createResource(resource(4)),
+        .createResource(resource(5)),
+        .unrefResource(id: 5),
+    ])
+
+    let supplied = FakeVirGLEngine(onFence: { _ in })
+    #expect(replay(recording, onto: supplied, suppliesBacking: true).failures.isEmpty)
+    // Resource 5 is released before it goes, and resource 4 is released at the end of the replay.
+    #expect(backingCalls(supplied) == ["attach 4", "attach 5", "detach 5", "unref 5", "detach 4"])
+    let ranges = supplied.calls.compactMap { call -> [VirGLBackingRange]? in
+        if case .attachBacking(4, let ranges) = call { return ranges }
+        return nil
+    }
+    // A 4 × 4 texture of four-byte pixels, as the resource table counts it.
+    #expect(ranges.first?.map(\.count) == [64])
+
+    // Without the flag, the replay makes no backing calls, as before.
+    let plain = FakeVirGLEngine(onFence: { _ in })
+    #expect(replay(recording, onto: plain).failures.isEmpty)
+    #expect(backingCalls(plain) == ["unref 5"])
+}
+
 @Test func aFencedResponseWaitsForItsFence() async throws {
     let harness = try VirGLHarness()
     let control = harness.send([

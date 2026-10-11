@@ -189,9 +189,19 @@ struct VirGLReplayOutcome {
 /// failure and still answers the guest (IR-460), so a stream with rejected calls replays the same way (IR-811).
 ///
 /// The failures are returned, not counted in the device's counters, so a replay leaves the renderer failure count alone.
-func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> VirGLReplayOutcome {
+///
+/// With `suppliesBacking`, each resource that the replay creates gets zeroed guest pages of its size, as the guest
+/// attaches them. The recording holds no backing, and the renderer reads an in-stream transfer from its backing
+/// (IR-831), so the replay supplies it (IR-845). The pages hold no guest data, so the replay checks the renderer's
+/// calls, not the pixels.
+func replay(
+    _ recording: VirGLRecording,
+    onto engine: any VirGLEngine,
+    suppliesBacking: Bool = false
+) -> VirGLReplayOutcome {
     var failures: [(index: Int, failure: GraphicsFailure)] = []
     var attempted = 0
+    let backing = ReplayBacking()
     for (index, operation) in recording.operations.enumerated() {
         attempted += 1
         do throws(GraphicsFailure) {
@@ -208,7 +218,12 @@ func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> VirGLR
                 try engine.submit(context: context, commands: commands)
             case .createResource(let arguments):
                 try engine.createResource(arguments)
+                if suppliesBacking {
+                    try backing.attach(arguments, to: engine)
+                }
             case .unrefResource(let id):
+                // The renderer releases the pages when the resource goes, so the replay releases them first.
+                backing.release(resource: id, from: engine)
                 engine.unrefResource(id: id)
             case .transferWrite(let transfer, var data):
                 try engine.transferWrite(transfer, data: &data)
@@ -219,10 +234,76 @@ func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> VirGLR
                 try engine.createFence(id: id, context: context)
             case .reset:
                 try engine.reset()
+                backing.forgetAll()
             }
         } catch {
             failures.append((index, error))
         }
     }
+    backing.releaseAll(from: engine)
     return VirGLReplayOutcome(attempted: attempted, failures: failures)
+}
+
+/// The zeroed guest pages that a replay gives the resources it creates, of the size the resource table counts them.
+/// The replay owns the pages. It releases each one in the renderer before it frees the pages (IR-845).
+private final class ReplayBacking {
+    private var pages: [UInt32: VirGLBackingRange] = [:]
+
+    /// Attaches zeroed pages to the resource that `arguments` creates. A format that the table does not accept gets none.
+    func attach(_ arguments: VirGLResourceArguments, to engine: any VirGLEngine) throws(GraphicsFailure) {
+        guard let count = Self.byteCount(arguments), count > 0, let base = calloc(count, 1) else { return }
+        guard let range = VirGLBackingRange(UnsafeMutableRawBufferPointer(start: base, count: count)) else {
+            free(base)
+            return
+        }
+        do throws(GraphicsFailure) {
+            try engine.attachBacking(resource: arguments.resourceID, ranges: [range])
+        } catch {
+            free(base)
+            throw error
+        }
+        pages[arguments.resourceID] = range
+    }
+
+    /// Releases the pages of `resource` in the renderer, then frees them. A resource without pages is left alone.
+    func release(resource: UInt32, from engine: any VirGLEngine) {
+        guard let range = pages.removeValue(forKey: resource) else { return }
+        engine.detachBacking(resource: resource)
+        free(range.base)
+    }
+
+    /// Frees the pages after a reset, which has already released them in the renderer.
+    func forgetAll() {
+        for range in pages.values {
+            free(range.base)
+        }
+        pages.removeAll()
+    }
+
+    /// Releases every remaining backing at the end of a replay, while the renderer still runs.
+    func releaseAll(from engine: any VirGLEngine) {
+        for resource in Array(pages.keys) {
+            release(resource: resource, from: engine)
+        }
+    }
+
+    /// The bytes of a resource at level 0, counted as `ResourceTable` counts them, or `nil` for a format it refuses.
+    private static func byteCount(_ arguments: VirGLResourceArguments) -> Int? {
+        guard let layout = ResourceTable.layout(format: arguments.format) else { return nil }
+        if arguments.target == 0 {
+            return Int(arguments.width) * Int(layout.bytesPerBlock)
+        }
+        guard
+            let bytes = try? ResourceTable.textureBytes(
+                width: arguments.width,
+                height: arguments.height,
+                depth: arguments.depth,
+                arraySize: arguments.arraySize,
+                layout: layout
+            )
+        else {
+            return nil
+        }
+        return Int(exactly: bytes)
+    }
 }

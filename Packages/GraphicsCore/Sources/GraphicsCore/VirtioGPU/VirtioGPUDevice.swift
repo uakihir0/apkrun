@@ -648,13 +648,17 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     // path (graphics.md §7).
     extension VirtioGPUDevice {
         /// Replays `recording` on this device's renderer, in order. A failing call does not stop the replay, as on the
-        /// device, but the replay does not count its failures in `counters`. Returns how many operations ran and each
-        /// call that failed.
+        /// device, but the replay does not count its failures in `counters`. The replay supplies the guest pages that
+        /// the recording does not hold (IR-845). Returns how many operations ran and each call that failed.
         func replayRecordingForTest(_ recording: VirGLRecording) -> VirGLReplayOutcome {
             guard let backend else {
                 preconditionFailure("A replay needs the VirGL renderer of a drmVirgl device.")
             }
-            guard let outcome = backend.sync({ engine in replay(recording, onto: engine) }) else {
+            guard
+                let outcome = backend.sync({ engine in
+                    replay(recording, onto: engine, suppliesBacking: true)
+                })
+            else {
                 preconditionFailure("The renderer is not running.")
             }
             return outcome

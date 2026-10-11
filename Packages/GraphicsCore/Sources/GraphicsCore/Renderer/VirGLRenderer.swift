@@ -14,6 +14,17 @@ public final class VirGLRenderer {
     private let logger = APKLogger(category: .renderer)
     private var renderer: OpaquePointer?
     private var retainedCallbackContext: UnsafeMutableRawPointer?
+    #if APKRUN_TEST_READBACK
+        /// The submits that virglrenderer rejected, in order, with the value and messages of each (IR-830).
+        private(set) var submitRejections: [VirGLSubmitRejection] = []
+
+        /// The message sink of the callback context. It is nil after `destroy()`.
+        private var messageSink: VirGLMessageSink? {
+            retainedCallbackContext.map {
+                Unmanaged<GraphicsRendererCallbackContext>.fromOpaque($0).takeUnretainedValue().messageSink
+            }
+        }
+    #endif
 
     /// Creates the ANGLE Metal display and initializes virglrenderer.
     public convenience init() throws(GraphicsFailure) {
@@ -195,9 +206,22 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
 
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure) {
         let renderer = try live(operation: "submit")
+        #if APKRUN_TEST_READBACK
+            let sink = messageSink
+            _ = sink?.takeMessages()
+        #endif
         let status = commands.withUnsafeBytes { bytes in
             gb_submit(renderer, context, bytes.baseAddress, bytes.count)
         }
+        #if APKRUN_TEST_READBACK
+            if status != GB_OK {
+                submitRejections.append(
+                    VirGLSubmitRejection(
+                        virglResult: gb_last_submit_result(renderer),
+                        messages: sink?.takeMessages() ?? []
+                    ))
+            }
+        #endif
         try check(status, operation: "submit")
     }
 
@@ -249,6 +273,9 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
 private final class GraphicsRendererCallbackContext: Sendable {
     let logger = APKLogger(category: .renderer)
     let onFenceCompleted: @Sendable (UInt32) -> Void
+    #if APKRUN_TEST_READBACK
+        let messageSink = VirGLMessageSink()
+    #endif
 
     init(onFenceCompleted: @escaping @Sendable (UInt32) -> Void) {
         self.onFenceCompleted = onFenceCompleted
@@ -278,6 +305,9 @@ private let graphicsRendererLog:
             .fromOpaque(contextPointer)
             .takeUnretainedValue()
         let message = String(cString: messagePointer)
+        #if APKRUN_TEST_READBACK
+            context.messageSink.record(message)
+        #endif
         switch Int(level) {
         case GB_LOG_ERROR:
             context.logger.error("VirGL: \(message, .private)")

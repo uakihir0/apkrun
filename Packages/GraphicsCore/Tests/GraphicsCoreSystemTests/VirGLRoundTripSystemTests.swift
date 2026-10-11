@@ -394,6 +394,24 @@ extension VirGLRendererSuite {
                     return false
                 })
 
+            // The first rejected submit is the cause. Its TRANSFER3D names resource 4, which the renderer has no guest
+            // backing for. virglrenderer then marks the context in error, and each later DRAW_VBO of that context returns
+            // ENOTRECOVERABLE (IR-830, IR-831). Removing the first TRANSFER3D clears all of them (IR-831).
+            let rejections = device.submitRejectionsForTest()
+            #expect(rejections.count == kmscubeReplayFailures.count)
+            #expect(rejections.first?.virglResult == EINVAL)
+            #expect(
+                rejections.first?.messages == [
+                    "vrend_renderer_transfer_iov: context error reported 2 \"kmscube\" Illegal resource 4",
+                    "context 2 failed to dispatch TRANSFER3D: 22",
+                    "vrend_decode_ctx_submit_cmd: context error reported 2 \"kmscube\" Illegal command buffer 852011",
+                ])
+            #expect(
+                rejections.dropFirst().allSatisfy { rejection in
+                    rejection.virglResult == ENOTRECOVERABLE
+                        && rejection.messages == ["context 2 failed to dispatch DRAW_VBO: 104"]
+                })
+
             // The replay runs through the device's renderer. The normal-path counters must stay at zero (graphics.md §7).
             let counters = device.statistics
             #expect(counters.hostReadbacks == 0)

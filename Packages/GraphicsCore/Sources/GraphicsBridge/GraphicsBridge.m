@@ -81,6 +81,7 @@ struct gb_renderer {
     bool log_callback_registered;
     bool owns_process_slot;
     pthread_t render_thread;
+    int last_submit_result;
 };
 
 static pthread_mutex_t gb_renderer_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1022,7 +1023,12 @@ int gb_submit(gb_renderer *renderer, uint32_t ctx_id, const void *commands, size
     }
     int result = renderer->virgl.submit_cmd(stream, (int)ctx_id, (int)(size_bytes / sizeof(uint32_t)));
     free(aligned);
+    renderer->last_submit_result = result;
     return result == 0 ? GB_OK : GB_E_SUBMIT_OPERATION;
+}
+
+int gb_last_submit_result(const gb_renderer *renderer) {
+    return renderer == NULL ? 0 : renderer->last_submit_result;
 }
 
 int gb_resource_create(gb_renderer *renderer, const gb_resource_args *args) {

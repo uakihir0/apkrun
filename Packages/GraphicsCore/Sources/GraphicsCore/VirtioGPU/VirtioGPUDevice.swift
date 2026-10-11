@@ -660,6 +660,18 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             return outcome
         }
 
+        /// The submits that virglrenderer rejected on this device's renderer, in order, with the value and messages of
+        /// each (IR-830). Read it after a replay, on the same device.
+        func submitRejectionsForTest() -> [VirGLSubmitRejection] {
+            guard let backend else {
+                preconditionFailure("A replay needs the VirGL renderer of a drmVirgl device.")
+            }
+            guard let rejections = backend.sync({ engine in (engine as? VirGLRenderer)?.submitRejections ?? [] }) else {
+                preconditionFailure("The renderer is not running.")
+            }
+            return rejections
+        }
+
         /// Reads `byteCount` bytes of the box `transfer` through the renderer's test-only readback.
         func readResourceForTest(_ transfer: VirGLTransfer, byteCount: Int) throws(GraphicsFailure) -> [UInt8] {
             guard let backend else {

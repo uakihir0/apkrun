@@ -127,6 +127,15 @@ void gb_ctx_detach_resource(gb_renderer *renderer, uint32_t ctx_id, uint32_t res
  */
 int gb_submit(gb_renderer *renderer, uint32_t ctx_id, const void *commands, size_t size_bytes);
 
+/*
+ * Diagnostic for the test-only replay (IR-830): the raw value that virglrenderer
+ * returned for the last call to `gb_submit` that reached it, such as EINVAL (22).
+ * `gb_submit` maps every nonzero value to GB_E_SUBMIT_OPERATION, so this is the only
+ * place the value is kept. It is 0 before the first such call. Call it on the render
+ * thread, as the other calls.
+ */
+int gb_last_submit_result(const gb_renderer *renderer);
+
 typedef struct {
     uint32_t resource_id;
     uint32_t target;

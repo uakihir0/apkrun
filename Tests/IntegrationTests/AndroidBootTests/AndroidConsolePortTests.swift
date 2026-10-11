@@ -26,9 +26,19 @@ enum ConsolePortMarkerPlan {
     /// The ports that get a marker, in attachment order: hvc2 to hvc17 and hvc19.
     static let markedPorts: [Int] = (2..<portCount).filter { $0 != sensorsPort }
 
+    /// How long a reader must be ready before its marker is written (IR-899, update 2). The first bytes sent to a port
+    /// were lost in the 2026-10-12 run, so the host waits for this settle time after it sees `ready-<port>`.
+    static let writeSettle: Duration = .seconds(2)
+
     /// The line the host writes into `port`, and the line that the guest reader of `port` must receive.
     static func marker(for port: Int) -> String {
         "APKRUN-PORT-\(port)"
+    }
+
+    /// The bytes the host writes into `port`: the marker line with its newline, so the guest reader gets one complete
+    /// line.
+    static func payload(for port: Int) -> String {
+        marker(for: port) + "\n"
     }
 
     /// The guest device that the reader of `port` opens.
@@ -54,12 +64,14 @@ enum ConsolePortMarkerPlan {
 
     /// The guest command that starts one reader per marked port in the background, and returns at once.
     ///
-    /// A reader opens its port (`exec 3<`) and then writes `ready-<port>`, so a ready file shows that the port has a
-    /// reader. The reader is `cat` under `timeout`, which copies what arrives into `out-<port>` and ends by itself. Its
-    /// process id goes into `pid-<port>`, so that `stopReadersCommand` can end it.
+    /// A reader opens its port on fd 3, sets it to raw mode on that descriptor (`raw-<port>` records whether that
+    /// worked), and only then writes `ready-<port>`. The reader is `cat` under `timeout`, which copies what arrives
+    /// into `out-<port>` and ends by itself. Its process id goes into `pid-<port>`, so `stopReadersCommand` can end it.
     static func readerCommand(timeoutSeconds: Int) -> String {
         let readers = markedPorts.map { port in
-            "( stty -F \(device(for: port)) raw -echo 2>/dev/null; exec 3<\(device(for: port)); "
+            "( exec 3<\(device(for: port)); "
+                + "if stty raw -echo <&3 2>/dev/null; then echo raw > \(guestDirectory)/raw-\(port); "
+                + "else echo unchanged > \(guestDirectory)/raw-\(port); fi; "
                 + "echo ready > \(guestDirectory)/ready-\(port); "
                 + "if command -v timeout >/dev/null 2>&1; then "
                 + "exec timeout \(timeoutSeconds) cat <&3 > \(guestDirectory)/out-\(port); "
@@ -73,6 +85,9 @@ enum ConsolePortMarkerPlan {
     /// The guest command that ends every reader that `readerCommand` started.
     static let stopReadersCommand =
         "for f in \(guestDirectory)/pid-*; do kill $(cat $f) 2>/dev/null; done; echo stopped"
+
+    /// The guest command that prints the raw-mode record of every reader.
+    static let rawStateCommand = "for f in \(guestDirectory)/raw-*; do echo \"$f $(cat $f)\"; done"
 
     /// The guest command that prints each marked port's reader file, under a `PORT <n>` header.
     static func collectCommand() -> String {
@@ -110,28 +125,46 @@ enum ConsolePortMarkerPlan {
                 return Int(name.dropFirst("ready-".count))
             })
     }
+
+    /// The marked ports to write now. A port is due once its `ready` file was first seen at least `settle` before
+    /// `now`, and it has not been written yet. The host writes each port once.
+    static func portsToWrite(
+        seenAt: [Int: Duration],
+        now: Duration,
+        written: Set<Int>,
+        settle: Duration
+    ) -> [Int] {
+        markedPorts.filter { port in
+            guard !written.contains(port), let seen = seenAt[port] else {
+                return false
+            }
+            return now - seen >= settle
+        }
+    }
 }
 
 /// The result of the marker check on one port.
 struct ConsolePortMarkerResult: Equatable {
     let port: Int
     let readerReady: Bool
+    let written: Bool
     let writeError: String?
     let received: [String]
 
-    /// The port passed when its reader received exactly its own marker, and no other line.
+    /// The port passed when its marker was written after its reader was ready, and its reader received exactly that
+    /// marker line, and no other line.
     var passed: Bool {
-        writeError == nil && received == [ConsolePortMarkerPlan.marker(for: port)]
+        readerReady && written && writeError == nil && received == [ConsolePortMarkerPlan.marker(for: port)]
     }
 
-    /// One line per port: the marker, the reader state, and the exact lines the reader received.
+    /// One line per port: the marker, the reader and write state, and the exact lines the reader received.
     var line: String {
         let verdict = passed ? "ok" : "missing"
         let lines = received.map { "\"\($0)\"" }.joined(separator: ",")
         let error = writeError.map { " write-error=\($0)" } ?? ""
         return
             "hvc\(port) marker=\(ConsolePortMarkerPlan.marker(for: port)) reader-ready=\(readerReady ? "yes" : "no") "
-            + "received=[\(lines)] \(verdict)\(error)"
+            + "written=\(written ? "yes" : "no") received=[\(lines)] \(verdict)\(error)"
     }
 }
 
@@ -262,7 +295,8 @@ private final class ConsolePortMarkerBoot {
         return "sys.boot_completed=\"\(completed)\""
     }
 
-    /// Starts the readers, waits for them, writes one marker into every marked port, and collects what each reader got.
+    /// Starts the readers, writes each marker once its reader has been ready for the settle time, and collects what
+    /// each reader got.
     func checkMarkers() async throws -> [ConsolePortMarkerResult] {
         let adb = try requireADB()
         let controller = try requireController()
@@ -277,31 +311,45 @@ private final class ConsolePortMarkerBoot {
         let startedOutput = started.output.trimmingCharacters(in: .whitespacesAndNewlines)
         print("port-check readers started: status \(started.status) \(startedOutput)")
 
+        let start = ContinuousClock.now
+        var seenAt: [Int: Duration] = [:]
+        var written: Set<Int> = []
+        var writeErrors: [Int: String] = [:]
         var ready: Set<Int> = []
-        let readyDeadline = ContinuousClock.now + .seconds(60)
-        while ContinuousClock.now < readyDeadline {
+        let writeDeadline = start + .seconds(90)
+        while true {
             let listing = try await adb.shell("ls \(ConsolePortMarkerPlan.guestDirectory)", timeout: .seconds(20))
             ready = ConsolePortMarkerPlan.readyPorts(listing.output)
-            if ConsolePortMarkerPlan.markedPorts.allSatisfy({ ready.contains($0) }) {
+            let now = ContinuousClock.now - start
+            for port in ready where seenAt[port] == nil {
+                seenAt[port] = now
+            }
+            let due = ConsolePortMarkerPlan.portsToWrite(
+                seenAt: seenAt,
+                now: now,
+                written: written,
+                settle: ConsolePortMarkerPlan.writeSettle
+            )
+            for port in due {
+                written.insert(port)
+                do {
+                    try controller.console(ConsolePortMarkerPlan.testRole(for: port))
+                        .writeHostInput(Data(ConsolePortMarkerPlan.payload(for: port).utf8))
+                } catch {
+                    writeErrors[port] = String(describing: error)
+                }
+            }
+            if written.count == ConsolePortMarkerPlan.markedPorts.count || ContinuousClock.now >= writeDeadline {
                 break
             }
-            try await Task.sleep(for: .seconds(1))
+            try await Task.sleep(for: .milliseconds(500))
         }
         let notReady = ConsolePortMarkerPlan.markedPorts.filter { !ready.contains($0) }
-        print("port-check readers ready: \(ready.sorted()) not ready: \(notReady)")
+        let notWritten = ConsolePortMarkerPlan.markedPorts.filter { !written.contains($0) }
+        print("port-check readers ready: \(ready.sorted()) not ready: \(notReady) not written: \(notWritten)")
 
         let holdersAfter = try await adb.shell(ConsolePortMarkerPlan.holdersCommand, timeout: .seconds(20))
         print("port-check holders with the readers running:\n\(holdersAfter.output)")
-
-        var writeErrors: [Int: String] = [:]
-        for port in ConsolePortMarkerPlan.markedPorts {
-            let line = ConsolePortMarkerPlan.marker(for: port) + "\n"
-            do {
-                try controller.console(ConsolePortMarkerPlan.testRole(for: port)).writeHostInput(Data(line.utf8))
-            } catch {
-                writeErrors[port] = String(describing: error)
-            }
-        }
 
         var received: [Int: [String]] = [:]
         let markerDeadline = ContinuousClock.now + .seconds(60)
@@ -316,11 +364,14 @@ private final class ConsolePortMarkerBoot {
             }
             try await Task.sleep(for: .seconds(2))
         }
+        let rawState = try await adb.shell(ConsolePortMarkerPlan.rawStateCommand, timeout: .seconds(20))
+        print("port-check raw mode per reader:\n\(rawState.output)")
 
         return ConsolePortMarkerPlan.markedPorts.map { port in
             ConsolePortMarkerResult(
                 port: port,
                 readerReady: ready.contains(port),
+                written: written.contains(port),
                 writeError: writeErrors[port],
                 received: received[port] ?? []
             )
@@ -451,7 +502,7 @@ final class ConsolePortMarkerPlanTests: XCTestCase {
     func testReaderCommandStartsOneReaderPerMarkedPortAndOpensNoOtherPort() {
         let command = ConsolePortMarkerPlan.readerCommand(timeoutSeconds: 180)
         for port in ConsolePortMarkerPlan.markedPorts {
-            XCTAssertTrue(opens(command, device: port) || command.contains("exec 3</dev/hvc\(port);"))
+            XCTAssertTrue(command.contains("exec 3</dev/hvc\(port);"), "port \(port) has a reader")
             XCTAssertTrue(command.contains("echo $! > /data/local/tmp/apkrun-port-check/pid-\(port);"))
         }
         for port in [0, 1, ConsolePortMarkerPlan.sensorsPort] {
@@ -461,9 +512,69 @@ final class ConsolePortMarkerPlanTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("echo started"))
     }
 
+    /// Raw mode is set on the port before the reader writes its ready file, so the host never writes before the port is
+    /// in raw mode, and the record of raw mode is written where the host can read it.
+    func testReaderSetsRawModeBeforeItsReadyFile() throws {
+        let command = ConsolePortMarkerPlan.readerCommand(timeoutSeconds: 180)
+        let raw = try XCTUnwrap(command.range(of: "stty raw -echo <&3"))
+        let ready = try XCTUnwrap(command.range(of: "echo ready > /data/local/tmp/apkrun-port-check/ready-2;"))
+        let open = try XCTUnwrap(command.range(of: "exec 3</dev/hvc2;"))
+        XCTAssertLessThan(open.lowerBound, raw.lowerBound, "the port is opened before raw mode is set")
+        XCTAssertLessThan(raw.lowerBound, ready.lowerBound, "raw mode is set before ready-2 is written")
+        XCTAssertTrue(command.contains("echo raw > /data/local/tmp/apkrun-port-check/raw-2;"))
+        XCTAssertFalse(command.contains("stty -F"), "stty acts on the open descriptor, not on a device path")
+    }
+
     func testStopCommandEndsTheRecordedReaders() {
         XCTAssertTrue(ConsolePortMarkerPlan.stopReadersCommand.contains("pid-*"))
         XCTAssertTrue(ConsolePortMarkerPlan.stopReadersCommand.contains("kill $(cat $f)"))
+    }
+
+    /// A port is written only after its ready file has been seen for the settle time, and only once.
+    func testPortsAreWrittenOnlyAfterReadyAndSettleAndOnlyOnce() {
+        let settle = ConsolePortMarkerPlan.writeSettle
+        let seenAt: [Int: Duration] = [2: .seconds(1), 3: .seconds(5)]
+
+        XCTAssertEqual(
+            ConsolePortMarkerPlan.portsToWrite(seenAt: [:], now: .seconds(100), written: [], settle: settle),
+            [],
+            "no port is written before its ready file is seen"
+        )
+        XCTAssertEqual(
+            ConsolePortMarkerPlan.portsToWrite(seenAt: seenAt, now: .seconds(3), written: [], settle: settle),
+            [2],
+            "port 2 waited its settle time (seen at 1 s, due at 3 s), and port 3 has not yet been ready that long"
+        )
+        XCTAssertEqual(
+            ConsolePortMarkerPlan.portsToWrite(seenAt: seenAt, now: .seconds(10), written: [2], settle: settle),
+            [3],
+            "a port written once is not written again"
+        )
+        XCTAssertEqual(
+            ConsolePortMarkerPlan.portsToWrite(
+                seenAt: [18: .seconds(1)], now: .seconds(10), written: [], settle: settle
+            ),
+            [],
+            "the sensors port is never a marked port"
+        )
+    }
+
+    /// A marker written after its ready file is seen is the complete line `APKRUN-PORT-<i>` with its newline, and a
+    /// port passes only when that line, and no other, is what the reader received.
+    func testMarkerWrittenAfterReadyIsCompleteAndPassesOnlyWhenWhole() {
+        XCTAssertEqual(ConsolePortMarkerPlan.payload(for: 5), "APKRUN-PORT-5\n")
+        let complete = ConsolePortMarkerResult(
+            port: 5, readerReady: true, written: true, writeError: nil, received: ["APKRUN-PORT-5"]
+        )
+        XCTAssertTrue(complete.passed)
+        let truncated = ConsolePortMarkerResult(
+            port: 5, readerReady: true, written: true, writeError: nil, received: ["PKRUN-PORT-5"]
+        )
+        XCTAssertFalse(truncated.passed, "a line that lost its first characters is not the marker")
+        let notWritten = ConsolePortMarkerResult(
+            port: 5, readerReady: true, written: false, writeError: nil, received: ["APKRUN-PORT-5"]
+        )
+        XCTAssertFalse(notWritten.passed, "a marker that was never written is not a pass")
     }
 
     func testCollectedLinesAreParsedPerPort() {
@@ -472,12 +583,11 @@ final class ConsolePortMarkerPlanTests: XCTestCase {
         XCTAssertEqual(parsed[0], ["APKRUN-PORT-0"])
         XCTAssertEqual(parsed[1], ["APKRUN-PORT-2"])
         XCTAssertEqual(parsed[2], [])
-        let result = ConsolePortMarkerResult(port: 1, readerReady: true, writeError: nil, received: ["APKRUN-PORT-2"])
-        XCTAssertFalse(result.passed, "a reader that gets another port's marker is a missing marker")
     }
 
     func testReadyPortsComeFromTheReaderListing() {
-        XCTAssertEqual(ConsolePortMarkerPlan.readyPorts("out-3\nready-3\nready-19\nready-18\npid-3\n"), [3, 19, 18])
+        let listing = "out-3\nready-3\nready-19\nready-18\npid-3\nraw-3\n"
+        XCTAssertEqual(ConsolePortMarkerPlan.readyPorts(listing), [3, 19, 18])
     }
 }
 
@@ -521,7 +631,7 @@ final class AndroidConsolePortTests: XCTestCase {
         XCTAssertEqual(
             missing.map(\.port),
             [],
-            "the marker did not reach its own reader on: \(missing.map(\.line).joined(separator: "; "))"
+            "the marker did not reach its own reader whole on: \(missing.map(\.line).joined(separator: "; "))"
         )
     }
 }

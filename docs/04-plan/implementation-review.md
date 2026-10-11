@@ -14509,7 +14509,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Superseded by IR-726 |
 | Task | #099 (the first VM boot, step 4) |
 | Affected documents | [cli.md](../02-design/cli.md) §5; [android-image.md](../02-design/android-image.md) §10.2 |
 
@@ -14523,7 +14523,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 | Field | Value |
 |---|---|
-| Status | Needs maintainer review |
+| Status | Superseded by IR-726 |
 | Task | #099 (the task's step 4, the first VM boot) |
 | Affected documents | [android-image.md](../02-design/android-image.md) §10.2; [cli.md](../02-design/cli.md) §5 |
 
@@ -14573,7 +14573,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Reason.** The first boot was to decide IR-650, and no boot ran. The stock failure recorded in #022 (IR-661) is a missing Mesa EGL driver, not a verity error, so it does not decide IR-650 either.
 
-**Consequence.** IR-650 needs the first boot, which waits for IR-721 or a design change. The signing decision of IR-625 waits for it too.
+**Consequence.** Update after the first boot (IR-727): dm-verity blocks the injected `vendor_a`. The signing choice of IR-650 and IR-625 is still open for the maintainer.
 
 ## IR-725: The stale `--bundle` remediation in the error catalog is left as it is
 
@@ -14588,3 +14588,31 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Reason.** The catalog is generated, so a correction needs a regenerated catalog and a wording decision. Neither belongs in a VM check.
 
 **Consequence.** Decision needed: the maintainer should assign the wording fix to a follow-up, or to the next catalog change. Until then, a user who follows the remediation gets `cli.invalidArguments`.
+
+## IR-726: The variant is installed into a scratch APKRUN_HOME under /tmp and booted from there, which supersedes IR-720 and IR-721
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the task's steps 2 to 4) |
+| Affected documents | [cli.md](../02-design/cli.md) §5; [android-image.md](../02-design/android-image.md) §10.3 |
+
+**Choice.** The variant is installed with `apkrun dev image install` into a scratch `APKRUN_HOME` under `/tmp`, never the default home, and the boot runs from that home. IR-720 and IR-721 are superseded by this entry. Inside the scratch home the variant keeps the stock image name `2026.10.0-cf16373615-arm64` (IR-700 on main). The default store is not touched.
+
+**Reason.** The CLI installs only the current image. `dev image install` makes the installed image `current`, and `dev boot` boots only `current` (cli.md §5, android-image.md §10.3). So the variant can be booted only through an install. A scratch home holds nothing else, and it is removed after the run.
+
+**Consequence.** The durable identity of a variant (IR-700) stays open. The scratch install is for this experiment only.
+
+## IR-727: The first boot of the Mesa variant stops at dm-verity on the injected vendor_a, and this task makes no signing choice
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the task's step 4, the first VM boot) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.4; IR-650; IR-625 |
+
+**Choice.** The verity failure is the answer to the first part of IR-650: dm-verity blocks the injected `vendor_a` on the first boot. This task does not re-sign the top-level vbmeta, does not turn verity off, and does not boot again. Decision needed: the signing choice of IR-650, either a new RSA key that the guest trusts, or a development boot with verity off (which needs an ADR).
+
+**Reason.** IR-650 asks to record the failure first and then choose the key. The key choice changes the guest's trust chain, and IR-650 lists it as a trust decision. Turning verity off is a design change. A second boot with the same vbmeta would repeat the same failure.
+
+**Consequence.** The record is the `dm-verity device corrupted` reboot loop of the #099 entry. The boot ended at `failed(runtime.vm)` after about 431 s, with 646 guest reboots.

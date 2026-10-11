@@ -1,4 +1,5 @@
 import Foundation
+import IOSurface
 
 /// One renderer operation, as the device issued it. A recording replays these calls in order (graphics.md §12).
 enum VirGLOperation: Codable, Equatable, Sendable {
@@ -161,6 +162,27 @@ final class RecordingVirGLEngine: VirGLEngine {
     func createFence(id: UInt32, context: UInt32) throws(GraphicsFailure) {
         recorder.record(.createFence(id: id, context: context))
         try inner.createFence(id: id, context: context)
+    }
+
+    // Presentation changes no state that the replay restores, so it is forwarded and not recorded (graphics.md §14).
+    func createPresentTarget(
+        surface: IOSurface,
+        width: UInt32,
+        height: UInt32
+    ) throws(GraphicsFailure) -> any PresentTarget {
+        try inner.createPresentTarget(surface: surface, width: width, height: height)
+    }
+
+    func destroyPresentTarget(_ target: any PresentTarget) {
+        inner.destroyPresentTarget(target)
+    }
+
+    func presentBlit(
+        resource: UInt32,
+        sourceRect: VirtioGPURect,
+        into target: any PresentTarget
+    ) throws(GraphicsFailure) -> any PresentFence {
+        try inner.presentBlit(resource: resource, sourceRect: sourceRect, into: target)
     }
 
     func poll() {

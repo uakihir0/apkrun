@@ -1,9 +1,44 @@
 import Foundation
+import IOSurface
 import Testing
 import VirtioDeviceCore
 import VirtioDeviceCoreTestSupport
 
 @testable import GraphicsCore
+
+/// A present target of the fake engine.
+final class FakePresentTarget: PresentTarget, @unchecked Sendable {
+    let id: Int
+
+    init(id: Int) {
+        self.id = id
+    }
+}
+
+/// A present fence of the fake engine. It signals on `complete()`, or at once when created signaled.
+final class FakePresentFence: PresentFence, @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isSignaled: Bool
+
+    init(signaled: Bool) {
+        isSignaled = signaled
+    }
+
+    func complete() {
+        condition.lock()
+        isSignaled = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func poll() -> PresentWaitOutcome {
+        condition.lock()
+        defer { condition.unlock() }
+        return isSignaled ? .signaled : .timedOut
+    }
+
+    func release() {}
+}
 
 /// A renderer that records each call and completes fences only when the test releases them.
 ///
@@ -27,6 +62,9 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
         case poll
         case reset
         case destroy
+        case presentTargetCreate(width: UInt32, height: UInt32)
+        case presentTargetDestroy(target: Int)
+        case presentBlit(resource: UInt32, source: VirtioGPURect, target: Int)
     }
 
     private let lock = NSLock()
@@ -76,6 +114,49 @@ final class FakeVirGLEngine: VirGLEngine, @unchecked Sendable {
         if shouldFail {
             throw GraphicsFailure.rendererOperationFailed(operation: operation, detail: "injected failure")
         }
+    }
+
+    /// Whether the fences of `presentBlit` signal at once. A test that holds them clears it and calls `completePresentFences`.
+    var autoCompletePresentFences = true
+    private var nextPresentTargetID = 1
+    private var presentFences: [FakePresentFence] = []
+
+    /// Signals every present fence created so far, as the GPU does once a blit has finished.
+    func completePresentFences() {
+        let fences = lock.withLock { presentFences }
+        for fence in fences {
+            fence.complete()
+        }
+    }
+
+    func createPresentTarget(surface: IOSurface, width: UInt32, height: UInt32) throws(GraphicsFailure)
+        -> any PresentTarget
+    {
+        try record(.presentTargetCreate(width: width, height: height), operation: "presentTargetCreate")
+        let id = lock.withLock { () -> Int in
+            let id = nextPresentTargetID
+            nextPresentTargetID += 1
+            return id
+        }
+        return FakePresentTarget(id: id)
+    }
+
+    func destroyPresentTarget(_ target: any PresentTarget) {
+        guard let target = target as? FakePresentTarget else { return }
+        lock.withLock { recorded.append(.presentTargetDestroy(target: target.id)) }
+    }
+
+    func presentBlit(
+        resource: UInt32,
+        sourceRect: VirtioGPURect,
+        into target: any PresentTarget
+    ) throws(GraphicsFailure) -> any PresentFence {
+        let id = (target as? FakePresentTarget)?.id ?? -1
+        // The fence is registered before the call is recorded, so a test that sees the call can complete the fence.
+        let fence = FakePresentFence(signaled: autoCompletePresentFences)
+        lock.withLock { presentFences.append(fence) }
+        try record(.presentBlit(resource: resource, source: sourceRect, target: id), operation: "presentBlit")
+        return fence
     }
 
     func capsetInfo(id: UInt32) throws(GraphicsFailure) -> GraphicsCapsetInfo {

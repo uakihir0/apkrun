@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import GraphicsBridge
+import IOSurface
 import Metal
 
 /// One Android virglrenderer instance, owned and used by its render thread.
@@ -265,6 +266,67 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
         try check(gb_create_fence(renderer, id, context), operation: "fenceCreate")
     }
 
+    func createPresentTarget(
+        surface: IOSurface,
+        width: UInt32,
+        height: UInt32
+    ) throws(GraphicsFailure) -> any PresentTarget {
+        let renderer = try live(operation: "presentTargetCreate")
+        var target: OpaquePointer?
+        let surfacePointer = Unmanaged.passUnretained(surface).toOpaque()
+        try check(
+            gb_present_target_create(renderer, surfacePointer, width, height, &target),
+            operation: "presentTargetCreate"
+        )
+        guard let target else {
+            throw GraphicsFailure.rendererOperationFailed(
+                operation: "presentTargetCreate",
+                detail: "The bridge returned no target."
+            )
+        }
+        return BridgePresentTarget(pointer: target)
+    }
+
+    func destroyPresentTarget(_ target: any PresentTarget) {
+        guard let renderer, let target = target as? BridgePresentTarget else { return }
+        gb_present_target_destroy(renderer, target.pointer)
+    }
+
+    func presentBlit(
+        resource: UInt32,
+        sourceRect: VirtioGPURect,
+        into target: any PresentTarget
+    ) throws(GraphicsFailure) -> any PresentFence {
+        let renderer = try live(operation: "presentBlit")
+        guard let target = target as? BridgePresentTarget else {
+            throw GraphicsFailure.rendererOperationFailed(
+                operation: "presentBlit",
+                detail: "The target was not made by this renderer."
+            )
+        }
+        var sync: UnsafeMutableRawPointer?
+        try check(
+            gb_present_blit(
+                renderer,
+                resource,
+                sourceRect.x,
+                sourceRect.y,
+                sourceRect.width,
+                sourceRect.height,
+                target.pointer,
+                &sync
+            ),
+            operation: "presentBlit"
+        )
+        guard let sync else {
+            throw GraphicsFailure.rendererOperationFailed(
+                operation: "presentBlit",
+                detail: "The bridge returned no fence."
+            )
+        }
+        return BridgePresentFence(renderer: renderer, sync: sync)
+    }
+
     func poll() {
         guard let renderer else { return }
         gb_poll(renderer)
@@ -334,3 +396,47 @@ private let graphicsRendererLog:
             context.logger.debug("VirGL: \(message, .private)")
         }
     }
+
+/// A present target of the bridge. The renderer that made it destroys it through `gb_present_target_destroy`.
+// UNCHECKED-SENDABLE: the pointer is used only on the render thread, through VirGLRenderer's present calls.
+final class BridgePresentTarget: PresentTarget, @unchecked Sendable {
+    let pointer: OpaquePointer
+
+    init(pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+}
+
+/// A blit fence of the bridge. The render thread polls and releases it, and the renderer outlives both.
+// UNCHECKED-SENDABLE: the sync is polled and released only on the render thread, which owns the renderer. The lock
+// guards the one release, so a second release is a no-op.
+final class BridgePresentFence: PresentFence, @unchecked Sendable {
+    private let renderer: OpaquePointer
+    private let sync: UnsafeMutableRawPointer
+    private let lock = NSLock()
+    private var isReleased = false
+
+    init(renderer: OpaquePointer, sync: UnsafeMutableRawPointer) {
+        self.renderer = renderer
+        self.sync = sync
+    }
+
+    func poll() -> PresentWaitOutcome {
+        switch Int(gb_sync_wait(renderer, sync, 0)) {
+        case Int(GB_OK):
+            .signaled
+        case Int(GB_SYNC_TIMEOUT):
+            .timedOut
+        default:
+            .failed
+        }
+    }
+
+    func release() {
+        lock.withLock {
+            guard !isReleased else { return }
+            isReleased = true
+            gb_sync_destroy(renderer, sync)
+        }
+    }
+}

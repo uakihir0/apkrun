@@ -38,6 +38,10 @@ final class GuestGPUSession {
     private var shadows: [UInt32: [UInt8]] = [:]
     /// The resource that each scanout shows, as `SET_SCANOUT` bound it.
     private var scanoutBindings: [Int: UInt32] = [:]
+    /// The source rectangle that each scanout's `SET_SCANOUT` named. A present copies it (graphics.md §6.2 step 2).
+    private var scanoutRects: [Int: VirtioGPURect] = [:]
+    /// The presenter of each scanout that presents (#023). The device attaches them before the guest starts.
+    private var presenters: [Int: ScanoutPresenter] = [:]
 
     /// - Parameters:
     ///   - path: The resource path the device runs.
@@ -58,6 +62,20 @@ final class GuestGPUSession {
         backings.removeAll(keepingCapacity: false)
         shadows.removeAll(keepingCapacity: false)
         scanoutBindings.removeAll(keepingCapacity: false)
+        scanoutRects.removeAll(keepingCapacity: false)
+        for presenter in presenters.values {
+            presenter.guestReset()
+        }
+    }
+
+    /// Attaches the presenter of its scanout. The device calls it before the guest starts (#023).
+    func attachPresenter(_ presenter: ScanoutPresenter) {
+        presenters[Int(presenter.scanout.rawValue)] = presenter
+    }
+
+    /// The attached presenters, so the device can close them before the renderer is destroyed.
+    var attachedPresenters: [ScanoutPresenter] {
+        Array(presenters.values)
     }
 
     /// Answers a 2D or 3D request, or an error for a command this path does not implement.
@@ -179,6 +197,7 @@ final class GuestGPUSession {
         shadows.removeValue(forKey: id)
         for (scanout, bound) in scanoutBindings where bound == id {
             scanoutBindings.removeValue(forKey: scanout)
+            scanoutRects.removeValue(forKey: scanout)
         }
         guard path == .virgl else { return succeeded() }
         return succeeded(renderWork: { engine in
@@ -198,6 +217,7 @@ final class GuestGPUSession {
         }
         if resource == 0 {
             scanoutBindings.removeValue(forKey: Int(scanout))
+            scanoutRects.removeValue(forKey: Int(scanout))
             return succeeded()
         }
         guard let bound = resources.resource(id: resource) else {
@@ -207,6 +227,7 @@ final class GuestGPUSession {
             return failed(.invalidParameter)
         }
         scanoutBindings[Int(scanout)] = resource
+        scanoutRects[Int(scanout)] = rect
         return succeeded()
     }
 
@@ -218,8 +239,35 @@ final class GuestGPUSession {
         guard Self.isInside(rect, width: flushed.width, height: flushed.height) else {
             return failed(.invalidParameter)
         }
-        // No pool is attached until #023, so a flush completes without a blit (graphics.md §6.1).
-        return succeeded()
+        // A flush presents on each scanout that shows the resource and has a presenter (graphics.md §6.2). A scanout
+        // without one, or a presenter that holds the frame, completes the flush at once (graphics.md §6.1).
+        let presents = presentFlush(resource: resource)
+        guard !presents.isEmpty else {
+            return succeeded()
+        }
+        return succeeded(renderWork: { engine in
+            var firstFailure: GraphicsFailure?
+            for present in presents {
+                if let failure = present(engine), firstFailure == nil {
+                    firstFailure = failure
+                }
+            }
+            return firstFailure
+        })
+    }
+
+    /// The present work of each presenting scanout that shows `resource`. A held frame yields no work.
+    private func presentFlush(resource: UInt32) -> [VirGLRenderWork] {
+        var presents: [VirGLRenderWork] = []
+        for (scanout, bound) in scanoutBindings where bound == resource {
+            guard let presenter = presenters[scanout], let source = scanoutRects[scanout] else {
+                continue
+            }
+            if let present = presenter.flush(resource: resource, source: source) {
+                presents.append(present)
+            }
+        }
+        return presents
     }
 
     private func transferToHost2D(

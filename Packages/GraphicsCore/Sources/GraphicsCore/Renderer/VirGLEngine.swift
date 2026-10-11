@@ -1,4 +1,32 @@
 import GraphicsBridge
+import IOSurface
+
+/// A present target: the Metal texture of one IOSurface, imported into GL (graphics.md §6.2, #023).
+///
+/// Only the render thread creates, uses, and destroys a target.
+protocol PresentTarget: AnyObject, Sendable {}
+
+/// The result of waiting on a present fence.
+enum PresentWaitOutcome: Equatable, Sendable {
+    /// The GPU has finished the blit.
+    case signaled
+    /// The timeout expired first. The caller waits again (graphics.md §6.2 stall rule).
+    case timedOut
+    /// The fence cannot be waited on, so the frame is lost.
+    case failed
+}
+
+/// The GPU completion of one present blit (graphics.md §6.2 step 4).
+///
+/// ANGLE validates a fence check against the current context, so the render thread checks the fence between requests,
+/// with the root context current. The completion waiter asks the render thread for each check, and releases the fence
+/// once it has the outcome.
+protocol PresentFence: AnyObject, Sendable {
+    /// Checks the blit once, without blocking. Call it on the render thread.
+    func poll() -> PresentWaitOutcome
+    /// Releases the fence. Call it on the render thread, after the last poll.
+    func release()
+}
 
 /// The virglrenderer calls that the render thread makes (graphics.md §4.5, §5.2).
 ///
@@ -23,6 +51,18 @@ protocol VirGLEngine: AnyObject {
     func transferWrite(_ transfer: VirGLTransfer, data: inout [UInt8]) throws(GraphicsFailure)
     func transferRead(_ transfer: VirGLTransfer, into data: inout [UInt8]) throws(GraphicsFailure)
     func createFence(id: UInt32, context: UInt32) throws(GraphicsFailure)
+    /// Creates a present target for `surface`, which is `width` x `height` BGRA8 pixels (graphics.md §6.3).
+    func createPresentTarget(surface: IOSurface, width: UInt32, height: UInt32) throws(GraphicsFailure)
+        -> any PresentTarget
+    /// Releases a present target. Call it before the renderer is destroyed.
+    func destroyPresentTarget(_ target: any PresentTarget)
+    /// Copies `sourceRect` of `resource` into the whole target, scaling when the sizes differ, and flushes. The fence
+    /// signals when the GPU has finished the copy (graphics.md §6.2 steps 2 and 4).
+    func presentBlit(
+        resource: UInt32,
+        sourceRect: VirtioGPURect,
+        into target: any PresentTarget
+    ) throws(GraphicsFailure) -> any PresentFence
     func poll()
     func reset() throws(GraphicsFailure)
     func destroy() throws(GraphicsFailure)

@@ -232,6 +232,19 @@ final class VirGLBackend: @unchecked Sendable {
         _ = renderThread.sync { () -> Bool in true }
     }
 
+    /// Runs `work` on the render thread after the work already queued. No guest element waits for it, so the presenter
+    /// uses it for blits that a held frame starts later (graphics.md §6.2). A failure is counted and logged.
+    func submitRenderWork(_ work: @escaping VirGLRenderWork) {
+        let engineBox = self.engineBox
+        let failures = self.failures
+        renderThread.submit {
+            guard let engine = engineBox.engine else { return }
+            if let failure = work(engine) {
+                failures.record(failure)
+            }
+        }
+    }
+
     /// Resets the renderer. Every waiting element is returned, because the guest reset and no longer waits.
     func reset() {
         let engineBox = self.engineBox

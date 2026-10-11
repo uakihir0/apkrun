@@ -44,6 +44,8 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     /// The display generation that the last `GET_DISPLAY_INFO` answered.
     private var reportedGeneration: UInt64
     private var negotiatedEDID = false
+    /// Set by DRIVER_OK. A presenter attaches only before the guest starts (#023).
+    private var hasStarted = false
     /// The `events_read` value the device wants the guest to see.
     private var eventsReadDesired: UInt32 = 0
     /// The `events_read` value the last successful configuration update wrote.
@@ -240,6 +242,7 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
             isWriterRunning = false
             configurationUpdater = updater
             negotiatedEDID = edid
+            hasStarted = true
             startConfigurationWriterLocked()
             guard let delay = hotplugSpikeDelay, !isHotplugSpikeScheduled else { return nil }
             isHotplugSpikeScheduled = true
@@ -287,11 +290,47 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     public func deviceWillStop() {
         clearGuestSession()
         session.reset()
+        // The presenters release their targets on the render thread, so they close before the renderer is shut down.
+        for presenter in session.attachedPresenters {
+            presenter.close()
+        }
         backend?.shutdown()
         logger.info("virtio-gpu stop")
     }
 
     // MARK: - Host configuration
+
+    /// Attaches a presenter that shows `scanout` in a pool of `width` x `height` IOSurfaces (graphics.md §6.1 to §6.3, #023).
+    ///
+    /// Call it before the guest starts, and only on the virgl device, which has the renderer. Once attached, the
+    /// presenter's frames carry the flushes of the scanout's resource. Close the device to release the targets.
+    public func attachPresenter(
+        _ scanout: ScanoutID,
+        width: Int,
+        height: Int
+    ) throws(GraphicsFailure) -> ScanoutPresenter {
+        guard let backend else {
+            throw .rendererOperationFailed(
+                operation: "attachPresenter",
+                detail: "Only the drmVirgl device has a renderer to present with."
+            )
+        }
+        guard !lock.withLock({ hasStarted }) else {
+            throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
+        }
+        // The targets are made on the render thread, so the device lock is not held while they are.
+        let presenter = try ScanoutPresenter(scanout: scanout, width: width, height: height, backend: backend)
+        let started = lock.withLock { () -> Bool in
+            guard !hasStarted else { return true }
+            session.attachPresenter(presenter)
+            return false
+        }
+        guard !started else {
+            presenter.close()
+            throw .configUpdateFailed(detail: "A presenter must be attached before the guest starts.")
+        }
+        return presenter
+    }
 
     /// Enables `scanout` with `mode` and tells the guest about the change.
     ///

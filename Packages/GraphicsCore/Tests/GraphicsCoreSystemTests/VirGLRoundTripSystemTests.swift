@@ -454,5 +454,26 @@ extension VirGLRendererSuite {
             #expect(readBack == pattern)
             renderer.unrefResource(id: 7)
         }
+
+        @Test(
+            .enabled(
+                if: MTLCreateSystemDefaultDevice() != nil,
+                "This host does not provide a Metal device."
+            )
+        )
+        func aSubmitRejectedByTheBridgeRecordsNoVirglResult() throws {
+            guard let runtime = runtimeDirectory() else {
+                Issue.record("The built VirGL runtime cache is unavailable.")
+                return
+            }
+            #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+            let renderer = try VirGLRenderer()
+            defer { try? renderer.destroy() }
+            // An empty stream fails in the bridge before virglrenderer runs, so no raw value exists (IR-830).
+            #expect(throws: GraphicsFailure.self) {
+                try renderer.submit(context: 2, commands: [])
+            }
+            #expect(renderer.submitRejections == [VirGLSubmitRejection(virglResult: Int32.min, messages: [])])
+        }
     #endif
 }

@@ -209,17 +209,18 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
         #if APKRUN_TEST_READBACK
             let sink = messageSink
             _ = sink?.takeMessages()
-        #endif
-        let status = commands.withUnsafeBytes { bytes in
-            gb_submit(renderer, context, bytes.baseAddress, bytes.count)
-        }
-        #if APKRUN_TEST_READBACK
+            var virglResult = Int32.min
+            let status = commands.withUnsafeBytes { bytes in
+                gb_submit_with_result(renderer, context, bytes.baseAddress, bytes.count, &virglResult)
+            }
             if status != GB_OK {
                 submitRejections.append(
-                    VirGLSubmitRejection(
-                        virglResult: gb_last_submit_result(renderer),
-                        messages: sink?.takeMessages() ?? []
-                    ))
+                    VirGLSubmitRejection(virglResult: virglResult, messages: sink?.takeMessages() ?? [])
+                )
+            }
+        #else
+            let status = commands.withUnsafeBytes { bytes in
+                gb_submit(renderer, context, bytes.baseAddress, bytes.count)
             }
         #endif
         try check(status, operation: "submit")

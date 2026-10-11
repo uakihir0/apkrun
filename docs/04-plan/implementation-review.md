@@ -15223,3 +15223,108 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Verification.** One VM run under `lockf`. The command and the result line are in the #022 Notes.
 
+## IR-900: The guest loads one monolithic sepolicy from the boot ramdisk, so the vendor partition's policy text has no runtime effect
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the drmVirgl check, step 4); #035 (the product sepolicy) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** On this image a vendor-side change to the SELinux policy cannot change the policy that the guest runs. The guest loads the monolithic binary policy `/sepolicy` (930,777 bytes, magic `0xf97cff8c`) from the boot ramdisk. The vendor partition holds only build inputs.
+
+**Reason.** The stock `vendor_a` (from the stock super image, through the inject tools) has 14 SELinux files under `/vendor/etc/selinux`: `plat_pub_versioned.cil` 590,074 bytes; `vendor_sepolicy.cil` 305,055; `vendor_file_contexts` 33,745; `vendor_mac_permissions.xml` 2,549; `vendor_property_contexts` 3,406; `vendor_service_contexts` 1,350; `vndservice_contexts` 476; `selinux_denial_metadata` 414; `vendor_keystore2_key_contexts` 183; `vendor_tee_service_contexts` 181; `vendor_hwservice_contexts` 82; `vendor_seapp_contexts` 130; `plat_sepolicy_vers.txt` 7; `genfs_labels_version.txt` 7. It has no `precompiled_sepolicy`, no `*.sha256` hash file, and no `mapping/` directory. The stock system image holds the same 14 names at the same sizes under `/system/etc/selinux`, which is unexpected and is not explained here; it has no `plat_sepolicy.cil`. The ramdisk has no `secilc` either, and neither does the system or the vendor partition. The stage-2 `init` contains the path `/system/bin/secilc` next to the messages `Opening SELinux policy from monolithic file` and `Failed to open monolithic SELinux policy`, and the path `/sepolicy`. The branch is AOSP's split check, which tests `/system/bin/secilc`. The AOSP source is not in the repository, so this is read from the strings and not from the source. All 5 unique `uevent` genfs paths in `vendor_sepolicy.cil` appear in `/sepolicy`, so the binary was built from those CIL files at AOSP build time.
+
+**Verification.** The three extractions are under `/tmp/apkrun-022-pol/` (`vendor`, `system`, `ramdisk`), made read-only with `fsck.erofs` from the pinned erofs-utils 1.9.4 bottle. Its sha256 (`52f58391…`) matches `ThirdParty/ThirdParty.lock.json`. The stock and injected `vendor_a.img` differ.
+
+**Consequence.** A sysfs label, or any allow rule, reaches the guest only through an AOSP build of `/sepolicy`. The `vendor/etc/selinux` text is read at runtime only for the file, service, property, and seapp contexts.
+
+## IR-901: No SELinux compiler is available offline, and the lock has none, so the policy cannot be rebuilt in this task
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035 (the product build) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** No compiler is added in this task. A pinned SELinux userspace (`secilc` or `checkpolicy`, with `libsepol`) is the prerequisite for an offline rebuild, and it needs a new lock entry and its source.
+
+**Reason.** `secilc`, `checkpolicy`, `sefcontext_compile`, and `setfiles` are not on the host `PATH`. `ThirdParty/ThirdParty.lock.json` has no SELinux entry; its only image entry, `erofs-utils` 1.9.4, was used here only to read the images. The image has no `secilc` (IR-900). The product's split inputs are absent: `plat_sepolicy.cil`, the `mapping` CIL, and `plat_sepolicy_and_mapping.sha256`. The monolithic `/sepolicy` needs the full AOSP policy source, which the repository does not contain. Compiling the two CIL files that are present would leave out the private platform types, so the result would not be the policy that the image runs. Nothing was downloaded.
+
+**Consequence.** An edited policy cannot be built or checked on this host. The check that matters is the AOSP build of #035.
+
+## IR-902: No present neverallow rule blocks a sysfs read by SurfaceFlinger, but the platform's private neverallow set is not in the image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); #035 (the product build) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The vendor CIL can name a platform domain, and no neverallow statement in the image blocks a read of a sysfs node by `surfaceflinger`. That check cannot be closed offline, so the AOSP build of #035 decides it.
+
+**Reason.** The two CIL files carry 473 `neverallow` statements: 435 in `plat_pub_versioned.cil` and 38 in `vendor_sepolicy.cil`. None names `sysfs`, `sysfs_gpu`, a genfs path, or a file read by `surfaceflinger`. Two name `surfaceflinger`, at `plat_pub_versioned.cil` lines 8967 and 9798, and both are `property_service set` on SurfaceFlinger property types. The vendor CIL already carries allow rules for platform domains on `sysfs_gpu`, for example `(allow platform_app_202604 sysfs_gpu_202604 (file (read getattr open)))` at line 3682, and the same form for `priv_app`, `untrusted_app_all`, `gmscore_app`, `traceur_app`, and `bluetooth` (lines 3724 to 4126). The form is therefore accepted by the build. The platform's private neverallow rules are not in the image, and neither are its allow rules, so the grants that `surfaceflinger` already holds on `sysfs_gpu` cannot be read here.
+
+**Consequence.** A vendor-only rule for SurfaceFlinger has no visible neverallow conflict, and the candidate allow rule is not proven allowed. #035 must run the check with the private sources.
+
+## IR-903: A file_contexts entry cannot relabel the uevent node, so the second option of IR-761 is wrong
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #035 (the product sepolicy); #022 (step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** A sysfs node takes its label from a `genfscon` rule in the binary policy, not from `file_contexts`. IR-761 offered "a file-context rule that gives that sysfs node a type". That option does not work and is not one of the product options. The options are a `genfscon` rule for the exact uevent path, and an allow rule to a type that SurfaceFlinger can read. IR-761 is on `task/022-egl-drm-diag`, not on main.
+
+**Reason.** The denied node has the default label `sysfs` (IR-760, inode 3405). The monolithic `/sepolicy` has no genfs entry for the path: `/devices/platform/40000000.pci` occurs 0 times. The vendor CIL has 56 `genfscon sysfs` entries. Its PCI GPU entries are for `0000:00:02.0` under `30000000.pci`, `4010000000.pcie`, `3f000000.pcie`, `10000.pci`, or the root bus, and the rest are RTC, net, and test devices. The guest's virtio-gpu is at `0000:00:14.0` under `40000000.pci` (IR-760), so none of them matches. The 11 `/sys` lines of `vendor_file_contexts` cover virtio `net` and `block` only, and none names the denied path.
+
+**Consequence.** The product fix needs a `genfscon` line for the exact path, in addition to the allow rule. A file-context entry is not enough.
+
+## IR-904: No vendor-only experiment is written, because a file that no compiler checks and no boot loads would be an experiment without a test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The vendor-only experiment of step (d) is not written. The answer to "can a vendor-only allow rule for the SurfaceFlinger domain work on this image" is no. The blockers are the loading path (IR-900), the missing compiler and split inputs (IR-901), and the private neverallow set that is outside the image (IR-902). The drmVirgl criteria of #022 stay open, as IR-800 says.
+
+**Reason.** A vendor policy file cannot be compiled here (IR-901), and the device does not read it (IR-900). The only test that would show it works is the T2 boot, which this task does not run. Writing an untested file would add a claim, not evidence (AGENTS §10).
+
+**Consequence.** The fix goes through #035 in the AOSP product, as IR-905 lists.
+
+## IR-905: The product fix must contain a genfscon rule, an allow rule, a rebuilt ramdisk, and no permissive mode
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #035 (the product sepolicy); #022 (criterion 4 of the drmVirgl boot) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1, §11.4 and §6.6; [graphics.md](../02-design/graphics.md) §9 |
+
+**Choice.** For the AOSP product (`Guest/product/sepolicy/`, mapped to `device/apkrun/apkrun_arm64/sepolicy`), #035 must contain:
+
+1. `genfscon sysfs "/devices/platform/40000000.pci/pci0000:00/0000:00:14.0/uevent"` with a type `T`. The path comes from the live guest (IR-760), not from the stock rules.
+2. `allow surfaceflinger T:file read`, with `T` a type that SurfaceFlinger can read. Before choosing `T`, read the allow table of the built `/sepolicy` to see whether `surfaceflinger` already reads `sysfs_gpu`, the type of the stock PCI GPU entries.
+3. The rules in the product's `BOARD_SEPOLICY_DIRS`, and a ramdisk rebuilt from them, because the ramdisk's `/sepolicy` is the only policy that the guest loads.
+4. No `androidboot.selinux=permissive`, and no permissive domain for SurfaceFlinger (IR-761, and [android-image.md](../02-design/android-image.md) §6.6).
+
+**Reason.** Items 1 to 3 are the only sysfs label mechanism on this image (IR-900, IR-903). The neverallow check of the product build is the test that the rule is allowed (IR-902), and the T2 boot in enforcing mode is the test that it works. Item 4 keeps the fix a rule, not a mode switch.
+
+**Consequence.** #022 criterion 4 (the drmVirgl boot) depends on this product build, and not on any vendor-side change.
+
+## IR-906: A binary edit of the ramdisk's `/sepolicy` is the only offline route; it is not done here and needs a follow-up task
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (step 4); a follow-up task (number from GitHub, #098 or later; not filed here) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** A test-only route exists in principle: add an avtab entry and a genfs entry to the ramdisk's `/sepolicy` with a policydb writer. It is not a vendor-side change, so it does not answer the question as asked, and it is not done here. If the maintainer wants it, file a follow-up task that names the policy tool, pinned or reviewed.
+
+**Reason.** The experiment boot (`Experiments/vz-android-boot`) passes an initial ramdisk file directly to `VZLinuxBootLoader` (`initialRamdiskURL`), with no AVB check on that file, so an edited `/sepolicy` in that file could reach the guest without an AOSP build. The repository has no policydb reader or writer, and a hand edit of the binary skips the neverallow check that the build runs (IR-902). That is a large expansion of scope (AGENTS §11), so it is a follow-up and not part of #022.
+
+**Consequence.** No ramdisk or vendor image is changed in this task.
+

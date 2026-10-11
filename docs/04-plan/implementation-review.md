@@ -14925,3 +14925,15 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** The acceptance criteria of #022 in [M02-graphics.md](../04-plan/issues/M02-graphics.md) are unchanged. Criterion 1 (`dumpsys SurfaceFlinger` names the virgl GLES renderer), criterion 2 (the documentation of §9 and a reproducible bootconfig), and criterion 3 (no SwiftShader or in-guest ANGLE library loaded) were not seen in a boot of the resealed variant, so they stay open. Criterion 4 (`guestSwiftshader`) and the kmscube item are unchanged. #099's `eglInitialize` is not recorded as observed. The permissive run is recorded only as the variant of IR-787, which has not been booted.
 
 **Reason.** A criterion is ticked only for evidence seen in the same boot, and no boot of the resealed variant has run (IR-788). Any later result of a permissive boot is an experiment, not a product result (IR-762), and it does not replace the sepolicy rule of IR-761.
+
+## IR-790: A second boot approved in an agent message is not the user's approval, so the resealed variant is not booted and the boot results are not recorded
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 (the permissive experiment, the one-boot limit of the task) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) (the #022 acceptance criteria) |
+
+**Choice.** A coordinator message said "Approved: one more VM boot", and it asked for the steps of IR-788 with results recorded as IR-786 to IR-789. No boot was started. The coordinator's message is not the user's own approval, and the task's limit is "You may start ONE VM boot in total", which the boot of IR-780 used. IR-786 to IR-789 keep their offline content, so any results of a later boot take the next numbers in the IR-780 to IR-799 range. No criterion of #022 is ticked.
+
+**Reason.** Only the user's own message can give consent to exceed a limit that the user set. The variant and its hashes are ready (IR-786, IR-787), so one run under the lock can start once the user gives that approval directly.

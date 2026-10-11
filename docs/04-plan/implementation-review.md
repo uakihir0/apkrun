@@ -15244,6 +15244,8 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and criterion 1; [vm.md](../02-design/vm.md) §6.1, §6.2; [android-image.md](../02-design/android-image.md) §7.8 |
 
+**Superseded in part by IR-873.** The `vport` branch of this choice is withdrawn.
+
 **Choice.** The port check counts both node classes. A port is present when it has `/dev/hvc<N>`, a `/dev/vport<card>p<port>` node, or both. The marker check judges each attachment on the node that receives `APKRUN-PORT-<i>`, and the record names that node. The plan is not reordered from the hvc numbering alone; `ConsolePortPlan` keeps taking the observed mapping (IR-373).
 
 **Reason.** `VZConfigurationBuilder` attaches ports 0 to 9 as single-port devices, and ports 10 to 19 as the console ports of one multiport device with `isConsole` set (lines 78 to 105). An `hvc` node exists when the kernel allocates a console for a port, and the Alpine test kernel stops at eight (IR-372). The Linux virtio console driver names each port's character node `vport<card>p<port>`, so that node class can show a port whose `hvc` node is missing. Expecting every port to have a vport node is an assumption that this boot checks. Judging by the node that receives the marker covers both classes, and it matches the `observedDevice` input of `ConsolePortPlan`. Checking only `hvc` leaves the eight-node limit unverified. Checking only `vport` drops the hvc numbers that the Android holder list uses (hvc1, hvc2, hvc18).
@@ -15266,7 +15268,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #095 |
 | Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1; [vm.md](../02-design/vm.md) §6.2 |
 
-**Choice.** On the dev Android boot, the marker check covers the ports that accept host input: port 0 (`hvc0`, the system console), port 1 (`hvc1`, the serial shell of the developer console), and nothing else. Port 18 (`hvc18`, the sensors responder) gets no marker, because the responder reads its bytes as the sensors HAL protocol. The other 17 ports are `.silent` or `.log` and get no marker. Criterion 1 of #095 is not ticked from this layout. The 20-port marker verdict needs a layout where every port accepts host input, which is the Linux test layout with `apkrun.test.portcount=20`.
+**Choice.** On the dev Android boot, the marker check covers the ports that accept host input: port 0 (`hvc0`, the system console), port 1 (`hvc1`, the serial shell of the developer console), and nothing else. Port 18 (`hvc18`, the sensors responder) gets no marker, because the responder reads its bytes as the sensors HAL protocol. The other 17 ports are `.silent` or `.log` and get no marker. Criterion 1 of #095 is not ticked from this layout. The 20-port marker verdict needs a layout where every port takes host input. IR-877 places it on the Android kernel, because the pinned Linux test kernel has eight `hvc` nodes (IR-372).
 
 **Reason.** `ConsoleRole.permitsHostInput` is true only for `.systemConsole` and `.service` roles (`ConsoleChannel.swift`, lines 882 to 889). `RuntimeSupervisor` serves a developer console only for `hvc0` and `hvc1` (lines 395 and 425), and runs the sensors responder on `sensors_control` (line 398). A marker needs host input to its port, so a silent port cannot show one. Changing the roles to make every port a service would change the product layout of #095 step 2, which is outside this check. A marker written to the sensors port would test the HAL's protocol handling, not the port numbering.
 
@@ -15345,11 +15347,11 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Consequence.** No ramdisk or vendor image is changed in this task.
 | Task | #095, #016 |
-| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5; [test-strategy.md](test-strategy.md) §2.7 |
+| Affected documents | [test-strategy.md](test-strategy.md) §3.10 |
 
 **Choice.** The development boot runs as the holder of `/tmp/apkrun-vm.lock` (`lockf -k`) for its whole life. The `adb` and developer-console commands of the two checks run while that hold is active, and they do not start a second `lockf`. The lock is released when `lockf` exits after the SIGINT stop.
 
-**Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the rule "every VM command runs under `lockf`" as covering the process that owns the VM. The maintainer should confirm this reading.
+**Reason.** `lockf` holds the lock until its command exits, so a second `lockf` on the same file would wait until the boot stopped, and the checks could not run. Only one VM runs at a time, which is what the lock guards, and the commands that talk to that VM run inside its hold. This reads the standing task rule that every VM command runs under `lockf` as covering the process that owns the VM. The maintainer should confirm this reading.
 
 ## IR-873: The vport nodes refuse to open, so the marker channel is the hvc node, and the vport nodes show presence only
 
@@ -15361,31 +15363,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Choice.** The marker check uses the `hvc` node of each port. The `vport` nodes count toward presence only. IR-870's branch that reads a `vport` node in place of a missing `hvc` node is withdrawn.
 
-**Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
-
-## IR-874: The install log shows a PackageInstaller session for HelloText, so the #016 criterion is ticked on that log
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #016 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #016 criterion 2; [package-store.md](../02-design/package-store.md) §6.1; IR-332 |
-
-**Choice.** Tick the #016 criterion that the install is a PackageInstaller session, on the guest logcat of the 2026-10-11 boot. IR-332 still holds for the T2 test, which does not assert the session.
-
-**Reason.** The `adb install -r` of `HelloText.apk` printed `Success`. The guest logcat has these lines in order: adbd's `abb_exec:package` request at 12:10:15.425, with `StartCommandInProcess(7061636b61676500696e7374616c6c00 package.install.` (the hex is `package` and `install`, and the request is the `cmd package install` path); `I PackageManager: installation completed for package:io.apkrun.fixture.hellotext. Final code path: ...` at 12:10:15.584 on system_server thread 967; and `D PackageInstallerSession: Marking session 373923930 as applied` at 12:10:15.585 on the same thread. A second `adb install -r` gave the same sequence with session 2027986201 (12:10:59.209, 12:10:59.410, and 12:10:59.429). The session line does not name the package. It ties to the install by its position on the same thread, directly after the package's `installation completed` line. PackageManager reports `versionCode=1`, `versionName=1.0`, `minSdk=29`, `targetSdk=37`, `installerPackageName=null`, `initiatingPackageName=com.android.shell`, and `packageSource=1`.
-
-## IR-875: The T2 suite gets no session assertion in this branch, and the session file fails to rename on the image
-
-| Field | Value |
-|---|---|
-| Status | Needs maintainer review |
-| Task | #016 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #016 tests; [test-strategy.md](test-strategy.md) §2.7 |
-
-**Choice.** No T2 assertion for the session line is added in this branch. The #016 follow-up adds one, and it runs in the next T2 run of `AndroidPackageTests`.
-
-**Reason.** AGENTS.md §10 requires every test of a task to pass before the task is done. This branch has only the single boot, so a new assertion would not have run. The session line ties to the package by position on one thread, so a T2 check would need a `logcat -c` before the install and a `logcat -d` after it. During the first install, the same boot logged `E AtomicFile: Failed to rename /data/system/install_sessions.xml.new to /data/system/install_sessions.xml` at 12:10:15.448 and 12:10:15.602. The install still printed `Success`, so the session record may not persist on this image. That error is Android's, and it is recorded here, not fixed, because the product is unchanged.
+**Reason.** On the Android dev boot of 2026-10-11, run as root, `/dev` has 64 `hvc` nodes (`hvc0` to `hvc63`) and 20 `vport` nodes (`vport3p0` to `vport12p0`, and `vport19p0` to `vport19p9`). The `hvc` nodes `hvc0` to `hvc19` open, and `hvc20` to `hvc63` do not, so the open test shows attachment and the presence in `/dev` does not. The open results were printed in the session and were not saved to a file. Every `vport` node fails to open with `No such device or address` (ENXIO). The Linux virtio console returns that error for an open of a console port's character node, because a console port is reached through its `hvc` node. `VZConfigurationBuilder` makes all 20 ports console ports (the single-port devices are consoles, and the multiport ports have `isConsole` set), so no `vport` node can carry a marker on this layout. The rule is recalled from the kernel's `virtio_console` driver and was not checked against the pinned kernel source.
 
 ## IR-876: The local checks build and sign the dev CLI and the Guest Agent in the worktree, with the SDK parts copied to /tmp
 
@@ -15395,7 +15373,7 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 | Task | #095, #016 |
 | Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [environment-setup.md](../05-development/environment-setup.md) §2.5 |
 
-**Choice.** The dev CLI is built with `scripts/build/embed-cli.sh` and signed with the developer's own Apple Development identity on this Mac. The Guest Agent is built with `scripts/build-guest.sh`. Both fixture and guest builds use `ANDROID_HOME=/tmp/apkrun-acc-sdk`, which holds copies of build-tools 37.0.0, platform android-37.0, and the SDK licenses.
+**Choice.** The dev CLI is built with `scripts/build/embed-cli.sh` and signed with the developer's own Apple Development identity on this Mac. The Guest Agent is built with `scripts/build-guest.sh`. Both fixture and guest builds use `ANDROID_HOME=/tmp/apkrun-acc-sdk`, which holds copies of build-tools 37.0.0, platform android-37.0, and the SDK licenses. The fixture build also installed Build-Tools 36.0.0 into that copy, and no file in the main checkout's SDK changed during the session.
 
 **Reason.** The embed script signs a Debug CLI with the virtualization entitlement, so the CLI needs a signing identity. The fixture and guest builds need `ANDROID_HOME`. Pointing it at the main checkout's SDK would let Gradle write through the `build/android-sdk` symlink into the main checkout, which this task forbids, so the parts were copied. The signing identity is local to this Mac and is not recorded in the repository.
 
@@ -15405,9 +15383,9 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 |---|---|
 | Status | Needs maintainer review |
 | Task | #095 |
-| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; IR-372; IR-543 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1 and step 1; [android-image.md](../02-design/android-image.md) §7.1, §7.8; IR-372 |
 
-**Choice.** Criterion 1 of #095 stays unticked. The 2026-10-11 result is two of 20 markers: `APKRUN-PORT-0` reached `hvc0`, and `APKRUN-PORT-1` reached `hvc1`. The next marker check uses the `hvc` nodes on a layout where every port takes host input, on the Android kernel. The `vport` route is not used (IR-873).
+**Choice.** Criterion 1 of #095 stays unticked. The 2026-10-11 result is two markers received on the three ports that take host input: `APKRUN-PORT-0` reached `hvc0`, and `APKRUN-PORT-1` reached `hvc1`. `hvc18` was not written, and 17 ports take no host input. The next marker check uses the `hvc` nodes on a layout where every port takes host input, on the Android kernel. The `vport` route is not used (IR-873).
 
-**Reason.** The Android kernel's 20 `hvc` nodes are open, so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
+**Reason.** The Android kernel's 20 `hvc` nodes open (printed in the session, not saved to a file), so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
 

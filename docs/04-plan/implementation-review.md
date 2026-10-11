@@ -14820,3 +14820,17 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 
 **Verification.** The commands and their output lines are in the #022 and #099 Notes. The scratch home was removed, and the boot process and the lock were released.
 
+## IR-801: The guestSwiftshader boot reaches sys.boot_completed under the product SELinux mode; criterion 4 stays open for drmVirgl
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022 |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #022 criterion 4 |
+
+**Choice.** Record the guestSwiftshader boot as observed, under the product condition (the stock test bundle, SELinux Enforcing). Keep criterion 4 unticked, because its drmVirgl half is observed only under the permissive experiment (IR-800).
+
+**Reason.** One dev boot with `--gpu swiftshader` reached `ready` in 11.4 s. `sys.boot_completed` is 1. `getenforce` is `Enforcing`. `ro.hardware.egl` is `angle`, and `dumpsys SurfaceFlinger` names the SwiftShader ANGLE renderer, as the profile expects. The clean stop was a SIGINT, with exit 0. The scratch home was removed, and the lock was released.
+
+**Verification.** The boot log is `/tmp/apkrun-022-sw-boot.log` on the run's host, and the commands are in the same session. The drmVirgl half of criterion 4 still depends on the sepolicy rule of #035.
+

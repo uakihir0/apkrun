@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import GraphicsCore
 import ImageCore
 import VirtualMachineCore
 
@@ -111,6 +112,8 @@ public actor RuntimeSupervisor {
     private var adbPollTask: Task<Void, Never>?
     /// The bundled development Guest Agent, when developer mode is given one (guest-components.md §3).
     private let guestAgentBundle: GuestAgentBundle?
+    /// The development display of scanout 0, or `nil` (`apkrun dev boot --window`, #023).
+    private let developmentDisplay: DevelopmentDisplay?
     /// The development Guest Agent of the boot in flight, from the start of the ADB bridge until the boot ends.
     public private(set) var developmentGuestAgent: DevelopmentGuestAgent?
     /// The loopback TCP port that developer ADB is bound to in this boot: `BootOptions.adbHostPort`, or the port the
@@ -143,9 +146,11 @@ public actor RuntimeSupervisor {
         platform: VZPlatformProfile = .macOS27,
         timeouts: BootTimeouts = .standard,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        guestAgentBundle: GuestAgentBundle? = nil
+        guestAgentBundle: GuestAgentBundle? = nil,
+        developmentDisplay: DevelopmentDisplay? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
+        self.developmentDisplay = developmentDisplay
         self.image = image
         self.instanceStore = instanceStore
         self.options = options
@@ -243,6 +248,14 @@ public actor RuntimeSupervisor {
             for: options.gpuProfile,
             requiredHostCapabilities: image.manifest.gpuProfiles[options.gpuProfile.rawValue]?.requiredHostCapabilities
         )
+        // The display attaches before the guest starts, so the first scanout flush is presented (graphics.md §6.1).
+        if let developmentDisplay, let device = gpuDevices.first {
+            do throws(GraphicsFailure) {
+                try developmentDisplay.attach(to: device)
+            } catch {
+                throw .graphics(error)
+            }
+        }
         let instance: InstanceConfiguration
         do throws(ImageFailure) {
             guard let loaded = try await instanceStore.load(image: image) else {

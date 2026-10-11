@@ -43,6 +43,8 @@ public struct DevBootOptions: Sendable {
     public var guestAgentDirectory: URL?
     /// A package to launch on display 0 once Android is ready (`apkrun dev launch`, #072). Nil launches nothing.
     public var launchPackage: String?
+    /// The window's connection to display 0 (`apkrun dev boot --window`, #023). Nil shows nothing. It needs `drmVirgl`.
+    public var developerDisplay: DeveloperDisplay?
 
     /// Creates options for one development boot.
     public init(
@@ -53,7 +55,8 @@ public struct DevBootOptions: Sendable {
         resetInstance: Bool = false,
         stopWhenReady: Bool = false,
         guestAgentDirectory: URL? = nil,
-        launchPackage: String? = nil
+        launchPackage: String? = nil,
+        developerDisplay: DeveloperDisplay? = nil
     ) {
         self.gpu = gpu
         self.cpuCount = cpuCount
@@ -63,6 +66,7 @@ public struct DevBootOptions: Sendable {
         self.stopWhenReady = stopWhenReady
         self.guestAgentDirectory = guestAgentDirectory
         self.launchPackage = launchPackage
+        self.developerDisplay = developerDisplay
     }
 }
 
@@ -151,8 +155,13 @@ public struct DevBoot: Sendable {
                 captureLogcat: true
             ),
             diagnostics: diagnostics,
-            guestAgentBundle: guestAgentBundle
+            guestAgentBundle: guestAgentBundle,
+            developmentDisplay: options.developerDisplay?.core
         )
+        // The window's events end with the boot, so it can close after Android has stopped.
+        defer {
+            options.developerDisplay?.finish()
+        }
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
         let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)

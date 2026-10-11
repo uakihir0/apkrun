@@ -16118,7 +16118,7 @@ The variant record (`android-bundle.variant.json`) is rewritten with the hash of
 | Task | #016, #099 |
 | Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #016 (Notes); [M02-graphics.md](issues/M02-graphics.md) #099 (Notes) |
 
-**Choice.** Boot 2 used the same command with a second scratch home, installed from the second variant (IR-992 fix). Results, on the ODM-overlay variant:
+**Choice.** Boot 2 used the same command with a second scratch home, installed from the second variant (IR-992 fix). Results, on the ODM-overlay variant (IR-960):
 
 - `getenforce` is `Enforcing`; `ro.hardware.egl` is `mesa`; GLES is `Mesa, virgl`; `sys.boot_completed=1` at 16:56:09.
 - The first failing line for #099 is `init: /system/bin/sh: cannot expand arguments': using deprecated syntax for specifying property 'l in *apkrun.test=egl*) exec /odm/bin/apkrun_egl_test;; esac', use ${name} instead` (10.398971 s). The next line is `Service 'apkrun_egl_test' (pid 3317) exited with status 6` (10.400150 s). The binary did not run, and `apkrun-test.txt` is empty.
@@ -16136,7 +16136,7 @@ The variant record (`android-bundle.variant.json`) is rewritten with the hash of
 | Task | #016 |
 | Affected documents | [M01-android-bring-up.md](issues/M01-android-bring-up.md) #016 (acceptance criteria and Notes) |
 
-**Choice.** The acceptance criteria of #016 gain one criterion, unticked: the Button is tapped with `adb shell input tap` and the debug counter reads 3 after three taps. Criterion 1 is unchanged and stays ticked on the debug hook (IR-924).
+**Choice.** On the ODM-overlay variant (IR-960), the tap is not met. The acceptance criteria of #016 gain one criterion, unticked: the Button is tapped with `adb shell input tap` and the debug counter reads 3 after three taps. Criterion 1 is unchanged and stays ticked on the debug hook (IR-924).
 
 **Reason.** The tick needs a counter of 3 after three taps at the button. Boot 2 read 0, and no tap reached the button (IR-995), so the criterion is not met. #016 had no separate tap criterion: criterion 1 was ticked on the hook, and its text says the click was not driven. A separate criterion keeps the open item visible. It adds no requirement, no task, and no traceability row.
 

@@ -89,20 +89,29 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
     }
 }
 
-/// The AppKit event loop of the development display. It runs on the main thread.
+/// The AppKit event loop of the development windows.
+///
+/// `run()` must be called on the main thread, from a context that is neither an actor job nor a main-queue block. A
+/// job that blocks in the loop stops the main actor's tasks, and a main-queue block that blocks in it stops the queue
+/// that the virtual machine uses (IR-1103). The caller runs the work that the loop serves on other tasks.
 public enum DisplayApplication {
-    /// Runs the event loop on the calling thread, after `setup`, until `stop()`. Call it on the main thread.
-    @MainActor
-    public static func run(setup: @MainActor () -> Void) {
+    /// A stop that arrives before or during the loop. It is kept, so a loop that starts later still returns.
+    private static let stopRequest = StopRequest()
+
+    /// Runs the event loop on the calling thread until `stop()`.
+    public static func run() {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
-        setup()
         application.activate(ignoringOtherApps: true)
+        guard !stopRequest.isRequested else {
+            return
+        }
         application.run()
     }
 
     /// Stops the event loop. Any thread may call it. The loop returns after the current event.
     public static func stop() {
+        stopRequest.request()
         DispatchQueue.main.async {
             NSApplication.shared.stop(nil)
             // A posted event wakes the loop, so it sees the stop at once.
@@ -120,5 +129,20 @@ public enum DisplayApplication {
                 NSApplication.shared.postEvent(event, atStart: true)
             }
         }
+    }
+}
+
+/// The flag that `DisplayApplication.stop` sets, read by the loop's start.
+// UNCHECKED-SENDABLE: the flag is written and read under its lock, from any thread.
+private final class StopRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requested = false
+
+    var isRequested: Bool {
+        lock.withLock { requested }
+    }
+
+    func request() {
+        lock.withLock { requested = true }
     }
 }

@@ -25,6 +25,20 @@ struct APKRunCommand: AsyncParsableCommand {
 
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        #if APKRUN_EMBEDDED_RUNTIME
+            if DisplayWindowSession.isRequested(arguments) {
+                // AppKit runs on this thread, which is the main thread until the first suspension. Nothing is awaited
+                // before the loop starts, so the loop never runs inside an actor job or a main-queue block (IR-1103).
+                DisplayWindowSession.runEventLoop(showStatistics: arguments.contains("--stats")) {
+                    await runCommand(arguments)
+                }
+                return
+            }
+        #endif
+        await runCommand(arguments)
+    }
+
+    static func runCommand(_ arguments: [String]) async {
         let shouldRenderJSON = usesJSONErrorOutput(arguments)
         var command: ParsableCommand
         do {

@@ -81,7 +81,12 @@
                 )
             )
 
-            let stops = AsyncStream.makeStream(of: Void.self)
+            // With `--window`, the session holds the stop requests, because the window's close button makes one too.
+            let session = window ? DisplayWindowSession.current : nil
+            guard !window || session != nil else {
+                throw CLIFailure.invalidArgument(argument: "--window", reason: "entry")
+            }
+            let stops = session?.stops ?? AsyncStream.makeStream(of: Void.self)
             signal(SIGINT, SIG_IGN)
             signal(SIGTERM, SIG_IGN)
             let sources = [SIGINT, SIGTERM].map { number in
@@ -112,32 +117,11 @@
                 }
             }
 
-            guard window else {
-                try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
-                return
+            if let session {
+                // The window's session runs the boot here. The event loop is on the main thread, and it ends with the command.
+                options.developerDisplay = session.display
             }
-            // Display 0 is the 1024 x 768 mode of the scanout until #028 gives the image's default mode.
-            let display = DeveloperDisplay(pixelWidth: 1024, pixelHeight: 768)
-            options.developerDisplay = display
-            let showStatistics = stats
-            // The boot runs off the main thread, and the window's event loop runs on it. Ending the boot stops the loop,
-            // and closing the window ends the boot.
-            let boot = Task.detached {
-                defer {
-                    DisplayApplication.stop()
-                }
-                try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
-            }
-            await MainActor.run {
-                let pump = DisplayPump(display: display, showStatistics: showStatistics) {
-                    stops.continuation.yield()
-                }
-                DisplayApplication.run {
-                    pump.start()
-                }
-                pump.stop()
-            }
-            try await boot.value
+            try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
         }
     }
 #endif

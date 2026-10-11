@@ -24,13 +24,15 @@
             self.onWindowClosed = onWindowClosed
         }
 
-        /// Starts the pump. Call it on the main actor, before the event loop runs.
+        /// Starts the pump. It returns at once, and the events are handled on the main actor once the loop runs.
         func start() {
             tasks.append(
                 Task { @MainActor in
                     for await event in display.events {
                         handle(event)
                     }
+                    // The boot has ended, so the window goes with it.
+                    stop()
                 }
             )
             tasks.append(
@@ -43,7 +45,7 @@
             )
         }
 
-        /// Stops the pump and closes the window. The boot has ended.
+        /// Stops the statistics and the frames, and closes the window.
         func stop() {
             for task in tasks {
                 task.cancel()

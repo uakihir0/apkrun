@@ -451,7 +451,7 @@ private func transfer(
     #expect(decoded.operations.count == 6)
 
     let replayed = FakeVirGLEngine(onFence: { _ in })
-    #expect(replay(decoded, onto: replayed) == nil)
+    #expect(replay(decoded, onto: replayed).isEmpty)
     let recordedCalls = ref.engine.calls.filter { call in
         switch call {
         case .capset, .poll: return false
@@ -521,8 +521,30 @@ private func sessionResponses(recorder: VirGLRecorder?) async throws -> (
     let decoded = try VirGLRecording.decoded(from: data)
     #expect(decoded == recorder.recording)
     let replayed = FakeVirGLEngine(onFence: { _ in })
-    #expect(replay(decoded, onto: replayed) == nil)
+    #expect(replay(decoded, onto: replayed).isEmpty)
     #expect(replayed.calls == fake.calls)
+}
+
+@Test func aReplayGoesOnPastAFailingCall() throws {
+    let recording = VirGLRecording(operations: [
+        .createContext(id: 1, name: "gl"),
+        .submit(context: 1, commands: [1, 0, 0, 0]),
+        .submit(context: 1, commands: [2, 0, 0, 0]),
+        .destroyContext(id: 1),
+    ])
+    let fake = FakeVirGLEngine(onFence: { _ in })
+    fake.fail("submit")
+    let failures = replay(recording, onto: fake)
+
+    // Both submits fail, and the destroy after them still runs, as it does on the device (IR-460).
+    #expect(failures.map(\.index) == [1, 2])
+    #expect(
+        fake.calls == [
+            .createContext(1, "gl"),
+            .submit(context: 1, bytes: [1, 0, 0, 0]),
+            .submit(context: 1, bytes: [2, 0, 0, 0]),
+            .destroyContext(1),
+        ])
 }
 
 @Test func aRecordingFromAnotherVersionIsRejected() throws {

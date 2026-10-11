@@ -647,9 +647,9 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
     // the renderer, and neither touches `counters`: the test-only readback is not a host readback of the normal
     // path (graphics.md §7).
     extension VirtioGPUDevice {
-        /// Replays `recording` on this device's renderer, in order. Returns the first call that failed, with its index,
-        /// or `nil` when every call succeeded.
-        func replayRecordingForTest(_ recording: VirGLRecording) -> (index: Int, failure: GraphicsFailure)? {
+        /// Replays `recording` on this device's renderer, in order, as the device would run it: a failing call is kept
+        /// and the replay goes on. Returns every call that failed, with its index, and an empty array when all succeeded.
+        func replayRecordingForTest(_ recording: VirGLRecording) -> [(index: Int, failure: GraphicsFailure)] {
             guard let backend else {
                 preconditionFailure("A replay needs the VirGL renderer of a drmVirgl device.")
             }

@@ -58,6 +58,7 @@ public final class VirGLRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var operations: [VirGLOperation] = []
 
+    /// Creates an empty recorder.
     public init() {}
 
     /// The operations recorded so far.
@@ -160,10 +161,14 @@ final class RecordingVirGLEngine: VirGLEngine {
     }
 }
 
-/// Replays a recording on `engine`, in order, and stops at the first failing call.
+/// Replays a recording on `engine`, in order. Like the device, it goes on after a failing call: the device counts the
+/// failure and still answers the guest (IR-460), so a stream with rejected calls replays the same way (IR-811).
 ///
-/// The returned index is the position of the operation that failed, or `nil` when every call succeeded.
-func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> (index: Int, failure: GraphicsFailure)? {
+/// It returns every failing call, with its position in the recording. An empty result means every call succeeded.
+func replay(
+    _ recording: VirGLRecording, onto engine: any VirGLEngine
+) -> [(index: Int, failure: GraphicsFailure)] {
+    var failures: [(index: Int, failure: GraphicsFailure)] = []
     for (index, operation) in recording.operations.enumerated() {
         do throws(GraphicsFailure) {
             switch operation {
@@ -192,8 +197,8 @@ func replay(_ recording: VirGLRecording, onto engine: any VirGLEngine) -> (index
                 try engine.reset()
             }
         } catch {
-            return (index, error)
+            failures.append((index, error))
         }
     }
-    return nil
+    return failures
 }

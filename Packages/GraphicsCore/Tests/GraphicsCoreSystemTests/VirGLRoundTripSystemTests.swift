@@ -128,6 +128,22 @@ private let syntheticFixtureSHA256 = "5a3ffaea5130102d90b28456975512f9fd8359f869
     /// with a separate script that applies the box rule of `expectedSyntheticScanout`, and it is pinned here (IR-515).
     private let syntheticScanoutSHA256 = "41172b76173b4dd26e522abf890495d98aff5f9d2cc601ee617d48b4b7343b86"
 
+    /// The environment variable that names the `kmscube` recording of the development Linux run (M02-graphics.md #022
+    /// step 3). The recording is 24.6 MiB, so it is not in the repository, and the test skips without the variable.
+    private let kmscubeRecordingVariable = "APKRUN_TEST_KMSCUBE_RECORDING"
+
+    /// The SHA-256 of the `kmscube` recording that the Linux run wrote (IR-812). The run's command is in the IR entry.
+    private let kmscubeRecordingSHA256 = "0f7010c7bd0e10228900420859a1d8d035fe47be2733a40d656b71886c0df46a"
+
+    /// The positions of the 61 calls that the renderer rejects on replay. They are exactly the `submit` calls of the
+    /// recording, the SUBMIT_3D of the kmscube context (IR-813). The live run logged 61 renderer failures too (IR-605).
+    /// The test pins them, so a change in either direction is visible. It does not claim that the renderer draws.
+    private let kmscubeReplayFailures: [Int] = [
+        16, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55, 57, 59, 61, 63, 65, 67, 69,
+        71, 73, 75, 77, 79, 81, 83, 85, 87, 89, 91, 93, 95, 97, 99, 101, 103, 105, 107, 109, 111, 113, 115, 117,
+        119, 121, 123, 125, 127, 129, 131, 133, 135, 137, 139,
+    ]
+
     /// The largest difference that a replayed byte may have from the expected byte. The synthetic session has no
     /// rasterization, so its uploads must match exactly (IR-516).
     private let syntheticScanoutTolerance = 0
@@ -284,7 +300,7 @@ extension VirGLRendererSuite {
 
         let recording = try VirGLRecording.decoded(from: try recorder.recording.encoded())
         let fresh = try VirGLRenderer(onFenceCompleted: { _ in })
-        #expect(replay(recording, onto: fresh) == nil)
+        #expect(replay(recording, onto: fresh).isEmpty)
         var readBack = [UInt8](repeating: 0, count: 16 * 16 * 4)
         try fresh.transferRead(box(width: 16, height: 16), into: &readBack)
         #expect(readBack == pattern)
@@ -331,7 +347,7 @@ extension VirGLRendererSuite {
             let device = try VirtioGPUDevice.virgl()
             defer { device.deviceWillStop() }
             let recording = try VirGLRecording.decoded(from: Data(contentsOf: syntheticFixtureURL()))
-            #expect(device.replayRecordingForTest(recording) == nil)
+            #expect(device.replayRecordingForTest(recording).isEmpty)
 
             let expected = expectedSyntheticScanout(from: recording)
             #expect(sha256Hex(Data(expected)) == syntheticScanoutSHA256)
@@ -342,6 +358,41 @@ extension VirGLRendererSuite {
             #expect(sha256Hex(Data(scanout)) == syntheticScanoutSHA256)
 
             // The replay and the test-only readback leave the normal-path counters at zero (graphics.md §7).
+            let counters = device.statistics
+            #expect(counters.hostReadbacks == 0)
+            #expect(counters.guestReadbacks == 0)
+        }
+
+        @Test(
+            .enabled(
+                if: MTLCreateSystemDefaultDevice() != nil
+                    && ProcessInfo.processInfo.environment[kmscubeRecordingVariable] != nil,
+                "Set APKRUN_TEST_KMSCUBE_RECORDING to the kmscube recording (M02-graphics.md #022 step 3)."
+            )
+        )
+        func theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks() throws {
+            guard let runtime = runtimeDirectory() else {
+                Issue.record("The built VirGL runtime cache is unavailable.")
+                return
+            }
+            #expect(setenv("APKRUN_VIRGL_RUNTIME_PATH", runtime, 1) == 0)
+
+            let path = try #require(ProcessInfo.processInfo.environment[kmscubeRecordingVariable])
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            #expect(sha256Hex(data) == kmscubeRecordingSHA256)
+            let recording = try VirGLRecording.decoded(from: data)
+
+            let device = try VirtioGPUDevice.virgl()
+            defer { device.deviceWillStop() }
+            let failures = device.replayRecordingForTest(recording)
+            #expect(failures.map(\.index) == kmscubeReplayFailures)
+            #expect(
+                failures.allSatisfy { failure in
+                    if case .submit = recording.operations[failure.index] { return true }
+                    return false
+                })
+
+            // The replay runs through the device's renderer. The normal-path counters must stay at zero (graphics.md §7).
             let counters = device.statistics
             #expect(counters.hostReadbacks == 0)
             #expect(counters.guestReadbacks == 0)

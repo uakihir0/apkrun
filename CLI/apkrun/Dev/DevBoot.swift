@@ -3,6 +3,7 @@
     import Dispatch
     import Foundation
     import RuntimeHost
+    import WindowingCore
 
     struct DevBootCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -24,6 +25,15 @@
 
         @Flag(name: .long, help: "Copy the kernel console (hvc0) to standard output.")
         var console = false
+
+        @Flag(
+            name: .long,
+            help: "Show display 0 in a development window. Needs `--gpu virgl`. Closing it stops Android."
+        )
+        var window = false
+
+        @Flag(name: .long, help: "Show the frame rate and the pixel counters in the window, and log them every second.")
+        var stats = false
 
         @Option(name: .long, help: "Guest vCPUs for a new instance (1-16).")
         var cpus = 4
@@ -52,8 +62,12 @@
             guard (8...256).contains(userdataGib) else {
                 throw CLIFailure.invalidArgument(argument: "--userdata-gib", reason: "range")
             }
+            // The window shows the scanout of the drmVirgl device, and the other profiles have no presenter (#023).
+            guard !window || profile == .virgl else {
+                throw CLIFailure.invalidArgument(argument: "--window", reason: "profile")
+            }
             let gibibyte: UInt64 = 1024 * 1024 * 1024
-            let options = DevBootOptions(
+            var options = DevBootOptions(
                 gpu: profile,
                 cpuCount: cpus,
                 memoryBytes: UInt64(memoryGib) * gibibyte,
@@ -83,7 +97,7 @@
             }
 
             let copyConsole = console
-            try await DevBoot().run(options: options, stopRequests: stops.stream) { event in
+            let onEvent: @Sendable (DevBootEvent) -> Void = { event in
                 switch event {
                 case .state(let state):
                     Output.writeLogLine("state: \(state)", toStandardError: true)
@@ -97,6 +111,33 @@
                     Output.writeLogLine("warning: \(text)", toStandardError: true)
                 }
             }
+
+            guard window else {
+                try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
+                return
+            }
+            // Display 0 is the 1024 x 768 mode of the scanout until #028 gives the image's default mode.
+            let display = DeveloperDisplay(pixelWidth: 1024, pixelHeight: 768)
+            options.developerDisplay = display
+            let showStatistics = stats
+            // The boot runs off the main thread, and the window's event loop runs on it. Ending the boot stops the loop,
+            // and closing the window ends the boot.
+            let boot = Task.detached {
+                defer {
+                    DisplayApplication.stop()
+                }
+                try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
+            }
+            await MainActor.run {
+                let pump = DisplayPump(display: display, showStatistics: showStatistics) {
+                    stops.continuation.yield()
+                }
+                DisplayApplication.run {
+                    pump.start()
+                }
+                pump.stop()
+            }
+            try await boot.value
         }
     }
 #endif

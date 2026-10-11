@@ -479,3 +479,11 @@ def test_nonstandard_header_sizes_are_refused() -> None:
     extended = raw[:8] + struct.pack("<H", 32) + raw[10:28] + bytes(4) + raw[28:]
     with pytest.raises(SparseImageError, match="standard sparse header sizes"):
         rewritten(extended, [])
+
+
+def test_bytes_after_the_last_chunk_are_refused() -> None:
+    """Bytes after the last chunk are not part of the image, and a rewrite would drop them."""
+    raw, _expanded = block_sparse((CHUNK_FILL, 1, b"abcd"))
+    with pytest.raises(SparseImageError, match="bytes follow the last sparse chunk"):
+        rewritten(raw + b"xyz", [])
+    assert rewritten(raw, []) == raw

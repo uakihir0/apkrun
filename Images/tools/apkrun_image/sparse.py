@@ -710,9 +710,9 @@ def rewrite_ranges(
     empty `replacements` gives back the input bytes. A chunk cut by a replacement keeps its type on
     both sides of the cut. `out` must be a new, empty, seekable stream. Return the chunk count.
 
-    Only the standard 28-byte file header and 12-byte chunk headers are accepted, and an image with
-    a whole-image checksum or CRC32 chunks is refused, because those values would have to be
-    recomputed.
+    Only the standard 28-byte file header and 12-byte chunk headers are accepted. An image with a
+    whole-image checksum or CRC32 chunks is refused, because those values would have to be
+    recomputed, and so is an image with bytes after its last chunk, which a rewrite would drop.
     """
     header = read_header(stream)
     if header.file_header_size != FILE_HEADER_SIZE or header.chunk_header_size != CHUNK_HEADER_SIZE:
@@ -769,6 +769,8 @@ def rewrite_ranges(
 
     if cursor != header.total_blocks:
         raise SparseImageError("sparse chunks do not cover the declared output size")
+    if stream.read(1):
+        raise SparseImageError("bytes follow the last sparse chunk and cannot be rewritten")
     out.seek(0)
     out.write(
         struct.pack(

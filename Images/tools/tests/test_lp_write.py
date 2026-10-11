@@ -8,6 +8,7 @@ extents do not begin or end, so the replacement has to split chunks.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from apkrun_image import lp, sparse
+from apkrun_image import lp, lp_write, sparse
 from apkrun_image.lp import LpMetadataError
 from apkrun_image.lp_write import (
     LpWriteError,
@@ -30,6 +31,7 @@ from apkrun_image.sparse import (
     CHUNK_FILL,
     CHUNK_RAW,
     SPARSE_MAGIC,
+    RangeReplacement,
     rewrite_ranges,
 )
 
@@ -384,6 +386,133 @@ def test_checksums_of_every_copy_are_counted(tmp_path: Path) -> None:
     path, _logical = make_super(tmp_path)
     with path.open("rb") as stream:
         assert check_copies(stream) == 2 + 2 * SLOT_COUNT
+
+
+def test_damaged_magic_in_a_backup_slot_is_refused_not_skipped(tmp_path: Path) -> None:
+    """A slot that is not all zero must parse, so a damaged magic is refused, not skipped."""
+    backup_slot_2 = lp.METADATA_START + SLOT_COUNT * METADATA_MAX + 2 * METADATA_MAX
+    path, _logical = make_super(tmp_path, corrupt=backup_slot_2)
+    with path.open("rb") as stream, pytest.raises(LpMetadataError):
+        check_copies(stream)
+
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(b"abc")
+    with pytest.raises(LpMetadataError):
+        replace_partition(path, "vendor_a", image_path, tmp_path / "magic-out.img")
+    assert not list(tmp_path.glob(".magic-out.img.partial"))
+
+
+def test_output_that_appears_during_the_write_is_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The output is linked into place, so a file that appears during the write is kept."""
+    source, _logical = make_super(tmp_path)
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(b"abc")
+    destination = tmp_path / "late-out.img"
+    real_rewrite = lp_write.rewrite_ranges
+
+    def appearing(stream: io.BufferedIOBase, out: io.BufferedIOBase, replacements: list) -> int:
+        destination.write_bytes(b"written by someone else")
+        return real_rewrite(stream, out, replacements)
+
+    monkeypatch.setattr(lp_write, "rewrite_ranges", appearing)
+    with pytest.raises(LpWriteError, match="already exists"):
+        replace_partition(source, "vendor_a", image_path, destination)
+
+    assert destination.read_bytes() == b"written by someone else"
+    assert not list(tmp_path.glob(".late-out.img.partial"))
+
+
+def test_partial_name_that_is_an_input_is_refused_and_left_alone(tmp_path: Path) -> None:
+    """The partial name of an output is never deleted when it names an input."""
+    source, _logical = make_super(tmp_path, name=".out.img.partial")
+    before = source.read_bytes()
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(b"abc")
+
+    with pytest.raises(LpWriteError, match="partial name is an input"):
+        replace_partition(source, "vendor_a", image_path, tmp_path / "out.img")
+
+    assert source.read_bytes() == before
+
+
+def _tampered_writer(
+    monkeypatch: pytest.MonkeyPatch, extra: list[RangeReplacement] | None, image_bytes: bytes | None
+) -> None:
+    """Make the rewrite change the output, so that the post-write checks must refuse it."""
+    real_rewrite = lp_write.rewrite_ranges
+
+    def tampered(stream: io.BufferedIOBase, out: io.BufferedIOBase, replacements: list) -> int:
+        changed = list(replacements)
+        if image_bytes is not None:
+            flipped = io.BytesIO(image_bytes)
+            changed = [dataclasses.replace(item, source=flipped) for item in changed]
+        changed.extend(extra or [])
+        return real_rewrite(stream, out, changed)
+
+    monkeypatch.setattr(lp_write, "rewrite_ranges", tampered)
+
+
+def test_post_write_check_refuses_a_partition_image_that_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The written partition must hold the image, so a changed byte of the image is refused."""
+    source, _logical = make_super(tmp_path)
+    image = make_content(700 * KIB, seed=5)[:-100]
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(image)
+    _tampered_writer(monkeypatch, None, bytes([image[0] ^ 0xFF]) + image[1:])
+    destination = tmp_path / "differs-out.img"
+
+    with pytest.raises(LpWriteError, match="differs from the image"):
+        replace_partition(source, "vendor_a", image_path, destination)
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".differs-out.img.partial"))
+
+
+def test_post_write_check_refuses_a_changed_other_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partition other than the target must read back unchanged, so a change there is refused."""
+    source, _logical = make_super(tmp_path)
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(b"abc")
+    extra = RangeReplacement(
+        offset=2 * MIB - BLOCK,
+        size=BLOCK,
+        source=io.BytesIO(b"\xab" * BLOCK),
+        source_offset=0,
+        source_size=BLOCK,
+    )
+    _tampered_writer(monkeypatch, [extra], None)
+    destination = tmp_path / "other-out.img"
+
+    with pytest.raises(LpWriteError, match="its data changed"):
+        replace_partition(source, "vendor_a", image_path, destination)
+    assert not destination.exists()
+
+
+def test_post_write_check_refuses_changed_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The metadata region must stay byte-identical, so a change to the backup geometry fails."""
+    source, _logical = make_super(tmp_path)
+    image_path = tmp_path / "image.img"
+    image_path.write_bytes(b"abc")
+    extra = RangeReplacement(
+        offset=lp.GEOMETRY_OFFSET + lp.GEOMETRY_SIZE,
+        size=BLOCK,
+        source=io.BytesIO(bytes(BLOCK)),
+        source_offset=0,
+        source_size=BLOCK,
+    )
+    _tampered_writer(monkeypatch, [extra], None)
+    destination = tmp_path / "metadata-out.img"
+
+    with pytest.raises(LpWriteError, match="metadata bytes differ"):
+        replace_partition(source, "vendor_a", image_path, destination)
+    assert not destination.exists()
 
 
 def test_corrupt_primary_geometry_is_refused(tmp_path: Path) -> None:

@@ -1,16 +1,17 @@
 """Replace the data of one linear logical partition in a liblp super image (#099, IR-680).
 
-The writer changes the bytes of an existing linear partition and nothing else. The geometry, the
-metadata copies, the partition table, and every other partition stay byte-identical, so the
-metadata does not change and its checksums stay valid. A new image may be smaller than its
-partition: the rest of the partition is zero. A larger image is refused with
-`PartitionTooLargeError`, because growing a partition changes the metadata, and this writer does
-not make that change (IR-682).
+The writer changes the bytes of one existing linear partition. The geometry, the metadata copies,
+and the partition table stay byte-identical, so the metadata does not change and its checksums stay
+valid. A new image may be smaller than its partition: the rest of the partition is zero. A larger
+image is refused with `PartitionTooLargeError`, because growing a partition changes the metadata,
+and this writer does not make that change (IR-682).
 
 The super must be a sparse image, the form that the manifest records. The output is a sparse image
-with the same header and the same chunks outside the partition. `rewrite_ranges` encodes the new
-data. Before the output is published, the writer checks the partition table, the metadata bytes,
-the checksums of every metadata copy, the new data, and every other partition against the input.
+whose chunks outside the partition are the input's chunk records, so the free space between
+partitions is copied, not changed. `rewrite_ranges` encodes the new data. Before the output is
+published, the writer compares the partition table, the metadata bytes, the checksums of every
+metadata copy, the new data, and every other partition with data against the input. The free space
+is not compared separately.
 """
 
 from __future__ import annotations
@@ -85,8 +86,9 @@ def check_copies(stream: BinaryIO) -> int:
     """Check the checksums of both geometry copies and of every metadata copy in use.
 
     Each primary slot is at `METADATA_START + slot * metadata_max_size`, and each backup slot
-    follows the primary slots. A slot without the liblp magic is unused and is skipped. Return the
-    number of copies that were checked. Raise `LpMetadataError` for a checksum or layout mismatch.
+    follows the primary slots. A slot that is entirely zero is unused and is skipped. Any other
+    slot is parsed, so a damaged magic or a checksum mismatch is refused. Return the number of
+    copies that were checked. Raise `LpMetadataError` for a checksum or layout mismatch.
     """
     primary = _read_geometry(stream, lp.GEOMETRY_OFFSET)
     backup = _read_geometry(stream, lp.GEOMETRY_OFFSET + lp.GEOMETRY_SIZE)
@@ -101,7 +103,7 @@ def check_copies(stream: BinaryIO) -> int:
         for slot in range(primary.metadata_slot_count):
             offset = base + slot * primary.metadata_max_size
             blob = read_range(stream, offset, primary.metadata_max_size)
-            if struct.unpack_from("<I", blob)[0] != lp.LP_METADATA_MAGIC:
+            if blob == bytes(len(blob)):
                 continue
             lp.parse_metadata(blob, primary)
             copies += 1
@@ -230,15 +232,20 @@ def replace_partition(
     """Write a copy of the sparse super `source` with `partition` holding `image`.
 
     `destination` must not exist, and it must be in a directory that exists. The copy is written
-    beside it as a partial file, checked, and then renamed into place, so a failed write leaves no
-    output. Raise `LpWriteError` (or `PartitionTooLargeError`) for an input that the writer refuses.
+    beside it as a partial file, checked, and then linked to `destination`. The link fails if the
+    destination exists, so no file is overwritten, and a failed write leaves no output.
+
+    Raise `LpWriteError` or `PartitionTooLargeError` for an input or an output that the writer
+    refuses. Raise `LpMetadataError` for damaged liblp metadata, and `SparseImageError` for a
+    damaged or unsupported sparse container.
     """
+    partial = destination.with_name(f".{destination.name}.partial")
     if source.resolve() == destination.resolve():
         raise LpWriteError("the output must not be the super image that it is written from")
+    if partial.resolve() in (source.resolve(), image.resolve()):
+        raise LpWriteError(f"{partial}: the partial name is an input")
     if destination.exists():
         raise LpWriteError(f"{destination}: the output already exists")
-    partial = destination.with_name(f".{destination.name}.partial")
-    partial.unlink(missing_ok=True)
     try:
         with (
             source.open("rb") as super_stream,
@@ -246,7 +253,11 @@ def replace_partition(
             partial.open("w+b") as out,
         ):
             result = _write(super_stream, partition, image_stream, out)
-        os.replace(partial, destination)
+        try:
+            os.link(partial, destination)
+        except FileExistsError as error:
+            raise LpWriteError(f"{destination}: the output already exists") from error
+        partial.unlink()
     except BaseException:
         partial.unlink(missing_ok=True)
         raise

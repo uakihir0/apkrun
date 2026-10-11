@@ -16378,3 +16378,30 @@ Round 2 (after the third boot): a second reviewer found eight items, and each is
 **Reason.** Each finding was verified against the code before the fix. The fixes keep the normal path's counters at zero and do not add a readback. The T0 suite is 175 passing, and the T1 test still passes.
 
 **Verification.** `swift test --filter GraphicsCoreTests` (175 passed), `--filter WindowingCoreTests` (10 passed), `--filter RuntimeCoreTests` (145 passed, after the fix), `swift build --build-tests` (exit 0 after the fix).
+
+## IR-1111: Without the window, the guest's SurfaceFlinger still aborts on "no suitable EGLConfig"; the bundle differs from the reference
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023, #099, #016 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (status); [graphics.md](../02-design/graphics.md) §16; IR-1106 |
+
+**Choice.** The third boot (no `--window`, `--gpu virgl`, `--console`) reproduces the failure, so the window is not its trigger. Guest logcat, `logcat-20261011T201809Z.log`, from the boot of `/tmp/apkrun-023/bin/apkrun` built at HEAD 7b9ee61 with the bundle `/tmp/apkrun-022-sepol-work/bundle/android-bundle`:
+
+```
+10-11 20:18:13.430   707   707 D SurfaceFlinger: Threaded RenderEngine with SkiaGL Backend (Ganesh)
+10-11 20:18:13.452   707   742 W SurfaceFlinger: no suitable EGLConfig found, trying a simpler query
+10-11 20:18:13.452   707   742 F SurfaceFlinger: no suitable EGLConfig found, giving up (format: 1, vendor: Android, version: 1.4 Android META-EGL, ...
+10-11 20:18:13.452   707   742 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 742 (surfaceflinger), pid 707 (surfaceflinger)
+```
+
+The renderer line was never printed: SurfaceFlinger aborted before `vendor` and `version`. The boot logged 50 restarts (`Using HWComposer service`) in about two minutes. The reference boot (`/tmp/apkrun-odmc/session1` and `home-logs/guest/logcat-20261011T164804Z.log`) printed `SurfaceFlinger: vendor : Mesa` and `SurfaceFlinger: version : OpenGL ES 3.0 Mesa 26.1.8` at 16:48:08.420, with no `no suitable EGLConfig` line.
+
+**Caveat 1, the bundle differs.** The reference boot used `/tmp/apkrun-odmc/odm4/bundle/android-bundle`. The bundle of this boot is `/tmp/apkrun-022-sepol-work/bundle/android-bundle`. The two differ in `manifest.json` (sha256 `37d4def6…` against `cdf138fb…`), in `disks/os.img` (`8826d4dc…` against `2486e86f…`), and in `boot/ramdisk.img` (`3abc7297…` against `9f159a2a…`). So the failing bundle is not the one that ran SurfaceFlinger on Mesa virgl, and "this variant" in the coordinator's wording is not established.
+
+**Caveat 2, the build is not the pre-#023 build.** Without a presenter, the #023 code is inert: `gb_load_present_api` only resolves symbols, and the flush and `SET_SCANOUT` paths answer as before. I did not boot main (`e09291b`) with this bundle, and no further boot is allowed. The scanout format, the EDID, and the mode are created by the device whether or not a window exists, so no window-only setting differs. Only the presenter attach differs, and it did not run here.
+
+**Verification.** `/tmp/apkrun-023/evidence/boot3-sf-lines.txt`, `logcat-boot3-no-window.log`, `boot3.err`. SIGINT was ignored for 25 s (the boot never reached ready, IR-1105), so the boot was stopped with SIGKILL. No VM process is left, the lock is free, and the scratch home was removed.
+
+**Reason.** The window is not the trigger, which answers the question asked of this boot. Whether the cause is the user-named bundle or the build cannot be separated without one more boot: the reference bundle `odm4` with this build, without `--window`. That boot needs the maintainer's approval, because the allowance was for this diagnosis only.

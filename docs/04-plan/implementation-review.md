@@ -14740,7 +14740,7 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 |---|---|
 | Status | Needs maintainer review |
 | Task | #099 (the verity step, step 4) |
-| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-747; `docs/../Images/reference/16373615/expected-differences.yaml` (the digest note) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6; IR-747; [expected-differences.yaml](../../Images/reference/16373615/expected-differences.yaml) (the digest note) |
 
 **Choice.** `bundle_variant._bootconfig_values` builds a document with one top-level artifact and the chained partitions of the variant's disk (the chained `vbmeta_*` partitions with the `vbmeta` kind, the others with the image kind), and it calls `avb.calculate_vbmeta_bootconfig` on it. The first version had its own loop, and a review found the two could drift. Decision needed: whether `calculate_vbmeta_bootconfig` should accept a vbmeta source directly, so that the document is not needed.
 
@@ -14757,3 +14757,51 @@ The app list (§4.2) allows only the identifiers it names. §4.5 fails `A WITH E
 **Choice.** A reviewer read `c29aed5..HEAD` and reported these. Fixed: (1) a bootconfig value on the last line, or before a blank line, lost its newline, because the match consumed it; the pattern now stops at the closing quote and the newline is kept, with tests. (2) The reseal record's identity checks passed when two fields were both missing; each field must now be a non-empty string, and the descriptors are read from the two files with the vendored avbtool and compared with the record and with each other. (3) A record with a non-object field raised an `AttributeError`, and a bootconfig that is not UTF-8 raised a `UnicodeDecodeError`; both are now refused as `BundleVariantError`. (4) The docstrings of `bundle_variant.py` and `vendor_reseal.py` said the super only, or that nothing else is written; they are corrected. (5) `vendor-reseal` makes its output directory only after every check, and a failure while the files are moved removes the files that were moved. (6) The refreshed path refuses a replacement whose size is not the partition's size. Not fixed: the variant-level test. The synthetic stock bundle of `test_bundle_variant.py` has no valid `vbmeta_a`, so the GPT splice, the manifest hash, and the bootconfig rewrite of the variant are checked only on the real bundle (see M02 #099). Decision needed: whether a synthetic stock with a real vbmeta chain should be added to the suite.
 
 **Reason.** The first three defects can give a wrong or a silently accepted bundle, so they were fixed before the boot. The missing variant-level test is recorded, not added here, because it needs a fixture that carries a real vbmeta chain and a re-signed stock bundle, which is larger than this step.
+
+## IR-750: The first boot used a Debug CLI copied from the main checkout, a guest agent built from a clone, and a VirGL runtime copied from `ThirdParty/out`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 5) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (`apkrun dev boot`); [error-catalog.md](../03-reference/error-catalog.md) (`runtime.guestAgentBundleMissing`, `runtime.graphics`) |
+
+**Choice.** The boot ran `/tmp/apkrun-099-vh-bin/apkrun`, a copy of the Debug CLI at `.build/out/Products/Debug/apkrun` of the main checkout (built 11 Oct 11:33, no Swift source changed on `main` since). The copy kept its virtualization entitlement, and its `apkrun dev` commands are present. The Guest Agent was built with `scripts/build-guest.sh` in a copy of this worktree and a copy of the SDK under `/tmp` (the worktree's `Guest/local.properties` and the SDK of the main checkout were not written). The VirGL runtime was a copy of the `/tmp/apkrun-test-linux/virgl-runtime` files, which match `ThirdParty/out/virgl-runtime/current` by SHA-256. Two attempts stopped before any VM was created: the first without `APKRUN_GUEST_DIR` (`runtime.guestAgentBundleMissing`), and the second without `APKRUN_VIRGL_RUNTIME_PATH` (`runtime.graphics`). The cause of the second is inferred from the code (the Debug bridge looks for the runtime in `ThirdParty/out` above the executable, or in that variable), because the console shows only the error code. The boot that created the VM ran with both variables set. Decision needed: whether `apkrun dev boot` should find the agent and the VirGL runtime without these variables (the Debug build has a repository search only inside `ThirdParty/out`).
+
+**Reason.** The Swift code of this branch is the code of `main`, so the copied binary runs the same boot logic. The only parts that differ from an installed development build are the paths of the two bundles, which the Debug build reads from the environment.
+
+## IR-751: The vendor partition passes dm-verity with the new descriptor, the unsigned vbmeta is accepted in the unlocked state, and the boot stops in SurfaceFlinger's EGL configuration
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 5) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §4.6 and §11.4; [graphics.md](../02-design/graphics.md) §9; IR-744; IR-741 |
+
+**Choice.** One drmVirgl boot, with verity on, of the variant of IR-746 (`vbmeta_a` with `NONE`, the resealed `vendor_a`). The console shows `init: [libfs_avb] Built verity table: '1 /dev/block/dm-6 … 45404 45404 sha256 a373fc52…' … restart_on_corruption`, and `init: [libfs_mgr] __mount(source=/dev/block/dm-13,target=/vendor,type=erofs)=0: Success`. The log has no dm-verity corruption and no FEC message. `init` logs `[libfs_avb] : Error verifying vbmeta image: OK_NOT_SIGNED` and `public key data shouldn't be empty for /system`, and it continues, so the unlocked guest accepts `NONE` (the answer that IR-744 asks for). The boot does not reach `ready` or `sys.boot_completed`. The first failing line is the logcat line `F DEBUG : Abort message: 'no suitable EGLConfig found, giving up (format: 1, vendor: Android, version: 1.4 Android META-EGL …'` at 08:17:17.347, after the warning `W EGL-MAIN : Failed to open any DRM device` at 08:17:17.286. SurfaceFlinger had started on `Threaded RenderEngine with SkiaGL Backend (Ganesh)`. After the abort, init restarted zygote 67 times, and adbd answered `getprop sys.boot_completed` 999 times. Decision needed: the guest's EGL cannot open a DRM device, so the next step is graphics (IR-462 and the M02 #099 criteria), not verity. The key choice of IR-650 is still open, because the guest did not refuse `NONE`.
+
+**Reason.** The descriptor is the only place the kernel learns the tree's layout, and the vendor table now has the injected layout (45,404 blocks, root `a373fc52…`), so the mount succeeds without a corruption event. The stop is in the graphics path, which this task does not change.
+
+## IR-752: SIGINT did not stop the boot in a restart loop, and the process was stopped with SIGKILL after about three and a half minutes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 5 and 6) |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (Ctrl-C stops Android gracefully) |
+
+**Choice.** `kill -INT` was sent to the `apkrun dev boot` process. It was still running after about three and a half minutes, so `kill -KILL` was sent to the same process, which ended. The lock wrapper (`lockf`) ended with it, and no Virtualization process was left. The scratch home was removed after `chmod -R u+w`. Decision needed: whether a stuck guest needs its own stop path (the graceful stop waits for Android, which never came up).
+
+**Reason.** The instructions allow SIGKILL only when SIGINT does not stop the boot. Android was in a zygote loop, so the graceful shutdown could not finish, as IR-729 found on the other branch. The one VM boot is the only one used; no second boot was started.
+
+## IR-753: The boot count is one of two, and the two attempts that stopped before the VM was created are not boots
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #099 (the verity step, step 5) |
+| Affected documents | [error-catalog.md](../03-reference/error-catalog.md) (`runtime.graphics`: "fails to start before the VM is created") |
+
+**Choice.** The task allowed two VM boots. One boot created a VM (IR-751). The attempts without the Guest Agent bundle and without `APKRUN_VIRGL_RUNTIME_PATH` failed with `runtime.guestAgentBundleMissing` and `runtime.graphics` before the VM existed, so they are not counted. No second boot was started, because the task says to stop at a failing boot.
+
+**Reason.** The error catalog says `runtime.graphics` is raised before the VM is created, and the logs show no VM for those attempts. Counting them would cost a boot the task may need for a fixed bundle.

@@ -422,6 +422,29 @@ import Virtualization
     }
 }
 
+@Test func guestMemoryHostMemoryIsTheMappedBytesUntilInvalidation() throws {
+    let fake = FakeGuestMemory(
+        range: GuestPhysicalRange(address: 0x4000, length: 4),
+        bytes: [1, 2, 3, 4]
+    )
+
+    let host = try fake.memory.hostMemory()
+    #expect(host.count == 4)
+    #expect(Array(host) == [1, 2, 3, 4])
+    #expect(try fake.memory.hostMemory().baseAddress == host.baseAddress)
+
+    // The pointer and the view share the same bytes, in both directions.
+    host[2] = 9
+    #expect(try fake.memory.copyBytes(at: 0, count: 4) == [1, 2, 9, 4])
+    try fake.memory.writeBytes([7], at: 3)
+    #expect(Array(host) == [1, 2, 9, 7])
+
+    fake.invalidate()
+    #expect(throws: VirtioFailure.guestMemoryInvalidated) {
+        _ = try fake.memory.hostMemory()
+    }
+}
+
 @Test func deviceContextRejectsOperationsBeforeDriverOK() async {
     let fake = FakeVirtioDeviceContext(queueCount: 1, configurationSpace: Data([1, 2]))
 

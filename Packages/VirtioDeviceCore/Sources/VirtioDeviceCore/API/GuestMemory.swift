@@ -32,6 +32,16 @@ public final class GuestMemory {
         try storage.writeBytes(bytes, at: range.lowerBound)
     }
 
+    /// The host memory of the whole mapped range. It is the guest's RAM, not a copy, so writes through it reach
+    /// the guest.
+    ///
+    /// The pointer stays valid only while this view is valid, which ends when the device resets or stops. A
+    /// consumer that keeps the pointer longer, such as a renderer that reads the pages after the request returns,
+    /// must release it before then. Take the pointer on the device queue.
+    public func hostMemory() throws(VirtioFailure) -> UnsafeMutableRawBufferPointer {
+        try storage.hostMemory()
+    }
+
     private func checkedRange(offset: Int, length: Int) throws(VirtioFailure) -> Range<Int> {
         try storage.validate()
         let capacity = storage.byteCount
@@ -52,5 +62,7 @@ package protocol GuestMemoryStorage: AnyObject {
     func validate() throws(VirtioFailure)
     func copyBytes(in range: Range<Int>) throws(VirtioFailure) -> [UInt8]
     func writeBytes(_ bytes: [UInt8], at offset: Int) throws(VirtioFailure)
+    /// The whole mapped range. Validates the storage first.
+    func hostMemory() throws(VirtioFailure) -> UnsafeMutableRawBufferPointer
     func invalidate()
 }

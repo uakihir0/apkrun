@@ -897,6 +897,12 @@ private final class VZGuestMemoryStorage: GuestMemoryStorage {
         }
     }
 
+    func hostMemory() throws(VirtioFailure) -> UnsafeMutableRawBufferPointer {
+        try validate()
+        guard let mapping else { throw .guestMemoryInvalidated }
+        return UnsafeMutableRawBufferPointer(start: mapping.mutableBytes, count: Int(mapping.length))
+    }
+
     func invalidate() {
         mapping = nil
     }

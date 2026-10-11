@@ -15413,3 +15413,115 @@ The signing pair is the one of IR-508. The staged inputs are those of `/tmp/apkr
 
 **Reason.** The Android kernel's 20 `hvc` nodes open (printed in the session, not saved to a file), so the node count is no longer the blocker, which IR-372 placed on the Alpine kernel's eight. The dev layout gives host input only to `hvc0`, `hvc1`, and `hvc18` (IR-871). It has 17 `.silent` or `.log` ports with no host input path. Port 18 was not written, because the sensors responder reads its bytes as HAL protocol. The markers of the other 18 ports need a test layout in which every port takes host input, which is a role change in the test layout and not part of this check.
 
+## IR-890: The 20-port marker check boots the product image and changes the console roles in the test's definition only
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and criterion 1; [android-image.md](../02-design/android-image.md) §7.1; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** `AndroidConsolePortTests` (T2, `Tests/IntegrationTests/AndroidBootTests/AndroidConsolePortTests.swift`) boots the signed test image through the product image store, the instance store, and `AndroidBootPlanner`, as the supervisor does. Before validation it replaces `consolePorts` in its own `VMDefinition`: hvc0 stays `.systemConsole`, hvc1 to hvc17 and hvc19 become `.service(name: "test-<i>")`, and hvc18 keeps its product role. It starts its own loopback ADB bridge to guest vsock port 5555, as `RuntimeSupervisor.startADBBridge` does. No product file changes.
+
+**Reason.** The supervisor exposes host writes only for hvc0 and hvc1 (its `devConsole` endpoints, RuntimeSupervisor.swift lines 395 and 425), and the product roles accept host input on hvc0, hvc1, and hvc18 only (IR-871). `VMController.console(_:)` refuses writes to `.silent` and `.log` roles (`ConsoleChannel.writeHostInput`). `VZConfigurationBuilder` does not read the role, so the role change alters only the host side. The image is not edited or re-signed.
+
+**Consequence.** The T2 runs the product's image and ADB path. It does not run the supervisor's boot sequencing or its sensors responder (IR-894).
+
+## IR-891: Each reader holds its port before the host writes, and a port passes only on its own exact marker line
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1; [vm.md](../02-design/vm.md) §6.2 |
+
+**Choice.** The guest command starts one background reader per marked port. Each reader runs `stty -F /dev/hvc<i> raw -echo`, opens `/dev/hvc<i>` on fd 3, writes `ready-<i>`, and then runs `timeout 180 cat <&3 > out-<i>`. The host waits up to 60 s for the 19 `ready-<i>` files, then writes `APKRUN-PORT-<i>` followed by a newline into each port with `VMController.console(role).writeHostInput`. A port passes when `out-<i>` holds exactly that one line. The open file descriptors of every `/dev/hvc*` node are listed before the readers start and again after they are ready.
+
+**Reason.** The host writes only after the reader holds its port, so the test does not depend on whether a tty without an open reader keeps input. That was not checked on this image. `timeout` ends each reader. The holder listing shows a competing reader. On the developer boot, the Android console shell runs on hvc1 (`androidboot.console=hvc1`), so a marker written to hvc1 can reach that shell instead of the reader, and the listing names it. A reader that receives another port's marker fails, which is how a numbering difference shows.
+
+## IR-892: hvc18 is excluded from the marker check by design, and no reader or write touches it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.1 |
+
+**Choice.** `ConsolePortMarkerPlan.excludedPorts` lists hvc18 with its reason (IR-871). The 19 marked ports are hvc0 to hvc19 without hvc18. The test never writes to hvc18, opens no reader on it, and runs no sensors responder (IR-894). The T0 test `testReaderCommandStartsOneReaderPerMarkedPortAndNeverOpensHvc18` checks the reader command.
+
+**Reason.** The sensors responder reads hvc18 as HAL protocol, so a marker written there would test the HAL and not the numbering (IR-871). With this exclusion, criterion 1 can be ticked on the other 19 ports, and the record must say that hvc18 is excluded by design.
+
+## IR-893: The 2026-10-11 boot of the 20-port check stopped before its marker step, so no port has a marker result
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; IR-873; IR-877 |
+
+**Choice.** Criterion 1 of #095 stays unticked. The one boot of this task wrote no marker, so no port has a result. The missing ports are hvc0, hvc1 to hvc17, and hvc19: all 19 marked ports, none observed. The console log and the xcodebuild output record the following. ADB connected to 127.0.0.1 at 21:49:37 (JST). The guest's `system_server` first appeared at about +418 s (21:56:31). Its sensors HAL start was retried at least 537 times by 21:58:37. At 21:59:47, about ten minutes after the test began, xcodebuild stopped the test host (`exceeded execution time allowance of 10 minutes`), and the VM stopped with it. That was not a SIGINT stop. Afterwards no VM, test-host, or xcodebuild process remained, and the run's home was removed. The adb server on port 15037 (started 2026-10-10 18:22, before this run) was stopped with the copied adb. The server on port 5037 was not touched.
+
+**Reason.** The check waited for `sys.boot_completed` for up to 15 minutes. xcodebuild's default per-test allowance is 10 minutes, so the host was killed while the check was still waiting. The stall has a cause in the test layout: no sensors responder runs, and without it the sensors HAL keeps retrying (IR-894). The SIGINT rule was not kept for this boot, because xcodebuild stopped the host first. The kill is recorded here, and the next boot must stop with SIGINT.
+
+## IR-894: The check runs no sensors responder and does not wait for the boot to finish, and a responder needs a channel acknowledgement that the test cannot make
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 steps 1 and 2, criterion 1; [android-image.md](../02-design/android-image.md) §7.1 |
+
+**Choice.** The T2 runs no responder on hvc18. It waits up to 120 s for `sys.boot_completed`, records the value, and goes on to the marker check whether or not the boot has finished. A responder that works in this test needs a decision by the maintainer: a public acknowledgement API on `ConsoleChannel` (a VirtualMachineCore change), or another route. This record does not make that decision.
+
+**Reason.** `RuntimeSupervisor` runs `SensorsResponder` on `sensors_control`. It reads `makeByteStream()` and acknowledges each chunk with `acknowledgeConsumedBytes` (RuntimeSupervisor.swift lines 398 to 411). Those acknowledgements are `package` in VirtualMachineCore, so a test outside the package cannot call them. A subscriber whose reserved chunk capacity is full drops later chunks (`ConsoleChannel.swift`, `reserveDataChunk`), so an unacknowledged responder would stop answering. The capacity was not measured. The marker check needs ADB and root, not a finished boot.
+
+**Consequence.** On the next boot the Android guest may still not finish booting. The marker check still runs and records the boot state.
+
+## IR-895: The 20-port check runs with xcodebuild's test timeouts disabled
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 step 1 and tests |
+
+**Choice.** The run command for `AndroidConsolePortTests` passes `-test-timeouts-enabled NO`, and the test file comment says so.
+
+**Reason.** The check's budgets are 300 s to connect ADB, 120 s for the boot state, 60 s for the readers, 60 s for the markers, and up to 30 s for the power-off. Together they can pass xcodebuild's 10-minute default, as IR-893 shows.
+
+## IR-896: The marker-plan tests pass on the final build, and the T2 has compiled but has not run to its marker step
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 tests; [test-strategy.md](test-strategy.md) |
+
+**Choice.** `ConsolePortMarkerPlanTests` (six T0 tests) passes 6 of 6 on the final build. They cover: 19 marked ports with hvc18 excluded and its reason cited; exact markers and reader devices; the test layout's roles (host input on every marked port, hvc18 unchanged); the reader command (one reader per marked port, none on hvc18); the parsing of collected lines and the pass rule; and the ready-port listing. The T2 has compiled and has not run to its marker step (IR-893).
+
+**Reason.** The boot is one-shot for this task, so the T2 has no second run here, and its result on the device is not known.
+
+## IR-897: IR-543 and IR-544 are not in the record on main, so nothing is restored from them
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [M01](issues/M01-android-bring-up.md) #095 criterion 1; [android-image.md](../02-design/android-image.md) §7.8 |
+
+**Choice.** Recorded as a finding. The brief of this task cites IR-543 and IR-544, and commit 916f43c cited IR-543 for the mapping of ports 8 to 19 as not verified. Neither number has a heading in `implementation-review.md` on main. The IR-873 entry of commit c217fc8 cited IR-543 in its Affected documents, and commit 4c6b7c0 removed that citation. No text of either number is restored, and no content is assumed.
+
+**Reason.** The repository has no heading or text for either number, so restoring one would invent its content. The mapping of ports 8 to 19 that IR-543 referred to is still checked by criterion 1 of #095.
+
+## IR-898: The test host finds adb through its build setting, because a test-runner environment variable does not reach it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #095 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §2.5 |
+
+**Choice.** `AndroidTestEnvironment` reads `ANDROID_HOME` from the process environment and falls back to the test host's `APKRUN_ANDROID_HOME` value from its Info.plist. With xcodebuild, `TEST_RUNNER_ANDROID_HOME=<sdk>` does not reach the test process (a probe test read `ANDROID_HOME=nil`). The build setting `APKRUN_ANDROID_HOME=<sdk>` does reach it, so runs that need a copied SDK set the build setting.
+
+**Reason.** The instructions for this task require a copy of the SDK adb under `/tmp`, not the SDK under `~/Documents`. The probe read `ANDROID_ADB_SERVER_PORT=15037` from the test plan and resolved `/tmp/apkrun-p20-sdk/platform-tools/adb`. The probe test was removed after it ran.
+

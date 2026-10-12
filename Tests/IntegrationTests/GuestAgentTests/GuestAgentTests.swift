@@ -44,8 +44,8 @@ final class GuestAgentTests: XCTestCase {
     /// runs the daemon's own classes through app_process.
     func testEveryServiceWrapperResolvesOnTheStockImage() async throws {
         let bundle = try Self.bundle()
-        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
+            let adb = try await Self.connectedClient(session)
             let reply = try await adb.shell(
                 "CLASSPATH=$(pm path \(Self.agentPackage) | sed \"s/^package://\") app_process / io.apkrun.guest.daemon.ServiceCheck"
             )
@@ -64,7 +64,7 @@ final class GuestAgentTests: XCTestCase {
         let apk = try Self.fixtureAPK()
         let bundle = try Self.bundle()
         try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
-            let adb = try await Self.connectedClient()
+            let adb = try await Self.connectedClient(session)
             try await adb.install(apk: apk)
             guard let agent = await session.supervisor.developmentGuestAgent else {
                 return XCTFail("the boot did not start the development Guest Agent")
@@ -89,7 +89,7 @@ final class GuestAgentTests: XCTestCase {
             guard let agent = await session.supervisor.developmentGuestAgent else {
                 return XCTFail("the boot did not start the development Guest Agent")
             }
-            let adb = try await Self.connectedClient()
+            let adb = try await Self.connectedClient(session)
             let pidBefore = try await adb.processID(named: Self.processName)
             let tokenBefore = await agent.supervisor.session?.sessionToken
             try await adb.terminateProcess(named: Self.processName)
@@ -115,7 +115,7 @@ final class GuestAgentTests: XCTestCase {
             guard let agent = await session.supervisor.developmentGuestAgent else {
                 return XCTFail("the boot did not start the development Guest Agent")
             }
-            let adb = try await Self.connectedClient()
+            let adb = try await Self.connectedClient(session)
             for death in 1...3 {
                 let before = await agent.supervisor.session?.sessionToken
                 try await adb.terminateProcess(named: Self.processName)
@@ -142,8 +142,8 @@ final class GuestAgentTests: XCTestCase {
     func testAnotherInstalledVersionIsReplacedByTheBundle() async throws {
         let bundle = try Self.bundle()
         let other = try Self.otherBundle()
-        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
+            let adb = try await Self.connectedClient(session)
             try await GuestAgentProvisioner(adb: adb, bundle: other).install()
             let installed = try await adb.listPackages(matching: Self.agentPackage).first?.versionCode
             XCTAssertEqual(installed, other.versionCode)
@@ -156,8 +156,8 @@ final class GuestAgentTests: XCTestCase {
     /// The ADB forward listens on the host's loopback address only (NFR-SEC-06, guest-protocol.md §13.2).
     func testTheAgentForwardListensOnTheLoopbackAddressOnly() async throws {
         let bundle = try Self.bundle()
-        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
+            let adb = try await Self.connectedClient(session)
             let port = try await adb.forward(remote: "localabstract:apkrun-guestd-control")
             defer {
                 Task { try? await adb.forwardRemove(port: port) }
@@ -169,8 +169,8 @@ final class GuestAgentTests: XCTestCase {
     /// The device setup of guest-components.md §3.4: the screen stays on, and there is no keyguard.
     func testTheDeviceStaysAwakeWithoutKeyguard() async throws {
         let bundle = try Self.bundle()
-        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
+            let adb = try await Self.connectedClient(session)
             let stayOn = try await adb.shell("settings get global stay_on_while_plugged_in").output
             XCTAssertEqual(stayOn.trimmingCharacters(in: .whitespacesAndNewlines), "7")
             let timeout = try await adb.shell("settings get system screen_off_timeout").output
@@ -216,9 +216,15 @@ final class GuestAgentTests: XCTestCase {
         return URL(fileURLWithPath: path)
     }
 
-    /// An ADB client connected to the development endpoint.
-    private static func connectedClient() async throws -> AdbClient {
-        let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
+    /// An ADB client connected to the development endpoint of `session`: the port that the boot bound, which is the
+    /// run's own or one the kernel chose (test-strategy §3.10), not `AdbClient.developmentEndpoint`.
+    private static func connectedClient(_ session: AndroidBootSession) async throws -> AdbClient {
+        let boundPort = await session.supervisor.developmentADBHostPort
+        let port = try XCTUnwrap(boundPort, "the boot bound no development ADB port")
+        let adb = AdbClient(
+            executable: try AndroidTestEnvironment.adbExecutable(),
+            endpoint: AdbClient.loopbackEndpoint(port: port)
+        )
         try await adb.connect(timeout: .seconds(30))
         return adb
     }

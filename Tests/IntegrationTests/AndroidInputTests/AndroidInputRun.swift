@@ -14,6 +14,8 @@ typealias InputPixel = (x: Double, y: Double)
 enum AndroidInputRunFailure: Error, Equatable {
     case timedOut(String)
     case viewNotFound(String)
+    /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
+    case bootEnded(String)
 }
 
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
@@ -154,6 +156,7 @@ final class AndroidInputRun {
             } catch {
                 bootLog.append("failed: \(error)")
             }
+            bootLog.end()
         }
         Task { @MainActor in
             for await event in display.events {
@@ -196,6 +199,10 @@ final class AndroidInputRun {
     private func waitUntil(seconds: Double, _ what: String, _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(seconds)
         while !condition() {
+            // A boot that has ended (a graphics failure, for example) cannot reach the condition, so stop waiting.
+            if bootLog.hasEnded {
+                throw AndroidInputRunFailure.bootEnded("\(what) (boot: \(bootLog.recent))")
+            }
             guard ContinuousClock.now < deadline else {
                 throw AndroidInputRunFailure.timedOut("\(what) (boot: \(bootLog.recent))")
             }
@@ -400,6 +407,7 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
 private final class BootLog: @unchecked Sendable {
     private let lock = NSLock()
     private var lines: [String] = []
+    private var ended = false
 
     func append(_ line: String) {
         lock.withLock { lines.append(line) }
@@ -407,6 +415,15 @@ private final class BootLog: @unchecked Sendable {
 
     func contains(_ line: String) -> Bool {
         lock.withLock { lines.contains(line) }
+    }
+
+    /// Records that the boot task has returned, whether it stopped or failed.
+    func end() {
+        lock.withLock { ended = true }
+    }
+
+    var hasEnded: Bool {
+        lock.withLock { ended }
     }
 
     var recent: String {

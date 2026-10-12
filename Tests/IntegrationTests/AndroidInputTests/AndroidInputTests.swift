@@ -9,7 +9,8 @@ import XCTest
 /// permission. Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the
 /// centres of their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
 ///
-/// The Xcode test host does not run adb (IR-438), so this suite is compiled there and not run there. The device checks
+/// The suite runs in the Xcode test host (IR-438, IR-1257), and its boot needs a working guest renderer. On the odm4
+/// bundle the home app aborts in RenderThread, HelloText does not start, and the checks fail there. The device checks
 /// are run by the coordinator's scripted runs, which post the same gestures with the CGEvent helper in /tmp (decision
 /// D14). The suite runs only with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan
 /// sets. It also needs APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText), and

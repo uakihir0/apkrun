@@ -102,8 +102,8 @@ final class AndroidInputRun {
         return (try? await adb.shell("uiautomator dump \(path) > /dev/null; cat \(path); rm -f \(path)").output) ?? ""
     }
 
-    /// Whether the node `resourceID` has focus in a uiautomator dump, or nil when the dump has no such node. The focus
-    /// attribute comes before `resource-id` in the element, so the element is cut at its `<node` and its `>`.
+    /// Whether the node `resourceID` has focus in a uiautomator dump, or nil when the dump has no such node. The element is
+    /// cut at its `<node` and its `>`, whatever the order of its attributes.
     static func isFocused(_ resourceID: String, in xml: String) -> Bool? {
         guard let id = xml.range(of: "resource-id=\"\(resourceID)\"") else {
             return nil
@@ -150,7 +150,7 @@ final class AndroidInputRun {
             $0.components(separatedBy: "\"").first
         }
         let unique = Set(names).sorted()
-        return unique.isEmpty ? "no nodes" : unique.joined(separator: ", ")
+        return unique.isEmpty ? "no nodes in the dump" : unique.joined(separator: ", ")
     }
 
     /// The fixture's log lines, polled every 500 ms until `enough` holds or 30 s have passed.
@@ -265,7 +265,7 @@ final class AndroidInputRun {
         try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
         try await adb.connect(timeout: .seconds(30))
         try await adb.install(apk: apk)
-        // The lock screen covers the app on this image: the dump of the first failure showed only SystemUI (IR-1285). The
+        // The lock screen covers the app on this image: the dump of the first failing case showed only SystemUI (IR-1285). The
         // G3 gate wakes the screen and dismisses the keyguard the same way (G3GraphicsTests). These run before the sequence.
         _ = try await adb.shell("input keyevent 82")
         _ = try await adb.shell("wm dismiss-keyguard")
@@ -412,7 +412,11 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         queue = made.continuation
         Task {
             for await events in made.stream {
-                await route.send(RuntimeAPI.InputBatch(events: events.compactMap(WireSink.wire)))
+                // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
+                for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
+                    let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
+                    await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+                }
             }
         }
     }

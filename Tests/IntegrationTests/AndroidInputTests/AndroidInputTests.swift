@@ -107,12 +107,10 @@ final class AndroidInputTests: XCTestCase {
     func testTypingGivesExactTextInTheField() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
-            let sampler = ShellInputSampler()
-            sampler.start()
-            try await Self.focusField(run)
-            try await run.keyboard().type("Hello, APKRun 123!")
-            let shellInput = await sampler.stop()
-            XCTAssertEqual(shellInput, [], "adb shell input processes ran during the typing")
+            try await Self.withoutShellInput {
+                try await Self.focusField(run)
+                try await run.keyboard().type("Hello, APKRun 123!")
+            }
             let text = try await Self.fieldText(run)
             XCTAssertEqual(text, "Hello, APKRun 123!")
         }
@@ -123,24 +121,27 @@ final class AndroidInputTests: XCTestCase {
     func testBackspaceEnterAndArrowsEditTheField() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
-            try await Self.focusField(run)
-            let keys = try run.keyboard()
-            try await keys.type("abc")
-            try await keys.tap(.delete)
-            var text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "ab", "Backspace did not remove the last character")
-            try await keys.type("cd")
-            try await keys.tap(.leftArrow)
-            try await keys.tap(.leftArrow)
-            try await keys.type("X")
-            text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "abXcd", "the left arrow did not move the cursor")
-            _ = try await run.adb.shell("logcat -c")
-            try await keys.tap(.returnKey)
-            let lines = try await run.fixtureLog { lines in
-                lines.contains { $0.contains(Self.editorActionLine) }
+            try await Self.withoutShellInput {
+                try await Self.focusField(run)
+                let keys = try run.keyboard()
+                try await keys.type("abc")
+                try await keys.tap(.delete)
+                var text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "ab", "Backspace did not remove the last character")
+                try await keys.type("cd")
+                try await keys.tap(.leftArrow)
+                try await keys.tap(.leftArrow)
+                try await keys.type("X")
+                text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "abXcd", "the left arrow did not move the cursor")
+                _ = try await run.adb.shell("logcat -c")
+                try await keys.tap(.returnKey)
+                let lines = try await run.fixtureLog { lines in
+                    lines.contains { $0.contains(Self.editorActionLine) }
+                }
+                XCTAssertTrue(
+                    lines.contains { $0.contains(Self.editorActionLine) }, "Enter did not log the editor action")
             }
-            XCTAssertTrue(lines.contains { $0.contains(Self.editorActionLine) }, "Enter did not log the editor action")
         }
     }
 
@@ -149,18 +150,23 @@ final class AndroidInputTests: XCTestCase {
     func testEscAndCommandBracketGoBackFromDetails() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
-            let keys = try run.keyboard()
-            try await Self.openDetails(run)
-            _ = try await run.adb.shell("logcat -c")
-            try await keys.tap(.escape)
-            let back = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
-            XCTAssertTrue(back.contains { $0.contains(Self.mainScreenLine) }, "Esc did not return to the main screen")
-            try await Self.openDetails(run)
-            _ = try await run.adb.shell("logcat -c")
-            try await keys.commandShortcut(.leftBracket)
-            let commandBack = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
-            XCTAssertTrue(
-                commandBack.contains { $0.contains(Self.mainScreenLine) }, "⌘[ did not return to the main screen")
+            try await Self.withoutShellInput {
+                let keys = try run.keyboard()
+                try await Self.openDetails(run)
+                _ = try await run.adb.shell("logcat -c")
+                try await keys.tap(.escape)
+                let back = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
+                XCTAssertTrue(
+                    back.contains { $0.contains(Self.mainScreenLine) }, "Esc did not return to the main screen")
+                try await Self.openDetails(run)
+                _ = try await run.adb.shell("logcat -c")
+                try await keys.commandShortcut(.leftBracket)
+                let commandBack = try await run.fixtureLog { lines in
+                    lines.contains { $0.contains(Self.mainScreenLine) }
+                }
+                XCTAssertTrue(
+                    commandBack.contains { $0.contains(Self.mainScreenLine) }, "⌘[ did not return to the main screen")
+            }
         }
     }
 
@@ -169,25 +175,27 @@ final class AndroidInputTests: XCTestCase {
     func testCommandShortcutsActOnTheField() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
-            try await Self.focusField(run)
-            let keys = try run.keyboard()
-            try await keys.type("Hello")
-            try await keys.commandShortcut(.a)
-            try await keys.commandShortcut(.c)
-            try await keys.tap(.rightArrow)
-            try await keys.commandShortcut(.v)
-            var text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "HelloHello", "⌘C and ⌘V did not copy and paste the selection")
-            try await keys.commandShortcut(.a)
-            try await keys.commandShortcut(.x)
-            text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "", "⌘X did not cut the selection")
-            try await keys.commandShortcut(.v)
-            text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "HelloHello", "⌘V did not paste the cut text")
-            try await keys.commandShortcut(.z)
-            text = try await Self.fieldText(run)
-            XCTAssertEqual(text, "", "⌘Z did not undo the paste")
+            try await Self.withoutShellInput {
+                try await Self.focusField(run)
+                let keys = try run.keyboard()
+                try await keys.type("Hello")
+                try await keys.commandShortcut(.a)
+                try await keys.commandShortcut(.c)
+                try await keys.tap(.rightArrow)
+                try await keys.commandShortcut(.v)
+                var text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "HelloHello", "⌘C and ⌘V did not copy and paste the selection")
+                try await keys.commandShortcut(.a)
+                try await keys.commandShortcut(.x)
+                text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "", "⌘X did not cut the selection")
+                try await keys.commandShortcut(.v)
+                text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "HelloHello", "⌘V did not paste the cut text")
+                try await keys.commandShortcut(.z)
+                text = try await Self.fieldText(run)
+                XCTAssertEqual(text, "", "⌘Z did not undo the paste")
+            }
         }
     }
 
@@ -257,10 +265,27 @@ final class AndroidInputTests: XCTestCase {
         return AndroidInputRun.numbers(in: lines, after: rowPrefix).last ?? 0
     }
 
+    /// Runs `body`, then fails when an `adb shell input` process ran during it (FR-IN-06). The sampler polls every 250 ms,
+    /// so a command shorter than that can pass unseen.
+    private static func withoutShellInput(_ body: () async throws -> Void) async throws {
+        let sampler = ShellInputSampler()
+        sampler.start()
+        do {
+            try await body()
+        } catch {
+            _ = await sampler.stop()
+            throw error
+        }
+        let shellInput = await sampler.stop()
+        XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+    }
+
     /// The APK that the environment variable `key` names. The test is skipped when the variable or the file is missing.
     private static func fixture(_ key: String) throws -> URL {
         guard let path = ProcessInfo.processInfo.environment[key], FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("\(key) does not name a fixture APK. Copy the fixture of scripts/build-fixtures.sh to /tmp.")
+            throw XCTSkip(
+                "\(key) does not name a fixture APK. Build the debug HelloText as environment-setup.md §4 says, and copy it to /tmp."
+            )
         }
         return URL(fileURLWithPath: path)
     }

@@ -50,6 +50,10 @@ struct MacKey: Equatable, Sendable {
 enum InputKeyboardFailure: Error, Equatable {
     /// The suite has no key for this character, so it cannot type it.
     case unmappedCharacter(Character)
+    /// AppKit would not create the event for this key, so nothing was sent.
+    case eventNotMade(UInt16)
+    /// The window did not take this ⌘ shortcut as a key equivalent (IR-1265).
+    case shortcutNotTaken(UInt16)
 }
 
 /// Posts AppKit key events into the window's content view, as AppKit delivers them (#025, T2). Shift and Command are
@@ -86,13 +90,14 @@ struct InputKeyboard {
         }
     }
 
-    /// A ⌘ shortcut: Command goes down, the key goes to the window as AppKit sends it (a key equivalent first), and
-    /// Command goes up. macOS sends no key up while Command is held, so none is sent (IR-1273).
+    /// A ⌘ shortcut: Command goes down, the key goes to the window as a key equivalent, and Command goes up. macOS sends
+    /// no key up while Command is held, so none is sent (IR-1273). The window must take the key. A shortcut it does not
+    /// take would go to the menus in AppKit (IR-1265), so the call throws `shortcutNotTaken`.
     func commandShortcut(_ key: MacKey) async throws {
         try await flagsChanged(Self.commandKeyCode, .command)
-        if let event = Self.event(.keyDown, key.code, .command, window: window), !view.performKeyEquivalent(with: event)
-        {
-            view.keyDown(with: event)
+        let event = try Self.event(.keyDown, key.code, .command, window: window)
+        guard view.performKeyEquivalent(with: event) else {
+            throw InputKeyboardFailure.shortcutNotTaken(key.code)
         }
         try await Task.sleep(for: .milliseconds(15))
         try await flagsChanged(Self.commandKeyCode, [])
@@ -100,29 +105,31 @@ struct InputKeyboard {
 
     /// A modifier key goes down (with its flag) or up (with no flag).
     private func flagsChanged(_ code: UInt16, _ flags: NSEvent.ModifierFlags) async throws {
-        if let event = Self.event(.flagsChanged, code, flags, window: window) {
-            view.flagsChanged(with: event)
-        }
+        view.flagsChanged(with: try Self.event(.flagsChanged, code, flags, window: window))
         try await Task.sleep(for: .milliseconds(15))
     }
 
     private func send(_ type: NSEvent.EventType, _ code: UInt16, _ flags: NSEvent.ModifierFlags) async throws {
-        if let event = Self.event(type, code, flags, window: window) {
-            switch type {
-            case .keyDown: view.keyDown(with: event)
-            case .keyUp: view.keyUp(with: event)
-            default: break
-            }
+        let event = try Self.event(type, code, flags, window: window)
+        switch type {
+        case .keyDown: view.keyDown(with: event)
+        case .keyUp: view.keyUp(with: event)
+        default: break
         }
         try await Task.sleep(for: .milliseconds(15))
     }
 
     private static func event(
         _ type: NSEvent.EventType, _ code: UInt16, _ flags: NSEvent.ModifierFlags, window: NSWindow
-    ) -> NSEvent? {
-        NSEvent.keyEvent(
-            with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
-            isARepeat: false, keyCode: code)
+    ) throws -> NSEvent {
+        guard
+            let event = NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: code)
+        else {
+            throw InputKeyboardFailure.eventNotMade(code)
+        }
+        return event
     }
 }

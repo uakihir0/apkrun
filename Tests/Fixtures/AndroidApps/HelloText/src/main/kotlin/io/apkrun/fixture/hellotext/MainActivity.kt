@@ -2,19 +2,24 @@ package io.apkrun.fixture.hellotext
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.ContextMenu
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 
 /**
- * The only Activity of HelloText. It shows a counter that persists across process restarts. Each click
+ * The main Activity of HelloText. It shows a counter that persists across process restarts. Each click
  * logs `APKRUN-FIXTURE: click <n>`. A long press on the target text logs `APKRUN-FIXTURE: contextmenu` and offers
- * a reset.
+ * a reset. The field takes the typed text, and the Details button opens the Details screen (#025). The screen logs
+ * `APKRUN-FIXTURE: screen <name>` when it resumes.
  */
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore
@@ -27,7 +32,27 @@ class MainActivity : Activity() {
         counterText = findViewById(R.id.counter_text)
         showCount(counter.current())
         findViewById<Button>(R.id.increment_button).setOnClickListener { click() }
+        findViewById<Button>(R.id.details_button).setOnClickListener {
+            startActivity(Intent(this, DetailsActivity::class.java))
+        }
+        findViewById<EditText>(R.id.input_text).addTextChangedListener(
+            object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+                override fun afterTextChanged(s: Editable?) {
+                    FixtureState.fieldText = s?.toString().orEmpty()
+                }
+            }
+        )
         registerForContextMenu(findViewById<TextView>(R.id.context_target))
+    }
+
+    override fun onResume() {
+        super.onResume()
+        FixtureState.screen = FixtureState.SCREEN_MAIN
+        Log.i(LOG_TAG, "screen ${FixtureState.SCREEN_MAIN}")
     }
 
     private fun click() {

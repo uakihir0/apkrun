@@ -6,4 +6,6 @@
     <string name="input_hint">Type here</string>
     <string name="context_target">Long-press this text</string>
     <string name="reset_counter">Reset counter</string>
+    <string name="details">Details</string>
+    <string name="details_text">Details screen. Esc or Command-[ goes back.</string>
 </resources>

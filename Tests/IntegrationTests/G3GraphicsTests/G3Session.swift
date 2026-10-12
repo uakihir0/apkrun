@@ -301,9 +301,11 @@ final class G3Session: @unchecked Sendable {
     func guestLog() -> String {
         let directory = home.appendingPathComponent("Logs/guest", isDirectory: true)
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        // Logcat carries bytes that are not UTF-8. A strict decode dropped the whole file, so the markers and the fps
+        // events vanished (IR-1224). The decode replaces the invalid bytes instead.
         return files.filter { $0.pathExtension == "log" }.sorted { $0.path < $1.path }.compactMap {
-            try? String(contentsOf: $0, encoding: .utf8)
-        }.joined()
+            try? Data(contentsOf: $0)
+        }.map { String(decoding: $0, as: UTF8.self) }.joined()
     }
 
     /// Captures the window of display 0 of the boot with `screencapture`, and returns its window number.

@@ -16805,3 +16805,19 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Reason.** Runs 4, 5, and 7 lost the display window while the Mac was in use. The window was on another Space, hidden, or minimized, as `window-list.txt` records. The design defines these states as normal, so making the window join all Spaces would change the product for every user. The lab Mac is the place where the gate is meant to run unattended (test-strategy §3.6), so the requirement is stated there.
 
 **Risk.** On the development Mac the gate can still fail when the window leaves the screen during the run. The gate then fails and says so in `window-list.txt`. A pass on this Mac needs the window to stay on screen for about 13 minutes.
+
+## IR-1224: The G3 guest log is decoded with replacement, so one non-UTF-8 byte cannot drop the whole log
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criteria 6 and 7, the fps and crash checks) |
+
+**Choice.** `G3Session.guestLog` reads each logcat file as bytes and decodes it with `String(decoding:as:)`, which replaces invalid bytes with U+FFFD. The strict `String(contentsOf:encoding: .utf8)` is no longer used there.
+
+**Reason.** Run 9 reached the end of the 10-minute phase and then failed with "the stab-start marker is missing from the guest log" (`session.log`, 08:22:16Z). The logcat is valid UTF-8 only in part: `iconv -f UTF-8` rejects the `guest-logcat.log` of the HelloGL run (`/tmp/apkrun-023-hgl/boot1`). The strict decode returns nil for such a file, and `compactMap` drops it. The marker and every fps event sit in that file, so the checks failed although the run was healthy. The 60 s and 10-minute statistics in `boot.err` are ASCII, so they were not affected.
+
+**Scope.** The change covers the guest log only. The other strict read in `G3Session` (the `screencapture` output at line 543) reads a text file that the test writes itself.
+
+**Risk.** A replaced byte is still counted as a line, and it cannot match a marker or an fps line by accident. If the corruption were in the middle of a marker, the marker would be missing and the check would fail, which is the correct outcome.

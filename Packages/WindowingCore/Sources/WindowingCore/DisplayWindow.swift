@@ -5,7 +5,8 @@ import Dispatch
 ///
 /// The window is created at the scanout's size, so the surface shows at its native density, and it is never resized
 /// by the guest. The window consumes the frames of its source on the main actor, applies the layer's frame gate, and
-/// reports each displayed frame back to the source.
+/// reports each displayed frame back to the source. Its pointer events go to the input sink (#024). The mapper follows
+/// the generation of the frames it shows.
 @MainActor
 public final class DisplayWindow: NSObject, NSWindowDelegate {
     /// Runs when the user closes the window. The owner stops the runtime, which is the close action of the window.
@@ -16,9 +17,17 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
     private let source: any FrameSource
     private var gate: LayerFrameGate
     private var consumer: Task<Void, Never>?
+    /// The generation that the input mapper maps to. Nil until the first frame is shown.
+    private var inputGeneration: UInt64?
 
     /// Creates the window for `source`, titled `title`, at the points of the source's pixel size divided by `backingScale`.
-    public init(source: any FrameSource, title: String, backingScale: CGFloat) {
+    /// The pointer events of the window go to `inputSink` (#024). Without a sink the window shows the frames only.
+    public init(
+        source: any FrameSource,
+        title: String,
+        backingScale: CGFloat,
+        inputSink: PointerInputSink? = nil
+    ) {
         self.source = source
         gate = LayerFrameGate(generation: source.generation)
         let size = DisplayGeometry.contentSize(
@@ -40,8 +49,11 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         super.init()
         window.title = title
         window.isReleasedWhenClosed = false
+        layerView.inputSink = inputSink
         window.contentView = layerView
         window.delegate = self
+        // Pointer moves without a button are hover events, so the window needs them (input.md §4.1).
+        window.acceptsMouseMovedEvents = true
         window.setContentSize(size)
         window.center()
     }
@@ -66,8 +78,14 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         window.close()
     }
 
-    /// Stops the frames, and tells the owner that the user closed the window.
+    /// The window lost key status, so the open gesture ends on the guest (input.md §4.2).
+    public func windowDidResignKey(_ notification: Notification) {
+        layerView.focusLost()
+    }
+
+    /// Ends the input, then stops the frames, and tells the owner that the user closed the window.
     public func windowWillClose(_ notification: Notification) {
+        layerView.cancelAll()
         consumer?.cancel()
         consumer = nil
         onClose?()
@@ -80,6 +98,15 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
                 source.surfaces.indices.contains(bufferIndex)
             else {
                 return
+            }
+            // A new generation changes the mapper, and an open gesture of the old one is cancelled (input.md §3).
+            if generation != inputGeneration {
+                inputGeneration = generation
+                layerView.update(
+                    pixelWidth: source.pixelWidth,
+                    pixelHeight: source.pixelHeight,
+                    generation: generation
+                )
             }
             let source = source
             layerView.show(source.surfaces[bufferIndex]) {

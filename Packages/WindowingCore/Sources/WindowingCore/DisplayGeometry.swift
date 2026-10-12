@@ -1,4 +1,5 @@
 import CoreGraphics
+import InputCore
 
 /// The fixed-size geometry of a display window (graphics.md §12 #023, step 3).
 ///
@@ -19,6 +20,25 @@ public enum DisplayGeometry {
             y: (bounds.height - fitted.height) / 2,
             width: fitted.width,
             height: fitted.height
+        )
+    }
+
+    /// The mapper of input.md §3 for content of `contentSize` aspect-fit in `bounds`, shown on a display of
+    /// `pixelWidth` x `pixelHeight` pixels. The content rectangle is in the coordinates of `bounds`, so a point of the
+    /// letterbox maps to nothing.
+    public static func coordinateMapper(
+        contentSize: CGSize,
+        in bounds: CGSize,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        generation: UInt64
+    ) -> CoordinateMapper {
+        let rect = aspectFit(contentSize: contentSize, in: bounds)
+        return CoordinateMapper(
+            contentRect: DisplayRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            generation: generation
         )
     }
 

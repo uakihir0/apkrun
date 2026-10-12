@@ -1084,10 +1084,10 @@ class InputInjectorKeyTest {
     }
 
     @Test
-    fun aDownWhileTheKeyIsDownReleasesThePressAndDropsItself() {
-        // The UP of the press was lost. The press is released, the second DOWN is dropped, and the
-        // UP that follows has no
-        // press to end.
+    fun aDownWhileTheKeyIsDownReleasesThePressAndStartsANewOne() {
+        // The UP of the press was lost. The press is released, the second DOWN starts a new press,
+        // and the UP ends it,
+        // so the keystroke is kept.
         val harness = Harness()
         val outcome =
             harness.injector.injectBatch(
@@ -1100,8 +1100,31 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 2), outcome)
-        assertEquals(listOf(androidDown, androidUp), harness.keySpecs.map { it.action })
+        assertEquals(BatchOutcome(4, 0), outcome)
+        assertEquals(
+            listOf(androidDown, androidUp, androidDown, androidUp),
+            harness.keySpecs.map { it.action },
+        )
+    }
+
+    @Test
+    fun aRefusedUpBlocksANewPressSoItIsDropped() {
+        // The framework refuses the UP of the press, so the press stays open, and the DOWN that
+        // follows is dropped.
+        val harness = Harness()
+        harness.sink.keyRefuse = { it.action == androidUp }
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, keyCode = 29),
+                    keyEvent(hostNanos = 1L, keyCode = 29),
+                ),
+            )
+
+        assertEquals(BatchOutcome(1, 2), outcome)
+        assertEquals(listOf(androidDown), harness.keySpecs.map { it.action })
     }
 
     @Test

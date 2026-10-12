@@ -106,9 +106,9 @@ private fun pressureOf(buttonState: Int): Float = if (buttonState != 0) 1f else 
  *   an ACTION_BUTTON_PRESS or ACTION_BUTTON_RELEASE. The gesture closes with ACTION_UP when no
  *   button is down.
  * - Scroll stands alone. A key is a KeyEvent on the virtual keyboard (#025). A DOWN while the key
- *   is down is a repeat when its repeat count is above zero, and otherwise releases the open press
- *   and is dropped. An UP without an open press is dropped. A long press is dropped and counted,
- *   because it is not injected in this build (decision D6).
+ *   is down is a repeat when its repeat count is above zero. Otherwise the open press is released
+ *   and the DOWN starts a new press. An UP without an open press is dropped. A long press is
+ *   dropped and counted, because it is not injected in this build (decision D6).
  * - A hover event is dropped while a touch or a mouse button gesture is open on its display,
  *   because Android refuses the mixed event. An unbalanced hover enter or exit is dropped too. Both
  *   are counted (see [hostHover]).
@@ -592,8 +592,8 @@ class InputInjector(
     /**
      * A key event of key mode (input.md §5.2, §7.3). A DOWN with a repeat count above zero repeats
      * the open press, and it keeps the press's down time. A DOWN without a count for a key that is
-     * already down means that its UP was lost: the open press is released, and this DOWN is
-     * dropped, as a touch DOWN is. A repeat or an UP with no open press is dropped.
+     * already down means that its UP was lost or refused: the open press is released, and this DOWN
+     * starts a new press (see the branch below). A repeat or an UP with no open press is dropped.
      */
     private fun key(
         displayId: Int,
@@ -627,9 +627,16 @@ class InputInjector(
                     return
                 }
                 if (open != null) {
+                    // The host sends a DOWN for a key it sent UP for, or lost its UP. The open
+                    // press is released, and this
+                    // DOWN starts a new press, so the keystroke is kept. If the framework refuses
+                    // that UP, the press stays
+                    // open, and this DOWN is dropped.
                     releaseKey(displayId, gestures, code, time, tally)
-                    tally.dropped += 1
-                    return
+                    if (gestures.keys.containsKey(code)) {
+                        tally.dropped += 1
+                        return
+                    }
                 }
                 val spec =
                     keySpec(android.view.KeyEvent.ACTION_DOWN, time, time, code, 0, metaState)

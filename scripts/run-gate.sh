@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1|G2\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2|G3\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 && "$gate" != G2 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -46,6 +46,33 @@ APKRUN_TEST_LINUX_DIR="$(
     python3 "$script_dir/tools/validate-test-linux-dir.py" "$APKRUN_TEST_LINUX_DIR"
 )"
 export APKRUN_TEST_LINUX_DIR
+
+if [[ "$gate" == G3 ]]; then
+    # G3 runs on the stock build 16373615 with the ODM overlay, because the stock image without the overlay fails the
+    # EGL DRM check (IR-760 to IR-764, IR-940 to IR-961). The overlay bundle is built outside the production tree
+    # (IR-1112), so the gate takes it by path, checks its checksums, and records its path and SHA-256 (IR-1209).
+    g3_bundle="${APKRUN_G3_ANDROID_BUNDLE:-}"
+    if [[ "$g3_bundle" != /* || ! -f "$g3_bundle/manifest.json" || ! -f "$g3_bundle/SHA256SUMS" ]]; then
+        printf 'run-gate: G3 needs APKRUN_G3_ANDROID_BUNDLE, the absolute path of the Android bundle with the ODM overlay (IR-1209)\n' >&2
+        exit 78
+    fi
+    if ! (cd "$g3_bundle" && shasum -a 256 -c SHA256SUMS > /dev/null); then
+        printf 'run-gate: the checksums of %s do not match SHA256SUMS\n' "$g3_bundle" >&2
+        exit 1
+    fi
+    g3_android_home="${ANDROID_HOME:-$repo_root/build/android-sdk}"
+    if [[ ! -x "$g3_android_home/platform-tools/adb" ]]; then
+        printf 'run-gate: G3 needs adb at %s/platform-tools/adb (environment-setup.md §2.5)\n' "$g3_android_home" >&2
+        exit 78
+    fi
+    g3_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
+    if [[ ! -f "$g3_virgl/libvirglrenderer.1.dylib" ]]; then
+        printf 'run-gate: G3 needs the virgl runtime at %s (ThirdParty, #020)\n' "$g3_virgl" >&2
+        exit 78
+    fi
+    rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
+fi
+
 mkdir -p "$gate_dir"
 rm -rf "$gate_dir/DerivedData" "$gate_dir/LinuxGuest.xcresult" "$gate_dir/$gate.xcresult"
 # The gate runs the spec's values. A dwell override in the environment would change the evidence, so both
@@ -67,6 +94,13 @@ macos_build="$(sw_vers -buildVersion)"
     printf 'artifact_directory: %s\n' "$APKRUN_TEST_LINUX_DIR"
     if [[ "$gate" == G2 ]]; then
         printf 'dwell_seconds: %s\n' "$gate_dwell_seconds"
+    fi
+    if [[ "$gate" == G3 ]]; then
+        printf 'bundle: %s\n' "$g3_bundle"
+        printf 'bundle_manifest_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/manifest.json" | awk '{ print $1 }')"
+        printf 'bundle_sha256sums_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/SHA256SUMS" | awk '{ print $1 }')"
+        printf 'bundle_checksums: verified against SHA256SUMS\n'
+        printf 'cli_traits: EmbeddedRuntime,TestReadback\n'
     fi
     printf 'status: running\n'
 } > "$report"
@@ -97,6 +131,39 @@ fi
 # Both gates run the LinuxGuest suite, whose layout test reads the Android disks. Every gate rebuilds them, so no
 # run depends on disks left by an earlier build.
 scripts/build-test-android-disks.sh
+if [[ "$gate" == G3 ]]; then
+    # The Guest Agent bundle, HelloGL, and the Debug CLI with the TestReadback trait (graphics.md §12 #023, step 5).
+    # Each is built from this clean checkout. The files the test host reads are copied under the shared test directory,
+    # outside ~/Documents, so the test host can read them without a file-access prompt (as G2 does for its bundle).
+    export ANDROID_HOME="$g3_android_home"
+    scripts/build-guest.sh
+    scripts/build-fixtures.sh --app HelloGL
+    SRCROOT="$repo_root" scripts/build/stamp-commit.sh
+    SRCROOT="$repo_root" \
+        CONFIGURATION=Debug \
+        TARGET_BUILD_DIR="$gate_dir/products" \
+        UNLOCALIZED_RESOURCES_FOLDER_PATH=Resources \
+        DERIVED_FILE_DIR="$gate_dir/derived" \
+        APKRUN_CLI_TRAITS=EmbeddedRuntime,TestReadback \
+        EXPANDED_CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+        scripts/build/embed-cli.sh
+    staging="$APKRUN_TEST_LINUX_DIR/g3-staging"
+    rm -rf "$staging"
+    mkdir -p "$staging/cli" "$staging/guest" "$staging/android-sdk"
+    cp "$gate_dir/products/Resources/bin/apkrun" "$staging/cli/apkrun"
+    cp Guest/build/out/apkrun-guest.apk Guest/build/out/apkrun-guest.json "$staging/guest/"
+    cp -RL "$g3_virgl" "$staging/virgl-runtime"
+    cp -R "$g3_android_home/platform-tools" "$staging/android-sdk/platform-tools"
+    cp Tests/Fixtures/AndroidApps/out/HelloGL.apk "$staging/HelloGL.apk"
+    {
+        printf 'cli_sha256: %s\n' "$(shasum -a 256 "$staging/cli/apkrun" | awk '{ print $1 }')"
+        printf 'cli_commit: %s\n' "$(sed -n 's/^#define APKRUN_GIT_COMMIT \(.*\)$/\1/p' "$repo_root/build/generated/BuildStamp.h")"
+        printf 'hellogl_apk_sha256: %s\n' "$(shasum -a 256 "$staging/HelloGL.apk" | awk '{ print $1 }')"
+        printf 'guest_apk_sha256: %s\n' "$(shasum -a 256 "$staging/guest/apkrun-guest.apk" | awk '{ print $1 }')"
+        printf 'virgl_runtime: %s\n' "$g3_virgl"
+        printf 'android_sdk: %s\n' "$g3_android_home"
+    } >> "$report"
+fi
 scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
 # Build the test host before any test runs, then check the directory it will read (IR-376).
 xcodebuild build-for-testing \
@@ -123,6 +190,55 @@ xcodebuild test \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
     "${signing_arguments[@]}"
+if [[ "$gate" == G3 ]]; then
+    # The G3 check runs one boot in the G3 configuration (graphics.md §12 #023). It is serialised with the other VM runs
+    # by lockf (test-strategy §3.6). The artifacts stay outside ~/Documents until the run ends, and the gate copies them.
+    artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
+    rm -rf "$artifacts"
+    recording="$gate_dir/screen-recording.mov"
+    # screencapture ignores SIGINT and writes its file only when its own timer ends. The recording therefore runs for
+    # 30 minutes, which bounds the run, and the gate waits for it to end.
+    screencapture -v -V 1800 "$recording" &
+    recording_pid=$!
+    g3_status=0
+    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+        -project APKRun.xcodeproj \
+        -scheme IntegrationTests \
+        -testPlan IntegrationTests \
+        -configuration Debug \
+        -only-test-configuration G3 \
+        -only-testing:IntegrationTests/G3GraphicsTests \
+        -test-timeouts-enabled NO \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        -resultBundlePath "$gate_dir/$gate.xcresult" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        "TEST_RUNNER_APKRUN_G3_CLI=$staging/cli/apkrun" \
+        "TEST_RUNNER_APKRUN_G3_BUNDLE=$g3_bundle" \
+        "TEST_RUNNER_APKRUN_G3_APK=$staging/HelloGL.apk" \
+        "TEST_RUNNER_APKRUN_G3_GUEST_DIR=$staging/guest" \
+        "TEST_RUNNER_APKRUN_G3_VIRGL_RUNTIME=$staging/virgl-runtime" \
+        "TEST_RUNNER_APKRUN_G3_ANDROID_HOME=$staging/android-sdk" \
+        "TEST_RUNNER_APKRUN_G3_ARTIFACTS=$artifacts" || g3_status=$?
+    recording_status=0
+    wait "$recording_pid" || recording_status=$?
+    if [[ -d "$artifacts" ]]; then
+        rm -rf "$gate_dir/artifacts"
+        cp -R "$artifacts" "$gate_dir/artifacts"
+    fi
+    if [[ -f "$recording" ]]; then
+        avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4" \
+            && rm -f "$recording"
+    fi
+    {
+        printf 'artifacts: %s\n' "$gate_dir/artifacts"
+        printf 'screen_recording: %s (recorder exit %s)\n' "$gate_dir/screen-recording.mp4" "$recording_status"
+        printf 'test_exit: %s\n' "$g3_status"
+    } >> "$report"
+    exit "$g3_status"
+fi
 xcodebuild test \
     -project APKRun.xcodeproj \
     -scheme AcceptanceTests \

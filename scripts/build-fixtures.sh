@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Builds the fixture apps (build-system.md §8). Writes Tests/Fixtures/AndroidApps/out/HelloText.apk, which is
+# Builds the fixture apps (build-system.md §8). Writes Tests/Fixtures/AndroidApps/out/<app>.apk, which is
 # git-ignored and signed with the test-only key Tests/Fixtures/signing/test-fixture-a.jks.
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
+#   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #023)
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex
 #                                                 hashes, and the archive listing (build-system.md §14)
@@ -13,26 +14,35 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 fixtures="$repo_root/Tests/Fixtures/AndroidApps"
-output_apk="$fixtures/out/HelloText.apk"
-gradle_apk="$fixtures/HelloText/build/outputs/apk/release/HelloText-release.apk"
+app="HelloText"
 build_tools_version="37.0.0"
 # The SHA-256 of the test-only certificate of test-fixture-a.jks (IR-328). A signature from any other key fails.
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL] [--check-reproducible]\n' >&2
     exit 64
 }
 
 mode="build"
-case "${1:-}" in
-    "") ;;
-    --check-reproducible) mode="check" ;;
+while (($# > 0)); do
+    case "$1" in
+        --check-reproducible) mode="check" ;;
+        --app)
+            (($# >= 2)) || usage
+            app="$2"
+            shift
+            ;;
+        *) usage ;;
+    esac
+    shift
+done
+case "$app" in
+    HelloText | HelloGL) ;;
     *) usage ;;
 esac
-if (($# > 1)); then
-    usage
-fi
+output_apk="$fixtures/out/$app.apk"
+gradle_apk="$fixtures/$app/build/outputs/apk/release/$app-release.apk"
 
 if [[ -z "${ANDROID_HOME:-}" ]]; then
     printf 'build-fixtures: set ANDROID_HOME to the Android SDK (environment-setup.md §2.5)\n' >&2
@@ -64,7 +74,7 @@ verify_signer() {
 }
 
 if [[ "$mode" == "build" ]]; then
-    gradle_build :HelloText:assembleRelease
+    gradle_build ":$app:assembleRelease"
     verify_signer "$gradle_apk"
     mkdir -p "$(dirname "$output_apk")"
     cp "$gradle_apk" "$output_apk"
@@ -75,7 +85,7 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/apkrun-fixtures.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 for run in 1 2; do
-    gradle_build :HelloText:clean :HelloText:assembleRelease
+    gradle_build ":$app:clean" ":$app:assembleRelease"
     cp "$gradle_apk" "$work/run$run.apk"
     verify_signer "$work/run$run.apk"
     "$aapt2" dump badging "$work/run$run.apk" > "$work/run$run.badging"

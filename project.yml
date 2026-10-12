@@ -242,6 +242,7 @@ targets:
       - path: Tests/IntegrationTests/AndroidGraphicsTests
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
+      - path: Tests/IntegrationTests/AndroidInputTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:
@@ -272,6 +273,12 @@ targets:
         product: ImageCore
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: InputCore
+      - package: APKRun
+        product: WindowingCore
+      - package: APKRun
+        product: RuntimeAPI
     scheme:
       testTargets:
         - IntegrationTests

@@ -2372,6 +2372,42 @@
         "raisedBy": "DevelopmentGuestAgent",
         "ref": "[../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.3"
       }
+    },
+    {
+      "code": "runtime.inputNotBound",
+      "parameters": [
+        "cause",
+        "reason"
+      ],
+      "message": {
+        "en": "Pointer and keyboard input are not bound to Android. {cause}",
+        "ja": "ポインタとキーボードの入力は Android に接続されていません。{cause}"
+      },
+      "remediation": {
+        "en": "Pointer and keyboard input stay off for this boot until the Guest Agent is running. Restart the boot with `apkrun dev boot --window`.",
+        "ja": "Guest Agent が起動するまで、このブートではポインタとキーボードの入力は無効のままです。`apkrun dev boot --window` でブートをやり直してください。"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "variants": {
+        "guestAgentNotRunning": {
+          "message": {
+            "en": "Pointer and keyboard input are not bound to Android, because the Guest Agent is not running.",
+            "ja": "Guest Agent が動作していないため、ポインタとキーボードの入力は Android に接続されていません。"
+          },
+          "doc": {
+            "when": "after Android is ready, the boot has no running Guest Agent, so there is no input channel to bind",
+            "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
+            "ref": "[../02-design/input.md](../02-design/input.md) §7.1"
+          }
+        }
+      },
+      "doc": {
+        "case": "inputNotBound(cause:)",
+        "when": "after Android is ready, the window's input cannot be bound to the Guest Agent's input channel because the channel fails. The binding is tried again, and the boot goes on without input until it succeeds",
+        "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
+        "ref": "[../02-design/input.md](../02-design/input.md) §7.1, §11"
+      }
     }
   ]
 }

@@ -1,0 +1,31 @@
+gate: G3
+commit: 7dfa317cdcd36212d6df608bef76ee796ade0ef8
+started: 2026-10-12T09:00:21Z
+mac_model: Mac17,9
+macos_build: 26A434
+artifact_directory: /private/tmp/apkrun-test-linux
+bundle: /tmp/apkrun-odmc/odm4/bundle/android-bundle
+bundle_manifest_sha256: 37d4def60302fab6f930e7bc40d047d366ca9f1993c56c45e47b5d2d83f11e59
+bundle_sha256sums_sha256: 594bb43218eae0438764ee7e81ca4b9f1204a71be805127a21fa940aaa3a70e1
+bundle_checksums: SHA256SUMS matches the bundle files; manifest.sig is not checked by this gate
+bundle_image_version: 2026.10.0-cf16373615-arm64 (manifest.json; the overlay itself is not checked by this gate)
+cli_traits: EmbeddedRuntime,TestReadback
+status: passed
+cli_sha256: 1a7d3eacb224832c0c49d100626eb477962ee2512fbf6980fb18a904bff61057
+cli_commit: 7dfa317
+hellogl_apk_sha256: 140c3f9dfebb77995ee462e646a15cb3ed094554131402e847a20f682fee71fd
+guest_apk_sha256: 0d44ea2b59dfbcac5475d675e37b8af524f5f09ccd97f384d4876a21b9eadb0e
+virgl_runtime: /Users/N3275/Documents/projects/apkrun/ThirdParty/out/virgl-runtime/current
+android_sdk: /Users/N3275/Documents/projects/apkrun/build/android-sdk
+artifacts: /Users/N3275/Documents/projects/apkrun/build/gates/G3/artifacts
+screen_recording: /Users/N3275/Documents/projects/apkrun/build/gates/G3/screen-recording.mp4
+recorder_exit: 0
+test_exit: 0
+evidence_check_exit: 0
+evidence: passed: summary: result: passed
+evidence: passed: xcresult: G3GraphicsTests/testHelloGLRendersThroughVirglInAWindowWithoutReadbacksTearingOrRendererCrash() executed and passed
+evidence: info: xcresult: 1 test case(s) in the run, 1 of G3GraphicsTests
+evidence: passed: fixed-size: docs/02-design/graphics.md states it in `### #023 SurfaceFlinger to Metal`
+evidence: passed: fixed-size: docs/02-design/display-and-windowing.md states it in `### 5.3 Wrapper presentation algorithm`
+finished: 2026-10-12T11:07:49Z
+exit_code: 0

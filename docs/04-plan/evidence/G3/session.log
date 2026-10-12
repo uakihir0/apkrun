@@ -1,0 +1,20 @@
+2026-10-12T09:06:54Z G3 run: artifacts in /private/tmp/apkrun-test-linux/g3-artifacts, home /tmp/apkrun-g3-6a1b8ee2
+2026-10-12T09:06:59Z image installed
+2026-10-12T09:07:16Z state: ready
+2026-10-12T09:07:20Z keyguard dismissed, screen timeout off
+2026-10-12T09:07:36Z window 13147 captured
+2026-10-12T09:07:36Z HelloGL pid after launch: 5308
+2026-10-12T09:08:36Z 60 s window: 59 statistics lines
+2026-10-12T09:08:47Z alternating phase: sampled 320, red 225, blue 38, mixed 0
+2026-10-12T09:09:58Z minute 1: pid 7171
+2026-10-12T09:10:59Z minute 2: pid 7171
+2026-10-12T09:11:59Z minute 3: pid 7171
+2026-10-12T09:13:00Z minute 4: pid 7171
+2026-10-12T09:14:00Z minute 5: pid 7171
+2026-10-12T09:15:01Z minute 6: pid 7171
+2026-10-12T09:16:01Z minute 7: pid 7171
+2026-10-12T09:17:01Z minute 8: pid 7171
+2026-10-12T09:18:01Z minute 9: pid 7171
+2026-10-12T09:19:02Z minute 10: pid 7171
+2026-10-12T09:19:03Z 10 minute run: 61 fps events, 0 renderer crash lines, 432 other crash lines
+2026-10-12T09:19:06Z boot stop: endedAfterInterrupt

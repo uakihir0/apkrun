@@ -1,0 +1,432 @@
+10-12 09:08:47.528  7112  7126 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:08:47.528  7112  7126 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:08:47.528  7112  7126 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7126 (RenderThread), pid 7112 (droid.launcher3)
+10-12 09:08:47.544  7138  7138 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:08:47.544   479   479 I tombstoned: received crash request for pid 7126
+10-12 09:08:47.616  7138  7138 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:08:47.616  7138  7138 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:08:47.616  7138  7138 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:08:47.616  7138  7138 F DEBUG   : Revision: '0'
+10-12 09:08:47.616  7138  7138 F DEBUG   : ABI: 'arm64'
+10-12 09:08:47.616  7138  7138 F DEBUG   : Timestamp: 2026-10-12 09:08:47.552210009+0000
+10-12 09:08:47.616  7138  7138 F DEBUG   : Process uptime: 1s
+10-12 09:08:47.616  7138  7138 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:08:47.616  7138  7138 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:08:47.616  7138  7138 F DEBUG   : pid: 7112, ppid: 607, tid: 7126, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:08:47.616  7138  7138 F DEBUG   : uid: 10084
+10-12 09:08:47.616  7138  7138 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:08:47.616  7138  7138 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:08:47.616  7138  7138 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:08:47.616  7138  7138 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:08:47.616  7138  7138 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x0  0000000000000000  x1  0000000000001bd6  x2  0000000000000006  x3  0000006f24a345c0
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x4  0000000000000001  x5  0000000000000001  x6  0000000000000001  x7  7f7f7f7f7f7f7f7f
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x8  00000000000000f0  x9  7a42305339d56240  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x12 00000000000040cc  x13 00000000000043b8  x14 0000000000000018  x15 0000000000000000
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e9b2cc000  x19 0000000000001bc8
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x20 0000000000001bd6  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000018eed43f46
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x24 0000006f24a35300  x25 0000000000000000  x26 b400006f7b6b5920  x27 00000000017d7841
+10-12 09:08:47.616  7138  7138 F DEBUG   :     x28 b400006f7b6b5920  x29 0000006f24a34640
+10-12 09:08:47.616  7138  7138 F DEBUG   :     lr  00000071f9af535c  sp  0000006f24a345c0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:08:47.616  7138  7138 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:08:47.616  7138  7138 F DEBUG   : 13 total frames
+10-12 09:08:47.616  7138  7138 F DEBUG   : backtrace:
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #07 pc 00000000007533ec  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderThread::preload()::$_0, void ()>::operator()() (.__uniq.90750746851124314286939039409884766998.f88bde0a67a86f8d08c38b2ff999c659)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #08 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #09 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #10 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #11 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.616  7138  7138 F DEBUG   :       #12 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.616  7138  7138 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:08:47.616  7138  7138 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:08:47.623   479   479 E tombstoned: Tombstone written to: tombstone_56
+10-12 09:08:47.624   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:08:47.628   869  3216 I ActivityManager: Process com.android.launcher3 (pid 7112) has died: fg  TOP 
+10-12 09:08:47.696  7144  7157 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:08:47.696  7144  7157 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:08:47.696  7144  7157 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7157 (RenderThread), pid 7144 (droid.launcher3)
+10-12 09:08:47.717  7168  7168 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:08:47.718   479   479 I tombstoned: received crash request for pid 7157
+10-12 09:08:47.793  7168  7168 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:08:47.793  7168  7168 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:08:47.793  7168  7168 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:08:47.793  7168  7168 F DEBUG   : Revision: '0'
+10-12 09:08:47.793  7168  7168 F DEBUG   : ABI: 'arm64'
+10-12 09:08:47.793  7168  7168 F DEBUG   : Timestamp: 2026-10-12 09:08:47.729357217+0000
+10-12 09:08:47.793  7168  7168 F DEBUG   : Process uptime: 1s
+10-12 09:08:47.793  7168  7168 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:08:47.793  7168  7168 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:08:47.793  7168  7168 F DEBUG   : pid: 7144, ppid: 607, tid: 7157, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:08:47.793  7168  7168 F DEBUG   : uid: 10084
+10-12 09:08:47.793  7168  7168 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:08:47.793  7168  7168 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:08:47.793  7168  7168 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:08:47.793  7168  7168 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:08:47.793  7168  7168 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x0  0000000000000000  x1  0000000000001bf5  x2  0000000000000006  x3  0000006f24a345c0
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x4  6f1f216360647167  x5  6f1f216360647167  x6  6f1f216360647167  x7  7f7f7f7f7f7f7f7f
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x8  00000000000000f0  x9  73cc699bf2726ca1  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x12 0000000000000000  x13 00000000000089ba  x14 000000009997f806  x15 0000000029aaaaab
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e9d234000  x19 0000000000001be8
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x20 0000000000001bf5  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000018f91db014
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x24 0000006f24a35300  x25 0000000000000000  x26 b400006f7b6b4de0  x27 00000000017d7841
+10-12 09:08:47.793  7168  7168 F DEBUG   :     x28 b400006f7b6b4de0  x29 0000006f24a34640
+10-12 09:08:47.793  7168  7168 F DEBUG   :     lr  00000071f9af535c  sp  0000006f24a345c0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:08:47.793  7168  7168 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:08:47.793  7168  7168 F DEBUG   : 13 total frames
+10-12 09:08:47.793  7168  7168 F DEBUG   : backtrace:
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #07 pc 00000000007533ec  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderThread::preload()::$_0, void ()>::operator()() (.__uniq.90750746851124314286939039409884766998.f88bde0a67a86f8d08c38b2ff999c659)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #08 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #09 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #10 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #11 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.793  7168  7168 F DEBUG   :       #12 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:08:47.793  7168  7168 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:08:47.793  7168  7168 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:08:47.800   479   479 E tombstoned: Tombstone written to: tombstone_57
+10-12 09:08:47.800   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:08:47.804   869  3216 I ActivityManager: Process com.android.launcher3 (pid 7144) has died: fg  TOP 
+10-12 09:09:52.078  7226  7246 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:52.078  7226  7246 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:52.078  7226  7246 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:52.078  7226  7246 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7246 (RenderThread), pid 7226 (droid.launcher3)
+10-12 09:09:52.096  7249  7249 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:09:52.097   479   479 I tombstoned: received crash request for pid 7246
+10-12 09:09:52.171  7249  7249 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:09:52.171  7249  7249 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:09:52.171  7249  7249 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:09:52.171  7249  7249 F DEBUG   : Revision: '0'
+10-12 09:09:52.171  7249  7249 F DEBUG   : ABI: 'arm64'
+10-12 09:09:52.171  7249  7249 F DEBUG   : Timestamp: 2026-10-12 09:09:52.105332498+0000
+10-12 09:09:52.171  7249  7249 F DEBUG   : Process uptime: 1s
+10-12 09:09:52.171  7249  7249 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:09:52.171  7249  7249 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:09:52.171  7249  7249 F DEBUG   : pid: 7226, ppid: 607, tid: 7246, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:09:52.171  7249  7249 F DEBUG   : uid: 10084
+10-12 09:09:52.171  7249  7249 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:09:52.171  7249  7249 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:09:52.171  7249  7249 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:09:52.171  7249  7249 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:09:52.171  7249  7249 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x0  0000000000000000  x1  0000000000001c4e  x2  0000000000000006  x3  0000006e95ff74f0
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x4  0000000000007007  x5  0000000000007007  x6  0000000000007007  x7  7f7f7f7f7f7f7f7f
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x8  00000000000000f0  x9  324d3ecb6b942418  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x12 0000000000000000  x13 000000000000cd74  x14 00000000f5b16123  x15 0000000029aaaaab
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e95290000  x19 0000000000001c3a
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x20 0000000000001c4e  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000027f65289fc
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x24 0000006e95ff8300  x25 0000006e95ff8300  x26 b400006f8b61a420  x27 00000000017d7841
+10-12 09:09:52.171  7249  7249 F DEBUG   :     x28 b400006f8b61a4e0  x29 0000006e95ff7570
+10-12 09:09:52.171  7249  7249 F DEBUG   :     lr  00000071f9af535c  sp  0000006e95ff74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:09:52.171  7249  7249 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:09:52.171  7249  7249 F DEBUG   : 16 total frames
+10-12 09:09:52.171  7249  7249 F DEBUG   : backtrace:
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:52.171  7249  7249 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:52.171  7249  7249 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:09:52.171  7249  7249 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:09:52.178   479   479 E tombstoned: Tombstone written to: tombstone_58
+10-12 09:09:52.178   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:09:52.182   869  2833 I ActivityManager: Process com.android.launcher3 (pid 7226) has died: fg  BFGS
+10-12 09:09:53.275  7255  7275 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:53.275  7255  7275 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:53.275  7255  7275 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:09:53.275  7255  7275 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7275 (RenderThread), pid 7255 (droid.launcher3)
+10-12 09:09:53.294  7279  7279 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:09:53.294   479   479 I tombstoned: received crash request for pid 7275
+10-12 09:09:53.372  7279  7279 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:09:53.372  7279  7279 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:09:53.372  7279  7279 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:09:53.372  7279  7279 F DEBUG   : Revision: '0'
+10-12 09:09:53.372  7279  7279 F DEBUG   : ABI: 'arm64'
+10-12 09:09:53.372  7279  7279 F DEBUG   : Timestamp: 2026-10-12 09:09:53.302851999+0000
+10-12 09:09:53.372  7279  7279 F DEBUG   : Process uptime: 1s
+10-12 09:09:53.372  7279  7279 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:09:53.372  7279  7279 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:09:53.372  7279  7279 F DEBUG   : pid: 7255, ppid: 607, tid: 7275, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:09:53.372  7279  7279 F DEBUG   : uid: 10084
+10-12 09:09:53.372  7279  7279 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:09:53.372  7279  7279 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:09:53.372  7279  7279 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:09:53.372  7279  7279 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:09:53.372  7279  7279 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x0  0000000000000000  x1  0000000000001c6b  x2  0000000000000006  x3  0000006e95ff74f0
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x4  0000000000009009  x5  0000000000009009  x6  0000000000009009  x7  7f7f7f7f7f7f7f7f
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x8  00000000000000f0  x9  da39526701ae0acc  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x12 0000000000000000  x13 000000000000cee6  x14 00000000f767c0e0  x15 0000000029aaaaab
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e950bc000  x19 0000000000001c57
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x20 0000000000001c6b  x21 00000000ffffffff  x22 0000006f2a20e000  x23 000000283db0a25b
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x24 0000006e95ff8300  x25 0000006e95ff8300  x26 b400006f8b61d260  x27 00000000017d7841
+10-12 09:09:53.372  7279  7279 F DEBUG   :     x28 b400006f8b61d320  x29 0000006e95ff7570
+10-12 09:09:53.372  7279  7279 F DEBUG   :     lr  00000071f9af535c  sp  0000006e95ff74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:09:53.372  7279  7279 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:09:53.372  7279  7279 F DEBUG   : 16 total frames
+10-12 09:09:53.372  7279  7279 F DEBUG   : backtrace:
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:53.372  7279  7279 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:09:53.372  7279  7279 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:09:53.372  7279  7279 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:09:53.379   479   479 E tombstoned: Tombstone written to: tombstone_59
+10-12 09:09:53.379   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:09:53.383   869  2833 I ActivityManager: Process com.android.launcher3 (pid 7255) has died: fg  BFGS
+10-12 09:12:05.132  7313  7333 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:05.132  7313  7333 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:05.132  7313  7333 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:05.132  7313  7333 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7333 (RenderThread), pid 7313 (droid.launcher3)
+10-12 09:12:05.159  7336  7336 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:12:05.160   479   479 I tombstoned: received crash request for pid 7333
+10-12 09:12:05.268  7336  7336 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:12:05.268  7336  7336 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:12:05.268  7336  7336 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:12:05.268  7336  7336 F DEBUG   : Revision: '0'
+10-12 09:12:05.268  7336  7336 F DEBUG   : ABI: 'arm64'
+10-12 09:12:05.268  7336  7336 F DEBUG   : Timestamp: 2026-10-12 09:12:05.172226728+0000
+10-12 09:12:05.268  7336  7336 F DEBUG   : Process uptime: 1s
+10-12 09:12:05.268  7336  7336 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:12:05.268  7336  7336 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:12:05.268  7336  7336 F DEBUG   : pid: 7313, ppid: 607, tid: 7333, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:12:05.268  7336  7336 F DEBUG   : uid: 10084
+10-12 09:12:05.268  7336  7336 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:12:05.268  7336  7336 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:12:05.268  7336  7336 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:12:05.268  7336  7336 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:12:05.268  7336  7336 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x0  0000000000000000  x1  0000000000001ca5  x2  0000000000000006  x3  0000006e95ff74f0
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x4  0000000000009009  x5  0000000000009009  x6  0000000000009009  x7  7f7f7f7f7f7f7f7f
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x8  00000000000000f0  x9  d7aa4a093abd0bea  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x12 0000000000000000  x13 0000000000015514  x14 00000001b406ffce  x15 0000000029aaaaab
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e956b0000  x19 0000000000001c91
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x20 0000000000001ca5  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000046f059c231
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x24 0000006e95ff8300  x25 0000006e95ff8300  x26 b400006f8b61d260  x27 00000000017d7841
+10-12 09:12:05.268  7336  7336 F DEBUG   :     x28 b400006f8b61d320  x29 0000006e95ff7570
+10-12 09:12:05.268  7336  7336 F DEBUG   :     lr  00000071f9af535c  sp  0000006e95ff74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:12:05.268  7336  7336 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:12:05.268  7336  7336 F DEBUG   : 16 total frames
+10-12 09:12:05.268  7336  7336 F DEBUG   : backtrace:
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:05.268  7336  7336 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:12:05.269  7336  7336 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:12:05.269  7336  7336 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:05.269  7336  7336 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:05.269  7336  7336 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:12:05.269  7336  7336 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:12:05.276   479   479 E tombstoned: Tombstone written to: tombstone_60
+10-12 09:12:05.277   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:12:05.282   869  2833 I ActivityManager: Process com.android.launcher3 (pid 7313) has died: fg  BFGS
+10-12 09:12:06.374  7342  7362 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:06.374  7342  7362 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:06.374  7342  7362 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:12:06.374  7342  7362 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7362 (RenderThread), pid 7342 (droid.launcher3)
+10-12 09:12:06.393  7365  7365 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:12:06.393   479   479 I tombstoned: received crash request for pid 7362
+10-12 09:12:06.471  7365  7365 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:12:06.471  7365  7365 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:12:06.471  7365  7365 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:12:06.471  7365  7365 F DEBUG   : Revision: '0'
+10-12 09:12:06.471  7365  7365 F DEBUG   : ABI: 'arm64'
+10-12 09:12:06.471  7365  7365 F DEBUG   : Timestamp: 2026-10-12 09:12:06.404843104+0000
+10-12 09:12:06.471  7365  7365 F DEBUG   : Process uptime: 1s
+10-12 09:12:06.471  7365  7365 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:12:06.471  7365  7365 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:12:06.471  7365  7365 F DEBUG   : pid: 7342, ppid: 607, tid: 7362, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:12:06.471  7365  7365 F DEBUG   : uid: 10084
+10-12 09:12:06.471  7365  7365 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:12:06.471  7365  7365 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:12:06.471  7365  7365 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:12:06.471  7365  7365 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:12:06.471  7365  7365 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x0  0000000000000000  x1  0000000000001cc2  x2  0000000000000006  x3  0000006e95ff74f0
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x4  0000000000007007  x5  0000000000007007  x6  0000000000007007  x7  7f7f7f7f7f7f7f7f
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x8  00000000000000f0  x9  7ae43f61d64e89d9  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x12 0000000000000000  x13 000000000001569e  x14 00000001b5ce090c  x15 0000000029aaaaab
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e9523c000  x19 0000000000001cae
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x20 0000000000001cc2  x21 00000000ffffffff  x22 0000006f2a20e000  x23 000000473ad6ab79
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x24 0000006e95ff8300  x25 0000006e95ff8300  x26 b400006f8b61a420  x27 00000000017d7841
+10-12 09:12:06.471  7365  7365 F DEBUG   :     x28 b400006f8b61a4e0  x29 0000006e95ff7570
+10-12 09:12:06.471  7365  7365 F DEBUG   :     lr  00000071f9af535c  sp  0000006e95ff74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:12:06.471  7365  7365 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:12:06.471  7365  7365 F DEBUG   : 16 total frames
+10-12 09:12:06.471  7365  7365 F DEBUG   : backtrace:
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:06.471  7365  7365 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:12:06.471  7365  7365 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:12:06.471  7365  7365 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:12:06.479   479   479 E tombstoned: Tombstone written to: tombstone_61
+10-12 09:12:06.480   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:12:06.484   869  2387 I ActivityManager: Process com.android.launcher3 (pid 7342) has died: fg  BFGS
+10-12 09:16:26.104  7399  7419 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:26.104  7399  7419 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:26.104  7399  7419 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:26.104  7399  7419 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7419 (RenderThread), pid 7399 (droid.launcher3)
+10-12 09:16:26.128  7423  7423 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:16:26.128   479   479 I tombstoned: received crash request for pid 7419
+10-12 09:16:26.233  7423  7423 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:16:26.233  7423  7423 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:16:26.233  7423  7423 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:16:26.233  7423  7423 F DEBUG   : Revision: '0'
+10-12 09:16:26.233  7423  7423 F DEBUG   : ABI: 'arm64'
+10-12 09:16:26.233  7423  7423 F DEBUG   : Timestamp: 2026-10-12 09:16:26.140911394+0000
+10-12 09:16:26.233  7423  7423 F DEBUG   : Process uptime: 1s
+10-12 09:16:26.233  7423  7423 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:16:26.233  7423  7423 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:16:26.233  7423  7423 F DEBUG   : pid: 7399, ppid: 607, tid: 7419, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:16:26.233  7423  7423 F DEBUG   : uid: 10084
+10-12 09:16:26.233  7423  7423 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:16:26.233  7423  7423 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:16:26.233  7423  7423 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:16:26.233  7423  7423 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:16:26.233  7423  7423 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x0  0000000000000000  x1  0000000000001cfb  x2  0000000000000006  x3  0000006e961f74f0
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x4  0000000000007007  x5  0000000000007007  x6  0000000000007007  x7  7f7f7f7f7f7f7f7f
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x8  00000000000000f0  x9  627f9fd8eaf512a2  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x12 0000000000000000  x13 000000000002660c  x14 000000032959e0c5  x15 0000000029aaaaab
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e95290000  x19 0000000000001ce7
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x20 0000000000001cfb  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000083b3d1fc2b
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x24 0000006e961f8300  x25 0000006e961f8300  x26 b400006f8b61a420  x27 00000000017d7841
+10-12 09:16:26.233  7423  7423 F DEBUG   :     x28 b400006f8b61a4e0  x29 0000006e961f7570
+10-12 09:16:26.233  7423  7423 F DEBUG   :     lr  00000071f9af535c  sp  0000006e961f74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:16:26.233  7423  7423 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:16:26.233  7423  7423 F DEBUG   : 16 total frames
+10-12 09:16:26.233  7423  7423 F DEBUG   : backtrace:
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:26.233  7423  7423 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:26.233  7423  7423 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:16:26.233  7423  7423 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:16:26.240   479   479 E tombstoned: Tombstone written to: tombstone_62
+10-12 09:16:26.241   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:16:26.245   869  2724 I ActivityManager: Process com.android.launcher3 (pid 7399) has died: fg  BFGS
+10-12 09:16:27.335  7429  7449 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:27.335  7429  7449 F droid.launcher3: runtime.cc:761]   native: #06 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:27.335  7429  7449 F droid.launcher3: runtime.cc:761]   native: #05 pc 001c89c8  /system/lib64/libandroid_runtime.so (android::AndroidRuntime::javaThreadShell+104) (BuildId: c03dc1794674efb0b54099259ed8bfa4)
+10-12 09:16:27.335  7429  7449 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 7449 (RenderThread), pid 7429 (droid.launcher3)
+10-12 09:16:27.353  7452  7452 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstoneProto
+10-12 09:16:27.354   479   479 I tombstoned: received crash request for pid 7449
+10-12 09:16:27.429  7452  7452 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-12 09:16:27.429  7452  7452 F DEBUG   : Build fingerprint: 'generic/aosp_cf_arm64_only_phone/vsoc_arm64_only:17/CP2A.260605.016/16373615:userdebug/test-keys'
+10-12 09:16:27.429  7452  7452 F DEBUG   : Kernel Release: '6.12.74-android16-6-g3ec022196c4e-ab15076761-4k'
+10-12 09:16:27.429  7452  7452 F DEBUG   : Revision: '0'
+10-12 09:16:27.429  7452  7452 F DEBUG   : ABI: 'arm64'
+10-12 09:16:27.429  7452  7452 F DEBUG   : Timestamp: 2026-10-12 09:16:27.363212728+0000
+10-12 09:16:27.429  7452  7452 F DEBUG   : Process uptime: 1s
+10-12 09:16:27.429  7452  7452 F DEBUG   : Executable: /system/bin/app_process64
+10-12 09:16:27.429  7452  7452 F DEBUG   : Cmdline: com.android.launcher3
+10-12 09:16:27.429  7452  7452 F DEBUG   : pid: 7429, ppid: 607, tid: 7449, name: RenderThread  >>> com.android.launcher3 <<<
+10-12 09:16:27.429  7452  7452 F DEBUG   : uid: 10084
+10-12 09:16:27.429  7452  7452 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-12 09:16:27.429  7452  7452 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-12 09:16:27.429  7452  7452 F DEBUG   : esr: 0000000092000006 (Data Abort Exception 0x24)
+10-12 09:16:27.429  7452  7452 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-12 09:16:27.429  7452  7452 F DEBUG   : Abort message: 'Failed to create context, error = EGL_NOT_INITIALIZED'
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x0  0000000000000000  x1  0000000000001d19  x2  0000000000000006  x3  0000006e95ff74f0
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x4  0000000000007007  x5  0000000000007007  x6  0000000000007007  x7  7f7f7f7f7f7f7f7f
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x8  00000000000000f0  x9  c9ba15773042b818  x10 0000000000000001  x11 00000071f9b0eff0
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x12 0000000000000000  x13 0000000000026790  x14 000000032b1cd21a  x15 0000000029aaaaab
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x16 00000071f9b7a3e0  x17 00000071f9b60600  x18 0000006e95404000  x19 0000000000001d05
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x20 0000000000001d19  x21 00000000ffffffff  x22 0000006f2a20e000  x23 00000083fd7e52ea
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x24 0000006e95ff8300  x25 0000006e95ff8300  x26 b400006f8b61a420  x27 00000000017d7841
+10-12 09:16:27.429  7452  7452 F DEBUG   :     x28 b400006f8b61a4e0  x29 0000006e95ff7570
+10-12 09:16:27.429  7452  7452 F DEBUG   :     lr  00000071f9af535c  sp  0000006e95ff74f0  pc  00000071f9af5380  pst 0000000000000000
+10-12 09:16:27.429  7452  7452 F DEBUG   :     esr 0000000092000006  vg  0000000000000000
+10-12 09:16:27.429  7452  7452 F DEBUG   : 16 total frames
+10-12 09:16:27.429  7452  7452 F DEBUG   : backtrace:
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #00 pc 000000000007e380  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #01 pc 000000000061b844  /apex/com.android.art/lib64/libart.so (art::Runtime::Abort(char const*)+612) (BuildId: dbbf6bdc26a88194cc04fabf5da00f03)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #02 pc 0000000000016c84  /apex/com.android.art/lib64/libbase.so (android::base::SetAborter(std::__1::function<void (char const*)>&&)::$_0::__invoke(char const*)+84) (BuildId: 2903ab7cdbd021b35b32a8789ab68908)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #03 pc 000000000000d284  /system/lib64/liblog.so (__android_log_assert+292) (BuildId: a9da23020ffc890eb9c0afb0e17c2e7a)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #04 pc 0000000000750ad4  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::createContext()+500) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #05 pc 0000000000750424  /system/lib64/libhwui.so (android::uirenderer::renderthread::EglManager::initialize()+196) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #06 pc 00000000003e9464  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::requireGlContext()+84) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #07 pc 000000000074e85c  /system/lib64/libhwui.so (android::uirenderer::skiapipeline::SkiaOpenGLPipeline::setSurface(ANativeWindow*, android::uirenderer::renderthread::SwapBehavior)+92) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #08 pc 000000000024c768  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setupPipelineSurface()+56) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #09 pc 000000000024c6cc  /system/lib64/libhwui.so (android::uirenderer::renderthread::CanvasContext::setSurface(ANativeWindow*, bool)+204) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.429  7452  7452 F DEBUG   :       #10 pc 000000000056c84c  /system/lib64/libhwui.so (std::__1::__function::__func<android::uirenderer::renderthread::RenderProxy::setSurface(ANativeWindow*, bool)::$_0, void ()>::operator()() (.__uniq.110435125376433984577876079601927332169.7f1a31096babb08a9e31b4388111c9d6)+28) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.430  7452  7452 F DEBUG   :       #11 pc 00000000004b4bdc  /system/lib64/libhwui.so (android::uirenderer::renderthread::RenderThread::threadLoop()+1052) (BuildId: de8346ffde8290dd24fdf062bb2539a2)
+10-12 09:16:27.430  7452  7452 F DEBUG   :       #12 pc 0000000000019474  /system/lib64/libutils.so (android::Thread::_threadLoop(void*)+260) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:16:27.430  7452  7452 F DEBUG   :       #13 pc 000000000001ba64  /system/lib64/libutils.so (libutil_thread_trampoline(void*) (.__uniq.226528677032898775202282855395389835431)+20) (BuildId: 534e721fa4c7a272207c396bb868d723)
+10-12 09:16:27.430  7452  7452 F DEBUG   :       #14 pc 0000000000092398  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*) (.__uniq.67847048707805468364044055584648682506)+184) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:27.430  7452  7452 F DEBUG   :       #15 pc 00000000000820e4  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 8b777b63cf5939692d106d72a1396cf4)
+10-12 09:16:27.430  7452  7452 F DEBUG   : Note: To display stack pointer information, use the pbtombstone tool:
+10-12 09:16:27.430  7452  7452 F DEBUG   :         pbtombstone --display-sp tombstone_XX.pb
+10-12 09:16:27.437   479   479 E tombstoned: Tombstone written to: tombstone_63
+10-12 09:16:27.437   869  2403 E NativeTombstoneManager: Tombstone has invalid selinux label (u:r:priv_app:s0:c512,c768��), ignoring
+10-12 09:16:27.441   869  2724 I ActivityManager: Process com.android.launcher3 (pid 7429) has died: fg  BFGS

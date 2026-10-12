@@ -1,0 +1,5 @@
+passed: summary: result: passed
+passed: xcresult: G3GraphicsTests/testHelloGLRendersThroughVirglInAWindowWithoutReadbacksTearingOrRendererCrash() executed and passed
+info: xcresult: 1 test case(s) in the run, 1 of G3GraphicsTests
+passed: fixed-size: docs/02-design/graphics.md states it in `### #023 SurfaceFlinger to Metal`
+passed: fixed-size: docs/02-design/display-and-windowing.md states it in `### 5.3 Wrapper presentation algorithm`

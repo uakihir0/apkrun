@@ -16821,3 +16821,23 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Scope.** The change covers the guest log only. The other strict read in `G3Session` (the `screencapture` output at line 543) reads a text file that the test writes itself.
 
 **Risk.** A replaced byte is still counted as a line, and it cannot match a marker or an fps line by accident. If the corruption were in the middle of a marker, the marker would be missing and the check would fail, which is the correct outcome.
+
+## IR-1225: Gate G3 passed on `7dfa317`; the judgments of the passing run are recorded here for review
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 and tearing criteria, the status line); [graphics.md](../02-design/graphics.md) §16 (the #023 row); [test-strategy.md](../04-plan/test-strategy.md) §5 and §8 (C01-6 still open) |
+
+**Result.** `scripts/run-gate.sh G3` on `main` at `7dfa317` ended with `status: passed`, `test_exit: 0`, `recorder_exit: 0`, and `evidence_check_exit: 0`. The checker's own record is `evidence/G3/evidence-check.txt`. The six conditions of roadmap §2 G3 are measured in `evidence/G3/summary.txt`: the display is in a window (141 distinct colours in the first capture), the renderer is `virgl`, `hostReadbacks` and `cpuPixelCopies` are 0 over the 60 s run, the fps average is 59.98 over 61 events in 10 minutes, the alternating phase has 320 sampled frames with 0 mixed, the pid stays 7171 through 10 minutes with no renderer crash line, and the resize is fixed-size in graphics.md and display-and-windowing.md §5.3.
+
+**Judgments of this run, for review.**
+1. The stock image is the odm4 overlay bundle, not a stock-only image (IR-1209). The gate checks the bundle's SHA-256 (`SHA256SUMS`), not `manifest.sig`, and not the overlay itself. The report says so.
+2. The tearing check is the pool-buffer sampling of the `TestReadback` build (IR-1210). The first-row test was replaced by a centre-pixel test (IR-1222), which is why the earlier runs saw no colour. The check reads every row and column of the frames that are pure red or blue at the centre.
+3. The crash count of the 10-minute run is HelloGL and SurfaceFlinger only. The 432 launcher and Settings crash lines are recorded and not counted (IR-1213, IR-1208).
+4. The gate ran with the Mac in use. The display window was kept on screen by the activation rule (IR-1220), and a capture was retried (IR-1221). Those rules do not change the product's visibility rule (IR-1223).
+5. The stock zip for the disk build was restored from an existing copy with the pinned SHA-256 (`051caf80…`). Its source is `/private/tmp/apkrun-022-doc-input`, not a fresh fetch. The fetch needs `APKRUN_ANDROID_BUILD_API_KEY`, which was not available here.
+6. The evidence is the text of the run under `docs/04-plan/evidence/G3/`. The 30-minute screen recording and the boot logs (`boot.out`, `boot.err`) stay in `build/gates/G3/` on this Mac because of their size.
+
+**Still open.** The C01-6 manual check (M02 #023 T3, test-strategy §8) needs a person to watch `build/gates/G3/screen-recording.mp4` for tearing or stutter. It is not done. Until it is, #023 is not complete under the definition of done (AGENTS.md §12), so the GitHub issue for #023 stays open.

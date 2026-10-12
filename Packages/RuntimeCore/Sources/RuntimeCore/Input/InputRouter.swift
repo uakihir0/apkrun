@@ -46,6 +46,15 @@ public struct InputCounters: Equatable, Sendable {
     }
 }
 
+extension InputCounters: CustomStringConvertible {
+    /// The counts on one line, under the names of input.md §11, for the development command's output.
+    public var description: String {
+        "sent=\(eventsSent) batches=\(batchesSent) input.dropped.rate=\(droppedRate) "
+            + "input.dropped.notRunning=\(droppedNotRunning) input.dropped.invalid=\(droppedInvalid) "
+            + "input.dropped.channel=\(droppedChannel) input.coalesced=\(coalesced)"
+    }
+}
+
 /// The routing of input to the guest (input.md §7.1, runtime-api.md §7.3). The router keeps the sessions, checks
 /// that a session may send, limits its rate, merges events when the guest is behind, and sends the rest as batches.
 ///

@@ -157,6 +157,14 @@ public actor DevelopmentGuestAgent {
     /// The input channel of the control session (input.md §8, decision D11). The input connection opens on the first
     /// call, presents the control session's token, and is reused while it is usable. It is opened again when it is not
     /// usable, or when the control session has another token, because a new control session refuses the old one.
+    /// The number of `adb shell` commands that this agent's ADB client has started (input.md §11, #024). The input path
+    /// runs none, so the count does not change while input is routed (the box "no shell command per event").
+    public var adbShellInvocationCount: Int {
+        get async {
+            await adb.shellInvocationCount
+        }
+    }
+
     public func inputChannel() async throws(GuestAgentFailure) -> GuestInputChannel {
         try requireAvailable()
         guard let token = await supervisor.session?.sessionToken else {

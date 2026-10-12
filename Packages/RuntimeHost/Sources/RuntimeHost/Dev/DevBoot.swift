@@ -237,6 +237,13 @@ public struct DevBoot: Sendable {
             await supervisor.stop()
             throw error
         }
+        // The counters of the route are read before the route is unbound, which discards its router (input.md §11).
+        if let route = options.inputRoute {
+            onEvent(.message("input counters: \(await route.counters())"))
+        }
+        if let agent = await supervisor.developmentGuestAgent {
+            onEvent(.message("adb shell commands so far: \(await agent.adbShellInvocationCount)"))
+        }
         onEvent(.message("stopping Android"))
         await endInput(inputBinding, route: options.inputRoute)
         await supervisor.stop()

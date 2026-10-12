@@ -15,8 +15,9 @@ import XCTest
 /// sets. It also needs APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText), and
 /// APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names the variable.
 ///
-/// The entry's `adb shell` counter is not in the code, because AdbClient has no shell counter, and none is added here.
-/// The sequence samples the process list for `adb ... shell input` commands instead, and must find none (FR-IN-06).
+/// The sequence checks two things for FR-IN-06: the `shellInvocationCount` of the test's AdbClient does not change while
+/// the clicks run, and the process list shows no `adb ... shell input` command. The run of the development boot prints
+/// its own agent counter in the same way (`adb shell commands so far`), which the device checks record.
 @MainActor
 final class AndroidInputTests: XCTestCase {
     private static let helloText = "io.apkrun.fixture.hellotext"
@@ -42,6 +43,7 @@ final class AndroidInputTests: XCTestCase {
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
+            let shellBefore = await run.adb.shellInvocationCount
             let pointer = try run.pointer()
             for _ in 0..<100 {
                 try await pointer.click(at: target)
@@ -49,6 +51,8 @@ final class AndroidInputTests: XCTestCase {
             }
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+            let shellAfter = await run.adb.shellInvocationCount
+            XCTAssertEqual(shellAfter, shellBefore, "the adb shell counter changed during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
         }

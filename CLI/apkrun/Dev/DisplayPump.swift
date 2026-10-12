@@ -8,11 +8,12 @@
     ///
     /// The pump runs on the main actor, next to the AppKit event loop. It makes the window when the display is attached,
     /// forwards each ready frame to the window, and updates the title once a second. With `--stats` it also logs each
-    /// line to standard error.
+    /// line to standard error. The window's pointer events go to `inputSink` (#024).
     @MainActor
     final class DisplayPump {
         private let display: DeveloperDisplay
         private let showStatistics: Bool
+        private let inputSink: PointerInputSink
         private let onWindowClosed: @MainActor () -> Void
         private var source: SurfacePoolFrameSource?
         private var window: DisplayWindow?
@@ -21,9 +22,15 @@
             private let tearing = TearingSampler()
         #endif
 
-        init(display: DeveloperDisplay, showStatistics: Bool, onWindowClosed: @escaping @MainActor () -> Void) {
+        init(
+            display: DeveloperDisplay,
+            showStatistics: Bool,
+            inputSink: PointerInputSink,
+            onWindowClosed: @escaping @MainActor () -> Void
+        ) {
             self.display = display
             self.showStatistics = showStatistics
+            self.inputSink = inputSink
             self.onWindowClosed = onWindowClosed
         }
 
@@ -62,7 +69,8 @@
             case .attached(let surfaces):
                 let source = SurfacePoolFrameSource(surfaces: surfaces, generation: 1, display: display)
                 let scale = NSScreen.main?.backingScaleFactor ?? 1
-                let window = DisplayWindow(source: source, title: "APKRun display 0", backingScale: scale)
+                let window = DisplayWindow(
+                    source: source, title: "APKRun display 0", backingScale: scale, inputSink: inputSink)
                 window.onClose = onWindowClosed
                 window.show()
                 self.source = source

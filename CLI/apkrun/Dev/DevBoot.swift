@@ -120,6 +120,7 @@
             if let session {
                 // The window's session runs the boot here. The event loop is on the main thread, and it ends with the command.
                 options.developerDisplay = session.display
+                options.inputRoute = session.inputRoute
             }
             try await DevBoot().run(options: options, stopRequests: stops.stream, onEvent: onEvent)
         }

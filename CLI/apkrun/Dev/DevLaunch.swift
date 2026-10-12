@@ -5,11 +5,13 @@
     import RuntimeHost
 
     /// `apkrun dev launch <package>`: boots Android, starts the Guest Agent, launches the package on display 0 through
-    /// `LaunchApplication`, prints the result, and stops Android (cli.md §5, #072). It opens no window.
+    /// `LaunchApplication`, and prints the result (cli.md §5, #072). With the development window (the default, decision
+    /// D13) the boot goes on until the window closes or Ctrl-C, and the window sends its pointer events to the app. With
+    /// `--no-window` Android stops once the launch is done, as #072 did.
     struct DevLaunchCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "launch",
-            abstract: "Boot Android and launch a package on display 0, without a window."
+            abstract: "Boot Android, launch a package on display 0, and show it in a development window."
         )
 
         @Argument(help: "The Android package to launch, for example io.apkrun.fixture.hellotext.")
@@ -20,13 +22,21 @@
             help: "The Guest Agent bundle directory (default: APKRUN_GUEST_DIR, then the app's Resources/guest).")
         var guestDir: String?
 
+        @Flag(name: .long, help: "Launch without the window, and stop Android when the launch is done.")
+        var noWindow = false
+
         mutating func run() async throws {
             guard isPackageName(package) else {
                 throw CLIFailure.invalidArgument(argument: "package", reason: "name")
             }
-            let options = DevBootOptions(
-                gpu: .none,
-                stopWhenReady: true,
+            // The window is the default (decision D13). It needs the drmVirgl device, which the window's session attaches.
+            let session = noWindow ? nil : DisplayWindowSession.current
+            guard noWindow || session != nil else {
+                throw CLIFailure.invalidArgument(argument: "--no-window", reason: "entry")
+            }
+            var options = DevBootOptions(
+                gpu: session == nil ? .none : .virgl,
+                stopWhenReady: session == nil,
                 guestAgentDirectory: DevGuestAgentLocation.directory(
                     guestDir: guestDir,
                     environment: ProcessInfo.processInfo.environment,
@@ -34,7 +44,12 @@
                 ),
                 launchPackage: package
             )
-            let stops = AsyncStream.makeStream(of: Void.self)
+            if let session {
+                options.developerDisplay = session.display
+                options.inputRoute = session.inputRoute
+            }
+            // With the window, the session holds the stop requests, because the window's close button makes one too.
+            let stops = session?.stops ?? AsyncStream.makeStream(of: Void.self)
             signal(SIGINT, SIG_IGN)
             signal(SIGTERM, SIG_IGN)
             let sources = [SIGINT, SIGTERM].map { number in

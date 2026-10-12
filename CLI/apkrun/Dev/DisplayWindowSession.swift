@@ -18,22 +18,34 @@
             registryLock.withLock { registered }
         }
 
-        /// Whether `arguments` ask for `dev boot --window`. The check is on the words, because the loop starts before
-        /// the arguments are parsed.
+        /// Whether `arguments` ask for a development window: `dev boot --window`, and `dev launch` unless it has
+        /// `--no-window` (decision D13). The check is on the words, because the loop starts before the arguments are
+        /// parsed. A request for help does not open a window.
         static func isRequested(_ arguments: [String]) -> Bool {
-            arguments.contains("boot") && arguments.contains("--window")
+            if arguments.contains("boot") && arguments.contains("--window") {
+                return true
+            }
+            let helpRequested = arguments.contains { ["-h", "-help", "--help"].contains($0) }
+            return arguments.contains("launch") && !arguments.contains("--no-window") && !helpRequested
         }
 
         /// The display 0 of the boot. Its size is the scanout's mode, 1024 x 768, until #028 gives the image's default mode.
         let display = DeveloperDisplay(pixelWidth: 1024, pixelHeight: 768)
         /// Stop requests for the boot: Ctrl-C, or the window closing.
         let stops = AsyncStream.makeStream(of: Void.self)
+        /// The development input route of the boot. The boot binds it to display 0 (#024).
+        let inputRoute: DevInputRoute
+        /// The window's pointer events, sent to `inputRoute`.
+        let inputSink: EmbeddedInputSink
         /// Whether the statistics go to standard error as well as to the window title.
         let showStatistics: Bool
         private var pump: DisplayPump?
 
         private init(showStatistics: Bool) {
             self.showStatistics = showStatistics
+            let route = DevInputRoute()
+            inputRoute = route
+            inputSink = EmbeddedInputSink(route: route)
         }
 
         /// Runs `command` on a detached task, and the window's event loop on this thread, until the command ends.
@@ -57,7 +69,7 @@
         /// Starts the pump that makes the window when the display is attached. It runs on the main actor.
         @MainActor
         private func startPump() {
-            let pump = DisplayPump(display: display, showStatistics: showStatistics) { [stops] in
+            let pump = DisplayPump(display: display, showStatistics: showStatistics, inputSink: inputSink) { [stops] in
                 stops.continuation.yield()
             }
             pump.start()

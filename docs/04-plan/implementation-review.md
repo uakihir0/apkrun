@@ -17188,3 +17188,90 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Reason.** Reusing the home avoids a 45 GB image install before each boot. The lock keeps one VM at a time.
 
 **Risk.** The margin was low at times (13 GiB available). Other caches on the same container grew, and the record does not say which ones.
+
+## IR-1247: The 99-of-100 batch: a pointer moved during the press, and one clean loss is not explained
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §4.1, §4.2, §12 (#024 step 2); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (box 3, Notes); IR-1243 (its box 3 and box 6 wording) |
+
+**Choice.**
+1. The mechanism is shown on this Mac. When a pointer that the helper does not drive moves during a press, the translator sends the move as a touch move, and the tap is lost. Whether the 99-of-100 batch of run F had such a move is not shown: the previous guard could not see the batch (RING FULL), so run F's cause is likely this mechanism but not proven. The translator sent a `mouseMoved` (no button) during a touch gesture as a touch move. §4.1 maps such a move to a hover move, and §4.2 holds hover during a gesture, so the move should send nothing. The guest then saw a tap that moved, and the tap was not a click. Measured on the diagnosis build before the fix: batch C5 had 366 moves at the view and 130 touch moves inside gestures, and 91 of 100 clicks were logged. The view had 100 down and 100 up, and the guest accepted all 453 events it received, with no refusal. Batch X1, a deliberate sweep of 12 moves, logged 98 of 100 with 4 touch moves.
+2. The fix is `cbcb444` (fix(input)): a move without a button sends nothing during a press, and only `leftMouseDragged` is a touch move. The T0 tests pin the rule. After the fix, three batches with a concurrent sweep (H1 to H3, 34 to 35 pointer deviations each) logged 100 of 100.
+3. The harness had three faults, and they are fixed in the scratch scripts (IR-1251). A batch ran while another app's window covered the click point, so its clicks never reached the window (B1). The helper did not check the cursor during a batch. The earlier "no foreign movement" reading of run F was taken at the start and the end of the batch, and its guard ring was full (RING FULL), so it could not see movement during the batch.
+4. Not explained. Batch D1 had no pointer deviation, and it logged 99 of 100 on the diagnosis build of `99afde0` (HEAD with trace lines, not committed). The view received 100 down and 100 up. The translator emitted 100 touch down and 100 touch up. The router dropped nothing. The guest validated 201 events, and every injection returned `ok=true`, with no refusal and no silent-drop marker. The one unmatched up is batch sequence 7 at 17:43:58.225. Its down (sequence 6) was injected 54 ms before it, and the app logged no click for the pair. Android logged no input warning in that window, only audio HAL and GPU messages. Batch F1 on the final build logged 99 of 100 too, with one pointer deviation, so it is void under IR-1251. Across the 45 clean batches after the fix, D1 is the only loss. With a touch listener in HelloText (diagnosis build), 28 clean batches (T1 to T8, U1 to U20) lost nothing.
+
+**Reason.** The translator's mapping follows §4.1 and the hover rule of §4.2: a move without a button is never a drag. A real AppKit press delivers `leftMouseDragged`, so the change only affects a no-button move during a press, which only a stray pointer or a mismatched event stream can produce. The fix does not change the drag path (`leftMouseDragged`), and the drag and scroll checks still pass.
+
+**Risk.** The residual loss (1 of 45 clean batches) is not explained, and it may recur in a reference run. HelloText commits its counter with `SharedPreferences.commit()` on the main thread for each click, and that can stall the main thread for about 50 ms. The late clicks of the failing batch are consistent with a stall, but passing batches show similar latencies, so the stall is not shown to be the cause. The touch listener changes the timing, and its 28 clean batches are not a proof either way. Box 3 is ticked under the three-consecutive-pass rule (IR-1250), and the maintainer can keep it open until the residual is explained.
+
+## IR-1248: The input counters are printed when the boot binds and stops, with the adb shell count
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §11, §15; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (box 6, Notes); [cli.md](../02-design/cli.md) §5 |
+
+**Choice.**
+1. `apkrun dev boot` prints `input counters: sent=… batches=… input.dropped.rate=… input.dropped.notRunning=… input.dropped.invalid=… input.dropped.channel=… input.coalesced=…` when it stops. The names are the design's §11 names. The IME counter is not added (IR-1249).
+2. It prints `adb shell commands so far: N` when the input binds, and again when it stops. N is `AdbClient.shellInvocationCount` of the boot's client, read through `DevelopmentGuestAgent.adbShellInvocationCount`. The counter exists since #015. IR-1243 said that `AdbClient` has no shell counter, and that was wrong. The T2 comment said the same, and it is corrected. `testOneHundredClicksOnTheButtonAreLogged` now asserts that the test client's count does not change across the 100 clicks.
+3. Measured on `99afde0`, session final1: bind 13, stop 13. The counters read sent=2650, batches=2543, and every drop counter 0. A sampler found no `shell input` process in 156 one-second samples. The diagnosis session (diag2) read 15 and 15, with sent=7665 and no drop.
+
+**Reason.** Box 6 asks that the adb shell counter not change during the input sequence. The two readings bracket the whole bound session, and the input path starts no shell command (`inputChannel` runs none).
+
+**Risk.** The count is read at two points, not per click. A shell command in the session would show as a change, but one that ran before the bind or after the stop would not. The counters are printed on stdout, not exported to a diagnostics snapshot, which does not exist yet (IR-1238). `AndroidInputTests` compiles (`build-for-testing`, scheme `IntegrationTests`, on `99afde0`), and it is not run in the Xcode test host (IR-438).
+
+## IR-1249: Two §11 names are outside #024: the IME counter and the input health warning
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (scope, Notes) |
+
+**Choice.**
+1. `input.ime.unmappedCommand` is not implemented. It counts IME commands, and the IME is #071.
+2. The health warning `agent.input.disconnected` is not implemented in #024. The #024 scope names "the counters, logging, and signposts of §11", and a health warning is none of the three. No task number is filed for it here. The maintainer decides where it goes (AGENTS §11).
+
+**Reason.** The IME counter would count nothing before #071. The warning belongs to the health report, which #024 does not change.
+
+**Risk.** Until the warning exists, `apkrun doctor` does not show that the input stream is down. The rebind follow-up (#101) is where that gap matters most.
+
+## IR-1250: The decisions for boxes 3, 4, and 6 of #024
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (acceptance boxes 3, 4, 6, Notes); [README.md](issues/README.md) §5; [input.md](../02-design/input.md) §15 |
+
+**Choice.**
+- Box 3 (100 of 100 clicks logged) is ticked. The box states one batch of 100 with a logged count of 100. On `99afde0`, the final build, batches F2, F3, and G1 to G5 pass in a row, with no pointer deviation, and H1 to H3 pass with a concurrent sweep. That meets the three-consecutive-pass rule the maintainer set. The residual loss (IR-1247) stays open in the Notes.
+- Box 4 (drag, trackpad, and wheel) stays open. The box names trackpad and wheel scrolling "in the direction macOS uses". The synthetic CGEvent scrolls check the translator's signs, but they do not show what macOS does with the user's natural-scrolling setting, and the trackpad clause needs a physical trackpad. The check is C01-2 (T3), which needs a person. The drag clause and the synthetic scroll signs were re-run on the diagnosis copy of `99afde0`, and the list moves in the expected direction.
+- Box 6 (no shell command per event) is ticked on the counter (IR-1248): equal counts at bind and stop, and no `shell input` process in the sampler.
+- Boxes 1, 2, 5, 7, and 8 are unchanged. Box 7's letterbox part is T0 only, as before.
+
+**Reason.** Each box is decided by its own words. Box 3 is a one-batch criterion, and its three-pass evidence exists. Box 4 names a physical device check, and that check is not run. Box 6 names a counter, and the counter is now printed.
+
+**Risk.** The tick of box 3 depends on the three-pass rule and not on an explanation of the residual loss (IR-1247). If the maintainer wants "reliably" to mean no residual loss, box 3 goes back to open. The GitHub issue stays open, because box 4 is open.
+
+## IR-1251: The closeout harness: which batches are void, and the earlier evidence that this changes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); IR-1243 (box 3 and box 6 wording), IR-1244 (the guard) |
+
+**Choice.** The batch rules of the closeout, in scratch scripts outside the repository (`/tmp/apkrun-024/closeout/`):
+1. A batch is void when the APKRun window is not the topmost window at the click point, before or after the batch. The batch script raises the window first with `cgpost activate`, which posts no pointer event.
+2. A batch is void when the helper's cursor check sees the pointer away from the click point during the batch. The helper reads the cursor after each event.
+3. Void in the closeout: B1 (another app's window covered the point, and no click reached the window), C5 (366 moves, before the fix), and F1 (one deviation, logged 99).
+4. Controlled experiments, not counted as batches: X1 (before the fix, a deliberate sweep, 98 of 100) and H1 to H3 (after the fix, a deliberate sweep, 100 of 100 each).
+
+**Reason.** A batch that a foreign pointer disturbed does not test the product. The rules fix that before the counts are read.
+
+**Risk.** The cursor check cannot see a foreign click that leaves the cursor on the point, and it cannot see movement between two readings. The helper's check is scratch code and is not in the repository. The earlier run's guard readings (IR-1244) stay as they were recorded, and they do not exclude a pointer during the batch.

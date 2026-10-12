@@ -80,3 +80,21 @@ private func census(_ bytes: [UInt8], width: Int, height: Int, rowBytes: Int, st
     let bytes = [UInt8](repeating: 0, count: 4)
     #expect(census(bytes, width: 0, height: 0, rowBytes: 0) == FrameColourCensus(sampled: 0, red: 0, blue: 0))
 }
+
+@Test func aTearOfOneRowIsFoundWhenEveryRowIsSampled() {
+    // Eight rows of pure red with one row of pure blue between them: the tear is a single row.
+    let bytes = bgraImage(width: 8, height: 8, rowBytes: 32) { _, y in y == 3 ? (255, 0, 0) : (0, 0, 255) }
+    let result = census(bytes, width: 8, height: 8, rowBytes: 32)
+    #expect(result.blue == 8)
+    #expect(result.red == 56)
+    #expect(result.isMixed)
+}
+
+@Test func theFirstPixelDecidesWhetherAFrameIsOfAnAlternatingColour() {
+    let red = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (0, 0, 255) }
+    let blue = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (255, 0, 0) }
+    let gradient = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (10, 128, 200) }
+    red.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
+    blue.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
+    gradient.withUnsafeBytes { #expect(!FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
+}

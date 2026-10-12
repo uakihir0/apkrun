@@ -2,8 +2,9 @@
 ///
 /// The alternating-colour mode of HelloGL clears each frame to one of two colours, so a frame that holds both colours
 /// was written partly before and partly after the other colour. The census reads the pixels of a BGRA8 buffer, the
-/// layout of the pool (IR-1107), and samples every `step`-th pixel in each direction. It reads memory only. It does not
-/// change the frame, and the caller holds the buffer's lock for the call.
+/// layout of the pool (IR-1107), and samples every `step`-th pixel in each direction. The tearing check uses `step` 1, so
+/// every row is read: a tear of a single row is found. It reads memory only. It does not change the frame, and the
+/// caller holds the buffer's lock for the call.
 public struct FrameColourCensus: Equatable, Sendable {
     /// The pixels that were sampled.
     public let sampled: Int
@@ -24,6 +25,17 @@ public struct FrameColourCensus: Equatable, Sendable {
         red > 0 && blue > 0
     }
 
+    /// Whether the BGRA8 pixel at `base` is close to pure red or to pure blue, with the thresholds of `census`.
+    ///
+    /// The tearing check reads a frame in full only when its first pixel is one of the two colours, so the normal-mode
+    /// gradient of HelloGL, which is not one of them, costs one pixel read per frame.
+    public static func isPureRedOrBlue(_ base: UnsafeRawPointer) -> Bool {
+        let blueByte = Int(base.load(as: UInt8.self))
+        let greenByte = Int(base.load(fromByteOffset: 1, as: UInt8.self))
+        let redByte = Int(base.load(fromByteOffset: 2, as: UInt8.self))
+        return (redByte > 180 && greenByte < 80 && blueByte < 80) || (blueByte > 180 && redByte < 80 && greenByte < 80)
+    }
+
     /// Counts the sampled pixels of the `width` x `height` BGRA8 image at `base`. Row `y` starts at `base + y * bytesPerRow`.
     ///
     /// The caller must make `base` readable for `height` rows of `bytesPerRow` bytes, and `bytesPerRow` must hold
@@ -33,7 +45,7 @@ public struct FrameColourCensus: Equatable, Sendable {
         width: Int,
         height: Int,
         bytesPerRow: Int,
-        step: Int = 4
+        step: Int = 1
     ) -> FrameColourCensus {
         precondition(step > 0 && width >= 0 && height >= 0 && bytesPerRow >= width * 4)
         var sampled = 0

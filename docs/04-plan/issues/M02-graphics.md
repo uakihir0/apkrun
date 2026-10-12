@@ -763,12 +763,12 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 ### Acceptance criteria
 
 - [x] The Android display is visible in a macOS window (IR-1113; the screenshot shows the Android lock screen in the window).
-- [ ] Rendering is GPU accelerated: the `drmVirgl` profile, and HelloGL's `renderer` event contains `virgl`.
-- [ ] Normal frame presentation does not rely on CPU framebuffer copies: `hostReadbacks = 0` and `cpuPixelCopies = 0` over a 60 s HelloGL run (FR-GFX-05, NFR-PERF-05).
+- [x] Rendering is GPU accelerated: the `drmVirgl` profile, and HelloGL's `renderer` event contains `virgl` (IR-1202).
+- [x] Normal frame presentation does not rely on CPU framebuffer copies: `hostReadbacks = 0` and `cpuPixelCopies = 0` over a 60 s HelloGL run (FR-GFX-05, NFR-PERF-05) (IR-1203).
 - [x] The resize or fixed-size behavior is explicitly documented: the window is fixed-size with aspect fit (graphics.md §12 #023 step 3, display-and-windowing.md §5.3, IR-1104).
 - [x] Copies and readbacks are instrumented, and the counters are in the statistics. The window title shows `hostReadbacks` and `cpuPixelCopies` (screenshots `boot2-window-final.png`, IR-1108).
-- [ ] HelloGL averages ≥ 55 fps (NFR-PERF-04), with no tearing in the alternating-color test.
-- [ ] The renderer runs 10 minutes without a crash.
+- [x] HelloGL averages ≥ 55 fps (NFR-PERF-04), with no tearing in the alternating-color test (IR-1204, IR-1205).
+- [x] The renderer runs 10 minutes without a crash (IR-1206).
 - [ ] Gate G3 passes, with the evidence of [../test-strategy.md](../test-strategy.md) §5 committed.
 
 ### Notes
@@ -779,3 +779,4 @@ See [../test-strategy.md](../test-strategy.md) §6.3.
 - The buffer state names are those of [../../02-design/display-and-windowing.md](../../02-design/display-and-windowing.md) §5.2 (`offered`, `displayed`), which §6.3 uses too. Before #068 the consumer is the development window, which reports `frameDisplayed` through `DeveloperService`.
 - Before #031 and #032, the window runs in the CLI process ([../../02-design/runtime-daemon.md](../../02-design/runtime-daemon.md) §10).
 - **Status, 2026-10-12 (IR-1100 to IR-1109).** Built: the IOSurface pool, the GPU blit, the completion poll, the counters, the window, and `apkrun dev boot --window --stats`. T0 and T1 pass (IR-1100, IR-1101). The first boot stalled because the loop ran in a main-actor job (IR-1103). The second boot reached the window, but SurfaceFlinger aborted in the guest before any flush, so no criterion 1 to 3 is ticked. The stop signal does not end a boot that is still starting (IR-1105). A third boot without `--window` reproduced the same `no suitable EGLConfig found (format: 1)` abort, so the window is not its trigger. The reference bundle boots this build without the abort (IR-1112), so the cause is the other bundle (IR-1111). The windowed boot on the reference bundle shows the Android display in the window, and criterion 1 is ticked (IR-1113).
+- **Status, 2026-10-12 (IR-1200 to IR-1208).** HelloGL on the odm4 bundle, one `drmVirgl` boot with `--window`: the renderer event is `virgl`, the 60 s and 10-minute runs show every counter at 0, HelloGL averages 59.96 fps over 10 minutes, 40 alternating-colour captures show no mixed frame, and HelloGL's process ran the 10 minutes without a fault. Criteria 2, 3, 6 (with its tearing part), and the 10-minute criterion are ticked. Gate G3 stays open. The launcher and Settings processes abort in HWUI on this bundle (IR-1208); that is not the renderer.

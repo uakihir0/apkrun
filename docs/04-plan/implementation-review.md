@@ -16448,3 +16448,119 @@ Boot, `apkrun dev boot --gpu virgl --window --stats --console`, bundle `/tmp/apk
 **Caveats.** The displayed screen is the lock screen, reached after boot. HelloGL was not run, so the criteria that need it (2, 3 over a 60 s HelloGL run, 6, 7, and 8) are not ticked. The counter zeros are observed over the whole boot, not over the 60 s HelloGL run that criterion 3 asks for. Criterion 2's `drmVirgl` profile was used, but the HelloGL `renderer` event was not observed.
 
 **Reason.** The rule for this step is that the screenshot must show the Android display. The screenshot shows it, so the criterion is ticked on that evidence alone.
+
+## IR-1200: The HelloGL APK is the release variant, signed with the pinned fixture key, and it reproduces
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Implementation step 6); [build-system.md](../05-development/build-system.md) §8.1 (no change) |
+
+**Choice.** The HelloGL APK is `:HelloGL:assembleRelease`. It is the only variant with the fixture signing config, so it is the one signed with `test-fixture-a.jks`. The debug variant was not built. `scripts/build-fixtures.sh` builds only HelloText, so its steps were run for HelloGL by hand, with the script unchanged: two clean release builds with `--offline`, the signer check against the pinned SHA-256 `a2f3893391ae70e6…`, and a comparison of the badging, the dex hashes, and the archive listing. The APK is at `Tests/Fixtures/AndroidApps/out/HelloGL.apk` (git-ignored), sha256 `635392539b24f76c…`.
+
+**Reason.** `build-system.md` §8.1 gives HelloGL one plain APK signed with `test-fixture-a.jks`. HelloGL's `build.gradle.kts` has no debug signing config, so a debug build would be signed with the machine's debug keystore, and the pinned-key rule would not hold. The release build is the same plain APK that the script builds for HelloText.
+
+**Verification.** `/tmp/apkrun-023-hgl/logs/check-hellogl.log`: `signer OK run1`, `signer OK run2`, `reproducible (badging, dex hashes, archive listing match)`, `CHECK-EXIT 0`. The badging gives `package: name='io.apkrun.fixture.hellogl' versionCode='1'` and `launchable-activity: name='io.apkrun.fixture.hellogl.MainActivity'`.
+
+## IR-1201: The CLI of the HelloGL boot is built from `aad3ccb` in the worktree, with the guest bundle of `4f5f8d2`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 2 and 3 evidence); [build-system.md](../05-development/build-system.md) §12.2 (no change) |
+
+**Choice.** The CLI is the Debug embedded build from the hgl worktree at `aad3ccb`. `scripts/build/embed-cli.sh` ran with its output variables set to `/tmp/apkrun-023-hgl/products`, and the binary was signed with the local Apple Development identity, identifier `io.apkrun.cli.dev`, with the virtualization entitlement. The embedded commit reads `aad3ccb`. The guest-agent bundle is `/tmp/apkrun-022-sf-guest` (APK sha256 `45bd83b1…`, record `0.1.0+4f5f8d2`). The virgl runtime is `APKRUN_VIRGL_RUNTIME_PATH` set to the `ThirdParty/out/virgl-runtime/current` path, which is read through the worktree symlink. ADB is a copy of `build/android-sdk/platform-tools` (adb 1.0.41) under `/tmp/apkrun-023-hgl/adbsdk`, selected with `ANDROID_HOME`.
+
+**Reason.** The boot should run the code of the branch, so the CLI was built from this worktree, not reused from `/tmp/apkrun-023/bin/apkrun` (built from `0c9785e`). The guest bundle was reused because `git diff --stat 4f5f8d2 HEAD -- Guest/` is empty, so its sources have not changed since the APK was built, and a Gradle guest build was not needed for this check. The virgl runtime is read from the symlink, and nothing was written through it.
+
+## IR-1202: Criterion 2 of #023 is ticked: HelloGL's renderer event contains `virgl` on the odm4 bundle
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 2, Notes status); [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** Criterion 2 is ticked. The exact line from the HelloGL logcat, `renderer-logcat.txt` in `/tmp/apkrun-023-hgl/boot1`:
+
+```
+10-12 01:46:16.353  6072  6090 I HelloGL : APKRUN-FIXTURE: renderer virgl
+```
+
+The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 01:45:55 UTC) on the odm4 bundle `/tmp/apkrun-odmc/odm4/bundle/android-bundle`, installed with `apkrun dev image install` into a fresh scratch home. `shasum -a 256 -c SHA256SUMS` reported OK for all six files. `state: ready` came at 01:46:10. The guest reported `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`, and `getenforce` gave `Enforcing`. Before the launch, the keyguard was dismissed with `input keyevent 82` and `wm dismiss-keyguard`, the same way as the tap check of IR-996. The device screen timeout was set to the maximum and `svc power stayon true` was set, so the 10-minute run is not paused. The window capture at 60 s (`normal-60s.png`) shows the HelloGL title bar, the orange clear colour of the normal mode, and the title `61 fps`.
+
+**Reason.** The criterion is the `drmVirgl` profile and HelloGL's own `renderer` event. Both were observed on the same boot. The keyguard step is needed because the lock screen hid the app in IR-995. The screen-timeout setting changes only the device's power state and not the graphics path.
+
+## IR-1203: Criterion 3 of #023 is ticked: a 60 s HelloGL run with `hostReadbacks = 0` and `cpuPixelCopies = 0`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 3); [graphics.md](../02-design/graphics.md) §7 (no change) |
+
+**Choice.** Criterion 3 is ticked. The 60 s window ran from 01:46:31 to 01:47:31 with HelloGL drawing in normal mode. It has 60 `--stats` lines in `stats-60s.txt`, and each line reads `dropped 0  stalls 0  hostReadbacks 0  cpuPixelCopies 0` (the largest value of each counter is 0). The window's display fps is 60.98 on average, with a range of 55 to 64. Over the whole boot, 728 statistics lines have no nonzero dropped, stalls, `hostReadbacks`, or `cpuPixelCopies` value. These are the exact lines at the end of the window: `APKRun display 0  60 fps  dropped 0  stalls 0  hostReadbacks 0  cpuPixelCopies 0`.
+
+**Reason.** The counters are cumulative from the boot, so a zero reading at the end of the window cannot hide a count made inside it. The whole boot is zero too, which covers the 15 s between the launch and the start of the window.
+
+## IR-1204: Criterion 6 of #023: the fps average is at least 55 on the HelloGL run (59.96 over 10 minutes)
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, first half); [test-strategy.md](../04-plan/test-strategy.md) §4.2 (fixture events, no change) |
+
+**Choice.** The fps part of criterion 6 is ticked. The measure is HelloGL's own `APKRUN-FIXTURE: fps` line, which the fixture logs every 10 s, read from the persistent guest capture `guest-logcat.log`. In the 60 s window (01:46:16 to 01:47:33) there are 7 lines with mean 59.56: 56.9 at the first line, then 60.0 six times. In the 10-minute window (01:48:04 to 01:58:13) there are 61 lines with mean 59.96, minimum 59.1 and maximum 60.3. The display fps from `--stats` agrees: 60.98 over 60 s, and 60.73 over the 611 lines of the 10 minutes, with one second at 45.
+
+**Reason.** The criterion asks for HelloGL's average, so the app's own rate is the measure, and the display fps is the cross-check. The rate sits at 60 fps. That is the ceiling this run can show, because the fixture uses continuous rendering and the run does not show what limits it. The margin over 55 is 4.96 fps on the 10-minute average.
+
+## IR-1205: The tearing part of criterion 6 is ticked on 40 captures of the alternating-colour mode, with a visible-only check
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, second half; Deliverables: the test-only readback sampling); [graphics.md](../02-design/graphics.md) §6.2 (no change) |
+
+**Choice.** The tearing part of criterion 6 is ticked on the evidence of the window. HelloGL was restarted with `--ez io.apkrun.fixture.hellogl.ALTERNATE true` (`am start -S`). After 5 s, 40 captures of the window were taken in sequence, each followed by a 0.2 s pause (`alt-01.png` to `alt-40.png`). The classifier `colors.swift` (every 4th pixel) found 24 captures of only red and 16 of only blue, and no capture with a pixel of the other colour (`alt-colors.txt`). A mixed frame would show both colours in one capture.
+
+**Reason.** The fixture's alternating mode and the criterion were designed for this view, and the user asked for the alternating-colour view to be the check. The deliverables also name a sampler in the test-only readback mode (`APKRUN_TEST_READBACK`), which samples the pool buffers. That build was not made and was not run in this boot. So the tick rests on what the window showed, and 40 captures do not exclude a tear that is rare. A pool-level check needs a `TestReadback` build and its own boot. The maintainer should decide whether the window sample is enough for this criterion.
+
+## IR-1206: Criterion 7 of the document, the 10-minute run, is ticked: HelloGL has no fault in 10 minutes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the 10-minute criterion); [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** The 10-minute criterion is ticked. The run was from 01:48:04 to 01:58:12 in normal mode. The HelloGL process kept pid 7851 at every minute mark (`session.log`), and the window was captured at each minute (`stab-01.png` to `stab-10.png`). In the persistent guest capture there is no `E` or `F` line for pid 7851, and no line of the SurfaceFlinger process faults or dies in the boot. The 61 fps lines of the window and the 611 statistics lines (counters 0) are consistent with a renderer that ran throughout. The crash lines that the run did record belong to other processes, and they are in IR-1208.
+
+**Reason.** The criterion is about the renderer, which is HelloGL, and the composition process it depends on, SurfaceFlinger. Counting the launcher and Settings crashes against it would mix a different process into the test. Those crashes are a real finding, but they are not part of this criterion, so they are recorded separately.
+
+## IR-1207: The criteria are ticked by the document's numbering, which differs from the numbering of the task request
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (acceptance criteria) |
+
+**Choice.** The task request numbered the criteria 2, 3, 6 (fps), 7 (no tearing), 8 (10 minutes), and G3. The document numbers the list 2, 3, 6 (fps with the tearing check in one bullet), 7 (10 minutes), and 8 (G3). The ticks follow the document: the tearing part is ticked as part of item 6 (IR-1205), and the 10-minute run is item 7 (IR-1206). Gate G3 stays open, because it is not part of this run.
+
+**Reason.** The document is the specification (AGENTS.md §1 and §2). The task message names the criteria by a different number, and changing the list to match would change the text. The ticks follow the text that the document carries.
+
+## IR-1208: Finding: on the odm4 bundle the launcher and Settings processes abort in HWUI with `EGL_NOT_INITIALIZED`; HelloGL is not affected
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (finding); the follow-up is for the maintainer to file |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Notes); [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** The Android UI processes abort on the odm4 bundle with the same error family as IR-994 on the ODM-overlay variant. The first error in the boot is `F HWUI    : Failed to create context, error = EGL_NOT_INITIALIZED` at 01:46:04.467 (pid 2951, `com.android.settings`). It is followed by `W libEGL  : eglInitialize(...) failed (EGL_NOT_INITIALIZED)`, `W HWUI    : Failed to initialize 101010-2 format, error = EGL_NOT_INITIALIZED`, and `F libc    : Fatal signal 6 (SIGABRT) ... in tid 2969 (RenderThread), pid 2951 (ndroid.settings)`. Over the whole boot, the log has 173 `Failed to create context` lines and 84 `ActivityManager: Process com.android.launcher3 ... has died` lines. In the 10-minute window it has 6 launcher deaths (pid 7921), with 430 `F` lines from that process. The HelloGL process is not affected, and its GLSurfaceView (EGL 3.0, 8-bit) creates its context.
+
+**Reason.** This is a failure of HWUI's 10-bit (`101010-2`) EGL configuration in other processes. It does not stop the criteria above, and AGENTS.md §11 keeps one risk per task, so it is not fixed here. A fix would change the guest's EGL configs, which is a graphics design question. The maintainer should decide whether it blocks G3 or gets its own task (#098 or later), and whether the launcher loop needs a stock-image comparison.

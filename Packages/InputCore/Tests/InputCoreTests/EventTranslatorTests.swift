@@ -168,10 +168,21 @@ private func scroll(
     #expect(translator.translate(sample(.leftDown)) == [touch(.down, 200, 168)])
 }
 
-@Test func aMoveDuringATouchGestureIsADragNotHover() {
+/// A move without a button during a press is not a drag: a drag is `leftDragged`. The move sends nothing, so the tap that
+/// the press started still ends where it began. A stray pointer during a click must not turn it into a drag (#024).
+@Test func aMoveWithoutAButtonDuringATouchGestureSendsNothing() {
+    var translator = EventTranslator(mapper: contentMapper)
+    #expect(translator.translate(sample(.leftDown)) == [touch(.down, 200, 168)])
+    #expect(translator.translate(sample(.moved, x: 600, y: 100, ms: 1)) == [])
+    #expect(translator.translate(sample(.moved, x: 200, ms: 2)) == [])
+    #expect(translator.translate(sample(.leftUp, ms: 3)) == [touch(.up, 200, 168, ms: 3)])
+}
+
+/// A `leftDragged` during a press is still a touch move, at the mapped point.
+@Test func aLeftDragDuringATouchGestureIsATouchMove() {
     var translator = EventTranslator(mapper: contentMapper)
     _ = translator.translate(sample(.leftDown))
-    #expect(translator.translate(sample(.moved, x: 200, ms: 1)) == [touch(.move, 400, 168, ms: 1)])
+    #expect(translator.translate(sample(.leftDragged, x: 200, ms: 1)) == [touch(.move, 400, 168, ms: 1)])
 }
 
 @Test func aMoveDuringAMouseGestureIsDropped() {
@@ -188,7 +199,7 @@ private func scroll(
     _ = translator.translate(sample(.leftDown))
     #expect(translator.translate(sample(.entered, ms: 1)) == [])
     #expect(translator.translate(sample(.exited, x: 600, y: 100, ms: 2)) == [])
-    #expect(translator.translate(sample(.moved, x: 200, ms: 3)) == [touch(.move, 400, 168, ms: 3)])
+    #expect(translator.translate(sample(.moved, x: 200, ms: 3)) == [])
     #expect(!translator.hasPending)
     #expect(translator.translate(sample(.leftUp, x: 200, ms: 4)) == [touch(.up, 400, 168, ms: 4)])
 }

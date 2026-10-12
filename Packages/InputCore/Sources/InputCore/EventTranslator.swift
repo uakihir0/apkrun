@@ -279,14 +279,13 @@ public struct EventTranslator: Sendable {
         return [.touch(TouchEvent(phase: .move, pointerID: 0, position: point, time: time))]
     }
 
-    /// A move without a button. During a touch gesture it is a drag. During a mouse gesture it is dropped (see
-    /// `translate`). Otherwise it is hover, at most 120 per second, with the latest position sent as a trailing move (D4).
-    /// A move that starts the hover sends a `hoverEnter` first.
+    /// A move without a button is a hover move (input.md §4.1), so it sends nothing during a gesture: hover is held while
+    /// a gesture is open, and the framework refuses the mix. A drag is `leftDragged`, and only that is a touch move. Once
+    /// the gesture ends, a move is hover again: at most 120 per second, with the latest position sent as a trailing move
+    /// (D4). A move that starts the hover sends a `hoverEnter` first.
     private mutating func moved(_ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
         switch gesture {
-        case .touch?:
-            return touchMove(sample, at: time)
-        case .mouse?:
+        case .touch?, .mouse?:
             return []
         case nil:
             break

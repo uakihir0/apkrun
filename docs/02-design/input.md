@@ -123,7 +123,7 @@ This section is the "mouse as touch by default, hover and right-click as mouse" 
 | left `mouseDown` | `ACTION_DOWN` | `SOURCE_TOUCHSCREEN`, `TOOL_TYPE_FINGER`, pointer 0, pressure 1.0 | FR-IN-01 |
 | left `mouseDragged` | `ACTION_MOVE` | same | coalesced to one per display refresh when the stream is backed up (§8) |
 | left `mouseUp` | `ACTION_UP` | same | |
-| `mouseMoved` (no button) | `ACTION_HOVER_MOVE` | `SOURCE_MOUSE`, `TOOL_TYPE_MOUSE` | needs `acceptsMouseMovedEvents`; limited to 120 Hz; off with `input.hover = false` |
+| `mouseMoved` (no button) | `ACTION_HOVER_MOVE` | `SOURCE_MOUSE`, `TOOL_TYPE_MOUSE` | needs `acceptsMouseMovedEvents`; limited to 120 Hz; off with `input.hover = false`; sends nothing while a touch or mouse gesture is open (§4.2) |
 | `mouseEntered` / `mouseExited` (tracking area on the content rect) | `ACTION_HOVER_ENTER` / `ACTION_HOVER_EXIT` | `SOURCE_MOUSE` | |
 | `rightMouseDown` / `rightMouseUp` | `ACTION_DOWN` + `ACTION_BUTTON_PRESS(BUTTON_SECONDARY)` … `ACTION_BUTTON_RELEASE` + `ACTION_UP` | `SOURCE_MOUSE`, `TOOL_TYPE_MOUSE` | context click; with `input.secondaryClick = longPress`, a touch long-press instead (§4.3) |
 | Control + left click | as right click | | Mac convention |
@@ -138,6 +138,7 @@ A mouse click in a window that is not key only activates the window (`acceptsFir
 
 - A single pointer (ID 0) in v1. `downTime` is set at `DOWN` and reused for the gesture (the agent tracks it).
 - A left-button hold without movement becomes an Android long press naturally, because the `UP` arrives late.
+- Only `leftMouseDragged` moves the touch. A move without a button is hover, and hover is held while a gesture is open, so such a move sends nothing during a press. A stray pointer during a tap therefore does not turn it into a drag (#024, IR-1247).
 - Double click is two taps. No special handling.
 - Losing key focus, closing the window, `surfacesReplaced`, or the session leaving `running` during a gesture sends `CANCEL` (the translator emits `.cancelAll`).
 - Whether injected `SOURCE_MOUSE` events make Android draw its own mouse pointer on the display (on top of the Mac cursor) is checked in #024. If it does, the agent hides it for pool displays (pointer icon `TYPE_NULL`, through the hidden `InputManager` pointer-icon API), and if that is not possible, hover is off by default (`input.hover = false`). The result is recorded in [../04-plan/open-questions.md](../04-plan/open-questions.md).

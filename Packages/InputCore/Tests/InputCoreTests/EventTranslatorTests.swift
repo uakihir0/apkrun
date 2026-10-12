@@ -114,9 +114,9 @@ private func scroll(
 
 // MARK: Hover (D4)
 
-@Test func aMoveWithoutAButtonIsAHoverMove() {
+@Test func aMoveWithoutAButtonStartsTheHoverWithAnEnterAndIsAHoverMove() {
     var translator = EventTranslator(mapper: contentMapper)
-    #expect(translator.translate(sample(.moved)) == [mouse(.hoverMove, 200, 168)])
+    #expect(translator.translate(sample(.moved)) == [mouse(.hoverEnter, 200, 168), mouse(.hoverMove, 200, 168)])
 }
 
 @Test func enteringAndExitingAreSentAtOnceAtTheClampedPoint() {
@@ -127,7 +127,9 @@ private func scroll(
 
 @Test func hoverMovesAreLimitedTo120HzAndTheLatestPositionIsSentAsATrailingMove() {
     var translator = EventTranslator(mapper: contentMapper)
-    #expect(translator.translate(sample(.moved, x: 100, ms: 0)) == [mouse(.hoverMove, 200, 168)])
+    #expect(
+        translator.translate(sample(.moved, x: 100, ms: 0))
+            == [mouse(.hoverEnter, 200, 168), mouse(.hoverMove, 200, 168)])
     #expect(translator.translate(sample(.moved, x: 200, ms: 2)) == [])
     #expect(translator.translate(sample(.moved, x: 300, ms: 4)) == [])
     #expect(translator.hasPending)
@@ -153,7 +155,7 @@ private func scroll(
         moves += (events + flushed).count
     }
     // The trailing move goes out at the first sample or flush after 1/120 s. A 1 kHz stream therefore gives one move
-    // every 9 ms: 112 in this second, and never more than 121.
+    // every 9 ms: 112 in this second, and never more than 121. The first sample also sends one hover enter.
     #expect(moves <= 121)
     #expect(moves >= 100)
 }
@@ -177,6 +179,155 @@ private func scroll(
     _ = translator.translate(sample(.leftDown, control: true))
     #expect(translator.translate(sample(.moved, x: 200, ms: 1)) == [])
     #expect(translator.translate(sample(.leftDragged, x: 200, ms: 2)) == [])
+}
+
+// MARK: Hover and button gestures (D4): hover never overlaps a gesture
+
+@Test func aHoverBoundaryDuringATouchGestureEmitsNothing() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.leftDown))
+    #expect(translator.translate(sample(.entered, ms: 1)) == [])
+    #expect(translator.translate(sample(.exited, x: 600, y: 100, ms: 2)) == [])
+    #expect(translator.translate(sample(.moved, x: 200, ms: 3)) == [touch(.move, 400, 168, ms: 3)])
+    #expect(!translator.hasPending)
+    #expect(translator.translate(sample(.leftUp, x: 200, ms: 4)) == [touch(.up, 400, 168, ms: 4)])
+}
+
+@Test func aHoverBoundaryDuringAMouseGestureEmitsNothing() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.rightDown))
+    #expect(translator.translate(sample(.entered, ms: 1)) == [])
+    #expect(translator.translate(sample(.exited, x: 600, y: 100, ms: 2)) == [])
+    #expect(translator.translate(sample(.moved, x: 200, ms: 3)) == [])
+    #expect(translator.translate(sample(.rightUp, ms: 4)) == [mouse(.release(.secondary), 200, 168, ms: 4)])
+}
+
+@Test func aPressDuringAHoverEndsTheHoverBeforeTheGesture() {
+    var translator = EventTranslator(mapper: contentMapper)
+    #expect(translator.translate(sample(.entered)) == [mouse(.hoverEnter, 200, 168)])
+    #expect(
+        translator.translate(sample(.leftDown, ms: 1))
+            == [mouse(.hoverExit, 200, 168, ms: 1), touch(.down, 200, 168, ms: 1)])
+    #expect(translator.translate(sample(.leftUp, ms: 2)) == [touch(.up, 200, 168, ms: 2)])
+}
+
+@Test func aSecondaryPressDuringAHoverEndsTheHoverBeforeTheGesture() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.moved))
+    #expect(
+        translator.translate(sample(.rightDown, ms: 1))
+            == [mouse(.hoverExit, 200, 168, ms: 1), mouse(.press(.secondary), 200, 168, buttons: .secondary, ms: 1)])
+}
+
+@Test func theFirstMoveAfterAReleaseStartsANewHoverWithAnEnter() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.leftDown))
+    // The release does not emit a hover, because the pointer is not hovering during the gesture.
+    #expect(translator.translate(sample(.leftUp, ms: 1)) == [touch(.up, 200, 168, ms: 1)])
+    #expect(
+        translator.translate(sample(.moved, x: 200, ms: 2))
+            == [mouse(.hoverEnter, 400, 168, ms: 2), mouse(.hoverMove, 400, 168, ms: 2)])
+}
+
+@Test func cancelAllAndFocusLossEndTheHoverSoTheNextMoveStartsOneAgain() {
+    var translator = EventTranslator(mapper: contentMapper)
+    _ = translator.translate(sample(.entered))
+    #expect(translator.cancelAll(at: at(1)) == [.cancelAll(at(1))])
+    #expect(
+        translator.translate(sample(.moved, ms: 2))
+            == [mouse(.hoverEnter, 200, 168, ms: 2), mouse(.hoverMove, 200, 168, ms: 2)])
+    #expect(translator.focusLost(at: at(3)) == [.cancelAll(at(3))])
+    #expect(
+        translator.translate(sample(.moved, ms: 4))
+            == [mouse(.hoverEnter, 200, 168, ms: 4), mouse(.hoverMove, 200, 168, ms: 4)])
+}
+
+/// The kind of an event, for the assertions on the order of a long output.
+private func label(_ event: InputEvent) -> String {
+    switch event {
+    case .touch(let touch):
+        switch touch.phase {
+        case .down: "down"
+        case .move: "drag"
+        case .up: "up"
+        case .cancel: "cancel"
+        }
+    case .mouse(let mouse):
+        switch mouse.action {
+        case .hoverEnter: "enter"
+        case .hoverMove: "hover"
+        case .hoverExit: "exit"
+        case .press: "press"
+        case .release: "release"
+        }
+    case .scroll: "scroll"
+    case .key: "key"
+    case .longPress: "longPress"
+    case .cancelAll: "cancelAll"
+    }
+}
+
+/// A fixed table of samples: the window x (100 is inside the content, 600 is the letterbox), whether Control is down,
+/// and the kind. It mixes hover, both buttons, Control-click, drags, scrolls, boundaries in both orders, and presses
+/// in the letterbox. It is a table, not random numbers, so the test runs the same way every time.
+private let hoverTable: [(kind: PointerSample.Kind, x: Double, control: Bool)] = [
+    (.moved, 100, false), (.moved, 120, false), (.entered, 100, false), (.moved, 130, false),
+    (.exited, 100, false), (.exited, 100, false), (.entered, 100, false), (.leftDown, 100, false),
+    (.leftDragged, 110, false), (.entered, 100, false), (.exited, 600, false), (.leftUp, 110, false),
+    (.moved, 110, false), (.moved, 112, false), (.rightDown, 112, false), (.entered, 112, false),
+    (.scroll, 112, false), (.rightUp, 112, false), (.exited, 100, false), (.moved, 100, false),
+    (.leftDown, 100, true), (.moved, 100, false), (.leftUp, 100, false), (.scroll, 100, false),
+    (.moved, 100, false), (.exited, 100, false), (.entered, 100, false), (.entered, 100, false),
+    (.exited, 100, false), (.exited, 100, false), (.moved, 100, false), (.moved, 100, false),
+    (.leftDown, 600, false), (.leftDown, 100, false), (.rightDown, 100, false), (.rightUp, 100, false),
+    (.moved, 100, false), (.leftDown, 100, false), (.leftUp, 100, false), (.entered, 100, false),
+    (.rightDown, 100, false), (.rightUp, 100, false), (.exited, 600, false), (.entered, 100, false),
+    (.leftDown, 100, false), (.leftDragged, 300, false), (.leftUp, 100, false), (.scroll, 100, false),
+    (.moved, 100, false), (.entered, 100, false), (.exited, 100, false), (.exited, 100, false),
+    (.leftDown, 100, true), (.rightDown, 100, false), (.leftUp, 100, true), (.rightUp, 100, false),
+    (.moved, 100, false), (.moved, 100, false), (.entered, 100, false), (.leftDown, 100, false),
+    (.leftUp, 100, false), (.moved, 100, false), (.exited, 100, false),
+]
+
+@Test func theHoverBoundariesAlternateOverALongSequenceAndNeverOverlapAGesture() {
+    var translator = EventTranslator(mapper: contentMapper)
+    var hovering = false
+    var gestureOpen = false
+    var enters = 0
+    var exits = 0
+    var gestures = 0
+    for (index, step) in hoverTable.enumerated() {
+        let now = UInt64(index)
+        let input =
+            step.kind == .scroll
+            ? scrollSample(x: step.x, dy: 16, ms: now) : sample(step.kind, x: step.x, control: step.control, ms: now)
+        // The flush runs after each sample, so a pending hover or scroll is also checked against the gestures.
+        let events = translator.translate(input) + translator.flush(now: at(now))
+        for event in events {
+            switch label(event) {
+            case "enter":
+                #expect(!hovering && !gestureOpen, "step \(index): a hover enter")
+                hovering = true
+                enters += 1
+            case "exit":
+                #expect(hovering && !gestureOpen, "step \(index): a hover exit")
+                hovering = false
+                exits += 1
+            case "hover":
+                #expect(hovering && !gestureOpen, "step \(index): a hover move")
+            case "down", "press":
+                gestureOpen = true
+                gestures += 1
+            case "up", "release", "cancelAll":
+                gestureOpen = false
+            default:
+                break
+            }
+        }
+    }
+    #expect(enters >= 5)
+    #expect(exits >= 5)
+    #expect(gestures >= 5)
 }
 
 // MARK: Scroll (FR-IN-02, input.md §4.4, D5)
@@ -361,7 +512,8 @@ private func scroll(
     var translator = EventTranslator(mapper: contentMapper)
     _ = translator.translate(sample(.moved, ms: 0))
     _ = translator.translate(sample(.moved, x: 200, ms: 2))
+    // The pending hover move is due, then the press ends the hover, then the press starts the gesture.
     #expect(
         translator.translate(sample(.leftDown, ms: 9))
-            == [mouse(.hoverMove, 400, 168, ms: 2), touch(.down, 200, 168, ms: 9)])
+            == [mouse(.hoverMove, 400, 168, ms: 2), mouse(.hoverExit, 200, 168, ms: 9), touch(.down, 200, 168, ms: 9)])
 }

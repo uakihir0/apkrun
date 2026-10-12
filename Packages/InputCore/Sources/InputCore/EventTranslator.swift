@@ -1,8 +1,12 @@
 /// Translates pointer samples into the events of the guest (input.md §4.1 and §4.4; decisions D2 to D5).
 ///
-/// The translator is a value. It keeps the open gesture, the pressed buttons, and the pending hover move and scroll.
-/// When `hasPending` is true, the caller calls `flush(now:)` from a timer, so that a pending event is sent without a
-/// later sample. The events of one call keep the order in which they happened.
+/// The translator is a value. It keeps the open gesture, the pressed buttons, whether the pointer hovers, and the
+/// pending hover move and scroll. When `hasPending` is true, the caller calls `flush(now:)` from a timer, so that a
+/// pending event is sent without a later sample. The events of one call keep the order in which they happened.
+///
+/// Hover and a button gesture never overlap on the guest, because the framework refuses a hover event while a gesture
+/// is open ("Inconsistent event"). So hover samples emit nothing while a gesture is open, a press ends the hover first,
+/// and the hover enter and exit alternate: `hovering` is true only between a `hoverEnter` and the `hoverExit` after it.
 public struct EventTranslator: Sendable {
     /// The shortest interval between two hover moves: 1/120 s (D4).
     private static let hoverInterval: UInt64 = 1_000_000_000 / 120
@@ -48,6 +52,8 @@ public struct EventTranslator: Sendable {
     private var pressed: MouseButtons = []
     private var pendingHover: PendingHover?
     private var pendingScroll: PendingScroll?
+    /// Whether the guest has a hover (a `hoverEnter` was sent and no `hoverExit` after it). Never true during a gesture.
+    private var hovering = false
     private var lastHoverMove: InputTimestamp?
     private var lastScroll: InputTimestamp?
     private var lastTime: InputTimestamp?
@@ -156,6 +162,7 @@ public struct EventTranslator: Sendable {
         pressed = []
         pendingHover = nil
         pendingScroll = nil
+        hovering = false
         lastHoverMove = nil
         lastScroll = nil
     }
@@ -213,12 +220,17 @@ public struct EventTranslator: Sendable {
 
     /// A button goes down. The left button starts a touch gesture, unless Control is down. The right button and
     /// Control-click start a mouse gesture with the secondary button (D3). A press outside the content is dropped (D2).
+    /// A press during a hover first ends the hover, so the hover is over before the gesture starts.
     private mutating func press(_ trigger: Trigger, _ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
         guard let point = mapper.map(windowX: sample.windowX, windowY: sample.windowY) else { return [] }
         // A press that arrives while a gesture is open means the release was lost. The open gesture is cancelled first.
         var events = abandonGesture(at: time)
         // A hover move that is still pending is older than the press, and it is not sent after it.
         pendingHover = nil
+        if hovering {
+            hovering = false
+            events.append(.mouse(MouseEvent(action: .hoverExit, position: point, buttons: pressed, time: time)))
+        }
         if trigger == .left, !sample.controlDown {
             gesture = .touch
             events.append(.touch(TouchEvent(phase: .down, pointerID: 0, position: point, time: time)))
@@ -269,6 +281,7 @@ public struct EventTranslator: Sendable {
 
     /// A move without a button. During a touch gesture it is a drag. During a mouse gesture it is dropped (see
     /// `translate`). Otherwise it is hover, at most 120 per second, with the latest position sent as a trailing move (D4).
+    /// A move that starts the hover sends a `hoverEnter` first.
     private mutating func moved(_ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
         switch gesture {
         case .touch?:
@@ -283,23 +296,36 @@ public struct EventTranslator: Sendable {
         else {
             return []
         }
+        var events: [InputEvent] = []
+        if !hovering {
+            hovering = true
+            events.append(.mouse(MouseEvent(action: .hoverEnter, position: point, buttons: pressed, time: time)))
+        }
         guard Self.isDue(since: lastHoverMove, at: time, interval: Self.hoverInterval) else {
             pendingHover = PendingHover(windowX: sample.windowX, windowY: sample.windowY, time: time)
-            return []
+            return events
         }
         pendingHover = nil
         lastHoverMove = time
-        let event = MouseEvent(action: .hoverMove, position: point, buttons: pressed, time: time)
-        return [.mouse(event)]
+        events.append(.mouse(MouseEvent(action: .hoverMove, position: point, buttons: pressed, time: time)))
+        return events
     }
 
-    /// The pointer enters or leaves the content. The event is sent at once, at the clamped position (D4).
+    /// The pointer enters or leaves the content. The event is sent at once, at the clamped position (D4). It is sent only
+    /// when it changes the hover: an enter while hovering, an exit while not, and any boundary during a gesture emit
+    /// nothing, so that the enter and exit stay alternate.
     private mutating func hoverBoundary(
         _ action: MouseEvent.Action, _ sample: PointerSample, at time: InputTimestamp
     ) -> [InputEvent] {
-        guard hoverEnabled, mapper.isUsable else { return [] }
-        if action == .hoverExit {
+        guard hoverEnabled, mapper.isUsable, gesture == nil else { return [] }
+        switch action {
+        case .hoverEnter where !hovering:
+            hovering = true
+        case .hoverExit where hovering:
+            hovering = false
             pendingHover = nil
+        default:
+            return []
         }
         let point = mapper.clamped(windowX: sample.windowX, windowY: sample.windowY)
         return [.mouse(MouseEvent(action: action, position: point, buttons: pressed, time: time))]

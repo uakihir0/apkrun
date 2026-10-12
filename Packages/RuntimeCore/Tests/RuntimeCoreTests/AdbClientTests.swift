@@ -9,12 +9,14 @@ import Testing
 @Test(.timeLimit(.minutes(1)))
 func adbClientConnectsAndChecksTheDeviceState() async throws {
     let fake = try FakeADB()
+    try fake.markTransportAbsent()
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
     try await client.connect(timeout: .seconds(5))
 
     #expect(
         try fake.calls() == [
+            "-s 127.0.0.1:6520 get-state",
             "disconnect 127.0.0.1:6520",
             "connect 127.0.0.1:6520",
             "-s 127.0.0.1:6520 get-state",
@@ -24,8 +26,21 @@ func adbClientConnectsAndChecksTheDeviceState() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func adbClientKeepsAHealthyTransport() async throws {
+    // #024: `adb disconnect` drops the forwards of the transport, which carry the Guest Agent's control and input
+    // sockets. A transport that already reports `device` must be kept, so connect asks for its state and nothing more.
+    let fake = try FakeADB()
+    let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
+
+    try await client.connect(timeout: .seconds(5))
+
+    #expect(try fake.calls() == ["-s 127.0.0.1:6520 get-state"])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func adbClientRetriesWhileTheEndpointRefusesTheConnection() async throws {
     let fake = try FakeADB()
+    try fake.markTransportAbsent()
     try fake.setConnectFailures(2)
     let client = AdbClient(executable: fake.executable, logSink: SilentLogSink())
 
@@ -44,7 +59,14 @@ func adbClientDropsAStaleTransportBeforeConnecting() async throws {
 
     try await client.connect(timeout: .seconds(5))
 
-    #expect(try fake.calls().first == "disconnect 127.0.0.1:6520")
+    #expect(
+        try fake.calls() == [
+            "-s 127.0.0.1:6520 get-state",
+            "disconnect 127.0.0.1:6520",
+            "connect 127.0.0.1:6520",
+            "-s 127.0.0.1:6520 get-state",
+        ]
+    )
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -270,10 +292,14 @@ private final class FakeADB: @unchecked Sendable {
                     exit 1
                   fi
                 fi
+                touch "$dir/connected"
                 echo "connected to 127.0.0.1:6520"
                 exit 0 ;;
-              "disconnect 127.0.0.1:6520") touch "$dir/disconnected"; exit 0 ;;
+              "disconnect 127.0.0.1:6520") rm -f "$dir/connected"; touch "$dir/disconnected"; exit 0 ;;
               *"get-state")
+                if [ -f "$dir/absent" ] && [ ! -f "$dir/connected" ]; then
+                  echo "error: device '127.0.0.1:6520' not found" >&2; exit 1
+                fi
                 if [ -f "$dir/state" ]; then cat "$dir/state"; exit 0; fi
                 if [ -f "$dir/stale" ] && [ ! -f "$dir/disconnected" ]; then echo offline; exit 0; fi
                 echo device
@@ -370,6 +396,11 @@ private final class FakeADB: @unchecked Sendable {
     /// The transport stays offline until the client disconnects it.
     func markTransportStale() throws {
         try "stale\n".write(to: directory.appendingPathComponent("stale"), atomically: true, encoding: .utf8)
+    }
+
+    /// The adb server does not know the endpoint until the first `connect`, as on a fresh boot.
+    func markTransportAbsent() throws {
+        try "absent\n".write(to: directory.appendingPathComponent("absent"), atomically: true, encoding: .utf8)
     }
 
     func setDeviceState(_ state: String) throws {

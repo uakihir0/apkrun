@@ -8,7 +8,7 @@ import Testing
 /// through (cli.md §5; #015 T0). A fake adb in a temporary directory records its arguments.
 @Test(.timeLimit(.minutes(1)))
 func devAdbConnectsThenPassesTheExitStatusThrough() async throws {
-    let fake = try FakeSDK()
+    let fake = try FakeSDK(transportAbsent: true)
 
     let status = try await DevAdb().run(
         arguments: ["shell", "exit-7"],
@@ -18,6 +18,24 @@ func devAdbConnectsThenPassesTheExitStatusThrough() async throws {
     #expect(status == 7)
     let calls = try fake.calls()
     #expect(calls.contains("connect 127.0.0.1:6520"))
+    #expect(calls.last == "-s 127.0.0.1:6520 shell exit-7")
+}
+
+/// A running boot holds the Guest Agent's forwards on the endpoint's transport. `apkrun dev adb` must not drop that
+/// transport, so it must not disconnect or connect when the endpoint already reports `device` (#024).
+@Test(.timeLimit(.minutes(1)))
+func devAdbLeavesAHealthyTransportAlone() async throws {
+    let fake = try FakeSDK()
+
+    let status = try await DevAdb().run(
+        arguments: ["shell", "exit-7"],
+        environment: ["ANDROID_HOME": fake.sdk.path, "PATH": "/nonexistent"]
+    )
+
+    #expect(status == 7)
+    let calls = try fake.calls()
+    #expect(!calls.contains("disconnect 127.0.0.1:6520"))
+    #expect(!calls.contains("connect 127.0.0.1:6520"))
     #expect(calls.last == "-s 127.0.0.1:6520 shell exit-7")
 }
 
@@ -51,19 +69,28 @@ private final class FakeSDK: @unchecked Sendable {
     let root: URL
     let sdk: URL
 
-    init() throws {
+    /// `transportAbsent` makes the endpoint unknown to the adb server until the first `connect`, as on a fresh boot.
+    init(transportAbsent: Bool = false) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("apkrun-015-devadb-\(UUID().uuidString)", isDirectory: true)
         sdk = root.appendingPathComponent("sdk", isDirectory: true)
         let tools = sdk.appendingPathComponent("platform-tools", isDirectory: true)
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        if transportAbsent {
+            try Data().write(to: root.appendingPathComponent("absent"))
+        }
         let script = """
             #!/bin/sh
-            printf '%s\\n' "$*" >> '\(root.path)/calls.log'
+            dir='\(root.path)'
+            printf '%s\\n' "$*" >> "$dir/calls.log"
             case "$*" in
-              "connect 127.0.0.1:6520") echo "connected to 127.0.0.1:6520"; exit 0 ;;
-              "disconnect 127.0.0.1:6520") exit 0 ;;
-              *"get-state") echo device; exit 0 ;;
+              "connect 127.0.0.1:6520") touch "$dir/connected"; echo "connected to 127.0.0.1:6520"; exit 0 ;;
+              "disconnect 127.0.0.1:6520") rm -f "$dir/connected"; exit 0 ;;
+              *"get-state")
+                if [ -f "$dir/absent" ] && [ ! -f "$dir/connected" ]; then
+                  echo "error: device '127.0.0.1:6520' not found" >&2; exit 1
+                fi
+                echo device; exit 0 ;;
               "-s 127.0.0.1:6520 shell exit-7") exit 7 ;;
               "-s 127.0.0.1:6520 devices") echo "List of devices attached"; exit 0 ;;
               *) echo "unexpected: $*" >&2; exit 2 ;;

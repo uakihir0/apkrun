@@ -586,11 +586,16 @@ public actor AdbClient {
         return process.terminationStatus
     }
 
-    /// One connect attempt. It first drops any transport that the adb server still holds for the
-    /// endpoint: after an earlier boot, `adb connect` answers "already connected" and the old transport
-    /// stays `offline`, so only a fresh transport can reach the device. Each step gets the time left
-    /// before `deadline`, and no step starts after it.
+    /// One connect attempt. A transport that already reports `device` is kept as it is: `adb disconnect` drops every
+    /// `adb forward` of the transport, and the development Guest Agent reaches its control, input, and bulk sockets
+    /// through those forwards (#024). Otherwise the attempt first drops any transport that the adb server still holds
+    /// for the endpoint: after an earlier boot, `adb connect` answers "already connected" and the old transport
+    /// stays `offline`, so only a fresh transport can reach the device. Each step gets the time left before
+    /// `deadline`, and no step starts after it.
     private func attemptConnect(until deadline: ContinuousClock.Instant) async -> Bool {
+        if await reportsDevice(until: deadline) {
+            return true
+        }
         _ = try? await AdbProcess.run(
             executable: executable,
             arguments: ["disconnect", endpoint],
@@ -612,6 +617,11 @@ public actor AdbClient {
         else {
             return false
         }
+        return await reportsDevice(until: deadline)
+    }
+
+    /// Whether the endpoint reports the `device` state. No step starts after `deadline`.
+    private func reportsDevice(until deadline: ContinuousClock.Instant) async -> Bool {
         guard ContinuousClock.now < deadline else {
             return false
         }

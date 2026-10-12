@@ -4,6 +4,7 @@
 #
 #   scripts/build-fixtures.sh                     build out/HelloText.apk and check its signer
 #   scripts/build-fixtures.sh --app HelloGL       build out/HelloGL.apk instead (the G3 gate, #023)
+#   scripts/build-fixtures.sh --app HelloCompose  build out/HelloCompose.apk instead (the list of #024, G5 of #030)
 #   scripts/build-fixtures.sh --check-reproducible
 #                                                 build twice from clean, and compare the badging, the dex
 #                                                 hashes, and the archive listing (build-system.md §14)
@@ -20,7 +21,7 @@ build_tools_version="37.0.0"
 expected_signer_sha256="a2f3893391ae70e6faee50a05c0d0c4b94505781f7af0d547c1625399e05f8b4"
 
 usage() {
-    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL] [--check-reproducible]\n' >&2
+    printf 'usage: scripts/build-fixtures.sh [--app HelloText|HelloGL|HelloCompose] [--check-reproducible]\n' >&2
     exit 64
 }
 
@@ -38,7 +39,7 @@ while (($# > 0)); do
     shift
 done
 case "$app" in
-    HelloText | HelloGL) ;;
+    HelloText | HelloGL | HelloCompose) ;;
     *) usage ;;
 esac
 output_apk="$fixtures/out/$app.apk"

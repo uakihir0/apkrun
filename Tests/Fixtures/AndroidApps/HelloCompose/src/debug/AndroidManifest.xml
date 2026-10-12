@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug build only (IR-920). The release manifest has no such receiver. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".DebugComposeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.apkrun.fixture.hellocompose.debug.SCROLL" />
+                <action android:name="io.apkrun.fixture.hellocompose.debug.TEXT" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

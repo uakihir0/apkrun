@@ -97,36 +97,66 @@ private let ctrlLeftState: AndroidMetaState = [.ctrlOn, .ctrlLeftOn]
     #expect(translator.translate(changed(MacVirtualKey.capsLock, pressed: false, [])) == [keyDown(115), keyUp(115)])
 }
 
-@Test func commandCIsControlCAndItsReleaseFollowsTheCommandKey() {
+@Test func commandCIsAControlTapAndCommandReleaseSendsNothing() {
+    // macOS sends no keyUp for C while Command is down, so the shortcut is a tap: DOWN and UP at once.
     var translator = KeyTranslator()
     #expect(translator.translate(changed(MacVirtualKey.command, pressed: true, [.command])) == [])
-    #expect(translator.translate(down(MacVirtualKey.c, [.command])) == [keyDown(31, ctrlLeftState)])
-    // Command goes up before C: the release is still the one of the press, with the Control bits it had.
+    #expect(
+        translator.translate(down(MacVirtualKey.c, [.command])) == [
+            keyDown(31, ctrlLeftState), keyUp(31, ctrlLeftState),
+        ])
     #expect(translator.translate(changed(MacVirtualKey.command, pressed: false, [])) == [])
-    #expect(translator.translate(up(MacVirtualKey.c)) == [keyUp(31, ctrlLeftState)])
+    // A later release of C, if one arrives, has no press to end.
+    #expect(translator.translate(up(MacVirtualKey.c)) == [])
 }
 
-@Test func theOtherShortcutLettersAreControlCombinations() {
+@Test func theOtherShortcutLettersAreControlTaps() {
     var translator = KeyTranslator()
-    #expect(translator.translate(down(MacVirtualKey.x, [.command])) == [keyDown(52, ctrlLeftState)])
-    #expect(translator.translate(up(MacVirtualKey.x, [.command])) == [keyUp(52, ctrlLeftState)])
-    #expect(translator.translate(down(MacVirtualKey.v, [.command])) == [keyDown(50, ctrlLeftState)])
-    #expect(translator.translate(up(MacVirtualKey.v, [.command])) == [keyUp(50, ctrlLeftState)])
-    #expect(translator.translate(down(MacVirtualKey.a, [.command])) == [keyDown(29, ctrlLeftState)])
-    #expect(translator.translate(up(MacVirtualKey.a, [.command])) == [keyUp(29, ctrlLeftState)])
+    #expect(
+        translator.translate(down(MacVirtualKey.x, [.command])) == [
+            keyDown(52, ctrlLeftState), keyUp(52, ctrlLeftState),
+        ])
+    #expect(
+        translator.translate(down(MacVirtualKey.v, [.command])) == [
+            keyDown(50, ctrlLeftState), keyUp(50, ctrlLeftState),
+        ])
+    #expect(
+        translator.translate(down(MacVirtualKey.a, [.command])) == [
+            keyDown(29, ctrlLeftState), keyUp(29, ctrlLeftState),
+        ])
 }
 
-@Test func commandShiftZIsControlShiftZ() {
+@Test func commandShiftZIsAControlShiftTap() {
     var translator = KeyTranslator()
     let state: AndroidMetaState = [.ctrlOn, .ctrlLeftOn, .shiftOn, .shiftLeftOn]
-    #expect(translator.translate(down(MacVirtualKey.z, [.command, .shiftLeft])) == [keyDown(54, state)])
-    #expect(translator.translate(up(MacVirtualKey.z, [.command, .shiftLeft])) == [keyUp(54, state)])
+    #expect(
+        translator.translate(down(MacVirtualKey.z, [.command, .shiftLeft])) == [keyDown(54, state), keyUp(54, state)])
 }
 
-@Test func commandLeftBracketIsBack() {
+@Test func commandLeftBracketIsABackTap() {
     var translator = KeyTranslator()
-    #expect(translator.translate(down(MacVirtualKey.leftBracket, [.command])) == [keyDown(4)])
-    #expect(translator.translate(up(MacVirtualKey.leftBracket, [.command])) == [keyUp(4)])
+    #expect(translator.translate(down(MacVirtualKey.leftBracket, [.command])) == [keyDown(4), keyUp(4)])
+}
+
+@Test func commandDownEndsTheKeysThatAreHeld() {
+    // The A is held when Command goes down. Its keyUp is not delivered while Command is down, so the UP is sent here.
+    var translator = KeyTranslator()
+    #expect(translator.translate(down(MacVirtualKey.a)) == [keyDown(29)])
+    #expect(translator.translate(changed(MacVirtualKey.command, pressed: true, [.command])) == [keyUp(29)])
+    #expect(translator.translate(up(MacVirtualKey.a)) == [])
+}
+
+@Test func commandDownKeepsTheModifiersThatAreHeld() {
+    // Shift stays held: its release arrives as flagsChanged, so only the other keys end.
+    var translator = KeyTranslator()
+    #expect(
+        translator.translate(changed(MacVirtualKey.shift, pressed: true, [.shiftLeft])) == [keyDown(59, shiftLeftState)]
+    )
+    #expect(translator.translate(down(MacVirtualKey.a, [.shiftLeft])) == [keyDown(29, shiftLeftState)])
+    #expect(
+        translator.translate(changed(MacVirtualKey.command, pressed: true, [.shiftLeft, .command]))
+            == [keyUp(29, shiftLeftState)])
+    #expect(translator.translate(changed(MacVirtualKey.shift, pressed: false, [.command])) == [keyUp(59)])
 }
 
 @Test func otherCommandCombinationsAreNotForwardedAndTheirReleasesAreDropped() {

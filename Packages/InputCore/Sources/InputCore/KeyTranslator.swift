@@ -25,6 +25,14 @@ public struct KeyTranslator: Sendable {
     private static let commandShortcutKeys: Set<UInt16> = [
         MacVirtualKey.a, MacVirtualKey.c, MacVirtualKey.v, MacVirtualKey.x, MacVirtualKey.z,
     ]
+    /// The modifier keys. Their own changes arrive as `flagsChanged`, so their releases are never missing.
+    private static let modifierKeys: Set<UInt16> = [
+        MacVirtualKey.shift, MacVirtualKey.rightShift, MacVirtualKey.control, MacVirtualKey.rightControl,
+        MacVirtualKey.option, MacVirtualKey.rightOption, MacVirtualKey.command, MacVirtualKey.rightCommand,
+        MacVirtualKey.capsLock,
+    ]
+    /// The Command keys, whose going down ends the keys that are held (see `releaseHeldKeys`).
+    private static let commandKeys: Set<UInt16> = [MacVirtualKey.command, MacVirtualKey.rightCommand]
     /// The modifiers that make ⌘[ something else than BACK.
     private static let otherModifiers: KeyModifiers = [
         .shiftLeft, .shiftRight, .controlLeft, .controlRight, .optionLeft, .optionRight,
@@ -89,12 +97,35 @@ public struct KeyTranslator: Sendable {
             return [key(.down, androidKeyCode, state, held.repeatCount, sample.time)]
         }
         let mapping = mapping(for: sample)
+        if sample.modifiers.contains(.command) {
+            // macOS sends no keyUp for a key while Command is held, so a ⌘ shortcut is a tap: DOWN and UP at once. Back
+            // acts on UP, and a shortcut acts on DOWN. Nothing is held, so no release can be lost (input.md §6).
+            guard let androidKeyCode = mapping.androidKeyCode else {
+                return []
+            }
+            let state = Self.metaState(sample.modifiers, extra: mapping.extraMeta)
+            return [key(.down, androidKeyCode, state, 0, sample.time), key(.up, androidKeyCode, state, 0, sample.time)]
+        }
         pressed[code] = PressedKey(androidKeyCode: mapping.androidKeyCode, extraMeta: mapping.extraMeta, repeatCount: 0)
         guard let androidKeyCode = mapping.androidKeyCode else {
             return []
         }
         let state = Self.metaState(sample.modifiers, extra: mapping.extraMeta)
         return [key(.down, androidKeyCode, state, 0, sample.time)]
+    }
+
+    /// The keys that are held, other than the modifier keys, each end with an UP, in the order of their codes. macOS sends
+    /// no keyUp for the other keys while Command is down, so the keys that were held end when Command goes down.
+    private mutating func releaseHeldKeys(_ sample: KeySample) -> [InputEvent] {
+        var events: [InputEvent] = []
+        for code in pressed.keys.filter({ !Self.modifierKeys.contains($0) }).sorted() {
+            guard let held = pressed.removeValue(forKey: code), let androidKeyCode = held.androidKeyCode else {
+                continue
+            }
+            let state = Self.metaState(sample.modifiers, extra: held.extraMeta)
+            events.append(key(.up, androidKeyCode, state, 0, sample.time))
+        }
+        return events
     }
 
     private mutating func keyUp(_ sample: KeySample) -> [InputEvent] {
@@ -125,12 +156,14 @@ public struct KeyTranslator: Sendable {
         guard pressed[code] == nil else {
             return []
         }
+        let released =
+            Self.commandKeys.contains(code) ? releaseHeldKeys(sample) : []
         pressed[code] = PressedKey(androidKeyCode: androidKeyCode, extraMeta: [], repeatCount: 0)
         guard let androidKeyCode else {
-            return []
+            return released
         }
         let state = Self.metaState(sample.modifiers, extra: [])
-        return [key(.down, androidKeyCode, state, 0, sample.time)]
+        return released + [key(.down, androidKeyCode, state, 0, sample.time)]
     }
 
     /// The Android key code of a key that goes down, and the meta bits that its mapping adds (input.md §5.2, §6). A nil

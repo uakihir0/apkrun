@@ -11,6 +11,7 @@ import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemServices
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** The system user, which the density and the IME policy apply to (guest-components.md §5). */
 private const val SYSTEM_USER_ID = 0
@@ -33,6 +34,15 @@ class DisplayService(
     private val callbacks: (() -> Unit) -> Unit,
 ) {
     private val known = LinkedHashMap<Int, DisplayInfo>()
+    private val removalListeners = CopyOnWriteArrayList<(Int) -> Unit>()
+
+    /**
+     * Registers [listener] for the displays that are removed. It runs on the thread of [refresh],
+     * after the DisplayRemoved event is published, so it must not block.
+     */
+    fun addRemovalListener(listener: (Int) -> Unit) {
+        removalListeners += listener
+    }
 
     /**
      * Registers the display listener and reads the first list. A missing listener only fails
@@ -93,6 +103,7 @@ class DisplayService(
         }
         for (id in known.keys - current.keys) {
             events.publish { it.setDisplayRemoved(DisplayRemoved.newBuilder().setDisplayId(id)) }
+            removalListeners.forEach { it(id) }
         }
         known.clear()
         known.putAll(current)

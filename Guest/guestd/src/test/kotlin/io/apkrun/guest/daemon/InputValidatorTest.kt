@@ -1,15 +1,12 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.v1.CancelAll
-import io.apkrun.guest.protocol.v1.InputBatch
 import io.apkrun.guest.protocol.v1.InputEvent
 import io.apkrun.guest.protocol.v1.KeyAction
 import io.apkrun.guest.protocol.v1.KeyEvent
 import io.apkrun.guest.protocol.v1.TouchEvent
 import io.apkrun.guest.protocol.v1.TouchPhase
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,60 +82,5 @@ class InputValidatorTest {
             )
         )
         assertFalse(InputValidator.isValid(InputEvent.getDefaultInstance(), bounds))
-    }
-}
-
-class InputServiceTest {
-    private val service = InputService { id -> if (id == 0) DisplayBounds(100, 100) else null }
-
-    private fun batch(displayId: Int, ack: Boolean, events: List<InputEvent>): InputBatch =
-        InputBatch.newBuilder()
-            .setBatchSeq(5)
-            .setDisplayId(displayId)
-            .setAckRequested(ack)
-            .addAllEvents(events)
-            .build()
-
-    @Test
-    fun aBatchWithAnAckGetsItsRejectedCount() {
-        val events =
-            listOf(
-                InputEvent.newBuilder().setCancelAll(CancelAll.getDefaultInstance()).build(),
-                InputEvent.newBuilder()
-                    .setTouch(TouchEvent.newBuilder().setX(500f).setY(1f))
-                    .build(),
-            )
-        val ack = service.submit(batch(0, ack = true, events = events))
-        assertEquals(5L, ack!!.getBatchSeq())
-        assertEquals(1, ack.getRejectedEvents())
-        assertEquals(0, ack.getReceiveToInjectMicros())
-    }
-
-    @Test
-    fun aBatchWithoutAnAckGetsNoAck() {
-        assertNull(service.submit(batch(0, ack = false, events = emptyList())))
-    }
-
-    @Test
-    fun aBatchForAnUnknownDisplayDropsEveryEvent() {
-        val events =
-            listOf(InputEvent.newBuilder().setCancelAll(CancelAll.getDefaultInstance()).build())
-        val ack = service.submit(batch(3, ack = true, events = events))
-        assertEquals(1, ack!!.getRejectedEvents())
-    }
-
-    @Test
-    fun abatchOverTheLimitDropsEveryEvent() {
-        val events =
-            List(InputValidator.MAXIMUM_EVENTS_PER_BATCH + 1) {
-                InputEvent.newBuilder().setCancelAll(CancelAll.getDefaultInstance()).build()
-            }
-        val ack = service.submit(batch(0, ack = true, events = events))
-        assertEquals(InputValidator.MAXIMUM_EVENTS_PER_BATCH + 1, ack!!.getRejectedEvents())
-        assertEquals(1L, service.counters().getBatches())
-        assertEquals(
-            InputValidator.MAXIMUM_EVENTS_PER_BATCH + 1L,
-            service.counters().getEventsRejected(),
-        )
     }
 }

@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import android.net.LocalSocket
 import android.os.HandlerThread
+import android.os.Process
 import android.os.SystemClock
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
@@ -43,14 +44,41 @@ class Daemon(internal val scope: CoroutineScope) {
         }
     }
 
+    /**
+     * The `apkrun-input` thread, which injects the input events. It runs at display urgency, so
+     * that control work does not delay it (guest-components.md §6.3).
+     */
+    private val inputThread =
+        HandlerThread("apkrun-input", Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
+    private val inputHandler = android.os.Handler(inputThread.looper)
+    private val inputPost: (() -> Unit) -> Unit = { work ->
+        inputHandler.post {
+            try {
+                work()
+            } catch (error: Exception) {
+                AgentLog.error("an input task failed", error)
+            }
+        }
+    }
+
     internal val events = EventBus()
     internal val sessions = SessionManager { SystemClock.elapsedRealtime() }
     private val displays = DisplayService(events, post)
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }
-    internal val input = InputService { displayId ->
-        displays.modeOf(displayId)?.let { DisplayBounds(it.widthPx, it.heightPx) }
-    }
+    internal val input =
+        InputService(
+            boundsOf = { displayId ->
+                displays.modeOf(displayId)?.let { DisplayBounds(it.widthPx, it.heightPx) }
+            },
+            injector =
+                InputInjector(
+                    factory = AndroidMotionEventFactory,
+                    sink = AndroidInjectionSink,
+                    uptimeMillis = { SystemClock.uptimeMillis() },
+                ),
+            post = inputPost,
+        )
     internal val dispatcher =
         Dispatcher(
             operations = DeviceOperations(displays, tasks, launch),
@@ -76,6 +104,7 @@ class Daemon(internal val scope: CoroutineScope) {
      */
     fun start() {
         sockets.forEach { it.bind() }
+        displays.addRemovalListener { displayId -> input.displayRemoved(displayId) }
         displays.start()
         tasks.start()
         DeviceSetup.apply()

@@ -14,6 +14,7 @@ import io.apkrun.guest.protocol.v1.AndroidInfo
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.protocol.v1.Envelope
 import io.apkrun.guest.protocol.v1.Hello
+import io.apkrun.guest.protocol.v1.InputAck
 import io.apkrun.guest.protocol.v1.ProtocolVersion as WireProtocolVersion
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.HiddenApi
@@ -100,6 +101,10 @@ class Connection(
             secondaryLoop()
         } finally {
             daemon.sessions.untrack(socket)
+            if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
+                // A closed input stream releases the gestures it left open (input.md §7.3).
+                daemon.input.streamClosed(this)
+            }
         }
     }
 
@@ -177,18 +182,14 @@ class Connection(
                 ChannelKind.CHANNEL_KIND_GUEST_INPUT ->
                     if (envelope.bodyCase == Envelope.BodyCase.INPUT_BATCH) {
                         // A batch that the framework cannot apply is logged and dropped, and the
-                        // stream stays
-                        // open (guest-protocol.md §9). Only a frame that breaks the protocol closes
-                        // it.
-                        val ack =
-                            try {
-                                daemon.input.submit(envelope.inputBatch)
-                            } catch (error: Exception) {
-                                AgentLog.error("an input batch could not be applied", error)
-                                null
+                        // stream stays open (guest-protocol.md §9). Only a frame that breaks the
+                        // protocol closes it. The ack is sent later, from the injector thread.
+                        try {
+                            daemon.input.submit(this, envelope.inputBatch) { ack ->
+                                sendInputAck(ack)
                             }
-                        if (ack != null) {
-                            writer.send { it.setInputAck(ack) }
+                        } catch (error: Exception) {
+                            AgentLog.error("an input batch could not be applied", error)
                         }
                     } else {
                         throw GuestProtocolFailure.MalformedFrame(
@@ -203,6 +204,18 @@ class Connection(
                         "the channel ${channel.name} is not served here"
                     )
             }
+        }
+    }
+
+    /**
+     * Sends the ack of an input batch. It runs on the injector thread, and [FrameWriter.send] is
+     * safe to call from there. A closed connection loses the ack, and nothing else.
+     */
+    private fun sendInputAck(ack: InputAck) {
+        try {
+            writer.send { it.setInputAck(ack) }
+        } catch (error: IOException) {
+            AgentLog.info("an input ack was not sent: ${error.javaClass.simpleName}")
         }
     }
 

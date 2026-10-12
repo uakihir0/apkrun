@@ -17861,7 +17861,7 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 
 **Risk.** The reviewer ran on the state before these corrections, and it did not boot anything. The answers were checked by me after its run. The text of this commit is the state that the answers describe.
 
-## IR-1285: The first AndroidInputTests failure on the odm7 bundle is the lock screen over HelloText; the test host now dismisses the keyguard before the launch
+## IR-1285: The first failing case on the odm7 bundle shows the lock screen over HelloText; the test host now dismisses the keyguard before the launch
 
 | Field | Value |
 |---|---|
@@ -17871,9 +17871,9 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 
 **Choice.** The suite was run on the odm7 bundle (`APKRUN_TEST_LINUX_DIR=/tmp/apkrun-odmr/odm7/bundle`, so the Android bundle is `/tmp/apkrun-odmr/odm7/bundle/android-bundle`, IR-1284). The run `base` (`/tmp/apkrun-t2k/base.xcresult`, log `/tmp/apkrun-t2k/logs/base.log`) ended `Executed 3 tests, with 5 failures (2 unexpected)`, the same counts as IR-1257 on odm4. Its first error was `viewNotFound("io.apkrun.fixture.hellotext:id/context_target")`. A diagnostic run that names the packages of the last uiautomator dump (`diag1`) showed only `com.android.systemui`, so the lock screen covered the app. `prepare` now runs `input keyevent 82` and `wm dismiss-keyguard` before the launch, as `G3GraphicsTests` does.
 
-**Reason.** The dump is the only view of the screen the host has, and it showed SystemUI. The product path `apkrun dev launch` has no such call (a search of `Packages`, `CLI`, and `Tests` finds it only in the G3 test), so on this image a user would also see the lock screen after a launch. The product path is not changed here (AGENTS §11). The gap is recorded for the maintainer to decide.
+**Reason.** The dump is the only view of the screen the host has, and in this one diagnostic run it showed SystemUI. The product path `apkrun dev launch` has no such call (a search of `Packages`, `CLI`, and `Tests` finds it only in the G3 test), so a user of `dev launch` on this image may see the same lock screen. That was not run. The product path is not changed here (AGENTS §11). The gap is recorded for the maintainer to decide.
 
-**Risk.** `input keyevent` is a shell input process, which the suite forbids during a sequence. It runs before the sequence, and the FR-IN-06 sampler is started after it. The dismissal only holds while the keyguard is not secure, which holds on this image. A lock during a long case would show as a `viewNotFound` with the SystemUI package, and none occurred in seven cases.
+**Risk.** `input keyevent` is a shell input process, which the suite forbids during a sequence. It runs before the sequence, and the FR-IN-06 sampler is started after it. The keyguard in these runs was not secure, so the dismissal worked; a secure lock was not tested. A lock during a long case would show as a `viewNotFound` with the SystemUI package, and none occurred in the final runs.
 
 ## IR-1286: monkey starts nothing on this image, so the suite starts the launcher activity by component and checks its process
 
@@ -17897,11 +17897,11 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 | Task | #025 |
 | Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (Tests, Notes); [test-strategy.md](test-strategy.md) §6.4; [input.md](../02-design/input.md) (Status after #025); [environment-setup.md](../05-development/environment-setup.md) §4 |
 
-**Choice.** `AndroidInputTests` has four keyboard cases. (1) `testTypingGivesExactTextInTheField` types `Hello, APKRun 123!` and checks the field's exact text, with the shell-input sampler on. (2) `testBackspaceEnterAndArrowsEditTheField` checks Backspace (`ab`), the left arrow (`X` lands in `abXcd`), and Enter (`APKRUN-FIXTURE: editor action 6`). (3) `testEscAndCommandBracketGoBackFromDetails` checks Esc and ⌘[ back from the Details screen (`APKRUN-FIXTURE: screen main`). (4) `testCommandShortcutsActOnTheField` checks ⌘A, ⌘C, Right, ⌘V (`HelloHello`), ⌘A, ⌘X (empty), ⌘V (`HelloHello`), and ⌘Z (empty, the paste undone). The keys reach the window's view as AppKit delivers them: `InputKeyboard` (a new file) sends `keyDown` and `keyUp`, `flagsChanged` for Shift and Command, and a ⌘ shortcut goes to `performKeyEquivalent` first, with no key up while Command is held (IR-1273). `WireSink` now converts key events as the CLI's `EmbeddedInputSink` does; it dropped them before. The focus moves with Tab, one press at a time, and a uiautomator dump (`focused="true"` on `input_text`) decides each press. The field's text is read from the fixture's `text` line after a debug `TEXT` broadcast, which is a query and not input. The Details screen is opened by a pointer click on its button.
+**Choice.** `AndroidInputTests` has four keyboard cases. (1) `testTypingGivesExactTextInTheField` types `Hello, APKRun 123!` and checks the field's exact text, with the shell-input sampler on. (2) `testBackspaceEnterAndArrowsEditTheField` checks Backspace (`ab`), the left arrow (`X` lands in `abXcd`), and Enter (`APKRUN-FIXTURE: editor action 6`). (3) `testEscAndCommandBracketGoBackFromDetails` checks Esc and ⌘[ back from the Details screen (`APKRUN-FIXTURE: screen main`). (4) `testCommandShortcutsActOnTheField` checks ⌘A, ⌘C, Right, ⌘V (`HelloHello`), ⌘A, ⌘X (empty), ⌘V (`HelloHello`), and ⌘Z (empty, the paste undone). The keys reach the window's view through its overrides, as AppKit passes them: `InputKeyboard` (a new file) calls `keyDown` and `keyUp`, `flagsChanged` for Shift and Command, and a ⌘ shortcut goes to `performKeyEquivalent`, which must take it (a shortcut the view does not take throws `shortcutNotTaken`; AppKit would send it to the menus, IR-1265). No key up is sent while Command is held (IR-1273). `WireSink` now converts key events as the CLI's `EmbeddedInputSink` does; it dropped them before. The focus moves with Tab, one press at a time, and a uiautomator dump (`focused="true"` on `input_text`) decides each press. The field's text is read from the fixture's `text` line after a debug `TEXT` broadcast, which is a query and not input. The Details screen is opened by a pointer click on its button. Each keyboard case runs the shell-input sampler (FR-IN-06), which polls every 250 ms.
 
 **Reason.** #025's Tests list names typing, Backspace, Enter, the arrows, and Esc on Details. The Command shortcuts are acceptance boxes, so they are T2 cases too. Each case checks the state it needs (the field's text, a screen line, or the editor action), not that a command ran. The focus check replaces a pointer tap, which does not focus the field reliably (IR-1270, #102).
 
-**Risk.** The ⌘Z expectation rests on Android's undo of the last edit (the paste). It passed here, and IR-1268 had not seen ⌘Z in a clean run. The debug build is a new input: `TEXT` and `DETAILS` exist only in the debug manifest, and `scripts/build-fixtures.sh` builds only the release variant (documented in environment-setup §4 with the Gradle command, IR-1289). The test plan's `/tmp/apkrun-test-fixtures/HelloText.apk` was a release build without the Details screen, and it was replaced (backup `/tmp/apkrun-t2k/backup/HelloText-before.apk`). Tab order depends on the fixture's layout.
+**Risk.** The ⌘Z expectation rests on Android's undo of the last edit (the paste). It passed here, and IR-1268 had not seen ⌘Z in a clean run. The debug build is a new input: `TEXT` and `DETAILS` exist only in the debug manifest, and `scripts/build-fixtures.sh` builds only the release variant (documented in environment-setup §4 with the Gradle command, IR-1289). The test plan's `/tmp/apkrun-test-fixtures/HelloText.apk` was a release build without the Details screen, and it was replaced (backup `/tmp/apkrun-t2k/backup/HelloText-before.apk`). Tab order depends on the fixture's layout. The synthetic events carry no device side bits, so T2 does not run the side-bit branch of `KeyEventAdapter`; its T0 tests do. The shell-input sampler cannot see a command shorter than its poll interval.
 
 ## IR-1288: The drag case failed first from a race and then from the scroll event's location; the scroll steps now pass on the window's point
 
@@ -17925,11 +17925,11 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 | Task | #025, #024 |
 | Affected documents | [test-strategy.md](test-strategy.md) §4; [environment-setup.md](../05-development/environment-setup.md) §4; [IR-1253](#ir-1253-keep-the-t2-test-hosts-build-products-and-sdk-outside-documents) |
 
-**Choice.** Result: `full6` and `full7` each `Executed 7 tests, with 0 failures`, `xcodebuild exit 0`, on the final tree (logs `/tmp/apkrun-t2k/logs/full6.log` and `full7.log`; results `/tmp/apkrun-t2k/full6.xcresult` and `full7.xcresult`). The runs before them: `base` (3 tests, 5 failures), `full3` (7 tests, 9 failures: the lock screen), `full4` (7 tests, 3 failures: the drag's three assertions), and `full5` (7 tests, 2 failures: the trackpad and wheel steps). The inputs were replaced at the plan's `/tmp` paths, and the backups are in `/tmp/apkrun-t2k/backup`: the guest APK is `apkrun-guest.apk` of `scripts/build-guest.sh --out`, version `0.1.0+c3f366d` (was `0.1.0+ab37bbc`, which lacks the #025 key injection), and the fixture is the debug HelloText built with `Tests/Fixtures/AndroidApps/gradlew … :HelloText:assembleDebug` and signed by the test-fixture key (was a release build). The runs used DerivedData `/tmp/apkrun-t2k-dd`, the SDK root `/tmp/apkrun-ir438-sdk` (`platform-tools`), signing team `X4A37LMRPS`, and `APKRUN_CI=1`, all under `lockf -k /tmp/apkrun-vm.lock`. The worktree's project was regenerated with XcodeGen 2.44.1 from the main checkout's binary.
+**Choice.** Result on the tree of d0656f5 (before the review fixes): `full6` and `full7` each `Executed 7 tests, with 0 failures`, `xcodebuild exit 0`. On the final tree (IR-1292 to IR-1294): `full9` `Executed 7 tests, with 0 failures`, `xcodebuild exit 0`, and `full8` `Executed 7 tests, with 1 failure`, the click case (99 of 100 logged, IR-1294). Logs are in `/tmp/apkrun-t2k/logs/` and results in `/tmp/apkrun-t2k/<run>.xcresult`. The runs before them: `base` (3 tests, 5 failures: the lock screen's dump, IR-1285), `full3` (7 tests, 9 failures: after the keyguard fix the launcher was on top, IR-1286), `full4` (7 tests, 3 failures: the drag's three assertions), and `full5` (7 tests, 2 failures: the trackpad and wheel steps). The inputs were replaced at the plan's `/tmp` paths, and the backups are in `/tmp/apkrun-t2k/backup`: the guest APK is `apkrun-guest.apk` of `scripts/build-guest.sh --out`, version `0.1.0+c3f366d` (was `0.1.0+ab37bbc`, which lacks the #025 key injection), and the fixture is the debug HelloText built with `Tests/Fixtures/AndroidApps/gradlew … :HelloText:assembleDebug` and signed by the test-fixture key (was a release build). The runs used DerivedData `/tmp/apkrun-t2k-dd`, the SDK root `/tmp/apkrun-ir438-sdk` (`platform-tools`), signing team `X4A37LMRPS`, and `APKRUN_CI=1`, all under `lockf -k /tmp/apkrun-vm.lock`. The worktree's project was regenerated with XcodeGen 2.44.1 from the main checkout's binary.
 
 **Reason.** The `/tmp` inputs of the test plan predated #025 (the guest) and its debug receiver (the fixture), so the suite could not have passed with them.
 
-**Risk.** Two passes on the final tree and one earlier pass of the same cases (`diag3`) are the evidence; the runs are not a repeat count. The `/tmp` inputs are shared, and another worker that uses them now gets these builds. The format gate (`scripts/check-format.sh`) fails on three lines of `VMRunResourcesTests.swift`, which this change does not touch; that failure is not from this change.
+**Risk.** The evidence is the full runs listed above; the typing case alone also passed once (`diag3`). The `/tmp` inputs are shared, and another worker that uses them now gets these builds. The format gate (`scripts/check-format.sh`) flagged three lines of this change in an early run; they were wrapped in d0656f5 and the gate passes for them now. It still fails on three lines of `VMRunResourcesTests.swift`, which this change does not touch.
 
 ## IR-1290: Box 3 of #024 stays open: six CLI batches of 100 clicks on the odm7 image logged 590 of 600
 
@@ -17943,7 +17943,7 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 
 **Reason.** The harness reads the log 3 s after each batch, and lines arrived late: C1's 100th line appeared in C2's window and C3's last lines in C4's. So each batch verdict mixes two batches and is not a clean count. The total is a clean count, and it shows the loss. The harness does not record each batch's start time, so no batch can be shown to be 100 of 100 on its own.
 
-**Risk.** The loss is between the Mac helper, the guest, and the log path, and it is not isolated. It matches IR-1247 and IR-1250. The batch scripts and the boot are scratch, and their paths are in `/tmp/apkrun-t2k/batch`. Process: the boot did not stop within 60 s of SIGINT, so it received SIGKILL. The VM service and the lock wrapper ended with it.
+**Risk.** The cause is not isolated: the loss may be in the Mac helper, in the guest, or in the log path. It matches IR-1247 and IR-1250. The same loss appeared once in the XCTest host (IR-1294). The batch scripts and the boot are scratch, and their paths are in `/tmp/apkrun-t2k/batch`. Process: the boot did not stop within 60 s of SIGINT, so it received SIGKILL. The VM service and the lock wrapper ended with it.
 
 ## IR-1291: The boxes and the issues after this change: #025 closes, #024 stays open with boxes 3 and 4 open
 
@@ -17953,21 +17953,42 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 | Task | #025, #024 |
 | Affected documents | [issues/README.md](issues/README.md) (the open-items table: the #025 row is removed, the #024 row is updated); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #025 |
 
-**Choice.** #025: all six boxes were already ticked, and each now has repository T2 evidence or the device evidence of IR-1268 and IR-1274. The T2 cases of the entry pass (IR-1287, IR-1289), so GitHub issue 26 is closed after the merge. #024: boxes 1, 2, 5, 6, 7, and 8 are unchanged (six of eight, as the index says). Box 3 stays open (IR-1290). Box 4 stays open (C01-2 is manual; IR-1288). GitHub issue 25 stays open.
+**Choice.** #025: all six boxes were already ticked, and each now has repository T2 evidence or the device evidence of IR-1268 and IR-1274. The T2 cases of the entry pass (IR-1287, IR-1289, IR-1294), and its T0 and T1 tests pass on the final tree (IR-1294). GitHub issue 26 is titled `#025 Keyboard input` (checked with `gh issue view 26`), so it is the issue of #025; the index's rule that issue and task numbers are the same does not hold for these numbers (IR-297). It is closed after the merge. #024: boxes 1, 2, 5, 6, 7, and 8 are unchanged (six of eight, as the index says). Box 3 stays open (IR-1290). Box 4 stays open (C01-2 is manual; IR-1288). GitHub issue 25 stays open.
 
 **Reason.** Closing #025 follows AGENTS §10 (every box ticked and every T2 case passing). #024's box 3 has no clean run of three batches, and box 4's stated direction needs the manual check.
 
 **Risk.** Closing #025 does not fix the pointer-tap focus gap, which is #102. The T2 cases repeat the device checks of IR-1268 and IR-1274, and they run in the Xcode host, not on the reference Mac.
 
-## IR-1292: The adversarial review of this change, and how each finding was answered
+## IR-1292: The adversarial review of d0656f5, and how each finding was answered
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #025, #024 |
-| Affected documents | IR-1285 to IR-1291 |
+| Affected documents | IR-1285 to IR-1294; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 and #024 (Notes) |
 
-**Choice.** The review record is appended after the review (see below).
+**Choice.** One read-only reviewer (an Explore agent, which could not edit files, build, boot a VM, or run `lockf`) read the commit d0656f5, the IR entries, and the logs. It gave no blocker and fourteen other findings. Each was answered as follows.
+1. Major, the ⌘ cases did not check that the view takes the key. Accepted. `commandShortcut` throws `shortcutNotTaken` when `performKeyEquivalent` returns false (IR-1287).
+2. Major, the format claim. Accepted. The log it read predates the formatting of d0656f5, and IR-1289 now says so.
+3. Major, FR-IN-06 was sampled in two of seven cases. Accepted. `withoutShellInput` wraps all four keyboard cases and the typing case.
+4. Minor, the drag's trackpad and wheel steps check the direction for a fixed sign only. Accepted as a limit. IR-1288 and the #024 note say that C01-2 checks the direction macOS uses.
+5. Minor, IR-1289 called `full3` a lock-screen run and said `diag3` was a same-cases pass. Accepted. Both are corrected.
+6. Minor, IR-1285 and IR-1290 stated judgments as facts. Accepted. Both are reworded.
+7. Minor, the issue mapping and the #025 note. Accepted. IR-1291 gives the mapping, which `gh issue view 26` shows.
+8. Minor, the IR-1292 placeholder. Accepted. This record replaces it.
+9. Minor, IR-1293 cited AGENTS §13 for the trailer rule. Accepted. It cites the task's rule.
+10. Minor, the fixture hint pointed to the release build. Accepted. The hint names the debug build.
+11. Minor, a missing key event was skipped without an error. Accepted. `InputKeyboard` throws `eventNotMade`.
+12. Nit, the focus-attribute comment. Accepted. The comment says the attribute order does not matter.
+13. Nit, an adb error in `uiDump` reads as an empty dump. Not changed. The message now says "no nodes in the dump", and `waitForText` retries until it times out.
+14. Nit, `WireSink` did not cut long lists as the CLI does. Accepted. The batch is cut at `DevInputRoute.maximumEventsPerBatch`.
+15. Nit, the synthetic events have no side bits. Accepted as a limit (IR-1287).
+
+The reviewer also checked the per-case vacuity, the key codes and sequences against `KeyEventAdapter` and `KeyTranslator`, the batch numbers, and the run counts in the logs. It found no temporary print or dead code, and no product change beyond the key-adapter fix of IR-1294. It listed what it could not check without a VM: the guest's Enter and right-arrow behaviour, the scroll location on this macOS, keyguard persistence, and the batch harness's read timing. Those are the limits in IR-1285, IR-1287, IR-1288, and IR-1290.
+
+**Reason.** Each answer was checked against the file or the log it names, and where a claim was wrong it was corrected.
+
+**Risk.** The reviewer ran before the fixes of this record, and it did not run anything. The fixes were checked by the final run (IR-1294) and by the T0 and T1 runs of the same tree.
 
 ## IR-1293: Process judgments of the run: the worktree and branch, the scratch inputs, the stopped processes, and the commit trailer
 
@@ -17977,8 +17998,25 @@ Three things were seen and not explained. (1) The probe still fails in BootAnima
 | Task | #025, #024 |
 | Affected documents | None in the repository. The scratch paths are in IR-1289 and IR-1290. |
 
-**Choice.** (1) The worktree is `~/Documents/projects/apkrun-wt/t2k` on `task/025-t2-keyboard`, from `main` at `c3f366d`, as the task named. (2) Every VM run ran under `lockf -k /tmp/apkrun-vm.lock`, and the batch boot too. (3) The boot in `/tmp/apkrun-t2k/batch` was stopped by SIGKILL after SIGINT had not ended it in 60 s (IR-1290). (4) The adb server on port 15040 (this suite's port, started by the test runs) was stopped with `adb -P 15040 kill-server`. The adb server on the default port 5037 was not touched, because another worker may use it. (5) The commit has no `Co-Authored-By` line, as AGENTS §13 and the user's instruction require. (6) The closeout harness in `/tmp/apkrun-024` was copied, not edited.
+**Choice.** (1) The worktree is `~/Documents/projects/apkrun-wt/t2k` on `task/025-t2-keyboard`, from `main` at `c3f366d`, as the task named. (2) Every VM run ran under `lockf -k /tmp/apkrun-vm.lock`, and the batch boot too. (3) The boot in `/tmp/apkrun-t2k/batch` was stopped by SIGKILL after SIGINT had not ended it in 60 s (IR-1290). (4) The adb server on port 15040 (this suite's port, started by the test runs) was stopped with `adb -P 15040 kill-server`. The adb server on the default port 5037 was not touched, because another worker may use it. (5) The commit has no `Co-Authored-By` line, as the task's commit rule requires. AGENTS §13 does not mention the trailer. (6) The closeout harness in `/tmp/apkrun-024` was copied, not edited.
 
 **Reason.** The task asked for these steps, and each one is the least change that the run needed.
 
 **Risk.** The scratch inputs in `/tmp` (guest, fixture, batch harness) are shared, and the backups are the only record of the replaced files.
+
+## IR-1294: The key adapter read the key code of a pointer event, which failed the T0 test; the T0, T1, and full runs on the final tree
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 (T0 and T1), #024 (box 3, the click case) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (Tests, Notes) and #024 (Notes); [input.md](../02-design/input.md) §5.2 |
+
+**Choice.** The T0 test `aMouseEventIsNotAKeyEvent` crashed the test process. `KeyEventAdapter.sample(for:)` read `event.keyCode` before it checked the event type, and AppKit raises `NSInternalInconsistencyException` for `keyCode` of a pointer event. The adapter now switches on the type first (keyDown, keyUp, flagsChanged) and returns nil for the rest. The product path does not reach the fault, because the view passes it only key events, so the fix changes no behaviour there. The T0 tests of #025 then pass: `swift test --filter 'KeyCodeMapTests|KeyTranslatorTests|KeyEventAdapterTests'`, 31 tests in the Swift Testing run, exit 0 (`/tmp/apkrun-t2k/logs/t0-keys2.log`). The T1 JVM tests pass: the guest's `InputInjectorTest` and `InputInjectorKeyTest` (46 tests, `testDebugUnitTest --tests '*InputInjector*'`), and the HelloText `JsonStringTest` and `DebugFixtureCommandsTest` (4 tests, `testReleaseUnitTest`). The Gradle reports are in each module's `build/test-results`.
+
+The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with 0 failures`, `xcodebuild exit 0` (`/tmp/apkrun-t2k/logs/full9.log`). The run before it, `full8`, had one failure: `testOneHundredClicksOnTheButtonAreLogged`, first error `XCTAssertEqual failed: [1 … 99] is not equal to [1 … 100]`, with 99 of 100 clicks logged. The click case passed in each of the other five full runs since the launch fix (full4 to full7, and full9). The other six cases passed in `full8`.
+
+**Reason.** The T0 test is part of #025's tier list, and AGENTS §10 requires every tier to pass before the task is done. The fault in the adapter is latent, and the test is the one that found it. The click case's loss is the one of IR-1290: a click that the guest did not log within the test's 30 s poll. It is recorded here and not hidden by a rerun, so #024's box 3 stays open.
+
+**Risk.** The click loss is intermittent: one failed run in six full runs, and 10 of 600 clicks in the CLI batches. The suite's click case therefore is not a stable gate yet, and it is #024's open work. The #025 closure does not depend on it, because its cases passed in every run from `full4` on.
+

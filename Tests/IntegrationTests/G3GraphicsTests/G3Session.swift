@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -348,6 +349,22 @@ final class G3Session: @unchecked Sendable {
         )
         if let match {
             return match.number
+        }
+        if ownerWindows.contains(where: { $0.title.hasPrefix("APKRun display 0") }) {
+            // The display window is listed but off screen: on another Space, or hidden. Activating its process brings
+            // the window to the current Space. The lookup then runs again for up to 10 s (IR-1220).
+            NSRunningApplication(processIdentifier: owner)?.activate()
+            for _ in 0..<20 {
+                Thread.sleep(forTimeInterval: 0.5)
+                let reactivated = Self.windowRecords(onScreenOnly: true).first {
+                    $0.owner == owner && $0.title.hasPrefix("APKRun display 0")
+                }
+                if let reactivated {
+                    appendWindowList("reactivated owner \(owner); window \(reactivated.number) is on screen again")
+                    return reactivated.number
+                }
+            }
+            appendWindowList("reactivated owner \(owner) for 10 s; the display window is still not on screen")
         }
         let detail: String
         if ownerWindows.isEmpty {

@@ -16741,3 +16741,19 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Reason.** A gate that writes `passed` after a signal is wrong evidence, so the status has one writer and the signals are part of the trail. The window lookup needed to name the state the run was in, so the next failure can be read without a guess. The colour check would have failed a correct run.
 
 **Consequence.** Run 3 is not a pass. The next gate run needs the window on the active Space for its whole length. The check that counts colours is coarse: the title bar and the status bar supply most of the colours, so the check cannot tell a correct frame from a title bar on its own. Condition 1 still rests on the screenshot.
+
+## IR-1220: The G3 test activates the boot process when its display window is off screen, and waits up to 10 s for it
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 gate); [test-strategy.md](../04-plan/test-strategy.md) §5 (no change) |
+
+**Choice.** `G3Session.windowNumber` looks for the display window again after the process is activated, when the window is listed but not on screen. It waits up to 10 s in 0.5 s steps. If the window does not return, the lookup fails with the window state as before, and `window-list.txt` records the outcome.
+
+**Reason.** Runs 3 and 4 failed the same way. The display window of the boot process was still in the window list, but off screen (`window-list.txt`, 06:12:50Z in run 4): it was on another Space, hidden, or minimized. The Mac is the user's own Mac, not a lab Mac, so the Space of the window is not under the test's control. Activating the process brings its window back to the current Space. The change is in the test, not in the product window.
+
+**Rejected alternatives.** Joining all Spaces (`canJoinAllSpaces`) would change the product's window behaviour for every user, and it needs its own design decision. Asking the user to leave the Mac alone is not reliable, and it cannot be checked by the gate.
+
+**Risk.** Activation can switch the user's Space during a gate run. That is accepted for a test run, and the gate notes the activation in `window-list.txt`. Whether the lab Mac needs it at all is open: on a lab Mac the window should stay on screen.

@@ -295,5 +295,7 @@ func aFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
         Issue.record("the agent after its fourth death was reported as available")
     } catch {
         #expect(error == .requiredAgentUnavailable)
+        // The catalog code is the one that the host reports (error-catalog.md).
+        #expect(error.qualifiedCode == "runtime.requiredAgentUnavailable")
     }
 }

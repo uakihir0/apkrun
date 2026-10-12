@@ -602,7 +602,7 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #033 | golden frames (Swift and Kotlin), codec limits, handshake matrix, numbering rule | — | — | — |
 | #072 | `GuestConnection` with the fake agent | Kotlin agent server against the scripted host; dispatcher and session binding | ADB-forward transport; development mode install, start, kill, restart, reinstall; `SystemServicesTest` with `am instrument`; reconnect after agent kill | — |
 | #024 | `CoordinateMapper`, `EventTranslator`, `InputRouter` | injector `MotionEvent` construction | 100 of 100 HelloText clicks; HelloCompose drag and scroll; right-click opens the context menu | v0.1 checklist: scroll direction, context menu |
-| #025 | `KeyCodeMap`, key mode, repeat | injector `KeyEvent` construction | `Hello, APKRun 123!` exact; Backspace, Enter, arrows; Esc goes back | v0.1 checklist: US and JIS layouts |
+| #025 | `KeyCodeMap`, key mode, repeat | injector `KeyEvent` construction | `Hello, APKRun 123!` exact; Backspace, Enter, arrows; Esc and ⌘[ go back; ⌘A, ⌘C, ⌘X, ⌘V, ⌘Z | v0.1 checklist: US and JIS layouts |
 | #026 | — | `IOSurfaceLayerView` screenshot with a synthetic `FrameSource` | HelloText in a normal window, click and type | G4 check |
 | #027 | `PackageID`, `VersionCode`, journal, recovery table (every kind × step) | `PackageStore` with a fake channel; crash injection; raw-ADB lint | stock image: install, split install, uninstall, reinstall, downgrade reinstall | — |
 | #067 | `DisplayGeometryResolver`, mapper generation change, EDID size | — | resize and backing-scale change | v0.1 checklist: Retina sharpness |

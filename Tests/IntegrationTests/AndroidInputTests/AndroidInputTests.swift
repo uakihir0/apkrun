@@ -9,12 +9,17 @@ import XCTest
 /// permission. Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the
 /// centres of their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
 ///
-/// The suite runs in the Xcode test host (IR-438, IR-1257), and its boot needs a working guest renderer. On the odm4
-/// bundle the home app aborts in RenderThread, HelloText does not start, and the checks fail there. The device checks
-/// are run by the coordinator's scripted runs, which post the same gestures with the CGEvent helper in /tmp (decision
-/// D14). The suite runs only with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan
-/// sets. It also needs APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText), and
-/// APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names the variable.
+/// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
+/// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
+/// coordinator's scripted runs post the same gestures with the CGEvent helper in /tmp (decision D14). The suite runs only
+/// with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan sets. It also needs
+/// APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText, a debug build: its `TEXT` and `DETAILS`
+/// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
+/// the variable.
+///
+/// The keyboard cases (#025) post AppKit key events into the window's view, as the pointer cases post pointer events. The
+/// field's text is read from the fixture's `text` line after a `TEXT` broadcast, and the screens and the editor action
+/// from their log lines, so each case checks the state it needs and not only that a command ran.
 ///
 /// For FR-IN-06 the sequence samples the process list for `adb ... shell input` commands, and must find none. The adb
 /// shell count of the apkrun boot is printed by `apkrun dev boot` when the input binds and when it stops, and the device
@@ -62,11 +67,16 @@ final class AndroidInputTests: XCTestCase {
         let apk = try Self.fixture("APKRUN_FIXTURE_COMPOSE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloCompose) { run in
             _ = try await run.adb.shell("logcat -c")
+            // The first rows are on screen before the drag: the list is laid out after the launch (IR-1288).
+            try await run.waitForText("Row 0")
             let pointer = try run.pointer()
             // The list fills the display below the text field, so these points lie inside it.
             try await pointer.drag(from: (x: 512, y: 600), to: (x: 512, y: 250), steps: 20)
             let dragged = try await Self.lastRow(run, above: 0)
-            XCTAssertGreaterThan(dragged, 0, "the drag did not scroll the list")
+            if dragged == 0 {
+                XCTFail("the drag did not scroll the list: \(try await Self.diagnosis(run))")
+                return
+            }
             pointer.scroll(at: (x: 512, y: 400), deltaY: -120, precise: true)
             let trackpad = try await Self.lastRow(run, above: dragged)
             XCTAssertGreaterThan(trackpad, dragged, "the trackpad scroll did not move the list")
@@ -89,6 +99,154 @@ final class AndroidInputTests: XCTestCase {
             }
             XCTAssertTrue(lines.contains { $0.contains("APKRUN-FIXTURE: contextmenu") }, "no context menu was logged")
         }
+    }
+
+    /// Typing `Hello, APKRun 123!` into HelloText's field gives exactly that text (#025 acceptance, T2). The field is
+    /// focused with Tab, because a pointer tap does not focus it reliably (IR-1270). The debug `TEXT` broadcast makes the
+    /// fixture log the field's text, and that log line is what the case checks. The sequence samples for shell input too.
+    func testTypingGivesExactTextInTheField() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            let sampler = ShellInputSampler()
+            sampler.start()
+            try await Self.focusField(run)
+            try await run.keyboard().type("Hello, APKRun 123!")
+            let shellInput = await sampler.stop()
+            XCTAssertEqual(shellInput, [], "adb shell input processes ran during the typing")
+            let text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "Hello, APKRun 123!")
+        }
+    }
+
+    /// Backspace removes the character before the cursor, the left arrow moves the cursor, and Enter is the editor action
+    /// of the field, which logs `APKRUN-FIXTURE: editor action 6` (IME_ACTION_DONE, #025).
+    func testBackspaceEnterAndArrowsEditTheField() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            try await Self.focusField(run)
+            let keys = try run.keyboard()
+            try await keys.type("abc")
+            try await keys.tap(.delete)
+            var text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "ab", "Backspace did not remove the last character")
+            try await keys.type("cd")
+            try await keys.tap(.leftArrow)
+            try await keys.tap(.leftArrow)
+            try await keys.type("X")
+            text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "abXcd", "the left arrow did not move the cursor")
+            _ = try await run.adb.shell("logcat -c")
+            try await keys.tap(.returnKey)
+            let lines = try await run.fixtureLog { lines in
+                lines.contains { $0.contains(Self.editorActionLine) }
+            }
+            XCTAssertTrue(lines.contains { $0.contains(Self.editorActionLine) }, "Enter did not log the editor action")
+        }
+    }
+
+    /// Esc and ⌘[ go back from the Details screen to the main screen, which logs `APKRUN-FIXTURE: screen main` (FR-IN-04).
+    /// The Details button is opened with a pointer click, and the screen change is the log line the case checks.
+    func testEscAndCommandBracketGoBackFromDetails() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            let keys = try run.keyboard()
+            try await Self.openDetails(run)
+            _ = try await run.adb.shell("logcat -c")
+            try await keys.tap(.escape)
+            let back = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
+            XCTAssertTrue(back.contains { $0.contains(Self.mainScreenLine) }, "Esc did not return to the main screen")
+            try await Self.openDetails(run)
+            _ = try await run.adb.shell("logcat -c")
+            try await keys.commandShortcut(.leftBracket)
+            let commandBack = try await run.fixtureLog { lines in lines.contains { $0.contains(Self.mainScreenLine) } }
+            XCTAssertTrue(
+                commandBack.contains { $0.contains(Self.mainScreenLine) }, "⌘[ did not return to the main screen")
+        }
+    }
+
+    /// ⌘A, ⌘C, ⌘X, ⌘V, and ⌘Z act as the Ctrl combinations in the field (FR-IN-08, key mode). Each step is checked on the
+    /// field's text: copy and paste append the copied text, cut empties the selection, and undo reverts the last paste.
+    func testCommandShortcutsActOnTheField() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            try await Self.focusField(run)
+            let keys = try run.keyboard()
+            try await keys.type("Hello")
+            try await keys.commandShortcut(.a)
+            try await keys.commandShortcut(.c)
+            try await keys.tap(.rightArrow)
+            try await keys.commandShortcut(.v)
+            var text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "HelloHello", "⌘C and ⌘V did not copy and paste the selection")
+            try await keys.commandShortcut(.a)
+            try await keys.commandShortcut(.x)
+            text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "", "⌘X did not cut the selection")
+            try await keys.commandShortcut(.v)
+            text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "HelloHello", "⌘V did not paste the cut text")
+            try await keys.commandShortcut(.z)
+            text = try await Self.fieldText(run)
+            XCTAssertEqual(text, "", "⌘Z did not undo the paste")
+        }
+    }
+
+    private static let fieldID = "io.apkrun.fixture.hellotext:id/input_text"
+    private static let detailsID = "io.apkrun.fixture.hellotext:id/details_button"
+    private static let textAction = "io.apkrun.fixture.hellotext.debug.TEXT"
+    private static let textPrefix = "APKRUN-FIXTURE: text "
+    private static let editorActionLine = "APKRUN-FIXTURE: editor action 6"
+    private static let mainScreenLine = "APKRUN-FIXTURE: screen main"
+    private static let detailsScreenLine = "APKRUN-FIXTURE: screen details"
+
+    /// Moves the focus to HelloText's field with Tab, and reads the focus from a uiautomator dump before each Tab. A dump
+    /// that fails is retried without a Tab, so a Tab never moves the focus twice.
+    private static func focusField(_ run: AndroidInputRun) async throws {
+        let keys = try run.keyboard()
+        for _ in 0..<6 {
+            let xml = try await run.uiDump()
+            switch AndroidInputRun.isFocused(fieldID, in: xml) {
+            case true?:
+                return
+            case false?:
+                try await keys.tap(.tab)
+                try await Task.sleep(for: .milliseconds(400))
+            case nil:
+                try await Task.sleep(for: .seconds(1))
+            }
+        }
+        throw AndroidInputRunFailure.viewNotFound("the focus of \(fieldID)")
+    }
+
+    /// The text of HelloText's field, from the fixture's `text` line after the debug `TEXT` broadcast (a query, not input).
+    private static func fieldText(_ run: AndroidInputRun) async throws -> String {
+        _ = try await run.adb.shell("logcat -c")
+        _ = try await run.adb.shell("am broadcast -a \(textAction) -p \(helloText)")
+        let lines = try await run.fixtureLog { lines in lines.contains { $0.contains(textPrefix) } }
+        guard let line = lines.last(where: { $0.contains(textPrefix) }), let range = line.range(of: textPrefix) else {
+            throw AndroidInputRunFailure.timedOut("the fixture's text line")
+        }
+        // The fixture writes the text as a JSON string. The array wrapper lets JSONDecoder read a bare string.
+        let json = String(line[range.upperBound...])
+        return try JSONDecoder().decode([String].self, from: Data("[\(json)]".utf8)).first ?? ""
+    }
+
+    /// Opens the Details screen with a pointer click on its button, and waits for its `screen details` line.
+    private static func openDetails(_ run: AndroidInputRun) async throws {
+        let target = try await run.centre(of: detailsID)
+        _ = try await run.adb.shell("logcat -c")
+        try await run.pointer().click(at: target)
+        let lines = try await run.fixtureLog { lines in lines.contains { $0.contains(detailsScreenLine) } }
+        XCTAssertTrue(lines.contains { $0.contains(detailsScreenLine) }, "the Details screen did not open")
+    }
+
+    /// What the screen and the fixture log showed when a scroll had no effect (IR-1288): the packages of the dump, and the
+    /// last fixture lines.
+    private static func diagnosis(_ run: AndroidInputRun) async throws -> String {
+        let dump = try await run.uiDump()
+        let lines = try await run.adb.shell("logcat -d -s APKRUN-FIXTURE | tail -3").output
+        return
+            "the dump shows \(AndroidInputRun.packages(in: dump)); the fixture log ends with \(lines.replacingOccurrences(of: "\n", with: " | "))"
     }
 
     /// The last row index that HelloCompose logged, once it is above `previous`. The log is polled for 30 s.

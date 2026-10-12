@@ -14,6 +14,8 @@ typealias InputPixel = (x: Double, y: Double)
 enum AndroidInputRunFailure: Error, Equatable {
     case timedOut(String)
     case viewNotFound(String)
+    /// The launch started no process of the package, so the view could not appear (IR-1286).
+    case appDidNotStart(String)
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
 }
@@ -75,27 +77,80 @@ final class AndroidInputRun {
 
     /// The pointer of the window. Its content rectangle is the view's bounds: the window keeps the display's aspect.
     func pointer() throws -> InputPointer {
-        let window = try XCTUnwrap(NSApplication.shared.windows.first { $0.title == Self.windowTitle })
-        let view = try XCTUnwrap(window.contentView as? IOSurfaceLayerView)
+        let (window, view) = try windowAndView()
         let size = view.bounds.size
         let mapper = DisplayGeometry.coordinateMapper(
             contentSize: size, in: size, pixelWidth: Self.width, pixelHeight: Self.height, generation: 1)
         return InputPointer(window: window, view: view, mapper: mapper)
     }
 
+    /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
+    func keyboard() throws -> InputKeyboard {
+        let (window, view) = try windowAndView()
+        return InputKeyboard(window: window, view: view)
+    }
+
+    private func windowAndView() throws -> (NSWindow, IOSurfaceLayerView) {
+        let window = try XCTUnwrap(NSApplication.shared.windows.first { $0.title == Self.windowTitle })
+        let view = try XCTUnwrap(window.contentView as? IOSurfaceLayerView)
+        return (window, view)
+    }
+
+    /// The uiautomator dump of the screen, read with no input. A dump that fails gives an empty string.
+    func uiDump() async throws -> String {
+        let path = "/data/local/tmp/apkrun-025-dump.xml"
+        return (try? await adb.shell("uiautomator dump \(path) > /dev/null; cat \(path); rm -f \(path)").output) ?? ""
+    }
+
+    /// Whether the node `resourceID` has focus in a uiautomator dump, or nil when the dump has no such node. The focus
+    /// attribute comes before `resource-id` in the element, so the element is cut at its `<node` and its `>`.
+    static func isFocused(_ resourceID: String, in xml: String) -> Bool? {
+        guard let id = xml.range(of: "resource-id=\"\(resourceID)\"") else {
+            return nil
+        }
+        let start = xml[..<id.lowerBound].range(of: "<node", options: .backwards)?.lowerBound ?? xml.startIndex
+        let end = xml[id.upperBound...].firstIndex(of: ">") ?? xml.endIndex
+        return xml[start..<end].contains("focused=\"true\"")
+    }
+
     /// The centre of the view `resourceID` in display pixels, from a `uiautomator dump` (retried while the screen is
     /// busy, as scripts/dev/validate-input-coordinates.sh does).
     func centre(of resourceID: String) async throws -> InputPixel {
         let path = "/data/local/tmp/apkrun-024-input.xml"
+        var lastXML = ""
         for _ in 0..<15 {
             let xml =
                 (try? await adb.shell("uiautomator dump \(path) > /dev/null; cat \(path); rm -f \(path)").output) ?? ""
+            lastXML = xml
             if let bounds = Self.bounds(of: resourceID, in: xml) {
                 return ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)
             }
             try await Task.sleep(for: .seconds(1))
         }
-        throw AndroidInputRunFailure.viewNotFound(resourceID)
+        throw AndroidInputRunFailure.viewNotFound("\(resourceID); the last dump shows \(Self.packages(in: lastXML))")
+    }
+
+    /// Polls the uiautomator dump, for 30 s, until a node has the text `text`. It throws `viewNotFound` with the packages of
+    /// the last dump otherwise, so a launch that shows another screen is named.
+    func waitForText(_ text: String) async throws {
+        var xml = ""
+        for _ in 0..<30 {
+            xml = try await uiDump()
+            if xml.contains("text=\"\(text)\"") {
+                return
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+        throw AndroidInputRunFailure.viewNotFound("text \(text); the last dump shows \(Self.packages(in: xml))")
+    }
+
+    /// The packages of the nodes of a uiautomator dump, so that a failure names the screen that the dump saw.
+    static func packages(in xml: String) -> String {
+        let names = xml.components(separatedBy: "package=\"").dropFirst().compactMap {
+            $0.components(separatedBy: "\"").first
+        }
+        let unique = Set(names).sorted()
+        return unique.isEmpty ? "no nodes" : unique.joined(separator: ", ")
     }
 
     /// The fixture's log lines, polled every 500 ms until `enough` holds or 30 s have passed.
@@ -182,6 +237,24 @@ final class AndroidInputRun {
         }
     }
 
+    /// Starts the launcher activity of `package` by its component name, as AndroidPackageTests does (#017), and waits until
+    /// its process runs. monkey starts nothing on this image (IR-1286). A launch that starts no process throws with the
+    /// resumed activity and the fatal lines of the guest log, so the first failure names the cause.
+    private func launch(_ package: String) async throws {
+        try await adb.startActivity(component: "\(package)/.MainActivity")
+        for _ in 0..<30 {
+            if try await adb.pidof(package) != nil {
+                return
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+        let resumed = (try? await adb.shell("dumpsys activity activities | grep -m3 -i resumed").output) ?? ""
+        let fatal = (try? await adb.shell("logcat -d '*:F' | tail -3").output) ?? ""
+        throw AndroidInputRunFailure.appDidNotStart(
+            "\(package) has no process; resumed: \(resumed.trimmingCharacters(in: .whitespacesAndNewlines)); "
+                + "fatal: \(fatal.trimmingCharacters(in: .whitespacesAndNewlines))")
+    }
+
     /// Waits until the input is bound and frames have arrived, then installs `apk` and starts `package`. The launch is
     /// `monkey` with one event, which starts the launcher activity: the boot would start a named package before the
     /// install could happen, so the suite starts it over adb.
@@ -192,7 +265,11 @@ final class AndroidInputRun {
         try await waitUntil(seconds: 120, "the first frames") { self.framesSeen >= 2 }
         try await adb.connect(timeout: .seconds(30))
         try await adb.install(apk: apk)
-        _ = try await adb.shell("monkey -p \(package) -c android.intent.category.LAUNCHER 1")
+        // The lock screen covers the app on this image: the dump of the first failure showed only SystemUI (IR-1285). The
+        // G3 gate wakes the screen and dismisses the keyguard the same way (G3GraphicsTests). These run before the sequence.
+        _ = try await adb.shell("input keyevent 82")
+        _ = try await adb.shell("wm dismiss-keyguard")
+        try await launch(package)
     }
 
     /// Polls `condition` every 200 ms until it holds. It throws when `seconds` have passed.
@@ -249,7 +326,6 @@ struct InputPointer {
     /// event tap delivers it, and AppKit makes the NSEvent that the view reads.
     func scroll(at pixel: InputPixel, deltaY: Int32, precise: Bool) {
         let location = view.convert(windowPoint(pixel), to: nil)
-        let screen = window.convertToScreen(NSRect(origin: location, size: .zero)).origin
         let units: CGScrollEventUnit = precise ? .pixel : .line
         guard
             let cg = CGEvent(
@@ -260,8 +336,10 @@ struct InputPointer {
         if precise {
             cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         }
-        // CoreGraphics counts the global y from the top of the primary display, and AppKit from its bottom.
-        cg.location = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
+        // NSEvent(cgEvent:) reports the location as a global AppKit point, without a window (IR-1288), and the view reads
+        // `locationInWindow` as a window point. So the CG point is the window point, flipped to CoreGraphics's top-left
+        // origin, and AppKit reads it back as the window point. The event is not posted anywhere.
+        cg.location = CGPoint(x: location.x, y: (NSScreen.screens.first?.frame.height ?? 0) - location.y)
         if let event = NSEvent(cgEvent: cg) {
             view.scrollWheel(with: event)
         }
@@ -343,9 +421,15 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         queue.yield(events)
     }
 
-    /// The wire form of `event`. The translator makes no key or long-press event in #024 (decision D6).
+    /// The wire form of `event`. A long press is not sent (decision D6), and the key events are converted as the CLI's
+    /// `EmbeddedInputSink` converts them (#025).
     static func wire(_ event: InputCore.InputEvent) -> RuntimeAPI.WireInputEvent? {
         switch event {
+        case .key(let key):
+            return .key(
+                .init(
+                    action: keyAction(key.action), androidKeyCode: key.androidKeyCode,
+                    metaState: key.metaState.rawValue, repeatCount: key.repeatCount, time: time(key.time)))
         case .touch(let touch):
             let phase: RuntimeAPI.TouchPhase =
                 switch touch.phase {
@@ -381,6 +465,13 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
         case .hoverExit: .hoverExit
         case .press(let button): .press(wireButton(button))
         case .release(let button): .release(wireButton(button))
+        }
+    }
+
+    private static func keyAction(_ action: InputCore.KeyEvent.Action) -> RuntimeAPI.KeyAction {
+        switch action {
+        case .down: .down
+        case .up: .up
         }
     }
 

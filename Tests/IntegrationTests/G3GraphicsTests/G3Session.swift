@@ -50,6 +50,7 @@ enum G3Failure: Error, CustomStringConvertible {
     case bootEnded(String)
     case noWindow(Int32)
     case screenshotFailed(String)
+    case screenRecordingDenied
 
     var description: String {
         switch self {
@@ -65,6 +66,8 @@ enum G3Failure: Error, CustomStringConvertible {
             "no window titled APKRun display 0 belongs to process \(pid). Check that Screen Recording is allowed for the test host."
         case .screenshotFailed(let path):
             "screencapture did not write \(path)"
+        case .screenRecordingDenied:
+            "The test host has no Screen Recording access. Allow APKRunTestHost in System Settings, Privacy & Security, Screen Recording, then rerun scripts/run-gate.sh G3."
         }
     }
 }
@@ -305,7 +308,13 @@ final class G3Session: @unchecked Sendable {
     }
 
     /// The number of the on-screen window of `owner` whose title starts with `APKRun display 0`.
+    ///
+    /// Without Screen Recording access, macOS hides the titles of other processes' windows. The request also adds the
+    /// test host to the Screen Recording list of System Settings, which an app is not in until it asks.
     func windowNumber(owner: pid_t) throws -> Int {
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+            throw G3Failure.screenRecordingDenied
+        }
         let windows =
             CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []

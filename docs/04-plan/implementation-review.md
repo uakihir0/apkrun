@@ -16640,3 +16640,17 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 **Attempt 2 (04:30 UTC, `main` at dc133ce).** The LinuxGuest configuration ran 78 tests, 27 skipped, 0 failures. The image installed. `state: ready` came at 04:37:59 UTC. `sys.boot_completed` was 1. The guest reported `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8` (criterion 2, SurfaceFlinger) and HelloGL reported `APKRUN-FIXTURE: renderer virgl`. Its 34 statistics lines all show `hostReadbacks 0` and `cpuPixelCopies 0`. The test then failed at 04:38:19 UTC: no window titled `APKRun display 0` belonged to the CLI process (pid 9909). The window list gave no title for that window, which is what an unauthorised reader sees when Screen Recording is not granted. No permission dialog was on screen at 13:39 JST. The boot stopped after SIGINT at 04:38:22 UTC. The test cannot reach the window, fps, alternating-phase, or crash checks until the test host has that permission. I did not change any permission.
 
 **Cleanup.** Both gate processes were killed with SIGKILL. The first run's shell was waiting for its 30-minute recorder, and it would have written into the shared report. No VM or `lockf` holder remains. `build/gates/G3/report.txt` still reads `status: running`, from attempt 2, and `build/gates/G3/G3.xcresult` is attempt 2's bundle. Neither is a pass. Gate G3 is not passed, and the G3 row of graphics.md §16 and the last box of #023 stay as they are.
+
+## IR-1215: The G3 test host asks for Screen Recording access before it looks for the boot window
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 gate); [test-strategy.md](../04-plan/test-strategy.md) §5 (no change) |
+
+**Choice.** `G3Session.windowNumber` calls `CGPreflightScreenCaptureAccess()`, then `CGRequestScreenCaptureAccess()` when the preflight fails. If neither grants access, it throws `G3Failure.screenRecordingDenied`, whose message names APKRunTestHost and the System Settings pane.
+
+**Reason.** Without Screen Recording access, macOS hides the titles of other processes' windows, so the lookup of `APKRun display 0` finds nothing. APKRunTestHost was missing from the Screen Recording list because it had never asked for access. Reading the window list does not register an app there. The request registers it and shows the system prompt. `xcodebuild build-for-testing` of the IntegrationTests scheme succeeded with this change (`/tmp/apkrun-g3perm/build.log`). The gate has not been rerun.
+
+**Note.** The recording step in `scripts/run-gate.sh` runs `screencapture -v` from the shell, not from the test host. The app that runs the script (its terminal or IDE) therefore needs Screen Recording as well. This is not checked yet.

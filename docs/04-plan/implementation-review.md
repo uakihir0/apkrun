@@ -12240,6 +12240,8 @@ the real manifest.
 
 **Consequence.** A first boot can take longer than 5 s from `sys.boot_completed` to the connection. A steady-state boot does not. A stale forward can remain until the next start, without blocking it. The new `runtime.guestAgentStopped` code is in the catalog. The T2 suite measures neither interval separately.
 
+**Update (2026-10-12).** The 5-s criterion was measured from `sys.boot_completed` on seven boots of build 16373615 (IR-1227). The upper bound from `sys.boot_completed` to `ready` was 0.95 s to 2.25 s, and so was the connection, which comes before `ready`. The first boot after reset is in that range too. The code's timer still starts at the connection; the criterion is met by the measurement, not by the timer.
+
 ## IR-436: The development boot fails when no agent bundle is found
 
 | Field | Value |
@@ -12301,6 +12303,8 @@ the real manifest.
 - **adb location.** The T2 run uses the approach of [IR-388](#ir-388) on main: `platform-tools` copied to `/tmp/apkrun-072-sdk` and passed as `APKRUN_ANDROID_HOME`. The committed test plan is unchanged.
 - **Teardown after a failed boot (8a5f703).** `VsockLoopbackForwarder.stopAndWait(timeout:)` waits for the listener on a dispatch thread, bounded by the timeout, and `RuntimeSupervisor` awaits it. The synchronous `stop()` keeps its contract. The T0 test `loopbackForwarderStopReturnsWhileAGuestConnectionNeverOpens` stops a forwarder whose guest connect never returns, and checks that the stop returns within its bound, closes the client, and frees the port. It passes on the host.
 - **Not proven.** The fake-adb run did not reproduce the silence, and no sample of the stalled test host was taken. Main's `AdbProcess` change (3a0cc60) also moves the pipe readers off the concurrency pool, which is the same starvation mechanism. The device run must show whether the silence is gone.
+
+**Update (2026-10-12).** `GuestAgentTests` did not run in the Xcode test host in this session, so the status above is unchanged. The behaviors of the suite were checked through the CLI on the device, with the commands in the Notes of #072 (IR-1227 to IR-1230). The forwarder-stop silence was not reproduced, because the suite did not run.
 - **Next step, when the lock is free.** Run `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` once with `APKRUN_ANDROID_HOME=/tmp/apkrun-072-sdk`. If the test host still goes silent after `Stopped the loopback forwarder`, `sample` it during the silence to name the blocked wait.
 
 ## IR-439: The test inputs are read from /tmp, and the entry's path is stale
@@ -16841,3 +16845,87 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 6. The evidence is the text of the run under `docs/04-plan/evidence/G3/`. The 30-minute screen recording and the boot logs (`boot.out`, `boot.err`) stay in `build/gates/G3/` on this Mac because of their size.
 
 **Still open.** The C01-6 manual check (M02 #023 T3, test-strategy §8) needs a person to watch `build/gates/G3/screen-recording.mp4` for tearing or stutter. It is not done. Until it is, #023 is not complete under the definition of done (AGENTS.md §12), so the GitHub issue for #023 stays open.
+
+## IR-1226: A refusal's code is read before its detail, so the signer recovery runs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1; [IR-425](#ir-425) |
+
+**Choice.** `AdbOutputParser.packageReply` takes the code of `Failure [CODE: detail]` as the text before the first `:` or `]`. The code must still be an upper-case Android code, and the detail is never passed on. The device's reply `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]` now reads as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The T0 signer fake prints that detailed reply, and the parser tests cover the detailed form and the text that is not a code.
+
+**Reason.** The code used to be the whole text in the brackets, so any detail gave `unknown`. On the device, an agent signed by another key stopped the boot with `runtime.guestAgent` ("Android didn't install the Guest Agent: unknown"), and the uninstall-and-reinstall of IR-425 never ran. The T0 signer test passed because its fake printed the bare code. The parser test `aReasonThatIsNotAnAndroidCodeIsNeverPassedOn` expected `unknown` for the detailed form. That expectation is changed, because it is the defect. The rule it protects stays: text that is not an upper-case code never reaches an error.
+
+**Risk.** A reply with a code and a colon is read as that code, whatever the text after the colon. Android's refusal codes are stable names, and a reply with no code still gives `unknown`. The change alters the parser for every install and uninstall reply; the full RuntimeCore suite passes (147 tests).
+
+## IR-1227: The 5-second boot criterion is verified as an upper bound from `sys.boot_completed` to `ready`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [M03-input-and-basic-runtime.md](../04-plan/issues/M03-input-and-basic-runtime.md) #072 (the 5-s criterion); [guest-protocol.md](../02-design/guest-protocol.md) §15 and §18 (#072 row); [IR-435](#ir-435) |
+
+**Choice.** The criterion is measured from outside the CLI. A host script polls `getprop sys.boot_completed` about every 0.1 s through the development adb and records each reply with the host time. The upper bound is the time of the last poll that read no value before the first `1`, which is at or before the real moment that the property was set. The end is the time of the CLI's `state: ready` line, which the host timestamps. `ready` follows the agent start, so the bound covers the agent's install, its start, and its connection. Seven boots of build 16373615 were measured. Before the parser fix (IR-1226): the first boot after reset 2.25 s; steady boots 1.12 s, 1.13 s, and 1.80 s. With the final CLI: the first boot after reset 2.11 s; steady boots 1.10 s and 0.95 s.
+
+**Reason.** The milestone asks for the interval from `sys.boot_completed`, and IR-435 says the code's timer starts at the connection, so the criterion had not been measured as written. The CLI prints no timestamps. The guest clock and the host clock are not identical, so the measurement uses host times for both ends. A bound under 5 s proves the criterion, because the real interval is at most the bound.
+
+**Risk.** The bound includes the first-boot settings on the first boot and the poll resolution (about 0.1 s plus the adb latency). The measurement is a device run, not a T2 test, and it must be repeated on each image. IR-435 keeps its record of the first boot, and it is updated to say that the measured boots met the bound.
+
+## IR-1228: The signer replacement is run on the device with a scratch key that is not in the repository
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §2, §3.1; [IR-421](#ir-421); [IR-425](#ir-425) |
+
+**Choice.** The signer check uses a scratch PKCS#12 keystore that was generated for this run: `/tmp/apkrun-072-signer/scratch.jks`, RSA 2048, alias `scratch`, three days. Its password came from `openssl rand` and was passed through the environment, and it was not printed. `apksigner sign` re-signed a copy of the 1000 bundle, so the APK has the same versionCode and another SHA-256 certificate digest (`d4be2ea2…`, against the pinned test key `c58db702…`). The keystore is not committed, and `Tests/Fixtures/signing/` is unchanged.
+
+**Reason.** A mismatch needs a second signing key on the device (IR-425). A key in the repository would add a test keystore that is not in the fixture list. The provisioner does not compare signers (it relies on Android's refusal, IR-425), so a re-signed copy runs the production path unchanged.
+
+**Risk.** The scratch private key sits in `/tmp` until it is deleted, and it is valid only for this run. A later run should generate its own key. The device checks show the signer replacement in both directions; the T0 signer test still covers the uninstall order.
+
+## IR-1229: Wrapper isolation and the fourth death are tested with fakes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §6.2, §3.3; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.** `SystemServiceWrapper` takes its service lookup as a constructor parameter, and the default is the framework lookup (`HiddenApi.service`). The new `SystemServiceWrapperTest` (four JVM tests in `agentruntime`) passes a fake JDK collection as the service. It checks that a method the image lacks makes only its own call unusable, that an unregistered service fails only its wrapper, and that another wrapper keeps working. The new T0 test `aFourthDeathWithinAMinuteIsRequiredAgentUnavailable` (`AdbGuestAgentTests`) drives three restarts and a refusal, and checks `requiredAgentUnavailable` from `requireAvailable()`. A loss counts as a death only when the process is gone, so the test stops the fake agent before each loss.
+
+**Reason.** On the stock image a missing method cannot be produced, so the isolation can only be checked with a fake service. A default argument keeps the production path unchanged. The fourth-death code had been checked only as the absence of a restart on the device, and the T2 test that asserts the code does not run in the Xcode host (IR-438).
+
+**Risk.** The lookup parameter is a test seam on a production type. The fake does not exercise `HiddenApi.service`; the device `ServiceCheck` run does. The CLI still does not print `runtime.requiredAgentUnavailable`, which is an open item of #072 and is not part of its boxes.
+
+## IR-1230: The device checks need an entitled CLI copy, and the odm4 overlay needs a fresh home
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [build-system.md](../05-development/build-system.md) §3, §7 (the development CLI); [error-catalog.md](../03-reference/error-catalog.md) (`runtime.vmConfiguration`) |
+
+**Choice.** The `dev boot` checks ran a copy of the `swift build --product apkrun --traits EmbeddedRuntime` binary, signed the way `scripts/build/embed-cli.sh` signs a Debug build: `codesign --force --sign <Apple Development identity> --identifier io.apkrun.cli.dev --entitlements CLI/apkrun/apkrun-dev.entitlements`. The copy is `/tmp/apkrun-072-cli/apkrun`. The boots used the stock image, `/tmp/apkrun-test-linux/android-bundle`, installed into a scratch `APKRUN_HOME`.
+
+**Reason.** A plain `swift build` product carries only `com.apple.security.get-task-allow`. With that signature `apkrun dev boot` failed with `runtime.vmConfiguration` ("Android's configuration is not valid.") before the kernel started, and the same happened with the older CLI binary from the main checkout. The staged CLI of the G3 gate carries `com.apple.security.virtualization`, and it booted. With the entitled copy the stock image booted headless on the first try. Installing the odm4 overlay bundle into a home that held the stock image failed with `image.unexpectedFile`; in a fresh home the same bundle installed. The cause of that second failure was not investigated, because the checks used the stock image.
+
+**Risk.** Anyone who boots from an unsigned or ad-hoc `swift build` product gets `runtime.vmConfiguration` with no detail, and the error hint does not name the missing entitlement. A maintainer should decide whether the development build path or the error text needs a change. The rest of the device runs did not depend on it.
+
+## IR-1231: The #072 work is on `task/072-guest-agent-bootstrap-2`
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [workflow.md](../05-development/workflow.md) §4.1 (branch names) |
+
+**Choice.** The work is on `task/072-guest-agent-bootstrap-2`, in the worktree `/Users/N3275/Documents/projects/apkrun-wt/g72`, and it is merged into main with a fast-forward. The name `task/072-guest-agent-bootstrap` was not used, because that branch already exists: it is the earlier #072 branch, which is already an ancestor of main. It is checked out in the worktree `apkrun-wt/072`, which has untracked build inputs, and it was not touched.
+
+**Reason.** The task named `task/072-guest-agent-bootstrap`. Moving that branch would have meant working in a checkout that holds build inputs and is not clean, so a new name was used instead.
+
+**Risk.** Two branches carry #072. The merged one is not deleted here. Pull request titles still follow `#072 Title`, so a reviewer could pick the wrong branch; the new branch is the one that merged.

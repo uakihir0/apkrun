@@ -13,7 +13,8 @@ import android.widget.TextView
 
 /**
  * The only Activity of HelloText. It shows a counter that persists across process restarts. Each click
- * logs `APKRUN-FIXTURE: click <n>`, and a long press on the target text offers a reset.
+ * logs `APKRUN-FIXTURE: click <n>`. A long press on the target text logs `APKRUN-FIXTURE: contextmenu` and offers
+ * a reset.
  */
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore
@@ -45,6 +46,7 @@ class MainActivity : Activity() {
 
     override fun onCreateContextMenu(menu: ContextMenu, v: View, menuInfo: ContextMenu.ContextMenuInfo?) {
         super.onCreateContextMenu(menu, v, menuInfo)
+        Log.i(LOG_TAG, "contextmenu")
         menu.add(Menu.NONE, MENU_RESET, Menu.NONE, R.string.reset_counter)
     }
 

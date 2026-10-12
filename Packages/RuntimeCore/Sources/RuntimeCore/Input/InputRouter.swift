@@ -47,7 +47,8 @@ public struct InputCounters: Equatable, Sendable {
 }
 
 extension InputCounters: CustomStringConvertible {
-    /// The counts on one line, under the names of input.md §11, for the development command's output.
+    /// The counts on one line for the development command's output: the sends first, then the drop and merge counts of
+    /// input.md §11 under their names.
     public var description: String {
         "sent=\(eventsSent) batches=\(batchesSent) input.dropped.rate=\(droppedRate) "
             + "input.dropped.notRunning=\(droppedNotRunning) input.dropped.invalid=\(droppedInvalid) "

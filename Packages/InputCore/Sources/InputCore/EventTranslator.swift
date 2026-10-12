@@ -272,17 +272,17 @@ public struct EventTranslator: Sendable {
         }
     }
 
-    /// A move during a touch gesture is a touch move, clamped to the content (D2).
+    /// A drag during a touch gesture is a touch move, clamped to the content (D2). Only `leftDragged` reaches this.
     private func touchMove(_ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
         guard mapper.isUsable else { return [] }
         let point = mapper.clamped(windowX: sample.windowX, windowY: sample.windowY)
         return [.touch(TouchEvent(phase: .move, pointerID: 0, position: point, time: time))]
     }
 
-    /// A move without a button is a hover move (input.md §4.1), so it sends nothing during a gesture: hover is held while
-    /// a gesture is open, and the framework refuses the mix. A drag is `leftDragged`, and only that is a touch move. Once
-    /// the gesture ends, a move is hover again: at most 120 per second, with the latest position sent as a trailing move
-    /// (D4). A move that starts the hover sends a `hoverEnter` first.
+    /// A move without a button is a hover move (input.md §4.1). Hover is not sent while a gesture is open, because the
+    /// framework refuses the mix (a press ends the hover first), so such a move sends nothing during a press. A drag is
+    /// `leftDragged`, and only that is a touch move. Once the gesture ends, a move is hover again: at most 120 per second,
+    /// with the latest position sent as a trailing move (D4). A move that starts the hover sends a `hoverEnter` first.
     private mutating func moved(_ sample: PointerSample, at time: InputTimestamp) -> [InputEvent] {
         switch gesture {
         case .touch?, .mouse?:

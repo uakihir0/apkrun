@@ -138,7 +138,7 @@ A mouse click in a window that is not key only activates the window (`acceptsFir
 
 - A single pointer (ID 0) in v1. `downTime` is set at `DOWN` and reused for the gesture (the agent tracks it).
 - A left-button hold without movement becomes an Android long press naturally, because the `UP` arrives late.
-- Only `leftMouseDragged` moves the touch. A move without a button is hover, and hover is held while a gesture is open, so such a move sends nothing during a press. A stray pointer during a tap therefore does not turn it into a drag (#024, IR-1247).
+- Only `leftMouseDragged` moves the touch. A move without a button is hover, and hover is not sent while a gesture is open, so such a move sends nothing during a press. A stray pointer during a tap therefore does not turn it into a drag (#024, IR-1247).
 - Double click is two taps. No special handling.
 - Losing key focus, closing the window, `surfacesReplaced`, or the session leaving `running` during a gesture sends `CANCEL` (the translator emits `.cancelAll`).
 - Whether injected `SOURCE_MOUSE` events make Android draw its own mouse pointer on the display (on top of the Mac cursor) is checked in #024. If it does, the agent hides it for pool displays (pointer icon `TYPE_NULL`, through the hidden `InputManager` pointer-icon API), and if that is not possible, hover is off by default (`input.hover = false`). The result is recorded in [../04-plan/open-questions.md](../04-plan/open-questions.md).

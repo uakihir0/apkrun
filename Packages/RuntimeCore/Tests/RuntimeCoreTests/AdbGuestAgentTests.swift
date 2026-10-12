@@ -273,3 +273,27 @@ func aRestartThatFailsIsLoggedWithTheCodeOfItsOwnFailure() async throws {
     #expect(codes.contains("runtime.adb"), "the logged codes are \(codes)")
     #expect(!codes.contains("runtime.guestAgentStartFailed"))
 }
+
+@Test(.timeLimit(.minutes(1)))
+func aFourthDeathWithinAMinuteIsRequiredAgentUnavailable() async throws {
+    // Three deaths are restarted, and the fourth within the minute is refused. The refusal is the code that the
+    // host reports (guest-components.md §3.3, #072 acceptance).
+    let fake = try FakeGuestADB()
+    let agent = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000)
+    )
+    // A loss counts as a death only when the process is gone, so each death first stops the fake agent.
+    for death in 1...3 {
+        try fake.setRunning(false)
+        #expect(await agent.handleLoss(.disconnected), "death \(death) should be restarted")
+    }
+    try fake.setRunning(false)
+    #expect(await agent.handleLoss(.disconnected) == false)
+    do throws(GuestAgentFailure) {
+        try await agent.requireAvailable()
+        Issue.record("the agent after its fourth death was reported as available")
+    } catch {
+        #expect(error == .requiredAgentUnavailable)
+    }
+}

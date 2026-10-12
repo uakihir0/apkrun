@@ -3,13 +3,13 @@ import IOSurface
 import InputCore
 import QuartzCore
 
-/// Shows one IOSurface as the contents of a plain layer (display-and-windowing.md §5.3, #023), and captures the pointer
-/// events of the window (input.md §3, §4, #024).
+/// Shows one IOSurface as the contents of a plain layer (display-and-windowing.md §5.3, #023), and captures the pointer and key
+/// events of the window (input.md §3, §4, §5, #024, #025).
 ///
 /// The view never draws with the CPU. Setting the contents is zero-copy: Core Animation reads the surface, and the
 /// consumer's `displayed` callback runs once Core Animation has committed the new contents.
 ///
-/// The pointer events go through an ``EventTranslator`` and then to ``inputSink``. The mapper follows the content
+/// The pointer events go through an ``EventTranslator``, and the key events through a ``KeyTranslator``. Both send to ``inputSink``. The mapper follows the content
 /// rectangle, which is the aspect-fit rectangle of the view, so the letterbox maps to nothing.
 @MainActor
 public final class IOSurfaceLayerView: NSView {
@@ -29,7 +29,7 @@ public final class IOSurfaceLayerView: NSView {
     private var trackingRect: CGRect = .zero
     private var flushTimer: Timer?
 
-    /// Receives the pointer events, in order. The owner sets it before the window shows.
+    /// Receives the pointer and key events, in order. The owner sets it before the window shows.
     public var inputSink: PointerInputSink?
 
     /// Creates a view whose content is `contentSize` points, shown at `contentScale` pixels per point.

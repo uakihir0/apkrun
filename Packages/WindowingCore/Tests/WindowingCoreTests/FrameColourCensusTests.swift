@@ -90,11 +90,23 @@ private func census(_ bytes: [UInt8], width: Int, height: Int, rowBytes: Int, st
     #expect(result.isMixed)
 }
 
-@Test func theFirstPixelDecidesWhetherAFrameIsOfAnAlternatingColour() {
-    let red = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (0, 0, 255) }
-    let blue = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (255, 0, 0) }
-    let gradient = bgraImage(width: 2, height: 1, rowBytes: 8) { _, _ in (10, 128, 200) }
-    red.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
-    blue.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
-    gradient.withUnsafeBytes { #expect(!FrameColourCensus.isPureRedOrBlue($0.baseAddress!)) }
+@Test func theCentrePixelDecidesWhetherAFrameIsOfAnAlternatingColour() {
+    let red = bgraImage(width: 2, height: 2, rowBytes: 8) { _, _ in (0, 0, 255) }
+    let blue = bgraImage(width: 2, height: 2, rowBytes: 8) { _, _ in (255, 0, 0) }
+    let gradient = bgraImage(width: 2, height: 2, rowBytes: 8) { _, _ in (10, 128, 200) }
+    let offset = FrameColourCensus.centreOffset(width: 2, height: 2, bytesPerRow: 8)
+    red.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress! + offset)) }
+    blue.withUnsafeBytes { #expect(FrameColourCensus.isPureRedOrBlue($0.baseAddress! + offset)) }
+    gradient.withUnsafeBytes { #expect(!FrameColourCensus.isPureRedOrBlue($0.baseAddress! + offset)) }
+}
+
+@Test func aFrameWithADarkTopRowIsReadFromItsCentre() {
+    // The Android status bar is the first row, and the GL area below it is pure red.
+    let bytes = bgraImage(width: 4, height: 4, rowBytes: 16) { _, y in y == 0 ? (20, 20, 20) : (0, 0, 255) }
+    #expect(FrameColourCensus.centreOffset(width: 4, height: 4, bytesPerRow: 16) == 2 * 16 + 2 * 4)
+    bytes.withUnsafeBytes {
+        let centre = $0.baseAddress! + FrameColourCensus.centreOffset(width: 4, height: 4, bytesPerRow: 16)
+        #expect(FrameColourCensus.isPureRedOrBlue(centre))
+    }
+    #expect(census(bytes, width: 4, height: 4, rowBytes: 16).red == 12)
 }

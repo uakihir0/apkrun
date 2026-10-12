@@ -25,14 +25,22 @@ public struct FrameColourCensus: Equatable, Sendable {
         red > 0 && blue > 0
     }
 
-    /// Whether the BGRA8 pixel at `base` is close to pure red or to pure blue, with the thresholds of `census`.
+    /// The byte offset of the centre pixel of a `width` x `height` BGRA8 image whose rows are `bytesPerRow` bytes long.
     ///
-    /// The tearing check reads a frame in full only when its first pixel is one of the two colours, so the normal-mode
+    /// The tearing check decides from this pixel whether a frame is read in full. The first row is not used: in the
+    /// alternating-colour mode the Android status and app bars sit above the GL area, so the first row is dark.
+    public static func centreOffset(width: Int, height: Int, bytesPerRow: Int) -> Int {
+        (height / 2) * bytesPerRow + (width / 2) * 4
+    }
+
+    /// Whether the BGRA8 pixel at `pixel` is close to pure red or to pure blue, with the thresholds of `census`.
+    ///
+    /// The tearing check reads a frame in full only when its centre pixel is one of the two colours, so the normal-mode
     /// gradient of HelloGL, which is not one of them, costs one pixel read per frame.
-    public static func isPureRedOrBlue(_ base: UnsafeRawPointer) -> Bool {
-        let blueByte = Int(base.load(as: UInt8.self))
-        let greenByte = Int(base.load(fromByteOffset: 1, as: UInt8.self))
-        let redByte = Int(base.load(fromByteOffset: 2, as: UInt8.self))
+    public static func isPureRedOrBlue(_ pixel: UnsafeRawPointer) -> Bool {
+        let blueByte = Int(pixel.load(as: UInt8.self))
+        let greenByte = Int(pixel.load(fromByteOffset: 1, as: UInt8.self))
+        let redByte = Int(pixel.load(fromByteOffset: 2, as: UInt8.self))
         return (redByte > 180 && greenByte < 80 && blueByte < 80) || (blueByte > 180 && redByte < 80 && greenByte < 80)
     }
 

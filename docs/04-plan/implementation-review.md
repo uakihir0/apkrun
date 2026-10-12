@@ -16773,3 +16773,35 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **The flicker the user noticed is the fixture's alternating mode, not a fault.** `alternating-1.png` is solid red and `alternating-2.png` is solid blue, taken 0.2 s apart. The alternating mode of HelloGL (`--ez io.apkrun.fixture.hellogl.ALTERNATE true`) changes the whole window colour, and it is how the tearing check finds a torn frame. The flicker is therefore expected in that phase. The move of the window at 06:28:21Z is not explained by the fixture.
 
 **Risk.** A retry can mask a window that comes back only after the capture. The retries are logged, and a run that needs them shows this in `window-list.txt`. Three attempts is a judgment, not a measurement.
+
+## IR-1222: The tearing check decides from the centre pixel of a frame, not from its first row
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [graphics.md](../02-design/graphics.md) §12 #023 (step 5, the tearing check); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, the tearing half) |
+
+**Choice.** `FrameColourCensus.isPureRedOrBlue` takes the centre pixel, and `FrameColourCensus.centreOffset` gives its offset. `TearingSampler` reads a frame in full only when the centre pixel is pure red or pure blue. The first row is no longer used.
+
+**Reason.** Run 7 counted every sampled frame as `other`: `framesSampled 17095 redFrames 0 blueFrames 0 otherFrames 17095` (`boot.err`), while the window showed solid red and blue frames in the same phase (`alternating-1.png`, `alternating-2.png`). The first row of a frame is the Android status bar, which is dark, so the first-pixel test never passed. The GL area below the bars is one pure colour in the alternating mode, so the centre pixel is in it.
+
+**Coverage.** A torn frame has both colours in the GL area. Its centre pixel is one of them, so the frame is read in full and `mixedFrames` counts it. A frame whose centre is a gradient (the normal mode) is still not read.
+
+**Tests.** `theCentrePixelDecidesWhetherAFrameIsOfAnAlternatingColour` and `aFrameWithADarkTopRowIsReadFromItsCentre` in `FrameColourCensusTests`. `swift test --filter FrameColourCensus` passed (10 tests). The traited CLI (`EmbeddedRuntime,TestReadback`) compiled with `scripts/build/embed-cli.sh`.
+
+**Risk.** The bars are assumed to stay above the GL area in the window. If the layout changes, the centre may fall in a bar, and the check then sees no colour. The gate fails in that case, so it does not pass by mistake.
+
+## IR-1223: The G3 display window must stay on screen, and the product keeps the design's visibility rule
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [display-and-windowing.md](../02-design/display-and-windowing.md) §5.2 rule 5 (no change); [test-strategy.md](../04-plan/test-strategy.md) §5 (no change) |
+
+**Choice.** The product is not changed. The window keeps the design's visibility rule: when it is minimized, on another Space, hidden, or occluded, the scanout is not blitted. The G3 test handles this as an environment condition: it activates the boot process when the window is listed but off screen (IR-1220), and it retries a capture (IR-1221). It does not make the window join all Spaces.
+
+**Reason.** Runs 4, 5, and 7 lost the display window while the Mac was in use. The window was on another Space, hidden, or minimized, as `window-list.txt` records. The design defines these states as normal, so making the window join all Spaces would change the product for every user. The lab Mac is the place where the gate is meant to run unattended (test-strategy §3.6), so the requirement is stated there.
+
+**Risk.** On the development Mac the gate can still fail when the window leaves the screen during the run. The gate then fails and says so in `window-list.txt`. A pass on this Mac needs the window to stay on screen for about 13 minutes.

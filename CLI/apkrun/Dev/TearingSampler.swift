@@ -48,18 +48,24 @@
             }
             frames += 1
             let pixels = UnsafeRawPointer(base)
-            // The alternating-colour mode fills every frame with one pure colour, and a tear keeps the first row
-            // pure. A frame that starts with another colour (the gradient of the normal mode) is counted and not read.
-            guard FrameColourCensus.isPureRedOrBlue(pixels) else {
+            let width = IOSurfaceGetWidth(surface)
+            let height = IOSurfaceGetHeight(surface)
+            let bytesPerRow = IOSurfaceGetBytesPerRow(surface)
+            // The alternating-colour mode fills the GL area with one pure colour, below the Android bars. The centre
+            // pixel is in that area. A frame whose centre is another colour (the gradient of the normal mode) is counted
+            // and not read. The first row is not used, because it is the dark status bar (IR-1222).
+            let centre = pixels.advanced(
+                by: FrameColourCensus.centreOffset(width: width, height: height, bytesPerRow: bytesPerRow))
+            guard FrameColourCensus.isPureRedOrBlue(centre) else {
                 otherFrames += 1
                 return
             }
             // Every row and every column of an alternating frame is read, so a tear of one row is found.
             let census = FrameColourCensus.census(
                 of: pixels,
-                width: IOSurfaceGetWidth(surface),
-                height: IOSurfaceGetHeight(surface),
-                bytesPerRow: IOSurfaceGetBytesPerRow(surface),
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
                 step: 1
             )
             if census.isMixed {

@@ -17657,3 +17657,206 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 **Reason.** Boxes 3 and 4 need ⌘[ and the Command shortcuts on the device, and this run shows them. Box 6 is the same counter method as IR-1248.
 
 **Risk.** One run on one image and one Mac. The pointer focus gap (IR-1270) is still open, and the field was focused by Tab. The repository T2 keyboard cases (IR-1271) are missing, so the issue stays open under AGENTS §10 even though every box is ticked. The scratch logs are in `/tmp/apkrun-025/logs/` (b4-boot.err). The home is a clone of the #024 home, and its overlay was not checked against the hash list of `/tmp/apkrun-odmc/odm4/bundle/android-bundle`, so the bundle is the one #024 used, and not proven to be the odm4 bundle. The guest logs of these runs show native aborts of `com.android.launcher3` and `com.android.settings` (am_crash, RenderThread), which the IR-438 worker also reported on odm4. HelloText did not crash in these runs, and it responded to every check.
+
+## IR-1275: On the odm4 bundle HelloText renders; the aborts are Mesa's DRM probe failing in the launcher and Settings, not a config query
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 (blocked), #023 (the odm4 finding of IR-1208) |
+| Affected documents | [IR-1208](#ir-1208-finding-on-the-odm4-bundle-the-launcher-and-settings-processes-abort-in-hwui-with-egl_not_initialized-hellogl-is-not-affected) (the abort); [IR-1257](#ir-1257-androidinputtests-runs-in-the-xcode-test-host-and-fails-at-guest-app-rendering-on-the-odm4-bundle) (HelloText); [android-image.md](../02-design/android-image.md) §11.1 |
+
+**Choice.** The reproduction boot was `apkrun dev boot --gpu virgl --window --stats --console` on a fresh home, in one `lockf` session. The bundle was `/tmp/apkrun-odmc/odm4/bundle/android-bundle`, and the CLI was the G3-staged binary (`/tmp/apkrun-023-hgl/products/Resources/bin/apkrun`, sha256 prefix `d033f800`, built at `aad3ccb`, IR-1201). The run is `/tmp/apkrun-odmr/r1`. The guest reached `state: ready`, `getenforce` was `Enforcing`, and SurfaceFlinger reported `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8`. HelloText was installed, the keyguard was dismissed with `input keyevent 82` and `wm dismiss-keyguard` (as in IR-996), and `am start` launched it. It is the top resumed activity (pid 6389), and the window shows the HelloText screen (`after-launch.png`). So HelloText starts and renders on odm4 in this boot. The "does not start" of IR-1257 was not reproduced.
+
+The first failing calls, in the order of the guest logcat (`logcat-20261012T203054Z.log`; lines not shown are the routine Mesa property denials, which are benign):
+
+```text
+20:30:57.896  780 (BootAnimation)  avc: denied { read } name="uevent"
+20:30:57.896  780                  avc: denied { getattr } path=/dev/dri/card0
+20:30:57.902  780  831  W EGL-MAIN: Failed to open any DRM device
+20:30:57.905  780  831  W libEGL: eglInitialize(...) failed (EGL_NOT_INITIALIZED)
+   ...
+20:31:01.644 2946 (com.android.settings, system_app)  avc: denied { read } name="uevent"
+20:31:01.644 2946                  avc: denied { getattr } path=/dev/dri/card0
+20:31:01.650 2946 2971  W EGL-MAIN: Failed to open any DRM device      (three times, to .651)
+20:31:01.652 2946 2971  W EGL-MAIN: egl: failed to create dri2 screen
+20:31:01.652 2946 2971  W libEGL: eglInitialize(...) failed (EGL_NOT_INITIALIZED)
+20:31:01.652 2946 2971  F HWUI: Failed to create context, error = EGL_NOT_INITIALIZED
+20:31:01.679 2946 2971  F libc: Fatal signal 6 (SIGABRT) in RenderThread (ndroid.settings)
+   ...
+20:31:01.844 2991 3071  W libEGL: eglInitialize(...) failed (EGL_NOT_INITIALIZED)   (launcher, pid 2991)
+20:31:01.905 2991 3071  F libc: Fatal signal 6 (SIGABRT) in RenderThread (droid.launcher3)
+```
+
+BootAnimation (pid 780) fails the same probe and does not abort. The launcher (`com.android.launcher3`, priv_app) aborts with the same chain, and its log has no denial line. In this boot there are 81 SIGABRT lines (78 from the launcher and 3 from Settings). 82 processes log `Failed to open any DRM device`: the 78 launcher processes, the 3 Settings processes, and BootAnimation. The HelloText process logs no DRM failure, and neither does the SetupWizard process (`com.android.provision`, pid 2891, platform_app), which logs 68 `getattr` denials on the PCI nodes and no `eglInitialize` failure.
+
+**Reason.** In every aborting process the failed `eglInitialize` comes first, and the abort follows at once, after the `Failed to open any DRM device` lines. So the probe is the first failing call. The denials that come before the probe are the ones in IR-1277. The 10-bit config line is not first (IR-1276).
+
+**Risk.** IR-1208 gave pid 793's libEGL line as the first `EGL_NOT_INITIALIZED` line and Settings' HWUI line as the first `F` line. The first failing call of this boot is BootAnimation's probe, which does not abort. The launcher's denials are not logged (IR-1277), so its cause is an inference from the chain and the policy, which IR-1278 tests by granting the rights. The routine `Access denied finding property vendor.mesa.*` lines are libc messages, not failures, and they are not counted.
+
+## IR-1276: The 10-bit (101010-2) config query runs after `eglInitialize` has failed, so it is not the first failing call
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (IR-1208), #024, #025 |
+| Affected documents | [IR-1208](#ir-1208-finding-on-the-odm4-bundle-the-launcher-and-settings-processes-abort-in-hwui-with-egl_not_initialized-hellogl-is-not-affected); [IR-994](#ir-994-boot-1-reached-sysboot_completed-in-15-s-init-refused-the-egl_initialize-service-and-the-tap-step-found-no-hellotext-node) |
+
+**Choice.** HWUI asks for the 10-bit `101010-2` format in `EglManager`. In the odm4 boot the guest logs 84 `101010-2` failure lines. 81 of them report `EGL_NOT_INITIALIZED`, in the aborting processes, after their `eglInitialize` has failed (IR-1277). The other 3 report `EGL_SUCCESS` with `Device claims wide gamut support, cannot find matching config`: pid 2891 (SetupWizard, at 20:31:01.590), pid 2729 (`com.android.systemui`, at 20:31:01.889), and HelloText (pid 6389, at 20:31:13.385). In those three processes `eglInitialize` succeeded, the search found no 10-bit RGB config, and it reported no error. HWUI then falls back to 8-bit. The guest's answer for the 10-bit query is therefore "no config" with no error. The host does not log it, and no tool in the repo dumps the guest's EGL config list, so the virgl side of the answer was not read.
+
+**Reason.** The config search runs after `eglInitialize`, and in the aborting processes that call fails first (IR-1277). So the format query cannot be the first failing call. The task's hypothesis (an 8-bit config works where the 10-bit one fails) is not supported: the failing processes fail before any config is chosen, and the 8-bit HelloGL and the fallback 8-bit HelloText both render.
+
+**Risk.** A native probe that lists the EGL configs of the guest's display would show the virgl answer directly. It was not written here. The stock comparison (IR-1279) does not reach the query, because the stock bundle's EGL driver does not load.
+
+## IR-1277: Cause: the probe of the launcher and Settings fails on denied reads and stats of the virtio-gpu device's sysfs nodes and of `/dev/dri/card0`; the stock policy, the overlay, and the SurfaceFlinger control agree
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 (blocked), #022 (the policy), #035 (the product policy) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 (the bullet added here); [IR-958](#ir-958-consequence-for-035-the-surfaceflinger-rule-is-in-the-place-that-init-loads-but-the-app-domains-need-a-decision-too); [IR-991](#ir-991-hellotext-runs-in-untrusted_app-so-the-variant-gives-that-domain-the-uevent-and-drm-device-rules-as-well-as-platform_app) |
+
+**Choice.** Mesa's DRM probe, through libdrm, reads the `uevent` of the virtio-gpu device at `/sys/devices/platform/40000000.pci/pci0000:00/0000:00:14.0` and stats its PCI nodes (`vendor`, `device`, `subsystem_vendor`, `subsystem_device`) and `/dev/dri/card0`. The nodes keep the default `sysfs` label, since no `genfscon` labels this path. A failed probe in a process gives `Failed to open any DRM device`, and then the process has no EGL display. The denials of the odm4 boot (`r1`), counted as log lines (each event is logged twice in logcat):
+
+| Domain and processes | Denials | Probe |
+|---|---|---|
+| `priv_app`, the launcher (78 processes) | none logged | fails; SIGABRT |
+| `system_app`, Settings (3 processes) | `read` on `uevent` 6 lines (3 events), `getattr` on `/dev/dri/card0` 6 lines (3 events) | fails; SIGABRT |
+| `bootanim`, BootAnimation (1 process) | `read` on `uevent` 2 lines, `getattr` on `/dev/dri/card0` 2 lines | fails; no abort |
+| `platform_app`, all processes (for example SetupWizard, pid 2891) | `getattr` on `vendor` 36 lines, `device` 36, `uevent` 24, `subsystem_vendor` 22, `subsystem_device` 22 | passes; no failure line, no `eglInitialize` failure |
+| `untrusted_app`, HelloGL in the earlier HelloGL boot | `getattr` on `vendor` and `uevent` (non-fatal) | passes; the app renders |
+
+The SurfaceFlinger control confirms the `uevent` read as a cause. In the #099 vendor without the overlay (IR-1279, `r10`), SurfaceFlinger's probe fails: 74 denied `read` events on `uevent` (the console has 74 lines; logcat has 148, each event logged twice), three `Failed to open any DRM device`, then `no suitable EGLConfig found, giving up`. So a denied `uevent` read is fatal there. A denied PCI `getattr` alone was not seen to be fatal (platform_app passes with 36 of them).
+
+The policy explains the table. Queried with `policy_edit`, the stock precompiled policy (`tree-stock`, sha256 `6a1f95da…`) allows none of `getattr`, `open`, or `read` on `sysfs` to `platform_app`, `priv_app`, `system_app`, `untrusted_app`, or `surfaceflinger`. On `sysfs_gpu` it allows `getattr`, `open`, and `read` to `platform_app` and `priv_app`, and nothing to `system_app`. On `graphics_device` it allows `getattr` to `priv_app` and `platform_app`, and denies it to `untrusted_app` and `system_app`. The odm4 overlay adds `open` and `read` on `sysfs` for `surfaceflinger`, `platform_app`, and `untrusted_app`, and nothing for `priv_app` or `system_app`. The odm4 dump has `dontaudit priv_app_all sysfs:file` with the mask `0xfffffffd` (every permission but `read`). A launcher `read` of `uevent` would therefore still be logged, and none is. So either the launcher does not attempt that read, or its `open` and `getattr` denials are silenced because `priv_app` is in `priv_app_all`. The membership was not checked. The SurfaceFlinger's own EGL check (`APKRUN-TEST: egl ok`, `renderer : virgl`) succeeds in the overlay runs.
+
+**Reason.** Every failing process has the denials above before its probe fails, and the processes that pass have none of the fatal ones. The launcher row rests on the chain and on the dontaudit rule, not on a logged denial. IR-1278 tests it by granting the rights.
+
+**Risk.** The genfscon route (IR-958) is a candidate, not tested here. The stock policy grants `sysfs_gpu` to `platform_app` and `priv_app` only, so a `genfscon` alone would not cover `system_app`. The overlay's type-wide rules on `sysfs` are wider than the product should use. The claim that a PCI `getattr` denial alone is not fatal rests on the platform processes, which passed, and it was not tested in isolation.
+
+## IR-1278: The overlay grants the rights the launcher and Settings need: no fatal signal in 90 s with the final set, HelloText renders, and the launcher's home activity is not shown
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 (blocked), #022 (the overlay) |
+| Affected documents | [android-image.md](../02-design/android-image.md) §11.1 (the bullet added here); [IR-991](#ir-991-hellotext-runs-in-untrusted_app-so-the-variant-gives-that-domain-the-uevent-and-drm-device-rules-as-well-as-platform_app) (the rules of the overlay); [IR-1209](#ir-1209-the-g3-gate-runs-on-the-odm4-bundle-the-stock-build-with-the-odm-overlay-taken-by-path-it-is-not-a-stock-only-run) |
+
+**Choice.** Rules are added to `RULES` of `Experiments/sepolicy-022/odm_variant.py` (the test overlay, not a product input). The final set has 18 rules: the 11 of odm4, plus `priv_app sysfs file {open, read, getattr}`, `system_app sysfs file {open, read, getattr}`, and `system_app graphics_device chr_file getattr`. The odm4 rules for `platform_app` and `untrusted_app` are unchanged. Four variants were booted. Each was built by the three stages (`prepare`, `build`, `check`) of `odm_variant.py`. The variants odm5 and odm6 were built from earlier versions of the rule tuple, not from the committed one; odm7 was built from the committed file, and a rebuild from the final file gives the same manifest (`113e3d98…`), `SHA256SUMS`, and `os.img`.
+
+| Variant | Rules | Bundle | Result (run) |
+|---|---|---|---|
+| odm5 | 19: the final set plus `platform_app sysfs file getattr` | `/tmp/apkrun-odmr/odm5` | 0 SIGABRT in 30 s (`r2`), 150 s (`r4`), and in a HelloGL run of 30 s (`r5`) |
+| odm6 | 16: `priv_app` open, read, getattr; `system_app` read; `system_app` card0 getattr | `/tmp/apkrun-odmr/odm6` | launcher 0 aborts; Settings 4 aborts (`r7`) |
+| odm7 | 18: the final set | `/tmp/apkrun-odmr/odm7` | 0 SIGABRT in 90 s (`r8`) |
+
+The odm4 run (`r1`) had 81 SIGABRT. In the odm5 and odm7 runs the launcher process started once and did not die, and Settings started once and did not die. HelloText (pids 4079, 4124, 4102) is the top resumed activity with its window drawn (`after-launch.png`). In the odm6 run, the 10 denied `open` events on the `uevent` of Settings (`r7`, 21:02:36) show that Settings needs `open` as well as `read`. The sysfs `getattr` of Settings is in the booted set and was not tested alone. The odm6 run also shows that the launcher's three `priv_app` rights are enough for it (no launcher abort with them alone). HelloGL on odm5 reports `renderer virgl` and draws at 60 fps (`r5`). The platform rule of the odm5 build is not in the final set: the platform processes passed the probe without it (IR-1277), and odm7 shows no failure in them.
+
+Three things were seen and not explained. (1) The probe still fails in BootAnimation (pid 795 in `r2`, 788 in `r8`) and in system_server (pid 854, the wallpaper's `GLHelper: eglChooseConfig failed`); neither aborts, and neither is on the app path, so they are left alone. (2) The launcher's own activity is never shown in any run: there is no `Displayed com.android.launcher3` line. In the odm7 run the launcher process starts as a bound service only. The home activity that is shown is Settings' `FallbackHome` (`Displayed com.android.settings/.FallbackHome`, 21:06:12). So "the launcher no longer aborts" means no abort and no restart; the launcher's home screen is not displayed. (3) The status bar is drawn in the `r1` (odm4) and `r5` (odm5, HelloGL) screenshots, and in the `r7` (odm6) screenshot, and it is absent from the odm5 and odm7 HelloText screenshots (`r2`, `r4`, `r8`). SystemUI's last `disableFlagsInteractor` value is `disable1=0` in every run. The cumulative `dropped` counter also rises only in the odm5 and odm7 runs (IR-1281). Both changes appear with Settings alive as the home, which is one difference between odm6 and odm7. That link is an observation, not a test.
+
+**Reason.** The only change between `r1` and `r8` is the set of rules, and the aborts stop with it. The rules are the ones the logged denials name (`system_app` read and card0 getattr and open), plus the launcher's `priv_app` rights, which come from the failing chain and not from a logged denial (IR-1277).
+
+**Risk.** (1) Type-wide `sysfs` rules, not the GPU nodes only. The product route is a candidate (IR-958, IR-1277). (2) Each rule's necessity is not established. The final set is sufficient, not proven minimal. (3) The launcher's rights rest on the chain, not on a denial. (4) The launcher's home activity is not shown, and the status bar and `dropped` differences are unexplained (above). (5) The odm7 bundle is in `/tmp`, and it is not a repository input (IR-1209). (6) The HelloGL run is on odm5, not odm7; the `untrusted_app` rules are the same in both.
+
+## IR-1279: The two controls: the stock bundle's EGL driver does not load, and the #099 vendor without the ODM rules aborts in SurfaceFlinger
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #022, #023 |
+| Affected documents | [IR-1209](#ir-1209-the-g3-gate-runs-on-the-odm4-bundle-the-stock-build-with-the-odm-overlay-taken-by-path-it-is-not-a-stock-only-run); [IR-1111](#ir-1111-without-the-window-the-guests-surfaceflinger-still-aborts-on-no-suitable-eglconfig-the-bundle-differs-from-the-reference) |
+
+**Choice.** The task asks for the stock image as the control. Two bundles were booted, and neither is a virgl control for apps. (a) The stock bundle `/tmp/apkrun-test-linux/android-bundle` (`r9`; its ramdisk sha256 is the stock value of IR-945). SurfaceFlinger aborts before any EGL call: `libEGL: Failed to load drivers from property ro.hardware.egl with value mesa`, then `couldn't find an OpenGL ES implementation`. The loader found no driver for `mesa` in this bundle. Whether the stock vendor lacks `libEGL_mesa.so` was not checked by listing the vendor partition. The boot never reached `ready`. SIGINT at 21:36:12 was not honoured, and the boot was SIGKILLed at 21:37:20 (68 s later, exit 137). (b) The #099 vendor, which is the odm4 source without the ODM overlay (`/tmp/apkrun-099-vh-install-src/android-bundle`, `r10`). The stock ODM policy applies there. SurfaceFlinger's probe fails (`Failed to open any DRM device` three times), then `no suitable EGLConfig found, giving up`, and it aborts. The logcat has 148 `denied { read }` lines on `uevent` for `surfaceflinger` (74 events). The boot never reached `ready`. SIGINT at 21:39:27 was not honoured, and the boot was SIGKILLed at 21:40:34 (67 s later, exit 137). No VM process was left after either kill. The first attempts at the same two controls (`r3`, `r6`) also lost their guest logs, because the homes were removed before the logs were copied, and the script did not copy logs on the not-ready path. Those boots were SIGKILLed 80 s (`r3`) and 77 s (`r6`) after SIGINT. The script was fixed, and the controls were run again as `r9` and `r10`, which are the ones cited.
+
+**Reason.** The comparison that isolates the overlay is (b): odm4 is (b) plus the ODM overlay. Without the overlay, SurfaceFlinger cannot start, and the same probe mechanism of IR-1277 is the cause there. The apps cannot be reached on (b), so the app-domain effect of the stock policy is shown by the policy queries in IR-1277, not by a boot. Control (a) answers a different question: it does not contain the virgl driver that odm4 has.
+
+**Risk.** Neither control boots to `ready`, so neither gives app behaviour. The stock bundle is not a virgl image, so the stock/odm4 comparison the task asks for cannot be made on the same vendor; only (b) can, and it is the control for the overlay.
+
+## IR-1280: virtio-gpu rejects RESOURCE_ATTACH_BACKING (command 262) in every boot; the apps still render, and the cause is not isolated
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025, #023 (the IR-438 record: the logs of the IR-438 runs, IR-1253 to IR-1262) |
+| Affected documents | [graphics.md](../02-design/graphics.md) §6.2 (the resource checks, no change); [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine) |
+
+**Choice.** The guest's virtio-gpu driver reports the rejection itself: `[drm:virtio_gpu_dequeue_ctrl_func] *ERROR* response 0x1205 (command 0x106)`. Command `0x106` is `RESOURCE_ATTACH_BACKING` (262), and `0x1205` is `VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER`. The host's own warning, `virtio-gpu rejected a guest request … command was rejected command=262` (`GuestGPUSession.attachBacking`, which returns `invalidParameter` for every failed check of `ResourceTable.attachBacking` except an unknown ID), is not in the unified log for these boots: the `log show` queries of the boot windows returned no line. The counts in the guest logcat are 23 (`r1`, odm4), 21 (`r2`), 25 (`r4`), 24 (`r5`), and 22 (`r8`). They are lower bounds, because the guest kernel suppresses some messages (`callbacks suppressed`). The rejections occur in the same boots in which the apps render, and the first of them comes before HelloText is launched. The IR-438 runs logged the same `command=262` warning from the Xcode test host (`/tmp/apkrun-ir438/i3.log`).
+
+**Reason.** The rejections are not the abort: the aborting processes fail at the DRM probe (IR-1277), before they create an EGL surface, and HelloText and HelloGL render with the rejections present. Which of the `invalidParameter` checks fails (backing already set, an entry outside guest memory, a mapping failure, or fewer bytes than the estimate) was not isolated, because the host does not log the check.
+
+**Risk.** A rejected attach can leave a buffer without backing, which a later check could show as wrong pixels; no such symptom was looked for. Logging the failing check (the reason of `ResourceTableFailure`) is the follow-up. It is a `GraphicsCore` change and is outside this task (AGENTS §11). The maintainer files it under AGENTS §11.
+
+## IR-1281: The cumulative `dropped` counter rises during boot on odm5 and odm7; the criterion of #023 names other counters, and those stayed 0
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (criterion 3 of the 60 s HelloGL run), #024 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 3: `hostReadbacks = 0` and `cpuPixelCopies = 0` over a 60 s HelloGL run); IR-1203 (which also listed `dropped`) |
+
+**Choice.** `dropped` counts frames replaced before presentation (`LatestFrameScheduler.submit` and `hold`, `GraphicsCore/Display/PresentBuffers.swift`). It is cumulative from the boot, and it is printed in the statistics line only. On odm4 it stayed at 0 in the 52 statistics lines of `r1`. On odm5 and odm7 it first becomes nonzero during the boot, before `state: ready`. The first nonzero statistics line is line 18 of `boot.err` in `r2` (51 statistics lines in all), line 15 in `r4` (172 lines; first 1, then 9), and line 17 in `r5` (53 lines). `r8` ends at 11. It does not rise during the app runs. `hostReadbacks` and `cpuPixelCopies` stayed 0 in every overlay run (`r2`, `r4`, `r5`, `r8`). IR-1203 listed `dropped` with the criterion, but the criterion in M02-graphics.md names only `hostReadbacks` and `cpuPixelCopies`.
+
+**Reason.** Recorded as found. The likely cause is more composition during boot, because the launcher and SystemUI now stay alive, but that was not tested. The criterion does not name `dropped`, and the counters that it names stayed 0, so this observation does not change that criterion. The G3 gate's own check of the statistics line should decide whether `dropped` counts.
+
+**Risk.** Whoever reruns G3 on the overlay bundle should read `dropped` as well, and decide its meaning. This is not a regression claim: the frame rate is 60 in the HelloGL run and no stall or readback occurs.
+
+## IR-1282: HelloText does not start (IR-1257) is not reproduced in the CLI boots; the test-host run was not repeated
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3, the AndroidInputTests suite), #025 |
+| Affected documents | [IR-1257](#ir-1257-androidinputtests-runs-in-the-xcode-test-host-and-fails-at-guest-app-rendering-on-the-odm4-bundle); [M03-input-and-basic-runtime.md](../04-plan/issues/M03-input-and-basic-runtime.md) #024 |
+
+**Choice.** Five CLI boots started HelloText, and it rendered each time: `r1` (odm4), `r2` and `r4` (odm5), and `r7` (odm6), and `r8` (odm7). Each has an `after-launch.png`, and HelloText is the top resumed activity. IR-1257 had seen the process missing after a `monkey` launch in the Xcode test host. That host has its own session and launch path, and the difference was not found. The AndroidInputTests suite was not run again. Its boxes stay as they are.
+
+**Reason.** The task asks for an app that renders, and HelloText does on odm4 and on the overlay variants. Running the suite would use the test host and the `/tmp` fixtures of IR-1258, and the bundle that the suite reads is not a repository input (IR-1209). So the suite is left for the maintainer, with the bundle path `/tmp/apkrun-odmr/odm7/bundle/android-bundle`, and it is not run here.
+
+**Risk.** The suite may still fail for a reason other than rendering (IR-1257 named `monkey` and the launcher). A rerun on the final bundle would show which.
+
+## IR-1283: Process judgments of the run: the CLI, the bundles, the stopped boots, the branch name, and the scratch homes
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 (the task of this run) |
+| Affected documents | [IR-1230](#ir-1230-the-device-checks-need-an-entitled-cli-copy-and-the-odm4-overlay-needs-a-fresh-home) (the entitled CLI and the fresh home); [IR-1209](#ir-1209-the-g3-gate-runs-on-the-odm4-bundle-the-stock-build-with-the-odm-overlay-taken-by-path-it-is-not-a-stock-only-run) |
+
+**Choice.** (1) Every boot used the G3-staged CLI (sha256 prefix `d033f800`, built at `aad3ccb`). This branch changes no Swift code, so no CLI was built from it. (2) Each boot used a fresh scratch home and `lockf -k /tmp/apkrun-vm.lock`. Another worker's VM was running at the start, and the boots queued behind it. (3) The overlay variants were built from the worktree's `odm_variant.py` into `/tmp/apkrun-odmr/odm5`, `odm6`, and `odm7`, with the inputs that odm4 used (`/tmp/apkrun-099-vh-install-src`, the policy editor of IR-940). The developer image key `~/.config/apkrun/dev-image-key` was read to sign each variant manifest, as in IR-949, and was not changed. (4) The task's stop rule is SIGINT first, then SIGKILL 60 s later. Four boots never reached `ready`, and each was stopped by SIGINT and then SIGKILL: `r3` at 80 s, `r6` at 77 s, `r9` at 68 s, and `r10` at 67 s after SIGINT. Each exited with status 137, and no VM process was left. The kills came late because the polls came late; the rule was not met exactly. The other six boots stopped with SIGINT and exit status 0. (5) The branch is `task/odm4-render-abort`, as the request named it. AGENTS §13 uses `task/<NNN>-<short-name>`; no task number fits this finding, so the name is kept. (6) The stock zip, `docs/04-plan/evidence/`, and the gate evidence were not touched. The scratch homes, each holding a full image install, were removed after their logs were copied, except that the logs of `r3` and `r6` were not copied (IR-1279); the copy is now done on every path.
+
+**Reason.** The CLI is the one the G3 gate stages, so the boots compare with IR-1202 to IR-1206. The branch changes no Swift. The stuck boots were stopped with the signals the task gives, late by 7 to 20 s.
+
+**Risk.** The overlay bundles exist only in `/tmp`, so the evidence cannot be repeated from the repository alone. The bundles of `odm5` and `odm6` were built from earlier rule tuples (IR-1278), so only `odm7` is reproducible from the commit.
+
+## IR-1284: The adversarial review of the odm7 change, and how each finding was answered
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024, #025 (the task of this run) |
+| Affected documents | IR-1275 to IR-1283; [android-image.md](../02-design/android-image.md) §11.1; `Experiments/sepolicy-022/odm_variant.py` (RULES) |
+
+**Choice.** One read-only reviewer (an Explore agent that could not edit files, boot a VM, or run `lockf`) read the diff from `ecf25c9`, the IR entries, and the logs in `/tmp/apkrun-odmr`. It gave eighteen findings, and each was answered as follows.
+
+1. Major, system_app `open`: the odm6 run logs ten denied `open` events on `uevent`, so `open` is needed; `getattr` alone was not tested. Accepted. The RULES comment and IR-1278 say so.
+2. Major, "fails benignly in every process" was wrong: 81 of the 84 `101010-2` failures are `EGL_NOT_INITIALIZED` after `eglInitialize` failed, and 3 are `EGL_SUCCESS`. Accepted. IR-1276 is rewritten.
+3. Major, the control logs were lost (their homes were removed, and the script did not copy logs on the not-ready path), and the count of 173 `uevent` denials was not reproduced. Accepted. The controls were run again as `r9` and `r10` with the script fixed, and IR-1279 cites them. The SurfaceFlinger count is 74 events (148 logcat lines, 74 console lines).
+4. Major, the missing status bar was not recorded. Accepted. IR-1278 records it with the disable flags. Its cause was not found.
+5. Major, the commit scope. Accepted. The code commit uses `fix(image)`, the scope that covers the image tooling. The product policy stays with #035.
+6. Minor, the branch name does not follow AGENTS §13. Not changed: the request named the branch. IR-1283 records the choice.
+7. Minor, the timings, and SetupWizard's pid. Accepted. The launcher's EGL failure is at 20:31:01.844 and its abort at .905. SetupWizard is pid 2891 in `r1`; pid 2918 is from the HelloGL boot.
+8. Minor, criterion 3 of #023 names `hostReadbacks` and `cpuPixelCopies`, not `dropped`. Accepted. IR-1281 is rewritten.
+9. Minor, `command=262` is in the logs of the IR-438 runs, not in the IR-438 entry, and the counts are lower bounds. Accepted. IR-1280 cites the logs and says so.
+10. Minor, broken anchors. Accepted. They point to the correct headings now.
+11. Minor, the SIGKILL rule was attributed to AGENTS. Accepted. IR-1283 attributes it to the task request, and the times are corrected.
+12. Minor, the `priv_app_all` reasoning did not allow for `read` being unsilenced. Accepted. IR-1277 gives both readings, and says the membership is not checked.
+13. Minor, the genfscon route was stated as the route. Accepted. It is a candidate, not tested (IR-1277, §11.1).
+14. Minor, odm5 and odm6 were built from earlier rule tuples. Accepted. IR-1278 says so. Only odm7 is reproducible from the commit, and a rebuild gives a byte-identical manifest.
+15. Minor, the RULES comment said the app domains have only `getattr` on `graphics_device`. Accepted. The stock query shows that `priv_app` and `platform_app` have it and `untrusted_app` and `system_app` do not, and the comment says so.
+16. Minor, the `APKRUN-TEST: egl ok` line of SurfaceFlinger was not cited. Accepted. IR-1277 cites it.
+17. Minor, the review record did not exist. Accepted. This entry is the record.
+18. Nits. IR-1282 counts five boots, which includes `r7`. IR-1275 says the `vendor.mesa.*` property denials are benign and are not counted.
+
+**Reason.** Each finding was checked against the logs and the files, and where a number was wrong it was recomputed. The reviewer's count of 173 `uevent` denials was not reproduced, and its source is not known.
+
+**Risk.** The reviewer ran on the state before these corrections, and it did not boot anything. The answers were checked by me after its run. The text of this commit is the state that the answers describe.

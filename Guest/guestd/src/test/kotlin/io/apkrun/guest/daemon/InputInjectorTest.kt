@@ -18,10 +18,28 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** A framework event of the tests: the fields it was built from, and what the sink did with it. */
-private class FakeEvent(val spec: MotionSpec) {
+/**
+ * What the sink did with a framework event of the tests: its display and whether it was recycled.
+ */
+private open class RecordedEvent {
     var displayId: Int? = null
     var recycled = false
+}
+
+/** A motion event of the tests: the fields it was built from. */
+private class FakeEvent(val spec: MotionSpec) : RecordedEvent()
+
+/** A key event of the tests: the fields it was built from. */
+private class FakeKeyEvent(val spec: KeySpec) : RecordedEvent()
+
+/** Builds [FakeKeyEvent]s. [failure] makes every build throw. */
+private class FakeKeyFactory : KeyEventFactory {
+    var failure: RuntimeException? = null
+
+    override fun create(spec: KeySpec): Any {
+        failure?.let { throw it }
+        return FakeKeyEvent(spec)
+    }
 }
 
 /** Builds [FakeEvent]s, and records them. [failure] makes every build throw. */
@@ -42,24 +60,36 @@ private class FakeFactory : MotionEventFactory {
 private class FakeSink : InjectionSink {
     val displayIdCalls = mutableListOf<Int>()
     val injected = mutableListOf<FakeEvent>()
-    val injectedWithoutDisplay = mutableListOf<FakeEvent>()
+    val injectedKeys = mutableListOf<FakeKeyEvent>()
+    /** Every injected event, motion and key, in the order of the injection. */
+    val ordered = mutableListOf<RecordedEvent>()
+    val injectedWithoutDisplay = mutableListOf<RecordedEvent>()
     var displayIdFailure: InputFailure? = null
     var refuse: (MotionSpec) -> Boolean = { false }
+    var keyRefuse: (KeySpec) -> Boolean = { false }
     var throws: (MotionSpec) -> Boolean = { false }
     var recycled = 0
 
     override fun setDisplayId(event: Any, displayId: Int) {
         displayIdFailure?.let { throw it }
-        val fake = event as FakeEvent
-        fake.displayId = displayId
+        (event as RecordedEvent).displayId = displayId
         displayIdCalls += displayId
     }
 
     override fun inject(event: Any): Boolean {
-        val fake = event as FakeEvent
-        if (fake.displayId == null) {
-            injectedWithoutDisplay += fake
+        val recorded = event as RecordedEvent
+        if (recorded.displayId == null) {
+            injectedWithoutDisplay += recorded
         }
+        if (recorded is FakeKeyEvent) {
+            if (keyRefuse(recorded.spec)) {
+                return false
+            }
+            injectedKeys += recorded
+            ordered += recorded
+            return true
+        }
+        val fake = recorded as FakeEvent
         if (throws(fake.spec)) {
             throw RuntimeException("the framework threw")
         }
@@ -67,11 +97,12 @@ private class FakeSink : InjectionSink {
             return false
         }
         injected += fake
+        ordered += fake
         return true
     }
 
     override fun recycle(event: Any) {
-        (event as FakeEvent).recycled = true
+        (event as RecordedEvent).recycled = true
         recycled += 1
     }
 }
@@ -80,14 +111,18 @@ private class FakeSink : InjectionSink {
 private class Harness {
     var clock = 1_000L
     val factory = FakeFactory()
+    val keyFactory = FakeKeyFactory()
     val sink = FakeSink()
-    val injector = InputInjector(factory, sink) { clock }
+    val injector = InputInjector(factory, sink, keyFactory) { clock }
 
     val specs: List<MotionSpec>
         get() = sink.injected.map { it.spec }
 
     val actions: List<Int>
         get() = specs.map { it.action }
+
+    val keySpecs: List<KeySpec>
+        get() = sink.injectedKeys.map { it.spec }
 }
 
 private fun touchEvent(
@@ -122,10 +157,22 @@ private fun scrollEvent(vscroll: Float, hscroll: Float, hostNanos: Long = 0L): I
         )
         .build()
 
-private fun keyEvent(hostNanos: Long = 0L): InputEvent =
+private fun keyEvent(
+    hostNanos: Long = 0L,
+    action: KeyAction = KeyAction.KEY_ACTION_DOWN,
+    keyCode: Int = 66,
+    metaState: Int = 0,
+    repeatCount: Int = 0,
+): InputEvent =
     InputEvent.newBuilder()
         .setHostTimeNanos(hostNanos)
-        .setKey(KeyEvent.newBuilder().setAction(KeyAction.KEY_ACTION_DOWN).setKeyCode(66))
+        .setKey(
+            KeyEvent.newBuilder()
+                .setAction(action)
+                .setKeyCode(keyCode)
+                .setMetaState(metaState)
+                .setRepeatCount(repeatCount)
+        )
         .build()
 
 private fun longPressEvent(hostNanos: Long = 0L): InputEvent =
@@ -647,20 +694,19 @@ class InputInjectorTest {
     }
 
     @Test
-    fun keyAndLongPressEventsAreDroppedAndCounted() {
+    fun aLongPressIsDroppedAndCounted() {
         val harness = Harness()
         val outcome =
             harness.injector.injectBatch(
                 0,
                 0L,
                 listOf(
-                    keyEvent(),
                     longPressEvent(),
                     touchEvent(TouchPhase.TOUCH_PHASE_DOWN),
                 ),
             )
 
-        assertEquals(BatchOutcome(1, 2), outcome)
+        assertEquals(BatchOutcome(1, 1), outcome)
         assertEquals(listOf(MotionEvent.ACTION_DOWN), harness.actions)
     }
 
@@ -857,13 +903,15 @@ class InputInjectorTest {
         val ack = sent.single()
         assertEquals(5L, ack.batchSeq)
         assertEquals(250, ack.receiveToInjectMicros)
-        // The MOVE is outside the display, and the key is dropped by the injector.
-        assertEquals(2, ack.rejectedEvents)
+        // The MOVE is outside the display. The DOWN of the key is valid, and it is injected as a
+        // key.
+        assertEquals(1, ack.rejectedEvents)
         assertEquals(1, harness.sink.injected.size)
+        assertEquals(1, harness.sink.injectedKeys.size)
         val counters = service.counters()
         assertEquals(1L, counters.batches)
-        assertEquals(1L, counters.eventsInjected)
-        assertEquals(2L, counters.eventsRejected)
+        assertEquals(2L, counters.eventsInjected)
+        assertEquals(1L, counters.eventsRejected)
     }
 
     @Test
@@ -967,5 +1015,235 @@ class InputInjectorTest {
 
         assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL), harness.actions)
         assertEquals(2L, service.counters().eventsInjected)
+    }
+}
+
+/**
+ * Key mode on the injector (input.md §5.2, §7.3; #025). The base time is the uptime that the
+ * harness starts at.
+ */
+class InputInjectorKeyTest {
+    private val base = 1_000L
+    private val androidDown = android.view.KeyEvent.ACTION_DOWN
+    private val androidUp = android.view.KeyEvent.ACTION_UP
+
+    @Test
+    fun aKeyDownAndUpBuildKeyEventsOnTheDisplayWithTheirMetaState() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, keyCode = 29, metaState = 1),
+                    keyEvent(
+                        hostNanos = 1_000_000L,
+                        action = KeyAction.KEY_ACTION_UP,
+                        keyCode = 29,
+                        metaState = 0,
+                    ),
+                ),
+            )
+
+        assertEquals(BatchOutcome(2, 0), outcome)
+        assertEquals(
+            listOf(
+                KeySpec(androidDown, base, base, 29, 0, 1),
+                KeySpec(androidUp, base, base + 1, 29, 0, 0),
+            ),
+            harness.keySpecs,
+        )
+        assertEquals(listOf(0, 0), harness.sink.displayIdCalls)
+        assertTrue(harness.sink.injectedWithoutDisplay.isEmpty())
+    }
+
+    @Test
+    fun repeatsKeepTheDownTimeAndNoUpComesBetweenThem() {
+        val harness = Harness()
+        harness.injector.injectBatch(
+            0,
+            0L,
+            listOf(
+                keyEvent(hostNanos = 0L, keyCode = 29),
+                keyEvent(hostNanos = 10_000_000L, keyCode = 29, repeatCount = 1),
+                keyEvent(hostNanos = 20_000_000L, keyCode = 29, repeatCount = 2),
+                keyEvent(hostNanos = 30_000_000L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+            ),
+        )
+
+        assertEquals(
+            listOf(androidDown, androidDown, androidDown, androidUp),
+            harness.keySpecs.map { it.action },
+        )
+        assertEquals(listOf(0, 1, 2, 0), harness.keySpecs.map { it.repeatCount })
+        assertEquals(listOf(base, base, base, base), harness.keySpecs.map { it.downTime })
+        assertEquals(
+            listOf(base, base + 10, base + 20, base + 30),
+            harness.keySpecs.map { it.eventTime },
+        )
+    }
+
+    @Test
+    fun aDownWhileTheKeyIsDownReleasesThePressAndDropsItself() {
+        // The UP of the press was lost. The press is released, the second DOWN is dropped, and the
+        // UP that follows has no
+        // press to end.
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, keyCode = 29),
+                    keyEvent(hostNanos = 1L, keyCode = 29),
+                    keyEvent(hostNanos = 2L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+                ),
+            )
+
+        assertEquals(BatchOutcome(2, 2), outcome)
+        assertEquals(listOf(androidDown, androidUp), harness.keySpecs.map { it.action })
+    }
+
+    @Test
+    fun anUpOrARepeatWithoutAPressIsDropped() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+                    keyEvent(hostNanos = 1L, keyCode = 29, repeatCount = 1),
+                ),
+            )
+
+        assertEquals(BatchOutcome(0, 2), outcome)
+        assertTrue(harness.keySpecs.isEmpty())
+    }
+
+    @Test
+    fun aRefusedDownIsNotOpen() {
+        val harness = Harness()
+        harness.sink.keyRefuse = { it.action == androidDown }
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, keyCode = 29),
+                    keyEvent(hostNanos = 1L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+                ),
+            )
+
+        assertEquals(BatchOutcome(0, 2), outcome)
+        assertTrue(harness.keySpecs.isEmpty())
+    }
+
+    @Test
+    fun aRefusedUpKeepsThePressUntilCancelAllReleasesIt() {
+        val harness = Harness()
+        harness.sink.keyRefuse = { it.action == androidUp }
+        val batch =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(hostNanos = 0L, keyCode = 29),
+                    keyEvent(hostNanos = 1L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+                ),
+            )
+        assertEquals(BatchOutcome(1, 1), batch)
+
+        harness.sink.keyRefuse = { false }
+        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertEquals(listOf(androidDown, androidUp), harness.keySpecs.map { it.action })
+    }
+
+    @Test
+    fun cancelAllReleasesEachKeyWithTheMetaStateOfItsPress() {
+        val harness = Harness()
+        harness.injector.injectBatch(
+            0,
+            0L,
+            listOf(keyEvent(hostNanos = 0L, keyCode = 29, metaState = 1)),
+        )
+        harness.clock += 5L
+
+        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertEquals(
+            KeySpec(androidUp, base, base + 5, 29, 0, 1),
+            harness.keySpecs.last(),
+        )
+    }
+
+    @Test
+    fun aRemovedDisplayReleasesOnlyItsKeys() {
+        val harness = Harness()
+        harness.injector.injectBatch(0, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 29)))
+        harness.injector.injectBatch(1, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 30)))
+
+        assertEquals(BatchOutcome(1, 0), harness.injector.displayRemoved(0))
+        assertEquals(
+            listOf(Pair(29, androidDown), Pair(30, androidDown), Pair(29, androidUp)),
+            harness.keySpecs.map { Pair(it.keyCode, it.action) },
+        )
+        assertEquals(0, harness.sink.injectedKeys.last().displayId)
+
+        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertEquals(
+            Pair(30, androidUp),
+            harness.keySpecs.last().let { Pair(it.keyCode, it.action) },
+        )
+    }
+
+    @Test
+    fun keysAndTouchesKeepTheirOrderInTheBatch() {
+        val harness = Harness()
+        harness.injector.injectBatch(
+            0,
+            0L,
+            listOf(
+                touchEvent(TouchPhase.TOUCH_PHASE_DOWN, 10f, 10f),
+                keyEvent(hostNanos = 1L, keyCode = 29),
+                keyEvent(hostNanos = 2L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
+                touchEvent(TouchPhase.TOUCH_PHASE_UP, 10f, 10f),
+            ),
+        )
+
+        assertEquals(
+            listOf(false, true, true, false),
+            harness.sink.ordered.map { it is FakeKeyEvent },
+        )
+    }
+
+    @Test
+    fun anUnspecifiedKeyActionIsDropped() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    keyEvent(
+                        hostNanos = 0L,
+                        action = KeyAction.KEY_ACTION_UNSPECIFIED,
+                        keyCode = 29,
+                    )
+                ),
+            )
+
+        assertEquals(BatchOutcome(0, 1), outcome)
+        assertTrue(harness.keySpecs.isEmpty())
+    }
+
+    @Test
+    fun aKeyThatCannotBeBuiltStopsTheBatchAndCountsTheRest() {
+        val harness = Harness()
+        harness.keyFactory.failure = RuntimeException("the framework refused the build")
+        val outcome =
+            harness.injector.injectBatch(0, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 29)))
+
+        assertEquals(BatchOutcome(0, 1), outcome)
+        assertTrue(harness.sink.injectedKeys.isEmpty())
     }
 }

@@ -3,6 +3,8 @@ package io.apkrun.guest.daemon
 import android.view.InputDevice
 import android.view.MotionEvent
 import io.apkrun.guest.protocol.v1.InputEvent
+import io.apkrun.guest.protocol.v1.KeyAction
+import io.apkrun.guest.protocol.v1.KeyEvent
 import io.apkrun.guest.protocol.v1.MouseAction
 import io.apkrun.guest.protocol.v1.MouseEvent
 import io.apkrun.guest.protocol.v1.ScrollEvent
@@ -59,7 +61,16 @@ private class DisplayGestures {
     var hovering = false
     var hoverX = 0f
     var hoverY = 0f
+
+    /** The keys that are down, by Android key code. */
+    val keys = LinkedHashMap<Int, KeyPress>()
 }
+
+/**
+ * A key that is down: the time of its DOWN, which its events keep as their down time, and the meta
+ * state of its last event, which its release uses.
+ */
+private class KeyPress(val downTime: Long, var metaState: Int)
 
 /** The counts of one batch, filled while it is planned and injected. */
 private class Tally {
@@ -94,8 +105,10 @@ private fun pressureOf(buttonState: Int): Float = if (buttonState != 0) 1f else 
  * - A mouse gesture opens with ACTION_DOWN at its first button press, and each press and release is
  *   an ACTION_BUTTON_PRESS or ACTION_BUTTON_RELEASE. The gesture closes with ACTION_UP when no
  *   button is down.
- * - Scroll stands alone. Keys and long presses are dropped and counted, because they are not
- *   injected in this build (decision D6).
+ * - Scroll stands alone. A key is a KeyEvent on the virtual keyboard (#025). A DOWN while the key
+ *   is down is a repeat when its repeat count is above zero, and otherwise releases the open press
+ *   and is dropped. An UP without an open press is dropped. A long press is dropped and counted,
+ *   because it is not injected in this build (decision D6).
  * - A hover event is dropped while a touch or a mouse button gesture is open on its display,
  *   because Android refuses the mixed event. An unbalanced hover enter or exit is dropped too. Both
  *   are counted (see [hostHover]).
@@ -105,6 +118,7 @@ private fun pressureOf(buttonState: Int): Float = if (buttonState != 0) 1f else 
 class InputInjector(
     private val factory: MotionEventFactory,
     private val sink: InjectionSink,
+    private val keyFactory: KeyEventFactory = AndroidKeyEventFactory,
     private val uptimeMillis: () -> Long,
 ) {
     private val displays = HashMap<Int, DisplayGestures>()
@@ -138,8 +152,8 @@ class InputInjector(
                         mouse(displayId, gestures, event.mouse, time, tally)
                     InputEvent.KindCase.SCROLL ->
                         scroll(displayId, gestures, event.scroll, time, tally)
+                    InputEvent.KindCase.KEY -> key(displayId, gestures, event.key, time, tally)
                     InputEvent.KindCase.CANCEL_ALL -> releaseAll(time, tally)
-                    InputEvent.KindCase.KEY,
                     InputEvent.KindCase.LONG_PRESS -> {
                         unsupported += 1
                         tally.dropped += 1
@@ -156,7 +170,7 @@ class InputInjector(
         }
         if (unsupported > 0) {
             AgentLog.info(
-                "input: dropped $unsupported key or long-press events (not injected in this build)"
+                "input: dropped $unsupported long-press events (not injected in this build)"
             )
         }
         if (tally.hoverSkipped > 0) {
@@ -572,15 +586,136 @@ class InputInjector(
                 hovering = false,
             )
         }
+        releaseKeys(displayId, gestures, time, tally)
     }
+
+    /**
+     * A key event of key mode (input.md §5.2, §7.3). A DOWN with a repeat count above zero repeats
+     * the open press, and it keeps the press's down time. A DOWN without a count for a key that is
+     * already down means that its UP was lost: the open press is released, and this DOWN is
+     * dropped, as a touch DOWN is. A repeat or an UP with no open press is dropped.
+     */
+    private fun key(
+        displayId: Int,
+        gestures: DisplayGestures,
+        key: KeyEvent,
+        time: Long,
+        tally: Tally,
+    ) {
+        val code = key.keyCode
+        val metaState = key.metaState
+        val open = gestures.keys[code]
+        when (key.action) {
+            KeyAction.KEY_ACTION_DOWN -> {
+                if (key.repeatCount > 0) {
+                    if (open == null) {
+                        tally.dropped += 1
+                        return
+                    }
+                    val spec =
+                        keySpec(
+                            android.view.KeyEvent.ACTION_DOWN,
+                            open.downTime,
+                            time,
+                            code,
+                            key.repeatCount,
+                            metaState,
+                        )
+                    if (sendKey(displayId, spec, tally)) {
+                        open.metaState = metaState
+                    }
+                    return
+                }
+                if (open != null) {
+                    releaseKey(displayId, gestures, code, time, tally)
+                    tally.dropped += 1
+                    return
+                }
+                val spec =
+                    keySpec(android.view.KeyEvent.ACTION_DOWN, time, time, code, 0, metaState)
+                if (sendKey(displayId, spec, tally)) {
+                    gestures.keys[code] = KeyPress(time, metaState)
+                }
+            }
+            KeyAction.KEY_ACTION_UP -> {
+                if (open == null) {
+                    tally.dropped += 1
+                    return
+                }
+                val spec =
+                    keySpec(
+                        android.view.KeyEvent.ACTION_UP,
+                        open.downTime,
+                        time,
+                        code,
+                        0,
+                        metaState,
+                    )
+                if (sendKey(displayId, spec, tally)) {
+                    gestures.keys.remove(code)
+                }
+            }
+            else -> tally.dropped += 1
+        }
+    }
+
+    /**
+     * Releases the open press of [code] with ACTION_UP. The press is kept when the UP is refused.
+     */
+    private fun releaseKey(
+        displayId: Int,
+        gestures: DisplayGestures,
+        code: Int,
+        time: Long,
+        tally: Tally,
+    ) {
+        val open = gestures.keys[code] ?: return
+        val spec =
+            keySpec(android.view.KeyEvent.ACTION_UP, open.downTime, time, code, 0, open.metaState)
+        if (sendKey(displayId, spec, tally)) {
+            gestures.keys.remove(code)
+        }
+    }
+
+    /** Releases every key that is down on a display (`.cancelAll` and a removed display, §7.3). */
+    private fun releaseKeys(displayId: Int, gestures: DisplayGestures, time: Long, tally: Tally) {
+        for (code in gestures.keys.keys.toList()) {
+            releaseKey(displayId, gestures, code, time, tally)
+        }
+    }
+
+    private fun keySpec(
+        action: Int,
+        downTime: Long,
+        time: Long,
+        keyCode: Int,
+        repeatCount: Int,
+        metaState: Int,
+    ): KeySpec =
+        KeySpec(
+            action = action,
+            downTime = downTime,
+            eventTime = time,
+            keyCode = keyCode,
+            repeatCount = repeatCount,
+            metaState = metaState,
+        )
 
     /**
      * Builds, tags, and injects one event, and returns whether the framework accepted it. A refusal
      * or a throw from the injection is counted as dropped. A failure of the build or of
      * `setDisplayId` throws [InputFailure], because the framework cannot take the events at all.
      */
-    private fun send(displayId: Int, spec: MotionSpec, tally: Tally): Boolean {
-        val event = build(spec)
+    private fun send(displayId: Int, spec: MotionSpec, tally: Tally): Boolean =
+        sendEvent(displayId, build(spec), tally)
+
+    private fun sendKey(displayId: Int, spec: KeySpec, tally: Tally): Boolean =
+        sendEvent(displayId, buildKey(spec), tally)
+
+    /**
+     * Sets the display of [event], injects it, and recycles it. The event is built by the caller.
+     */
+    private fun sendEvent(displayId: Int, event: Any, tally: Tally): Boolean {
         try {
             sink.setDisplayId(event, displayId)
             val accepted =
@@ -603,6 +738,15 @@ class InputInjector(
             sink.recycle(event)
         }
     }
+
+    private fun buildKey(spec: KeySpec): Any =
+        try {
+            keyFactory.create(spec)
+        } catch (failure: InputFailure) {
+            throw failure
+        } catch (error: RuntimeException) {
+            throw InputFailure(InputFailureCode.EVENT_NOT_BUILT, error)
+        }
 
     private fun build(spec: MotionSpec): Any =
         try {

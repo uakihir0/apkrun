@@ -1,0 +1,72 @@
+import Foundation
+import RuntimeAPI
+import RuntimeCore
+
+/// The development input route of the embedded runtime (#024, decision D10): one input session on display 0.
+///
+/// It converts the wire batches of its session to InputCore values, and routes them through an ``InputRouter``. Until
+/// #026 it is the only input session. The route holds no router until ``bind(router:session:)``, and events that arrive
+/// before that are dropped and counted.
+public actor DevInputRoute {
+    /// The development session. Its identifier is fixed, so that a caller and its tests name the same session.
+    /// The identifier, as the UUID string 0024a2d0-0000-4000-8000-0000000024d0.
+    public static let developmentSession = SessionID.app(
+        UUID(uuid: (0x00, 0x24, 0xa2, 0xd0, 0x00, 0x00, 0x40, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0xd0)))
+    /// The Android display of the development session (input.md §7.1).
+    public static let displayID: Int32 = 0
+    /// The most events in one wire batch. A longer batch keeps its first events (runtime-api.md §7.3).
+    public static let maximumEventsPerBatch = 512
+
+    private var router: InputRouter?
+    private var session: SessionID?
+    /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
+    /// from a long batch.
+    private var localCounters = InputCounters()
+
+    /// Creates an unbound route.
+    public init() {}
+
+    /// Binds the route to `router` for `session`, which is registered on display 0 in the running state. A route that
+    /// was bound before is unbound first.
+    public func bind(router: InputRouter, session: SessionID = DevInputRoute.developmentSession) async {
+        await unbind()
+        await router.register(session: session, displayID: Self.displayID, state: .running)
+        self.router = router
+        self.session = session
+    }
+
+    /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys.
+    public func unbind() async {
+        guard let router, let session else {
+            return
+        }
+        self.router = nil
+        self.session = nil
+        await router.sessionEnded(session)
+    }
+
+    /// Routes a wire batch. The events beyond ``maximumEventsPerBatch`` are dropped and counted as invalid. The rest
+    /// are dropped as not running when the route is unbound.
+    public func send(_ batch: RuntimeAPI.InputBatch) async {
+        var wire = batch.events
+        if wire.count > Self.maximumEventsPerBatch {
+            localCounters.droppedInvalid += wire.count - Self.maximumEventsPerBatch
+            wire.removeLast(wire.count - Self.maximumEventsPerBatch)
+        }
+        let events = WireInputConversion.events(wire)
+        guard let router, let session else {
+            localCounters.droppedNotRunning += events.count
+            return
+        }
+        await router.route(events, from: session)
+    }
+
+    /// The counts of the route: the router's, and the drops that happened before it.
+    public func counters() async -> InputCounters {
+        var total = localCounters
+        if let router {
+            total.add(await router.counters)
+        }
+        return total
+    }
+}

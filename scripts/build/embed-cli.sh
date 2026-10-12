@@ -60,10 +60,13 @@ linker_arguments=(
     -Xlinker "$plist"
 )
 if [[ "$configuration" == "Debug" ]]; then
+    # APKRUN_CLI_TRAITS replaces the trait list. The G3 gate sets EmbeddedRuntime,TestReadback for its tearing check
+    # (#023). The default is unchanged.
+    cli_traits="${APKRUN_CLI_TRAITS:-EmbeddedRuntime}"
     swift build --package-path "$repo_root" \
         --configuration "$swift_configuration" \
         --product apkrun \
-        --traits EmbeddedRuntime \
+        --traits "$cli_traits" \
         "${linker_arguments[@]}"
 else
     swift build --package-path "$repo_root" \

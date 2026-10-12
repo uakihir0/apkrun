@@ -46,6 +46,11 @@ class MainActivity : Activity() {
                 }
             }
         )
+        // Enter in the field is the editor action of the field (imeOptions actionDone). The line names the action only.
+        findViewById<EditText>(R.id.input_text).setOnEditorActionListener { _, actionId, _ ->
+            Log.i(LOG_TAG, "editor action $actionId")
+            false
+        }
         registerForContextMenu(findViewById<TextView>(R.id.context_target))
     }
 

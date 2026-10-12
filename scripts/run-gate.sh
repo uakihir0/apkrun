@@ -50,9 +50,10 @@ APKRUN_TEST_LINUX_DIR="$(
 export APKRUN_TEST_LINUX_DIR
 
 if [[ "$gate" == G3 ]]; then
-    # G3 runs on the stock build 16373615 with the ODM overlay, because the stock image without the overlay fails the
+    # G3 is meant to run on build 16373615 with the ODM overlay, because the stock image without the overlay fails the
     # EGL DRM check (IR-760 to IR-764, IR-940 to IR-961). The overlay bundle is built outside the production tree
-    # (IR-1112), so the gate takes it by path, checks its checksums, and records its path and SHA-256 (IR-1209).
+    # (IR-1112), so the gate takes it by path (IR-1209). The gate checks SHA256SUMS against the bundle's files and
+    # records the manifest's imageVersion. It does not verify manifest.sig or the overlay itself.
     g3_bundle="${APKRUN_G3_ANDROID_BUNDLE:-}"
     if [[ "$g3_bundle" != /* || ! -f "$g3_bundle/manifest.json" || ! -f "$g3_bundle/SHA256SUMS" ]]; then
         printf 'run-gate: G3 needs APKRUN_G3_ANDROID_BUNDLE, the absolute path of the Android bundle with the ODM overlay (IR-1209)\n' >&2
@@ -101,7 +102,9 @@ macos_build="$(sw_vers -buildVersion)"
         printf 'bundle: %s\n' "$g3_bundle"
         printf 'bundle_manifest_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/manifest.json" | awk '{ print $1 }')"
         printf 'bundle_sha256sums_sha256: %s\n' "$(shasum -a 256 "$g3_bundle/SHA256SUMS" | awk '{ print $1 }')"
-        printf 'bundle_checksums: verified against SHA256SUMS\n'
+        printf 'bundle_checksums: SHA256SUMS matches the bundle files; manifest.sig is not checked by this gate\n'
+        printf 'bundle_image_version: %s (manifest.json; the overlay itself is not checked by this gate)\n' \
+            "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["imageVersion"])' "$g3_bundle/manifest.json")"
         printf 'cli_traits: EmbeddedRuntime,TestReadback\n'
     fi
     printf 'status: running\n'
@@ -209,8 +212,9 @@ if [[ "$gate" == G3 ]]; then
     artifacts="$APKRUN_TEST_LINUX_DIR/g3-artifacts"
     rm -rf "$artifacts"
     recording="$gate_dir/screen-recording.mov"
-    # screencapture ignores SIGINT and writes its file only when its own timer ends. The recording therefore runs for
-    # 30 minutes, which bounds the run, and the gate waits for it to end.
+    # screencapture writes its file only when its own -V timer ends. A background job of this non-interactive shell
+    # ignores SIGINT, and a signal that does reach it ends it without the file. So the recording runs for 30 minutes,
+    # which bounds the run, and the gate waits for it to end (IR-1212).
     screencapture -v -V 1800 "$recording" &
     recording_pid=$!
     g3_status=0
@@ -229,22 +233,40 @@ if [[ "$gate" == G3 ]]; then
         "APKRUN_CI=1" \
         "${signing_arguments[@]}" \
         ${g3_build_settings[@]+"${g3_build_settings[@]}"} || g3_status=$?
-    recording_status=0
-    wait "$recording_pid" || recording_status=$?
+    recorder_status=0
+    wait "$recording_pid" || recorder_status=$?
     if [[ -d "$artifacts" ]]; then
         rm -rf "$gate_dir/artifacts"
         cp -R "$artifacts" "$gate_dir/artifacts"
     fi
     if [[ -f "$recording" ]]; then
-        avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4" \
-            && rm -f "$recording"
+        if avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4"; then
+            rm -f "$recording"
+        else
+            recorder_status=1
+        fi
     fi
+    # The recording is evidence (test-strategy §5), so a missing or empty MP4 fails the gate.
+    if [[ ! -s "$gate_dir/screen-recording.mp4" ]]; then
+        recorder_status=1
+    fi
+    # xcodebuild's status is not the verdict: the test's summary and the xcresult must show that the check ran and passed.
+    check_status=0
+    python3 -I "$repo_root/scripts/tools/check-g3-evidence.py" \
+        "$gate_dir/artifacts" "$gate_dir/$gate.xcresult" "$repo_root" > "$gate_dir/evidence-check.txt" 2>&1 \
+        || check_status=$?
     {
         printf 'artifacts: %s\n' "$gate_dir/artifacts"
-        printf 'screen_recording: %s (recorder exit %s)\n' "$gate_dir/screen-recording.mp4" "$recording_status"
+        printf 'screen_recording: %s\n' "$gate_dir/screen-recording.mp4"
+        printf 'recorder_exit: %s\n' "$recorder_status"
         printf 'test_exit: %s\n' "$g3_status"
+        printf 'evidence_check_exit: %s\n' "$check_status"
+        sed 's/^/evidence: /' "$gate_dir/evidence-check.txt"
     } >> "$report"
-    exit "$g3_status"
+    gate_status=$g3_status
+    if [[ $gate_status -eq 0 ]]; then gate_status=$check_status; fi
+    if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
+    exit "$gate_status"
 fi
 xcodebuild test \
     -project APKRun.xcodeproj \

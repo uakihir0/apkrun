@@ -17,6 +17,9 @@
         private var source: SurfacePoolFrameSource?
         private var window: DisplayWindow?
         private var tasks: [Task<Void, Never>] = []
+        #if APKRUN_TEST_READBACK
+            private let tearing = TearingSampler()
+        #endif
 
         init(display: DeveloperDisplay, showStatistics: Bool, onWindowClosed: @escaping @MainActor () -> Void) {
             self.display = display
@@ -65,6 +68,9 @@
                 self.source = source
                 self.window = window
             case .frameReady:
+                #if APKRUN_TEST_READBACK
+                    tearing.observe(event, surfaces: source?.surfaces ?? [])
+                #endif
                 source?.ingest(event)
             }
         }
@@ -80,10 +86,15 @@
             guard showStatistics else {
                 return
             }
-            let line =
+            let counters =
                 "APKRun display 0  \(framesPerSecond) fps  dropped \(statistics.droppedFrames)  "
                 + "stalls \(statistics.presentStalls)  hostReadbacks \(statistics.hostReadbacks)  "
                 + "cpuPixelCopies \(statistics.cpuPixelCopies)"
+            #if APKRUN_TEST_READBACK
+                let line = counters + "  " + tearing.summary
+            #else
+                let line = counters
+            #endif
             window.setTitle(line)
             Output.writeLogLine(line, toStandardError: true)
         }

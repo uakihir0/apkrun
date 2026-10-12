@@ -233,7 +233,8 @@ let package = Package(
             path: "CLI/apkrun",
             exclude: ["Tests", "apkrun-dev.entitlements"],
             swiftSettings: [
-                .define("APKRUN_EMBEDDED_RUNTIME", .when(traits: ["EmbeddedRuntime"]))
+                .define("APKRUN_EMBEDDED_RUNTIME", .when(traits: ["EmbeddedRuntime"])),
+                .define("APKRUN_TEST_READBACK", .when(traits: ["TestReadback"])),
             ]
         ),
         .testTarget(

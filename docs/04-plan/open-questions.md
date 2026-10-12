@@ -176,6 +176,8 @@ Each entry names the task that finds the answer and what changes for each result
 | OQ-38 | `virtio_snd` is built in or loaded on the stock kernel (#083) | as designed | add it in the custom image ([../02-design/android-image.md](../02-design/android-image.md) §7.5) |
 | OQ-39 | The EDID physical size gives secondary displays the expected density (#067 on display 0, #028 on pool displays) | as designed | set the density with `setDisplayPolicy` only, and record it in [../02-design/graphics.md](../02-design/graphics.md) §6.4 |
 
+**OQ-31, answer for display 0 (2026-10-12 UTC, #024; build 16373615, one device).** Android draws no pointer for an injected `SOURCE_MOUSE` hover on display 0. The screenshot shows the plain background at the hover point, the SurfaceFlinger layer list has no child of the pointer overlay layer, and `dumpsys input` lists no mouse pointer controller. So the "nothing to do" answer applies on display 0, and `input.hover` stays `true` by default. The status stays `open`: the pool-display check is #029, and this answer comes from one device on one image. See [../02-design/input.md](../02-design/input.md) §15 and [issues/M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md#024-pointer-input).
+
 ---
 
 ## 5. Deferred

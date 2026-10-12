@@ -382,18 +382,28 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Acceptance criteria
 
-- [ ] The coordinates are validated with ADB input first, and the result is recorded.
-- [ ] The InputCore pointer model covers mouse down, move and drag, up, and scroll.
+- [x] The coordinates are validated with ADB input first, and the result is recorded.
+- [x] The InputCore pointer model covers mouse down, move and drag, up, and scroll.
 - [ ] HelloText's button can be clicked reliably from the Mac window: 100 of 100 clicks are logged as `APKRUN-FIXTURE: click <n>`.
 - [ ] Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it in the direction macOS uses.
-- [ ] A right-click opens HelloText's context menu.
+- [x] A right-click opens HelloText's context menu.
 - [ ] No shell command runs per event (FR-IN-06): the `adb shell` counter does not change, and no `input` process runs during the sequence.
-- [ ] Clicks in the letterbox are dropped, and drags that leave the content are clamped.
-- [ ] OQ-31 has an answer for display 0.
+- [x] Clicks in the letterbox are dropped, and drags that leave the content are clamped.
+- [x] OQ-31 has an answer for display 0.
 
 ### Notes
 
 - **Record:** the results in the four #024 rows of [../../02-design/input.md](../../02-design/input.md) §15, the partial result for input on displays in R-05, and the `setDisplayId` result in R-18.
+- **Verification (2026-10-12 UTC, build 16373615, the CLI path).** Step 1 ran at 12:41Z on the stock image with the odm4 overlay: 10 of 10 taps hit HelloText's button. The device runs used `apkrun dev boot --window`, a CGEvent helper outside the repository, and no `adb shell input`. Run 1 failed at the route: each `apkrun dev adb` ran `adb disconnect`, which dropped the Guest Agent's forwards; fixed by `47ced64`. Run 2 passed A, C (100 of 100), E, and G, and D on a retry after a first failure at the bottom edge. Its F failed: a drag out through the top-left corner left a touch open, and the cause was not determined. Run 3 was aborted at check A, because pointer events that the helper did not send reached the window; a physical pointer or another session is the likely cause, not identified. Run 4 passed A to G on the CLI of `881b421` with the guest built before its hover guard (`f0c15a4`), so it is not a HEAD run. The far-edge fix (`1796f23`) is for the right and bottom edges, which the final run's F checks. The final run, on HEAD (`c369e8f`, the tree of the tested `c10196b`), passed A, B, D, E, F, and G; its C batch logged 99 of 100.
+  - Box 2 is ticked, but right-button drags are dropped (IR-1235): `MouseEvent` has no move action, and §4.1 has no row for them. The maintainer decides.
+  - Box 3: the final C batch logged clicks 225 to 323, and the cause was not found in the guest logcat or the VM log. The batches of 100 of 100 are run 2 (12 to 111), run 4 (122 to 221), and the final C2 batch (326 to 425). Whether that is "reliably" is for the maintainer.
+  - Box 4: the check is synthetic only. Trackpad natural scrolling is check C01-2 (T3), not run. The synthesized pixel and line scrolls moved the content up (first index 0 to 4, 4 to 8, 8 to 28).
+  - Box 6: `AdbClient` has no shell counter, so the zero-change clause is not shown. Sampling found no `shell input` process in 327 one-second samples of the final run, and a code search found no adb call on the input path.
+  - Box 7: the device evidence covers the right and bottom edges only. The top-left drag of run 2 failed, and the top and left edges were not re-run after `1796f23`. The letterbox part is T0 only, because the device window has no letterbox.
+  - The route does not rebind after the guest agent is lost (IR-1241). The supervisor's recovery turns an adb error into "not running", so pointer input ends until the boot ends. A follow-up task is needed, and its number is to be assigned.
+  - The counters of §11 are not exported to a diagnostics snapshot, and `input.translate` is not added (IR-1238, IR-1244).
+  - `AndroidInputTests` compiles (`build-for-testing`, `c369e8f`), but it is not run in the Xcode test host (IR-438, IR-1243). Its window adapters are repeated from the CLI target.
+  - `apkrun dev launch` with its window was not run on the device. Every device run used `apkrun dev boot --window`, which binds the same input route (IR-1239).
 - **Pitfall:** trackpads and wheel mice give different scroll deltas and signs. Check both with HelloCompose's list (§14).
 - **Pitfall:** the window of #023 has a fixed size with aspect fit. The mapper must use the content rectangle, not the window bounds.
 - The window here is the #023 development window. #026 replaces it with `SessionWindowController`.

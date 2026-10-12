@@ -16564,3 +16564,79 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 **Choice.** The Android UI processes abort on the odm4 bundle with the same error family as IR-994 on the ODM-overlay variant. The first `F` line from HWUI is `F HWUI    : Failed to create context, error = EGL_NOT_INITIALIZED` at 01:46:04.467 (pid 2951, `com.android.settings`). The first `EGL_NOT_INITIALIZED` line is an earlier `W libEGL` line from pid 793 at 01:46:00.391. It is followed by `W libEGL  : eglInitialize(...) failed (EGL_NOT_INITIALIZED)`, `W HWUI    : Failed to initialize 101010-2 format, error = EGL_NOT_INITIALIZED`, and `F libc    : Fatal signal 6 (SIGABRT) ... in tid 2969 (RenderThread), pid 2951 (ndroid.settings)`. Over the whole boot, the log has 173 `Failed to create context` lines and 84 `ActivityManager: Process com.android.launcher3 ... has died` lines. In the 10-minute window six launcher processes died (pids 7921, 7950, 8010, 8039, 8123, 8153), and the window has 2,858 `F` lines; pid 7921 alone has 432. The HelloGL process is not affected, and its GLSurfaceView (EGL 3.0, 8-bit) creates its context.
 
 **Reason.** The log ties the abort to HWUI's EGL setup in other processes: `eglInitialize` fails, and then the `101010-2` format fails. It does not show a cause in the renderer. It does not stop the criteria above, and AGENTS.md §11 keeps one risk per task, so it is not fixed here. A fix would change the guest's EGL configs, which is a graphics design question. The maintainer should decide whether it blocks G3 or gets its own task (#098 or later), and whether the launcher loop needs a stock-image comparison.
+
+## IR-1209: The G3 gate runs on the odm4 bundle, the stock build with the ODM overlay, taken by path; it is not a stock-only run
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Gate G3, criterion 2); [test-strategy.md](../04-plan/test-strategy.md) §5; [graphics.md](../02-design/graphics.md) §16 |
+
+**Choice.** The G3 check runs on the Android bundle of build 16373615 with the ODM overlay of IR-1112, not on the stock image alone. `scripts/run-gate.sh G3` takes the bundle from `APKRUN_G3_ANDROID_BUNDLE` and does not build it. The gate checks `SHA256SUMS` in the bundle, and the report records the bundle path, the SHA-256 of `manifest.json` (`37d4def6…`, in full `37d4def60302fab6f930e7bc40d047d366ca9f1993c56c45e47b5d2d83f11e59`), and the SHA-256 of `SHA256SUMS` (`594bb432…`).
+
+**Reason.** The stock image without the overlay fails the EGL DRM check (IR-760 to IR-764, IR-940 to IR-961), so G3 cannot run on the stock image alone. The overlay is built by `Experiments/sepolicy-022/odm_variant.py`, and production targets never import experiments (AGENTS.md §11). So the gate takes the built bundle by path instead of building it. A maintainer must decide how the overlay becomes a production input (a production build script, or an ADR) before G3 can be repeated from `main` alone. Until then, G3 evidence names the overlay bundle and does not claim stock-only.
+
+## IR-1210: The tearing check reads the presented pool buffers in a TestReadback CLI build; the window captures are not the evidence
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, tearing half); [graphics.md](../02-design/graphics.md) §12 (#023, step 5) |
+
+**Choice.** The gate's Debug CLI is built with the `EmbeddedRuntime,TestReadback` traits (`APKRUN_CLI_TRAITS`). In that build, `CLI/apkrun/Dev/TearingSampler.swift` reads each frame that the display makes ready through a read-only `IOSurfaceLock`, samples every fourth pixel, and counts the pure red and pure blue pixels (`FrameColourCensus` in WindowingCore, with T0 tests). The `--stats` line carries the cumulative counts `framesSampled`, `redFrames`, `blueFrames`, and `mixedFrames`. The alternating phase passes when the change of these counts over the phase has `mixedFrames` 0 and at least 30 red and 30 blue frames. The window captures are kept as screenshots and are not tearing evidence (IR-1205).
+
+**Reason.** The design asks for pool-buffer sampling in the test-only readback mode (graphics.md §12 #023, step 5), and IR-1205 found that the window captures do not show it. The sampler does not change `hostReadbacks` or `cpuPixelCopies`, so those counters stay the device's own counters.
+
+**Consequence.** The gate's 60 s counter and fps numbers come from a TestReadback build, not from the production build. The design excludes the readback from the counters, but a maintainer should decide whether the counter evidence of G3 is acceptable from that build.
+
+## IR-1211: G3GraphicsTests is in the IntegrationTests target, as the task asked; the design places gate checks in AcceptanceTests
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [roadmap.md](../04-plan/roadmap.md) §2; [test-strategy.md](../04-plan/test-strategy.md) §5 and §3 (table of locations); [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Modules, T3) |
+
+**Choice.** `Tests/IntegrationTests/G3GraphicsTests/` holds the check. It has a `G3` configuration in `IntegrationTests.xctestplan` (`APKRUN_INTEGRATION_SUITE=g3`), and the gate runs `-scheme IntegrationTests -only-test-configuration G3 -only-testing:IntegrationTests/G3GraphicsTests -test-timeouts-enabled NO` under `lockf -k /tmp/apkrun-vm.lock`.
+
+**Reason and conflict.** The task asked for the IntegrationTests target. The design documents put gate checks in `Tests/AcceptanceTests/`, and G1 and G2 run there. The task also said G2 is wired with `APKRUN_INTEGRATION_SUITE`, but G2 uses `APKRUN_ACCEPTANCE_SUITE`. A maintainer should decide whether G3 moves to AcceptanceTests. That would make `run-gate.sh` use the same scheme as G1 and G2.
+
+## IR-1212: The G3 screen recording runs for 30 minutes and is converted; screencapture cannot be stopped early
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §5 (screen recording for G3–G9) |
+
+**Choice.** `run-gate.sh G3` starts `screencapture -v -V 1800` before the G3 test and waits for it to finish, then converts the file with `avconvert --preset PresetMediumQuality` to `screen-recording.mp4` and removes the `.mov`.
+
+**Reason.** On this Mac, a `screencapture -v` process that receives SIGINT or SIGTERM exits without writing its file. Only its own `-V` timer writes the file. A test of a 120 s recording wrote 455 MB, so the raw recording is converted to keep the evidence small. The gate waits for the timer, so a run that ends early still takes up to 30 minutes.
+
+## IR-1213: Criterion 5 counts the crashes of HelloGL and SurfaceFlinger; launcher and Settings aborts are recorded and do not fail G3
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, 10-minute run); [roadmap.md](../04-plan/roadmap.md) §2 (G3 condition 5) |
+
+**Choice.** The 10-minute check passes when the HelloGL pid is the same at the start and at each of the ten minute marks, and no guest log line after the `stab-start` marker names HelloGL or SurfaceFlinger together with a fatal marker. The other crash lines (the launcher and Settings aborts of IR-1208) are written to `guest-crash-lines.txt` and counted in the summary, but they do not fail G3. The run stops with SIGINT, and a boot that is still up after 60 s gets SIGKILL. The stop is recorded.
+
+**Reason.** Condition 5 is about the renderer, and IR-1206 and IR-1208 already separate the two. The launcher aborts are a finding for another task (AGENTS.md §11).
+
+## IR-1214: The first two G3 attempts did not pass; the second one stopped at the window lookup, which the test host's Screen Recording permission would need to allow
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Gate G3) |
+
+**Attempt 1 (about 04:23 UTC, `main` at eb31c87).** The LinuxGuest configuration ran 78 tests, 27 skipped, 0 failures. Then the G3 test failed at its first input check, `APKRUN_G3_CLI is not set`. No VM started. The `TEST_RUNNER_` values did not reach the test process. Commit dc133ce passes the inputs as build settings, which the test host's `Info.plist` expands, as `APKRUN_TEST_LINUX_DIR` already does. The test reads the environment first and then the `Info.plist`.
+
+**Attempt 2 (04:30 UTC, `main` at dc133ce).** The LinuxGuest configuration ran 78 tests, 27 skipped, 0 failures. The image installed. `state: ready` came at 04:37:59 UTC. `sys.boot_completed` was 1. The guest reported `GLES: Mesa, virgl, OpenGL ES 3.0 Mesa 26.1.8` (criterion 2, SurfaceFlinger) and HelloGL reported `APKRUN-FIXTURE: renderer virgl`. Its 34 statistics lines all show `hostReadbacks 0` and `cpuPixelCopies 0`. The test then failed at 04:38:19 UTC: no window titled `APKRun display 0` belonged to the CLI process (pid 9909). The window list gave no title for that window, which is what an unauthorised reader sees when Screen Recording is not granted. No permission dialog was on screen at 13:39 JST. The boot stopped after SIGINT at 04:38:22 UTC. The test cannot reach the window, fps, alternating-phase, or crash checks until the test host has that permission. I did not change any permission.
+
+**Cleanup.** Both gate processes were killed with SIGKILL. The first run's shell was waiting for its 30-minute recorder, and it would have written into the shared report. No VM or `lockf` holder remains. `build/gates/G3/report.txt` still reads `status: running`, from attempt 2, and `build/gates/G3/G3.xcresult` is attempt 2's bundle. Neither is a pass. Gate G3 is not passed, and the G3 row of graphics.md §16 and the last box of #023 stay as they are.

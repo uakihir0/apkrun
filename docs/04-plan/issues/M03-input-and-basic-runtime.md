@@ -403,7 +403,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
   - The route does not rebind after the guest agent is lost (IR-1241). The supervisor's recovery turns an adb error into "not running", so pointer input ends until the boot ends. A follow-up task is needed, and its number is to be assigned.
   - The counters of §11 are not exported to a diagnostics snapshot, and `input.translate` is not added (IR-1238, IR-1244).
   - `AndroidInputTests` compiles (`build-for-testing`, `c369e8f`), but it is not run in the Xcode test host (IR-438, IR-1243). Its window adapters are repeated from the CLI target.
-  - `apkrun dev launch` with its window was not run on the device. Every device run used `apkrun dev boot --window`, which binds the same input route (IR-1239).
+  - `apkrun dev launch` with its window was run on the device up to the input binding: HelloText launched on display 0 and the output printed `input is bound to display 0`. One click through that command was not observed, because the pointer moved outside the helper. The clicks were run under `apkrun dev boot --window`, which binds the same input route (IR-1239).
 - **Pitfall:** trackpads and wheel mice give different scroll deltas and signs. Check both with HelloCompose's list (§14).
 - **Pitfall:** the window of #023 has a fixed size with aspect fit. The mapper must use the content rectangle, not the window bounds.
 - The window here is the #023 development window. #026 replaces it with `SessionWindowController`.

@@ -50,7 +50,10 @@ public struct CoordinateMapper: Sendable, Equatable {
 
     /// Maps a window point to display pixels, or returns nil when the point is outside the content rectangle.
     ///
-    /// The content rectangle includes its edges. A point on the top or right edge maps to the last pixel row or column.
+    /// The content rectangle includes its edges. The mapped pixel is clamped to the last pixel, so x is at most W - 1 and
+    /// y is at most H - 1. The right edge (maximum x) and the bottom edge (minimum y) therefore map to the last column and
+    /// the last row, never to W or H: the guest rejects x >= width and y >= height (InputService.kt, `inside`). The
+    /// design allows values within twice the display size (input.md §9), so this host clamp is the stricter choice.
     public func map(windowX: Double, windowY: Double) -> DisplayPoint? {
         guard isUsable, windowX.isFinite, windowY.isFinite else { return nil }
         let rect = contentRect
@@ -86,13 +89,14 @@ public struct CoordinateMapper: Sendable, Equatable {
         return (x, y)
     }
 
-    /// The linear part of the mapping: x_px = (p.x - c.x) * W / c.w, y_px = (c.y + c.h - p.y) * H / c.h.
+    /// The linear part of the mapping: x_px = (p.x - c.x) * W / c.w, y_px = (c.y + c.h - p.y) * H / c.h, each clamped to
+    /// the last pixel (at most W - 1 and H - 1).
     private func project(windowX: Double, windowY: Double) -> DisplayPoint {
         let rect = contentRect
         let width = Double(pixelWidth)
         let height = Double(pixelHeight)
-        return DisplayPoint(
-            x: (windowX - rect.x) * width / rect.width,
-            y: (rect.y + rect.height - windowY) * height / rect.height)
+        let x = (windowX - rect.x) * width / rect.width
+        let y = (rect.y + rect.height - windowY) * height / rect.height
+        return DisplayPoint(x: min(x, width - 1), y: min(y, height - 1))
     }
 }

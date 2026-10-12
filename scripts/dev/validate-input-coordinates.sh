@@ -11,6 +11,8 @@
 # W x H:
 #   x_px = (p.x - c.x) * W / c.w
 #   y_px = (c.y + c.h - p.y) * H / c.h
+# A value above the last pixel is replaced by it, so x_px is at most W - 1 and y_px at most H - 1. The guest rejects
+# x >= W and y >= H (InputService.kt), and the far edges of the content map to the last pixel (CoordinateMapper.map).
 # The script also uses the inverse, which gives the window point a click on a pixel comes from:
 #   p.x = c.x + x_px * c.w / W
 #   p.y = c.y + c.h - y_px * c.h / H
@@ -36,11 +38,12 @@
 # Reference vectors for --self-test. The T0 test of #024 step 2 (CoordinateMapper) uses the same vectors, and the
 # two must agree. Each row is: content (x, y, w, h), display (W, H), window point (p.x, p.y), expected pixel.
 #   content (0, 0, 512, 384), display 1024 x 768:
-#       (0, 384) -> (0, 0)         (512, 0) -> (1024, 768)      (256, 192) -> (512, 384)
-#       (100, 300) -> (200, 168)   (100.5, 300.25) -> (201, 167.5)   (0, 0) -> (0, 768)
+#       (0, 384) -> (0, 0)         (512, 0) -> (1023, 767)      (256, 192) -> (512, 384)
+#       (100, 300) -> (200, 168)   (100.5, 300.25) -> (201, 167.5)   (0, 0) -> (0, 767)
 #   content (40, 30, 400, 300), display 1024 x 768:
-#       (40, 330) -> (0, 0)        (440, 30) -> (1024, 768)     (240, 180) -> (512, 384)
-#       (10, 180) -> (-76.8, 384), which is outside the content: the caller drops it, the formula is linear.
+#       (40, 330) -> (0, 0)        (440, 30) -> (1023, 767)     (240, 180) -> (512, 384)
+#       (10, 180) -> (-76.8, 384), which is outside the content: the caller drops it. The clamp only lowers values above
+#       the last pixel, so the formula is linear below it.
 set -euo pipefail
 
 print_usage() {
@@ -122,10 +125,13 @@ if [[ ! "$taps" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # The mapping of input.md §3 as awk functions. Every awk program in this script includes them, so the formula is
-# written once. Keep it equal to CoordinateMapper (InputCore, #024 step 2).
+# written once. Keep it equal to CoordinateMapper (InputCore, #024 step 2), including the clamp to the last pixel.
 mapping_awk='
-function map_x(px, cx, cw, pw) { return (px - cx) * pw / cw }
-function map_y(py, cy, ch, ph) { return (cy + ch - py) * ph / ch }
+function raw_x(px, cx, cw, pw) { return (px - cx) * pw / cw }
+function raw_y(py, cy, ch, ph) { return (cy + ch - py) * ph / ch }
+function last_pixel(v, n) { return v > n - 1 ? n - 1 : v }
+function map_x(px, cx, cw, pw) { return last_pixel(raw_x(px, cx, cw, pw), pw) }
+function map_y(py, cy, ch, ph) { return last_pixel(raw_y(py, cy, ch, ph), ph) }
 function unmap_x(xp, cx, cw, pw) { return cx + xp * cw / pw }
 function unmap_y(yp, cy, ch, ph) { return cy + ch - yp * ch / ph }
 function nearest_pixel(v) { return v < 0 ? -int(0.5 - v) : int(v + 0.5) }
@@ -136,13 +142,13 @@ self_test_vectors() {
     cat <<'VECTORS'
 # content x y w h | display W H | window px py | pixel x y
 0 0 512 384 1024 768 0 384 0 0
-0 0 512 384 1024 768 512 0 1024 768
+0 0 512 384 1024 768 512 0 1023 767
 0 0 512 384 1024 768 256 192 512 384
 0 0 512 384 1024 768 100 300 200 168
 0 0 512 384 1024 768 100.5 300.25 201 167.5
-0 0 512 384 1024 768 0 0 0 768
+0 0 512 384 1024 768 0 0 0 767
 40 30 400 300 1024 768 40 330 0 0
-40 30 400 300 1024 768 440 30 1024 768
+40 30 400 300 1024 768 440 30 1023 767
 40 30 400 300 1024 768 240 180 512 384
 40 30 400 300 1024 768 10 180 -76.8 384
 VECTORS
@@ -154,10 +160,12 @@ run_self_test() {
         NF != 10 { printf "self-test: malformed vector: %s\n", $0; malformed++; next }
         {
             count++
+            # The forward mapping is clamped, so the inverse is checked on the unclamped pixel, which the inverse
+            # returns to the window point exactly.
             mx = map_x($7, $1, $3, $5)
             my = map_y($8, $2, $4, $6)
-            ux = unmap_x($9, $1, $3, $5)
-            uy = unmap_y($10, $2, $4, $6)
+            ux = unmap_x(raw_x($7, $1, $3, $5), $1, $3, $5)
+            uy = unmap_y(raw_y($8, $2, $4, $6), $2, $4, $6)
             if (!near(mx, $9) || !near(my, $10) || !near(ux, $7) || !near(uy, $8)) {
                 printf "self-test: FAIL content (%s, %s, %s, %s) display %sx%s window (%s, %s): pixel (%.6f, %.6f), window (%.6f, %.6f)\n", $1, $2, $3, $4, $5, $6, $7, $8, mx, my, ux, uy
                 failures++

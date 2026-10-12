@@ -18,11 +18,11 @@ private func makeMapper(
     let mapper = makeMapper(fullContent)
     let vectors: [(wx: Double, wy: Double, px: Double, py: Double)] = [
         (0, 384, 0, 0),
-        (512, 0, 1024, 768),
+        (512, 0, 1023, 767),
         (256, 192, 512, 384),
         (100, 300, 200, 168),
         (100.5, 300.25, 201, 167.5),
-        (0, 0, 0, 768),
+        (0, 0, 0, 767),
     ]
     for vector in vectors {
         #expect(
@@ -35,7 +35,7 @@ private func makeMapper(
     let mapper = makeMapper(insetContent)
     let vectors: [(wx: Double, wy: Double, px: Double, py: Double)] = [
         (40, 330, 0, 0),
-        (440, 30, 1024, 768),
+        (440, 30, 1023, 767),
         (240, 180, 512, 384),
     ]
     for vector in vectors {
@@ -47,8 +47,27 @@ private func makeMapper(
 
 @Test func theContentEdgesAreInsideTheContent() {
     let mapper = makeMapper(insetContent)
-    #expect(mapper.map(windowX: 40, windowY: 30) == DisplayPoint(x: 0, y: 768))
-    #expect(mapper.map(windowX: 440, windowY: 330) == DisplayPoint(x: 1024, y: 0))
+    #expect(mapper.map(windowX: 40, windowY: 30) == DisplayPoint(x: 0, y: 767))
+    #expect(mapper.map(windowX: 440, windowY: 330) == DisplayPoint(x: 1023, y: 0))
+}
+
+@Test func theFarEdgesMapToTheLastPixelAndNeverPastIt() {
+    // The guest rejects x >= width and y >= height (InputService.inside), so no mapped point may reach W or H.
+    for content in [fullContent, insetContent] {
+        let mapper = makeMapper(content)
+        for step in 0...20 {
+            let x = content.x + content.width * Double(step) / 20
+            for row in 0...10 {
+                let y = content.y + content.height * Double(row) / 10
+                guard let pixel = mapper.map(windowX: x, windowY: y) else {
+                    Issue.record("the content edge (\(x), \(y)) is not mapped")
+                    continue
+                }
+                #expect(pixel.x >= 0 && pixel.x <= 1023, "window (\(x), \(y))")
+                #expect(pixel.y >= 0 && pixel.y <= 767, "window (\(x), \(y))")
+            }
+        }
+    }
 }
 
 @Test func aPointInTheLetterboxIsNotMapped() {
@@ -70,9 +89,10 @@ private func makeMapper(
     let mapper = makeMapper(insetContent)
     // The inset reference vector (10, 180): x is clamped to 40, which is pixel 0, and y stays at 384.
     #expect(mapper.clamped(windowX: 10, windowY: 180) == DisplayPoint(x: 0, y: 384))
-    // (600, 100): x is clamped to 440, which is pixel 1024; y = (330 - 100) * 768 / 300.
-    #expect(mapper.clamped(windowX: 600, windowY: 100) == DisplayPoint(x: 1024, y: 588.8))
-    #expect(mapper.clamped(windowX: 600, windowY: -50) == DisplayPoint(x: 1024, y: 768))
+    // (600, 100): x is clamped to 440, which is the last pixel column 1023; y = (330 - 100) * 768 / 300.
+    #expect(mapper.clamped(windowX: 600, windowY: 100) == DisplayPoint(x: 1023, y: 588.8))
+    // (600, -50): y is clamped to 30, which is the last pixel row 767.
+    #expect(mapper.clamped(windowX: 600, windowY: -50) == DisplayPoint(x: 1023, y: 767))
 }
 
 @Test func aPointInsideTheContentIsClampedToItsMapping() {
@@ -100,6 +120,10 @@ private func makeMapper(
 @Test func mappingAndItsInverseRoundTrip() {
     for content in [fullContent, insetContent] {
         let mapper = makeMapper(content)
+        // A point inside the far edges round-trips exactly. A point on the far edge (maxX, minY) is clamped to the last
+        // pixel, so its inverse is where that pixel begins: one pixel in from the edge.
+        let pixelWidthInPoints = content.width / 1024
+        let pixelHeightInPoints = content.height / 768
         for step in 0...20 {
             let x = content.x + content.width * Double(step) / 20
             for row in 0...10 {
@@ -109,8 +133,10 @@ private func makeMapper(
                     continue
                 }
                 let back = mapper.windowPoint(forPixel: pixel)
-                #expect(abs(back.x - x) < 1e-9)
-                #expect(abs(back.y - y) < 1e-9)
+                let slackX = step == 20 ? pixelWidthInPoints : 0
+                let slackY = row == 0 ? pixelHeightInPoints : 0
+                #expect(abs(back.x - x) <= slackX + 1e-9)
+                #expect(abs(back.y - y) <= slackY + 1e-9)
             }
         }
     }

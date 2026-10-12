@@ -11,8 +11,9 @@ import Testing
         contentSize: CGSize(width: 512, height: 384), in: CGSize(width: 512, height: 384),
         pixelWidth: 1024, pixelHeight: 768, generation: 1)
     // The window's bottom-left corner is the display's bottom-left pixel (AppKit y up, Android y down).
-    #expect(mapper.map(windowX: 0, windowY: 0) == DisplayPoint(x: 0, y: 768))
-    #expect(mapper.map(windowX: 512, windowY: 384) == DisplayPoint(x: 1024, y: 0))
+    // The far edges map to the last pixel, because the guest rejects x = 1024 and y = 768.
+    #expect(mapper.map(windowX: 0, windowY: 0) == DisplayPoint(x: 0, y: 767))
+    #expect(mapper.map(windowX: 512, windowY: 384) == DisplayPoint(x: 1023, y: 0))
     #expect(mapper.map(windowX: 256, windowY: 192) == DisplayPoint(x: 512, y: 384))
 }
 
@@ -24,7 +25,7 @@ import Testing
     #expect(mapper.map(windowX: 10, windowY: 100) == nil)
     #expect(mapper.map(windowX: 44 + 256, windowY: 192) == DisplayPoint(x: 512, y: 384))
     #expect(mapper.clamped(windowX: 0, windowY: 1000) == DisplayPoint(x: 0, y: 0))
-    #expect(mapper.clamped(windowX: 1000, windowY: -5) == DisplayPoint(x: 1024, y: 768))
+    #expect(mapper.clamped(windowX: 1000, windowY: -5) == DisplayPoint(x: 1023, y: 767))
 }
 
 @Test func theMapperKeepsItsGeneration() {

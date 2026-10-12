@@ -122,7 +122,7 @@ private func scroll(
 @Test func enteringAndExitingAreSentAtOnceAtTheClampedPoint() {
     var translator = EventTranslator(mapper: contentMapper)
     #expect(translator.translate(sample(.entered)) == [mouse(.hoverEnter, 200, 168)])
-    #expect(translator.translate(sample(.exited, x: 600, y: 100, ms: 1)) == [mouse(.hoverExit, 1024, 568, ms: 1)])
+    #expect(translator.translate(sample(.exited, x: 600, y: 100, ms: 1)) == [mouse(.hoverExit, 1023, 568, ms: 1)])
 }
 
 @Test func hoverMovesAreLimitedTo120HzAndTheLatestPositionIsSentAsATrailingMove() {
@@ -248,7 +248,7 @@ private func scroll(
 @Test func theScrollPositionIsClampedToTheContent() {
     var translator = EventTranslator(mapper: contentMapper)
     #expect(
-        translator.translate(scrollSample(x: 600, y: 100, dy: 64)) == [scroll(1024, 568, vertical: 1, horizontal: 0)])
+        translator.translate(scrollSample(x: 600, y: 100, dy: 64)) == [scroll(1023, 568, vertical: 1, horizontal: 0)])
 }
 
 // MARK: Letterbox, clamping, and the mapper generation (D2)
@@ -265,8 +265,10 @@ private func scroll(
 @Test func aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge() {
     var translator = EventTranslator(mapper: contentMapper)
     _ = translator.translate(sample(.leftDown))
-    #expect(translator.translate(sample(.leftDragged, x: 600, y: 100, ms: 1)) == [touch(.move, 1024, 568, ms: 1)])
-    #expect(translator.translate(sample(.leftUp, x: 600, y: -50, ms: 2)) == [touch(.up, 1024, 768, ms: 2)])
+    // The guest rejects x >= 1024 and y >= 768, so the clamped drag and its UP end on the last pixel (1023, 767).
+    #expect(translator.translate(sample(.leftDragged, x: 600, y: 100, ms: 1)) == [touch(.move, 1023, 568, ms: 1)])
+    #expect(translator.translate(sample(.leftUp, x: 600, y: -50, ms: 2)) == [touch(.up, 1023, 767, ms: 2)])
+    #expect(translator.translate(sample(.leftDown, ms: 3)) == [touch(.down, 200, 168, ms: 3)])
 }
 
 @Test func aGenerationChangeDuringAGestureCancelsIt() {

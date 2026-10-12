@@ -27,14 +27,26 @@ func uninstallOfAMissingPackageIsAFailureWithItsCode() {
 }
 
 @Test
-func aReasonThatIsNotAnAndroidCodeIsNeverPassedOn() {
-    // Output text between the brackets is not a code, so it must not reach an error message.
+func aDetailedRejectionCarriesOnlyItsCode() {
+    // The recorded reply of the second install of a development agent signed by another key (IR-1226). Android's
+    // detail after the colon is text, and it must not reach an error message.
+    let reply =
+        "adb: failed to install /tmp/apkrun-guest.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package "
+        + "io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]"
+    #expect(AdbOutputParser.packageReply(reply) == .failure(reason: "INSTALL_FAILED_UPDATE_INCOMPATIBLE"))
     #expect(
         AdbOutputParser.packageReply(
             "adb: failed to install x.apk: Failure [INSTALL_FAILED_INVALID_APK: Failed to parse /data/x.apk]")
-            == .failure(reason: "unknown")
+            == .failure(reason: "INSTALL_FAILED_INVALID_APK")
     )
+}
+
+@Test
+func aReasonThatIsNotAnAndroidCodeIsNeverPassedOn() {
+    // Text in the brackets that is not an upper-case code must not reach an error message.
     #expect(AdbOutputParser.packageReply("Failure [A [b] c]") == .failure(reason: "unknown"))
+    #expect(AdbOutputParser.packageReply("Failure [lowercase text]") == .failure(reason: "unknown"))
+    #expect(AdbOutputParser.packageReply("Failure [: no code]") == .failure(reason: "unknown"))
 }
 
 @Test

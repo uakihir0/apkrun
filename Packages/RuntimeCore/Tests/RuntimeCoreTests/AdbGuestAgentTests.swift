@@ -35,12 +35,12 @@ private final class FakeGuestADB: @unchecked Sendable {
                 exit 0 ;;
               "-s 127.0.0.1:6520 install -r -t "*)
                 if [ -f "$dir/refuse-all-installs" ]; then
-                  echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
+                  echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]"
                   exit 1
                 fi
                 if [ -f "$dir/refuse-install" ]; then
                   rm -f "$dir/refuse-install"
-                  echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
+                  echo "adb: failed to install: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]"
                   exit 1
                 fi
                 echo "Performing Streamed Install"; echo "Success"; exit 0 ;;

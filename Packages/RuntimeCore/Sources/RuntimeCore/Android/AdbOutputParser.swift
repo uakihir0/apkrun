@@ -49,19 +49,20 @@ enum AdbOutputParser {
     }
 
     /// Reads the reply of `adb install` or `adb uninstall`. A success is a `Success` line. adb reports
-    /// a rejection as `Failure [CODE]`, sometimes after a prefix such as `adb: failed to install <apk>: `,
-    /// so the code is read from anywhere on its line.
+    /// a rejection as `Failure [CODE]` or `Failure [CODE: detail]`, sometimes after a prefix such as
+    /// `adb: failed to install <apk>: `, so the code is read from anywhere on its line. The code ends at the
+    /// first `]` or `:`; the detail after the colon is Android's text and is never passed on (IR-1226).
     static func packageReply(_ output: String) -> PackageReply {
         for line in lines(output) {
             if line == "Success" {
                 return .success
             }
-            guard let marker = line.range(of: "Failure ["),
-                let close = line[marker.upperBound...].firstIndex(of: "]")
-            else {
+            guard let marker = line.range(of: "Failure [") else {
                 continue
             }
-            let code = String(line[marker.upperBound..<close])
+            let rest = line[marker.upperBound...]
+            let end = rest.firstIndex(where: { $0 == "]" || $0 == ":" }) ?? rest.endIndex
+            let code = String(rest[..<end])
             // Android's codes are upper-case words. Anything else is output text, which must not reach an error.
             let isCode = !code.isEmpty && code.allSatisfy { $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_") }
             return .failure(reason: isCode ? code : "unknown")

@@ -12307,6 +12307,15 @@ the real manifest.
 **Update (2026-10-12).** `GuestAgentTests` did not run in the Xcode test host in this session, so the status above is unchanged. The behaviors of the suite were checked through the CLI on the device, with the commands in the Notes of #072 (IR-1227 to IR-1230). The forwarder-stop silence was not reproduced, because the suite did not run.
 - **Next step, when the lock is free.** Run `testAFourthDeathWithinAMinuteIsRequiredAgentUnavailable` once with `APKRUN_ANDROID_HOME=/tmp/apkrun-072-sdk`. If the test host still goes silent after `Stopped the loopback forwarder`, `sample` it during the silence to name the blocked wait.
 
+**Update (2026-10-13, root cause and result).** The cause is the macOS Documents-folder decision, not the adb binary or the forwarder. The host (`io.apkrun.testhost`) and the adb it starts ran from `~/Documents`, through the DerivedData and the SDK under `build/android-sdk`.
+- **Evidence of the decision.** The unified log (subsystem `com.apple.TCC`) of the run at 04:09 (saved as `/tmp/apkrun-ir438/tcc-r1.log`, four lines, 04:09 and 04:10) shows `Failed to match existing code requirement for subject io.apkrun.testhost and service kTCCServiceSystemPolicyDocumentsFolder`, then `AUTHREQ_PROMPTING` and `display_prompt` for the same subject. The stored requirement does not match this build, so the system asks again, and an unattended run does not answer. A sample of the stalled host showed the main thread in XCTest's `_recordIssue`, then `CSSymbolicatorCreate`, `fopen`, and `open$NOCANCEL`, while it read the host's binary images, which lie under `~/Documents` in that run. That open was the stall. During the device wait, each adb connect attempt took about 5 s and then timed out, and the adb processes that the host started were alive in `ps`. Those adb processes were not sampled, so their block in `open()` is inferred from the same decision and from the dyld sample of IR-388.
+- **Ablation** (the same test and image, `testDevelopmentBootConnectsAndAnswersPing`). With DerivedData and the SDK under `~/Documents` (run r1), the device was not reached, and the failed test went silent. With DerivedData under `~/Documents` and an SDK root under `/tmp`, set through `TEST_RUNNER_ANDROID_HOME` (run r4), the test passed in 15.1 s, and a `ps` sampler logged only `/tmp/apkrun-ir438-sdk/platform-tools/adb` commands (`/tmp/apkrun-ir438/r4-adb-paths.txt`). Run r3 gave the same result, without the sampler (15.7 s). With both under `/tmp` (run r2), it passed in 16.9 s. The adb failure follows the SDK location. The silence was seen only in r1, and its sample shows the symbolication open of the host's binary images, which lie under `~/Documents`.
+
+- **Result with the harness outside Documents.** `GuestAgentTests` passed 8 of 8 (run g2, `xcresult` under `/tmp/apkrun-ir438/`, 125.9 s), and again on the committed tree (run `final`, `/tmp/apkrun-ir438/final.log`, 128.3 s), with `xcodebuild test -only-test-configuration AndroidGuestAgent`, DerivedData `/tmp/apkrun-ir438-dd`, and `APKRUN_ANDROID_HOME=/tmp/apkrun-ir438-sdk`. The bugs found on the way are IR-1254 (plan IDs and ports), IR-1255 (the helper's port), and IR-1256 (the input wait). `AndroidInputTests` runs in the host and fails on the odm4 bundle at guest app rendering (IR-1257). Its three tests passed 0 of 3, so the #024 box is not ticked.
+- **Permission.** The layout above needs no grant. A Documents-located host would need the maintainer to re-grant `Documents Folder` for `APKRunTestHost` (System Settings, Privacy & Security, Files and Folders) for the current signature, and this change does not do that. The decision is recorded in IR-1253.
+- **Processes stopped.** Three `xcodebuild test` runs were stopped with SIGINT, and each exited within 20 s: r1 (stalled in the symbolication), i1 (waiting in the input prepare after a failed boot), and g1 (stopped once the helper fault was seen, with the lock released). No SIGKILL was sent. The adb servers that these runs started on ports 15039 and 15040 were stopped.
+- **What the 2026-10-12 text above still says.** The statements that adb does not return in the Xcode host, and that the forwarder stop is the blocker, are wrong for this layout. The `/tmp` copy workaround of IR-388 is the same fix, and the test plan and the docs now say so.
+
 ## IR-439: The test inputs are read from /tmp, and the entry's path is stale
 
 | Field | Value |
@@ -17302,3 +17311,157 @@ Checked without a finding by the reviewer: the translator's dispatch and the hov
 **Reason.** Each finding was checked against the files, and the answers are the commits named above.
 
 **Risk.** The review read the range before the later corrections and before the final batches. The corrections were checked by the affected T0 suites (`DevInputRouteTests`, `EventTranslatorTests`, `InputRouterTests`), and they passed. `AndroidInputTests` compiles after the last edit (`build-for-testing`, scheme `IntegrationTests`, exit 0). Its suite does not run here (IR-438).
+
+## IR-1253: Keep the T2 test host's build products and SDK outside ~/Documents
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 (also #024) |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4, §8; [build-system.md](../05-development/build-system.md) §12.4; [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine) |
+
+**Choice.** A local T2 run builds with `-derivedDataPath` under `${TMPDIR:-/tmp}`, and it sets `APKRUN_ANDROID_HOME` (or, for a host that is already built, `TEST_RUNNER_ANDROID_HOME`) to an SDK root under `/tmp` that holds a copy of `platform-tools`, because adb is found at `$ANDROID_HOME/platform-tools/adb`. The copy is the same adb 1.0.41 binary, as IR-388 chose. The docs say so, and the troubleshooting table names the symptom. No macOS permission is requested or changed.
+
+**Reason.** The evidence is in IR-438 (2026-10-13). The unified log shows that the host's Documents-folder decision did not match the current signature, so the system asked again (`tcc-r1.log`). In run r1 the host's adb did not reach the device with the SDK under `~/Documents`, and it logged `ADB did not reach` for every attempt. The same SDK copy under `/tmp` reached it (run r3). XCTest's symbolication of the host's binary images, which lay under `~/Documents`, stalled the failed test for its time allowance. Moving only the SDK fixed adb (runs r3 and r4; r4 logs the adb binary, which is under `/tmp`), and moving both fixed the run (run r2). Choosing the `/tmp` layout avoids a grant that the unattended run cannot give.
+
+**Risk.** A host built under `~/Documents` still stalls on any failed assertion, so the rule is a convention that a developer must follow. The gate scripts still build under `build/gates`, which is in the checkout (IR-1260). A `/tmp` SDK copy is a snapshot, and it must be copied again after an SDK update. The `/tmp` paths need disk space for the image install (about 45 GB).
+
+## IR-1254: Give the AndroidGuestAgent and AndroidInput configurations their own ADB server, and a unique ID
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 (AndroidGuestAgent); #024 (AndroidInput) |
+| Affected documents | [IntegrationTests.xctestplan](../../Tests/IntegrationTests/IntegrationTests.xctestplan); [IR-389](#ir-389-give-the-androidgraphics-configuration-its-own-adb-server-port) |
+
+**Choice.** `AndroidGuestAgent` sets `ANDROID_ADB_SERVER_PORT=15039`, and `AndroidInput` sets `15040`. The duplicate ID of `AndroidGuestAgent` (`…003008`, the ID of `AndroidGraphics`) becomes `…003011`.
+
+**Reason.** The configuration without a port used the default server on 5037, which another worker's adb also used, and IR-389 gives the reason for a dedicated server. `-only-test-configuration` resolves a configuration by name, so the duplicate ID did not stop the run, but two configurations with one ID is not a valid plan. A check of the plan found 9 configurations with 9 unique IDs after the change. Ports 15039 and 15040 were not listening before the runs.
+
+**Risk.** A developer who runs another adb server on 15039 or 15040 gets a conflict. The configuration ports are not listed in environment-setup §2.8, so a second adb server on 15039 or 15040 would collide without a message.
+
+## IR-1255: GuestAgentTests connect to the port that the boot bound
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #072 Tests; [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine) |
+
+**Choice.** `connectedClient(_:)` takes the boot session and connects to `supervisor.developmentADBHostPort`, through `AdbClient.loopbackEndpoint(port:)`, as `AndroidADBTests` does. It no longer uses the fixed endpoint `127.0.0.1:6520`.
+
+**Reason.** The test host's boot used a kernel-chosen port, here 60999. The helper connected to 6520, where nothing listened, and waited 30 s before the device-wait error. In run g1, the two tests that reached the helper, `testAFourthDeath…` and `testAnotherInstalled…`, failed this way after their boots had completed, and `testDevelopmentBoot…`, which does not use the helper, passed. After the change, all eight pass (run g2).
+
+**Risk.** A boot with developer mode off has no port, so the helper fails with `XCTUnwrap`. The suite always uses developer mode, so this does not arise here.
+
+## IR-1256: The input wait ends when its boot ends, and the input configuration names the VirGL runtime
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine); [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** `BootLog` records when the boot task returns, and the wait in `AndroidInputRun` throws `AndroidInputRunFailure.bootEnded` once the boot has ended, instead of waiting for `900 s`. The `AndroidInput` configuration sets `APKRUN_VIRGL_RUNTIME_PATH=/tmp/apkrun-test-linux/virgl-runtime`, the staged copy of the four pinned libraries, which `cmp` found identical to `ThirdParty/out/virgl-runtime/current`.
+
+**Reason.** Run i1 failed the boot with `runtime.graphics` (`VirGLRuntime directory is missing`), and then `prepare()` kept waiting for an input binding that could not come, with no output, until the run was stopped about four minutes later (the wait allows 900 s). The renderer looks for the runtime by walking up from the executable, and a host built under `/tmp` does not reach `ThirdParty/out`. The debug override that the renderer reads from the environment in DEBUG builds is the route that IR-600 uses for the virgl tests.
+
+**Risk.** The override exists only in DEBUG builds, and the host is a Debug build. With it, the renderer skips the packaged-runtime checks that IR-600 already notes for the virgl tests, so the copy must be the pinned one. The staged copy must be refreshed when the pinned runtime changes. The cmp check was made on 2026-10-13 and is not in the suite. The bootEnded path is not exercised yet: no run failed its boot after the change (run i2 booted, and the earlier failing run i1 predates the change).
+
+## IR-1257: AndroidInputTests runs in the Xcode test host and fails at guest app rendering on the odm4 bundle
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (boxes 2 to 7); IR-954 and IR-991 |
+
+**Choice.** The suite is recorded as run in the host, and it did not pass. The result is `Executed 3 tests, with 5 failures (2 unexpected)` (run i2, `xcresult` under `/tmp/apkrun-ir438/`): `testARightClickOpensTheContextMenu` and `testOneHundredClicksOnTheButtonAreLogged` do not find their views, and `testDragAndScrollMoveTheHelloComposeList` does not scroll the list. The #024 box for the 100 clicks is not ticked. The odm4 bundle is the one the task names, and no run on the stock bundle was made.
+
+**Reason.** The boot works (ANGLE renders, the scanout attaches, adb connects, and `bootCompleted`), so the adb and host faults are gone. The probe runs (runs i3 and i4, read-only adb) show the cause that comes first. `monkey` starts HelloText with no process, and `logcat` shows `Fatal signal 6 (SIGABRT)` in `RenderThread` of `droid.launcher3`, the home app. The virtio-gpu host logs `command was rejected command=262` many times, which is `RESOURCE_ATTACH_BACKING` (0x0106). `uiautomator dump` returned rc 137 (killed) in some samples. The review log has the same class of fault: IR-954 says that apps abort on the uevent read, and IR-991 extends it to `untrusted_app`. This run does not establish which of them causes this abort.
+
+**Risk.** The suite does not test the input path until the guest renders apps. Its failures can look like input faults, but they are rendering faults. The checks in `AndroidInputTests` stay unproven on this path. A stock-bundle control would show whether the odm4 overlay is involved, but it needs the maintainer's approval, because the task names the odm4 bundle.
+
+## IR-1258: The inputs of this run come from copies in the worktree and in /tmp, not from links
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072, #024 |
+| Affected documents | [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** The worktree gets a copy of the pinned VirGL runtime (`ThirdParty/out/virgl-runtime/<hash>`, with `current` recreated), not a link into the shared checkout. `HelloCompose.apk` is built in the worktree with `scripts/build-fixtures.sh --app HelloCompose` and copied to `/tmp/apkrun-test-fixtures/`. The XcodeGen binary of the main checkout runs the worktree's `project.yml`, because the worktree has no `build/tools`. The SDK is copied to `/tmp/apkrun-ir438-sdk`.
+
+**Reason.** A link would let the worktree write to the shared cache of the main checkout. The build of `GraphicsBridge` needs the runtime headers, which are git-ignored. The compose checks were skipped without the APK, so the fixture was needed for the suite to run at all.
+
+**Risk.** The copies are not refreshed by the checkout. `HelloCompose.apk` is 22.6 MB and is not committed. `scripts/build-fixtures.sh` rebuilds it.
+
+## IR-1259: The #072 and #024 boxes stay as they are
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072, #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) (exit criteria; #072 acceptance; #024 acceptance); [issues/README.md](issues/README.md) §3 |
+
+**Choice.** No box is ticked. `GuestAgentTests` passed 8 of 8, but no acceptance box names that suite alone. The M03 exit-criteria box names five suites: `GuestAgentTests` passed, `AndroidInputTests` failed, and `NativeWindowTests`, `PackageStoreTests`, and `DisplayPoolTests` did not run in this change. The #072 acceptance boxes were checked on the CLI path in IR-1227 to IR-1230. The #024 box for 100 clicks names the suite, and the suite did not pass. The notes and the #072 status row record the new result.
+
+**Reason.** The task allows a tick only when the suite that the box names has passed in the host. Ticking a box for a suite that names other suites would claim more than the run shows.
+
+**Risk.** The maintainer may want a box for the host run, and may want to add one. That is a change to the acceptance of #072, which this entry does not make. Closure of #072 and #024 is the maintainer's decision.
+
+## IR-1260: The gate scripts still build under build/gates, and the change does not move them
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 (gate evidence, G1 to G3) |
+| Affected documents | [build-system.md](../05-development/build-system.md) §12.4; [IR-1253](#ir-1253-keep-the-t2-test-hosts-build-products-and-sdk-outside-documents) |
+
+**Choice.** `scripts/run-gate.sh` keeps `gate_dir=$repo_root/build/gates/$gate`, and so its DerivedData stays in the checkout. This change does not move it.
+
+**Reason.** The gate scripts are outside this task's scope (AGENTS §11), and moving the DerivedData of a gate changes the gate's evidence path, so the gates would need to be rerun. A passing gate does not reach the stall, which needs a failed test.
+
+**Risk.** A failing gate test can stall for its time allowance, the same way as IR-438. The follow-up, which has no task number yet, is to build the gate DerivedData under `${TMPDIR}` and rerun G1 before the next gate. The maintainer files it under AGENTS §11.
+
+## IR-1261: AndroidPackageTests connects to the boot's port and reads its fixture from /tmp
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #027 (the T2 suite `AndroidPackageTests`) |
+| Affected documents | [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine); [IR-1255](#ir-1255-guestagenttests-connect-to-the-port-that-the-boot-bound); [environment-setup.md](../05-development/environment-setup.md) §4 |
+
+**Choice.** `AndroidPackageTests` gets the helper of `GuestAgentTests`: `connectedClient(_:)` takes the boot session and connects to `developmentADBHostPort`. Its HelloText fixture comes from `APKRUN_FIXTURE_APK`, not from `Tests/Fixtures/AndroidApps/out` next to the source file. The AndroidPackage configuration sets `APKRUN_FIXTURE_APK=/tmp/apkrun-test-fixtures/HelloText.apk`. The run `pkg` passed 4 of 4 (`xcodebuild test -only-test-configuration AndroidPackage`, 63.8 s, `/tmp/apkrun-ir438/pkg.log`).
+
+**Reason.** An independent review of the IR-438 change found the same fixed-endpoint fault in this suite. The boot binds a kernel-chosen port when `APKRUN_TEST_ADB_PORT` is unset, so the fixed endpoint 6520 is wrong here too. The fixture read through `#filePath` opens a file under `~/Documents` in the host, which waits for the Documents-folder decision (IR-1253). The port fix alone would therefore not let this suite run.
+
+**Risk.** The suite now needs the `/tmp` copy of HelloText, as the other suites do. The configuration still uses ADB server port 15037, which `AndroidADB` also uses, so the two configurations share a server if they are run in one session. This entry does not change the boxes of #027, and the maintainer decides whether the result is recorded there.
+
+## IR-1262: The read-only review of the IR-438 change, and how each finding was answered
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072, #024 |
+| Affected documents | [IR-438](#ir-438-the-t2-suite-cannot-drive-adb-from-the-xcode-test-host-on-this-machine); IR-1253 to IR-1261 |
+
+**Choice.** A read-only reviewer (an Explore agent that could not edit files, build, or start a VM) read the diff from `a5d73a9` and the saved logs in `/tmp/apkrun-ir438/`. It gave twelve findings. The answers:
+1. Major, the TCC cause was stated as fact without a saved log: accepted. The four matching lines are saved as `/tmp/apkrun-ir438/tcc-r1.log`, and IR-438 names their run. The wording now says "can wait", not "cannot open".
+2. Major, the r3 arm was not logged: accepted. Run r4 repeats it with a `ps` sampler, which logs only `/tmp` adb binaries. IR-438 and IR-1253 cite it.
+3. Major, `AndroidPackageTests` has the fixed-endpoint fault: accepted, and applied with a fixture change (IR-1261). The suite passes 4 of 4.
+4. Major, the SDK path in the docs: accepted. The variable names the SDK root that holds `platform-tools`, and the copy command creates that directory. The docs and IR-1253 say so.
+5. Minor, the bootEnded path has not run: accepted. It is recorded in IR-1256's Risk. No run has tested it.
+6. Minor, M03 and README status: accepted. The 8-of-8 result is a verification bullet, not an open item. The README row leaves closure to the maintainer (IR-1259). IR-1259 states the five suites in the box correctly.
+7. Minor, workarounds without a `TODO(#NNN)`: partly accepted. The `/tmp` layout is a test convention, not a code workaround, and the test plan is JSON, so it cannot hold a comment. The gate follow-up (IR-1260) has no task number yet, and the maintainer files it under AGENTS §11.
+8. Minor, commit rules: accepted. The branch is local and unpushed, so its commits were rewritten with the subjects and scopes of workflow §4.2.
+9. Minor, the DEBUG override skips the packaged-runtime checks: accepted as a risk (IR-1256). The override is the existing IR-600 mechanism, and this change does not alter it.
+10. Minor, the evidence did not cover the committed tree: accepted. The run `final` was made on the committed code, and IR-438 cites it. The `lsof` and `ps` observations of the first runs were read in the terminal, and no file holds them.
+11. Minor, a wrong `graphics.md` section citation: accepted. The citation is removed from IR-1256 and IR-1257.
+12. Minor, wording: accepted. The input header now names the home app, which is the process that aborts. IR-1255 names the two tests of run g1 that reached the helper, and the commit message is corrected in the rewrite.
+
+Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolated port; no switch over `AndroidInputRunFailure`; `bootLog.end()` on both DevBoot exits; valid plan JSON with unique IDs; no assertion or skip removed; the import and layering rules (AGENTS §6); no `~/Documents` mount added (§9).
+
+**Reason.** Each finding was checked against the files and the logs. The answers are the changes named above.
+
+**Risk.** The reviewer read the diff and the logs, and did not run anything. The code findings were checked by the runs `pkg` and `final`, and the others by reading the files. The record of this review does not cover any change made after this entry.

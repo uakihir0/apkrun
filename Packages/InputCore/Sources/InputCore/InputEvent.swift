@@ -212,7 +212,7 @@ public struct ScrollEvent: Sendable, Equatable {
     }
 }
 
-/// A key event, injected as a key (#025; the translator does not emit keys in #024).
+/// A key event, injected as a key in key mode (#025, `KeyTranslator`).
 public struct KeyEvent: Sendable, Equatable {
     /// The key goes down or up.
     public enum Action: Sendable, Equatable {
@@ -253,7 +253,7 @@ public enum InputEvent: Sendable, Equatable {
     case mouse(MouseEvent)
     /// A scroll event.
     case scroll(ScrollEvent)
-    /// A key event. Not produced in #024.
+    /// A key event of key mode (#025).
     case key(KeyEvent)
     /// A long press at a position. Not produced in #024 (D6).
     case longPress(DisplayPoint, InputTimestamp)

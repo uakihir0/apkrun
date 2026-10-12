@@ -45,7 +45,7 @@ public enum PointerEventAdapter {
 
     /// `NSEvent.timestamp` is seconds since the system started, the same base as the mach continuous time that
     /// `InputTimestamp` holds. A negative or non-finite value gives zero.
-    private static func timestamp(seconds: TimeInterval) -> InputTimestamp {
+    static func timestamp(seconds: TimeInterval) -> InputTimestamp {
         guard seconds.isFinite, seconds > 0 else { return InputTimestamp(hostNanos: 0) }
         let nanos = seconds * 1_000_000_000
         guard nanos < Double(UInt64.max) else { return InputTimestamp(hostNanos: UInt64.max) }

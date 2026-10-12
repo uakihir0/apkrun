@@ -51,6 +51,8 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         layerView.inputSink = inputSink
         window.contentView = layerView
+        // Key events go to the first responder, so the view that forwards them must be it (input.md §5.1).
+        window.initialFirstResponder = layerView
         window.delegate = self
         // Pointer moves without a button are hover events, so the window needs them (input.md §4.1).
         window.acceptsMouseMovedEvents = true
@@ -61,6 +63,7 @@ public final class DisplayWindow: NSObject, NSWindowDelegate {
     /// Shows the window, and starts applying the frames of the source.
     public func show() {
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(layerView)
         consumer = Task { [source] in
             for await event in source.frames {
                 self.apply(event)

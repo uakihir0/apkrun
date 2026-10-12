@@ -1,6 +1,6 @@
 import AppKit
-import InputCore
 import IOSurface
+import InputCore
 import QuartzCore
 
 /// Shows one IOSurface as the contents of a plain layer (display-and-windowing.md §5.3, #023), and captures the pointer
@@ -19,6 +19,8 @@ public final class IOSurfaceLayerView: NSView {
     private let contentLayer = CALayer()
     private let contentSize: CGSize
     private var translator: EventTranslator
+    /// The key events of key mode (input.md §5.1). The keys that are down end with `focusLost` and `cancelAll`.
+    private var keyTranslator = KeyTranslator()
     /// The pixel size and generation that the owner set with ``update(pixelWidth:pixelHeight:generation:)``. Nil until
     /// then, so the translator maps nothing before the first surface.
     private var geometry: (pixelWidth: Int, pixelHeight: Int, generation: UInt64)?
@@ -79,15 +81,18 @@ public final class IOSurfaceLayerView: NSView {
         replaceMapper()
     }
 
-    /// The window lost key status. The open gesture, the buttons, and the hover end on the guest (input.md §4.2).
+    /// The window lost key status. The open gesture, the buttons, the hover, and the keys end on the guest (input.md §4.2,
+    /// §7.3). The `cancelAll` that the pointer translator sends releases the keys on the guest.
     public func focusLost() {
         cancelPending()
+        keyTranslator.reset()
         deliver(translator.focusLost(at: Self.now()))
     }
 
     /// The window is closing. Everything that is open ends on the guest, as with `focusLost` (input.md §4.2).
     public func cancelAll() {
         cancelPending()
+        keyTranslator.reset()
         deliver(translator.cancelAll(at: Self.now()))
     }
 
@@ -145,6 +150,30 @@ public final class IOSurfaceLayerView: NSView {
         forward(event)
     }
 
+    /// Key mode: a key goes down. The view does not call `super`, so an unhandled key does not beep (input.md §5.1).
+    public override func keyDown(with event: NSEvent) {
+        forwardKey(event)
+    }
+
+    public override func keyUp(with event: NSEvent) {
+        forwardKey(event)
+    }
+
+    /// A modifier key goes down or up, and Caps Lock toggles.
+    public override func flagsChanged(with event: NSEvent) {
+        forwardKey(event)
+    }
+
+    /// The ⌘ shortcuts of input.md §6 (⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, and ⌘[) reach the guest before the menus can take them. The
+    /// other key equivalents are left to the menus, so ⌘Q, ⌘W, and the rest keep their meaning.
+    public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let sample = KeyEventAdapter.sample(for: event), KeyTranslator.forwardsCommandShortcut(sample) else {
+            return false
+        }
+        deliver(keyTranslator.translate(sample))
+        return true
+    }
+
     /// The content rectangle in the view's coordinates: the aspect fit of the content in the bounds.
     private var contentRect: CGRect {
         DisplayGeometry.aspectFit(contentSize: contentSize, in: bounds.size)
@@ -178,6 +207,14 @@ public final class IOSurfaceLayerView: NSView {
         if translator.hasPending {
             scheduleFlush()
         }
+    }
+
+    /// Converts one key event to a sample, translates it, and sends the events that come out.
+    private func forwardKey(_ event: NSEvent) {
+        guard let sample = KeyEventAdapter.sample(for: event) else {
+            return
+        }
+        deliver(keyTranslator.translate(sample))
     }
 
     /// Stores the mapper for the current geometry. Nothing is stored before the first `update`.

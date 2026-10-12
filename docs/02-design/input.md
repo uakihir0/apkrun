@@ -361,6 +361,7 @@ This is the list #025 asks for ("Document unsupported IME behavior").
 
 - Input errors are not user-facing. They are counters in the diagnostics snapshot (`input.dropped.rate`, `input.dropped.notRunning`, `input.dropped.invalid`, `input.ime.unmappedCommand`, `input.coalesced`) and health warnings when the agent's input stream is down (`agent.input.disconnected`).
 - Logging: `io.apkrun.input`, categories `translate` (wrapper), `route` (apkrund), and `ime` (both). Guest: logcat tag `ApkRunInput`.
+- **Status after #024.** The router adds the counter `input.dropped.channel` (events the input stream could not carry). The `input.route` signpost wraps `InputRouter.route`. The `input.translate` signpost is not added: the window path is synchronous, and `Perf.interval` is asynchronous, so a synchronous variant needs an entry in [diagnostics.md](diagnostics.md) (IR-1244). The counters are kept by `InputRouter` and read by `DevInputRoute.counters()`, but no diagnostics snapshot exports them yet (IR-1238). The guest's input lines use the logcat tag `ApkRunGuest`, the Guest Agent's tag ([guest-components.md](guest-components.md) §9), not `ApkRunInput` (IR-1236).
 
 ---
 
@@ -429,10 +430,10 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Coordinates: `adb shell input -d 0 tap` at points computed by `CoordinateMapper` | #024 | pending (§3, §12) |
-| Android's own pointer for injected `SOURCE_MOUSE` events, and hiding it on pool displays (OQ-31) | #024 (display 0), #029 (pool displays) | pending (§4.2) |
-| Scroll signs: a two-finger swipe up moves HelloCompose's content up; wheel direction | #024 | pending (§4.4) |
-| 100 of 100 clicks on the HelloText button are registered; a right-click opens the context menu | #024 | pending (§12) |
+| Coordinates: `adb shell input -d 0 tap` at points computed by `CoordinateMapper` | #024 | done, 2026-10-12 UTC (step 1, commit `5a43977`): 10 of 10 taps hit HelloText's button on display 0 (§3, §12) |
+| Android's own pointer for injected `SOURCE_MOUSE` events, and hiding it on pool displays (OQ-31) | #024 (display 0), #029 (pool displays) | display 0: no pointer is drawn for an injected hover, so no hiding is needed (2026-10-12 UTC, one device and one image; [M03](../04-plan/issues/M03-input-and-basic-runtime.md) #024). The pool-display check remains #029 (§4.2) |
+| Scroll signs: a two-finger swipe up moves HelloCompose's content up; wheel direction | #024 | done for the synthetic scrolls, 2026-10-12 UTC: a drag up, a pixel scroll, and a line scroll with a negative vertical delta each move the content up (first index 0 to 4, 4 to 8, 8 to 28). The real trackpad check C01-2 (T3) is not run (§4.4) |
+| 100 of 100 clicks on the HelloText button are registered; a right-click opens the context menu | #024 | 100 of 100 in three batches (run 2, run 4, and the final C2 batch); one batch of 99 of 100 is open ([M03](../04-plan/issues/M03-input-and-basic-runtime.md) #024). The right-click logs `contextmenu` once and opens the menu (§12) |
 | Typing `Hello, APKRun 123!` into HelloText; Backspace, Enter, the arrow keys, and Esc | #025 | pending (§5.2) |
 | IME: "にほんご" converts to "日本語" in both fixtures; the candidate window position; emoji viewer and dictation; secure input in password fields | #071 | pending (§5, §10) |
 | Two-window routing: typing goes only to the key window's app, and the IME binds to the editor on the correct display (R-05) | #030, #071 | pending (§7.2) |

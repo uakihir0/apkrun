@@ -17103,6 +17103,8 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 
 **Risk.** A guest agent restart ends pointer input until the boot ends. Events on the dead channel fail and are counted as `input.dropped.channel`. The follow-up task is not filed yet.
 
+**Filed.** The follow-up is task #101 (GitHub issue #101), with its entry in [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) and a row in the task index. The number follows AGENTS §11: the task takes the number of its issue.
+
 ## IR-1242: OQ-31 answer for display 0: no pointer is drawn, and hover stays on
 
 | Field | Value |

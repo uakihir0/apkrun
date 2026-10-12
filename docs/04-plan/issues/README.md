@@ -116,6 +116,7 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #033 | Define GuestProtocol | M3 | #007 | | [guest-protocol.md](../../02-design/guest-protocol.md) |
 | #072 | Guest Agent bootstrap | M3 | #033, #015 | | [guest-protocol.md](../../02-design/guest-protocol.md), [guest-components.md](../../02-design/guest-components.md) |
 | #024 | Pointer input | M3 | #023, #072 | | [input.md](../../02-design/input.md) |
+| #101 | Input route rebinds after the guest agent is lost (follow-up of #024) | M3 | #024 | | [input.md](../../02-design/input.md) §3, [guest-components.md](../../02-design/guest-components.md) §3.3 |
 | #025 | Keyboard input | M3 | #024 | | [input.md](../../02-design/input.md) |
 | #026 | HelloText in a native Mac window | M3 | #023, #024, #025 | G4 | [display-and-windowing.md](../../02-design/display-and-windowing.md) §7 |
 | #027 | RuntimeCore package operations | M3 | #026 | | [package-store.md](../../02-design/package-store.md) |

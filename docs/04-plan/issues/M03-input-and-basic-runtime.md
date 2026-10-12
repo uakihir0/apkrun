@@ -1000,3 +1000,36 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - **Record:** the #030 part of the two-window row of [../../02-design/input.md](../../02-design/input.md) §15, the #030 part of the two-display row of [../../02-design/graphics.md](../../02-design/graphics.md) §16, and R-03 and R-05 in [../risks.md](../risks.md).
 - **Pitfall:** a drag that is in progress when focus moves must end with `.cancelAll`. Otherwise the first app keeps a finger down.
 - Typing into a text field on a secondary display with the IME is #071. In M3, key mode is used on every display.
+
+---
+
+## #101 Input route rebinds after the guest agent is lost
+
+| Field | Value |
+|---|---|
+| Milestone | M3 (v0.1), follow-up of #024 |
+| Depends on | #024 |
+| Requirements | FR-IN-06 (the input path stays on the guest agent). Constraints: NFR-SEC-06 |
+| Design | [../../02-design/input.md](../../02-design/input.md) §3, §7.1; [../../02-design/guest-components.md](../../02-design/guest-components.md) §3.3 |
+| Modules / paths | RuntimeHost `DevInputBinding`, `DevelopmentGuestAgent.handleLoss`; RuntimeCore `GuestAgentSupervisor` |
+| Risks / questions | IR-1241 |
+
+### Goal
+
+After a guest agent restart, pointer input works again on the same window without ending the boot. Today the bound channel stays after the loss, so input stays dead until the boot ends.
+
+### Scope
+
+- Release the bound channel when the agent is lost, and rebind it when the new agent is ready.
+- Change the restart policy only as far as the rebind needs. The change is in the supervisor, not in the input path.
+- Out of scope: the restart policy itself, and the keyboard (#025).
+
+### Acceptance
+
+- [ ] A T1 test in `GuestAgentSupervisorTests` covers the loss and the rebind, and the events on the dead channel are counted as `input.dropped.channel`.
+- [ ] On a device, after a forced kill of the agent, a click in the window reaches the app again (no restart of the boot).
+- [ ] The rebind is recorded in an IR entry with the restart counts.
+
+### Notes
+
+- **Origin:** IR-1241. The previous task left this for a separate change, because it alters what counts as a death in the restart policy.

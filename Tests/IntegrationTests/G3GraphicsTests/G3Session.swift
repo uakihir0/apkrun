@@ -51,7 +51,8 @@ enum G3Failure: Error, CustomStringConvertible {
     case commandFailed(String, Int32, String)
     case commandTimedOut(String)
     case bootEnded(String)
-    case noWindow(Int32)
+    /// The window of display 0 was not on screen. The message is what the window list showed, not a permission.
+    case noWindow(String)
     case screenshotFailed(String)
     /// The test host has no Screen Recording access. The test does not request it: the lab grants it once, by hand
     /// (test-strategy.md §3.6). The name is the one of test-strategy.md §3.6.
@@ -69,8 +70,8 @@ enum G3Failure: Error, CustomStringConvertible {
             "\(command) did not finish in time"
         case .bootEnded(let state):
             "the boot ended before it was ready: \(state)"
-        case .noWindow(let pid):
-            "no window titled APKRun display 0 belongs to process \(pid). Check that Screen Recording is allowed for the test host."
+        case .noWindow(let detail):
+            detail
         case .screenshotFailed(let path):
             "screencapture did not write \(path)"
         case .runnerMissingPermission:
@@ -307,7 +308,7 @@ final class G3Session: @unchecked Sendable {
     /// Captures the window of display 0 of the boot with `screencapture`, and returns its window number.
     func captureWindow(to name: String) throws -> Int {
         guard let boot else {
-            throw G3Failure.noWindow(0)
+            throw G3Failure.noWindow("the boot was not started, so it has no window")
         }
         let number = try windowNumber(owner: boot.processIdentifier)
         let destination = inputs.artifacts.appendingPathComponent("screenshots", isDirectory: true)
@@ -327,28 +328,119 @@ final class G3Session: @unchecked Sendable {
 
     /// The number of the on-screen window of `owner` whose title starts with `APKRun display 0`.
     ///
-    /// Without Screen Recording access, macOS hides the titles of other processes' windows, so the title cannot be
-    /// matched. The check only reads the access (CGPreflightScreenCaptureAccess); it never requests it.
+    /// The Screen Recording access is checked with CGPreflightScreenCaptureAccess, and the test never requests it. Each
+    /// lookup appends the window list to `window-list.txt`, so a failure can be read against the list at its time. A
+    /// failure states what the list showed: whether the process is alive, and its windows with their on-screen flags.
     func windowNumber(owner: pid_t) throws -> Int {
         guard CGPreflightScreenCaptureAccess() else {
             throw G3Failure.runnerMissingPermission
         }
-        let windows =
-            CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-            as? [[String: Any]] ?? []
-        for window in windows {
-            let ownerPID = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
-            let title = window[kCGWindowName as String] as? String ?? ""
-            if ownerPID == owner, title.hasPrefix("APKRun display 0"),
-                let number = (window[kCGWindowNumber as String] as? NSNumber)?.intValue
-            {
-                return number
-            }
+        let onScreen = Self.windowRecords(onScreenOnly: true)
+        let all = Self.windowRecords(onScreenOnly: false)
+        let state = Self.processState(owner)
+        let ownerWindows = all.filter { $0.owner == owner }
+        let match = onScreen.first { $0.owner == owner && $0.title.hasPrefix("APKRun display 0") }
+        let summary = ownerWindows.map { $0.description }.joined(separator: "; ")
+        appendWindowList(
+            "\(ISO8601DateFormatter().string(from: Date())) owner \(owner) state \(state) "
+                + "on-screen windows \(onScreen.count) of \(all.count) listed; owner windows: "
+                + (summary.isEmpty ? "none" : summary)
+        )
+        if let match {
+            return match.number
         }
-        throw G3Failure.noWindow(owner)
+        let detail: String
+        if ownerWindows.isEmpty {
+            detail = "the boot process \(owner) has no window in the window list (state \(state))"
+        } else if ownerWindows.contains(where: { $0.title.hasPrefix("APKRun display 0") }) {
+            detail =
+                "the display window of boot process \(owner) is listed but not on screen (state \(state)): "
+                + "it is on another Space, hidden, or minimized. Windows of the process: \(summary)"
+        } else {
+            detail =
+                "the boot process \(owner) has windows, but none titled APKRun display 0 (state \(state)): "
+                + summary
+        }
+        throw G3Failure.noWindow(
+            "no on-screen window titled APKRun display 0 belongs to boot process \(owner); "
+                + "the window list has \(onScreen.count) on-screen windows and \(all.count) in all; \(detail)")
     }
 
-    /// The number of distinct colours in the central part of a capture. A blank or missing display shows few.
+    /// One window of the window list.
+    struct WindowRecord {
+        let number: Int
+        let owner: pid_t
+        let title: String
+        let onScreen: Bool
+        let layer: Int
+        let bounds: String
+
+        var description: String {
+            "window \(number) '\(title.prefix(40))' on screen \(onScreen) layer \(layer) bounds \(bounds)"
+        }
+    }
+
+    /// The windows of the window list, on screen only or in all.
+    static func windowRecords(onScreenOnly: Bool) -> [WindowRecord] {
+        let options: CGWindowListOption =
+            onScreenOnly ? [.optionOnScreenOnly, .excludeDesktopElements] : [.excludeDesktopElements]
+        let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.compactMap { window in
+            guard let number = (window[kCGWindowNumber as String] as? NSNumber)?.intValue,
+                let owner = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            else {
+                return nil
+            }
+            let bounds =
+                (window[kCGWindowBounds as String] as? [String: Any])
+                .map { "\($0["X"] ?? "?"),\($0["Y"] ?? "?") \($0["Width"] ?? "?")x\($0["Height"] ?? "?")" } ?? "?"
+            return WindowRecord(
+                number: number,
+                owner: owner,
+                title: window[kCGWindowName as String] as? String ?? "",
+                onScreen: (window[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false,
+                layer: (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1,
+                bounds: bounds
+            )
+        }
+    }
+
+    /// The live state of a process from `ps`, such as `S` (sleeping) or `R`; `Z` is a zombie, and `gone` is no process.
+    static func processState(_ pid: pid_t) -> String {
+        guard kill(pid, 0) == 0 else {
+            return "gone"
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-o", "stat=", "-p", String(pid)]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else {
+            return "unknown"
+        }
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        let state = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return state.isEmpty ? "gone" : state
+    }
+
+    /// Appends one line to `window-list.txt` in the artifact directory.
+    func appendWindowList(_ line: String) {
+        let url = inputs.artifacts.appendingPathComponent("window-list.txt")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            _ = try? handle.seekToEnd()
+            handle.write(Data((line + "\n").utf8))
+            try? handle.close()
+        }
+    }
+
+    /// The number of distinct colours in a capture, sampled every 8 pixels. HelloGL's normal-mode frame is one flat colour
+    /// that changes over time, so the title bar and the status bar carry most of the colours of a shown display. A blank
+    /// window shows few.
     static func distinctColours(inPNG url: URL) -> Int {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -368,8 +460,8 @@ final class G3Session: @unchecked Sendable {
         }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         var colours = Set<UInt32>()
-        for y in stride(from: height / 5, to: height * 4 / 5, by: 16) {
-            for x in stride(from: width / 5, to: width * 4 / 5, by: 16) {
+        for y in stride(from: 0, to: height, by: 8) {
+            for x in stride(from: 0, to: width, by: 8) {
                 let offset = y * rowBytes + x * 4
                 let value =
                     UInt32(pixels[offset]) << 16 | UInt32(pixels[offset + 1]) << 8 | UInt32(pixels[offset + 2])

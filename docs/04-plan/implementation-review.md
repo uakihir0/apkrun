@@ -16691,3 +16691,53 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 
 **Consequence.** The gate has not been run after these fixes. The tearing check reads alternating frames at about 21.6 ms each in a debug build, so the alternating phase may run below 60 fps. That phase is not a gate criterion. In normal mode the sampler reads one pixel per frame, so the census does not change the 60 s or 10-minute fps numbers.
 
+
+## IR-1218: Run 3 of G3: the boot's window was not on screen at 05:43:35 UTC; the rest of the boot was alive; the recorder exited on its own
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (Gate G3); [test-strategy.md](../04-plan/test-strategy.md) §5 (screen recording for G3) |
+
+**Choice.** The cause of the failed window lookup is not proven, and the evidence points to the window leaving the on-screen list, not to the CLI or the guest failing. The run is 0528ad5, run 3, artifacts in `/private/tmp/apkrun-test-linux/g3-artifacts`.
+
+Timeline (UTC, from `session.log`, `boot.err`, the screenshot `screenshots/normal-1.png`, and the unified log):
+
+- 05:42:50.162 HelloGL logged `APKRUN-FIXTURE: renderer virgl`.
+- 05:43:00.178 HelloGL logged `APKRUN-FIXTURE: fps 58.5`.
+- 05:43:05 the first window capture (window 10743) succeeded. The screenshot shows the HelloGL activity under the title `APKRun display 0 57 fps`. The lookup found the window, so the permission check passed.
+- 05:43:01.7 to 05:43:13.97 WindowServer logged four front-process changes (`SetFrontProcessWithInfo`, `BringNextToFront`, and two `SetManagedDisplayCurrentSpace` events at 05:43:09.8 and 05:43:13.97). The front process moved to ChatGPT and then to Code. These were activations in the Mac's user session, not by the test.
+- 05:43:35 the next lookup found no on-screen window titled `APKRun display 0` for process 54102. The test had made no capture in between. The message named Screen Recording, which was wrong: the preflight had passed.
+- 05:43:37 the test sent SIGINT. WindowServer logged `Process death: apkrun (pid 54102)` at 05:43:37.5, after the stop.
+
+What the evidence rules out:
+
+- Process death: process 54102 was alive until the test's own SIGINT. The boot printed `stopping Android` only after that signal.
+- Window closed by the user: the CLI stops the boot when its window closes. The boot ran until the test's signal.
+- Guest or presenter stall: `boot.err` shows about 60 frames per second, `dropped 0`, `stalls 0`, `hostReadbacks 0`, and `cpuPixelCopies 0` through 05:43:36. `framesSampled` rose by about 60 each second, and the 0 fps lines appear only after `state: stopping`.
+- Screen Recording: the preflight passed on the failing call. The cause is not the permission.
+
+What the evidence does not prove: that the window moved to another Space. The lookup uses `optionOnScreenOnly`, which drops windows on another Space, hidden windows, and minimized windows, and the timing matches the front-process changes. No window list was recorded at 05:43:35, so this is an inference. HelloGL's pid was not polled after 05:43:05, so HelloGL's state at 05:43:35 is also unverified. The fix in IR-1219 records the list at every lookup.
+
+The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It reported no signal and exited with status 1 at 05:46:21 (`proc_exit`), about five minutes in, with no file. The unified log shows no cause I could identify. The gate then reported `recorder_exit: 1` and failed, which is the correct result. The cause is open.
+
+**Reason.** The run went to the window check first, and every other part of the boot kept running. The lookup needs the window on screen, and the test has no way to bring it there. A gate run therefore needs the Mac's active Space and the window to stay put for the whole run: no Space switches and no full-screen apps activated during the run. That is an operating rule for the lab, not a code fix.
+
+## IR-1219: Fixes after run 3: the gate status is written once and signals are recorded, the window failure states its cause, and the normal-mode colour check is corrected
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §5 (the gate report); [graphics.md](../02-design/graphics.md) §12 #023 (criterion 1) |
+
+**Choice.** Three changes.
+
+- *The report status.* `scripts/tools/gate-status.sh` writes the final status once: `passed` for exit 0, `failed` for any other exit, and `interrupted` with exit 130, 143, or 129 for INT, TERM, or HUP. It replaces the `status: running` line instead of appending a second status line. `run-gate.sh` sources it, and the G3 recorder is stopped in the same path. `scripts/tests/test_gate_status.sh` covers each case, including an INT and a TERM while the gate waits on a child. Run 3 wrote one status line, `status: failed`, so the normal path was already correct. The killed run from attempt 1 of the review had written `status: passed` because the EXIT trap read a zero status after a signal.
+- *The window failure.* The lookup now checks the process state with `ps` and lists the windows of the owner, with their on-screen flags, layers, and bounds. It appends each lookup to `window-list.txt`. The failure message states the cause the list shows (no window, a window listed but not on screen, or windows with another title). It no longer suggests Screen Recording.
+- *Condition 1, the window colours.* The check counted distinct colours in the centre of the capture and needed eight. HelloGL's normal-mode frame is one flat colour that changes over time, so the centre had three colours even with the window visible. The check now samples the whole capture every eight pixels.
+
+**Reason.** A gate that writes `passed` after a signal is wrong evidence, so the status has one writer and the signals are part of the trail. The window lookup needed to name the state the run was in, so the next failure can be read without a guess. The colour check would have failed a correct run.
+
+**Consequence.** Run 3 is not a pass. The next gate run needs the window on the active Space for its whole length. The check that counts colours is coarse: the title bar and the status bar supply most of the colours, so the check cannot tell a correct frame from a title bar on its own. Condition 1 still rests on the screenshot.

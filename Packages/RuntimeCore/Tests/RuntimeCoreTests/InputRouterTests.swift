@@ -232,6 +232,35 @@ func theExcessOverTheLimitIsDroppedInTheOrderOfTheBatch() async {
     #expect(sent.last?.touch.x == 1_999)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func aBatchOverTheLimitKeepsEveryGestureEndAndKeyAndDropsOnlyMovesAndScrolls() async {
+    let channel = RecordingInputChannel()
+    let clock = TestClock()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: clock, session: session)
+    let press = MouseEvent(action: .press(.secondary), position: point(0), buttons: .secondary, time: stamp)
+    let release = MouseEvent(action: .release(.secondary), position: point(0), buttons: [], time: stamp)
+    let key = KeyEvent(action: .down, androidKeyCode: 29, metaState: [], repeatCount: 0, time: stamp)
+    // One DOWN, 1500 moves, and 600 scrolls, then the events that end gestures, a key, and the cancel, all after the limit.
+    var batch: [InputEvent] = [touch(.down, 1)]
+    batch += Array(repeating: touch(.move, 2), count: 1_500)
+    batch += Array(repeating: scroll(1), count: 600)
+    batch += [touch(.up, 3), touch(.cancel, 3), .mouse(press), .mouse(release), .key(key), .cancelAll(stamp)]
+    await router.route(batch, from: session)
+    let sent = await allEvents(channel)
+    // The window holds 2000: the DOWN and the 1500 moves, 499 scrolls, then the six events that are never dropped.
+    #expect(sent.count == 2_006)
+    #expect(sent.filter { label($0) == "scroll" }.count == 499)
+    #expect(await router.counters.droppedRate == 101)
+    #expect(sent.suffix(6).map(label) == ["touch", "touch", "mouse", "mouse", "key", "cancelAll"])
+    #expect(sent.suffix(6).prefix(2).map { $0.touch.phase } == [.up, .cancel])
+    // The events that were never dropped count against the window as they pass, so a move in the same second is dropped
+    // while the up is kept.
+    await router.route([touch(.move, 4), touch(.up, 4)], from: session)
+    #expect(await router.counters.droppedRate == 102)
+    #expect(await allEvents(channel).count == 2_007)
+}
+
 // MARK: - Coalescing
 
 @Test(.timeLimit(.minutes(1)))

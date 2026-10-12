@@ -76,18 +76,31 @@ public actor InputRouter {
         private var entries: [(at: UInt64, count: Int)] = []
         private var total = 0
 
-        /// Admits up to `wanted` events at `now` and returns how many were admitted.
-        mutating func admit(_ wanted: Int, at now: UInt64, limit: Int) -> Int {
+        /// Admits the events of a batch at `now`, in order, and returns the ones that pass and how many were dropped.
+        /// A droppable event passes while the window has room for it. An event that is never dropped passes at once, and
+        /// it counts against the window as it passes, so the limit still holds for the events after it (input.md §7.1).
+        mutating func admit(
+            _ events: [InputEvent], at now: UInt64, limit: Int
+        ) -> (passed: [InputEvent], dropped: Int) {
             while let first = entries.first, first.at + InputRouter.windowNanoseconds <= now {
                 total -= first.count
                 entries.removeFirst()
             }
-            let admitted = max(0, min(wanted, limit - total))
-            if admitted > 0 {
-                entries.append((at: now, count: admitted))
-                total += admitted
+            var passed: [InputEvent] = []
+            passed.reserveCapacity(events.count)
+            var dropped = 0
+            for event in events {
+                if InputRouter.isNeverDropped(event) || total + passed.count < limit {
+                    passed.append(event)
+                } else {
+                    dropped += 1
+                }
             }
-            return admitted
+            if !passed.isEmpty {
+                entries.append((at: now, count: passed.count))
+                total += passed.count
+            }
+            return (passed, dropped)
         }
     }
 
@@ -165,16 +178,17 @@ public actor InputRouter {
             return
         }
         let now = clock()
-        let admitted = sessions[session]?.window.admit(events.count, at: now, limit: Self.eventsPerSecond) ?? 0
-        let excess = events.count - admitted
-        if excess > 0 {
-            counters.droppedRate += excess
-            warnOncePerSecond("Input is over the rate limit, so the excess is dropped")
-        }
-        guard admitted > 0 else {
+        guard let admission = sessions[session]?.window.admit(events, at: now, limit: Self.eventsPerSecond) else {
             return
         }
-        var accepted = Array(events.prefix(admitted))
+        if admission.dropped > 0 {
+            counters.droppedRate += admission.dropped
+            warnOncePerSecond("Input is over the rate limit, so the excess is dropped")
+        }
+        var accepted = admission.passed
+        guard !accepted.isEmpty else {
+            return
+        }
         let backlog = await channel.pendingBytes
         if backlog > Self.coalescingBacklogBytes {
             accepted = coalesce(accepted)
@@ -217,6 +231,23 @@ public actor InputRouter {
             }
             counters.batchesSent += 1
             counters.eventsSent += batch.events.count
+        }
+    }
+
+    /// Whether the rate limit never drops `event`. The touch down, up, and cancel, the button presses and releases, the
+    /// hover enter and exit, the key, the long press, and `cancelAll` are kept, so that no gesture or hover stays open
+    /// on the guest. Only the touch moves, the hover moves, and the scrolls are droppable (input.md §7.1). A hover enter
+    /// and exit are kept too, because a dropped exit would leave the guest hovering.
+    static func isNeverDropped(_ event: InputEvent) -> Bool {
+        switch event {
+        case .touch(let touch):
+            touch.phase != .move
+        case .mouse(let mouse):
+            mouse.action != .hoverMove
+        case .scroll:
+            false
+        case .key, .longPress, .cancelAll:
+            true
         }
     }
 

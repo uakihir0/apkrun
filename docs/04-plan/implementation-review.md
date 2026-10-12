@@ -17492,8 +17492,8 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 1. The meta state comes from the modifiers of each sample, with the side of Shift, Control, and Option (`META_*_LEFT_ON`, `META_*_RIGHT_ON`). Caps Lock adds `META_CAPS_LOCK_ON`. Command adds no bit, because it is not forwarded.
 2. Caps Lock is a tap (DOWN and UP) for each change, and the lock state after the change is in the meta state.
 3. A key that is held sends DOWN with the repeat count, and no UP comes between repeats. A DOWN for a key the translator holds is a repeat, whether or not the window marks it.
-4. Every release sends the code of its press, and it keeps the extra meta bits of the press. A release with no press is dropped. A key that is not forwarded has no entry, so its release is dropped too.
-5. ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z send their letter with `META_CTRL_ON` and `META_CTRL_LEFT_ON`, and no separate Control key event. ⇧⌘Z keeps the user's Shift. ⌘[ is BACK when no Shift, Control, or Option is down. Other Command combinations are dropped.
+4. Every release sends the code of its press, and it keeps the extra meta bits of the press. A release with no press is dropped. A key that is not forwarded has no entry, so its release is dropped too. When Command goes down, the non-modifier keys that are held end with their UP (IR-1273, item 1).
+5. ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z are a tap each: DOWN and UP with `META_CTRL_ON` and `META_CTRL_LEFT_ON`, and no separate Control key event. A ⌘ shortcut keeps no key held, because macOS sends no keyUp while Command is down (IR-1273, item 1). ⇧⌘Z keeps the user's Shift. ⌘[ is a Back tap when no Shift, Control, or Option is down. Other Command combinations are dropped.
 6. Escape is BACK. The translator takes `escapeKey` as a parameter (`back` or `escape`). It does not read the setting, because no settings store reads any `input.*` key yet.
 7. `reset()` forgets the held keys when the window loses focus, and the guest releases them with `.cancelAll`.
 
@@ -17523,7 +17523,7 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 | Task | #025 |
 | Affected documents | [input.md](../02-design/input.md) §5.1, §7.3, §9, §10; [guest-components.md](../02-design/guest-components.md) §6.3 |
 
-**Choice.** `InputInjector` builds a `KeyEvent` on `KeyCharacterMap.VIRTUAL_KEYBOARD` (device -1) with `SOURCE_KEYBOARD`, scan code 0, and flags 0, through the `KeyEventFactory` seam (`KeyEventFactory.kt`). The planner keeps the keys that are down per display, by Android key code, with the down time and the meta state of the press (`DisplayGestures.keys`). A DOWN with a repeat count above zero repeats the open press with its down time. A DOWN without a count for a key that is down releases the press and drops the DOWN, as a touch DOWN does. An UP or a repeat with no press is dropped and counted. A refused DOWN leaves no press, and a refused UP keeps the press. `cancelAll` and a removed display send UP for each open key, with the meta state of the press. A long press is still dropped and counted (D6). The log tag stays `ApkRunGuest`, as IR-1236 chose.
+**Choice.** `InputInjector` builds a `KeyEvent` on `KeyCharacterMap.VIRTUAL_KEYBOARD` (device -1) with `SOURCE_KEYBOARD`, scan code 0, and flags 0, through the `KeyEventFactory` seam (`KeyEventFactory.kt`). The planner keeps the keys that are down per display, by Android key code, with the down time and the meta state of the press (`DisplayGestures.keys`). A DOWN with a repeat count above zero repeats the open press with its down time. A DOWN without a count for a key that is down releases the press, and the DOWN starts a new press, so the keystroke is kept (IR-1273, item 4). If the framework refuses that release, the DOWN is dropped. An UP or a repeat with no press is dropped and counted. A refused DOWN leaves no press, and a refused UP keeps the press. `cancelAll` and a removed display send UP for each open key, with the meta state of the press. A long press is still dropped and counted (D6). The log tag stays `ApkRunGuest`, as IR-1236 chose.
 
 **Reason.** The virtual keyboard gives Android's US character map, which input.md §5.1 and §10 name. The key rules follow the touch rules of §7.3.
 
@@ -17551,7 +17551,7 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 | Task | #025 |
 | Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (boxes 1, 2, 3, 4, 6; Notes); [input.md](../02-design/input.md) §15 |
 
-**Choice.** The device runs are from 2026-10-12 UTC, on the stock image 16373615 with the APKRun build of this branch (guest and embedded CLI built at 19:41Z). The home was a copy of the #024 home (APFS clone, `cp -c`), so the image was not installed again. The runs used `apkrun dev boot --gpu virgl --window` under `lockf -k /tmp/apkrun-vm.lock`, and the debug HelloText APK. Keys were sent by a scratch CGEvent helper outside the repository, and the scripts and logs are in `/tmp/apkrun-025/`. Results:
+**Choice.** Superseded in part by IR-1274, which repeats the checks on the build with the fixes of IR-1273: Back from ⌘[ and the Command shortcuts pass there. This record is the first run, on the build before those fixes. The device runs are from 2026-10-12 UTC, on the stock image 16373615 with the APKRun build of this branch (guest and embedded CLI built at 19:41Z). The home was a copy of the #024 home (APFS clone, `cp -c`), so the image was not installed again. The runs used `apkrun dev boot --gpu virgl --window` under `lockf -k /tmp/apkrun-vm.lock`, and the debug HelloText APK. Keys were sent by a scratch CGEvent helper outside the repository, and the scripts and logs are in `/tmp/apkrun-025/`. Results:
 - Passed: `Hello, APKRun 123!` typed into the field gives exactly that text (`text "Hello, APKRun 123!"`). Backspace removes the last character. Enter logs `editor action 6`. Left arrows move the cursor, and X typed after two Lefts lands between 1 and 2. A held A gives the press and three repeats (`aaaa`). Shift+Home selects (typing then replaces the selection). Ctrl+X cuts a selection, and ⌘X cuts it through the key path. ⌘A selects all. Esc on the Details screen logs `screen main`.
 - Not observed: ⌘[ on the Details screen did not navigate back in two attempts (`screen details` stayed). The T0 tests map ⌘[ to BACK. The cause is not determined. ⌘C, ⌘V, and ⌘Z were observed once, in a run where the harness had left Command held (IR-1269), and not in a clean run.
 - Not observed: typing did not register on the main screen after a return from Details in one check. The text stayed empty. The counters do not explain it.
@@ -17617,3 +17617,41 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 **Reason.** docs/README.md §1.8 names this page for #025.
 
 **Risk.** The page describes ⌘[ as BACK, which the device check has not confirmed. A later check should update the page.
+
+## IR-1273: The adversarial review of #025, and the fixes it led to
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [input.md](../02-design/input.md) §5.2, §6, §7.3, §9; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 |
+
+**Choice.** A read-only reviewer read the branch at 57301a8 against the design, without a build, a test, or a device run. Its findings and the answers:
+1. MAJOR, a keyUp is not delivered for an ordinary key while Command is down, so a ⌘ shortcut left its DOWN without an UP. Back acts on UP, which explains why ⌘[ did nothing on the device (IR-1268). Fixed in 58c20bb: a ⌘ shortcut is a DOWN and an UP at once, and Command going down ends the non-modifier keys that are held. The modifier keys keep their own `flagsChanged` releases. The T0 tests pin both rules. The device run in IR-1274 confirms the cause: ⌘[ works after the fix.
+2. MINOR, a repeat of a held ⌘ shortcut used the extra meta bits of its press. Resolved by item 1, because a shortcut holds no key.
+3. MINOR, without side bits, a left-Shift release is read as a press, so SHIFT_LEFT can stay down. Not changed. It is a limit of the adapter (IR-1265): macOS sets the side bits on the keyboard events it sends to apps, and no device run showed a stuck Shift.
+4. MINOR, a refused UP kept the press open, and the next DOWN of the key was dropped, so one keystroke was lost. Fixed in 9380a8b: a DOWN for a key that is held releases the press and starts a new one. If the framework refuses that release, the DOWN is dropped. The guest tests cover both cases.
+5. MINOR, Escape and ⌘[ both send `KEYCODE_BACK`, and the guest table is keyed by Android code. Kept. A Command press now ends a held key, so a held Escape cannot collide with a ⌘[ tap, and a DOWN for a key the guest holds now starts a new press instead of being dropped.
+6. MINOR, DESIGN. The validator in `InputService.kt` (#024) accepts any key code from 1 to 0xFFFF, and it does not check the meta state, while input.md §9 says "in the KEYCODE_* range". Not changed here. The maintainer decides whether §9 or the check changes.
+7. MINOR, stale comments in `InputSink.swift` and `IOSurfaceLayerView.swift` said the events were pointer events. Fixed in d677e33.
+
+**Reason.** Items 1 and 4 are behavior errors, and each has a test. Items 3 and 6 need a decision or a device case, so they are recorded and not changed.
+
+**Risk.** The reviewer did not build, run tests, or use the device. The AppKit claim in item 1 was not verified by the reviewer; the device evidence in IR-1274 supports it.
+
+## IR-1274: The device checks on the build with the fixes of IR-1273
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (boxes 3, 4; Notes); [input.md](../02-design/input.md) §15; [keyboard-and-text-input.md](../06-user/keyboard-and-text-input.md) |
+
+**Choice.** The guest APK and the embedded CLI were built from the branch at d677e33, and the boot used them with the same scratch home and the debug HelloText of IR-1267. The boot ran `dev boot --gpu virgl --window` under `lockf -k /tmp/apkrun-vm.lock`. It bound input to display 0 with the adb shell count at 19, and it stopped with `sent=125 batches=110`, every drop counter 0, and the count at 19. So no shell command ran in the bound session. Results, from a clean log:
+- Passed: Tab focused the field, and `Hello, APKRun 123!` typed to exactly that text. ⌘[ on the Details screen logged `screen main`, and so did Esc. ⌘A, ⌘C, End, and ⌘V gave `abcabc`, ⌘Z gave `abc`, ⌘A and ⌘X gave an empty field, and ⌘Z after the cut restored `abc`. Typing `Z` after a refocus was inserted. Enter logged `editor action 6`.
+- The earlier "typing did nothing after Back" (IR-1268) was Enter's default action, which moved focus to the Details button. It is not a defect of the path. The check was not repeated on a field that Enter had not moved.
+- Not re-run on this build: the plain-key checks of IR-1268 (Backspace, the arrows, the held key, Shift+Home, and the Control shortcuts). The fix changes those keys only when Command goes down, so the earlier results stand for them, and they are recorded as such.
+
+**Reason.** Boxes 3 and 4 need ⌘[ and the Command shortcuts on the device, and this run shows them. Box 6 is the same counter method as IR-1248.
+
+**Risk.** One run on one image and one Mac. The pointer focus gap (IR-1270) is still open, and the field was focused by Tab. The repository T2 keyboard cases (IR-1271) are missing, so the issue stays open under AGENTS §10 even though every box is ticked. The scratch logs are in `/tmp/apkrun-025/logs/` (b4-boot.err).

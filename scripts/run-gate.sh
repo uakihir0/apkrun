@@ -110,22 +110,16 @@ macos_build="$(sw_vers -buildVersion)"
     printf 'status: running\n'
 } > "$report"
 
-finish_report() {
-    local result=$?
-    local finished_at
-    finished_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    if [[ $result -eq 0 ]]; then
-        status=passed
-    else
-        status=failed
+# The report's final status is written once, by one trap, whichever way the gate ends (scripts/tools/gate-status.sh).
+# A signal that ends the gate also stops the G3 recorder, which would otherwise keep running after the gate.
+stop_recorder() {
+    if [[ -n "${recording_pid:-}" ]] && kill -0 "$recording_pid" 2>/dev/null; then
+        kill "$recording_pid" 2>/dev/null || true
     fi
-    {
-        printf 'finished: %s\n' "$finished_at"
-        printf 'status: %s\n' "$status"
-        printf 'exit_code: %s\n' "$result"
-    } >> "$report"
 }
-trap finish_report EXIT
+source "$script_dir/tools/gate-status.sh"
+GATE_FINISH_HOOK=stop_recorder
+gate_report_install "$report"
 
 scripts/generate-project.sh
 scripts/build-test-initramfs.sh

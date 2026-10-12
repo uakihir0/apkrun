@@ -482,18 +482,21 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 
 ### Acceptance criteria
 
-- [ ] The user can type into an Android text field: typing `Hello, APKRun 123!` into HelloText's field produces exactly that text.
-- [ ] Key down and up, text entry, modifiers, Backspace, Enter, the arrow keys, and Escape as Back work.
+- [x] The user can type into an Android text field: typing `Hello, APKRun 123!` into HelloText's field produces exactly that text.
+- [x] Key down and up, text entry, modifiers, Backspace, Enter, the arrow keys, and Escape as Back work.
 - [ ] Esc and ⌘[ navigate back (FR-IN-04).
 - [ ] ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z act as the Ctrl combinations in key mode (FR-IN-08, key-mode part).
-- [ ] The unsupported IME behavior is documented.
-- [ ] No shell command runs per key event.
+- [x] The unsupported IME behavior is documented.
+- [x] No shell command runs per key event.
 
 ### Notes
 
 - **Record:** the result in the #025 row of [../../02-design/input.md](../../02-design/input.md) §15.
 - **Pitfall:** macOS sends repeated `keyDown` events with `isARepeat`. Map them to the repeat count. Do not send a new `DOWN` without an `UP`.
 - In key mode, ⌘V sends Ctrl+V, which pastes Android's clipboard. Pasting Mac text comes with #071 and #053.
+- **Tests.** T0: `InputCoreTests` (`KeyCodeMapTests`, `KeyTranslatorTests`) and `WindowingCoreTests` (`KeyEventAdapterTests`). T1: the guest JVM tests (`InputInjectorKeyTest`, 11 tests) and the HelloText JVM tests (`JsonStringTest`, `DebugFixtureCommandsTest`). The T2 suite `AndroidInputTests` has no keyboard case (IR-1271), and the T3 layout check C01-4 is not run.
+- **Verification (2026-10-12 UTC, stock image 16373615, this branch).** Boxes 1, 2, 5, and 6 are ticked. The device run is in IR-1268: `Hello, APKRun 123!` gives exactly that text, and Backspace, Enter, the arrows, a held key, Shift+Home, Ctrl+X, Ctrl+A, and Esc on Details work. The counters read 287 sent, no drops, and the adb shell count stayed at 13 from bind to stop.
+- **Open.** Box 3 stays open: ⌘[ did not navigate back in two device attempts, although the T0 tests map it to BACK. Box 4 stays open: ⌘A and ⌘X were confirmed on the device, and ⌘C, ⌘V, and ⌘Z were not confirmed in a clean run (IR-1268, IR-1269). A pointer tap on the field does not focus it reliably (IR-1270), so the device run focused the field with Tab. `input.escapeKey` is a translator parameter that no settings store reads yet (IR-1264).
 
 ---
 

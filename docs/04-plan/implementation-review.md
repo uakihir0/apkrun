@@ -17465,3 +17465,155 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 **Reason.** Each finding was checked against the files and the logs. The answers are the changes named above.
 
 **Risk.** The reviewer read the diff and the logs, and did not run anything. The code findings were checked by the runs `pkg` and `final`, and the others by reading the files. The record of this review does not cover any change made after this entry.
+
+## IR-1263: The key map is a CSV with a literal Swift table, checked by a T0 test
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (step 1); [input.md](../02-design/input.md) §5.2; [keymap-mac-android.csv](../../Packages/InputCore/Resources/keymap-mac-android.csv) |
+
+**Choice.** The CSV `Packages/InputCore/Resources/keymap-mac-android.csv` holds the 100 rows of the US map. `KeyCodeMap.swift` is a literal table of the same rows, and `KeyCodeMapTests` reads the CSV and fails when the two differ. Every `KEYCODE_*` name and value is checked against `android-api37-keycodes.txt`, which lists the `KeyEvent` constants of the API 37 `android.jar` (javap, Gradle cache). The `kVK_*` values are checked against `HIToolbox/Events.h` of the Xcode 27.0 SDK. Escape maps to `KEYCODE_BACK`. Command, Function, F13 to F20, the ISO section key, the keypad clear, JIS Eisu and Kana, Help, volume, mute, and the context menu key are not forwarded. The keypad clear is not mapped to NUM_LOCK, because the two keys differ on a Mac.
+
+**Reason.** A literal table needs no resource bundle at run time, and the test keeps one source as the truth. The design says "generated", but no generator exists, and a generator would add a build step for 100 rows.
+
+**Risk.** The two copies are kept equal by the test and not by construction. The API 37 list comes from one `android.jar`, so a later API may renumber a key.
+
+## IR-1264: Key-mode translation rules, and the input.escapeKey gap
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [input.md](../02-design/input.md) §5.1, §5.2, §6, §7.3; [configuration.md](../03-reference/configuration.md) (`input.escapeKey`); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 |
+
+**Choice.** `KeyTranslator` (InputCore) makes these choices.
+1. The meta state comes from the modifiers of each sample, with the side of Shift, Control, and Option (`META_*_LEFT_ON`, `META_*_RIGHT_ON`). Caps Lock adds `META_CAPS_LOCK_ON`. Command adds no bit, because it is not forwarded.
+2. Caps Lock is a tap (DOWN and UP) for each change, and the lock state after the change is in the meta state.
+3. A key that is held sends DOWN with the repeat count, and no UP comes between repeats. A DOWN for a key the translator holds is a repeat, whether or not the window marks it.
+4. Every release sends the code of its press, and it keeps the extra meta bits of the press. A release with no press is dropped. A key that is not forwarded has no entry, so its release is dropped too.
+5. ⌘C, ⌘X, ⌘V, ⌘A, and ⌘Z send their letter with `META_CTRL_ON` and `META_CTRL_LEFT_ON`, and no separate Control key event. ⇧⌘Z keeps the user's Shift. ⌘[ is BACK when no Shift, Control, or Option is down. Other Command combinations are dropped.
+6. Escape is BACK. The translator takes `escapeKey` as a parameter (`back` or `escape`). It does not read the setting, because no settings store reads any `input.*` key yet.
+7. `reset()` forgets the held keys when the window loses focus, and the guest releases them with `.cancelAll`.
+
+**Reason.** Items 1 to 4 follow input.md §5.2 and the integrity rule of §7.3. Item 4 keeps a stuck key from happening when Command is released before C. Item 5 follows §6. Item 6 keeps the design's default, and the setting waits for the settings store.
+
+**Risk.** Item 5 sends no Control key event, so an app that reads `KEYCODE_CTRL_LEFT` alone sees no Control. The device check did not show a difference for the Ctrl shortcuts. Escape ignores `input.escapeKey` until the settings store exists, which the maintainer should record against the setting's row in configuration.md.
+
+## IR-1265: The key adapter reads the side bits of NSEvent, and the view takes the ⌘ shortcuts before the menus
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [input.md](../02-design/input.md) §5.1, §6; [display-and-windowing.md](../02-design/display-and-windowing.md) §7 |
+
+**Choice.** `KeyEventAdapter` (WindowingCore) is the only reader of key `NSEvent`s. It reads the side of each modifier from the device-dependent bits of `NSEvent.ModifierFlags` (`NX_DEVICE*KEYMASK`, IOLLEvent.h). The left side of a modifier with no side bit counts the generic flag, and the right side never does. `IOSurfaceLayerView` overrides `keyDown`, `keyUp`, and `flagsChanged`, and it does not call `super`, so an unhandled key does not beep. `performKeyEquivalent` takes the forwarded ⌘ shortcuts before the menus, and it returns false for every other key equivalent, so ⌘Q, ⌘W, and the rest keep their meaning. `DisplayWindow` makes the view the initial and the current first responder.
+
+**Reason.** Without `performKeyEquivalent`, the Edit menu would take ⌘C, ⌘V, and ⌘A before `keyDown`. The adapter is the one place that reads AppKit, as with the pointer adapter (IR-1234).
+
+**Risk.** The device bits are undocumented constants, and the left-side fallback is for events that carry no side bit. The T0 tests use synthesized events. The device runs were on one macOS release.
+
+## IR-1266: The guest injects keys on the virtual keyboard, with a per-display key table
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [input.md](../02-design/input.md) §5.1, §7.3, §9, §10; [guest-components.md](../02-design/guest-components.md) §6.3 |
+
+**Choice.** `InputInjector` builds a `KeyEvent` on `KeyCharacterMap.VIRTUAL_KEYBOARD` (device -1) with `SOURCE_KEYBOARD`, scan code 0, and flags 0, through the `KeyEventFactory` seam (`KeyEventFactory.kt`). The planner keeps the keys that are down per display, by Android key code, with the down time and the meta state of the press (`DisplayGestures.keys`). A DOWN with a repeat count above zero repeats the open press with its down time. A DOWN without a count for a key that is down releases the press and drops the DOWN, as a touch DOWN does. An UP or a repeat with no press is dropped and counted. A refused DOWN leaves no press, and a refused UP keeps the press. `cancelAll` and a removed display send UP for each open key, with the meta state of the press. A long press is still dropped and counted (D6). The log tag stays `ApkRunGuest`, as IR-1236 chose.
+
+**Reason.** The virtual keyboard gives Android's US character map, which input.md §5.1 and §10 name. The key rules follow the touch rules of §7.3.
+
+**Risk.** The 11 JVM tests check the planner's events, not what the framework does with them. The repeat DOWN relies on the framework to repeat the character; the device run showed that it does.
+
+## IR-1267: HelloText gets a Details screen, screen and text lines, and an editor-action line
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [test-strategy.md](test-strategy.md) §4.2 (HelloText events); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (step 4); [build-system.md](../05-development/build-system.md) §8 |
+
+**Choice.** Details is a second Activity, opened by the Details button or by the debug `DETAILS` broadcast. Each screen logs `APKRUN-FIXTURE: screen <name>` when it resumes. The debug `TEXT` broadcast logs `APKRUN-FIXTURE: text <JSON string>` with the field's text, and only when it is sent; the field does not log on each change. The field's IME action is `actionDone`, and Enter logs `APKRUN-FIXTURE: editor action <id>`. `TEXT` and `DETAILS` are registered in the debug manifest, so the release build has no receiver. The JSON encoding has JVM tests.
+
+**Reason.** Test-strategy §4.2 names these events. AGENTS §8 forbids logging typed text, and the log line carries the text only when a test asks for it in a debug build, with text that the harness typed. The Enter line names the action and carries no text.
+
+**Risk.** The debug `TEXT` line does carry the typed text. IR-1237 (HelloCompose logs only the length) is unchanged, so the two fixtures differ. There are no committed fixture copies in the repository, so no copy was refreshed.
+
+## IR-1268: The device check of #025: what passed, what did not, and the state
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (boxes 1, 2, 3, 4, 6; Notes); [input.md](../02-design/input.md) §15 |
+
+**Choice.** The device runs are from 2026-10-12 UTC, on the stock image 16373615 with the APKRun build of this branch (guest and embedded CLI built at 19:41Z). The home was a copy of the #024 home (APFS clone, `cp -c`), so the image was not installed again. The runs used `apkrun dev boot --gpu virgl --window` under `lockf -k /tmp/apkrun-vm.lock`, and the debug HelloText APK. Keys were sent by a scratch CGEvent helper outside the repository, and the scripts and logs are in `/tmp/apkrun-025/`. Results:
+- Passed: `Hello, APKRun 123!` typed into the field gives exactly that text (`text "Hello, APKRun 123!"`). Backspace removes the last character. Enter logs `editor action 6`. Left arrows move the cursor, and X typed after two Lefts lands between 1 and 2. A held A gives the press and three repeats (`aaaa`). Shift+Home selects (typing then replaces the selection). Ctrl+X cuts a selection, and ⌘X cuts it through the key path. ⌘A selects all. Esc on the Details screen logs `screen main`.
+- Not observed: ⌘[ on the Details screen did not navigate back in two attempts (`screen details` stayed). The T0 tests map ⌘[ to BACK. The cause is not determined. ⌘C, ⌘V, and ⌘Z were observed once, in a run where the harness had left Command held (IR-1269), and not in a clean run.
+- Not observed: typing did not register on the main screen after a return from Details in one check. The text stayed empty. The counters do not explain it.
+- Counters at stop: `sent=287 batches=287`, every drop counter 0. The adb shell count was 13 at bind and 13 at stop, so no shell command ran in the bound session (the method of IR-1248).
+- Focus: a pointer tap on the field did not focus it in most attempts (IR-1270), so the field was focused with Tab, which is the keyboard path.
+
+**Reason.** The boxes are ticked only for the checks that passed in this run. Boxes 3 and 4 need the checks that did not pass.
+
+**Risk.** One image, one Mac, one macOS release. The shortcut results depend on the harness's modifier events (IR-1269). The T2 suite did not run (IR-1271).
+
+## IR-1269: The harness must send Command and Shift as their own key events
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | None in the repository. The scratch helper is outside it. |
+
+**Choice.** The first runs sent a Command letter with the Command flag on the key-up and no Command key-up. The window server kept Command held, and the next keys were read as Command combinations: a typed Z became ⌘Z, and a plain key did not insert. The scratch helper now sends Command and Shift as key events (`flagsChanged`), with the flag on each event, and it releases them. The product path was not changed for this.
+
+**Reason.** A physical keyboard sends the modifier key, and the translator follows that. The harness had to do the same, or the results would reflect the harness.
+
+**Risk.** The earlier results from the held-Command runs are not used in IR-1268, except as the "observed once" note.
+
+## IR-1270: A pointer tap on the field does not focus it on this image
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 (also #024) |
+| Affected documents | [input.md](../02-design/input.md) §4.1, §7.3; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (Notes) |
+
+**Choice.** On the device, a click from the Mac window on HelloText's field focused the field in one attempt out of about eight, and the same press focused it in none of the later ones. The click on the Count button always worked, and a long press on the context target logged `contextmenu`, so touches reach the views. An ADB tap on the same pixel focused the field, and an ADB swipe that stays in place did not. The cause is not determined. It may be the injected touch or the Android side. The field was focused with Tab instead. No task number is filed (AGENTS §11), and no code changed.
+
+**Reason.** The keyboard path is the subject of #025, so the device check used Tab to focus the field.
+
+**Risk.** A user cannot yet click into a text field from the Mac window and type. This blocks the acceptance in practice. The maintainer should decide whether it is a follow-up of #024 or of #025, and file it.
+
+## IR-1271: The repository's T2 suite has no keyboard case
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #025 (Tests); [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.** `Tests/IntegrationTests/AndroidInputTests` has no keyboard test. The device checks of IR-1268 were run by the scratch harness, not by `xcodebuild`. The T2 tests named by #025 (typing, Backspace, Enter, the arrows, and Esc on the Details screen) are not in the repository. The box "T2 passes" is not claimed.
+
+**Reason.** The suite skips without `APKRUN_INPUT_T2=1`, and it does not run in the Xcode test host (IR-438). Adding the keyboard cases needs the Xcode run, and the device gap (IR-1270) blocks the typing case until it is fixed.
+
+**Risk.** The keyboard path has T0 and T1 tests and the scratch device run, but no repository T2 test.
+
+## IR-1272: The IME gap and the user page
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #025 |
+| Affected documents | [keyboard-and-text-input.md](../06-user/keyboard-and-text-input.md); [input.md](../02-design/input.md) §10 |
+
+**Choice.** The user page `docs/06-user/keyboard-and-text-input.md` is created (docs/README.md §1.8). It describes key mode, the Back keys, the shortcuts, and the limits of input.md §10 before #071. It states the `input.escapeKey` gap, and that ⌘[ is not yet confirmed on the device (IR-1268). The acceptance box "the unsupported IME behavior is documented" is checked against §10.
+
+**Reason.** docs/README.md §1.8 names this page for #025.
+
+**Risk.** The page describes ⌘[ as BACK, which the device check has not confirmed. A later check should update the page.

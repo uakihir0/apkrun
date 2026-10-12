@@ -48,10 +48,17 @@ public actor DevelopmentGuestAgent {
     private let provisioner: GuestAgentProvisioner
     private let logger: APKLogger
     private let clock: @Sendable () -> ContinuousClock.Instant
+    /// The transport of the control connection, which the input connection shares.
+    private let transport: any GuestTransport
+    private let hostVersion: String
+    private let logSink: (any LogSink)?
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
     private var generation: UInt64 = 0
+    /// The input connection, and the control session token that it presents (input.md §8, decision D11).
+    private var inputConnection: GuestConnection?
+    private var inputConnectionToken: Data?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
     public init(
@@ -63,11 +70,15 @@ public actor DevelopmentGuestAgent {
     ) {
         self.adb = adb
         self.clock = clock
+        self.hostVersion = hostVersion
+        self.logSink = logSink
         logger = APKLogger(category: RuntimeLogCategory.agents, sink: logSink)
         provisioner = GuestAgentProvisioner(adb: adb, bundle: bundle)
+        let transport = ADBForwardGuestTransport(adb: adb, logSink: logSink)
+        self.transport = transport
         let relay = RestartRelay()
         supervisor = GuestAgentSupervisor(
-            transport: ADBForwardGuestTransport(adb: adb, logSink: logSink),
+            transport: transport,
             hostVersion: hostVersion,
             logSink: logSink,
             restartAgent: { loss in await relay.restart(loss) }
@@ -136,7 +147,63 @@ public actor DevelopmentGuestAgent {
     public func stop() async {
         generation += 1
         await supervisor.stop()
+        // The input connection belongs to the control session, so it ends with it.
+        await inputConnection?.close()
+        inputConnection = nil
+        inputConnectionToken = nil
         try? await removeForwards()
+    }
+
+    /// The input channel of the control session (input.md §8, decision D11). The input connection opens on the first
+    /// call, presents the control session's token, and is reused while it is usable. It is opened again when it is not
+    /// usable, or when the control session has another token, because a new control session refuses the old one.
+    public func inputChannel() async throws(GuestAgentFailure) -> GuestInputChannel {
+        try requireAvailable()
+        guard let token = await supervisor.session?.sessionToken else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let connection = await reusableInputConnection(token: token) {
+            return GuestInputChannel(connection: connection)
+        }
+        let connection = GuestConnection(
+            endpoint: .guestInput,
+            transport: transport,
+            presentedToken: token,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
+        do throws(GuestProtocolFailure) {
+            _ = try await connection.open()
+        } catch {
+            throw Self.inputFailure(error)
+        }
+        // A caller that ran meanwhile may have opened a usable one. It is kept, and the new one is closed.
+        if let kept = await reusableInputConnection(token: token) {
+            await connection.close()
+            return GuestInputChannel(connection: kept)
+        }
+        await inputConnection?.close()
+        inputConnection = connection
+        inputConnectionToken = token
+        return GuestInputChannel(connection: connection)
+    }
+
+    /// The input connection, when it is usable and presents `token`.
+    private func reusableInputConnection(token: Data) async -> GuestConnection? {
+        guard let connection = inputConnection, inputConnectionToken == token, await connection.isUsable else {
+            return nil
+        }
+        return connection
+    }
+
+    /// The agent failure of an input connection that did not open.
+    private static func inputFailure(_ failure: GuestProtocolFailure) -> GuestAgentFailure {
+        switch failure {
+        case .incompatibleVersion, .handshakeFailed:
+            .handshakeFailed(reason: failure.catalogName)
+        default:
+            .operationFailed(reason: failure.catalogName)
+        }
     }
 
     /// Throws `stopped` when ``stop()`` has run since `started`, so that a start in flight does not go on.

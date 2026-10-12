@@ -46,6 +46,9 @@ public actor GuestConnection {
     public nonisolated let endpoint: GuestEndpoint
     /// The events of the agent, in order. The stream finishes when the connection closes.
     public nonisolated let events: AsyncStream<GPEvent>
+    /// The acks of the agent for the input batches that asked for one (input.md §8). Only the input endpoint has
+    /// them. The stream finishes when the connection closes.
+    public nonisolated let inputAcks: AsyncStream<GPInputAck>
 
     /// The number of requests that may be in flight at once (guest-protocol.md §6).
     public static let maximumInFlight = 64
@@ -60,7 +63,10 @@ public actor GuestConnection {
     private let handshakeTimeout: Duration
     private let logger: APKLogger
     private let eventContinuation: AsyncStream<GPEvent>.Continuation
+    private let inputAckContinuation: AsyncStream<GPInputAck>.Continuation
     private var outbound: AsyncStream<Data>.Continuation?
+    /// The bytes that the frames yielded to `outbound` hold, until the transport has written them.
+    private var outboundBacklog = 0
     private var decoder = FrameDecoder()
     private var nextEnvelopeID: UInt64 = 1
     private var lastAgentEnvelopeID: UInt64 = 0
@@ -102,11 +108,20 @@ public actor GuestConnection {
         let stream = AsyncStream.makeStream(of: GPEvent.self, bufferingPolicy: .bufferingNewest(1024))
         events = stream.stream
         eventContinuation = stream.continuation
+        let acks = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .bufferingNewest(256))
+        inputAcks = acks.stream
+        inputAckContinuation = acks.continuation
     }
 
     /// Whether the connection can carry requests: the handshake completed and the connection is still open.
     public var isUsable: Bool {
         sessionInfo != nil && failure == nil
+    }
+
+    /// The bytes of the frames that were queued for the transport and are not written yet (input.md §8). The input
+    /// router reads it to decide when to coalesce.
+    public var pendingOutboundBytes: Int {
+        outboundBacklog
     }
 
     /// Why the connection ended, or nil while it is open. A protocol violation is one of the cases that the
@@ -143,6 +158,8 @@ public actor GuestConnection {
                     for await frame in frames.stream {
                         do {
                             try await opened.write(frame)
+                            // The task runs on this actor, so the backlog is updated in isolation.
+                            self.outboundBacklog -= frame.count
                         } catch {
                             // A write that fails ends the connection, and the requests that wait on it get the reason.
                             self.logger.warning(
@@ -232,7 +249,7 @@ public actor GuestConnection {
                     try? await Task.sleep(for: limit + grace)
                     self.expire(id)
                 }
-                outbound?.yield(frame)
+                yieldFrame(frame)
             }
         } onCancel: {
             Task { await self.cancelRequest(id) }
@@ -259,6 +276,21 @@ public actor GuestConnection {
     /// Closes the connection. The pending requests fail with `disconnected`, and the events stream finishes.
     public func close() {
         connectionLost(.disconnected)
+    }
+
+    /// Sends one input batch on the input endpoint, as an `InputBatch` envelope (guest-protocol.md §9). The frame goes
+    /// through the same writer as the requests, so it keeps their order. It returns once the frame is queued, and it
+    /// fails with the connection's failure when the connection is not usable. Only the input endpoint carries batches.
+    public func sendInputBatch(_ batch: GPInputBatch) throws(GuestProtocolFailure) {
+        precondition(endpoint == .guestInput, "Input batches go only to the input endpoint (guest-protocol.md §9)")
+        guard isUsable else {
+            throw failure ?? .disconnected
+        }
+        var envelope = GPEnvelope()
+        envelope.id = allocateEnvelopeID()
+        envelope.body = .inputBatch(batch)
+        let frame = try FrameCodec.encode(envelope)
+        yieldFrame(frame)
     }
 
     // MARK: - Reading
@@ -315,12 +347,13 @@ public actor GuestConnection {
             try deliver(response, replyTo: envelope.replyTo)
         case .event(let event):
             try deliver(event)
-        case .inputAck:
-            // The input acks belong to the input stream, which #024 uses. On any other channel they are a violation
-            // (guest-protocol.md §3).
+        case .inputAck(let ack):
+            // The input acks belong to the input stream. On any other channel they are a violation (guest-protocol.md
+            // §3).
             guard endpoint == .guestInput else {
                 throw .malformedFrame
             }
+            inputAckContinuation.yield(ack)
         default:
             throw .malformedFrame
         }
@@ -442,7 +475,15 @@ public actor GuestConnection {
         guard let frame = try? FrameCodec.encode(envelope) else {
             return
         }
-        outbound?.yield(frame)
+        yieldFrame(frame)
+    }
+
+    /// Queues a frame for the writer task, and counts its bytes as backlog until the transport has written them.
+    private func yieldFrame(_ frame: Data) {
+        guard let outbound, case .enqueued = outbound.yield(frame) else {
+            return
+        }
+        outboundBacklog += frame.count
     }
 
     private func handshakeTimedOut() {
@@ -480,6 +521,7 @@ public actor GuestConnection {
         }
         slotWaiters.removeAll()
         eventContinuation.finish()
+        inputAckContinuation.finish()
         outbound?.finish()
     }
 

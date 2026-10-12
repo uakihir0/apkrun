@@ -3,8 +3,9 @@
 The variant is the #099 variant bundle (`install-src`, vendor replaced and resealed) with these
 changes, all in the ODM logical partition `odm_a` unless stated:
 
-- the precompiled policy holds the rules of RULES: the SurfaceFlinger rule of #022 and the uevent
-  and DRM-device rules of the app domains (IR-991);
+- the precompiled policy holds the rules of RULES: the SurfaceFlinger rule of #022, the uevent
+  and DRM-device rules of the untrusted app domain (IR-991), and the sysfs and card0 rules that the
+  privileged and system apps need for Mesa's DRM probe (IR-1278);
 - the test binary `/bin/apkrun_egl_test` and its init rc `/etc/init/apkrun_egl_test.rc`, which runs
   the binary once on sys.boot_completed (test variant only; no command-line gate, IR-993);
 - the top-level `vbmeta_a` carries the new `odm` hashtree descriptor.
@@ -64,8 +65,9 @@ PART_PRECOMPILED_STOCK_SHA = "6a1f95dad28bdf50"  # prefix of the file the guest 
 # SurfaceFlinger: the rule of #022 (IR-942). platform_app: the uevent read that aborted platform_app
 # RenderThreads (IR-954; requested for this variant). untrusted_app: the domain of HelloText, which
 # targets SDK 37 with the test key (seapp_contexts: `minTargetSdkVersion=37 domain=untrusted_app`,
-# IR-991). The DRM-device rules copy what SurfaceFlinger's EGL uses on the same node; the app
-# domains have only getattr there.
+# IR-991). The DRM-device rules copy what SurfaceFlinger's EGL uses on the same node; in the
+# stock policy only priv_app and platform_app have getattr there, and untrusted_app and
+# system_app have none (IR-1277).
 RULES = (
     ("surfaceflinger", "sysfs", "file", "open"),
     ("surfaceflinger", "sysfs", "file", "read"),
@@ -78,6 +80,20 @@ RULES = (
     ("untrusted_app", "graphics_device", "chr_file", "write"),
     ("untrusted_app", "graphics_device", "chr_file", "ioctl"),
     ("untrusted_app", "graphics_device", "chr_file", "map"),
+    # The Mesa DRM probe of the privileged (launcher) and system (Settings) apps (IR-1275 to
+    # IR-1278). libdrm reads the uevent and stats the PCI sysfs nodes of the virtio-gpu device,
+    # which carry the default `sysfs` label. priv_app has no open, read, or getattr there; its
+    # denials are not logged, so these rules rest on the failing chain. system_app is denied
+    # read on uevent and getattr on /dev/dri/card0, and open on uevent (logged in IR-1278);
+    # its sysfs getattr is in the booted set but was not tested alone. Without these rules Mesa
+    # reports "Failed to open any DRM device" and eglInitialize fails with EGL_NOT_INITIALIZED.
+    ("priv_app", "sysfs", "file", "open"),
+    ("priv_app", "sysfs", "file", "read"),
+    ("priv_app", "sysfs", "file", "getattr"),
+    ("system_app", "sysfs", "file", "open"),
+    ("system_app", "sysfs", "file", "read"),
+    ("system_app", "sysfs", "file", "getattr"),
+    ("system_app", "graphics_device", "chr_file", "getattr"),
 )
 EGL_DIR = REPO / "Experiments" / "sepolicy-022" / "egl_check"
 EGL_BINARY = Path(os.environ.get("APKRUN_022_EGL_BIN", "/tmp/apkrun-odmc/egl/apkrun_egl_test"))

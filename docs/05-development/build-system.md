@@ -560,6 +560,15 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
   component-by-component and stop before a protected Documents lookup. This
   keeps the selected directory consistent when the scripts and test host run
   from different working directories.
+- The build products of a local T2 run go outside `~/Documents` as well. The
+  hosted process loads its own binary and the test bundle from `-derivedDataPath`,
+  and XCTest reads that binary when it reports a failure. In the IR-438 run r1,
+  that read under `~/Documents` waited for a Documents-folder decision that an
+  unattended run does not get, and the run stalled for its time allowance
+  (IR-438, IR-1253). Pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"`, and set
+  `APKRUN_ANDROID_HOME` to an SDK root outside `~/Documents` that holds a copy of
+  `platform-tools`. The gate scripts still build under `build/gates`, which is
+  inside the checkout, so a failing gate run can stall the same way (IR-1260).
 - The team and certificate fingerprint come from `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY`; CI reads them from repository variables. Xcode's generic `Apple Development` identity name does not reliably select the lab certificate for a manually signed test host, so the fingerprint is explicit.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime to allow XCTest to load the test bundle into the entitled host. This setting is limited to test targets; product targets retain the common hardened-runtime setting of §2.5.
 - The test plan `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per suite of [../04-plan/test-strategy.md](../04-plan/test-strategy.md) §2.4 (`LinuxGuest`, `AndroidStock`, `AndroidCustom`, `Maintenance`), each with the test classes and the environment it needs. It sets the automatic retry to one attempt for T2 ([test-strategy.md](../04-plan/test-strategy.md) §2.7).

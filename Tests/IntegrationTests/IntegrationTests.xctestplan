@@ -93,6 +93,21 @@
     }
     ,
     {
+      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003009",
+      "name" : "G3",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "APKRUN_INTEGRATION_SUITE",
+            "value" : "g3",
+            "enabled" : true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance" : 3600
+      }
+    }
+    ,
+    {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003008",
       "name": "AndroidGuestAgent",
       "options": {

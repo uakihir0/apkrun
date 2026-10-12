@@ -190,3 +190,18 @@ func unbindingEndsTheSessionAndLaterEventsAreDropped() async {
     let counters = await route.counters()
     #expect(counters.droppedNotRunning == 1)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
+    // The agent restarts, so the binding builds a new router over a new channel (decision D11).
+    let oldChannel = CollectingInputChannel()
+    let newChannel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: oldChannel))
+    await route.bind(router: InputRouter(channel: newChannel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    // The old session ends with a cancelAll on the old channel, and the event goes to the new channel only.
+    #expect(await oldChannel.batches.count == 1)
+    #expect(await newChannel.batches.count == 1)
+    #expect(await newChannel.batches.first?.displayID == 0)
+}

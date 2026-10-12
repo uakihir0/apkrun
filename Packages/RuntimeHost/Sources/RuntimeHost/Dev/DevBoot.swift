@@ -45,6 +45,9 @@ public struct DevBootOptions: Sendable {
     public var launchPackage: String?
     /// The window's connection to display 0 (`apkrun dev boot --window`, #023). Nil shows nothing. It needs `drmVirgl`.
     public var developerDisplay: DeveloperDisplay?
+    /// The development input route of the window (#024). Nil binds no input. It is bound once the Guest Agent is ready,
+    /// and it is unbound before Android stops.
+    public var inputRoute: DevInputRoute?
 
     /// Creates options for one development boot.
     public init(
@@ -56,7 +59,8 @@ public struct DevBootOptions: Sendable {
         stopWhenReady: Bool = false,
         guestAgentDirectory: URL? = nil,
         launchPackage: String? = nil,
-        developerDisplay: DeveloperDisplay? = nil
+        developerDisplay: DeveloperDisplay? = nil,
+        inputRoute: DevInputRoute? = nil
     ) {
         self.gpu = gpu
         self.cpuCount = cpuCount
@@ -67,6 +71,7 @@ public struct DevBootOptions: Sendable {
         self.guestAgentDirectory = guestAgentDirectory
         self.launchPackage = launchPackage
         self.developerDisplay = developerDisplay
+        self.inputRoute = inputRoute
     }
 }
 
@@ -196,6 +201,16 @@ public struct DevBoot: Sendable {
         let started = ContinuousClock.now
         try await supervisor.ensureReady(.cli)
         onEvent(.message("Android is ready after \(ContinuousClock.now - started)"))
+        // The window's input reaches display 0 through the Guest Agent (#024). It is bound before the launch.
+        var inputBinding: Task<Void, Never>?
+        if let route = options.inputRoute {
+            if let agent = await supervisor.developmentGuestAgent {
+                let binding = DevInputBinding(route: route, agent: agent, logSink: diagnostics.logSink)
+                inputBinding = Task { await binding.run(report: onEvent) }
+            } else {
+                onEvent(.warning("input is not bound: the Guest Agent is not running"))
+            }
+        }
         do {
             if let package = options.launchPackage {
                 guard let agent = await supervisor.developmentGuestAgent else {
@@ -216,11 +231,21 @@ public struct DevBoot: Sendable {
             }
         } catch {
             // A failed launch still stops Android, so the VM and the agent do not run on after the command has failed.
+            await endInput(inputBinding, route: options.inputRoute)
             await supervisor.stop()
             throw error
         }
         onEvent(.message("stopping Android"))
+        await endInput(inputBinding, route: options.inputRoute)
         await supervisor.stop()
+    }
+
+    /// Stops the input binding, and unbinds the route. The unbinding sends `cancelAll` while the agent still runs, so
+    /// the guest releases every gesture and button that is open (input.md §7.3, #024).
+    private func endInput(_ binding: Task<Void, Never>?, route: DevInputRoute?) async {
+        binding?.cancel()
+        await binding?.value
+        await route?.unbind()
     }
 
     static func describe(_ state: RuntimeState) -> String {

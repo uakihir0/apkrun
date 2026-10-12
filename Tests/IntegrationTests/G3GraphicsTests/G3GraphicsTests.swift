@@ -16,7 +16,17 @@ import XCTest
 final class G3GraphicsTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
-        guard ProcessInfo.processInfo.environment["APKRUN_INTEGRATION_SUITE"] == "g3" else {
+        let environment = ProcessInfo.processInfo.environment
+        let selected = environment["APKRUN_INTEGRATION_SUITE"] == "g3"
+        // The G3 configuration sets APKRUN_G3_REQUIRED. There the check must run, so a suite that does not match
+        // fails instead of skipping. Other configurations skip the check, as the other suites do.
+        if environment["APKRUN_G3_REQUIRED"] == "1" {
+            guard selected else {
+                throw G3Failure.notSelected
+            }
+            return
+        }
+        guard selected else {
             throw XCTSkip("The G3 check runs in the G3 test-plan configuration.")
         }
     }
@@ -36,8 +46,8 @@ final class G3GraphicsTests: XCTestCase {
             stepFailure = error
             session.note("step failed: \(error)")
         }
-        measurements.stoppedAfterInterrupt = await session.stopBoot()
-        session.note("boot stopped; stopped after SIGINT: \(measurements.stoppedAfterInterrupt)")
+        measurements.bootStop = await session.stopBoot()
+        session.note("boot stop: \(measurements.bootStop.rawValue)")
 
         let failures = G3Evidence.failures(measurements)
         try session.writeArtifact(
@@ -128,6 +138,7 @@ final class G3GraphicsTests: XCTestCase {
         measurements.alternatingRedFrames = Self.difference(after?.redFrames, before?.redFrames)
         measurements.alternatingBlueFrames = Self.difference(after?.blueFrames, before?.blueFrames)
         measurements.alternatingMixedFrames = Self.difference(after?.mixedFrames, before?.mixedFrames)
+        measurements.unreadableFrames = session.statisticsLines(after: 0).compactMap(\.unreadable).max() ?? 0
         session.note(
             "alternating phase: sampled \(measurements.alternatingSampledFrames), "
                 + "red \(measurements.alternatingRedFrames), blue \(measurements.alternatingBlueFrames), "
@@ -204,7 +215,8 @@ final class G3GraphicsTests: XCTestCase {
             "HelloGL pid at start: \(measurements.pidAtStart ?? "none"), at minutes: "
                 + measurements.pidAtMinute.map { $0 ?? "none" }.joined(separator: ","),
             "renderer crash lines: \(measurements.rendererCrashLines.count), other crash lines: \(measurements.otherCrashLines)",
-            "stopped after SIGINT: \(measurements.stoppedAfterInterrupt)",
+            "boot stop: \(measurements.bootStop.rawValue)",
+            "unreadable buffers in the tearing sampler: \(measurements.unreadableFrames)",
         ]
         lines.append(
             contentsOf: failures.isEmpty ? ["result: passed"] : ["result: failed"] + failures.map { "failed: \($0)" })

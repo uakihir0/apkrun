@@ -91,7 +91,7 @@ final class G3EvidenceTests: XCTestCase {
         measurements.alternatingBlueFrames = 300
         measurements.alternatingSampledFrames = 600
         measurements.alternatingMixedFrames = 0
-        measurements.stoppedAfterInterrupt = true
+        measurements.bootStop = .endedAfterInterrupt
         return measurements
     }
 
@@ -149,5 +149,42 @@ final class G3EvidenceTests: XCTestCase {
         var measurements = passingMeasurements()
         measurements.distinctColoursInWindow = 1
         XCTAssertTrue(G3Evidence.failures(measurements).contains { $0.hasPrefix("1 ") })
+    }
+
+    func testAnAdbErrorTextIsNotAProcessID() {
+        var measurements = passingMeasurements()
+        let error = "error: device offline"
+        measurements.pidAtStart = error
+        measurements.pidAtMinute = Array(repeating: error, count: 10)
+        XCTAssertFalse(G3Evidence.isProcessID(error))
+        XCTAssertTrue(G3Evidence.failures(measurements).contains { $0.hasPrefix("5 the HelloGL pid") })
+    }
+
+    func testAMissingPidFailsCondition5() {
+        var measurements = passingMeasurements()
+        measurements.pidAtMinute[3] = nil
+        XCTAssertTrue(G3Evidence.failures(measurements).contains { $0.hasPrefix("5 the HelloGL pid") })
+    }
+
+    func testAnUnreadableTearingBufferFails() {
+        var measurements = passingMeasurements()
+        measurements.unreadableFrames = 2
+        XCTAssertTrue(G3Evidence.failures(measurements).contains { $0.contains("could not read 2 buffers") })
+    }
+
+    func testABootThatWasKilledFailsTheStopRule() {
+        var measurements = passingMeasurements()
+        measurements.bootStop = .killedAfterInterrupt
+        XCTAssertTrue(G3Evidence.failures(measurements).contains { $0.contains("did not end within 60 s of SIGINT") })
+        measurements.bootStop = .endedBeforeStop
+        XCTAssertFalse(G3Evidence.failures(measurements).isEmpty)
+    }
+
+    func testTheUnreadableCountIsParsedFromTheStatisticsLine() {
+        let line = G3StatisticsLine(
+            line: "APKRun display 0  60 fps  dropped 0  stalls 0  hostReadbacks 0  cpuPixelCopies 0  "
+                + "framesSampled 9  redFrames 4  blueFrames 4  mixedFrames 0  otherFrames 1  unreadable 3")
+        XCTAssertEqual(line?.unreadable, 3)
+        XCTAssertEqual(line?.mixedFrames, 0)
     }
 }

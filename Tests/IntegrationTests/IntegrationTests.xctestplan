@@ -101,6 +101,11 @@
             "key" : "APKRUN_INTEGRATION_SUITE",
             "value" : "g3",
             "enabled" : true
+          },
+          {
+            "key" : "APKRUN_G3_REQUIRED",
+            "value" : "1",
+            "enabled" : true
           }
         ],
         "maximumTestExecutionTimeAllowance" : 3600

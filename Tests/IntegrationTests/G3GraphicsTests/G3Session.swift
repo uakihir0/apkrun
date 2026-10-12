@@ -2,7 +2,8 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// The inputs of the G3 run, which `scripts/run-gate.sh G3` passes as TEST_RUNNER_ environment variables.
+/// The inputs of the G3 run. `scripts/run-gate.sh G3` passes them as build settings, which the test host's Info.plist
+/// expands (IntegrationTests/Host/Info.plist), and the process environment overrides them.
 struct G3Inputs {
     /// The embedded Debug CLI, built with the TestReadback trait (`apkrun dev boot`).
     let cli: URL
@@ -44,16 +45,22 @@ struct G3Inputs {
 
 /// A G3 step that could not produce its evidence. The message says what to fix.
 enum G3Failure: Error, CustomStringConvertible {
+    /// The G3 configuration selected the check but the suite marker is not set.
+    case notSelected
     case missingInput(String)
     case commandFailed(String, Int32, String)
     case commandTimedOut(String)
     case bootEnded(String)
     case noWindow(Int32)
     case screenshotFailed(String)
-    case screenRecordingDenied
+    /// The test host has no Screen Recording access. The test does not request it: the lab grants it once, by hand
+    /// (test-strategy.md §3.6). The name is the one of test-strategy.md §3.6.
+    case runnerMissingPermission
 
     var description: String {
         switch self {
+        case .notSelected:
+            "The G3 configuration did not set APKRUN_INTEGRATION_SUITE=g3, so the G3 check did not run."
         case .missingInput(let key):
             "\(key) is not set to an absolute path. scripts/run-gate.sh G3 sets it."
         case .commandFailed(let command, let status, let output):
@@ -66,8 +73,10 @@ enum G3Failure: Error, CustomStringConvertible {
             "no window titled APKRun display 0 belongs to process \(pid). Check that Screen Recording is allowed for the test host."
         case .screenshotFailed(let path):
             "screencapture did not write \(path)"
-        case .screenRecordingDenied:
-            "The test host has no Screen Recording access. Allow APKRunTestHost in System Settings, Privacy & Security, Screen Recording, then rerun scripts/run-gate.sh G3."
+        case .runnerMissingPermission:
+            "APKRunTestHost has no Screen Recording access, so macOS hides the titles of the boot's window. "
+                + "Add APKRunTestHost by hand under System Settings, Privacy & Security, Screen Recording, "
+                + "then rerun scripts/run-gate.sh G3. The test does not request the access."
         }
     }
 }
@@ -243,32 +252,41 @@ final class G3Session: @unchecked Sendable {
         }
     }
 
-    /// Stops the boot with SIGINT, waits 60 s, and then sends SIGKILL (the gate's stop rule). Returns whether the
-    /// boot ended after SIGINT.
-    func stopBoot() async -> Bool {
-        guard let boot, boot.isRunning else {
-            return true
+    /// Stops the boot with SIGINT and waits 60 s. A boot that is still running then gets SIGKILL, which G3 reports.
+    func stopBoot() async -> G3BootStop {
+        guard let boot else {
+            return .notStarted
+        }
+        guard boot.isRunning else {
+            return .endedBeforeStop
         }
         boot.interrupt()
         let deadline = ContinuousClock.now + .seconds(60)
         while boot.isRunning, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(500))
         }
-        if boot.isRunning {
-            kill(boot.processIdentifier, SIGKILL)
-            while boot.isRunning {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-            return false
+        guard boot.isRunning else {
+            return .endedAfterInterrupt
         }
-        return true
+        kill(boot.processIdentifier, SIGKILL)
+        while boot.isRunning {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return .killedAfterInterrupt
     }
 
-    /// The pid of HelloGL, from `pidof`, or `nil` when it is not running.
+    /// The pid of HelloGL, or `nil` when `pidof` reports that it is not running (an empty output with exit status 0
+    /// or 1). Any other output or status is an error, so an adb failure is never read as a pid.
     func helloGLPID() throws -> String? {
-        let output = try adb(["shell", "pidof \(Self.package)"], timeout: 60).output
-        let pid = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return pid.isEmpty ? nil : pid
+        let result = try adb(["shell", "pidof \(Self.package)"], timeout: 60)
+        let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.isEmpty, result.status == 0 || result.status == 1 {
+            return nil
+        }
+        guard result.status == 0, G3Evidence.isProcessID(output) else {
+            throw G3Failure.commandFailed("adb shell pidof \(Self.package)", result.status, result.output)
+        }
+        return output
     }
 
     /// Runs `apkrun dev adb <arguments>` with a 90 s limit, which talks to the developer ADB port of the boot.
@@ -309,11 +327,11 @@ final class G3Session: @unchecked Sendable {
 
     /// The number of the on-screen window of `owner` whose title starts with `APKRun display 0`.
     ///
-    /// Without Screen Recording access, macOS hides the titles of other processes' windows. The request also adds the
-    /// test host to the Screen Recording list of System Settings, which an app is not in until it asks.
+    /// Without Screen Recording access, macOS hides the titles of other processes' windows, so the title cannot be
+    /// matched. The check only reads the access (CGPreflightScreenCaptureAccess); it never requests it.
     func windowNumber(owner: pid_t) throws -> Int {
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            throw G3Failure.screenRecordingDenied
+        guard CGPreflightScreenCaptureAccess() else {
+            throw G3Failure.runnerMissingPermission
         }
         let windows =
             CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)

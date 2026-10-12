@@ -12,10 +12,12 @@ struct G3StatisticsLine: Equatable {
     let redFrames: Int?
     let blueFrames: Int?
     let mixedFrames: Int?
+    /// Cumulative since the boot: buffers the tearing sampler could not lock or read. Any is a failure.
+    let unreadable: Int?
 
     init(
         framesPerSecond: Int, hostReadbacks: UInt64, cpuPixelCopies: UInt64,
-        framesSampled: Int?, redFrames: Int?, blueFrames: Int?, mixedFrames: Int?
+        framesSampled: Int?, redFrames: Int?, blueFrames: Int?, mixedFrames: Int?, unreadable: Int? = nil
     ) {
         self.framesPerSecond = framesPerSecond
         self.hostReadbacks = hostReadbacks
@@ -24,6 +26,7 @@ struct G3StatisticsLine: Equatable {
         self.redFrames = redFrames
         self.blueFrames = blueFrames
         self.mixedFrames = mixedFrames
+        self.unreadable = unreadable
     }
 
     /// Parses a line of the form `APKRun display 0  60 fps  dropped 0  stalls 0  hostReadbacks 0  cpuPixelCopies 0`.
@@ -55,7 +58,20 @@ struct G3StatisticsLine: Equatable {
         redFrames = values["redFrames"].flatMap(Int.init)
         blueFrames = values["blueFrames"].flatMap(Int.init)
         mixedFrames = values["mixedFrames"].flatMap(Int.init)
+        unreadable = values["unreadable"].flatMap(Int.init)
     }
+}
+
+/// How the boot ended at the gate's stop (IntegrationTests G3Session.stopBoot).
+enum G3BootStop: String, Equatable {
+    /// No boot was started.
+    case notStarted
+    /// The boot had ended before the stop was requested.
+    case endedBeforeStop
+    /// The boot ended within 60 s of SIGINT.
+    case endedAfterInterrupt
+    /// The boot was still running 60 s after SIGINT, and it was killed.
+    case killedAfterInterrupt
 }
 
 /// The measurements of one G3 run, and the verdict on each of its conditions (roadmap.md §2, gate G3).
@@ -86,8 +102,10 @@ struct G3Measurements {
     var rendererCrashLines: [String] = []
     /// Crash lines of other processes in the 10-minute run. They are recorded and do not fail G3 (IR-1208).
     var otherCrashLines = 0
-    /// Whether the boot stopped after SIGINT, without SIGKILL.
-    var stoppedAfterInterrupt = false
+    /// How the boot ended at the stop. Only `endedAfterInterrupt` passes condition 5 of the stop rule.
+    var bootStop: G3BootStop = .notStarted
+    /// The buffers the tearing sampler could not read, cumulative over the boot.
+    var unreadableFrames = 0
 }
 
 /// The pure checks of G3. The gate test measures, and this type says which of the conditions fail.
@@ -150,16 +168,25 @@ enum G3Evidence {
                     + "\(measurements.alternatingBlueFrames) blue frames; the alternation was not observed")
         }
         let pids = [measurements.pidAtStart] + measurements.pidAtMinute
-        if pids.count != 11 || Set(pids.map { $0 ?? "none" }).count != 1 || measurements.pidAtStart == nil {
+        let allArePIDs = pids.allSatisfy { pid in pid.map(isProcessID) ?? false }
+        if pids.count != 11 || !allArePIDs || Set(pids.compactMap { $0 }).count != 1 {
             failures.append("5 the HelloGL pid changed or was missing during the 10-minute run: \(pids)")
+        }
+        if measurements.unreadableFrames != 0 {
+            failures.append("4 the tearing sampler could not read \(measurements.unreadableFrames) buffers")
         }
         if !measurements.rendererCrashLines.isEmpty {
             failures.append("5 \(measurements.rendererCrashLines.count) renderer crash lines in the 10-minute run")
         }
-        if !measurements.stoppedAfterInterrupt {
-            failures.append("the boot did not stop after SIGINT")
+        if measurements.bootStop != .endedAfterInterrupt {
+            failures.append("5 the boot did not end within 60 s of SIGINT (\(measurements.bootStop.rawValue))")
         }
         return failures
+    }
+
+    /// Whether `text` is one process id: ASCII digits only. An adb error text is not a pid.
+    static func isProcessID(_ text: String) -> Bool {
+        !text.isEmpty && text.allSatisfy { $0 >= "0" && $0 <= "9" }
     }
 
     /// Whether a logcat line is a crash of the renderer: HelloGL or SurfaceFlinger with a fatal marker.

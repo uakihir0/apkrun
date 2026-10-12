@@ -16613,7 +16613,7 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 
 **Choice.** `run-gate.sh G3` starts `screencapture -v -V 1800` before the G3 test and waits for it to finish, then converts the file with `avconvert --preset PresetMediumQuality` to `screen-recording.mp4` and removes the `.mov`.
 
-**Reason.** On this Mac, a `screencapture -v` process that receives SIGINT or SIGTERM exits without writing its file. Only its own `-V` timer writes the file. A test of a 120 s recording wrote 455 MB, so the raw recording is converted to keep the evidence small. The gate waits for the timer, so a run that ends early still takes up to 30 minutes.
+**Reason.** Two tests on this Mac. A `screencapture -v` started as a background job of a non-interactive shell ignored `kill -INT`, and it ran to its `-V` timer. With SIGINT's default disposition, the process exited and wrote no file. SIGTERM also exited without a file. Only the `-V` timer writes the file. A 120 s recording wrote 455 MB, so the raw recording is converted to keep the evidence small. The gate waits for the timer, so a run that ends early still takes up to 30 minutes.
 
 ## IR-1213: Criterion 5 counts the crashes of HelloGL and SurfaceFlinger; launcher and Settings aborts are recorded and do not fail G3
 
@@ -16623,7 +16623,7 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 | Task | #023 |
 | Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (criterion 6, 10-minute run); [roadmap.md](../04-plan/roadmap.md) §2 (G3 condition 5) |
 
-**Choice.** The 10-minute check passes when the HelloGL pid is the same at the start and at each of the ten minute marks, and no guest log line after the `stab-start` marker names HelloGL or SurfaceFlinger together with a fatal marker. The other crash lines (the launcher and Settings aborts of IR-1208) are written to `guest-crash-lines.txt` and counted in the summary, but they do not fail G3. The run stops with SIGINT, and a boot that is still up after 60 s gets SIGKILL. The stop is recorded.
+**Choice.** The 10-minute check passes when the HelloGL pid is the same at the start and at each of the ten minute marks, and no guest log line after the `stab-start` marker names HelloGL or SurfaceFlinger together with a fatal marker. The other crash lines (the launcher and Settings aborts of IR-1208) are written to `guest-crash-lines.txt` and counted in the summary, but they do not fail G3. The run stops with SIGINT. A boot still up 60 s after SIGINT is killed with SIGKILL, and G3 fails with `the boot did not end within 60 s of SIGINT`, so the stop is part of the verdict (`G3BootStop` in G3Evidence.swift).
 
 **Reason.** Condition 5 is about the renderer, and IR-1206 and IR-1208 already separate the two. The launcher aborts are a finding for another task (AGENTS.md §11).
 
@@ -16641,16 +16641,53 @@ The boot was `apkrun dev boot --gpu virgl --window --stats --console` (started 0
 
 **Cleanup.** Both gate processes were killed with SIGKILL. The first run's shell was waiting for its 30-minute recorder, and it would have written into the shared report. No VM or `lockf` holder remains. `build/gates/G3/report.txt` still reads `status: running`, from attempt 2, and `build/gates/G3/G3.xcresult` is attempt 2's bundle. Neither is a pass. Gate G3 is not passed, and the G3 row of graphics.md §16 and the last box of #023 stay as they are.
 
-## IR-1215: The G3 test host asks for Screen Recording access before it looks for the boot window
+## IR-1215: G3 checks for Screen Recording access and fails without it; the test never requests the access
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #023 |
-| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 gate); [test-strategy.md](../04-plan/test-strategy.md) §5 (no change) |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 gate); [test-strategy.md](../04-plan/test-strategy.md) §3.6 (the permission is granted once, by hand) |
 
-**Choice.** `G3Session.windowNumber` calls `CGPreflightScreenCaptureAccess()`, then `CGRequestScreenCaptureAccess()` when the preflight fails. If neither grants access, it throws `G3Failure.screenRecordingDenied`, whose message names APKRunTestHost and the System Settings pane.
+**Choice.** `G3Session.windowNumber` calls `CGPreflightScreenCaptureAccess()` and throws `G3Failure.runnerMissingPermission` when it is false. The message says that the user must add APKRunTestHost by hand under System Settings, Privacy & Security, Screen Recording, and then rerun `scripts/run-gate.sh G3`. The test does not request the access and does not click a prompt. The name is the one of test-strategy §3.6. `Packages/DiagnosticsCore/ErrorCatalog/errors.json` has no `runnerMissingPermission` entry. The case is test-only and shows no text to a user, so no catalog entry is added.
 
-**Reason.** Without Screen Recording access, macOS hides the titles of other processes' windows, so the lookup of `APKRun display 0` finds nothing. APKRunTestHost was missing from the Screen Recording list because it had never asked for access. Reading the window list does not register an app there. The request registers it and shows the system prompt. `xcodebuild build-for-testing` of the IntegrationTests scheme succeeded with this change (`/tmp/apkrun-g3perm/build.log`). The gate has not been rerun.
+**Reason.** Without Screen Recording access macOS hides the titles of other processes' windows, so the lookup of `APKRun display 0` cannot match the boot's window. The design grants the permission once, by hand (test-strategy §3.6). The test does not request it, so the run does not wait on a prompt.
 
-**Note.** The recording step in `scripts/run-gate.sh` runs `screencapture -v` from the shell, not from the test host. The app that runs the script (its terminal or IDE) therefore needs Screen Recording as well. This is not checked yet.
+**Correction.** The first version of this entry (commit 814eb4e) added `CGRequestScreenCaptureAccess()` to the lookup. That is reverted here.
+
+**Note.** The recording step of `scripts/run-gate.sh` runs `screencapture -v` from the gate's shell, not from the test host, so the app that runs the script also needs Screen Recording. The gate does not check that permission. A recording without it shows up as a failed or empty file, which the gate catches only if the file is missing or empty.
+
+## IR-1216: G1 and G2 do not run under `lockf`, though the test strategy says the gates do
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 (note found in the review of the G3 gate) |
+| Affected documents | [test-strategy.md](../04-plan/test-strategy.md) §3.6 (line 304: "the gates run under `lockf -k /tmp/apkrun-vm.lock`"); `scripts/run-gate.sh` (G1 and G2) |
+
+**Choice.** The G1 and G2 `xcodebuild` calls of `scripts/run-gate.sh` do not take `lockf -k /tmp/apkrun-vm.lock`. Only the G3 check does. G1 and G2 are not changed in this task, so their behaviour stays as it was.
+
+**Reason.** The test strategy says the gates run under the lock, and the G3 check does. Whether G1 and G2 should take it too is for the maintainer to decide, because changing their calls changes their behaviour.
+
+## IR-1217: The review of the G3 gate (6b032d0): the verdict, the fixed-size text, the tearing check, and the stop are now checked by the gate
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [roadmap.md](../04-plan/roadmap.md) §2 (G3 conditions 1, 4, 5, and 6); [graphics.md](../02-design/graphics.md) §12 #023; [display-and-windowing.md](../02-design/display-and-windowing.md) §5.3 |
+
+**Choice.** The fixes of the review of 6b032d0, and what each does:
+
+- *The verdict.* The gate's exit status no longer comes from `xcodebuild` alone. `scripts/tools/check-g3-evidence.py` requires `result: passed` in the artifacts' `summary.txt`, requires that `G3GraphicsTests` was executed and passed in the xcresult, and fails the run when any other test in it did not pass. The G3 configuration sets `APKRUN_G3_REQUIRED=1`, so a suite marker that does not match fails the test instead of skipping it. A missing or empty screen recording (`screen-recording.mp4`) fails the gate, and so does a failed recorder or conversion. `scripts/tests/test_check_g3_evidence.py` covers the checker.
+- *Condition 6.* The checker asserts the fixed-size statement with its exact text: graphics.md §12 #023, step 3, and display-and-windowing.md §5.3. The second statement was missing from §5.3 (the resize text was in §7.1), so it is now a bullet in §5.3. The result is written to the report.
+- *The tearing check.* A frame whose first pixel is pure red or pure blue is read in full, every row and every column (`step` 1). The alternating frames of HelloGL are filled with one of those colours, and a tear keeps the first row pure, so each alternating frame is read in full. Other frames are counted as `otherFrames` and not read. A full read of a 1024 × 768 frame took about 21.6 ms in a debug build (measured with `swift test`), which is too slow for every frame, so the reading is limited this way. `@_optimize(speed)` did not change the time. Frames the sampler could not read (`unreadable`) fail the gate.
+- *Process ids.* `helloGLPID` accepts a pid only when `pidof` exits with 0 or 1 and prints nothing else, or prints one all-digit pid with exit 0. An adb error is never read as a pid, and G3Evidence rejects any non-digit pid.
+- *The stop.* `G3BootStop` records whether the boot was not started, ended before the stop, ended within 60 s of SIGINT, or was killed. Only the third passes.
+- *The bundle.* The gate checks `SHA256SUMS` against the bundle's files. It does not check `manifest.sig` or that the bundle carries the ODM overlay. It records the manifest's `imageVersion` (`2026.10.0-cf16373615-arm64`, kind `stock`) in the report and states what is not checked.
+- *Text.* The G3 inputs are described as build settings that the test host's Info.plist expands, not as `TEST_RUNNER_` variables. The screencapture comments and IR-1212 now describe the measured behaviour.
+
+**Reason.** The first review found that a skipped test, a missing file, or an adb error could still show as passed. Each of these is now a failure with its own message.
+
+**Consequence.** The gate has not been run after these fixes. The tearing check reads alternating frames at about 21.6 ms each in a debug build, so the alternating phase may run below 60 fps. That phase is not a gate criterion. In normal mode the sampler reads one pixel per frame, so the census does not change the 60 s or 10-minute fps numbers.
+

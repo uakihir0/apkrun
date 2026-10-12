@@ -248,6 +248,8 @@ on frameReady(gen, i, seq, t):
 - `frameDisplayed` is sent from the transaction completion block, which runs after Core Animation has committed the new contents. Combined with rule 2(b) this makes reuse safe without knowing WindowServer's timing.
 - In embedded development mode (before #031/#032) the same view is fed by `SurfacePoolFrameSource` in `CLI/apkrun/Dev/` (#023). As built in #023: the presenter attaches to the boot's drmVirgl device before the guest starts (`DevelopmentDisplay` in RuntimeCore, `DeveloperDisplay` in RuntimeHost; the design's name `DeveloperService` is the RuntimeHost type). RuntimeHost wraps RuntimeCore's types, so the CLI never imports GraphicsCore. The AppKit loop runs on the main thread from the entry point before its first suspension, and the boot runs on a detached task. A loop that runs inside a main-actor job or a main-queue block stops the runtime's queue (IR-1103). It adapts the `SurfaceSet` and frame events of the embedded-only `DeveloperService` ([../03-reference/runtime-api.md](../03-reference/runtime-api.md) §15) to `FrameSource` and reports `frameDisplayed` back to it, in process instead of over XPC. Neither WindowingCore nor the CLI imports GraphicsCore.
 
+- **Development window (#023), fixed-size:** display 0 keeps the image's default mode, and the window scales the layer with aspect fit when it is resized (graphics.md §12 #023, step 3).
+
 ### 5.4 Color and format
 
 - Pool surfaces are `BGRA8` with the `kIOSurfaceColorSpace` property set to sRGB. The content layer is color-matched by WindowServer on P3 and XDR displays. Android renders sRGB. Wide color and HDR are post-v1.

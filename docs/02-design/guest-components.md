@@ -475,8 +475,8 @@ Filled in by the tasks. Each entry records the date, the macOS build, the image 
 
 | Question | Task | Result |
 |---|---|---|
-| Every `SystemServices` wrapper resolves on the stock image; a missing method fails only its capability | #072 | the wrappers resolve on build 16373615 (2026-10-10, `app_process` check, all five available), and the signatures that differ are in R-18. The capability isolation is covered by T0 (`aMissingFrameworkMethodFailsOnlyItsRequest`), not by a device run |
-| Development mode: install, start, kill, restart, and reinstall with a different version | #072 | install, start, kill and restart, the fourth-death stop, and replacement in both directions (1000 to 1001 and back) pass on 2026-10-10 through the CLI (IR-424, IR-426). The signer replacement is T0 only (IR-425) |
+| Every `SystemServices` wrapper resolves on the stock image; a missing method fails only its capability | #072 | the wrappers resolve on build 16373615 (2026-10-12, `app_process` `ServiceCheck`, all five `available=true`, on two boots; 2026-10-10 before), and the signatures that differ are in R-18. The capability isolation is JVM T1 (`SystemServiceWrapperTest`, IR-1229) and the dispatcher test (`aMissingFrameworkMethodFailsOnlyItsRequest`) |
+| Development mode: install, start, kill, restart, and reinstall with a different version | #072 | install, start, kill and restart, the fourth-death stop, and replacement in both directions (1000 to 1001 and back) pass on 2026-10-12 with the final CLI, and the signer replacement in both directions (test key and scratch key, IR-1228) passes after the refusal parser fix (IR-1226). Earlier: 2026-10-10 (IR-424, IR-426) |
 | vsock with `apkrun_vsockd` run as root on the stock image | #034 | pending (§11) |
 | Custom image: SELinux rules from the denials, attribute and permission names, boot with the domains enforcing and the privapp allowlist complete (R-13) | #035 | pending (§4.2, §4.3, §10.2) |
 | Custom image: the Guest Agent is reachable over vsock with ADB disabled; HelloProbe fails to connect to the agents' sockets | #035 | pending (§11, §12) |

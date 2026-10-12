@@ -21,8 +21,8 @@ final class AndroidPackageTests: XCTestCase {
     /// `adb install -r` installs HelloText, and PackageManager reports its metadata (FR-PKG-01).
     func testInstallHelloText() async throws {
         let apk = try Self.fixtureAPK()
-        try await AndroidBootSession.withBoot(developerMode: true) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let adb = try await Self.connectedClient(session)
             try await adb.install(apk: apk)
 
             let listing = try await adb.listPackages(matching: Self.packageName)
@@ -38,8 +38,8 @@ final class AndroidPackageTests: XCTestCase {
     /// `adb uninstall` removes HelloText, PackageManager no longer lists it, and a second install succeeds.
     func testUninstallHelloText() async throws {
         let apk = try Self.fixtureAPK()
-        try await AndroidBootSession.withBoot(developerMode: true) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let adb = try await Self.connectedClient(session)
             try await adb.install(apk: apk)
 
             try await adb.uninstall(packageName: Self.packageName)
@@ -62,8 +62,8 @@ final class AndroidPackageTests: XCTestCase {
     /// resumed activity (#017). The headless profile draws no window, so no rendering is needed.
     func testLaunchHelloText() async throws {
         let apk = try Self.fixtureAPK()
-        try await AndroidBootSession.withBoot(developerMode: true) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let adb = try await Self.connectedClient(session)
             try await adb.install(apk: apk)
 
             try await adb.startActivity(component: Self.mainActivity)
@@ -83,8 +83,8 @@ final class AndroidPackageTests: XCTestCase {
     /// Install, launch, stop, and uninstall on one boot (#017 end to end).
     func testInstallLaunchStopUninstall() async throws {
         let apk = try Self.fixtureAPK()
-        try await AndroidBootSession.withBoot(developerMode: true) { _ in
-            let adb = try await Self.connectedClient()
+        try await AndroidBootSession.withBoot(developerMode: true) { session in
+            let adb = try await Self.connectedClient(session)
             try await adb.install(apk: apk)
             try await adb.startActivity(component: Self.mainActivity)
             let launchedPid = try await adb.pidof(Self.packageName)
@@ -106,27 +106,30 @@ final class AndroidPackageTests: XCTestCase {
         }
     }
 
-    private static func connectedClient() async throws -> AdbClient {
-        let adb = AdbClient(executable: try AndroidTestEnvironment.adbExecutable())
+    /// An ADB client connected to the development endpoint of `session`, which is the port the boot bound (IR-1255).
+    private static func connectedClient(_ session: AndroidBootSession) async throws -> AdbClient {
+        let boundPort = await session.supervisor.developmentADBHostPort
+        let port = try XCTUnwrap(boundPort, "the boot bound no development ADB port")
+        let adb = AdbClient(
+            executable: try AndroidTestEnvironment.adbExecutable(),
+            endpoint: AdbClient.loopbackEndpoint(port: port)
+        )
         try await adb.connect(timeout: .seconds(30))
         return adb
     }
 
-    /// The fixture APK, found from this source file's location in the checkout.
+    /// The HelloText fixture APK of `APKRUN_FIXTURE_APK`, copied to /tmp before the run (environment-setup §4). The
+    /// checkout is not read, because a read under ~/Documents waits for the privacy decision (IR-438, IR-1253).
     private static func fixtureAPK() throws -> URL {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let apk = root.appendingPathComponent("Tests/Fixtures/AndroidApps/out/HelloText.apk")
-        guard FileManager.default.fileExists(atPath: apk.path) else {
-            let message = "The HelloText fixture is missing. Run scripts/build-fixtures.sh."
+        guard let path = ProcessInfo.processInfo.environment["APKRUN_FIXTURE_APK"], !path.isEmpty,
+            FileManager.default.fileExists(atPath: path)
+        else {
+            let message = "APKRUN_FIXTURE_APK does not name the HelloText fixture (environment-setup §4)."
             if ProcessInfo.processInfo.environment["APKRUN_CI"] == "1" {
                 XCTFail(message)
             }
             throw XCTSkip(message)
         }
-        return apk
+        return URL(fileURLWithPath: path)
     }
 }

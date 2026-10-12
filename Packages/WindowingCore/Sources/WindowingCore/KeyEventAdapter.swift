@@ -9,6 +9,13 @@ import InputCore
 public enum KeyEventAdapter {
     /// Returns the sample of `event`, or nil when key mode does not use the event.
     public static func sample(for event: NSEvent) -> KeySample? {
+        // The key code is read only for the key event types: AppKit raises an exception for `keyCode` of a pointer event.
+        switch event.type {
+        case .keyDown, .keyUp, .flagsChanged:
+            break
+        default:
+            return nil
+        }
         let time = PointerEventAdapter.timestamp(seconds: event.timestamp)
         let code = event.keyCode
         switch event.type {

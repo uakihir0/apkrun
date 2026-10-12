@@ -155,7 +155,14 @@ public actor InputRouter {
 
     /// Routes a batch of events from `session`, in order (runtime-api.md §7.3). Dropped events are counted, and nothing
     /// is returned to the caller.
-    public func route(_ events: [InputEvent], from session: SessionID) async {
+    public nonisolated func route(_ events: [InputEvent], from session: SessionID) async {
+        await Perf.interval("input.route") {
+            await self.routeBatch(events, from: session)
+        }
+    }
+
+    /// Routes one batch. `route` measures it with the `input.route` signpost interval.
+    private func routeBatch(_ events: [InputEvent], from session: SessionID) async {
         guard !events.isEmpty else {
             return
         }

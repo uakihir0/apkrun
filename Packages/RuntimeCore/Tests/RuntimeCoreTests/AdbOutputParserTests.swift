@@ -47,6 +47,17 @@ func aReasonThatIsNotAnAndroidCodeIsNeverPassedOn() {
     #expect(AdbOutputParser.packageReply("Failure [A [b] c]") == .failure(reason: "unknown"))
     #expect(AdbOutputParser.packageReply("Failure [lowercase text]") == .failure(reason: "unknown"))
     #expect(AdbOutputParser.packageReply("Failure [: no code]") == .failure(reason: "unknown"))
+    #expect(AdbOutputParser.packageReply("Failure [4: text]") == .failure(reason: "unknown"))
+    #expect(AdbOutputParser.packageReply("Failure [_CODE]") == .failure(reason: "unknown"))
+}
+
+@Test
+func aReplyCutOffBeforeItsCodeEndsIsUnknown() {
+    // A marker with no closing `]` or `:` has no code that can be read, so the reply is unknown.
+    #expect(
+        AdbOutputParser.packageReply("adb: failed to install x.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPA")
+            == .unknown
+    )
 }
 
 @Test

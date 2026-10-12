@@ -57,14 +57,18 @@ enum AdbOutputParser {
             if line == "Success" {
                 return .success
             }
-            guard let marker = line.range(of: "Failure [") else {
+            // A marker without its closing `]` or `:` is cut off, so it has no code to read.
+            guard let marker = line.range(of: "Failure ["),
+                let end = line[marker.upperBound...].firstIndex(where: { $0 == "]" || $0 == ":" })
+            else {
                 continue
             }
-            let rest = line[marker.upperBound...]
-            let end = rest.firstIndex(where: { $0 == "]" || $0 == ":" }) ?? rest.endIndex
-            let code = String(rest[..<end])
-            // Android's codes are upper-case words. Anything else is output text, which must not reach an error.
-            let isCode = !code.isEmpty && code.allSatisfy { $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_") }
+            let code = String(line[marker.upperBound..<end])
+            // Android's codes are upper-case words that start with a letter. Anything else is output text, which must
+            // not reach an error.
+            let startsWithLetter = code.first.map { $0.isASCII && $0.isUppercase } ?? false
+            let isCode =
+                startsWithLetter && code.allSatisfy { $0.isASCII && ($0.isUppercase || $0.isNumber || $0 == "_") }
             return .failure(reason: isCode ? code : "unknown")
         }
         return .unknown

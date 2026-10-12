@@ -458,6 +458,176 @@ class InputInjectorTest {
     }
 
     @Test
+    fun aHoverMoveDuringAnOpenTouchGestureIsNotInjectedAndIsCounted() {
+        val harness = Harness()
+        harness.injector.injectBatch(
+            0,
+            0L,
+            listOf(mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER, x = 30f, y = 40f)),
+        )
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    touchEvent(TouchPhase.TOUCH_PHASE_DOWN, 10f, 10f),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 31f, y = 41f),
+                    touchEvent(TouchPhase.TOUCH_PHASE_MOVE, 12f, 12f),
+                ),
+            )
+
+        assertEquals(BatchOutcome(2, 1), outcome)
+        assertEquals(
+            listOf(
+                MotionEvent.ACTION_HOVER_ENTER,
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_MOVE,
+            ),
+            harness.actions,
+        )
+        // The hover entered before the gesture is still open, so cancelAll exits it.
+        harness.injector.cancelAll()
+        assertEquals(MotionEvent.ACTION_HOVER_EXIT, harness.actions.last())
+    }
+
+    @Test
+    fun aHoverMoveDuringAnOpenMouseButtonGestureIsNotInjected() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    mouseEvent(MouseAction.MOUSE_ACTION_PRESS, MotionEvent.BUTTON_SECONDARY),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 31f, y = 41f),
+                    mouseEvent(MouseAction.MOUSE_ACTION_RELEASE, MotionEvent.BUTTON_SECONDARY),
+                ),
+            )
+
+        assertEquals(BatchOutcome(4, 1), outcome)
+        assertEquals(
+            listOf(
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_BUTTON_PRESS,
+                MotionEvent.ACTION_BUTTON_RELEASE,
+                MotionEvent.ACTION_UP,
+            ),
+            harness.actions,
+        )
+    }
+
+    @Test
+    fun aHoverMoveIsInjectedAgainAfterTheGestureIsReleased() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER, x = 30f, y = 40f),
+                    touchEvent(TouchPhase.TOUCH_PHASE_DOWN, 10f, 10f),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 31f, y = 41f),
+                    touchEvent(TouchPhase.TOUCH_PHASE_UP, 10f, 10f),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 32f, y = 42f),
+                ),
+            )
+
+        assertEquals(BatchOutcome(4, 1), outcome)
+        assertEquals(
+            listOf(
+                MotionEvent.ACTION_HOVER_ENTER,
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_HOVER_MOVE,
+            ),
+            harness.actions,
+        )
+        assertEquals(32f, harness.specs.last().x)
+        assertEquals(42f, harness.specs.last().y)
+    }
+
+    @Test
+    fun aGestureOnAnotherDisplayDoesNotHoldHoverOnThisOne() {
+        val harness = Harness()
+        harness.injector.injectBatch(1, 0L, listOf(touchEvent(TouchPhase.TOUCH_PHASE_DOWN)))
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 31f, y = 41f)),
+            )
+
+        assertEquals(BatchOutcome(1, 0), outcome)
+        assertEquals(MotionEvent.ACTION_HOVER_MOVE, harness.actions.last())
+    }
+
+    @Test
+    fun aHoverExitWithNoOpenEnterIsSkipped() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_EXIT),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_EXIT),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_EXIT),
+                ),
+            )
+
+        assertEquals(BatchOutcome(2, 2), outcome)
+        assertEquals(
+            listOf(MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_EXIT),
+            harness.actions,
+        )
+        // Nothing is open, so the cancel has no hover to exit.
+        assertEquals(BatchOutcome(0, 0), harness.injector.cancelAll())
+    }
+
+    @Test
+    fun aHoverEnterWhileAHoverIsOpenIsSkipped() {
+        val harness = Harness()
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER),
+                    mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER),
+                ),
+            )
+
+        assertEquals(BatchOutcome(1, 1), outcome)
+        assertEquals(listOf(MotionEvent.ACTION_HOVER_ENTER), harness.actions)
+    }
+
+    @Test
+    fun cancelAllExitsAHoverWhileAGestureIsOpen() {
+        val harness = Harness()
+        harness.injector.injectBatch(
+            0,
+            0L,
+            listOf(
+                mouseEvent(MouseAction.MOUSE_ACTION_HOVER_ENTER, x = 70f, y = 80f),
+                touchEvent(TouchPhase.TOUCH_PHASE_DOWN),
+            ),
+        )
+        val outcome = harness.injector.cancelAll()
+
+        assertEquals(BatchOutcome(2, 0), outcome)
+        assertEquals(
+            listOf(
+                MotionEvent.ACTION_HOVER_ENTER,
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_CANCEL,
+                MotionEvent.ACTION_HOVER_EXIT,
+            ),
+            harness.actions,
+        )
+    }
+
+    @Test
     fun aScrollHasTheVerticalAndHorizontalAxisValues() {
         val harness = Harness()
         val outcome =

@@ -65,6 +65,9 @@ private class DisplayGestures {
 private class Tally {
     var injected = 0
     var dropped = 0
+
+    /** The hover events that were dropped by [InputInjector.hostHover] (they are in [dropped]). */
+    var hoverSkipped = 0
 }
 
 /**
@@ -91,8 +94,11 @@ private fun pressureOf(buttonState: Int): Float = if (buttonState != 0) 1f else 
  * - A mouse gesture opens with ACTION_DOWN at its first button press, and each press and release is
  *   an ACTION_BUTTON_PRESS or ACTION_BUTTON_RELEASE. The gesture closes with ACTION_UP when no
  *   button is down.
- * - Hover and scroll stand alone. Keys and long presses are dropped and counted, because they are
- *   not injected in this build (decision D6).
+ * - Scroll stands alone. Keys and long presses are dropped and counted, because they are not
+ *   injected in this build (decision D6).
+ * - A hover event is dropped while a touch or a mouse button gesture is open on its display,
+ *   because Android refuses the mixed event. An unbalanced hover enter or exit is dropped too. Both
+ *   are counted (see [hostHover]).
  * - An event that does not fit the open gesture is dropped and counted.
  * - A refused event is counted and does not change the gesture state.
  */
@@ -151,6 +157,11 @@ class InputInjector(
         if (unsupported > 0) {
             AgentLog.info(
                 "input: dropped $unsupported key or long-press events (not injected in this build)"
+            )
+        }
+        if (tally.hoverSkipped > 0) {
+            AgentLog.info(
+                "input: dropped ${tally.hoverSkipped} hover events (a gesture was open, or the hover enter and exit were not balanced)"
             )
         }
         return BatchOutcome(tally.injected, tally.dropped)
@@ -276,34 +287,31 @@ class InputInjector(
     ) {
         when (mouse.action) {
             MouseAction.MOUSE_ACTION_HOVER_ENTER ->
-                hover(
+                hostHover(
                     displayId,
                     gestures,
                     MotionEvent.ACTION_HOVER_ENTER,
-                    mouse.x,
-                    mouse.y,
+                    mouse,
                     time,
                     tally,
                     hovering = true,
                 )
             MouseAction.MOUSE_ACTION_HOVER_MOVE ->
-                hover(
+                hostHover(
                     displayId,
                     gestures,
                     MotionEvent.ACTION_HOVER_MOVE,
-                    mouse.x,
-                    mouse.y,
+                    mouse,
                     time,
                     tally,
                     hovering = true,
                 )
             MouseAction.MOUSE_ACTION_HOVER_EXIT ->
-                hover(
+                hostHover(
                     displayId,
                     gestures,
                     MotionEvent.ACTION_HOVER_EXIT,
-                    mouse.x,
-                    mouse.y,
+                    mouse,
                     time,
                     tally,
                     hovering = false,
@@ -312,6 +320,38 @@ class InputInjector(
             MouseAction.MOUSE_ACTION_RELEASE -> release(displayId, gestures, mouse, time, tally)
             else -> tally.dropped += 1
         }
+    }
+
+    /**
+     * A hover event from the host. Android refuses a hover event while a touch or a mouse button
+     * gesture is open on the display, and the host translator holds hover during a gesture, so this
+     * is the last check. Such an event is dropped and counted. An enter with a hover already open,
+     * and an exit with none open, are dropped too, so the enters and exits stay balanced. The
+     * teardown in [releaseDisplay] does not come through here, because it runs after the gestures
+     * are closed.
+     */
+    private fun hostHover(
+        displayId: Int,
+        gestures: DisplayGestures,
+        action: Int,
+        mouse: MouseEvent,
+        time: Long,
+        tally: Tally,
+        hovering: Boolean,
+    ) {
+        val gestureOpen = gestures.touch != null || gestures.mouse != null
+        val unbalanced =
+            when (action) {
+                MotionEvent.ACTION_HOVER_ENTER -> gestures.hovering
+                MotionEvent.ACTION_HOVER_EXIT -> !gestures.hovering
+                else -> false
+            }
+        if (gestureOpen || unbalanced) {
+            tally.dropped += 1
+            tally.hoverSkipped += 1
+            return
+        }
+        hover(displayId, gestures, action, mouse.x, mouse.y, time, tally, hovering)
     }
 
     private fun hover(

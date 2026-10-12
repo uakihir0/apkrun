@@ -16955,3 +16955,234 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Reason.** The findings were checked against the source and the milestone text, and each one that changed a claim was corrected in the same change. The reviewer's counts were taken from the source and were not run.
 
 **Risk.** Three points stay open for the maintainer: whether the box 2 code must be visible to a user (item 4); whether the boot's wrapper code `runtime.guestAgent` should print the inner `installFailed` code (IR-1226 names the printed code); and the README header and its counts line, which describe `main` at `213984d` and were not regenerated, because no script produces them.
+
+## IR-1233: Step 1 checks the mapping with awk and the same clamp, and the device is prepared by hand
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (box 1); [input.md](../02-design/input.md) §12 (#024 step 1); [validate-input-coordinates.sh](../../scripts/dev/validate-input-coordinates.sh) |
+
+**Choice.** Step 1 is `scripts/dev/validate-input-coordinates.sh` (commit `5a43977`). It maps window points to display pixels in awk, with the same formula and the same clamp to the last pixel as `CoordinateMapper`, and `--self-test` checks reference vectors. The content rectangle defaults to 0,0,W/2,H/2, which assumes backing scale 2, the scale of the reference Mac. The script is the only `adb shell input` in the repository. The keyguard was cleared by hand with `cmd power wakeup`, `wm dismiss-keyguard`, and `svc power stayon true`, not with input. On image 16373615 the check hit HelloText's button 10 of 10 times (`APKRUN-FIXTURE: click 1` to `click 10`; the button centre is (150.5, 182.0) px; ready after 10.88 s). The first attempt found no button, because the keyguard was up; the retry after clearing it passed.
+
+**Reason.** Step 1 is a one-off check, and it must not be a product path (FR-IN-06). The vectors match the T0 vectors of `CoordinateMapperTests` (for example (512, 0) to (1023, 767) and (256, 192) to (512, 384)).
+
+**Risk.** The mapping exists in awk and in Swift, and the two copies are kept equal by hand. The hits show the mapping to tens of pixels, because the button is 205 by 96 px, not to one pixel.
+
+## IR-1234: InputCore imports nothing, and WindowingCore reads NSEvent into plain samples
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §2, §12 (#024 step 2); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (step 2) |
+
+**Choice.** `InputCore` has no `import` statement, so it has neither AppKit nor DiagnosticsCore. `EventTranslator` consumes `PointerSample`, a plain value with the event kind, the window point, the Control flag, the time, the scroll deltas, and the precise and momentum flags. `PointerEventAdapter` in WindowingCore turns an `NSEvent` into a `PointerSample`, and it is the only place that reads `NSEvent`. The T0 tests of the adapter and of the mapping are in `WindowingCoreTests` (`PointerEventAdapterTests`, `PointerMappingTests`). The scroll cases build their events with `CGEvent(scrollWheelEvent2Source:…)`, because the system delivers wheel and trackpad scrolls to the application as `NSEvent`s. `PointerEventAdapter` itself has no `CGEvent` conversion.
+
+**Reason.** The model stays free of AppKit, so its tests run without a window, and only one module reads `NSEvent`.
+
+**Risk.** There are two conversion points, the adapter (`NSEvent` to sample) and the view's conversion of the location to the content (`convert(_:from:nil)`). A change at either can move the mapping without a failure in `InputCoreTests`. The adapter's time base is `NSEvent.timestamp`, and the view's flush clock is `ProcessInfo.systemUptime` (IR-1244, item 6).
+
+## IR-1235: The translator's choices for the §4.1 rows, and the far edges
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §3, §4.1, §4.4, §9, §14; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (boxes 2 and 7) |
+
+**Choice.** `EventTranslator` and `CoordinateMapper` make these choices.
+1. A right-button drag is dropped. `MouseEvent` has no move action, and §4.1 has no row for a drag with a mouse button. The release still carries the position. The maintainer decides whether to add a row.
+2. Control-click starts a secondary-button gesture. A Control release during that gesture still ends it, because the gesture remembers which trigger started it.
+3. Hover is sent at most 120 times per second (1/120 s). The latest position is kept and sent as a trailing move from the view's timer.
+4. Scroll deltas are summed and sent at most once per 8 ms. The held scroll is flushed by the same timer.
+5. A press during a hover sends a hover exit first. Hover samples send nothing while a gesture is open (`cb5e318`).
+6. A far edge maps to the last pixel: x is at most W - 1 and y at most H - 1 (`1796f23`, which replaces the first commit `d59b59f`). The guest rejects x >= width and y >= height. §9 allows coordinates within ±2 × the display size, so the host choice is stricter than §9.
+7. The scroll factor is 64 dp and the zoom is 1, both fixed. The view constructs the translator with the defaults, and the guest does not report a per-display factor yet (§4.4).
+8. The mapper maps nothing until the first frame sets the display geometry (`update` on the first generation), so pointer events before that are dropped.
+9. `touchDrag` mode (§4.4) is not implemented.
+
+**Reason.** Item 1 is the smallest choice that does not send an action the guest has no row for. Items 3 to 5 follow the framework's rules for hover and gestures. Item 6 follows the guest's own bound, so that the release at the edge is not refused.
+
+**Risk.** A secondary-button drag does nothing in v0.1. The far-edge choice differs from §9. Scrolling speed is not tuned to a reported dp value. Without `touchDrag`, an app whose custom views ignore `ACTION_SCROLL` does not scroll.
+
+## IR-1236: The guest injector logs with the agent tag, drops keys, and reflects two hidden calls
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [input.md](../02-design/input.md) §7.3, §8, §11, §12 (#024 step 3); [guest-components.md](../02-design/guest-components.md) §9; [risks.md](risks.md) R-18 |
+
+**Choice.** The injector is `InputInjector` in `Guest/guestd`, and it logs through `AgentLog`.
+1. The log tag is `ApkRunGuest` (`AgentLog.TAG`), the tag of the Guest Agent (guest-components §9). input.md §11 names `ApkRunInput`, and the input row of guest-components §9 does too. The tag was kept, because a new tag would split the agent's log. Changing it needs a Guest/agentruntime change.
+2. A `LONG_PRESS` is not injected, and a `KEY` event is validated, dropped, and counted with a log line. The translator never produces either. The keyboard is #025.
+3. `setDisplayId` on `InputEvent` and `setActionButton` on `MotionEvent` are reached by reflection (R-18). A missing method is reported as an injection failure.
+4. `DisplayService` gained a removal listener, which `Daemon` connects to the injector. The gestures on a removed display are released.
+5. A hover event is dropped in the guest while a touch or mouse gesture is open (`881b421`), beside the translator's rule. The framework refuses that combination.
+6. The ack is sent after the batch is injected, and `events_injected` counts the events the injector synthesized.
+
+**Reason.** Items 2 to 5 follow input.md §7.3 and the framework's rules. Item 3 is the same kind of hidden call that R-18 names.
+
+**Risk.** `MotionEvent`s are built only through the `MotionEventFactory` seam. The JVM tests use a fake factory, so the real factory (`MotionEvent.obtain`) runs only on the device. A key on the wire is dropped until #025. The tag differs from the design.
+
+## IR-1237: HelloCompose is added, and its text event logs only the length
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [test-strategy.md](test-strategy.md) §4.2 (HelloCompose commands); [build-system.md](../05-development/build-system.md) §8 (committed fixtures) |
+
+**Choice.** HelloCompose (`Tests/Fixtures/AndroidApps/HelloCompose/`) has a `LazyColumn` of 200 rows (`ListRows.COUNT`), a `TextField`, and two debug-only receivers in `src/debug`, for `scroll first=<index>` and for the text. The text event logs `APKRUN-FIXTURE: text length=<n>` and never the text (AGENTS §8). test-strategy §4.2 gives the text event a JSON argument, so the implementation differs from the design. `scripts/build-fixtures.sh` gained `--app HelloCompose`. `Tests/Fixtures/apks/` does not exist on this branch, so no committed copies were updated. build-system §8 names `scripts/build-fixtures.sh --refresh-committed` and `scripts/check-fixtures.sh`, and neither exists.
+
+**Reason.** The text is not logged, as AGENTS §8 requires. #071 needs to read the text back, so the text event will need a design decision then.
+
+**Risk.** Without committed copies, nothing compares the build with a checked-in APK, so a stale fixture would not be caught. The text event's argument differs from the design until #071 decides it.
+
+## IR-1238: Routing: the wire types in RuntimeAPI, the router rules, and counters without XPC
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [runtime-api.md](../03-reference/runtime-api.md) §7.1 to §7.3; [input.md](../02-design/input.md) §7.1, §8, §11 |
+
+**Choice.**
+1. The wire types of runtime-api §7.2 are in `RuntimeAPI` (`InputWireTypes.swift`). No XPC endpoint is added: `sendInput`, `sendText`, and `focusChanged` belong to #026 and #031. The CLI reaches the route in process through `EmbeddedInputSink`.
+2. `SessionID` and `AppSessionState` are in RuntimeCore (`AppSession.swift`). None existed before.
+3. `InputRouter` (an actor) keeps the sessions. An unknown session is counted as `input.dropped.invalid`. Events need the state running or backgrounded, or they are counted as `input.dropped.notRunning`. Events above 2,000 per second per session are counted as `input.dropped.rate`. Touch down, up, and cancel, button press and release, hover enter and exit, long press, key, and `cancelAll` are never dropped, and only touch moves, hover moves, and scrolls can be.
+4. Coalescing runs only above a 64 KiB backlog, within one route call, and merges consecutive moves, hover moves, and scrolls. A merged scroll adds up its axes.
+5. `batch_seq` is owned by the router. The host requests an ack on every 32nd batch (`GuestInputEncoding`). Acks report rejected events to `input.dropped.invalid`.
+6. The counter `input.dropped.channel` counts events that the stream could not carry.
+
+**Reason.** The rules are runtime-api §7.3 and input.md §7.1. The XPC endpoints wait for the sessions of #026 and #031.
+
+**Risk.** The counters are not exported to a diagnostics snapshot: `DevInputRoute.counters()` has no production caller (IR-1244, item 8).
+
+## IR-1239: dev launch opens the window by default, and --no-window keeps the #072 path
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [cli.md](../02-design/cli.md) §5 (the `dev boot` and `dev launch` rows, updated in this change); [input.md](../02-design/input.md) §12 (#024 step 4); [error-catalog.md](../03-reference/error-catalog.md) |
+
+**Choice.** `apkrun dev launch <package>` opens the development window and binds the input route to display 0. Android keeps running until the window closes or Ctrl-C, and the launch result is printed. `--no-window` restores #072: Android stops once the launch is done. `apkrun dev boot --window` binds the route too. The route checks the control session's token every 250 ms (`DevInputBinding`), so an agent restart is seen without a restart stream. It reports "input is bound to display 0" after each bind.
+
+**Reason.** The window shows the app only while Android runs, so the VM stays up until the window closes. `--no-window` keeps the #072 behavior for scripts.
+
+**Risk.** `apkrun dev launch` with its window was not run on the device: every device run used `apkrun dev boot --window`, which binds the same route, and the step 4 check (a click logs `click 1`) was run under `dev boot` only. The route does not rebind after an agent loss (IR-1241). Two warnings print on standard error and have no entry in [error-catalog.md](../03-reference/error-catalog.md): `input is not bound: the Guest Agent is not running` (`DevBoot.swift`) and `input is not bound: <code>` (`DevInputBinding.swift`). The catalog's Markdown is generated from `errors.json` by `scripts/errorgen.swift`, which was not run in this change, so no entry was added (IR-1244, item 10). The `--no-window` guard reuses `cli.invalidArgument` with the reason `entry`, which the reader cannot act on.
+
+## IR-1240: adb connect keeps a healthy device transport
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1 (the forwards); [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes) |
+
+**Choice.** `AdbClient.connect` asks `adb -s <endpoint> get-state` first, and it keeps a transport that reports `device` (`47ced64`). Only a transport that does not report `device` gets `adb disconnect` and `adb connect`. Before this change, every connect ran `adb disconnect`. That removed the `adb forward` listeners of the Guest Agent's control, input, and bulk sockets, and the input route dropped in device run 1.
+
+**Reason.** A private adb server and a fake device showed that `adb disconnect` removes the forwards of the transport, which matches the time of the drop (the run 1 follow-up). The stale-transport path stays: after an earlier boot a transport can answer "already connected" and stay offline (`adbClientDropsAStaleTransportBeforeConnecting`).
+
+**Risk.** A dead transport still takes the old path. Two T0 tests cover the healthy case: `adbClientKeepsAHealthyTransport` (RuntimeCore) and `devAdbLeavesAHealthyTransportAlone` (RuntimeHost). The change also reaches `apkrun dev adb` (`DevAdb.swift`) and the boot's connect (`RuntimeSupervisor.swift`). The doc comment of `connect` still says that every attempt runs `adb disconnect`, which is no longer true for a healthy transport.
+
+## IR-1241: The route does not rebind after the guest agent is lost (open)
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [README.md](issues/README.md) §5 (the #024 row); [guest-components.md](../02-design/guest-components.md) §3.3 |
+
+**Choice.** Not fixed in #024. `DevInputBinding` checks the bound channel only when the control session exists. After a loss, with the session nil, the bound channel is not released. The supervisor's recovery, `DevelopmentGuestAgent.handleLoss`, calls `provisioner.isRunning()` with `try?`. When adb fails, the result is nil, which is not `true`, so the code counts a death and restarts. When the restart fails, `restartsRefused` is set, and it is never reset within the boot (`requireAvailable`). This is inferred from the timing of run 1 and from the code. The supervisor's log lines go to the CLI's log sink, which the CLI does not print, so the refusal was not captured.
+
+**Reason.** The fix changes what counts as a death in the restart policy, and it needs its own T1 test in `GuestAgentSupervisorTests`. That is a supervisor change, not an input change, so it goes to a follow-up task. The number is to be assigned from GitHub (AGENTS §11).
+
+**Risk.** A guest agent restart ends pointer input until the boot ends. Events on the dead channel fail and are counted as `input.dropped.channel`. The follow-up task is not filed yet.
+
+## IR-1242: OQ-31 answer for display 0: no pointer is drawn, and hover stays on
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [open-questions.md](open-questions.md) OQ-31; [input.md](../02-design/input.md) §4.2, §14, §15; [risks.md](risks.md) R-18 |
+
+**Choice.** On display 0, Android draws no pointer for an injected `SOURCE_MOUSE` hover. The answer is the "nothing to do" branch, so `input.hover` stays `true` by default, and the pointer-icon API is not called. The evidence: the screenshot at the hover point shows the plain background, the SurfaceFlinger layer list has no child of the pointer overlay layer, and `dumpsys input` lists no mouse pointer controller. OQ-31 stays open for the pool-display check of #029.
+
+**Reason.** The design's default (hide the pointer with `TYPE_NULL`, else hover off) applies only when Android draws a pointer.
+
+**Risk.** One device and one image (16373615). The screenshot shows the guest display only, and it may not include an overlay layer. The layer list and the empty controller list are the other evidence. Another image, or a pool display, may draw a pointer.
+
+## IR-1243: How the acceptance boxes were verified, and what could not be
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (acceptance criteria, Notes) |
+
+**Choice.**
+- Box 4 (drag, trackpad, and wheel) is synthetic only: CGEvent drags, pixel scrolls, and line scrolls from a helper outside the repository. Trackpad natural scrolling is check C01-2 (T3), not run.
+- Box 6 (no shell per event): `AdbClient` has no shell counter. The box is checked by sampling `shell input` processes (none in 327 one-second samples of the final run), and by a code search for adb calls in the input files (none). The adb calls of the test setup (`am start`, `uiautomator dump`, `dumpsys`) ran outside check C.
+- `AndroidInputTests` compiles: `xcodebuild build-for-testing` ended with `TEST BUILD SUCCEEDED` on the tested tree (`c10196b`, now `c369e8f`). It is not run in the Xcode test host, as with IR-438 (adb does not return there). The suite skips unless `APKRUN_INPUT_T2=1` is set and its fixture variables name APKs. Its window adapters are copied from the CLI target (412 lines in `AndroidInputRun.swift`), because the test host cannot import the CLI target. `EmbeddedInputSinkTests` covers the CLI's conversion table.
+
+**Reason.** These are the checks that the environment allows. The box 6 counter does not exist, so the box can be met only by sampling and search, or by a counter in `AdbClient` if the maintainer wants one.
+
+**Risk.** The T2 path does not run in CI or in the host. The adapter copy can drift from the CLI.
+
+## IR-1244: The adversarial review of #024, and how each finding was answered
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [README.md](issues/README.md) §5; [risks.md](risks.md) R-05, R-18; [open-questions.md](open-questions.md) OQ-31; [input.md](../02-design/input.md) §11, §15; [cli.md](../02-design/cli.md) §5; IR-1233 to IR-1243 |
+
+**Choice.** A read-only reviewer read the branch at `f5494db`, 13 commits then, against the design, with no build and no test run. The review file is outside the repository (`/tmp/apkrun-024/logs/review-024.txt`). The commit hashes below are the current ones. A message rewrite of the 19 branch commits changed the hashes and kept the trees; the trees of the old and new hashes named here were compared, and they match.
+1. BLOCKER 1, a drag out through the right or bottom edge sent x = W or y = H, which the guest rejects: fixed in `1796f23` (old hash `d59b59f`), which clamps to the last pixel, and the tests that pinned the edge were updated.
+2. BLOCKER 2, a Co-Authored-By trailer on the commit `13292b7`: removed by the message rewrite. The commit is `0e835bd` now, with the same tree.
+3. MAJOR 1, the rate limit could drop UP, DOWN, and others: fixed in `004942d`. Gesture ends and keys are exempt.
+4. MAJOR 2, hover during a gesture: fixed in the translator (`cb5e318`) and in the guest (`881b421`).
+5. MAJOR 3, the route keeps a stale channel: IR-1241, not fixed.
+6. MAJOR 4, the clock bases: the flush timer reads `ProcessInfo.systemUptime`, and the events carry `NSEvent.timestamp`. The route drag and scroll pass on the device. A clock check on this Mac (step 4, `clockcheck3`) found the two equal within 0.05 ms, so they work together here. The check did not cover sleep.
+7. MAJOR 5, `AndroidInputTests` was missing: added in `c369e8f` (the tree of `c10196b`).
+8. MAJOR 6, counters and signposts: the route signpost is added (`f0c15a4`). The `input.translate` signpost is not added: the window path is synchronous, and `Perf.interval` is asynchronous, so a synchronous variant needs an entry in [diagnostics.md](../02-design/diagnostics.md). The counters are not exported to a diagnostics snapshot (open).
+9. MAJOR 7, the unrecorded deviations: IR-1233 to IR-1243. The touchDrag gap is in IR-1235.
+10. MAJOR 8, the docs: the M03 entry, the README row, R-05, R-18, OQ-31, input.md §11 and §15, and cli.md are updated in this change. The error catalog is not updated: the "input is not bound" warnings and the `--no-window` message have no entry, because the catalog's Markdown is generated from `errors.json` by `scripts/errorgen.swift`, which was not run.
+11. Minor: a scroll in the letterbox is clamped and sent, where the task's letterbox rule (M03 #024, scope) suggests dropping it. The window has no letterbox, so the choice is recorded and not changed. The guest tag is IR-1236. `boundsOf` (`DisplayService.modeOf`, which calls `readDisplays()`) runs once per batch in `InputService.submit`, which is recorded and not changed. The `--no-window` guard error is not actionable, and it is not changed (IR-1239). The reverse-conversion test (`EmbeddedInputSinkTests`) compiles only under the `APKRUN_EMBEDDED_RUNTIME` trait, so CI must run that configuration.
+
+**Reason.** Each finding was checked against the code and the design, and each fix has its own commit with the tests that the finding named.
+
+**Risk.** Items 5, 8 (the counters), and the minor items stay open for the maintainer.
+
+## IR-1245: A stray xcodebuild run started without the VM lock
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | None in the repository. The command log is outside the repository. |
+
+**Choice.** During the T2 compile check, an agent working on the suite started `xcodebuild test-without-building` in the `LinuxGuest` configuration, scoped to `AndroidInputTests`, without `lockf -k /tmp/apkrun-vm.lock`. The command is recorded in the log of the check. It was stopped with SIGTERM within seconds, and the VM lock was free at that time. No VM run was seen from it. The device runs after it held the lock.
+
+**Reason.** The process rule is that a VM run holds the lock. The record is kept so that the maintainer can review it.
+
+**Risk.** The rule was broken once. The stop is recorded in that agent's report, not in the repository.
+
+## IR-1246: Sequential boots reused the scratch home, and the disk margin was low at times
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | None in the repository. |
+
+**Choice.** The device runs were sequential boots, each under `lockf -k /tmp/apkrun-vm.lock`, reusing the installed scratch home. After step 1, no image was installed again. The floor was 10 GB free. The free space on the shared APFS container was between 13 and 51 GiB during the runs.
+
+**Reason.** Reusing the home avoids a 45 GB image install before each boot. The lock keeps one VM at a time.
+
+**Risk.** The margin was low at times (13 GiB available). Other caches on the same container grew, and the record does not say which ones.

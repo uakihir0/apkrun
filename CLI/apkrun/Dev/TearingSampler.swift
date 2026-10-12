@@ -21,6 +21,8 @@
         private(set) var mixedFrames = 0
         /// The buffers that could not be locked or read.
         private(set) var unreadable = 0
+        /// The frames whose first pixel is neither colour. They are counted and not read in full (see `observe`).
+        private(set) var otherFrames = 0
 
         /// Reads the buffer of a frame that is ready to show. Other events are ignored.
         func observe(_ event: DeveloperDisplayEvent, surfaces: [IOSurface]) {
@@ -44,13 +46,22 @@
                 unreadable += 1
                 return
             }
+            frames += 1
+            let pixels = UnsafeRawPointer(base)
+            // The alternating-colour mode fills every frame with one pure colour, and a tear keeps the first row
+            // pure. A frame that starts with another colour (the gradient of the normal mode) is counted and not read.
+            guard FrameColourCensus.isPureRedOrBlue(pixels) else {
+                otherFrames += 1
+                return
+            }
+            // Every row and every column of an alternating frame is read, so a tear of one row is found.
             let census = FrameColourCensus.census(
-                of: UnsafeRawPointer(base),
+                of: pixels,
                 width: IOSurfaceGetWidth(surface),
                 height: IOSurfaceGetHeight(surface),
-                bytesPerRow: IOSurfaceGetBytesPerRow(surface)
+                bytesPerRow: IOSurfaceGetBytesPerRow(surface),
+                step: 1
             )
-            frames += 1
             if census.isMixed {
                 mixedFrames += 1
             } else if census.red > 0 {
@@ -63,7 +74,7 @@
         /// The counts for the statistics line. They are cumulative from the boot, like the device counters.
         var summary: String {
             "framesSampled \(frames)  redFrames \(redFrames)  blueFrames \(blueFrames)  mixedFrames \(mixedFrames)  "
-                + "unreadable \(unreadable)"
+                + "otherFrames \(otherFrames)  unreadable \(unreadable)"
         }
     }
 #endif

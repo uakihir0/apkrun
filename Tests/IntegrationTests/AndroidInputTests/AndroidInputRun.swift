@@ -143,6 +143,9 @@ final class AndroidInputRun {
         let report: @Sendable (DevBootEvent) -> Void = { event in
             if case .message(let text) = event { bootLog.append(text) }
             if case .warning(let text) = event { bootLog.append(text) }
+            if case .catalogWarning(let error) = event {
+                bootLog.append("\(error.qualifiedCode): \(error.cause?.qualifiedCode ?? "no Guest Agent")")
+            }
         }
         boot = Task.detached {
             do {

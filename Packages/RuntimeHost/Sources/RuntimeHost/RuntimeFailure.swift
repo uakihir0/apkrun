@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import RuntimeCore
 
 /// The process that owns `Runtime/instance.lock`.
 public enum InstanceLockOwner: String, Codable, Equatable, Sendable {
@@ -70,6 +71,10 @@ public enum RuntimeFailure: APKRunError, Equatable {
     /// `apkrun dev boot` cannot create the developer console socket.
     case devConsoleSocketUnavailable
 
+    /// The development window's input is not bound to the Guest Agent's input channel (#024). `cause` is the agent
+    /// failure, or nil when the boot has no running Guest Agent to bind to. A warning: the boot goes on.
+    case inputNotBound(cause: GuestAgentFailure?)
+
     /// The stable error catalog namespace for the runtime host.
     public static let domain: ErrorDomain = .runtime
 
@@ -89,6 +94,7 @@ public enum RuntimeFailure: APKRunError, Equatable {
         case .devConsoleCleanupPending: "devConsoleCleanupPending"
         case .devConsoleNotRunning: "devConsoleNotRunning"
         case .devConsoleSocketUnavailable: "devConsoleSocketUnavailable"
+        case .inputNotBound: "inputNotBound"
         }
     }
 
@@ -113,6 +119,9 @@ public enum RuntimeFailure: APKRunError, Equatable {
             [:]
         case .devConsoleNotRunning(let console):
             ["console": .text(console)]
+        case .inputNotBound(let cause):
+            // Without a cause, the catalog's variant for a boot with no running Guest Agent is used.
+            cause == nil ? ["reason": .text("guestAgentNotRunning")] : [:]
         }
     }
 
@@ -120,5 +129,11 @@ public enum RuntimeFailure: APKRunError, Equatable {
     public var underlying: UnderlyingError? {
         guard case .instanceLockFailed(let underlying) = self else { return nil }
         return underlying
+    }
+
+    /// The Guest Agent failure behind an input binding that failed, when there is one.
+    public var cause: (any APKRunError)? {
+        guard case .inputNotBound(let cause?) = self else { return nil }
+        return cause
     }
 }

@@ -38,7 +38,7 @@ struct DevInputBinding: Sendable {
                         report(.message("input is bound to display 0"))
                     } catch {
                         if !reportedFailure {
-                            report(.warning("input is not bound: \(error.qualifiedCode)"))
+                            report(.catalogWarning(RuntimeFailure.inputNotBound(cause: error)))
                             reportedFailure = true
                         }
                     }

@@ -28,6 +28,8 @@
                     Output.writeLogLine(text, toStandardError: true)
                 case .warning(let text):
                     Output.writeLogLine("warning: \(text)", toStandardError: true)
+                case .catalogWarning(let error):
+                    ErrorOutput.write(error, json: false)
                 case .state, .console:
                     break
                 }

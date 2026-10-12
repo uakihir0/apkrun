@@ -85,6 +85,8 @@ public enum DevBootEvent: Sendable {
     case message(String)
     /// A human-readable development warning.
     case warning(String)
+    /// A development warning from the error catalog (cliExit 0). It prints with its `hint:` and `code:` lines.
+    case catalogWarning(any APKRunError)
 }
 
 /// Boots the Android image of a development bundle inside the embedded CLI process.
@@ -208,7 +210,7 @@ public struct DevBoot: Sendable {
                 let binding = DevInputBinding(route: route, agent: agent, logSink: diagnostics.logSink)
                 inputBinding = Task { await binding.run(report: onEvent) }
             } else {
-                onEvent(.warning("input is not bound: the Guest Agent is not running"))
+                onEvent(.catalogWarning(RuntimeFailure.inputNotBound(cause: nil)))
             }
         }
         do {

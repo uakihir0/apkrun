@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 import InputCore
@@ -204,4 +205,45 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     #expect(await oldChannel.batches.count == 1)
     #expect(await newChannel.batches.count == 1)
     #expect(await newChannel.batches.first?.displayID == 0)
+}
+
+// MARK: - The warning of an unbound route
+
+/// The warning that `apkrun dev boot --window` and `apkrun dev launch` print when the input is not bound. The warning is
+/// a typed error, so its text, hint, and code come from the catalog (error-catalog.md runtime.inputNotBound). The CLI
+/// prints it with ``ErrorPresenter/cli(_:)``, and the tests check that output.
+@Test func anUnboundInputWarningWithoutAnAgentPrintsItsTextHintAndCode() {
+    let error = RuntimeFailure.inputNotBound(cause: nil)
+    #expect(error.qualifiedCode == "runtime.inputNotBound")
+    #expect(ErrorCatalog.cliExit(for: error) == 0)
+
+    let text = ErrorPresenter(locale: Locale(identifier: "en")).cli(error)
+    let lines = text.split(separator: "\n").map(String.init)
+    #expect(
+        lines.first
+            == "warning: Pointer and keyboard input are not bound to Android, because the Guest Agent is not running.")
+    #expect(
+        lines.contains {
+            $0.hasPrefix("hint: Pointer and keyboard input stay off for this boot until the Guest Agent is running.")
+                && $0.contains("apkrun dev boot --window")
+        })
+    #expect(lines.contains { $0.hasPrefix("code: runtime.inputNotBound") })
+}
+
+@Test func anUnboundInputWarningWithACausePrintsTheCauseAndTheSameHintAndCode() {
+    let error = RuntimeFailure.inputNotBound(cause: .connectTimedOut)
+    #expect(error.cause?.qualifiedCode == "runtime.guestAgentConnectTimedOut")
+    #expect(ErrorCatalog.cliExit(for: error) == 0)
+
+    let text = ErrorPresenter(locale: Locale(identifier: "en")).cli(error)
+    let lines = text.split(separator: "\n").map(String.init)
+    #expect(
+        lines.first
+            == "warning: Pointer and keyboard input are not bound to Android. APKRun couldn't connect to the Guest Agent within 5 seconds."
+    )
+    #expect(
+        lines.contains {
+            $0.hasPrefix("hint: Pointer and keyboard input stay off for this boot until the Guest Agent is running.")
+        })
+    #expect(lines.contains { $0.hasPrefix("code: runtime.inputNotBound") })
 }

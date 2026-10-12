@@ -12240,7 +12240,7 @@ the real manifest.
 
 **Consequence.** A first boot can take longer than 5 s from `sys.boot_completed` to the connection. A steady-state boot does not. A stale forward can remain until the next start, without blocking it. The new `runtime.guestAgentStopped` code is in the catalog. The T2 suite measures neither interval separately.
 
-**Update (2026-10-12).** The 5-s criterion was measured from `sys.boot_completed` on seven boots of build 16373615 (IR-1227). The upper bound from `sys.boot_completed` to `ready` was 0.95 s to 2.25 s, and so was the connection, which comes before `ready`. The first boot after reset is in that range too. The code's timer still starts at the connection; the criterion is met by the measurement, not by the timer.
+**Update (2026-10-12).** The 5-s criterion was measured from `sys.boot_completed` on seven boots of build 16373615 (IR-1227). The bound from `sys.boot_completed` to `ready` was 0.95 s to 2.25 s. The connection comes before `ready`, so the bound covers it, and the first boot after reset is in that range too. The code's timer still starts at the connection; the criterion is met by the measurement, not by the timer.
 
 ## IR-436: The development boot fails when no agent bundle is found
 
@@ -16854,11 +16854,11 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 | Task | #072 |
 | Affected documents | [guest-components.md](../02-design/guest-components.md) §3.1; [IR-425](#ir-425) |
 
-**Choice.** `AdbOutputParser.packageReply` takes the code of `Failure [CODE: detail]` as the text before the first `:` or `]`. The code must still be an upper-case Android code, and the detail is never passed on. The device's reply `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]` now reads as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The T0 signer fake prints that detailed reply, and the parser tests cover the detailed form and the text that is not a code.
+**Choice.** `AdbOutputParser.packageReply` takes the code of `Failure [CODE: detail]` as the text before the first `:` or `]`. The code must still be a whole upper-case Android word that starts with a letter, and the detail is never passed on. A marker with no `]` or `:` after it has no code, so its reply is `unknown`. The device's reply `Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package io.apkrun.guest signatures do not match newer version; ignoring !allowDowngrade]` now reads as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The T0 signer fake prints that detailed reply, and the parser tests cover the detailed form and the text that is not a code.
 
-**Reason.** The code used to be the whole text in the brackets, so any detail gave `unknown`. On the device, an agent signed by another key stopped the boot with `runtime.guestAgent` ("Android didn't install the Guest Agent: unknown"), and the uninstall-and-reinstall of IR-425 never ran. The T0 signer test passed because its fake printed the bare code. The parser test `aReasonThatIsNotAnAndroidCodeIsNeverPassedOn` expected `unknown` for the detailed form. That expectation is changed, because it is the defect. The rule it protects stays: text that is not an upper-case code never reaches an error.
+**Reason.** The code used to be the whole text in the brackets, so any detail gave `unknown`. On the device, an agent signed by another key stopped the boot with `runtime.guestAgent` ("Android didn't install the Guest Agent: unknown"), and the uninstall-and-reinstall of IR-425 never ran. The T0 signer test passed because its fake printed the bare code. The parser test `aReasonThatIsNotAnAndroidCodeIsNeverPassedOn` expected `unknown` for the detailed form. That expectation is changed, because it is the defect. The first `Failure [` marker on a line is the one read, as before; a line with two markers is not expected from adb. The rule it protects stays: text that is not an upper-case code never reaches an error.
 
-**Risk.** A reply with a code and a colon is read as that code, whatever the text after the colon. Android's refusal codes are stable names, and a reply with no code still gives `unknown`. The change alters the parser for every install and uninstall reply; the full RuntimeCore suite passes (147 tests).
+**Risk.** A reply with a code and a colon is read as that code, whatever the text after the colon. Android's refusal codes are stable names. A reply whose code is not a whole upper-case word, or that is cut off before the code ends, still gives the reason `unknown`. The change alters the parser for every install and uninstall reply; the full RuntimeCore suite passes (148 tests).
 
 ## IR-1227: The 5-second boot criterion is verified as an upper bound from `sys.boot_completed` to `ready`
 
@@ -16868,7 +16868,7 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 | Task | #072 |
 | Affected documents | [M03-input-and-basic-runtime.md](../04-plan/issues/M03-input-and-basic-runtime.md) #072 (the 5-s criterion); [guest-protocol.md](../02-design/guest-protocol.md) §15 and §18 (#072 row); [IR-435](#ir-435) |
 
-**Choice.** The criterion is measured from outside the CLI. A host script polls `getprop sys.boot_completed` about every 0.1 s through the development adb and records each reply with the host time. The upper bound is the time of the last poll that read no value before the first `1`, which is at or before the real moment that the property was set. The end is the time of the CLI's `state: ready` line, which the host timestamps. `ready` follows the agent start, so the bound covers the agent's install, its start, and its connection. Seven boots of build 16373615 were measured. Before the parser fix (IR-1226): the first boot after reset 2.25 s; steady boots 1.12 s, 1.13 s, and 1.80 s. With the final CLI: the first boot after reset 2.11 s; steady boots 1.10 s and 0.95 s.
+**Choice.** The criterion is measured from outside the CLI. A host script polls `getprop sys.boot_completed` about every 0.1 s through the development adb and records each reply with the host time. The start of the bound is the host time of the last poll that read no value before the first `1`. The time of a poll is taken before its `adb` call, so an empty read made at or after that time means the property was not yet set, and it was set after the start of the bound. The end is the host time of the CLI's `state: ready` line. The elapsed time is therefore at most the difference. The raw files are `/tmp/apkrun-072-logs/r1-*`, `r2-*`, `r3-*`, and `r4-*` (CLI before the parser fix) and `r7-first-*`, `r8-steady-*`, and `r9-steady-*` (final CLI). `ready` follows the agent start, so the bound covers the agent's install, its start, and its connection. Seven boots of build 16373615 were measured. Before the parser fix (IR-1226): the first boot after reset 2.25 s; steady boots 1.12 s, 1.13 s, and 1.80 s. With the final CLI: the first boot after reset 2.11 s; steady boots 1.10 s and 0.95 s.
 
 **Reason.** The milestone asks for the interval from `sys.boot_completed`, and IR-435 says the code's timer starts at the connection, so the criterion had not been measured as written. The CLI prints no timestamps. The guest clock and the host clock are not identical, so the measurement uses host times for both ends. A bound under 5 s proves the criterion, because the real interval is at most the bound.
 
@@ -16886,7 +16886,7 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 
 **Reason.** A mismatch needs a second signing key on the device (IR-425). A key in the repository would add a test keystore that is not in the fixture list. The provisioner does not compare signers (it relies on Android's refusal, IR-425), so a re-signed copy runs the production path unchanged.
 
-**Risk.** The scratch private key sits in `/tmp` until it is deleted, and it is valid only for this run. A later run should generate its own key. The device checks show the signer replacement in both directions; the T0 signer test still covers the uninstall order.
+**Risk.** The scratch private key was deleted at the end of this run, and it was valid only for this run. A later run should generate its own key. The device checks show the signer replacement in both directions; the T0 signer test still covers the uninstall order.
 
 ## IR-1229: Wrapper isolation and the fourth death are tested with fakes
 
@@ -16900,7 +16900,7 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 
 **Reason.** On the stock image a missing method cannot be produced, so the isolation can only be checked with a fake service. A default argument keeps the production path unchanged. The fourth-death code had been checked only as the absence of a restart on the device, and the T2 test that asserts the code does not run in the Xcode host (IR-438).
 
-**Risk.** The lookup parameter is a test seam on a production type. The fake does not exercise `HiddenApi.service`; the device `ServiceCheck` run does. The CLI still does not print `runtime.requiredAgentUnavailable`, which is an open item of #072 and is not part of its boxes.
+**Risk.** The lookup parameter is a test seam on a production type. The fake does not exercise `HiddenApi.service`; the device `ServiceCheck` run does. No CLI command prints `runtime.requiredAgentUnavailable`, because no command reports the agent's state after a boot; the milestone's Notes record this as open. The T0 test compares the qualified code, so the code's string is checked. The Kotlin JVM tests are called T1 here, as the milestone's Tests section names them for `Guest/`, while AGENTS §10 names T0 for unit tests.
 
 ## IR-1230: The device checks need an entitled CLI copy, and the odm4 overlay needs a fresh home
 
@@ -16924,8 +16924,34 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 | Task | #072 |
 | Affected documents | [workflow.md](../05-development/workflow.md) §4.1 (branch names) |
 
-**Choice.** The work is on `task/072-guest-agent-bootstrap-2`, in the worktree `/Users/N3275/Documents/projects/apkrun-wt/g72`, and it is merged into main with a fast-forward. The name `task/072-guest-agent-bootstrap` was not used, because that branch already exists: it is the earlier #072 branch, which is already an ancestor of main. It is checked out in the worktree `apkrun-wt/072`, which has untracked build inputs, and it was not touched.
+**Choice.** The work is on `task/072-guest-agent-bootstrap-2`, in the worktree `/Users/N3275/Documents/projects/apkrun-wt/g72`, and it is merged into main by `git merge --ff-only` at the end of the run. The name `task/072-guest-agent-bootstrap` was not used, because that branch already exists: it is the earlier #072 branch, which is already an ancestor of main. It is checked out in the worktree `apkrun-wt/072`, which has untracked build inputs, and it was not touched.
 
 **Reason.** The task named `task/072-guest-agent-bootstrap`. Moving that branch would have meant working in a checkout that holds build inputs and is not clean, so a new name was used instead.
 
 **Risk.** Two branches carry #072. The merged one is not deleted here. Pull request titles still follow `#072 Title`, so a reviewer could pick the wrong branch; the new branch is the one that merged.
+
+## IR-1232: An adversarial review of the #072 diff, and how each finding was answered
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #072 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #072 (the boxes and the Notes); [README.md](issues/README.md) §5 (the #072 row); IR-1226 to IR-1231 |
+
+**Choice.** A read-only reviewer read `784f9b4..HEAD` against AGENTS.md and the milestone, without a build or a device. Its findings were answered as follows.
+
+1. The README row said "7 of 7" next to a T2 tier that has not passed. The row now names the open T2 suite (IR-438) and says the task is not closed.
+2. Box 2 said the resync was verified on the device. The box now says that the reconnect is observed as a new ADB forward port, and that the resync is T0 only.
+3. The kill spacing and the 30 s check were not recorded. The Notes now record them (kills about 2 s apart, a check 30 s after the fourth).
+4. The Notes said that the boxes do not ask for the code, which was wrong. The T0 test now compares `qualifiedCode` with `runtime.requiredAgentUnavailable`. Box 2 stays ticked, because the refusal is shown on the device and the code is T0; the missing CLI report is recorded as open for the maintainer.
+5. IR-1231 said the branch "is merged", before the merge. It now says the merge is made by `git merge --ff-only` at the end of the run.
+6. The reviewer named the JVM tests as T0 under AGENTS §10. The milestone names them T1 for `Guest/`, so the label follows the milestone (IR-1229).
+7. IR-1227 lacked the timing rule and the raw logs. Both are now in it.
+8. The parser accepted a digit or an underscore as the first character, and it accepted a marker cut off before its code ended. Both are rejected now, with tests (`2b5e3d4`).
+9. The first `Failure [` marker on a line is still the one read. adb prints one marker per refusal, so this was left as it was, and IR-1226 says so.
+10. Some tests pass on the old code. The fourth-death test is a characterization test for behavior that already existed, and it was added for the missing code assertion. The detailed-reply and signer tests fail on the old parser, which the reviewer confirmed from the source.
+11. The reviewer found no problem with the detail-text rule, with the provisioner's retry after the parser change, or with the lookup seam's equivalence to the previous two calls.
+
+**Reason.** The findings were checked against the source and the milestone text, and each one that changed a claim was corrected in the same change. The reviewer's counts were taken from the source and were not run.
+
+**Risk.** Three points stay open for the maintainer: whether the box 2 code must be visible to a user (item 4); whether the boot's wrapper code `runtime.guestAgent` should print the inner `installFailed` code (IR-1226 names the printed code); and the README header and its counts line, which describe `main` at `213984d` and were not regenerated, because no script produces them.

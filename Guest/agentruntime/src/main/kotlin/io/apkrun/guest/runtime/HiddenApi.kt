@@ -25,6 +25,13 @@ object HiddenApi {
     }
 
     /**
+     * The interface object of the service [serviceName], or null when the service or its stub is
+     * missing.
+     */
+    fun service(serviceName: String, interfaceName: String): Any? =
+        asInterface(interfaceName, serviceBinder(serviceName))
+
+    /**
      * `<interfaceName>$Stub.asInterface(binder)`, or null when the binder or the stub is missing.
      */
     fun asInterface(interfaceName: String, binder: Any?): Any? {

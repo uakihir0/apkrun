@@ -18,6 +18,11 @@ class SystemServiceWrapper(
     /** The hidden interface, such as `android.hardware.display.IDisplayManager`. */
     val interfaceName: String,
     private val requirements: List<MethodRequirement>,
+    /**
+     * Finds the interface object of a registered service, or null when there is none. The default
+     * reads the framework through `ServiceManager`; a test supplies its own service object.
+     */
+    private val lookup: (serviceName: String, interfaceName: String) -> Any? = HiddenApi::service,
 ) {
     private val resolution: Resolution by lazy { resolve() }
 
@@ -55,8 +60,7 @@ class SystemServiceWrapper(
     }
 
     private fun resolve(): Resolution {
-        val binder = HiddenApi.serviceBinder(serviceName)
-        val service = HiddenApi.asInterface(interfaceName, binder)
+        val service = lookup(serviceName, interfaceName)
         val interfaceClass = HiddenApi.classOrNull(interfaceName)
         if (service == null || interfaceClass == null) {
             return Resolution(service, interfaceClass, emptyMap(), requirements.map { it.name })

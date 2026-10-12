@@ -20,6 +20,20 @@
     <string>$(APKRUN_TEST_LINUX_DIR)</string>
     <key>APKRUN_ANDROID_HOME</key>
     <string>$(APKRUN_ANDROID_HOME)</string>
+    <key>APKRUN_G3_CLI</key>
+    <string>$(APKRUN_G3_CLI)</string>
+    <key>APKRUN_G3_BUNDLE</key>
+    <string>$(APKRUN_G3_BUNDLE)</string>
+    <key>APKRUN_G3_APK</key>
+    <string>$(APKRUN_G3_APK)</string>
+    <key>APKRUN_G3_GUEST_DIR</key>
+    <string>$(APKRUN_G3_GUEST_DIR)</string>
+    <key>APKRUN_G3_VIRGL_RUNTIME</key>
+    <string>$(APKRUN_G3_VIRGL_RUNTIME)</string>
+    <key>APKRUN_G3_ANDROID_HOME</key>
+    <string>$(APKRUN_G3_ANDROID_HOME)</string>
+    <key>APKRUN_G3_ARTIFACTS</key>
+    <string>$(APKRUN_G3_ARTIFACTS)</string>
     <key>LSMinimumSystemVersion</key>
     <string>27.0</string>
     <key>NSPrincipalClass</key>

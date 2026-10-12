@@ -19,10 +19,13 @@ struct G3Inputs {
     /// The directory the artifacts are written to. The gate copies it under build/gates/G3.
     let artifacts: URL
 
+    /// The inputs from the process environment, and then from the test host's Info.plist, where the gate's build
+    /// settings land (scripts/run-gate.sh G3, as APKRUN_TEST_LINUX_DIR does).
     static func fromEnvironment() throws -> G3Inputs {
         let environment = ProcessInfo.processInfo.environment
         func path(_ key: String) throws -> URL {
-            guard let value = environment[key], value.hasPrefix("/") else {
+            let fromInfo = Bundle.main.object(forInfoDictionaryKey: key) as? String
+            guard let value = environment[key] ?? fromInfo, !value.isEmpty, value.hasPrefix("/") else {
                 throw G3Failure.missingInput(key)
             }
             return URL(fileURLWithPath: value)

@@ -22,6 +22,8 @@ signing_arguments=(
     "CODE_SIGN_STYLE=Manual"
     "CODE_SIGN_IDENTITY=$APKRUN_TEST_CODE_SIGN_IDENTITY"
 )
+# The G3 inputs, set once the G3 artifacts are staged. Empty for G1 and G2.
+g3_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -155,6 +157,16 @@ if [[ "$gate" == G3 ]]; then
     cp -RL "$g3_virgl" "$staging/virgl-runtime"
     cp -R "$g3_android_home/platform-tools" "$staging/android-sdk/platform-tools"
     cp Tests/Fixtures/AndroidApps/out/HelloGL.apk "$staging/HelloGL.apk"
+    # The test host reads these from its Info.plist, where the build settings land (IntegrationTests/Host/Info.plist).
+    g3_build_settings=(
+        "APKRUN_G3_CLI=$staging/cli/apkrun"
+        "APKRUN_G3_BUNDLE=$g3_bundle"
+        "APKRUN_G3_APK=$staging/HelloGL.apk"
+        "APKRUN_G3_GUEST_DIR=$staging/guest"
+        "APKRUN_G3_VIRGL_RUNTIME=$staging/virgl-runtime"
+        "APKRUN_G3_ANDROID_HOME=$staging/android-sdk"
+        "APKRUN_G3_ARTIFACTS=$APKRUN_TEST_LINUX_DIR/g3-artifacts"
+    )
     {
         printf 'cli_sha256: %s\n' "$(shasum -a 256 "$staging/cli/apkrun" | awk '{ print $1 }')"
         printf 'cli_commit: %s\n' "$(sed -n 's/^#define APKRUN_GIT_COMMIT \(.*\)$/\1/p' "$repo_root/build/generated/BuildStamp.h")"
@@ -175,7 +187,8 @@ xcodebuild build-for-testing \
     -derivedDataPath "$gate_dir/DerivedData" \
     "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
     "APKRUN_CI=1" \
-    "${signing_arguments[@]}"
+    "${signing_arguments[@]}" \
+    ${g3_build_settings[@]+"${g3_build_settings[@]}"}
 scripts/tools/verify-test-host-directory.sh \
     "$gate_dir/DerivedData/Build/Products/Debug/APKRunTestHost.app" "$APKRUN_TEST_LINUX_DIR"
 xcodebuild test \
@@ -215,13 +228,7 @@ if [[ "$gate" == G3 ]]; then
         "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
         "APKRUN_CI=1" \
         "${signing_arguments[@]}" \
-        "TEST_RUNNER_APKRUN_G3_CLI=$staging/cli/apkrun" \
-        "TEST_RUNNER_APKRUN_G3_BUNDLE=$g3_bundle" \
-        "TEST_RUNNER_APKRUN_G3_APK=$staging/HelloGL.apk" \
-        "TEST_RUNNER_APKRUN_G3_GUEST_DIR=$staging/guest" \
-        "TEST_RUNNER_APKRUN_G3_VIRGL_RUNTIME=$staging/virgl-runtime" \
-        "TEST_RUNNER_APKRUN_G3_ANDROID_HOME=$staging/android-sdk" \
-        "TEST_RUNNER_APKRUN_G3_ARTIFACTS=$artifacts" || g3_status=$?
+        ${g3_build_settings[@]+"${g3_build_settings[@]}"} || g3_status=$?
     recording_status=0
     wait "$recording_pid" || recording_status=$?
     if [[ -d "$artifacts" ]]; then

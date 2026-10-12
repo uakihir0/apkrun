@@ -35,7 +35,8 @@ public actor DevInputRoute {
         self.session = session
     }
 
-    /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys.
+    /// Unbinds the route. The session ends on the router, so that the guest cancels its open gestures and keys. The
+    /// counts of the router are kept after it ends, so that the route's total covers every router it has had.
     public func unbind() async {
         guard let router, let session else {
             return
@@ -43,6 +44,7 @@ public actor DevInputRoute {
         self.router = nil
         self.session = nil
         await router.sessionEnded(session)
+        localCounters.add(await router.counters)
     }
 
     /// Routes a wire batch. The events beyond ``maximumEventsPerBatch`` are dropped and counted as invalid. The rest

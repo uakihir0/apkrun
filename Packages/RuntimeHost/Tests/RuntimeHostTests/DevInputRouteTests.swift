@@ -207,6 +207,23 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     #expect(await newChannel.batches.first?.displayID == 0)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func aRebindKeepsTheCountsOfTheRouterItReplaces() async {
+    // The agent restarts, so the route binds a new router. The old router's counts (its events and its cancelAll at
+    // the end of its session) stay in the total of the route.
+    let oldChannel = CollectingInputChannel()
+    let newChannel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: oldChannel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    await route.bind(router: InputRouter(channel: newChannel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    // Old router: one cancelAll from the batch and one from the end of its session. New router: one cancelAll.
+    let counters = await route.counters()
+    #expect(counters.eventsSent == 3)
+    #expect(counters.batchesSent == 3)
+}
+
 // MARK: - The warning of an unbound route
 
 /// The warning that `apkrun dev boot --window` and `apkrun dev launch` print when the input is not bound. The warning is

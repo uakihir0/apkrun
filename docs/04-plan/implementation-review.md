@@ -17590,6 +17590,8 @@ Checked without a finding (from the reviewer): `XCTUnwrap` with the actor-isolat
 
 **Risk.** A user cannot yet click into a text field from the Mac window and type. This blocks the acceptance in practice. The maintainer should decide whether it is a follow-up of #024 or of #025, and file it.
 
+**Filed.** The follow-up is task #102 (GitHub issue #102), with its entry in [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) and a row in the task index. Filed as a follow-up of #024 because the cause is in the pointer path; the maintainer may move it to #025.
+
 ## IR-1271: The repository's T2 suite has no keyboard case
 
 | Field | Value |

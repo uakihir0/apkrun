@@ -1037,3 +1037,36 @@ After a guest agent restart, pointer input works again on the same window withou
 ### Notes
 
 - **Origin:** IR-1241. The previous task left this for a separate change, because it alters what counts as a death in the restart policy.
+
+---
+
+## #102 A pointer tap reliably focuses a text field
+
+| Field | Value |
+|---|---|
+| Milestone | M3 (v0.1), follow-up of #024 and #025 |
+| Depends on | #024 |
+| Requirements | FR-IN-01, FR-IN-02 (the tap reaches the view as a touch). Constraints: NFR-PERF-03 |
+| Design | [../../02-design/input.md](../../02-design/input.md) §4.1, §7.3 |
+| Modules / paths | InputCore `EventTranslator`; WindowingCore `IOSurfaceLayerView` (event capture); RuntimeHost `DevInputBinding`; Guest `InputInjector` |
+| Risks / questions | IR-1270 |
+
+### Goal
+
+A click from the Mac window on a text field focuses the field, and the next key goes to it, in every attempt. Today one attempt in about eight focuses it on HelloText (IR-1270). The same tap through ADB focuses the field.
+
+### Scope
+
+- Find the difference between the Mac press sequence and the ADB tap that makes focus unreliable: the press timing, the pointer ID, the move during the press, or the release.
+- Fix it in the translator or the injector, not in the fixture.
+- Out of scope: the keyboard map (#025) and the IME (#071).
+
+### Acceptance
+
+- [ ] 50 of 50 clicks on the field of HelloText focus it, on the device, with the adb counter and drop counters at zero (the counters of #024).
+- [ ] A T0 or T1 test reproduces the sequence that failed and passes after the fix.
+- [ ] The cause is recorded in an IR entry.
+
+### Notes
+
+- **Origin:** IR-1270. The maintainer may move the task to #025.

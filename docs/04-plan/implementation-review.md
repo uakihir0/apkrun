@@ -16757,3 +16757,19 @@ The recorder: `screencapture -v -V 1800` started at 05:40:59 (pid 49015). It rep
 **Rejected alternatives.** Joining all Spaces (`canJoinAllSpaces`) would change the product's window behaviour for every user, and it needs its own design decision. Asking the user to leave the Mac alone is not reliable, and it cannot be checked by the gate.
 
 **Risk.** Activation can switch the user's Space during a gate run. That is accepted for a test run, and the gate notes the activation in `window-list.txt`. Whether the lab Mac needs it at all is open: on a lab Mac the window should stay on screen.
+
+## IR-1221: A G3 capture is retried up to three times, each time with a fresh window lookup; the colour flicker is the fixture's alternating mode
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #023 |
+| Affected documents | [M02-graphics.md](../04-plan/issues/M02-graphics.md) #023 (the G3 gate, C01-6 recording) |
+
+**Choice.** `G3Session.captureWindow` retries a failed `screencapture` up to three times, one second apart. Each retry looks the window up again, so an off-screen window is activated again (IR-1220). Every failed attempt is written to `window-list.txt`. A window that is still missing after three attempts fails the gate as before.
+
+**Reason.** Run 5 found the display window on screen at 06:27:13Z and at 06:28:20Z. At 06:28:21Z it moved from x 644 to x 419, and at 06:28:22Z it was off screen again. The reactivation of IR-1220 then brought it back, but the capture of `alternating-3.png` had already failed. The window is changing Space or position at that moment, which the capture cannot see. The retry covers this short transition without hiding a lasting loss.
+
+**The flicker the user noticed is the fixture's alternating mode, not a fault.** `alternating-1.png` is solid red and `alternating-2.png` is solid blue, taken 0.2 s apart. The alternating mode of HelloGL (`--ez io.apkrun.fixture.hellogl.ALTERNATE true`) changes the whole window colour, and it is how the tearing check finds a torn frame. The flicker is therefore expected in that phase. The move of the window at 06:28:21Z is not explained by the fixture.
+
+**Risk.** A retry can mask a window that comes back only after the capture. The retries are logged, and a run that needs them shows this in `window-list.txt`. Three attempts is a judgment, not a measurement.

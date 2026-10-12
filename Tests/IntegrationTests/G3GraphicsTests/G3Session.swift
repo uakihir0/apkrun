@@ -311,20 +311,30 @@ final class G3Session: @unchecked Sendable {
         guard let boot else {
             throw G3Failure.noWindow("the boot was not started, so it has no window")
         }
-        let number = try windowNumber(owner: boot.processIdentifier)
         let destination = inputs.artifacts.appendingPathComponent("screenshots", isDirectory: true)
             .appendingPathComponent(name)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let result = try runProcess(
-            URL(fileURLWithPath: "/usr/sbin/screencapture"),
-            ["-x", "-o", "-l", String(number), destination.path],
-            timeout: 30
-        )
-        guard result.status == 0, FileManager.default.fileExists(atPath: destination.path) else {
-            throw G3Failure.screenshotFailed(destination.path)
+        // A capture can fail while the window is changing Space (IR-1221). Each retry looks the window up again, so a
+        // window that is off screen is activated again before the next attempt.
+        var attempt = 1
+        while true {
+            let number = try windowNumber(owner: boot.processIdentifier)
+            let result = try runProcess(
+                URL(fileURLWithPath: "/usr/sbin/screencapture"),
+                ["-x", "-o", "-l", String(number), destination.path],
+                timeout: 30
+            )
+            if result.status == 0, FileManager.default.fileExists(atPath: destination.path) {
+                return number
+            }
+            appendWindowList("capture \(name) attempt \(attempt) of 3 failed for window \(number)")
+            guard attempt < 3 else {
+                throw G3Failure.screenshotFailed(destination.path)
+            }
+            attempt += 1
+            Thread.sleep(forTimeInterval: 1)
         }
-        return number
     }
 
     /// The number of the on-screen window of `owner` whose title starts with `APKRun display 0`.

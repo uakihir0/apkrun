@@ -438,8 +438,8 @@ message InputBatch {
   uint64 batch_seq = 1;
   int32 display_id = 2;           // stamped by InputRouter, never by the wrapper
   uint64 host_send_nanos = 3;     // for host-side latency accounting only
-  bool ack_requested = 4;         // every 32nd batch (input.md §8)
-  repeated InputEvent events = 5; // at most 256 per batch
+  bool ack_requested = 4;         // every 32nd batch normally; diagnostic tests may request every batch
+  repeated InputEvent events = 5; // at most 256 per batch; empty is a no-op fence
 }
 
 message InputEvent {
@@ -483,7 +483,8 @@ message ImeState {                                 // guest → host; never cont
 }
 ```
 
-- The input stream carries no request/response pairs. Validation failures in a batch drop the offending event and are reported as a count in the next `InputAck` and in `Health.input`. They do not close the stream (§12.2 lists what does).
+- The input stream carries no request/response pairs. Validation failures in a batch drop the offending event and are reported as a count in that batch's `InputAck` and in `Health.input`. They do not close the stream (§12.2 lists what does).
+- An empty `InputBatch` is valid and has no app-facing input. The guest queues it on the same serialized input worker as non-empty batches. If it requests an ack, that ack follows earlier batches on the stream after their `injectInputEvent(..., ASYNC)` calls return. The T1 test submits an acknowledged event batch before an empty acknowledged batch and checks their ack order and that the fence injects nothing. This fences guest validation and injection calls; it does not confirm Android dispatch or app handling.
 - `ImeState` updates are coalesced by the IME to at most one per 16 ms, except that a change of `editor_focused` is sent immediately.
 
 ---

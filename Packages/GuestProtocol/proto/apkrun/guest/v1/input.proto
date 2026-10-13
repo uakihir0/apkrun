@@ -18,8 +18,9 @@ message InputBatch {
   int32 display_id = 2;
   // For host-side latency accounting only.
   uint64 host_send_nanos = 3;
-  // Set on every 32nd batch (input.md §8).
+  // Set on every 32nd batch in normal routing; diagnostic tests may set it on every batch.
   bool ack_requested = 4;
+  // An empty list is a no-op input-worker fence. If acknowledged, its ack follows earlier batches on this stream.
   repeated InputEvent events = 5;
 }
 

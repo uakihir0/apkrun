@@ -38,8 +38,8 @@ struct DevInputBinding: Sendable {
                         boundToken = token
                         reportedFailure = false
                         if rebinding {
-                            // The previous connection was released with its control session (#101).
-                            logger.notice("The input route is bound again to the input connection of the new session")
+                            // The previous connection was released or failed, and the route now has a new one (#101).
+                            logger.notice("The input route is bound again to a new input connection")
                             report(.message("input is bound again to a new input connection"))
                         }
                         report(.message("input is bound to display 0"))

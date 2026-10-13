@@ -132,9 +132,9 @@ public actor GuestAgentSupervisor {
     private var generation: UInt64 = 0
     /// When the recent protocol violations happened.
     private var violations: [ContinuousClock.Instant] = []
-    /// The secondary connections of the current control session, such as the input connection. They belong to that
-    /// session, so the supervisor releases them when the session ends (guest-protocol.md §5.4, #101).
-    private var secondaries: [GuestConnection] = []
+    /// The secondary connections of the current control session, by endpoint, such as the input connection. They belong to
+    /// that session, so the supervisor releases them when the session ends (guest-protocol.md §5.4, #101).
+    private var secondaries: [GuestEndpoint: GuestConnection] = [:]
 
     /// Creates a supervisor. The timings are the design values unless a test sets shorter ones.
     public init(
@@ -234,16 +234,43 @@ public actor GuestAgentSupervisor {
         state = .stopped
     }
 
-    /// Attaches a secondary connection that presents the token of the current control session (guest-protocol.md
-    /// §5.4). The supervisor closes it when that session ends or the supervisor stops, so that no route keeps a
-    /// connection of an ended session (#101). It returns false, and keeps nothing, when there is no control session or
-    /// the token is another one. The caller then closes the connection.
-    public func attachSecondary(_ secondary: GuestConnection, presenting token: Data) -> Bool {
-        guard connection != nil, session?.sessionToken == token else {
-            return false
+    /// The secondary connection of `endpoint` for the current control session (guest-protocol.md §5.4). A usable one is
+    /// reused. Otherwise a connection is opened with the session's token, and the supervisor keeps it, so that it is
+    /// released when the session ends or the supervisor stops, and no route keeps a connection of an ended session (#101).
+    /// Without a control session the call fails with `disconnected`.
+    public func secondaryConnection(_ endpoint: GuestEndpoint) async throws(GuestProtocolFailure) -> GuestConnection {
+        guard connection != nil, let token = session?.sessionToken else {
+            throw .disconnected
         }
-        secondaries.append(secondary)
-        return true
+        if let existing = secondaries[endpoint], await existing.isUsable {
+            return existing
+        }
+        let next = GuestConnection(
+            endpoint: endpoint,
+            transport: transport,
+            presentedToken: token,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
+        do throws(GuestProtocolFailure) {
+            _ = try await next.open()
+        } catch {
+            await next.close()
+            throw error
+        }
+        // The session may have ended while the connection opened. A connection of an ended session is refused.
+        guard connection != nil, session?.sessionToken == token else {
+            await next.close()
+            throw .disconnected
+        }
+        if let existing = secondaries[endpoint], await existing.isUsable {
+            // Another caller opened a usable one meanwhile, and that one is kept.
+            await next.close()
+            return existing
+        }
+        let replaced = secondaries.updateValue(next, forKey: endpoint)
+        await replaced?.close()
+        return next
     }
 
     /// Sends one operation through the current connection. Without a connection the call fails with
@@ -306,6 +333,8 @@ public actor GuestAgentSupervisor {
                 session = nil
                 consumer?.cancel()
                 consumer = nil
+                // A secondary connection may have been opened while the snapshot was in flight, and it has no session.
+                _ = await releaseSecondaries()
             }
             await next.close()
             throw error
@@ -397,9 +426,14 @@ public actor GuestAgentSupervisor {
         // The secondary connections end with their control session (guest-protocol.md §5.4). They are released here,
         // so that a route cannot send on them, and the route is bound again to the connections of the next session.
         let released = await releaseSecondaries()
-        logger.warning(
-            "The control session ended, so \(released, .public) secondary connection(s) are released",
-            errorCode: "runtime.guestAgentOperationFailed")
+        guard generation == started else {
+            return
+        }
+        if released > 0 {
+            logger.warning(
+                "The control session ended, so \(released, .public) secondary connection(s) are released",
+                errorCode: "runtime.guestAgentOperationFailed")
+        }
         state = .connecting
         if let cause, recordViolation(cause) {
             state = .unavailable
@@ -457,8 +491,8 @@ public actor GuestAgentSupervisor {
 
     /// Closes the secondary connections of the control session, and returns how many there were.
     private func releaseSecondaries() async -> Int {
-        let released = secondaries
-        secondaries = []
+        let released = Array(secondaries.values)
+        secondaries = [:]
         for secondary in released {
             await secondary.close()
         }

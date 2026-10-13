@@ -365,9 +365,8 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
     try await supervisor.start(connectTimeout: .seconds(2))
     let firstToken = try #require(await supervisor.session?.sessionToken)
     // The input connection of the first session, bound to a route as the window's route is bound (DevInputBinding).
-    let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: firstToken)
-    _ = try await input.open()
-    #expect(await supervisor.attachSecondary(input, presenting: firstToken))
+    let input = try await supervisor.secondaryConnection(.guestInput)
+    #expect(await input.isUsable)
     let session = SessionID.app(UUID())
     let route = InputRouter(channel: GuestInputChannel(connection: input))
     await route.register(session: session, displayID: 0, state: .running)
@@ -388,9 +387,8 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
     // The new session has its own token, and a connection that presents it carries the route again.
     let secondToken = try #require(await supervisor.session?.sessionToken)
     #expect(secondToken != firstToken)
-    let rebound = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: secondToken)
-    _ = try await rebound.open()
-    #expect(await supervisor.attachSecondary(rebound, presenting: secondToken))
+    let rebound = try await supervisor.secondaryConnection(.guestInput)
+    #expect(await rebound.isUsable)
     let reboundRoute = InputRouter(channel: GuestInputChannel(connection: rebound))
     await reboundRoute.register(session: session, displayID: 0, state: .running)
     await reboundRoute.route([.cancelAll(InputTimestamp(hostNanos: 3))], from: session)
@@ -418,10 +416,10 @@ private final class SupervisorLogRecorder: LogSink, @unchecked Sendable {
     }
 }
 
-/// The release of the secondary connections at a loss is logged once, with the operation of the recovery and the
-/// catalog code of the `runtime` domain. A secondary connection that presents another token is refused (#101).
+/// The release of the secondary connections at a loss is logged once, in the operation of the recovery, with the catalog
+/// code of the `runtime` domain (#101).
 @Test(.timeLimit(.minutes(1)))
-func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsOperation() async throws {
+func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsRecovery() async throws {
     let recorder = SupervisorLogRecorder()
     let transport = InMemoryTransport { _, agent, _ in
         agent.sendHello()
@@ -438,24 +436,64 @@ func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsOperation() async throws 
         restartAgent: { _ in true }
     )
     try await supervisor.start(connectTimeout: .seconds(2))
-    let token = try #require(await supervisor.session?.sessionToken)
-    let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
-    _ = try await input.open()
-    #expect(await supervisor.attachSecondary(input, presenting: token))
-    let other = Data(repeating: 9, count: 16)
-    let stranger = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: other)
-    _ = try await stranger.open()
-    #expect(await supervisor.attachSecondary(stranger, presenting: other) == false)
-    await stranger.close()
+    _ = try await supervisor.secondaryConnection(.guestInput)
 
     transport.agents[0].hangUp()
-    // The agents are the control, the input, the refused stranger, and the control of the new session.
-    try await eventually { await supervisor.state == .ready && transport.agents.count >= 4 }
+    // The agents are the control, the input, and the control of the new session.
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 3 }
+    let lost = recorder.entries.filter { $0.publicMessage.contains("connection was lost") }
     let released = recorder.entries.filter { $0.publicMessage.contains("secondary connection") }
+    #expect(lost.count == 1)
     #expect(released.count == 1)
     let entry = try #require(released.first)
     #expect(entry.errorCode == "runtime.guestAgentOperationFailed")
     #expect(entry.operationID != nil)
+    #expect(entry.operationID == lost.first?.operationID)
+    await supervisor.stop()
+}
+
+/// A secondary connection that is opened while the control session resynchronises is released when the resync fails,
+/// because the session has no control connection after the failure (#101).
+@Test(.timeLimit(.minutes(1)))
+func aSecondaryConnectionOpenedDuringAFailedResyncIsReleased() async throws {
+    let transport = InMemoryTransport { _, agent, number in
+        agent.sendHello()
+        agent.answer = { request in
+            // The second connection, the control of the restarted session, never answers the snapshot. The connections
+            // are the control, the control of the restarted session, the input connection, and the next control.
+            if isGetSnapshot(request) {
+                return number == 2 ? nil : .getSnapshot(snapshot(displays: [0]))
+            }
+            return pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { _ in true }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let firstToken = try #require(await supervisor.session?.sessionToken)
+    transport.agents[0].hangUp()
+    // The restarted control session is open and waits for its snapshot, so it has a token of its own.
+    try await eventually {
+        if let token = await supervisor.session?.sessionToken {
+            return token != firstToken
+        }
+        return false
+    }
+    let during = try await supervisor.secondaryConnection(.guestInput)
+    #expect(await during.isUsable)
+    // The snapshot times out (5 s), the resync fails, and the connection that was opened in it is released.
+    try await eventually(within: 20) { await !during.isUsable }
+    #expect(await during.isUsable == false)
+    // The next attempt answers, and the supervisor is ready with a session of its own.
+    try await eventually(within: 20) { await supervisor.state == .ready && transport.agents.count >= 4 }
+    let after = try await supervisor.secondaryConnection(.guestInput)
+    #expect(await after.isUsable)
+    #expect(after !== during)
     await supervisor.stop()
 }
 

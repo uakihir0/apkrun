@@ -65,21 +65,103 @@ final class AndroidInputTests: XCTestCase {
     /// Diagnostic only: checks route counters, then checks persistence after all 100 ordered click logs are present.
     func testOneHundredCommittedClicksSurviveForceStopAndRelaunch() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
-        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, acknowledgeEveryBatch: true
+        ) { run in
+            var observation = "phase: preparing click sequence\n"
+            defer {
+                let attachment = XCTAttachment(string: observation)
+                attachment.name = "click-ack-fence.txt"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+
             let target = try await run.centre(of: Self.buttonID)
             _ = try await run.adb.shell("logcat -c")
             let pointer = try run.pointer()
-            for _ in 0..<100 {
-                try await pointer.click(at: target)
-                try await Task.sleep(for: .milliseconds(100))
+            observation = "phase: submitting clicks\n"
+            var submittedClicks = 0
+            do {
+                for _ in 0..<100 {
+                    try await pointer.click(at: target)
+                    submittedClicks += 1
+                    observation = "phase: submitting clicks; submitted \(submittedClicks) of 100\n"
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch {
+                let counters = await run.inputCounters()
+                let acknowledgementHistory = await run.acknowledgementHistory()
+                observation += "click submission failed: \(error)\n"
+                observation += "counters at click failure: \(counters)\n"
+                observation += "acknowledged sequences: \(acknowledgementHistory.batchSequences)\n"
+                observation += "acknowledgement history truncated: \(acknowledgementHistory.truncated)\n"
+                throw error
             }
+            observation = "phase: click sequence submitted\n"
+
+            let fenceSequence: UInt64
+            do {
+                fenceSequence = try await run.acknowledgementFence()
+            } catch {
+                let acknowledgementHistory = await run.acknowledgementHistory()
+                observation += "fence enqueue failed: \(error)\n"
+                observation += "counters before fence failure: \(await run.inputCounters())\n"
+                observation += "acknowledged sequences: \(acknowledgementHistory.batchSequences)\n"
+                observation += "acknowledgement history truncated: \(acknowledgementHistory.truncated)\n"
+                throw error
+            }
+            observation += "fence sequence: \(fenceSequence)\nphase: waiting for guest acknowledgements\n"
+
+            let receipt: (counters: InputCounters, lastAcknowledgedBatchSequence: UInt64)
+            do {
+                receipt = try await run.waitForAcknowledgement(fenceSequence)
+            } catch {
+                let counters = await run.inputCounters()
+                let acknowledgementHistory = await run.acknowledgementHistory()
+                let lastAcknowledgedBatchSequence = await run.lastAcknowledgedBatchSequence()
+                observation += "acknowledgement wait failed: \(error)\n"
+                observation += "last acknowledged sequence: \(String(describing: lastAcknowledgedBatchSequence))\n"
+                observation += "counters at timeout: \(counters)\n"
+                observation += "acknowledged sequences: \(acknowledgementHistory.batchSequences)\n"
+                observation += "acknowledgement history truncated: \(acknowledgementHistory.truncated)\n"
+                throw error
+            }
+            let counters = receipt.counters
+            let acknowledgementHistory = await run.acknowledgementHistory()
+            let expectedAcknowledgementSequences = Array(1...fenceSequence)
+            observation += """
+                last acknowledged sequence: \(receipt.lastAcknowledgedBatchSequence)
+                sent events: \(counters.eventsSent)
+                sent batches: \(counters.batchesSent)
+                received acknowledgements: \(counters.acknowledgementsReceived)
+                acknowledged sequences: \(acknowledgementHistory.batchSequences)
+                acknowledgement history truncated: \(acknowledgementHistory.truncated)
+                rejected events: \(counters.droppedInvalid)
+                host drops: rate=\(counters.droppedRate), not-running=\(counters.droppedNotRunning), channel=\(counters.droppedChannel)
+                coalesced events: \(counters.coalesced)
+                phase: collecting ordered click callbacks
+                """
             let clickLines = try await run.fixtureLog(
                 until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 },
                 settleFor: .seconds(2))
             let clickNumbers = AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix)
-            let counters = await run.inputCounters()
+            observation += "\nordered click callbacks before force-stop: \(clickNumbers)\n"
+            XCTAssertEqual(receipt.lastAcknowledgedBatchSequence, fenceSequence)
             XCTAssertGreaterThanOrEqual(
                 counters.eventsSent, 200, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(
+                counters.batchesSent, Int(fenceSequence),
+                "the batch sequence did not match the sent batch count through the fence: \(counters)")
+            XCTAssertEqual(
+                counters.acknowledgementsReceived,
+                counters.batchesSent,
+                "the guest did not acknowledge every test input batch through fence \(fenceSequence): \(counters)")
+            XCTAssertFalse(
+                acknowledgementHistory.truncated,
+                "the acknowledgement sequence history was truncated at fence \(fenceSequence)")
+            XCTAssertEqual(
+                acknowledgementHistory.batchSequences, expectedAcknowledgementSequences,
+                "the guest acknowledgements did not match each batch sequence through fence \(fenceSequence)")
             XCTAssertEqual(counters.droppedRate, 0, "input counters after 100 committed clicks: \(counters)")
             XCTAssertEqual(counters.droppedNotRunning, 0, "input counters after 100 committed clicks: \(counters)")
             XCTAssertEqual(counters.droppedInvalid, 0, "input counters after 100 committed clicks: \(counters)")
@@ -89,6 +171,20 @@ final class AndroidInputTests: XCTestCase {
                 XCTFail("the host input stream did not send 200 events; restart check skipped")
                 return
             }
+            guard counters.acknowledgementsReceived == counters.batchesSent, counters.droppedInvalid == 0 else {
+                XCTFail(
+                    "guest input acknowledgements were incomplete or reported rejected events; "
+                        + "restart check skipped")
+                return
+            }
+            guard
+                !acknowledgementHistory.truncated,
+                acknowledgementHistory.batchSequences == expectedAcknowledgementSequences,
+                receipt.lastAcknowledgedBatchSequence == fenceSequence
+            else {
+                XCTFail("guest acknowledgement sequences were incomplete; restart check skipped")
+                return
+            }
             guard clickNumbers == Array(1...100) else {
                 XCTFail(
                     "expected ordered click logs 1 through 100 before the persistence check, got \(clickNumbers); "
@@ -96,6 +192,7 @@ final class AndroidInputTests: XCTestCase {
                 return
             }
 
+            observation += "phase: force-stopping and relaunching the fixture\n"
             try await run.adb.forceStop(Self.helloText)
             let stoppedProcess = try await run.adb.pidof(Self.helloText)
             XCTAssertNil(stoppedProcess, "force-stop left the fixture process running")
@@ -107,10 +204,12 @@ final class AndroidInputTests: XCTestCase {
             let readLines = try await run.fixtureLog(until: { lines in
                 lines.contains { $0.contains(Self.debugReadPrefix) }
             })
+            let persistedClickNumbers = AndroidInputRun.numbers(in: readLines, after: Self.debugReadPrefix)
             XCTAssertEqual(
-                AndroidInputRun.numbers(in: readLines, after: Self.debugReadPrefix),
-                [100],
+                persistedClickNumbers, [100],
                 "the reopened store did not report the 100 saved clicks")
+            observation +=
+                "persisted click count after relaunch: \(persistedClickNumbers)\nphase: complete\n"
         }
     }
 

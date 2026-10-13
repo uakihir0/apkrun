@@ -16,6 +16,7 @@ enum AndroidInputRunFailure: Error, Equatable {
     case viewNotFound(String)
     /// The launch started no process of the package, so the view could not appear (IR-1286).
     case appDidNotStart(String)
+    case inputRouteUnbound
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
 }
@@ -34,21 +35,28 @@ final class AndroidInputRun {
     let adb: AdbClient
     private let home: URL
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
-    private let route = DevInputRoute()
+    private let route: DevInputRoute
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
     private var frames: DisplayFrames?
     private var framesSeen = 0
     private var window: DisplayWindow?
+    private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient) {
+    private init(home: URL, adb: AdbClient, acknowledgeEveryBatch: Bool) {
         self.home = home
         self.adb = adb
+        route = DevInputRoute(acknowledgeEveryBatch: acknowledgeEveryBatch)
     }
 
     /// Runs `body` on a boot with the window and input, after `apk` is installed and `package` is started on display 0.
-    static func with(apk: URL, package: String, _ body: (AndroidInputRun) async throws -> Void) async throws {
+    static func with(
+        apk: URL,
+        package: String,
+        acknowledgeEveryBatch: Bool = false,
+        _ body: (AndroidInputRun) async throws -> Void
+    ) async throws {
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
             throw XCTSkip(
                 "APKRUN_GUEST_DIR is not set. Build the Guest Agent bundle with scripts/build-guest.sh --out.")
@@ -63,7 +71,11 @@ final class AndroidInputRun {
         }
         let home = try AndroidBootFixture.makeHome()
         _ = try await AndroidBootFixture(home: home, bundle: bundle)
-        let run = AndroidInputRun(home: home, adb: AdbClient(executable: adbExecutable))
+        let run = AndroidInputRun(
+            home: home,
+            adb: AdbClient(executable: adbExecutable),
+            acknowledgeEveryBatch: acknowledgeEveryBatch
+        )
         run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
         do {
             try await run.prepare(apk: apk, package: package)
@@ -187,6 +199,34 @@ final class AndroidInputRun {
         await route.counters()
     }
 
+    /// Queues an empty guest acknowledgement fence after every event already yielded by the window input sink.
+    func acknowledgementFence() async throws -> UInt64 {
+        guard let inputSink else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        return try await inputSink.acknowledgementFence()
+    }
+
+    /// Waits until the current guest connection acknowledges the fence after processing its earlier input batches.
+    func waitForAcknowledgement(_ sequence: UInt64) async throws -> (
+        counters: InputCounters, lastAcknowledgedBatchSequence: UInt64
+    ) {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            if let acknowledged = await route.lastAcknowledgedBatchSequence(), acknowledged >= sequence {
+                return (await route.counters(), acknowledged)
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "input acknowledgement fence \(sequence); counters: \(await route.counters())")
+    }
+
+    /// The guest acknowledgement sequence history consumed by the bound route.
+    func acknowledgementHistory() async -> (batchSequences: [UInt64], truncated: Bool) {
+        await route.acknowledgementHistory()
+    }
+
     /// The integers that follow `prefix` on the lines that carry it, in order: `click 7` gives 7.
     static func numbers(in lines: [String], after prefix: String) -> [Int] {
         lines.compactMap { line in
@@ -246,10 +286,12 @@ final class AndroidInputRun {
         case .attached(let surfaces):
             let source = DisplayFrames(surfaces: surfaces, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
+            let inputSink = WireSink(route: route)
             let window = DisplayWindow(
-                source: source, title: Self.windowTitle, backingScale: scale, inputSink: WireSink(route: route))
+                source: source, title: Self.windowTitle, backingScale: scale, inputSink: inputSink)
             window.show()
             frames = source
+            self.inputSink = inputSink
             self.window = window
         case .frameReady(let generation, let bufferIndex, let sequence):
             framesSeen += 1
@@ -424,25 +466,49 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
 /// The window's events, routed in order (the CLI's `EmbeddedInputSink`, decision D10). One task converts each queued
 /// list to the wire types of runtime-api.md §7.2 and routes it, so no batch overtakes another.
 private final class WireSink: PointerInputSink, @unchecked Sendable {
-    private let queue: AsyncStream<[InputCore.InputEvent]>.Continuation
+    private enum WorkItem {
+        case events([InputCore.InputEvent])
+        case acknowledgementFence(CheckedContinuation<UInt64, Error>)
+    }
+
+    private let queue: AsyncStream<WorkItem>.Continuation
 
     init(route: DevInputRoute) {
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
-        let made = AsyncStream.makeStream(of: [InputCore.InputEvent].self, bufferingPolicy: .unbounded)
+        let made = AsyncStream.makeStream(of: WorkItem.self, bufferingPolicy: .unbounded)
         queue = made.continuation
         Task {
-            for await events in made.stream {
-                // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
-                for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
-                    let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
-                    await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+            for await item in made.stream {
+                switch item {
+                case .events(let events):
+                    // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
+                    for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
+                        let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
+                        await route.send(
+                            RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+                    }
+                case .acknowledgementFence(let continuation):
+                    do {
+                        guard let sequence = try await route.sendAcknowledgementFence() else {
+                            throw AndroidInputRunFailure.inputRouteUnbound
+                        }
+                        continuation.resume(returning: sequence)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
         }
     }
 
     func deliver(_ events: [InputCore.InputEvent]) {
-        queue.yield(events)
+        queue.yield(.events(events))
+    }
+
+    func acknowledgementFence() async throws -> UInt64 {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.yield(.acknowledgementFence(continuation))
+        }
     }
 
     /// The wire form of `event`. A long press is not sent (decision D6), and the key events are converted as the CLI's

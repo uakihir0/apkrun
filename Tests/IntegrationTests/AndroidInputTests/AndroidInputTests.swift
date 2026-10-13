@@ -84,7 +84,8 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(counters.coalesced, 0, "input counters after 100 committed clicks: \(counters)")
 
             try await run.adb.forceStop(Self.helloText)
-            XCTAssertNil(try await run.adb.pidof(Self.helloText), "force-stop left the fixture process running")
+            let stoppedProcess = try await run.adb.pidof(Self.helloText)
+            XCTAssertNil(stoppedProcess, "force-stop left the fixture process running")
             try await run.adb.startActivity(component: "\(Self.helloText)/.MainActivity")
             _ = try await run.adb.shell("logcat -c")
             _ = try await run.adb.shell(

@@ -455,3 +455,30 @@ func rejectedEventsInAnAckAreCountedAsInvalid() async throws {
     try await eventually { await router.counters.droppedInvalid == 3 }
     #expect(await router.counters.droppedInvalid == 3)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func anAcknowledgementFenceFollowsEveryBatchAndRecordsSuccessfulAcks() async throws {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: TestClock(), session: session)
+
+    await router.route([touch(.down)], from: session, acknowledgeEveryBatch: true)
+    let fenceSequence = try #require(await router.sendAcknowledgementFence(for: session))
+    let batches = await channel.batches
+    #expect(batches.map(\.batchSeq) == [1, fenceSequence])
+    #expect(batches.first?.ackRequested == true)
+    #expect(batches.last?.ackRequested == true)
+    #expect(batches.last?.events.isEmpty == true)
+
+    channel.deliverAck(batchSeq: 1, rejected: 0)
+    channel.deliverAck(batchSeq: fenceSequence, rejected: 0)
+    try await eventually {
+        await router.lastAcknowledgedBatchSequence == fenceSequence
+    }
+    let counters = await router.counters
+    #expect(counters.acknowledgementsReceived == 2)
+    #expect(counters.droppedInvalid == 0)
+    let acknowledgementHistory = await router.acknowledgementHistorySnapshot()
+    #expect(acknowledgementHistory.batchSequences == [1, fenceSequence])
+    #expect(acknowledgementHistory.truncated == false)
+}

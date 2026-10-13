@@ -18231,3 +18231,52 @@ referenced #024 evidence. The pre-removal worktree state and reported sizes
 were not independently recoverable after deletion; this log records the
 observations made before removal, and the APFS caveat above limits the size
 claim.
+
+## IR-1305: Three T2 click batches pass on the unchanged build, but do not resolve the residual loss
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §15 |
+
+**Choice.** Keep #024 box 3 open. On 2026-10-14, run
+`AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` three times in
+succession on the unchanged product code from `313cca0`. Each run passed its
+single test with 0 failures and logged exactly 100 ordered click numbers.
+Each run booted a fresh test VM home on the odm7 Android bundle whose manifest
+SHA-256 is
+`113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`.
+The host was an arm64 MacBook Pro on macOS 27.0.1 (26A434). The three result
+bundles are `/tmp/apkrun-024-click-baseline-odm7-20261014.xcresult`,
+`/tmp/apkrun-024-click-baseline-odm7-20261014-02.xcresult`, and
+`/tmp/apkrun-024-click-baseline-odm7-20261014-03.xcresult`.
+
+The test also samples for `adb shell input` processes and found none in each
+run. The test does not read the `DevInputRoute` drop counters, so zero drops
+are not claimed here. Each click has a 50 ms press followed by a 100 ms test
+delay. Its helper directly calls the view's mouse handlers instead of sending
+events through AppKit's normal event dispatch
+([AndroidInputRun.swift](../../Tests/IntegrationTests/AndroidInputTests/AndroidInputRun.swift)).
+The fixture logs a click only after `counter.increment()` returns; the
+SharedPreferences implementation uses synchronous `commit()`. The test does
+not read the stored count after restarting the app. This runner result is not
+the same as the earlier command-line batches in IR-1299.
+
+**Reason.** Three clean T2 batches are useful current evidence, but no source
+change was evaluated and the earlier unchanged-product runs recorded losses.
+The click test alone therefore cannot establish that the product clicks
+reliably or locate the cause. Marking box 3 complete would overstate the
+evidence.
+
+**Risk.** The filtered test runs one case, not the full AndroidInput suite.
+The test host does not export the route counters, and this evidence does not
+replace the physical trackpad check of #024 box 4 (C01-2).
+
+**Adversarial review.** A read-only reviewer agreed that the three passes are
+valid positive evidence but do not resolve the recorded product losses. The
+review also confirmed the limits above: the test calls view handlers directly,
+does not inspect counters or read persisted state after process restart, and
+uses a different cadence from IR-1299. The reviewer advised against treating
+an executor that still blocks the UI while waiting for `commit()` as a test of
+the UI-lag hypothesis.

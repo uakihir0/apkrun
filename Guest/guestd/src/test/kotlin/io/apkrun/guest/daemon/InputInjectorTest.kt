@@ -915,6 +915,47 @@ class InputInjectorTest {
     }
 
     @Test
+    fun anEmptyAcknowledgedBatchActsAsAnInputWorkerFence() {
+        val harness = Harness()
+        val tasks = mutableListOf<() -> Unit>()
+        val sent = mutableListOf<InputAck>()
+        val service =
+            InputService(
+                boundsOf = { DisplayBounds(100, 100) },
+                injector = harness.injector,
+                post = { tasks += it },
+            )
+        val inputBatch =
+            InputBatch.newBuilder()
+                .setBatchSeq(5)
+                .setDisplayId(0)
+                .setAckRequested(true)
+                .addEvents(touchEvent(TouchPhase.TOUCH_PHASE_DOWN))
+                .build()
+        val batch =
+            InputBatch.newBuilder()
+                .setBatchSeq(6)
+                .setDisplayId(0)
+                .setAckRequested(true)
+                .build()
+        service.submit(this, inputBatch) { sent += it }
+        service.submit(this, batch) { sent += it }
+
+        assertTrue(sent.isEmpty())
+        assertEquals(2, tasks.size)
+        tasks[0].invoke()
+        assertEquals(listOf(5L), sent.map { it.batchSeq })
+        assertEquals(1, harness.sink.injected.size)
+        tasks[1].invoke()
+
+        assertEquals(listOf(5L, 6L), sent.map { it.batchSeq })
+        assertEquals(0, sent.last().rejectedEvents)
+        assertEquals(1, harness.sink.injected.size)
+        assertEquals(2L, service.counters().batches)
+        assertEquals(0L, service.counters().eventsRejected)
+    }
+
+    @Test
     fun aBatchForAnUnknownDisplayDropsEveryEvent() {
         val harness = Harness()
         val sent = mutableListOf<InputAck>()

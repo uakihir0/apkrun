@@ -18345,3 +18345,105 @@ ordering; the observed false state at the lost UP is consistent with the
 source. The commit delay is plausible but not proven to explain when the
 state changed. No repository files were changed by the reviewer, and no VM
 was run.
+
+## IR-1307: Moving fixture counter commits off main does not eliminate intermittent lost clicks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §15; IR-1305, IR-1306 |
+
+**Choice.** Keep the counter-queue change as an isolated diagnostic experiment,
+leave #024 box 3 open, and continue #103. Moving fixture persistence off the
+UI thread did not remove the intermittent click loss in this sample.
+
+The experiment serializes HelloText startup reads, clicks, resets, and debug
+counter commands on one FIFO worker. The click callback returns without
+waiting for `SharedPreferences.commit()`; it logs the saved count only after
+the operation completes. This fixture change is on
+`experiment/103-off-main-counter` (`ac3116b` through `2523873`); the
+diagnostic-test improvements are `0bca830` and `e827dc0`. None is on the
+product branch. Its queue unit test passed with a multi-threaded executor and
+a deterministic manual executor; the targeted `:HelloText:testReleaseUnitTest
+--tests io.apkrun.fixture.hellotext.CounterOperationQueueTest` command passed.
+
+**T2 evidence.** On the arm64 MacBook Pro running macOS 27.0.1 build 26A434,
+the filtered
+`AndroidInputTests.testOneHundredCommittedClicksSurviveForceStopAndRelaunch`
+case ran four times against the odm7 Android bundle
+(manifest SHA-256
+`113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`).
+Each result executed the test with no skips:
+
+| Result bundle | Click callbacks | Route counters | Read after force-stop and relaunch |
+|---|---:|---|---:|
+| `/tmp/apkrun-103-offmain-20261014-02.xcresult` | 100 | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+| `/tmp/apkrun-103-offmain-20261014-03.xcresult` | 99 (logged values 1–99) | Drop and coalescing counters zero; sent-event threshold passed | The test did not observe `debug read 100`; the actual read line is not in the result bundle |
+| `/tmp/apkrun-103-offmain-20261014-04.xcresult` | 100 | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+| `/tmp/apkrun-103-offmain-20261014-05.xcresult` | 100 | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+
+Run 03's result confirms the click log stopped at 99 and that the test did not
+observe the expected `debug read 100`. Its result bundle does not preserve the
+actual READ value, so do not infer that it was 99. The measured host route
+counters reported no drop or coalescing, and the host's sent-event threshold
+passed, but these are not Android injection acknowledgements and do not locate
+the missing callback within the Android event path. Similar VirGL
+renderer-operation errors appeared in the failed run and in the following
+passing run, so these logs do not establish a graphics cause either.
+
+Run 05 followed a polling change and passed with 100 callbacks and a reopened
+count of 100 in 36.4 seconds. The first four-run sequence was therefore 100,
+99, 100, 100, with no three-pass streak.
+
+An initial attempt (`01`) used the test host's default Linux bundle and timed
+out while waiting for `systemServer`; it is excluded. All four reported runs
+explicitly set `APKRUN_TEST_LINUX_DIR` to the odm7 bundle. The filtered test
+calls the view handlers directly and does not exercise normal AppKit event
+dispatch (IR-1305).
+
+An intermediate test revision issued READ before force-stop; run 06
+(`/tmp/apkrun-103-offmain-20261014-06.xcresult`) passed. Review found that
+this did not drain the host `WireSink` queue or acknowledge
+guest injection, so it is not treated as conclusive post-restart evidence.
+The final test revision (`e827dc0`) waits up to 30 seconds for the ordered click
+logs, then allows two seconds without new logs before failing. If fewer than
+100 ordered click values are present, or the host sent fewer than 200 events,
+it skips force-stop and the persistence check. It reaches the restart check
+only after the fixture logged all 100 successful commits.
+
+| Final guarded series | Click callbacks | Route counters | Read after force-stop and relaunch |
+|---|---|---|---|
+| `/tmp/apkrun-103-offmain-20261014-07.xcresult` | 100 (values 1–100) | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+| `/tmp/apkrun-103-offmain-20261014-08.xcresult` | 100 (values 1–100) | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+| `/tmp/apkrun-103-offmain-20261014-09.xcresult` | 100 (values 1–100) | Drop and coalescing counters zero; sent-event threshold passed | 100 |
+
+All three final-series tests executed without skips and passed every
+assertion. These consecutive passes verify the final diagnostic test path, but
+they use an instrumented HelloText fixture and direct view-handler calls.
+They do not establish that the fixture change fixes the earlier product
+losses, or that an unacknowledged guest input could not still be delayed. No
+guest input acknowledgement is exposed by this test.
+
+**Reason.** The queue experiment's first series included a 99-of-100 run, and
+the exact cause of the earlier product loss remains unknown. The final
+three-pass fixture series does not establish that the synchronous commit delay
+caused the original failure or meet #103's product acceptance criterion. The
+samples are not a controlled timing comparison. No host input change or
+production guest change is justified by this evidence.
+
+**Risk.** These runs validate one filtered fixture test, not the complete
+AndroidInput suite or natural AppKit dispatch. The experiment changes fixture
+timing and durable writes, and its abrupt-process-stop behavior is not a
+production durability design. The renderer errors are concurrent diagnostic
+noise without a shown relation to click delivery.
+
+**Adversarial review.** Read-only reviewers confirmed that the 100, 99, 100,
+100 series does not establish a fix or identify a cause. They cautioned that
+route-side `eventsSent` does not prove Android acknowledgement and that
+pre-barrier run 03 does not preserve the actual reopened READ value. A reviewer
+also identified a test-teardown race in an intermediate revision. The final
+test skips force-stop when the ordered 100-click logs or host send threshold
+are incomplete; a reviewer confirmed that guard prevents the test from
+interrupting the known queued counter work. The final guarded series is
+recorded above.

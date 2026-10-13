@@ -18193,3 +18193,35 @@ Kept, and why:
 **Reason.** The disk was near its limit, and the removed items can be rebuilt from the scripts or are superseded. The removed image copies are clones of bundles that stay, so their space is returned only when the source is removed too. The logs and the experiment bundles that the records name stay, so that the review can follow the evidence.
 
 **Risk.** An IR entry that names a removed path cannot be reproduced from that path. The entry text still records the outcome. A rebuild from the scripts takes time and needs the stock zip.
+
+## IR-1304: Prune clean merged worktrees before #024 runs (2026-10-14)
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (housekeeping during implementation) |
+| Affected documents | this log; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 |
+
+**Choice.** Removed the clean worktrees `cl24` (`task/024-click-loss`),
+`ir438` (`task/ir438-xctest-host`), `k25` (`task/025-keyboard-input`),
+`odm4r` (`task/odm4-render-abort`), `p24` (`task/024-pointer-input`),
+`t102` (`task/102-tap-focus`), and `t2k` (`task/025-t2-keyboard`).
+Their branch tips were already reachable from `main`, and their worktrees
+had no tracked or untracked changes. Removed their ignored build products
+with the worktrees; their combined reported directory size was about
+18.4 GiB. Deleted the other local branch refs already merged into `main`
+that were not checked out in any remaining worktree.
+
+Kept `099`, `avb`, and `r101`: they contain unmerged or uncommitted work
+and are named in IR-1303. Kept the active #024 worktree, the main checkout,
+all unmerged branch refs, and the existing task evidence outside those
+worktrees.
+
+**Reason.** The merged commits remain in `main`, so removing these clean
+worktrees does not discard source history. Removing the repeated build
+products reduces the working set before the next VM test run.
+
+**Risk.** Re-running work in a removed checkout requires recreating its
+worktree and rebuilding ignored products. APFS may share blocks between
+worktrees, so the reported directory sizes do not equal reclaimed physical
+space.

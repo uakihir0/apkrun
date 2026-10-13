@@ -18170,3 +18170,17 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 **Reason.** The trace work of IR-1295 to IR-1301 finds the stage of the loss, but not its cause. The cause lies in the guest's display and UI path, which is outside #024, so it needs its own task (AGENTS §11). Leaving the loss without a number would hide it from the next maintainer.
 
 **Risk.** Filing a follow-up does not decide whether box 3's "reliably" is met today. That wording remains the maintainer's decision (IR-1298, option 5).
+
+## IR-1304: The #101 T1 test passes without a device; three RuntimeCore tests fail under load and pass alone
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #101 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #101 (the T1 box); [README.md](issues/README.md) §5 (the #101 row) |
+
+**Choice.** The T1 box of #101 is ticked on evidence from this run: `swift test --filter GuestAgentSupervisorTests` in `Packages/RuntimeCore` passed 19 of 19, including `aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds`. The device box stays open. The full `swift test` of RuntimeCore on this branch ran 175 tests with three failures (`loopbackForwarderStopReturnsWhileAGuestConnectionNeverOpens`, `devConsoleSocketRelaysBothWaysAndRefusesASecondClient`, `aResponseBehindAFencedOneWaitsItsTurn`). Each of the three passes when it runs alone.
+
+**Reason.** The failures are timing and port tests, and they ran while the Mac was under load (load average 10 to 15), with no device in use. The branch changes the supervisor and the input binding, and none of the three tests touches those paths. Running them alone separates the load from the code. I did not change them.
+
+**Risk.** Three tests that depend on timing can fail on a loaded Mac, and a green run needs an idle Mac. This is the same class as the parallel-run issue #100. A maintainer should decide whether these tests need fixed ports or longer waits. The #101 device check is still to be done, so the branch is not merged.

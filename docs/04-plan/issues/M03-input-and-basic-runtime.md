@@ -1033,7 +1033,7 @@ After a guest agent restart, pointer input works again on the same window withou
 
 ### Acceptance
 
-- [ ] A T1 test in `GuestAgentSupervisorTests` covers the loss and the rebind, and the events on the dead channel are counted as `input.dropped.channel`.
+- [x] A T1 test in `GuestAgentSupervisorTests` covers the loss and the rebind, and the events on the dead channel are counted as `input.dropped.channel`.
 - [ ] On a device, after a forced kill of the agent, a click in the window reaches the app again (no restart of the boot).
 - [ ] The rebind is recorded in an IR entry with the restart counts.
 

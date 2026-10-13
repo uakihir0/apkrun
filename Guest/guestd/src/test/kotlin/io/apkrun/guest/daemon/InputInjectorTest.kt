@@ -933,11 +933,7 @@ class InputInjectorTest {
                 .addEvents(touchEvent(TouchPhase.TOUCH_PHASE_DOWN))
                 .build()
         val batch =
-            InputBatch.newBuilder()
-                .setBatchSeq(6)
-                .setDisplayId(0)
-                .setAckRequested(true)
-                .build()
+            InputBatch.newBuilder().setBatchSeq(6).setDisplayId(0).setAckRequested(true).build()
         service.submit(this, inputBatch) { sent += it }
         service.submit(this, batch) { sent += it }
 

@@ -18039,22 +18039,23 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 
 **Risk.** The trace adds log lines and a listener in the touch path, which can change timing. The WAIT build blocks the injector until the app has handled each event, and the guest stamps `eventTime` when it receives an event. Under WAIT the press durations therefore differ from the product's (IR-1297). The ASYNC latency (from the inject line to the listener line) is valid only for ASYNC. The Mac trace is a hand-applied copy of the closeout's `apply-trace.py`, which no longer applies to `dacd801`.
 
-## IR-1296: The lost click's DOWN and UP both reached the Button, and the Button's press was cleared before the UP: the traces place the loss after delivery
+## IR-1296: The lost sequences reached the Button listener; the reason no click followed is undetermined
 
 | Field | Value |
 |---|---|
 | Status | Needs maintainer review |
 | Task | #024 (box 3) |
-| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §4.2, §11, §15; IR-1247, IR-1290, IR-1295 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §4.2, §11, §15; IR-1247, IR-1290, IR-1295, IR-1306 |
 
 **Choice.**
 1. The traced losses are E1 (ASYNC, click 2 lost), E2 (ASYNC, click 2 lost), and W1 (WAIT, clicks 2, 74, and 87 lost). In each batch the Mac view received 100 DOWN and 100 UP, the translator emitted 100 touch down and 100 touch up, the guest received 200 touch events and injected all of them, and the Button's listener received 100 DOWN and 100 UP, joined by `eventTime`. For each lost click the DOWN and the UP both reached the listener, and no click line followed the UP. The stored count agrees with the log in every batch. The product losses (P2, Q4, R4) were not traced, so their stage is not shown directly.
-2. The Button's pressed state explains the loss. In W1 the lines for click 2 are, in order: UP1 with `pressed=true`, click 789 (the click of UP1), DOWN2 with `pressed=true`, `after-click pressed=false`, and UP2 with `pressed=false`. The listener runs before the Button handles an event, so the `pressed=true` at DOWN2 is UP1's press, which the Button had not yet cleared. The press was cleared after DOWN2's listener ran and before UP2's listener ran. E2 shows the same pattern (UP1 `pressed=true`, DOWN2 `pressed=true`, UP2 `pressed=false`). With the press cleared, the UP posts no click. AOSP's `View` clears a press with a runnable that ACTION_UP posts (`UnsetPressedState`), and the order above fits that. The AOSP claim is from the source: the public SDK jar has no private classes, so it is not checked on this image.
-3. The stage is the Button's press-state handling, after delivery. It is not the translator, the injector, the router, or the log path (the stored count agrees with the log in every batch). It is not the counter either: the counter increments only in `click()`, so a click that does not run leaves the stored count unchanged.
+  2. In W1 the lines for click 2 are, in order: UP1 with `pressed=true`, click 789 (the click of UP1), DOWN2 with `pressed=true`, `after-click pressed=false`, and UP2 with `pressed=false`. E2 shows the same pattern for click 2. The listener runs before `View.onTouchEvent`, so these lines show that the old press state was still visible at DOWN2 and was cleared before UP2. On the ordinary pressed-click path, that false state at UP2 makes `View` skip `PerformClick`; HelloText's button is a direct child of a `LinearLayout`, so a prepressed path is not expected. The traces do not show why the press was cleared between DOWN2 and UP2.
+  3. The exact odm7 image source is now checked. Its bundle is CI build `16373615`, branch `aosp-android-latest-release`, target `aosp_cf_arm64_only_phone-userdebug`; the build manifest pins `frameworks/base` to `94b4c163b7dfe5ce3607f7bb8456f9573f7de57d`. In [`View.java`](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57d/core/java/android/view/View.java#18488), on the ordinary pressed-click path, `ACTION_UP` starts or posts `PerformClick` handling before it schedules `UnsetPressedState`. `PerformClick.run()` calls `performClickInternal()`, which invokes the `OnClickListener` synchronously; `UnsetPressedState.run()` later calls `setPressed(false)`. HelloText's listener calls `CounterStore.increment()`, whose SharedPreferences adapter uses synchronous `commit()`. In this same framework revision, `commit()` waits for the disk-write latch and can perform the file write and `fsync` on the calling thread ([`SharedPreferencesImpl.java`](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57d/core/java/android/app/SharedPreferencesImpl.java#605)). Therefore a preceding successful click callback can occupy the UI thread and delay the already-scheduled pressed-state clear. This is a plausible contributor, not a demonstrated cause: the traces do not record commit duration or establish why the next DOWN is dispatched before the clear.
+4. The traced loss is after the Button's touch listener and before its click callback/log. The translator, injector, router, and log path are not shown to have lost these events, and the stored count agrees with the click log in each batch. The product losses (P2, Q4, R4) were not traced, so their stage is not established.
 
-**Reason.** Each traced lost click has the full chain up to the listener, so the loss comes after delivery to the window. The pressed state is the only evidence inside the Button, and its order matches the framework's handling.
+**Reason.** Each diagnosis loss has a complete trace through the Button's touch listener and matching stored-count check. The exact source explains how a click callback can delay a posted state clear, but the available traces do not link that callback's duration to a later lost click.
 
-**Risk.** What delays UP1's posted clear past DOWN2 is not determined. In E1 and E2 the UP before the lost click reached the Button's listener 64 ms and 99 ms after its injection, while the other UPs of those batches reached it within 16 ms (E1) and 4 ms (E2). The lost click's own press was 53 ms in both, which is the product's cadence. In W1 the lost click's press was 11 ms (IR-1297). The frame statistics of P2, which lost one click, show no janky and no high-input-latency frame, while P1 had 682 high-input-latency frames and no loss, so frame stalls do not explain every loss. The virtio-gpu error `response 0x1205 (command 0x106)` is logged in every boot (32 lines in the ASYNC diagnosis boot, 24 in the WAIT diagnosis boot, and 27 in the product boot, IR-1280). Its link to the delay is not tested.
+**Risk.** What delayed the posted clear past DOWN2 is not determined. In E1 and E2 the UP before the lost click reached the Button's listener 64 ms and 99 ms after its injection, while the other UPs of those batches reached it within 16 ms (E1) and 4 ms (E2). The lost click's own press was 53 ms in both, which is the product's cadence. In W1 the lost click's press was 11 ms (IR-1297). The frame statistics of P2, which lost one click, show no janky and no high-input-latency frame, while P1 had 682 high-input-latency frames and no loss, so frame stalls do not explain every loss. The virtio-gpu error `response 0x1205 (command 0x106)` is logged in every boot (32 lines in the ASYNC diagnosis boot, 24 in the WAIT diagnosis boot, and 27 in the product boot, IR-1280). Its link to the delay is not tested.
 
 ## IR-1297: WAIT_FOR_RESULT did not prevent the loss in the one batch that lost clicks under it, and its timing differs from the product's
 
@@ -18142,7 +18143,7 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 **Choice.** One read-only reviewer (an Explore agent that could not edit files, run a VM, or run `lockf`) read the diff of `task/024-click-loss` against `main`, IR-1295 to IR-1300, and the logs. It gave twelve findings, and each was answered as follows.
 1. Blocker, the IR-1301 placeholder. Accepted. This entry replaces it.
 2. Major, the reading of the W1 press state, which said that DOWN2 set the press. Accepted. The listener runs before the Button handles an event, so the press at DOWN2's listener was UP1's (IR-1296).
-3. Major, judgments stated as facts in the titles and in the M03 and input.md notes. Accepted. The titles and notes say what the traces show, and the AOSP source claim is marked as not checked on this image.
+3. Major, judgments stated as facts in the titles and in the M03 and input.md notes. Accepted. The titles and notes say what the traces show. IR-1306 later checks the exact image source and corrects the earlier causal wording.
 4. Major, the mechanism was traced in E1, E2, and W1 only, and the product losses were not traced. Accepted. IR-1296 says so, and IR-1295 says the trace listener is in the touch path.
 5. Major, "a WAIT injection would not have changed the outcome" was not supported, and the lost click of W1 had an 11 ms press. Accepted. The claim is removed, and IR-1297 gives the timing.
 6. Major, IR-1299's rule statement left out the Q and R batches. Accepted. IR-1299 gives Q1 to Q3 and R1 to R3, and why the box stays open.
@@ -18167,7 +18168,7 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 
 **Choice.** The residual loss from IR-1298 is filed as task #103 (GitHub issue #103), with its own entry in M3 and a row in the task index. The #024 box stays open. The follow-up is filed now, and not left for the maintainer to file, so that the open work is tracked (AGENTS §11).
 
-**Reason.** The trace work of IR-1295 to IR-1301 finds the stage of the loss, but not its cause. The cause lies in the guest's display and UI path, which is outside #024, so it needs its own task (AGENTS §11). Leaving the loss without a number would hide it from the next maintainer.
+**Reason.** The trace work of IR-1295 to IR-1301 places the diagnosis losses after delivery to the Button's touch listener, but does not establish their cause or the stage of the product losses. The exact framework source identifies synchronous fixture persistence as a possible contributor, not a proven cause (IR-1306). The follow-up tracks the remaining guest UI and event-order investigation; leaving it unnumbered would hide the work.
 
 **Risk.** Filing a follow-up does not decide whether box 3's "reliably" is met today. That wording remains the maintainer's decision (IR-1298, option 5).
 
@@ -18280,3 +18281,67 @@ does not inspect counters or read persisted state after process restart, and
 uses a different cadence from IR-1299. The reviewer advised against treating
 an executor that still blocks the UI while waiting for `commit()` as a test of
 the UI-lag hypothesis.
+
+## IR-1306: The exact odm7 framework source supports a UI-stall hypothesis, but does not prove the cause
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §15; IR-1296, IR-1298, IR-1301 |
+
+**Choice.** Correct IR-1296's earlier causal explanation and keep #024 box 3
+open.
+
+1. The odm7 bundle manifest records CI build `16373615`, branch
+   `aosp-android-latest-release`, and target
+   `aosp_cf_arm64_only_phone-userdebug`
+   (`/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json`). The public
+   [source manifest](https://ci.android.com/builds/submitted/16373615/aosp_cf_arm64_only_phone-userdebug/latest/manifest_16373615.xml)
+   pins `frameworks/base` to `94b4c163b7dfe5ce3607f7bb8456f9573f7de57d`
+   (line 1226; downloaded copy SHA-256
+   `c9eaff434f26ee3769e1c47dbf92c157759c70e0d8bae12fd581e6cd575845f0`).
+2. In that exact [`View.java`](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57d/core/java/android/view/View.java#18488),
+   On the ordinary pressed-click path, `ACTION_UP` starts or posts click
+   handling before scheduling `UnsetPressedState`.
+   `PerformClick.run()` calls `performClickInternal()`; the click callback
+   invokes HelloText's `CounterStore.increment()`. The unpress runnable runs
+   afterward and calls `setPressed(false)`.
+3. A preceding successful HelloText click's `CounterStore.increment()` saves through
+   [`SharedPreferencesImpl.commit()`](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57d/core/java/android/app/SharedPreferencesImpl.java#605).
+   On the UI thread, this call waits for the disk-write latch. When no other
+   write is in flight, the framework runs the disk-write task on the calling
+   thread, and `writeToFile()` calls `FileUtils.sync`. This can delay the
+   already-scheduled unpress runnable while the successful click callback is
+   running.
+4. The false pressed state at a lost UP explains why that UP skips
+   `PerformClick` on the ordinary pressed-click path; the fixture does not
+   expect the prepressed path. This establishes a possible delay, not the cause
+   of the lost click. The traces show the previous pressed state at the next
+   DOWN listener and a cleared state at the following UP listener, but they do
+   not capture commit duration or establish why the press cleared between
+   DOWN and UP.
+   Product losses P2, Q4, and R4 were not traced.
+
+**Reason.** The exact framework code confirms that a pressed UP starts or
+queues click handling before scheduling its pressed-state clear. This corrects
+our earlier description of that ordering; the trace still shows the view
+unpressed at the lost UP, so that UP skips the ordinary click path. The source
+shows that a preceding successful listener's synchronous fixture persistence
+can occupy the same UI thread ahead of the scheduled clear, but does not
+identify what cleared the press between DOWN and UP. #103 must test the timing
+and event order before accepting this as the cause.
+
+**Risk.** The diagnosis's touch listener and logging alter timing, and the
+filtered T2 harness calls view handlers directly rather than using AppKit's
+normal event dispatch (IR-1305). These limitations prevent the source order
+and three passing batches from proving the production failure mechanism.
+
+**Adversarial review.** A read-only source audit mapped the bundle build to
+the exact `frameworks/base` revision and checked `View.java`,
+`SharedPreferencesImpl.java`, and `ViewRootImpl.java`. It confirmed that the
+exact source changes the earlier description of click-callback and clear
+ordering; the observed false state at the lost UP is consistent with the
+source. The commit delay is plausible but not proven to explain when the
+state changed. No repository files were changed by the reviewer, and no VM
+was run.

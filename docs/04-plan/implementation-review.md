@@ -18184,3 +18184,25 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 **Reason.** The failures are timing and port tests, and they ran while the Mac was under load (load average 10 to 15), with no device in use. The branch changes the supervisor and the input binding, and none of the three tests touches those paths. Running them alone separates the load from the code. I did not change them.
 
 **Risk.** Three tests that depend on timing can fail on a loaded Mac, and a green run needs an idle Mac. This is the same class as the parallel-run issue #100. A maintainer should decide whether these tests need fixed ports or longer waits. The #101 device check is still to be done, so the branch is not merged.
+
+## IR-1305: The review of the #101 branch: fixes, the decisions they embody, and what stays open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #101 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #101 (Acceptance and Notes); [README.md](issues/README.md) §5 (the #101 row); [input.md](../02-design/input.md) §3, §7.3 |
+
+**Choice.** A read-only review of `task/101-route-rebind` (IR-1304) gave PASS WITH NOTES. Its findings were answered as follows, without a device.
+1. Docs: the README row cited IR-1303, which is the cleanup record on main. It now cites this entry. The row's claim of an odm7 abort (an entry that is not on the branch) is replaced by "the device run is not done".
+2. Race in `secondaryConnection`: the reuse path and the usable-other path returned a connection after the awaited usability check, even when the session had ended meanwhile. Both now re-check the control session's token and throw `disconnected` when it has changed. Fixed.
+3. Overcount: a rebind sent `cancelAll` on the dead stream, and the router counted the failed send as `input.dropped.channel`. A stream now reports whether it is usable (`InputChannel.isUsable`, with a default of true for fakes). `sessionEnded` sends no cancel on an unusable stream and counts nothing, because the guest's gestures ended with the agent. Test: `aSessionEndedOnADeadChannelSendsNoCancelAndCountsNone`. Decision: the cancel is not a dropped input event, so it is not counted.
+4. Tests: the restart-refused path with an input connection open, and the restart count, are not yet covered by a test. Left open for the next change, with the device check.
+5. Error code: the release was logged with `runtime.guestAgentOperationFailed`, but no request failed. It is now a notice with no catalog code. Decision: the catalog code describes a failed request, and the release is not an error. The test expectation changed with it.
+6. Restart count: defined as the starts that the restart budget allowed, counted when the start is issued, whether it then succeeds or fails. A refused death is not counted. Decision: the count is the number of restarts the agent actually had a chance to take, which the boot record needs.
+7. Logs: the release and rebind notices name no session or endpoint, and they carry the operation ID of the recovery. Not changed; the token bytes are not logged.
+8. Open decision, not changed: a press held across a loss keeps its gesture in the window translator. The rebind sends no cancel for it (fix 3 does not cancel on a dead stream), so the later MOVE and UP reach the new agent without a DOWN. `input.md` §3 and §7.3 do not say what the channel must do here. The maintainer should decide whether the translator must end the held gesture when the route is bound again.
+
+**Reason.** The fixes are the ones the findings describe, and each is covered by a test where the test can run without a device. Items 4 and 8 need the device or a design decision, so they stay open.
+
+**Risk.** The race fix (2) is not covered by a test, because the window of the race is a suspension point that the test harness does not reach. The device check of #101 is still to be done, so the branch is not merged.

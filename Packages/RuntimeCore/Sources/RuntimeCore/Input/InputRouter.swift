@@ -12,6 +12,16 @@ public protocol InputChannel: Sendable {
     var pendingBytes: Int { get async }
     /// The acks of the stream. The stream finishes when the stream closes.
     var acks: AsyncStream<GPInputAck> { get }
+    /// Whether the stream can still carry batches. A stream that is not usable has lost its guest, and the guest's
+    /// gestures ended with it, so a cancel cannot reach it (#101).
+    var isUsable: Bool { get async }
+}
+
+extension InputChannel {
+    /// A stream is usable unless it says otherwise. The fakes of the tests rely on this default.
+    public var isUsable: Bool {
+        get async { true }
+    }
 }
 
 /// What the router dropped, merged, and sent (input.md §11). The diagnostics snapshot reads a copy of it.
@@ -221,6 +231,11 @@ public actor InputRouter {
         }
         await takeTurn()
         defer { releaseTurn() }
+        // A dead stream has lost its guest, and the guest's gestures ended with it. The cancel could not reach it, so it
+        // is not sent and not counted as a dropped event (#101, IR-1305).
+        guard await channel.isUsable else {
+            return
+        }
         let now = clock()
         await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: ended.displayID, at: now)
     }

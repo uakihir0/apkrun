@@ -243,6 +243,10 @@ public actor GuestAgentSupervisor {
             throw .disconnected
         }
         if let existing = secondaries[endpoint], await existing.isUsable {
+            // The session may have ended while the check awaited. A connection of an ended session is not returned.
+            guard connection != nil, session?.sessionToken == token else {
+                throw .disconnected
+            }
             return existing
         }
         let next = GuestConnection(
@@ -264,8 +268,11 @@ public actor GuestAgentSupervisor {
             throw .disconnected
         }
         if let existing = secondaries[endpoint], await existing.isUsable {
-            // Another caller opened a usable one meanwhile, and that one is kept.
+            // Another caller opened a usable one meanwhile, and that one is kept, unless the session ended meanwhile.
             await next.close()
+            guard connection != nil, session?.sessionToken == token else {
+                throw .disconnected
+            }
             return existing
         }
         let replaced = secondaries.updateValue(next, forKey: endpoint)
@@ -430,9 +437,8 @@ public actor GuestAgentSupervisor {
             return
         }
         if released > 0 {
-            logger.warning(
-                "The control session ended, so \(released, .public) secondary connection(s) are released",
-                errorCode: "runtime.guestAgentOperationFailed")
+            logger.notice(
+                "The control session ended, so \(released, .public) secondary connection(s) are released")
         }
         state = .connecting
         if let cause, recordViolation(cause) {

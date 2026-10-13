@@ -50,7 +50,8 @@ public actor DevelopmentGuestAgent {
     private let clock: @Sendable () -> ContinuousClock.Instant
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
-    /// The restarts of the agent that were attempted within the budget, for the record of the boot (#101).
+    /// The starts of the agent that the restart budget allowed, counted when the start is issued, whether it then
+    /// succeeds or fails. A death that the budget refuses is not counted (#101, IR-1305).
     public private(set) var restartCount = 0
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
     private var generation: UInt64 = 0

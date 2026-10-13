@@ -30,4 +30,11 @@ public struct GuestInputChannel: InputChannel {
     public var acks: AsyncStream<GPInputAck> {
         connection.inputAcks
     }
+
+    /// Whether the connection is usable, which is false once the connection has failed or closed.
+    public var isUsable: Bool {
+        get async {
+            await connection.isUsable
+        }
+    }
 }

@@ -416,8 +416,8 @@ private final class SupervisorLogRecorder: LogSink, @unchecked Sendable {
     }
 }
 
-/// The release of the secondary connections at a loss is logged once, in the operation of the recovery, with the catalog
-/// code of the `runtime` domain (#101).
+/// The release of the secondary connections at a loss is logged once, as a notice in the operation of the recovery
+/// (#101, IR-1305).
 @Test(.timeLimit(.minutes(1)))
 func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsRecovery() async throws {
     let recorder = SupervisorLogRecorder()
@@ -446,7 +446,8 @@ func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsRecovery() async throws {
     #expect(lost.count == 1)
     #expect(released.count == 1)
     let entry = try #require(released.first)
-    #expect(entry.errorCode == "runtime.guestAgentOperationFailed")
+    // The release is a notice: no request failed, so no catalog code applies (IR-1305).
+    #expect(entry.errorCode == nil)
     #expect(entry.operationID != nil)
     #expect(entry.operationID == lost.first?.operationID)
     await supervisor.stop()

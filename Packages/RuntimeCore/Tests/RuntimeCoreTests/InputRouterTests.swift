@@ -39,6 +39,17 @@ actor RecordingInputChannel: InputChannel {
         backlog = bytes
     }
 
+    private var usable = true
+
+    /// Whether the stream reports itself usable. A dead stream reports false (the guest is gone).
+    var isUsable: Bool {
+        usable
+    }
+
+    func setUsable(_ value: Bool) {
+        usable = value
+    }
+
     /// Lets the first `count` sends succeed, and fails the ones after them.
     func succeedFirst(_ count: Int) {
         sendLimit = count
@@ -381,6 +392,20 @@ func sessionEndedSendsCancelAllAndRemovesTheSession() async {
     await router.route([touch(.move)], from: session)
     #expect(await router.counters.droppedInvalid == 1)
     #expect(await channel.batches.count == 2)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aSessionEndedOnADeadChannelSendsNoCancelAndCountsNone() async {
+    let channel = RecordingInputChannel()
+    let clock = TestClock()
+    let session = SessionID.app(UUID())
+    let router = await makeRouter(channel, clock: clock, session: session)
+    await router.route([touch(.down)], from: session)
+    await channel.setUsable(false)
+    await router.sessionEnded(session)
+    // The guest's gestures ended with the agent, so the cancel is not sent and is not a dropped event (#101, IR-1305).
+    #expect(await channel.batches.count == 1)
+    #expect(await router.counters.droppedChannel == 0)
 }
 
 // MARK: - Batches

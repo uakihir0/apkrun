@@ -62,7 +62,7 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
-    /// Diagnostic only: after all 100 successful-commit click logs, the count survives process death and a fresh READ.
+    /// Diagnostic only: checks route counters, then checks persistence after all 100 ordered click logs are present.
     func testOneHundredCommittedClicksSurviveForceStopAndRelaunch() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
@@ -75,8 +75,8 @@ final class AndroidInputTests: XCTestCase {
             }
             let clickLines = try await run.fixtureLog(
                 until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 },
-                settleFor: .seconds(1))
-            XCTAssertEqual(AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix), Array(1...100))
+                settleFor: .seconds(2))
+            let clickNumbers = AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix)
             let counters = await run.inputCounters()
             XCTAssertGreaterThanOrEqual(
                 counters.eventsSent, 200, "input counters after 100 committed clicks: \(counters)")
@@ -85,6 +85,16 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(counters.droppedInvalid, 0, "input counters after 100 committed clicks: \(counters)")
             XCTAssertEqual(counters.droppedChannel, 0, "input counters after 100 committed clicks: \(counters)")
             XCTAssertEqual(counters.coalesced, 0, "input counters after 100 committed clicks: \(counters)")
+            guard counters.eventsSent >= 200 else {
+                XCTFail("the host input stream did not send 200 events; restart check skipped")
+                return
+            }
+            guard clickNumbers == Array(1...100) else {
+                XCTFail(
+                    "expected ordered click logs 1 through 100 before the persistence check, got \(clickNumbers); "
+                        + "restart check skipped")
+                return
+            }
 
             try await run.adb.forceStop(Self.helloText)
             let stoppedProcess = try await run.adb.pidof(Self.helloText)
@@ -96,7 +106,7 @@ final class AndroidInputTests: XCTestCase {
 
             let readLines = try await run.fixtureLog(until: { lines in
                 lines.contains { $0.contains(Self.debugReadPrefix) }
-            }, settleFor: .seconds(1))
+            })
             XCTAssertEqual(
                 AndroidInputRun.numbers(in: readLines, after: Self.debugReadPrefix),
                 [100],

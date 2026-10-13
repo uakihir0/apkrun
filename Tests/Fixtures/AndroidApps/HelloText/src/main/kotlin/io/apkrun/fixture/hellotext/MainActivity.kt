@@ -9,6 +9,7 @@ import android.text.TextWatcher
 import android.util.Log
 import android.view.ContextMenu
 import android.view.Menu
+import android.view.MotionEvent
 import android.view.MenuItem
 import android.view.View
 import android.widget.Button
@@ -32,6 +33,19 @@ class MainActivity : Activity() {
         counterText = findViewById(R.id.counter_text)
         showCount(counter.current())
         findViewById<Button>(R.id.increment_button).setOnClickListener { click() }
+        // DIAGNOSIS BUILD ONLY (#024 click loss). Logs the touch the Button receives and does not consume it.
+        findViewById<Button>(R.id.increment_button).setOnTouchListener { v, event ->
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                val inside = event.x >= 0f && event.x <= v.width.toFloat() && event.y >= 0f && event.y <= v.height.toFloat()
+                Log.i(
+                    "APKRUN-DIAG",
+                    "view action=$action t=${event.eventTime} pressed=${v.isPressed} enabled=${v.isEnabled} " +
+                        "focus=${v.hasWindowFocus()} inside=$inside clickable=${v.isClickable} shown=${v.isShown}",
+                )
+            }
+            false
+        }
         findViewById<Button>(R.id.details_button).setOnClickListener {
             startActivity(Intent(this, DetailsActivity::class.java))
         }
@@ -64,6 +78,9 @@ class MainActivity : Activity() {
         try {
             val value = counter.increment()
             Log.i(LOG_TAG, "click $value")
+            Log.i("APKRUN-DIAG", "clicked stored=$value")
+            // DIAGNOSIS BUILD ONLY: the state of the Button after this click has run (the post runs after the click).
+            findViewById<Button>(R.id.increment_button).let { b -> b.post { Log.i("APKRUN-DIAG", "after-click pressed=${b.isPressed}") } }
             showCount(value)
         } catch (failure: IllegalStateException) {
             Log.e(LOG_TAG, "click not saved: ${failure.message}")

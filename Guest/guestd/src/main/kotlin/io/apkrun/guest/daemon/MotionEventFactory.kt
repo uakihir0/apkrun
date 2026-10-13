@@ -175,10 +175,24 @@ object AndroidInjectionSink : InjectionSink {
         }
     }
 
+    // DIAGNOSIS BUILD ONLY (#024 click loss). Not for the product. The mode and the log line are
+    // set by the diagnosis worktree and are never committed to task/024-click-loss.
+    private const val DIAG_WAIT_FOR_RESULT = false
+    private const val INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT = 2
+
     override fun inject(event: Any): Boolean {
+        val mode = if (DIAG_WAIT_FOR_RESULT) INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT else INJECT_INPUT_EVENT_MODE_ASYNC
         val accepted =
-            SystemServices.input.call("injectInputEvent", event, INJECT_INPUT_EVENT_MODE_ASYNC)
-        return accepted as? Boolean ?: false
+            SystemServices.input.call("injectInputEvent", event, mode)
+        val ok = accepted as? Boolean ?: false
+        val motion = event as? MotionEvent
+        if (motion != null) {
+            android.util.Log.i(
+                "APKRUN-DIAG",
+                "inject mode=$mode action=${motion.actionMasked} t=${motion.eventTime} ok=$ok",
+            )
+        }
+        return ok
     }
 
     override fun recycle(event: Any) {

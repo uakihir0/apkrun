@@ -56,6 +56,7 @@ public actor DevInputRoute {
             wire.removeLast(wire.count - Self.maximumEventsPerBatch)
         }
         let events = WireInputConversion.events(wire)
+        fputs("TRACE route n=\(events.count) bound=\(router != nil)\n", stderr) // DIAG-TRACE
         guard let router, let session else {
             localCounters.droppedNotRunning += events.count
             return

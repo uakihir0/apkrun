@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import IOSurface
 import InputCore
 import QuartzCore
@@ -199,6 +200,7 @@ public final class IOSurfaceLayerView: NSView {
     /// Converts one event to a sample, translates it, and sends the events that come out. A held hover or scroll starts
     /// the flush timer.
     private func forward(_ event: NSEvent) {
+        fputs("TRACE view type=\(event.type.rawValue) host=\(UInt64(max(0, event.timestamp) * 1_000_000_000))\n", stderr) // DIAG-TRACE
         let location = convert(event.locationInWindow, from: nil)
         guard let sample = PointerEventAdapter.sample(for: event, locationInContent: location) else {
             return
@@ -266,11 +268,24 @@ public final class IOSurfaceLayerView: NSView {
         guard !events.isEmpty else {
             return
         }
+        for event in events { fputs("TRACE out \(diagTraceKind(event))\n", stderr) } // DIAG-TRACE
         inputSink?.deliver(events)
     }
 
     /// The current time on the clock of the event timestamps (`NSEvent.timestamp` is seconds since the system started).
     private static func now() -> InputTimestamp {
         InputTimestamp(hostNanos: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000))
+    }
+}
+
+// DIAG-TRACE: diagnosis build only (#024 click loss). Not in the product.
+func diagTraceKind(_ event: InputEvent) -> String {
+    switch event {
+    case .touch(let t): return "touch.\(t.phase) host=\(t.time.hostNanos)"
+    case .mouse(let m): return "mouse.\(m.action) host=\(m.time.hostNanos)"
+    case .scroll: return "scroll"
+    case .key: return "key"
+    case .longPress: return "longPress"
+    case .cancelAll: return "cancelAll"
     }
 }

@@ -145,6 +145,11 @@ class InputInjector(
             while (index < events.size) {
                 val event = events[index]
                 val time = eventTime(base, firstHostTimeNanos, event.hostTimeNanos)
+                // DIAG-TRACE: diagnosis build only (#024 click loss). The host time joins the Mac trace.
+                android.util.Log.i(
+                    "APKRUN-DIAG",
+                    "ev host=${event.hostTimeNanos} kind=${event.kindCase.name} phase=${if (event.kindCase == InputEvent.KindCase.TOUCH) event.touch.phase.number else -1} batch=${events.size}",
+                )
                 when (event.kindCase) {
                     InputEvent.KindCase.TOUCH ->
                         touch(displayId, gestures, event.touch, time, tally)

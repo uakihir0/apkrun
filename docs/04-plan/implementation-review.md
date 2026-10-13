@@ -18225,3 +18225,9 @@ products reduces the working set before the next VM test run.
 worktree and rebuilding ignored products. APFS may share blocks between
 worktrees, so the reported directory sizes do not equal reclaimed physical
 space.
+
+**Adversarial review.** The reviewer found no lost source or uniquely
+referenced #024 evidence. The pre-removal worktree state and reported sizes
+were not independently recoverable after deletion; this log records the
+observations made before removal, and the APFS caveat above limits the size
+claim.

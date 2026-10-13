@@ -153,16 +153,31 @@ final class AndroidInputRun {
         return unique.isEmpty ? "no nodes in the dump" : unique.joined(separator: ", ")
     }
 
-    /// The fixture's log lines, polled every 500 ms until `enough` holds or 30 s have passed.
-    func fixtureLog(until enough: ([String]) -> Bool) async throws -> [String] {
+    /// The fixture's log lines, polled until `enough` holds or 30 s have passed. When `settleFor` is set, return sooner
+    /// after the log output stops changing, which keeps a missing-event diagnostic from waiting out the full timeout.
+    func fixtureLog(until enough: ([String]) -> Bool, settleFor: Duration? = nil) async throws -> [String] {
+        let clock = ContinuousClock()
         var lines: [String] = []
-        for _ in 0..<60 {
+        var previousLines: [String]?
+        var unchangedSince = clock.now
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while clock.now < deadline {
             let output = try await adb.shell("logcat -d -s APKRUN-FIXTURE").output
             lines = output.split(separator: "\n").map(String.init)
             if enough(lines) {
                 break
             }
-            try await Task.sleep(for: .milliseconds(500))
+            if let settleFor {
+                if lines == previousLines {
+                    if clock.now - unchangedSince >= settleFor {
+                        break
+                    }
+                } else {
+                    previousLines = lines
+                    unchangedSince = clock.now
+                }
+            }
+            try await Task.sleep(for: .milliseconds(250))
         }
         return lines
     }

@@ -31,6 +31,7 @@ final class AndroidInputTests: XCTestCase {
     private static let buttonID = "io.apkrun.fixture.hellotext:id/increment_button"
     private static let contextTargetID = "io.apkrun.fixture.hellotext:id/context_target"
     private static let clickPrefix = "APKRUN-FIXTURE: click "
+    private static let debugReadPrefix = "APKRUN-FIXTURE: debug read "
     private static let rowPrefix = "APKRUN-FIXTURE: scroll first="
 
     override func setUpWithError() throws {
@@ -72,7 +73,9 @@ final class AndroidInputTests: XCTestCase {
                 try await pointer.click(at: target)
                 try await Task.sleep(for: .milliseconds(100))
             }
-            let clickLines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
+            let clickLines = try await run.fixtureLog(
+                until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 },
+                settleFor: .seconds(1))
             XCTAssertEqual(AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix), Array(1...100))
             let counters = await run.inputCounters()
             XCTAssertGreaterThanOrEqual(
@@ -91,11 +94,12 @@ final class AndroidInputTests: XCTestCase {
             _ = try await run.adb.shell(
                 "am broadcast -a io.apkrun.fixture.hellotext.debug.READ -p \(Self.helloText)")
 
-            let readLines = try await run.fixtureLog { lines in
-                lines.contains { $0.contains("APKRUN-FIXTURE: debug read 100") }
-            }
-            XCTAssertTrue(
-                readLines.contains { $0.contains("APKRUN-FIXTURE: debug read 100") },
+            let readLines = try await run.fixtureLog(until: { lines in
+                lines.contains { $0.contains(Self.debugReadPrefix) }
+            }, settleFor: .seconds(1))
+            XCTAssertEqual(
+                AndroidInputRun.numbers(in: readLines, after: Self.debugReadPrefix),
+                [100],
                 "the reopened store did not report the 100 saved clicks")
         }
     }

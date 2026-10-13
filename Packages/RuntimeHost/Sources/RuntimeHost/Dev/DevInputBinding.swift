@@ -19,6 +19,7 @@ struct DevInputBinding: Sendable {
     /// Binds the route now, and again after each restart of the agent, until the task is cancelled. A failure is
     /// reported once, and the binding tries again at the next look.
     func run(report: @escaping @Sendable (DevBootEvent) -> Void) async {
+        let logger = APKLogger(category: InputLogCategory.route, sink: logSink)
         var channel: GuestInputChannel?
         var boundToken: Data?
         var reportedFailure = false
@@ -30,11 +31,17 @@ struct DevInputBinding: Sendable {
                 }
                 if token != boundToken || !usable {
                     do {
+                        let rebinding = channel != nil
                         let next = try await agent.inputChannel()
                         await route.bind(router: InputRouter(channel: next, logSink: logSink))
                         channel = next
                         boundToken = token
                         reportedFailure = false
+                        if rebinding {
+                            // The previous connection was released with its control session (#101).
+                            logger.notice("The input route is bound again to the input connection of the new session")
+                            report(.message("input is bound again to a new input connection"))
+                        }
                         report(.message("input is bound to display 0"))
                         report(.message("adb shell commands so far: \(await agent.adbShellInvocationCount)"))
                     } catch {

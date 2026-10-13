@@ -1,3 +1,4 @@
+import DiagnosticsCore
 import Foundation
 import GuestProtocol
 import InputCore
@@ -366,6 +367,7 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
     // The input connection of the first session, bound to a route as the window's route is bound (DevInputBinding).
     let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: firstToken)
     _ = try await input.open()
+    #expect(await supervisor.attachSecondary(input, presenting: firstToken))
     let session = SessionID.app(UUID())
     let route = InputRouter(channel: GuestInputChannel(connection: input))
     await route.register(session: session, displayID: 0, state: .running)
@@ -388,6 +390,7 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
     #expect(secondToken != firstToken)
     let rebound = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: secondToken)
     _ = try await rebound.open()
+    #expect(await supervisor.attachSecondary(rebound, presenting: secondToken))
     let reboundRoute = InputRouter(channel: GuestInputChannel(connection: rebound))
     await reboundRoute.register(session: session, displayID: 0, state: .running)
     await reboundRoute.route([.cancelAll(InputTimestamp(hostNanos: 3))], from: session)
@@ -398,6 +401,61 @@ func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async thr
             return false
         }
     }
+    await supervisor.stop()
+}
+
+/// Keeps the entries that the supervisor writes (#101).
+private final class SupervisorLogRecorder: LogSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [LogEntry] = []
+
+    var entries: [LogEntry] {
+        lock.withLock { stored }
+    }
+
+    func write(_ entry: LogEntry) {
+        lock.withLock { stored.append(entry) }
+    }
+}
+
+/// The release of the secondary connections at a loss is logged once, with the operation of the recovery and the
+/// catalog code of the `runtime` domain. A secondary connection that presents another token is refused (#101).
+@Test(.timeLimit(.minutes(1)))
+func theReleaseOfTheSecondaryConnectionsIsLoggedWithItsOperation() async throws {
+    let recorder = SupervisorLogRecorder()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        logSink: recorder,
+        restartAgent: { _ in true }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let token = try #require(await supervisor.session?.sessionToken)
+    let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: token)
+    _ = try await input.open()
+    #expect(await supervisor.attachSecondary(input, presenting: token))
+    let other = Data(repeating: 9, count: 16)
+    let stranger = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: other)
+    _ = try await stranger.open()
+    #expect(await supervisor.attachSecondary(stranger, presenting: other) == false)
+    await stranger.close()
+
+    transport.agents[0].hangUp()
+    // The agents are the control, the input, the refused stranger, and the control of the new session.
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 4 }
+    let released = recorder.entries.filter { $0.publicMessage.contains("secondary connection") }
+    #expect(released.count == 1)
+    let entry = try #require(released.first)
+    #expect(entry.errorCode == "runtime.guestAgentOperationFailed")
+    #expect(entry.operationID != nil)
     await supervisor.stop()
 }
 

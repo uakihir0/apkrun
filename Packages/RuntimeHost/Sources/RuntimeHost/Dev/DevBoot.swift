@@ -243,6 +243,7 @@ public struct DevBoot: Sendable {
         }
         if let agent = await supervisor.developmentGuestAgent {
             onEvent(.message("adb shell commands so far: \(await agent.adbShellInvocationCount)"))
+            onEvent(.message("guest agent restarts so far: \(await agent.restartCount)"))
         }
         onEvent(.message("stopping Android"))
         await endInput(inputBinding, route: options.inputRoute)

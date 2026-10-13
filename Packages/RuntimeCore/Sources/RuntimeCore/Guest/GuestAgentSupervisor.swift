@@ -132,6 +132,9 @@ public actor GuestAgentSupervisor {
     private var generation: UInt64 = 0
     /// When the recent protocol violations happened.
     private var violations: [ContinuousClock.Instant] = []
+    /// The secondary connections of the current control session, such as the input connection. They belong to that
+    /// session, so the supervisor releases them when the session ends (guest-protocol.md §5.4, #101).
+    private var secondaries: [GuestConnection] = []
 
     /// Creates a supervisor. The timings are the design values unless a test sets shorter ones.
     public init(
@@ -227,7 +230,20 @@ public actor GuestAgentSupervisor {
         awaitingSnapshot = false
         buffered = []
         await closing?.close()
+        _ = await releaseSecondaries()
         state = .stopped
+    }
+
+    /// Attaches a secondary connection that presents the token of the current control session (guest-protocol.md
+    /// §5.4). The supervisor closes it when that session ends or the supervisor stops, so that no route keeps a
+    /// connection of an ended session (#101). It returns false, and keeps nothing, when there is no control session or
+    /// the token is another one. The caller then closes the connection.
+    public func attachSecondary(_ secondary: GuestConnection, presenting token: Data) -> Bool {
+        guard connection != nil, session?.sessionToken == token else {
+            return false
+        }
+        secondaries.append(secondary)
+        return true
     }
 
     /// Sends one operation through the current connection. Without a connection the call fails with
@@ -313,7 +329,9 @@ public actor GuestAgentSupervisor {
         }
         let cause = await ended.closeReason
         recovery?.cancel()
-        recovery = Task { await self.lost(.disconnected, cause: cause, from: ended) }
+        recovery = Task {
+            await OperationContext.withNew { @Sendable in await self.lost(.disconnected, cause: cause, from: ended) }
+        }
     }
 
     // MARK: - Keepalive and recovery
@@ -337,11 +355,16 @@ public actor GuestAgentSupervisor {
                     misses += 1
                     if await !current.isUsable {
                         misses = 0
-                        await lost(.disconnected, cause: await current.closeReason, from: current)
+                        let cause = await current.closeReason
+                        await OperationContext.withNew { @Sendable in
+                            await self.lost(.disconnected, cause: cause, from: current)
+                        }
                     } else if misses >= missLimit {
                         misses = 0
                         state = .unresponsive
-                        await lost(.unresponsive, cause: nil, from: current)
+                        await OperationContext.withNew { @Sendable in
+                            await self.lost(.unresponsive, cause: nil, from: current)
+                        }
                     }
                 }
             }
@@ -371,6 +394,12 @@ public actor GuestAgentSupervisor {
         consumer?.cancel()
         consumer = nil
         await dead.close()
+        // The secondary connections end with their control session (guest-protocol.md §5.4). They are released here,
+        // so that a route cannot send on them, and the route is bound again to the connections of the next session.
+        let released = await releaseSecondaries()
+        logger.warning(
+            "The control session ended, so \(released, .public) secondary connection(s) are released",
+            errorCode: "runtime.guestAgentOperationFailed")
         state = .connecting
         if let cause, recordViolation(cause) {
             state = .unavailable
@@ -424,6 +453,16 @@ public actor GuestAgentSupervisor {
                 delay = min(delay * 2, backoffMaximum)
             }
         }
+    }
+
+    /// Closes the secondary connections of the control session, and returns how many there were.
+    private func releaseSecondaries() async -> Int {
+        let released = secondaries
+        secondaries = []
+        for secondary in released {
+            await secondary.close()
+        }
+        return released.count
     }
 
     /// Counts a protocol violation (guest-protocol.md §12.2), and reports whether the count within

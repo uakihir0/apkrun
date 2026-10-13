@@ -54,6 +54,8 @@ public actor DevelopmentGuestAgent {
     private let logSink: (any LogSink)?
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
+    /// The restarts of the agent that were started within the budget, for the record of the boot (#101).
+    public private(set) var restartCount = 0
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
     private var generation: UInt64 = 0
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
@@ -164,7 +166,8 @@ public actor DevelopmentGuestAgent {
 
     /// The input channel of the control session (input.md §8, decision D11). The input connection opens on the first
     /// call, presents the control session's token, and is reused while it is usable. It is opened again when it is not
-    /// usable, or when the control session has another token, because a new control session refuses the old one.
+    /// usable, or when the control session has another token, because a new control session refuses the old one. The
+    /// supervisor releases the connection when its control session ends (guest-protocol.md §5.4, #101).
     public func inputChannel() async throws(GuestAgentFailure) -> GuestInputChannel {
         try requireAvailable()
         guard let token = await supervisor.session?.sessionToken else {
@@ -189,6 +192,12 @@ public actor DevelopmentGuestAgent {
         if let kept = await reusableInputConnection(token: token) {
             await connection.close()
             return GuestInputChannel(connection: kept)
+        }
+        // The supervisor releases the connection when its control session ends (#101). A session that ended while the
+        // connection opened refuses it, and the caller gets the failure of an unusable connection.
+        guard await supervisor.attachSecondary(connection, presenting: token) else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
         }
         await inputConnection?.close()
         inputConnection = connection
@@ -259,6 +268,7 @@ public actor DevelopmentGuestAgent {
             return false
         }
         logger.notice("Restarting the Guest Agent after a \(String(describing: loss), .public) loss")
+        restartCount += 1
         do {
             try await provisioner.startAgent()
             return true

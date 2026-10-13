@@ -18,9 +18,26 @@ class DebugCounterReceiver : BroadcastReceiver() {
             )
             return
         }
+        val action = intent.action
+        if (action == DebugCounterCommands.ACTION_INCREMENT || action == DebugCounterCommands.ACTION_READ) {
+            val pending = goAsync()
+            CounterOperationQueue.processWide.submit {
+                DebugCounterCommands(MainActivity.openCounter(context)).run(action)
+            }.whenComplete { line, failure ->
+                try {
+                    if (failure != null) {
+                        Log.e(MainActivity.LOG_TAG, "debug counter command failed: ${failure.message}")
+                    } else if (line != null) {
+                        Log.i(MainActivity.LOG_TAG, line)
+                    }
+                } finally {
+                    pending.finish()
+                }
+            }
+            return
+        }
         val line =
-            DebugCounterCommands(MainActivity.openCounter(context)).run(intent.action)
-                ?: DebugFixtureCommands().run(intent.action)
+            DebugFixtureCommands().run(action)
                 ?: return
         Log.i(MainActivity.LOG_TAG, line)
     }

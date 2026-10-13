@@ -30,7 +30,15 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         counter = openCounter(this)
         counterText = findViewById(R.id.counter_text)
-        showCount(counter.current())
+        CounterOperationQueue.processWide.submit { counter.current() }.whenComplete { value, failure ->
+            runOnUiThread {
+                if (failure == null) {
+                    showCount(value)
+                } else {
+                    Log.e(LOG_TAG, "counter read failed: ${failure.message}")
+                }
+            }
+        }
         findViewById<Button>(R.id.increment_button).setOnClickListener { click() }
         findViewById<Button>(R.id.details_button).setOnClickListener {
             startActivity(Intent(this, DetailsActivity::class.java))
@@ -61,12 +69,15 @@ class MainActivity : Activity() {
     }
 
     private fun click() {
-        try {
-            val value = counter.increment()
-            Log.i(LOG_TAG, "click $value")
-            showCount(value)
-        } catch (failure: IllegalStateException) {
-            Log.e(LOG_TAG, "click not saved: ${failure.message}")
+        CounterOperationQueue.processWide.submit { counter.increment() }.whenComplete { value, failure ->
+            runOnUiThread {
+                if (failure == null) {
+                    Log.i(LOG_TAG, "click $value")
+                    showCount(value)
+                } else {
+                    Log.e(LOG_TAG, "click not saved: ${failure.message}")
+                }
+            }
         }
     }
 
@@ -84,11 +95,17 @@ class MainActivity : Activity() {
         if (item.itemId != MENU_RESET) {
             return super.onContextItemSelected(item)
         }
-        try {
+        CounterOperationQueue.processWide.submit {
             counter.reset()
-            showCount(0)
-        } catch (failure: IllegalStateException) {
-            Log.e(LOG_TAG, "reset not saved: ${failure.message}")
+            0
+        }.whenComplete { value, failure ->
+            runOnUiThread {
+                if (failure == null) {
+                    showCount(value)
+                } else {
+                    Log.e(LOG_TAG, "reset not saved: ${failure.message}")
+                }
+            }
         }
         return true
     }

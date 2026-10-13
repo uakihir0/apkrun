@@ -22,9 +22,12 @@ public actor DevInputRoute {
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
     private var localCounters = InputCounters()
+    private let acknowledgeEveryBatch: Bool
 
-    /// Creates an unbound route.
-    public init() {}
+    /// Creates an unbound route. Tests can request an acknowledgement for each batch to localize input loss.
+    public init(acknowledgeEveryBatch: Bool = false) {
+        self.acknowledgeEveryBatch = acknowledgeEveryBatch
+    }
 
     /// Binds the route to `router` for `session`, which is registered on display 0 in the running state. A route that
     /// was bound before is unbound first.
@@ -60,7 +63,28 @@ public actor DevInputRoute {
             localCounters.droppedNotRunning += events.count
             return
         }
-        await router.route(events, from: session)
+        await router.route(events, from: session, acknowledgeEveryBatch: acknowledgeEveryBatch)
+    }
+
+    /// Sends an empty acknowledged batch after the events already routed through this session.
+    public func sendAcknowledgementFence() async throws -> UInt64? {
+        guard let router, let session else {
+            return nil
+        }
+        return try await router.sendAcknowledgementFence(for: session)
+    }
+
+    /// Highest batch sequence acknowledged on the currently bound guest connection.
+    public func lastAcknowledgedBatchSequence() async -> UInt64? {
+        await router?.lastAcknowledgedBatchSequence
+    }
+
+    /// A bounded prefix of acknowledgement sequences for diagnostic input tests.
+    public func acknowledgementHistory() async -> (batchSequences: [UInt64], truncated: Bool) {
+        guard let router else {
+            return ([], false)
+        }
+        return await router.acknowledgementHistorySnapshot()
     }
 
     /// The counts of the route: the router's, and the drops that happened before it.

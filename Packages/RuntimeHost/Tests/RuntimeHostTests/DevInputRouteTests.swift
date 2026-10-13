@@ -157,6 +157,20 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func anAcknowledgingRouteRequestsEveryAckAndSendsAnEmptyFence() async throws {
+    let channel = CollectingInputChannel()
+    let route = DevInputRoute(acknowledgeEveryBatch: true)
+    await route.bind(router: InputRouter(channel: channel))
+    await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
+    let fenceSequence = try #require(await route.sendAcknowledgementFence())
+
+    let batches = await channel.batches
+    #expect(batches.map(\.batchSeq) == [1, fenceSequence])
+    #expect(batches.map(\.ackRequested) == [true, true])
+    #expect(batches.last?.events.isEmpty == true)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aBatchOfMoreThan512EventsIsCutAt512() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()

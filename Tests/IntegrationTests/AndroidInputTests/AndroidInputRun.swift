@@ -167,6 +167,11 @@ final class AndroidInputRun {
         return lines
     }
 
+    /// The counters from the same route that delivered this run's window input.
+    func inputCounters() async -> InputCounters {
+        await route.counters()
+    }
+
     /// The integers that follow `prefix` on the lines that carry it, in order: `click 7` gives 7.
     static func numbers(in lines: [String], after prefix: String) -> [Int] {
         lines.compactMap { line in

@@ -61,6 +61,44 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
+    /// Diagnostic only: after all 100 successful-commit click logs, the count survives process death and a fresh READ.
+    func testOneHundredCommittedClicksSurviveForceStopAndRelaunch() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            _ = try await run.adb.shell("logcat -c")
+            let pointer = try run.pointer()
+            for _ in 0..<100 {
+                try await pointer.click(at: target)
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let clickLines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
+            XCTAssertEqual(AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix), Array(1...100))
+            let counters = await run.inputCounters()
+            XCTAssertGreaterThanOrEqual(
+                counters.eventsSent, 200, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(counters.droppedRate, 0, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(counters.droppedNotRunning, 0, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(counters.droppedInvalid, 0, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(counters.droppedChannel, 0, "input counters after 100 committed clicks: \(counters)")
+            XCTAssertEqual(counters.coalesced, 0, "input counters after 100 committed clicks: \(counters)")
+
+            try await run.adb.forceStop(Self.helloText)
+            XCTAssertNil(try await run.adb.pidof(Self.helloText), "force-stop left the fixture process running")
+            try await run.adb.startActivity(component: "\(Self.helloText)/.MainActivity")
+            _ = try await run.adb.shell("logcat -c")
+            _ = try await run.adb.shell(
+                "am broadcast -a io.apkrun.fixture.hellotext.debug.READ -p \(Self.helloText)")
+
+            let readLines = try await run.fixtureLog { lines in
+                lines.contains { $0.contains("APKRUN-FIXTURE: debug read 100") }
+            }
+            XCTAssertTrue(
+                readLines.contains { $0.contains("APKRUN-FIXTURE: debug read 100") },
+                "the reopened store did not report the 100 saved clicks")
+        }
+    }
+
     /// Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it the way macOS reports them (#024).
     /// The content moves up for a negative delta, and then the first visible row index grows.
     func testDragAndScrollMoveTheHelloComposeList() async throws {

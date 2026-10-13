@@ -183,7 +183,7 @@
           },
           {
             "key": "APKRUN_FIXTURE_APK",
-            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "value": "/tmp/apkrun-experiment-103/HelloText.apk",
             "enabled": true
           },
           {

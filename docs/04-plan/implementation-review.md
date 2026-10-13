@@ -18020,3 +18020,139 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 
 **Risk.** The click loss is intermittent: one failed run in six full runs, and 10 of 600 clicks in the CLI batches. The suite's click case therefore is not a stable gate yet, and it is #024's open work. The #025 closure does not depend on it, because its cases passed in every run from `full4` on.
 
+## IR-1295: The click-loss diagnosis build: the stages it logs, how the lines join, and what the stored count checks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §8, §11; IR-1247, IR-1290 |
+
+**Choice.**
+1. The diagnosis build is a separate worktree (`apkrun-wt/cl24-diag`) on the experiment branch `experiment/024-click-loss-diag` (commit `946af88`, from `dacd801`). It is never merged (AGENTS §11), and the product branch has no trace code. Its patch is `/tmp/apkrun-cl24/diag.patch`.
+2. Each click is logged at these stages. The Mac view logs `TRACE view` (event type and host time in ns, the `NSEvent.timestamp`). The translator logs `TRACE out` (kind and host time), and the route logs `TRACE route`. The guest logs `APKRUN-DIAG ev` (host time, kind, phase) before each touch event, and `APKRUN-DIAG inject` (mode, action, `MotionEvent.eventTime`, result) after each injection. The Count button's `OnTouchListener` logs `APKRUN-DIAG view`, and the click logs `APKRUN-FIXTURE: click N` and `APKRUN-DIAG clicked stored=N`. The listener changed between runs. E1 used the first version, which logs only the action and `eventTime`. E2 and the WAIT batches used the later versions, which also log `isPressed`, `isEnabled`, `hasWindowFocus`, the inside test, and `isShown`, and a post after the click logs `APKRUN-DIAG after-click pressed=`. The listener returns false, so the Button's own handling is not changed, but it runs in the touch path.
+3. The lines join by two keys. The host time links a Mac event to its guest event, and `eventTime` links a guest injection to the Button's listener line. A click line is attributed to the most recent UP view line before it, because the Button posts its click and the click can follow a later DOWN. The join is `/tmp/apkrun-cl24/tools/join.py`, and its outputs are `/tmp/apkrun-cl24/logs/join-E1.txt`, `join-E2.txt`, and `join-W1.txt`.
+4. The stored count (`click_count` in `shared_prefs/hellotext.xml`, read with `run-as`) is read before and after each batch. It counts the clicks that the app performed. In all 18 batches of the diagnosis and product sessions (E1 to R5), the stored delta equals the number of `APKRUN-FIXTURE: click` lines in the batch, so the log path lost no click.
+5. The guest has two modes in the diagnosis build: ASYNC (`guest/diag-async`, the product mode) and WAIT_FOR_RESULT (`guest/diag-wait`, a switch that exists only in the diagnosis build).
+
+**Reason.** The brief asks for each lost click to be placed at a stage. The keys are exact: the host time is the same nanosecond value on the Mac and in the guest, and the framework keeps `eventTime` on the event the Button receives. The stored count separates a loss before the app's `click()` from a line that did not reach the log.
+
+**Risk.** The trace adds log lines and a listener in the touch path, which can change timing. The WAIT build blocks the injector until the app has handled each event, and the guest stamps `eventTime` when it receives an event. Under WAIT the press durations therefore differ from the product's (IR-1297). The ASYNC latency (from the inject line to the listener line) is valid only for ASYNC. The Mac trace is a hand-applied copy of the closeout's `apply-trace.py`, which no longer applies to `dacd801`.
+
+## IR-1296: The lost click's DOWN and UP both reached the Button, and the Button's press was cleared before the UP: the traces place the loss after delivery
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §4.2, §11, §15; IR-1247, IR-1290, IR-1295 |
+
+**Choice.**
+1. The traced losses are E1 (ASYNC, click 2 lost), E2 (ASYNC, click 2 lost), and W1 (WAIT, clicks 2, 74, and 87 lost). In each batch the Mac view received 100 DOWN and 100 UP, the translator emitted 100 touch down and 100 touch up, the guest received 200 touch events and injected all of them, and the Button's listener received 100 DOWN and 100 UP, joined by `eventTime`. For each lost click the DOWN and the UP both reached the listener, and no click line followed the UP. The stored count agrees with the log in every batch. The product losses (P2, Q4, R4) were not traced, so their stage is not shown directly.
+2. The Button's pressed state explains the loss. In W1 the lines for click 2 are, in order: UP1 with `pressed=true`, click 789 (the click of UP1), DOWN2 with `pressed=true`, `after-click pressed=false`, and UP2 with `pressed=false`. The listener runs before the Button handles an event, so the `pressed=true` at DOWN2 is UP1's press, which the Button had not yet cleared. The press was cleared after DOWN2's listener ran and before UP2's listener ran. E2 shows the same pattern (UP1 `pressed=true`, DOWN2 `pressed=true`, UP2 `pressed=false`). With the press cleared, the UP posts no click. AOSP's `View` clears a press with a runnable that ACTION_UP posts (`UnsetPressedState`), and the order above fits that. The AOSP claim is from the source: the public SDK jar has no private classes, so it is not checked on this image.
+3. The stage is the Button's press-state handling, after delivery. It is not the translator, the injector, the router, or the log path (the stored count agrees with the log in every batch). It is not the counter either: the counter increments only in `click()`, so a click that does not run leaves the stored count unchanged.
+
+**Reason.** Each traced lost click has the full chain up to the listener, so the loss comes after delivery to the window. The pressed state is the only evidence inside the Button, and its order matches the framework's handling.
+
+**Risk.** What delays UP1's posted clear past DOWN2 is not determined. In E1 and E2 the UP before the lost click reached the Button's listener 64 ms and 99 ms after its injection, while the other UPs of those batches reached it within 16 ms (E1) and 4 ms (E2). The lost click's own press was 53 ms in both, which is the product's cadence. In W1 the lost click's press was 11 ms (IR-1297). The frame statistics of P2, which lost one click, show no janky and no high-input-latency frame, while P1 had 682 high-input-latency frames and no loss, so frame stalls do not explain every loss. The virtio-gpu error `response 0x1205 (command 0x106)` is logged in every boot (32 lines in the ASYNC diagnosis boot, 24 in the WAIT diagnosis boot, and 27 in the product boot, IR-1280). Its link to the delay is not tested.
+
+## IR-1297: WAIT_FOR_RESULT did not prevent the loss in the one batch that lost clicks under it, and its timing differs from the product's
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3) |
+| Affected documents | [input.md](../02-design/input.md) §8, §11; IR-1296, IR-1299 |
+
+**Choice.**
+1. The WAIT build (`INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT`, diagnosis only) ran as W1 (100 clicks, 3 lost: clicks 2, 74, and 87), W2 at a 150 ms gap (100 of 100), and W3 at a 50 ms gap (100 of 100). In W1 all 200 injections returned `ok=true`, so the framework dispatched each event, and the Button's listener received every DOWN and UP. Three clicks were still lost (IR-1296). The WAIT call returns after the Button's listener has run, so it does not wait for the runnables that the press posts. Whether WAIT lowers the rate is not shown: 3 losses in 100 clicks under WAIT, and 0 in 200 in the two later batches. That sample is too small to compare with the product's rate.
+2. The timing under WAIT is not the product's. The injector blocks until the app has handled each event, and the guest stamps `eventTime` when it receives the event. The lost click of W1 had a DOWN-to-UP press of 11 ms, against 53 ms for the same click in the ASYNC batches E1 and E2. So W1 does not test the product mode.
+3. The product keeps ASYNC, which §8 specifies. ASYNC returns `true` when the framework has queued the event, not when it is delivered. So the `input.dropped.*` counters count only refusals at the queue. In the product session of IR-1299 the counters at stop were `sent=2602 batches=2601` with every drop counter at 0, and the same session lost three clicks. Zero counters do not show that no click was lost. §11 now says so.
+
+**Reason.** The brief asks whether the framework refuses the events or the app misses them. The WAIT batch shows that the framework accepted and dispatched every event, including the lost ones. The WAIT mode changes the timing, so it cannot show whether WAIT would prevent losses in the product. §8 decides the mode, and a change needs a measured case in the product's mode.
+
+**Risk.** WAIT would make framework refusals visible in the counters, which is a real diagnostic gain. Changing the mode changes the decision in §8, so the maintainer decides it. It is not made here.
+
+## IR-1298: No product change: the traces place the loss in the Button's press handling, and the options the product has were tested or rejected
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §8, §11; IR-1296, IR-1297, IR-1299 |
+
+**Choice.** The product code is not changed, and no T0 or T1 test is added, because the traces do not show a cause in APKRun's code (IR-1296). The options, and the judgment on each:
+1. Pace the injector to the app's handling, with WAIT_FOR_RESULT on each event. Tested once (W1: 3 losses in 100, IR-1297), and the timing it changes is not the product's. Not adopted.
+2. A release-to-press gap, where the injector waits after each UP before the next DOWN. On the product boot, five batches at 150 ms lost 1 click in 500, and five at 50 ms lost 1 in 500 (Q and R, IR-1299). The rate did not change with the gap, so a gap is not shown to help. It would also hide the Android behaviour rather than show it. Not adopted.
+3. A retry on the Mac side that re-sends a click the app did not log: rejected. It hides the loss, as the brief requires, and it would count a click that the app never handled.
+4. Remove the UI lag that may open the race. The trigger is not determined (IR-1296), and it may lie in the guest's display and UI path, outside #024. A follow-up would take a GitHub number (AGENTS §11), and the maintainer decides whether to file it.
+5. Keep the residual loss and decide the wording of box 3. The product batches of IR-1299 lost 3 clicks in 1300, and 3 of 13 batches had one loss.
+
+**Reason.** The brief limits product changes to causes in APKRun's code. The traces do not show such a cause, and the APKRun-side levers tested (options 1 and 2) are not shown to help.
+
+**Risk.** A real user may see the same loss when two presses land within the app's UI lag. The `View` code is shared by every app, but no other app was tested. Whether box 3's "reliably" is met is the maintainer's decision.
+
+## IR-1299: Box 3 stays open: the three product batches were 100, 99, and 100, and the drop counters were zero
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3, box 6) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (acceptance box 3, Notes); IR-1250, IR-1290 |
+
+**Choice.**
+1. The product build is the worktree `apkrun-wt/cl24` at `dacd801`, with no code change. Its CLI is `/tmp/apkrun-cl24/products-product`, its guest is `/tmp/apkrun-cl24/guest/product` (version `0.1.0+dacd801`), and its fixture is the unmodified HelloText debug build `/tmp/apkrun-cl24/fixture-product/HelloText-debug.apk`. The VM is the odm7 image, bundle `/tmp/apkrun-odmr/odm7/bundle/android-bundle` (manifest SHA-256 `113e3d98…`, IR-1284), in the home `/tmp/apkrun-cl24/home`.
+2. Three consecutive batches of 100 clicks, with the default 50 ms hold and 50 ms gap and no sweep, were the batches the brief names: P1 logged 100 (stored delta 100), P2 logged 99 (delta 99), and P3 logged 100 (delta 100), at 00:06:02, 00:06:20, and 00:06:37 UTC. The batches were run on the unchanged product, because the brief's "after your change" has no change to test. They do not meet the rule of three consecutive batches of 100 of 100, so box 3 stays `[ ]`.
+3. The same boot also ran Q1 to Q5 (150 ms gap: 100, 100, 100, 99, 100) and R1 to R5 (50 ms gap: 100, 100, 100, 99, 100). Q1 to Q3 and R1 to R3 are each 100 of 100, so three consecutive 100s occurred in this boot, but losses occurred in P2, Q4, and R4, so no run covering the whole session is loss-free. The session total is 1297 logged of 1300 clicks.
+4. The counters printed at stop were `input counters: sent=2602 batches=2601 input.dropped.rate=0 input.dropped.notRunning=0 input.dropped.invalid=0 input.dropped.channel=0 input.coalesced=0`, and `adb shell commands so far: 13` at bind and at stop, so box 6 is not affected.
+5. The diagnosis batches (E1, E2, and W1 to W3) are not counted for box 3, because they ran on the trace build (IR-1295).
+
+**Reason.** Box 3 claims 100 of 100 "reliably". The brief's rule is three consecutive batches of 100 of 100 with zero drop counters, and P1 to P3 do not meet it. The unexplained loss (IR-1250) also stands against the word "reliably", whatever the consecutive runs show. The counters do not show the loss (IR-1297).
+
+**Risk.** The zero counters are not evidence of no loss. The batches are on the odm7 image, which is a development image (IR-1284). The maintainer may read box 3 differently, as IR-1250 and IR-1290 already raise.
+
+## IR-1300: The process record: the bundle, the home clone, the worktrees, and one stop that killed the wrong process
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | None in the repository. The scratch paths are in IR-1295 and IR-1299. |
+
+**Choice.**
+1. The bundle is `/tmp/apkrun-odmr/odm7/bundle/android-bundle` (IR-1284). The home `/tmp/apkrun-cl24/home` is a copy-on-write clone (`cp -c -R`) of the finished t2k home `/tmp/apkrun-t2k/home`, which was not changed. The clone's `Images/…/manifest.json` has the SHA-256 `113e3d98…`, the same as the odm7 bundle's `manifest.json` and its `variantManifestSHA256`. The clone's stale `Runtime/instance.lock` (owner pid 6020, not running) was removed.
+2. Worktrees: `apkrun-wt/cl24` on `task/024-click-loss` (product, docs only), and `apkrun-wt/cl24-diag` on `experiment/024-click-loss-diag` (diagnosis, not merged). Each has a copy of the ignored `ThirdParty/out` of the main checkout (`cp -c -R`, 12 GB), which the embedded CLI build needs for `EGL/egl.h`. No file of the main checkout was changed.
+3. Every VM ran under `lockf -k /tmp/apkrun-vm.lock`. The adb calls used `ADB_SERVER_SOCKET=tcp:localhost:15060`, this worker's own adb server, so the shared server on port 5037 was not used.
+4. One stop went wrong. At 00:00:45 UTC the stop script sent SIGINT to pid 91930, which was the `lockf` wrapper of the diagnosis boot, not the boot. The wrapper did not end within 60 s, so at 00:01:46 it received SIGKILL. Killing the wrapper released the lock, and the boot (pid 91932, `apkrun dev boot`) and its Virtualization VM service (pid 91934) kept running outside the lock. At 00:01:59 I sent SIGINT to 91932, which exited at 00:02:10. The VM ran without the lock for about 24 s (00:01:46 to 00:02:10). No VM process was visible after 00:02:10. I did not check the process list during the window, so another worker's start in it cannot be excluded. The stop script now matches the binary path only. The other stops ended with SIGINT: the first WAIT boot at 23:51:39 (it had stopped when checked at 23:52:49), and the product boot at 00:12:14 (stopped after 4 s).
+5. Commits carry no `Co-Authored-By` line, as the brief requires. The trace is on the experiment branch only.
+6. The scratch files are in `/tmp/apkrun-cl24/` (tools, logs, `logs/batches/index.txt` for the batch rows, the guests, the fixtures, and the home). The closeout's `topmost`, `zorder`, and helper binaries of `/tmp/apkrun-024/` were used read-only. `docs/04-plan/evidence/`, `~/.config/apkrun/dev-image-key`, and the stock image zip were not touched.
+
+**Reason.** The brief asks for these records, and the stop is recorded as it happened.
+
+**Risk.** The 24 s without the lock is the only exposure of the VM. The scratch home and builds are shared resources, and the t2k home was read only through the clone.
+
+## IR-1301: The adversarial review of the click-loss change, and how each finding was answered
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | IR-1295 to IR-1300; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 (Notes); [input.md](../02-design/input.md) §11 |
+
+**Choice.** One read-only reviewer (an Explore agent that could not edit files, run a VM, or run `lockf`) read the diff of `task/024-click-loss` against `main`, IR-1295 to IR-1300, and the logs. It gave twelve findings, and each was answered as follows.
+1. Blocker, the IR-1301 placeholder. Accepted. This entry replaces it.
+2. Major, the reading of the W1 press state, which said that DOWN2 set the press. Accepted. The listener runs before the Button handles an event, so the press at DOWN2's listener was UP1's (IR-1296).
+3. Major, judgments stated as facts in the titles and in the M03 and input.md notes. Accepted. The titles and notes say what the traces show, and the AOSP source claim is marked as not checked on this image.
+4. Major, the mechanism was traced in E1, E2, and W1 only, and the product losses were not traced. Accepted. IR-1296 says so, and IR-1295 says the trace listener is in the touch path.
+5. Major, "a WAIT injection would not have changed the outcome" was not supported, and the lost click of W1 had an 11 ms press. Accepted. The claim is removed, and IR-1297 gives the timing.
+6. Major, IR-1299's rule statement left out the Q and R batches. Accepted. IR-1299 gives Q1 to Q3 and R1 to R3, and why the box stays open.
+7. Minor, the "0 to 2 ms" latency claim was wrong for E1. Accepted. The other UPs were within 16 ms (E1) and 4 ms (E2).
+8. Minor, E1 had no pressed fields. Accepted. IR-1295 says that E1 used the first listener version.
+9. Minor, the virtio-gpu count was given for one boot only. Accepted. IR-1296 gives the count for each boot.
+10. Minor, the M03 label omitted that E1 started on 2026-10-12. Accepted.
+11. Nit, the IR-1298 title rested on one WAIT batch and two gap runs. Accepted. The title is reworded.
+12. Nit, the commit trailers were not yet checked. Handled at the commit: no `Co-Authored-By` line, and `Refs: #024`.
+
+**Reason.** Each answer was checked against the log it names, and the corrected numbers come from `/tmp/apkrun-cl24/logs`.
+
+**Risk.** The review did not run any batch. The W1 timing was found only in this review, so other WAIT-mode numbers in the logs may need the same check before anyone relies on them.

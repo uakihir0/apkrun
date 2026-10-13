@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import RuntimeCore
 import XCTest
 
 /// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.

@@ -30,6 +30,8 @@ public struct InputCounters: Equatable, Sendable {
     public var eventsSent = 0
     /// Batches sent on the input stream.
     public var batchesSent = 0
+    /// Guest acknowledgements received for batches that requested them.
+    public var acknowledgementsReceived = 0
 
     /// Creates counters with every count at zero.
     public init() {}
@@ -43,6 +45,7 @@ public struct InputCounters: Equatable, Sendable {
         coalesced += other.coalesced
         eventsSent += other.eventsSent
         batchesSent += other.batchesSent
+        acknowledgementsReceived += other.acknowledgementsReceived
     }
 }
 
@@ -52,7 +55,8 @@ extension InputCounters: CustomStringConvertible {
     public var description: String {
         "sent=\(eventsSent) batches=\(batchesSent) input.dropped.rate=\(droppedRate) "
             + "input.dropped.notRunning=\(droppedNotRunning) input.dropped.invalid=\(droppedInvalid) "
-            + "input.dropped.channel=\(droppedChannel) input.coalesced=\(coalesced)"
+            + "input.dropped.channel=\(droppedChannel) input.coalesced=\(coalesced) "
+            + "input.acks=\(acknowledgementsReceived)"
     }
 }
 
@@ -68,6 +72,8 @@ public actor InputRouter {
     public static let coalescingBacklogBytes = 64 * 1024
     /// The length of the rate window.
     private static let windowNanoseconds: UInt64 = 1_000_000_000
+    /// The maximum number of guest acknowledgement sequence numbers retained for diagnostic tests.
+    private static let acknowledgementHistoryCapacity = 4_096
 
     /// Returns the time in nanoseconds of a monotonic clock. The rate window and the cancel timestamps use it.
     public typealias Clock = @Sendable () -> UInt64
@@ -124,9 +130,15 @@ public actor InputRouter {
     private var turnTaken = false
     private var turnWaiters: [CheckedContinuation<Void, Never>] = []
     private var lastWarning: UInt64?
+    private var recordsAcknowledgementHistory = false
 
     /// What the router dropped, merged, and sent so far.
     public private(set) var counters = InputCounters()
+    /// Highest sequence acknowledged on this router's current guest connection.
+    public private(set) var lastAcknowledgedBatchSequence: UInt64?
+    /// A bounded prefix of acknowledgement sequence numbers and whether it was truncated.
+    private var acknowledgedBatchSequenceHistory: [UInt64] = []
+    private var acknowledgementHistoryWasTruncated = false
 
     /// Creates a router over `channel`. The acks of the channel are read for the rejected counts (input.md §8).
     public init(
@@ -165,14 +177,22 @@ public actor InputRouter {
 
     /// Routes a batch of events from `session`, in order (runtime-api.md §7.3). Dropped events are counted, and nothing
     /// is returned to the caller.
-    public nonisolated func route(_ events: [InputEvent], from session: SessionID) async {
+    public nonisolated func route(
+        _ events: [InputEvent],
+        from session: SessionID,
+        acknowledgeEveryBatch: Bool = false
+    ) async {
         await Perf.interval("input.route") {
-            await self.routeBatch(events, from: session)
+            await self.routeBatch(events, from: session, acknowledgeEveryBatch: acknowledgeEveryBatch)
         }
     }
 
     /// Routes one batch. `route` measures it with the `input.route` signpost interval.
-    private func routeBatch(_ events: [InputEvent], from session: SessionID) async {
+    private func routeBatch(
+        _ events: [InputEvent],
+        from session: SessionID,
+        acknowledgeEveryBatch: Bool
+    ) async {
         guard !events.isEmpty else {
             return
         }
@@ -194,6 +214,9 @@ public actor InputRouter {
             counters.droppedNotRunning += events.count
             return
         }
+        if acknowledgeEveryBatch {
+            recordsAcknowledgementHistory = true
+        }
         let now = clock()
         guard let admission = sessions[session]?.window.admit(events, at: now, limit: Self.eventsPerSecond) else {
             return
@@ -210,7 +233,12 @@ public actor InputRouter {
         if backlog > Self.coalescingBacklogBytes {
             accepted = coalesce(accepted)
         }
-        await send(accepted, displayID: current.displayID, at: now)
+        await send(
+            accepted,
+            displayID: current.displayID,
+            at: now,
+            acknowledgeEveryBatch: acknowledgeEveryBatch
+        )
     }
 
     /// Ends a session. Its open gestures, buttons, and keys are cancelled on the guest, after the batches that were
@@ -225,15 +253,52 @@ public actor InputRouter {
         await send([.cancelAll(InputTimestamp(hostNanos: now))], displayID: ended.displayID, at: now)
     }
 
+    /// Sends an empty acknowledged batch after earlier routes. Development tests use this to wait until the guest
+    /// input worker has processed the batches already sent on this session.
+    public func sendAcknowledgementFence(for session: SessionID) async throws -> UInt64? {
+        guard let arrival = sessions[session], arrival.state.acceptsInput else {
+            return nil
+        }
+        await takeTurn()
+        defer { releaseTurn() }
+        guard let current = sessions[session], current.generation == arrival.generation, current.state.acceptsInput
+        else {
+            return nil
+        }
+
+        recordsAcknowledgementHistory = true
+        let sequence = nextBatchSequence
+        var batch = GPInputBatch()
+        batch.batchSeq = sequence
+        batch.displayID = current.displayID
+        batch.hostSendNanos = clock()
+        batch.ackRequested = true
+        try await channel.send(batch)
+        nextBatchSequence += 1
+        counters.batchesSent += 1
+        return sequence
+    }
+
+    /// Returns one consistent bounded snapshot of the diagnostic acknowledgement sequence history.
+    public func acknowledgementHistorySnapshot() -> (batchSequences: [UInt64], truncated: Bool) {
+        (acknowledgedBatchSequenceHistory, acknowledgementHistoryWasTruncated)
+    }
+
     // MARK: - Sending
 
     /// Sends `events` as batches. The caller holds the turn, so the batches keep their order across calls.
-    private func send(_ events: [InputEvent], displayID: Int32, at now: UInt64) async {
+    private func send(
+        _ events: [InputEvent],
+        displayID: Int32,
+        at now: UInt64,
+        acknowledgeEveryBatch: Bool = false
+    ) async {
         let batches = GuestInputEncoding.batches(
             events,
             displayID: displayID,
             firstSequence: nextBatchSequence,
-            hostSendNanos: now
+            hostSendNanos: now,
+            acknowledgeEveryBatch: acknowledgeEveryBatch
         )
         nextBatchSequence += UInt64(batches.count)
         for (index, batch) in batches.enumerated() {
@@ -329,6 +394,15 @@ public actor InputRouter {
 
     /// Adds the events that the guest rejected to the invalid count.
     private func recordAck(_ ack: GPInputAck) {
+        counters.acknowledgementsReceived += 1
+        lastAcknowledgedBatchSequence = max(lastAcknowledgedBatchSequence ?? 0, ack.batchSeq)
+        if recordsAcknowledgementHistory {
+            if acknowledgedBatchSequenceHistory.count < Self.acknowledgementHistoryCapacity {
+                acknowledgedBatchSequenceHistory.append(ack.batchSeq)
+            } else {
+                acknowledgementHistoryWasTruncated = true
+            }
+        }
         guard ack.rejectedEvents > 0 else {
             return
         }

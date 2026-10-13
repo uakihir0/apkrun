@@ -18170,3 +18170,26 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 **Reason.** The trace work of IR-1295 to IR-1301 finds the stage of the loss, but not its cause. The cause lies in the guest's display and UI path, which is outside #024, so it needs its own task (AGENTS §11). Leaving the loss without a number would hide it from the next maintainer.
 
 **Risk.** Filing a follow-up does not decide whether box 3's "reliably" is met today. That wording remains the maintainer's decision (IR-1298, option 5).
+
+## IR-1303: Scratch cleanup on 2026-10-13: what was removed, what was kept, and why
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | none (housekeeping) |
+| Affected documents | [M02-graphics.md](issues/M02-graphics.md) #099 (the experiment bundle named there is kept); [README.md](issues/README.md) §5 |
+
+**Choice.** Removed, because each is regenerable or superseded:
+- The installed-image copies (`Images/`) inside five scratch boot homes: `/tmp/apkrun-022-sf-home`, `/tmp/apkrun-024/home`, `/tmp/apkrun-025/home`, `/tmp/apkrun-odmr/home9`, and `home10`. Their `Logs/` and `Runtime/` stay, because the logs are the record of the device runs.
+- The reference bundles `/tmp/apkrun-odmc/odm`, `odm2`, and `odm3`, the ODM experiments that odm4 superseded (11 GB).
+- Five worktrees whose branches hold their commits: `cl24-diag` (branch `experiment/024-click-loss-diag`), `u95`, `perm`, `egl`, and `p20`. Their only uncommitted content was regenerable (`Images/tools/.venv`, `Images/work`).
+
+Kept, and why:
+- `/tmp/apkrun-odmc/odm4` (the G3 gate input, named in `docs/04-plan/evidence/G3/report.txt`) and its session logs.
+- `/tmp/apkrun-odmr/odm5`, `odm6`, and `odm7` (the odm7 variant is the one IR-1284 names, and odm5 and odm6 are the table rows of IR-1284).
+- `/tmp/apkrun-022-sepol-work` and `/tmp/apkrun-099*` (the experiment bundles that the M02 and IR texts name).
+- The worktrees `099`, `avb`, and `r101`, because they hold unmerged or uncommitted work.
+
+**Reason.** The disk was near its limit, and the removed items can be rebuilt from the scripts or are superseded. The removed image copies are clones of bundles that stay, so their space is returned only when the source is removed too. The logs and the experiment bundles that the records name stay, so that the review can follow the evidence.
+
+**Risk.** An IR entry that names a removed path cannot be reproduced from that path. The entry text still records the outcome. A rebuild from the scripts takes time and needs the stock zip.

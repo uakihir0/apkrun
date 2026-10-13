@@ -1073,3 +1073,36 @@ A click from the Mac window on a text field focuses the field, and the next key 
 ### Notes
 
 - **Origin:** IR-1270. The maintainer may move the task to #025.
+
+---
+
+## #103 A click is lost when two presses land inside the app's UI lag
+
+| Field | Value |
+|---|---|
+| Milestone | M3 (v0.1), follow-up of #024 |
+| Depends on | #024 |
+| Requirements | FR-IN-01 (a press reaches the app as a tap). Constraints: NFR-PERF-03 |
+| Design | [../../02-design/input.md](../../02-design/input.md) §8, §11 |
+| Modules / paths | Guest display and UI path (outside #024); RuntimeHost input path for the trace |
+| Risks / questions | IR-1296 to IR-1299 |
+
+### Goal
+
+A press sequence from the Mac window produces a click in every attempt. Today about 3 of 1300 product presses lose their click (IR-1299). The Button's press state is cleared before the UP posts the click (IR-1296).
+
+### Scope
+
+- Find what delays the clear of the previous press state: the frame timing, the main-thread lag, or the UI work that runs between two presses.
+- Remove that cause in the guest, or show with evidence that no product change can remove it.
+- Out of scope: a retry on the Mac side (rejected by IR-1298).
+
+### Acceptance
+
+- [ ] Three consecutive batches of 100 product clicks are 100 of 100, with the drop counters at zero (the counters of #024).
+- [ ] The cause is recorded in an IR entry, with the framework code of the image that was checked.
+- [ ] #024 box 3 is ticked from that evidence.
+
+### Notes
+
+- **Origin:** IR-1298, the decision not to change the product code in #024.

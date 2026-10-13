@@ -118,6 +118,7 @@ Section references in a task entry: a bare `§N` refers to the first document in
 | #024 | Pointer input | M3 | #023, #072 | | [input.md](../../02-design/input.md) |
 | #101 | Input route rebinds after the guest agent is lost (follow-up of #024) | M3 | #024 | | [input.md](../../02-design/input.md) §3, [guest-components.md](../../02-design/guest-components.md) §3.3 |
 | #102 | A pointer tap reliably focuses a text field (follow-up of #024 and #025) | M3 | #024 | | [input.md](../../02-design/input.md) §4.1, §7.3 |
+| #103 | A click is lost when two presses land inside the app's UI lag (follow-up of #024) | M3 | #024 | | [input.md](../../02-design/input.md) §8, §11 |
 | #025 | Keyboard input | M3 | #024 | | [input.md](../../02-design/input.md) |
 | #026 | HelloText in a native Mac window | M3 | #023, #024, #025 | G4 | [display-and-windowing.md](../../02-design/display-and-windowing.md) §7 |
 | #027 | RuntimeCore package operations | M3 | #026 | | [package-store.md](../../02-design/package-store.md) |

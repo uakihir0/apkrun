@@ -18156,3 +18156,17 @@ The final AndroidInputTests run on this tree is `full9`: `Executed 7 tests, with
 **Reason.** Each answer was checked against the log it names, and the corrected numbers come from `/tmp/apkrun-cl24/logs`.
 
 **Risk.** The review did not run any batch. The W1 timing was found only in this review, so other WAIT-mode numbers in the logs may need the same check before anyone relies on them.
+
+## IR-1302: The residual click loss is filed as the follow-up #103, and #024 box 3 stays open
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), follow-up #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [README.md](issues/README.md) §3 |
+
+**Choice.** The residual loss from IR-1298 is filed as task #103 (GitHub issue #103), with its own entry in M3 and a row in the task index. The #024 box stays open. The follow-up is filed now, and not left for the maintainer to file, so that the open work is tracked (AGENTS §11).
+
+**Reason.** The trace work of IR-1295 to IR-1301 finds the stage of the loss, but not its cause. The cause lies in the guest's display and UI path, which is outside #024, so it needs its own task (AGENTS §11). Leaving the loss without a number would hide it from the next maintainer.
+
+**Risk.** Filing a follow-up does not decide whether box 3's "reliably" is met today. That wording remains the maintainer's decision (IR-1298, option 5).

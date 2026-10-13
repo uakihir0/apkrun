@@ -1,5 +1,6 @@
 import Foundation
 import GuestProtocol
+import InputCore
 import Testing
 
 @testable import RuntimeCore
@@ -335,6 +336,69 @@ func fiveProtocolViolationsStopTheReconnection() async throws {
         #expect(error == .requiredAgentUnavailable)
     }
     #expect(transport.agents.count == GuestAgentSupervisor.violationLimit)
+}
+
+/// The input route across a lost control session (#101; guest-protocol.md §5.4, input.md §7.1). The input connection of
+/// a session belongs to that session, so it is released with it. The events that the route sends after the loss fail on
+/// the released connection and are counted as `input.dropped.channel`. A connection that presents the new session's token
+/// carries the route again.
+@Test(.timeLimit(.minutes(1)))
+func aLostControlSessionReleasesItsInputConnectionAndTheRouteRebinds() async throws {
+    let losses = LossLog()
+    let transport = InMemoryTransport { endpoint, agent, _ in
+        agent.sendHello()
+        agent.answer = { request in
+            isGetSnapshot(request) ? .getSnapshot(snapshot(displays: [0])) : pongResult(for: request)
+        }
+    }
+    let supervisor = GuestAgentSupervisor(
+        transport: transport,
+        keepaliveInterval: .seconds(60),
+        backoffMinimum: .milliseconds(10),
+        backoffMaximum: .milliseconds(20),
+        restartAgent: { loss in
+            losses.record(loss)
+            return true
+        }
+    )
+    try await supervisor.start(connectTimeout: .seconds(2))
+    let firstToken = try #require(await supervisor.session?.sessionToken)
+    // The input connection of the first session, bound to a route as the window's route is bound (DevInputBinding).
+    let input = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: firstToken)
+    _ = try await input.open()
+    let session = SessionID.app(UUID())
+    let route = InputRouter(channel: GuestInputChannel(connection: input))
+    await route.register(session: session, displayID: 0, state: .running)
+    await route.route([.cancelAll(InputTimestamp(hostNanos: 1))], from: session)
+    #expect(await route.counters.batchesSent == 1)
+
+    transport.agents[0].hangUp()
+    try await eventually { await supervisor.state == .ready && transport.agents.count >= 3 }
+    #expect(losses.all == [.disconnected])
+
+    // The first session has ended, so its input connection is released, and the events that the route sends now are
+    // counted as dropped on the channel.
+    #expect(await input.isUsable == false)
+    await route.route([.cancelAll(InputTimestamp(hostNanos: 2))], from: session)
+    #expect(await route.counters.droppedChannel == 1)
+    #expect(await route.counters.batchesSent == 1)
+
+    // The new session has its own token, and a connection that presents it carries the route again.
+    let secondToken = try #require(await supervisor.session?.sessionToken)
+    #expect(secondToken != firstToken)
+    let rebound = GuestConnection(endpoint: .guestInput, transport: transport, presentedToken: secondToken)
+    _ = try await rebound.open()
+    let reboundRoute = InputRouter(channel: GuestInputChannel(connection: rebound))
+    await reboundRoute.register(session: session, displayID: 0, state: .running)
+    await reboundRoute.route([.cancelAll(InputTimestamp(hostNanos: 3))], from: session)
+    #expect(await reboundRoute.counters.batchesSent == 1)
+    try await eventually {
+        transport.agents[3].envelopes.contains { envelope in
+            if case .inputBatch? = envelope.body { return true }
+            return false
+        }
+    }
+    await supervisor.stop()
 }
 
 // MARK: - The restart budget, the snapshot state, and the bundle

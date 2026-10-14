@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import IOSurface
 import InputCore
@@ -18,6 +19,15 @@ enum AndroidInputRunFailure: Error, Equatable {
     case appDidNotStart(String)
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
+    case inputRouteUnbound
+    case windowNotActive
+    case ambiguousDisplay
+    case cannotCreateSystemEvent
+}
+
+enum InputPointerDelivery: Sendable, Equatable {
+    case directView
+    case windowServer
 }
 
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
@@ -33,6 +43,7 @@ final class AndroidInputRun {
 
     let adb: AdbClient
     private let home: URL
+    private let pointerDelivery: InputPointerDelivery
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route = DevInputRoute()
     private let stop = AsyncStream.makeStream(of: Void.self)
@@ -40,15 +51,25 @@ final class AndroidInputRun {
     private var frames: DisplayFrames?
     private var framesSeen = 0
     private var window: DisplayWindow?
+    private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient) {
+    private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
         self.home = home
         self.adb = adb
+        self.pointerDelivery = pointerDelivery
     }
 
     /// Runs `body` on a boot with the window and input, after `apk` is installed and `package` is started on display 0.
-    static func with(apk: URL, package: String, _ body: (AndroidInputRun) async throws -> Void) async throws {
+    static func with(
+        apk: URL,
+        package: String,
+        pointerDelivery: InputPointerDelivery = .directView,
+        _ body: (AndroidInputRun) async throws -> Void
+    ) async throws {
+        if pointerDelivery == .windowServer, !CGPreflightPostEventAccess() {
+            throw XCTSkip("WindowServer input needs Accessibility permission on the dedicated lab GUI session.")
+        }
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
             throw XCTSkip(
                 "APKRUN_GUEST_DIR is not set. Build the Guest Agent bundle with scripts/build-guest.sh --out.")
@@ -62,8 +83,17 @@ final class AndroidInputRun {
             setenv("ANDROID_HOME", sdk, 1)
         }
         let home = try AndroidBootFixture.makeHome()
-        _ = try await AndroidBootFixture(home: home, bundle: bundle)
-        let run = AndroidInputRun(home: home, adb: AdbClient(executable: adbExecutable))
+        do {
+            _ = try await AndroidBootFixture(home: home, bundle: bundle)
+        } catch {
+            VMRunResources.removeHomeOrReport(home)
+            throw error
+        }
+        let run = AndroidInputRun(
+            home: home,
+            adb: AdbClient(executable: adbExecutable),
+            pointerDelivery: pointerDelivery
+        )
         run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
         do {
             try await run.prepare(apk: apk, package: package)
@@ -81,7 +111,80 @@ final class AndroidInputRun {
         let size = view.bounds.size
         let mapper = DisplayGeometry.coordinateMapper(
             contentSize: size, in: size, pixelWidth: Self.width, pixelHeight: Self.height, generation: 1)
-        return InputPointer(window: window, view: view, mapper: mapper)
+        return InputPointer(window: window, view: view, mapper: mapper, delivery: pointerDelivery)
+    }
+
+    /// Activates the display window before the test posts system mouse events.
+    func prepareForWindowServerPointerDispatch() async throws {
+        guard pointerDelivery == .windowServer else {
+            throw AndroidInputRunFailure.windowNotActive
+        }
+        guard NSScreen.screens.count == 1 else {
+            throw AndroidInputRunFailure.ambiguousDisplay
+        }
+        let (window, view) = try windowAndView()
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if NSApplication.shared.isActive, window.isKeyWindow {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw AndroidInputRunFailure.windowNotActive
+    }
+
+    /// Waits until the window sink has routed all previously received view events.
+    func drainInput() async throws {
+        guard let inputSink else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        await inputSink.drain()
+    }
+
+    /// The route counters after all previously received view events have been routed.
+    func inputCounters() async throws -> InputCounters {
+        try await drainInput()
+        return await route.counters()
+    }
+
+    /// Enables bounded guest ACK capture for an explicitly opted-in diagnostic run.
+    func startAcknowledgementHistoryCapture() async throws -> InputCounters {
+        guard inputSink != nil else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        guard let counters = await route.startAcknowledgementHistoryCapture() else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        return counters
+    }
+
+    /// The bounded history of guest ACKs after all previously received view events have been routed.
+    func acknowledgementHistory() async throws -> InputAcknowledgementHistory {
+        try await drainInput()
+        return await route.acknowledgementHistory()
+    }
+
+    /// Waits for the ACK that covers `batchSequence`, and returns the complete bounded ACK history.
+    func waitForAcknowledgement(through batchSequence: UInt64) async throws -> InputAcknowledgementHistory {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            let history = try await acknowledgementHistory()
+            if history.discardedRecords > 0 {
+                throw AndroidInputRunFailure.timedOut(
+                    "ACK history overflowed before sequence \(batchSequence)")
+            }
+            if history.records.contains(where: { $0.batchSequence == batchSequence }) {
+                return history
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let history = try await acknowledgementHistory()
+        throw AndroidInputRunFailure.timedOut(
+            "input ACK \(batchSequence); received \(history.records.map(\.batchSequence))")
     }
 
     /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
@@ -153,16 +256,17 @@ final class AndroidInputRun {
         return unique.isEmpty ? "no nodes in the dump" : unique.joined(separator: ", ")
     }
 
-    /// The fixture's log lines, polled every 500 ms until `enough` holds or 30 s have passed.
-    func fixtureLog(until enough: ([String]) -> Bool) async throws -> [String] {
+    /// The fixture's log lines, polled every 500 ms until `enough` holds or `timeout` has passed.
+    func fixtureLog(until enough: ([String]) -> Bool, timeout: Duration = .seconds(30)) async throws -> [String] {
+        let deadline = ContinuousClock.now + timeout
         var lines: [String] = []
-        for _ in 0..<60 {
+        while ContinuousClock.now < deadline {
             let output = try await adb.shell("logcat -d -s APKRUN-FIXTURE").output
             lines = output.split(separator: "\n").map(String.init)
             if enough(lines) {
-                break
+                return lines
             }
-            try await Task.sleep(for: .milliseconds(500))
+            try await Task.sleep(for: min(.milliseconds(500), deadline - .now))
         }
         return lines
     }
@@ -184,6 +288,7 @@ final class AndroidInputRun {
 
     /// Ends the input and the window, stops Android, and removes the home, in that order.
     func finish() async {
+        _ = await route.stopAcknowledgementHistoryCapture()
         window?.close()
         stop.continuation.yield(())
         await boot?.value
@@ -226,11 +331,13 @@ final class AndroidInputRun {
         case .attached(let surfaces):
             let source = DisplayFrames(surfaces: surfaces, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
+            let sink = WireSink(route: route)
             let window = DisplayWindow(
-                source: source, title: Self.windowTitle, backingScale: scale, inputSink: WireSink(route: route))
+                source: source, title: Self.windowTitle, backingScale: scale, inputSink: sink)
             window.show()
             frames = source
             self.window = window
+            inputSink = sink
         case .frameReady(let generation, let bufferIndex, let sequence):
             framesSeen += 1
             frames?.ingest(generation: generation, bufferIndex: bufferIndex, sequence: sequence)
@@ -288,38 +395,60 @@ final class AndroidInputRun {
     }
 }
 
-/// Posts AppKit pointer events into the window's content view, which receives them as the window delivers them.
-///
-/// The view's mouse methods are called directly. A window that is not key does not deliver a click, because the view
-/// refuses the first mouse (`acceptsFirstMouse`), and the test host is never key.
+/// Delivers pointer events either directly to the view or through the WindowServer.
 @MainActor
 struct InputPointer {
     let window: NSWindow
     let view: IOSurfaceLayerView
     let mapper: CoordinateMapper
+    let delivery: InputPointerDelivery
 
-    func click(at pixel: InputPixel) async throws {
-        deliver(.leftMouseDown, at: pixel)
+    func click(at pixel: InputPixel, interClickGap: Duration = .zero) async throws {
+        try deliver(.leftMouseDown, at: pixel)
+        var released = false
+        defer {
+            if !released {
+                try? deliver(.leftMouseUp, at: pixel)
+            }
+        }
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.leftMouseUp, at: pixel)
+        try deliver(.leftMouseUp, at: pixel)
+        released = true
+        if interClickGap > .zero {
+            try await Task.sleep(for: interClickGap)
+        }
     }
 
     func rightClick(at pixel: InputPixel) async throws {
-        deliver(.rightMouseDown, at: pixel)
+        try deliver(.rightMouseDown, at: pixel)
+        var released = false
+        defer {
+            if !released {
+                try? deliver(.rightMouseUp, at: pixel)
+            }
+        }
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.rightMouseUp, at: pixel)
+        try deliver(.rightMouseUp, at: pixel)
+        released = true
     }
 
     /// A left-button drag: down at `start`, `steps` moves along the straight path, and up at `end`.
     func drag(from start: InputPixel, to end: InputPixel, steps: Int) async throws {
-        deliver(.leftMouseDown, at: start)
+        try deliver(.leftMouseDown, at: start)
+        var released = false
+        defer {
+            if !released {
+                try? deliver(.leftMouseUp, at: end)
+            }
+        }
         try await Task.sleep(for: .milliseconds(50))
         for step in 1...steps {
             let t = Double(step) / Double(steps)
-            deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
+            try deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
             try await Task.sleep(for: .milliseconds(20))
         }
-        deliver(.leftMouseUp, at: end)
+        try deliver(.leftMouseUp, at: end)
+        released = true
     }
 
     /// A scroll of `deltaY` at `pixel`: points for a trackpad (`precise`), lines for a wheel. The CGEvent is made as the
@@ -345,14 +474,18 @@ struct InputPointer {
         }
     }
 
-    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) {
+    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) throws {
         let location = view.convert(windowPoint(pixel), to: nil)
+        if delivery == .windowServer {
+            try postThroughWindowServer(type, at: window.convertPoint(toScreen: location))
+            return
+        }
         guard
             let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
         else {
-            return
+            throw AndroidInputRunFailure.cannotCreateSystemEvent
         }
         switch type {
         case .leftMouseDown: view.mouseDown(with: event)
@@ -362,6 +495,62 @@ struct InputPointer {
         case .rightMouseUp: view.rightMouseUp(with: event)
         default: break
         }
+    }
+
+    /// Posts a real system mouse event so WindowServer and AppKit select the target window and view.
+    private func postThroughWindowServer(_ type: NSEvent.EventType, at screenLocation: NSPoint) throws {
+        let isRelease = type == .leftMouseUp || type == .rightMouseUp
+        if !isRelease, !(NSApplication.shared.isActive && window.isKeyWindow) {
+            throw AndroidInputRunFailure.windowNotActive
+        }
+        guard let screen = window.screen,
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else {
+            throw AndroidInputRunFailure.ambiguousDisplay
+        }
+        let displayBounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        let screenFrame = screen.frame
+        let quartzLocation = CGPoint(
+            x: displayBounds.minX + screenLocation.x - screenFrame.minX,
+            y: displayBounds.minY + screenFrame.maxY - screenLocation.y
+        )
+        let mouseType: CGEventType
+        let button: CGMouseButton
+        switch type {
+        case .leftMouseDown:
+            mouseType = .leftMouseDown
+            button = .left
+        case .leftMouseDragged:
+            mouseType = .leftMouseDragged
+            button = .left
+        case .leftMouseUp:
+            mouseType = .leftMouseUp
+            button = .left
+        case .rightMouseDown:
+            mouseType = .rightMouseDown
+            button = .right
+        case .rightMouseDragged:
+            mouseType = .rightMouseDragged
+            button = .right
+        case .rightMouseUp:
+            mouseType = .rightMouseUp
+            button = .right
+        default:
+            throw AndroidInputRunFailure.cannotCreateSystemEvent
+        }
+        guard
+            let event = CGEvent(
+                mouseEventSource: nil,
+                mouseType: mouseType,
+                mouseCursorPosition: quartzLocation,
+                mouseButton: button
+            )
+        else {
+            throw AndroidInputRunFailure.cannotCreateSystemEvent
+        }
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setDoubleValueField(.mouseEventPressure, value: mouseType == .leftMouseUp ? 0 : 1)
+        event.post(tap: .cghidEventTap)
     }
 
     /// The window point of a display pixel: the inverse of the window's mapping.
@@ -404,25 +593,42 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
 /// The window's events, routed in order (the CLI's `EmbeddedInputSink`, decision D10). One task converts each queued
 /// list to the wire types of runtime-api.md §7.2 and routes it, so no batch overtakes another.
 private final class WireSink: PointerInputSink, @unchecked Sendable {
-    private let queue: AsyncStream<[InputCore.InputEvent]>.Continuation
+    private enum Command: Sendable {
+        case events([InputCore.InputEvent])
+        case drained(CheckedContinuation<Void, Never>)
+    }
+
+    private let queue: AsyncStream<Command>.Continuation
 
     init(route: DevInputRoute) {
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
-        let made = AsyncStream.makeStream(of: [InputCore.InputEvent].self, bufferingPolicy: .unbounded)
+        let made = AsyncStream.makeStream(of: Command.self, bufferingPolicy: .unbounded)
         queue = made.continuation
         Task {
-            for await events in made.stream {
-                // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
-                for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
-                    let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
-                    await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+            for await command in made.stream {
+                switch command {
+                case .events(let events):
+                    // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
+                    for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
+                        let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
+                        await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+                    }
+                case .drained(let continuation):
+                    continuation.resume()
                 }
             }
         }
     }
 
     func deliver(_ events: [InputCore.InputEvent]) {
-        queue.yield(events)
+        queue.yield(.events(events))
+    }
+
+    /// Completes after every earlier event list has finished routing.
+    func drain() async {
+        await withCheckedContinuation { continuation in
+            queue.yield(.drained(continuation))
+        }
     }
 
     /// The wire form of `event`. A long press is not sent (decision D6), and the key events are converted as the CLI's

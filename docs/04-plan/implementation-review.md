@@ -18553,3 +18553,68 @@ coalescing assertions, a two-second settled wait for the missing callback,
 explicit activation-policy restoration checks, and a single activation request
 before key-window polling. Both confirmed that the final diff has no remaining
 actionable findings. The T2 execution limitation remains.
+
+## IR-1310: Capture AppKit delivery with the guest button's UI state
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [input.md](../02-design/input.md) §11; IR-1309 |
+
+**Choice.** Extend `experiment/103-ui-state-trace` with an opt-in, 4,096-entry
+host pointer trace and a debug-only HelloText trace of touch dispatch, pressed
+state, click callbacks, and preference commit duration/result. The AppKit T2
+diagnostic sends 100 clicks in FIFO mode and 100 in synchronous mode, waits
+for each ordered callback batch, fences host input acknowledgements, and
+reassembles the numbered guest trace chunks. The guest ring holds 1,024
+events, with JSON emitted in 3,000-character logcat messages. `TRACE_START`
+and `TRACE_READ` run behind the same serial counter queue as commits, so
+previous work finishes before a capture starts and all captured commits finish
+before it is read. A second start is rejected while a capture is active. The
+debug receiver requires `android.permission.DUMP`; the release fixture uses
+the ordinary platform `Button` and a no-op trace object.
+
+**Reason.** IR-1309 established that a synthetic click reaches AppKit's
+application queue, but it did not exercise a repeated press sequence or record
+the guest's pressed-state transitions. Correlating those transitions and
+commit timing with callbacks can narrow the diagnostic without changing
+product input code. Queue fences keep prior fixture work outside the measured
+interval and prevent outstanding commits from disappearing at read time.
+Debug-only touch overrides keep the release fixture's button dispatch path
+unchanged.
+
+**Verification.** On 2026-10-14 UTC, `:HelloText:testReleaseUnitTest` passed
+27 tests with zero failures or skips, and `:HelloText:assembleDebug`
+succeeded. `aapt dump xmltree` confirmed that the packaged debug receiver
+requires `android.permission.DUMP`. The filtered
+`xcodebuild build-for-testing` for
+`AndroidInputTests.testHundredAppKitClicksCaptureGuestButtonStateForBothWriteModes`
+passed with code signing disabled; this only compiles the test. Targeted
+`swift-format lint --strict`, `ktfmt --dry-run --set-exit-if-changed`, and
+`git diff --check` passed. The repository-wide `scripts/check-format.sh`
+reports three existing overlength lines in the untouched
+`Tests/IntegrationTests/RunResources/VMRunResourcesTests.swift` at lines 143,
+144, and 181. No VM test was run: local
+`APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` are unset,
+and [build-system.md](../05-development/build-system.md) §12.4 requires the
+lab-signed `APKRunTestHost` for `VZVirtualMachine` tests. No local Apple
+Development identity was substituted for the documented lab certificate.
+
+**Risk.** The host and guest traces add diagnostic overhead, and the two
+fixture modes do not reproduce an unmodified product timing path. The host
+test posts synthetic `NSEvent`s and does not test WindowServer or physical
+input. Run signed T2 on an isolated active UI session so human pointer input
+cannot enter the measured host trace. `android.permission.DUMP` was confirmed
+in the built manifest, but Android 17 sender permission and `goAsync` behavior
+still need guest execution. Even a passing run would not prove the product
+loss cause or satisfy the three consecutive product batches required by #103.
+
+**Adversarial review.** Guest reviewers found and drove fixes for read and
+start queue fences, duplicate-start preservation, full sequence validation,
+bounded log output, debug receiver permission, and source-set isolation.
+Host review found and drove fixes for per-batch trace counts, empty-trace
+sequence handling, cumulative route-counter deltas, full-deadline log waits,
+and an initial ACK fence for startup hover traffic. Final reviewers found no
+remaining actionable source issue. Neither review executed signed T2 or
+established runtime success.

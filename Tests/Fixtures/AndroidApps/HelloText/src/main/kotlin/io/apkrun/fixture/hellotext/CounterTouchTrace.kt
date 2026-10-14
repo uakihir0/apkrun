@@ -57,6 +57,10 @@ class CounterTouchTraceBuffer(private val capacity: Int = DEFAULT_CAPACITY) {
         record(atNanos = atNanos, kind = TouchTraceKind.PRESSED, pressed = pressed)
     }
 
+    fun recordPressedStateWaitElapsed(atNanos: Long) {
+        record(atNanos = atNanos, kind = TouchTraceKind.PRESSED_STATE_WAIT_ELAPSED)
+    }
+
     fun recordClickCallback(atNanos: Long) {
         record(atNanos = atNanos, kind = TouchTraceKind.CLICK_CALLBACK)
     }
@@ -203,6 +207,7 @@ class CounterTouchTraceBuffer(private val capacity: Int = DEFAULT_CAPACITY) {
 
 enum class TouchTraceAction(val wireName: String) {
     DOWN("down"),
+    MOVE("move"),
     UP("up"),
     CANCEL("cancel"),
 }
@@ -221,6 +226,7 @@ enum class CounterClickExecutionMode(val wireValue: String) {
 private enum class TouchTraceKind(val wireName: String) {
     TOUCH("touch"),
     PRESSED("pressed"),
+    PRESSED_STATE_WAIT_ELAPSED("pressed_state_wait_elapsed"),
     CLICK_CALLBACK("click_callback"),
     COUNTER_WRITE("counter_write"),
 }

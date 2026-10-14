@@ -46,9 +46,10 @@ class CounterTouchTraceTest {
         )
         trace.recordTouch(atNanos = 20, action = TouchTraceAction.DOWN, pressed = false)
         trace.recordPressed(atNanos = 21, pressed = true)
+        trace.recordTouch(atNanos = 25, action = TouchTraceAction.MOVE, pressed = true)
         trace.recordTouch(atNanos = 30, action = TouchTraceAction.UP, pressed = true)
-        trace.recordPressed(atNanos = 31, pressed = false)
         trace.recordClickCallback(atNanos = 32)
+        trace.recordPressed(atNanos = 33, pressed = false)
         trace.recordCounterWrite(
             atNanos = 50,
             durationNanos = 7,
@@ -56,6 +57,7 @@ class CounterTouchTraceTest {
             saved = true,
             observedValue = 1,
         )
+        trace.recordPressedStateWaitElapsed(atNanos = 55)
 
         val firstRead = commands.run(DebugCounterTouchTraceCommands.ACTION_TRACE_READ, atNanos = 60)
         assertFalse(trace.isRecording())
@@ -65,21 +67,29 @@ class CounterTouchTraceTest {
         assertTrue(
             firstDocument.contains("\"kind\":\"touch\",\"action\":\"down\",\"pressed\":false")
         )
+        assertTrue(
+            firstDocument.contains("\"kind\":\"touch\",\"action\":\"move\",\"pressed\":true")
+        )
         assertTrue(firstDocument.contains("\"kind\":\"pressed\",\"pressed\":true"))
         assertTrue(firstDocument.contains("\"kind\":\"click_callback\""))
+        assertTrue(firstDocument.contains("\"kind\":\"pressed_state_wait_elapsed\""))
         assertTrue(
             firstDocument.contains(
                 "\"kind\":\"counter_write\",\"duration_ns\":7,\"requested\":1,\"saved\":true,\"observed\":1"
             )
         )
         val upIndex = firstDocument.indexOf("\"action\":\"up\"")
+        val moveIndex = firstDocument.indexOf("\"action\":\"move\"")
         val callbackIndex = firstDocument.indexOf("\"kind\":\"click_callback\"")
         val writeIndex = firstDocument.indexOf("\"kind\":\"counter_write\"")
         assertTrue(upIndex >= 0)
+        assertTrue(moveIndex >= 0)
         assertTrue(callbackIndex >= 0)
+        assertTrue(moveIndex < upIndex)
         assertTrue(writeIndex >= 0)
         assertTrue(upIndex < callbackIndex)
         assertTrue(callbackIndex < writeIndex)
+        assertTrue(writeIndex < firstDocument.indexOf("\"kind\":\"pressed_state_wait_elapsed\""))
 
         trace.recordClickCallback(atNanos = 70)
         val secondDocument =

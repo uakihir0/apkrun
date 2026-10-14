@@ -21,6 +21,7 @@ constructor(
         val action =
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> TouchTraceAction.DOWN
+                MotionEvent.ACTION_MOVE -> TouchTraceAction.MOVE
                 MotionEvent.ACTION_UP -> TouchTraceAction.UP
                 MotionEvent.ACTION_CANCEL -> TouchTraceAction.CANCEL
                 else -> null

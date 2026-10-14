@@ -16,6 +16,8 @@ object CounterTouchTrace {
 
     fun recordPressed(atNanos: Long, pressed: Boolean) = buffer.recordPressed(atNanos, pressed)
 
+    fun recordPressedStateWaitElapsed(atNanos: Long) = buffer.recordPressedStateWaitElapsed(atNanos)
+
     fun recordClickCallback(atNanos: Long) = buffer.recordClickCallback(atNanos)
 
     fun recordCounterWrite(

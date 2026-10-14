@@ -15,8 +15,8 @@ import XCTest
 /// coordinator's scripted runs post the same gestures with the CGEvent helper in /tmp (decision D14). The suite runs only
 /// with APKRUN_INPUT_T2=1, which the AndroidInput configuration of IntegrationTests.xctestplan sets. It also needs
 /// APKRUN_GUEST_DIR (the Guest Agent bundle), APKRUN_FIXTURE_APK (HelloText, a debug build: its `TEXT` and `DETAILS`
-/// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). A missing input skips its test and names
-/// the variable.
+/// broadcasts exist only there), and APKRUN_FIXTURE_COMPOSE_APK (HelloCompose). The separate ACK diagnostic test
+/// requests one Guest Agent acknowledgement per routed batch. A missing input skips its test and names the variable.
 ///
 /// The keyboard cases (#025) post AppKit key events into the window's view, as the pointer cases post pointer events. The
 /// field's text is read from the fixture's `text` line after a `TEXT` broadcast, and the screens and the editor action
@@ -44,13 +44,38 @@ final class AndroidInputTests: XCTestCase {
     /// 100 of 100 clicks on HelloText's button are logged as `APKRUN-FIXTURE: click <n>` (#024 acceptance). Each click is
     /// a left-button press and release at the button's centre, with no `adb shell input` process during the sequence.
     func testOneHundredClicksOnTheButtonAreLogged() async throws {
+        try await runOneHundredClickBatch(acknowledgeEveryBatch: false)
+    }
+
+    /// The opt-in diagnostic variant records every guest ACK without changing the ordinary click-test cadence.
+    func testOneHundredClicksWithGuestAcknowledgementsAreLogged() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_ACK_T2"] == "1" else {
+            throw XCTSkip("The ACK diagnostic runs only with the AndroidInputAckDiagnostic test-plan configuration.")
+        }
+        try await runOneHundredClickBatch(acknowledgeEveryBatch: true)
+    }
+
+    private func runOneHundredClickBatch(acknowledgeEveryBatch: Bool) async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
-        try await AndroidInputRun.with(apk: apk, package: Self.helloText) { run in
+        try await AndroidInputRun.with(
+            apk: apk,
+            package: Self.helloText,
+            acknowledgeEveryBatch: acknowledgeEveryBatch
+        ) { run in
             let target = try await run.centre(of: Self.buttonID)
+            let traceAcknowledgements = acknowledgeEveryBatch
+            let counterBefore = try await run.helloTextCounter().value
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
             let countersBefore = await run.inputCountersAfterDraining()
+            let bindingGenerationBefore = await run.inputBindingGeneration()
+            if traceAcknowledgements {
+                XCTAssertEqual(
+                    countersBefore.batchesSent,
+                    0,
+                    "the ACK diagnostic requires a fresh route with no earlier batches")
+            }
             let pointer = try run.pointer()
             for _ in 0..<100 {
                 try await pointer.click(at: target)
@@ -58,9 +83,17 @@ final class AndroidInputTests: XCTestCase {
             }
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
-            let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
+            let acknowledgementTrace =
+                traceAcknowledgements
+                ? try await run.inputAcknowledgementTraceAfterDraining(throughSequence: 200)
+                : []
+            let lines = try await run.fixtureLog {
+                $0.filter { $0.contains(Self.clickPrefix) }.count >= 100
+            }
             let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
             let countersAfter = await run.inputCountersAfterDraining()
+            let counterAfter = try await run.helloTextCounter().value
+            let batchesSent = countersAfter.batchesSent - countersBefore.batchesSent
             XCTAssertEqual(
                 clickNumbers, Array(1...100),
                 "the direct-view click batch missed or reordered a callback; route counters: \(countersAfter)")
@@ -69,6 +102,52 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(countersAfter.droppedInvalid - countersBefore.droppedInvalid, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
             XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
+
+            if traceAcknowledgements {
+                let newAcknowledgements = acknowledgementTrace
+                let expectedSequences = (1...200).map(UInt64.init)
+                let bindingGenerationAfter = await run.inputBindingGeneration()
+                let acknowledgementPairs =
+                    newAcknowledgements
+                    .map { "\($0.batchSequence):\($0.rejectedEvents)" }
+                    .joined(separator: ",")
+                let attachment = XCTAttachment(
+                    string: """
+                        host batches sent: \(batchesSent)
+                        host events sent: \(countersAfter.eventsSent - countersBefore.eventsSent)
+                        host route counters before: \(countersBefore)
+                        host route counters after: \(countersAfter)
+                        route generation: \(bindingGenerationBefore) -> \(bindingGenerationAfter)
+                        acknowledgements (batch:rejected events): \(acknowledgementPairs)
+                        HelloText click log: \(clickNumbers)
+                        HelloText SharedPreferences counter: \(counterBefore) -> \(counterAfter)
+                        adb shell input processes during clicks: \(shellInput.count)
+                        """
+                )
+                attachment.name = "input-ack-diagnostic"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                XCTAssertEqual(
+                    bindingGenerationAfter,
+                    bindingGenerationBefore,
+                    "the Guest Agent input route rebound during the batch-sequence diagnostic")
+                XCTAssertEqual(batchesSent, 200, "the host route did not send 200 batches; \(countersAfter)")
+                XCTAssertEqual(
+                    countersAfter.eventsSent - countersBefore.eventsSent,
+                    200,
+                    "the host route did not send 200 click events; \(countersAfter)")
+                XCTAssertEqual(
+                    newAcknowledgements.map(\.batchSequence),
+                    expectedSequences,
+                    "missing or reordered Guest Agent acknowledgements: \(newAcknowledgements)")
+                XCTAssertTrue(
+                    newAcknowledgements.allSatisfy { $0.rejectedEvents == 0 },
+                    "the Guest Agent rejected input events: \(newAcknowledgements)")
+            }
+            XCTAssertEqual(
+                counterAfter - counterBefore,
+                100,
+                "the live guest app counter did not record all clicks; click log: \(clickNumbers)")
         }
     }
 

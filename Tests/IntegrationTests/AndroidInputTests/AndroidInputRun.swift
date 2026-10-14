@@ -18,6 +18,7 @@ enum AndroidInputRunFailure: Error, Equatable {
     case appDidNotStart(String)
     case appKitActivationFailed
     case appKitWindowNotKey
+    case fixtureCounterReadMissing
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
 }
@@ -35,13 +36,16 @@ enum InputPointerDelivery: Sendable, Equatable {
 @MainActor
 final class AndroidInputRun {
     private static let windowTitle = "APKRun display 0"
+    private static let helloTextPackage = "io.apkrun.fixture.hellotext"
+    private static let helloTextCounterReadAction = "io.apkrun.fixture.hellotext.debug.READ"
+    private static let helloTextCounterReadPrefix = "APKRUN-FIXTURE: debug read "
     private static let width = 1024
     private static let height = 768
 
     let adb: AdbClient
     private let home: URL
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
-    private let route = DevInputRoute()
+    private let route: DevInputRoute
     private let pointerDelivery: InputPointerDelivery
     private let previousActivationPolicy: NSApplication.ActivationPolicy?
     private let previousFrontmostApplication: NSRunningApplication?
@@ -53,10 +57,19 @@ final class AndroidInputRun {
     private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
+    private init(
+        home: URL,
+        adb: AdbClient,
+        pointerDelivery: InputPointerDelivery,
+        acknowledgeEveryBatch: Bool
+    ) {
         self.home = home
         self.adb = adb
         self.pointerDelivery = pointerDelivery
+        route = DevInputRoute(
+            acknowledgeEveryBatch: acknowledgeEveryBatch,
+            traceAcknowledgements: acknowledgeEveryBatch
+        )
         previousActivationPolicy =
             pointerDelivery == .appKitEventQueue
             ? NSApplication.shared.activationPolicy()
@@ -72,6 +85,7 @@ final class AndroidInputRun {
         apk: URL,
         package: String,
         pointerDelivery: InputPointerDelivery = .directView,
+        acknowledgeEveryBatch: Bool = false,
         _ body: (AndroidInputRun) async throws -> Void
     ) async throws {
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
@@ -91,7 +105,8 @@ final class AndroidInputRun {
         let run = AndroidInputRun(
             home: home,
             adb: AdbClient(executable: adbExecutable),
-            pointerDelivery: pointerDelivery
+            pointerDelivery: pointerDelivery,
+            acknowledgeEveryBatch: acknowledgeEveryBatch
         )
         if pointerDelivery == .appKitEventQueue {
             guard NSApplication.shared.setActivationPolicy(.accessory) else {
@@ -144,6 +159,26 @@ final class AndroidInputRun {
             await inputSink.drain()
         }
         return await route.counters()
+    }
+
+    func inputBindingGeneration() async -> UInt64 {
+        await route.bindingGeneration
+    }
+
+    /// Drains earlier window events and waits up to 30 seconds for the acknowledgement of `batchSequence`.
+    func inputAcknowledgementTraceAfterDraining(throughSequence batchSequence: UInt64) async throws
+        -> [InputAckTraceRecord]
+    {
+        if let inputSink {
+            await inputSink.drain()
+        }
+        var trace = await route.acknowledgementTrace()
+        let deadline = ContinuousClock.now + .seconds(30)
+        while (trace.last?.batchSequence ?? 0) < batchSequence, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+            trace = await route.acknowledgementTrace()
+        }
+        return trace
     }
 
     /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
@@ -215,10 +250,10 @@ final class AndroidInputRun {
         return unique.isEmpty ? "no nodes in the dump" : unique.joined(separator: ", ")
     }
 
-    /// The fixture's log lines, polled every 500 ms until `enough` holds or 30 s have passed.
-    func fixtureLog(until enough: ([String]) -> Bool) async throws -> [String] {
+    /// The fixture's log lines, polled every 500 ms until `enough` holds or the poll limit has passed.
+    func fixtureLog(maxPolls: Int = 60, until enough: ([String]) -> Bool) async throws -> [String] {
         var lines: [String] = []
-        for _ in 0..<60 {
+        for _ in 0..<maxPolls {
             let output = try await adb.shell("logcat -d -s APKRUN-FIXTURE").output
             lines = output.split(separator: "\n").map(String.init)
             if enough(lines) {
@@ -227,6 +262,19 @@ final class AndroidInputRun {
             try await Task.sleep(for: .milliseconds(500))
         }
         return lines
+    }
+
+    /// Reads the HelloText counter through its debug-only receiver and returns that log snapshot.
+    func helloTextCounter() async throws -> (value: Int, lines: [String]) {
+        _ = try await adb.shell(
+            "am broadcast -a \(Self.helloTextCounterReadAction) -p \(Self.helloTextPackage)")
+        let lines = try await fixtureLog(maxPolls: 10) {
+            $0.contains { $0.contains(Self.helloTextCounterReadPrefix) }
+        }
+        guard let value = Self.numbers(in: lines, after: Self.helloTextCounterReadPrefix).last else {
+            throw AndroidInputRunFailure.fixtureCounterReadMissing
+        }
+        return (value, lines)
     }
 
     /// The integers that follow `prefix` on the lines that carry it, in order: `click 7` gives 7.

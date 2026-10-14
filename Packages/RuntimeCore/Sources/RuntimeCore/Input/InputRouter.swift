@@ -46,6 +46,21 @@ public struct InputCounters: Equatable, Sendable {
     }
 }
 
+/// One acknowledgement returned after the Guest Agent's asynchronous injection call for a batch. It does not establish
+/// Android UI dispatch or an app callback.
+public struct InputAckTraceRecord: Equatable, Sendable {
+    /// The acknowledged batch sequence.
+    public let batchSequence: UInt64
+    /// Events rejected by the Guest Agent for this batch.
+    public let rejectedEvents: UInt32
+
+    /// Creates a trace record.
+    public init(batchSequence: UInt64, rejectedEvents: UInt32) {
+        self.batchSequence = batchSequence
+        self.rejectedEvents = rejectedEvents
+    }
+}
+
 extension InputCounters: CustomStringConvertible {
     /// The counts on one line for the development command's output: the sends first, then the drop and merge counts of
     /// input.md §11 under their names.
@@ -68,6 +83,8 @@ public actor InputRouter {
     public static let coalescingBacklogBytes = 64 * 1024
     /// The length of the rate window.
     private static let windowNanoseconds: UInt64 = 1_000_000_000
+    /// The most recent acknowledgements retained for opt-in development diagnostics.
+    private static let acknowledgementTraceLimit = 256
 
     /// Returns the time in nanoseconds of a monotonic clock. The rate window and the cancel timestamps use it.
     public typealias Clock = @Sendable () -> UInt64
@@ -117,6 +134,8 @@ public actor InputRouter {
     private let channel: any InputChannel
     private let clock: Clock
     private let logger: APKLogger
+    private let acknowledgeEveryBatch: Bool
+    private let traceAcknowledgements: Bool
     private var sessions: [SessionID: Entry] = [:]
     private var nextGeneration: UInt64 = 1
     private var nextBatchSequence: UInt64 = 1
@@ -127,15 +146,21 @@ public actor InputRouter {
 
     /// What the router dropped, merged, and sent so far.
     public private(set) var counters = InputCounters()
+    /// Recent Guest Agent acknowledgements, populated only when tracing is enabled.
+    public private(set) var acknowledgementTrace: [InputAckTraceRecord] = []
 
     /// Creates a router over `channel`. The acks of the channel are read for the rejected counts (input.md §8).
     public init(
         channel: any InputChannel,
         clock: @escaping Clock = InputRouter.monotonicNanoseconds,
+        acknowledgeEveryBatch: Bool = false,
+        traceAcknowledgements: Bool = false,
         logSink: (any LogSink)? = nil
     ) {
         self.channel = channel
         self.clock = clock
+        self.acknowledgeEveryBatch = acknowledgeEveryBatch
+        self.traceAcknowledgements = traceAcknowledgements
         logger = APKLogger(category: InputLogCategory.route, sink: logSink)
         // The reader ends when the channel's acks finish, which is when its connection closes.
         let acks = channel.acks
@@ -233,7 +258,8 @@ public actor InputRouter {
             events,
             displayID: displayID,
             firstSequence: nextBatchSequence,
-            hostSendNanos: now
+            hostSendNanos: now,
+            acknowledgeEveryBatch: acknowledgeEveryBatch
         )
         nextBatchSequence += UInt64(batches.count)
         for (index, batch) in batches.enumerated() {
@@ -329,6 +355,13 @@ public actor InputRouter {
 
     /// Adds the events that the guest rejected to the invalid count.
     private func recordAck(_ ack: GPInputAck) {
+        if traceAcknowledgements {
+            if acknowledgementTrace.count == Self.acknowledgementTraceLimit {
+                acknowledgementTrace.removeFirst()
+            }
+            acknowledgementTrace.append(
+                InputAckTraceRecord(batchSequence: ack.batchSeq, rejectedEvents: ack.rejectedEvents))
+        }
         guard ack.rejectedEvents > 0 else {
             return
         }

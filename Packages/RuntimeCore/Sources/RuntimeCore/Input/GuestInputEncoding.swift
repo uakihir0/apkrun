@@ -17,7 +17,8 @@ enum GuestInputEncoding {
         _ events: [InputEvent],
         displayID: Int32,
         firstSequence: UInt64,
-        hostSendNanos: UInt64
+        hostSendNanos: UInt64,
+        acknowledgeEveryBatch: Bool = false
     ) -> [GPInputBatch] {
         var batches: [GPInputBatch] = []
         var start = 0
@@ -28,7 +29,7 @@ enum GuestInputEncoding {
             batch.batchSeq = sequence
             batch.displayID = displayID
             batch.hostSendNanos = hostSendNanos
-            batch.ackRequested = sequence % ackInterval == 0
+            batch.ackRequested = acknowledgeEveryBatch || sequence % ackInterval == 0
             batch.events = events[start..<end].map(message)
             batches.append(batch)
             start = end

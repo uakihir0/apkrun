@@ -455,3 +455,42 @@ func rejectedEventsInAnAckAreCountedAsInvalid() async throws {
     try await eventually { await router.counters.droppedInvalid == 3 }
     #expect(await router.counters.droppedInvalid == 3)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func diagnosticRouterAcknowledgesEveryBatchAndRetainsAckResults() async throws {
+    let channel = RecordingInputChannel()
+    let session = SessionID.app(UUID())
+    let router = InputRouter(
+        channel: channel,
+        clock: { 0 },
+        acknowledgeEveryBatch: true,
+        traceAcknowledgements: true
+    )
+    await router.register(session: session, displayID: display, state: .running)
+    await router.route(Array(repeating: touch(.move), count: 257), from: session)
+
+    let batches = await channel.batches
+    #expect(batches.map(\.ackRequested) == [true, true])
+    channel.deliverAck(batchSeq: 1, rejected: 0)
+    channel.deliverAck(batchSeq: 2, rejected: 1)
+    try await eventually { await router.acknowledgementTrace.count == 2 }
+
+    #expect(
+        await router.acknowledgementTrace
+            == [
+                InputAckTraceRecord(batchSequence: 1, rejectedEvents: 0),
+                InputAckTraceRecord(batchSequence: 2, rejectedEvents: 1),
+            ])
+    #expect(await router.counters.droppedInvalid == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementTraceRetainsOnlyItsNewestEntries() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, traceAcknowledgements: true)
+    for sequence in 1...260 {
+        channel.deliverAck(batchSeq: UInt64(sequence), rejected: 0)
+    }
+    try await eventually { await router.acknowledgementTrace.last?.batchSequence == 260 }
+    #expect(await router.acknowledgementTrace.map(\.batchSequence) == Array(5...260).map(UInt64.init))
+}

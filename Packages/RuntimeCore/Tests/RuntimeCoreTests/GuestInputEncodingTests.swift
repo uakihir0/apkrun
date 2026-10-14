@@ -128,6 +128,18 @@ private let stamp = InputTimestamp(hostNanos: 42_000)
     #expect(thirtyThree.map(\.ackRequested) == [false])
 }
 
+@Test func diagnosticModeAsksForAnAckOnEveryBatch() {
+    let events = [InputEvent.cancelAll(stamp)]
+    let batches = GuestInputEncoding.batches(
+        events,
+        displayID: 0,
+        firstSequence: 33,
+        hostSendNanos: 0,
+        acknowledgeEveryBatch: true
+    )
+    #expect(batches.map(\.ackRequested) == [true])
+}
+
 @Test func noEventsMeansNoBatches() {
     #expect(GuestInputEncoding.batches([], displayID: 0, firstSequence: 1, hostSendNanos: 0).isEmpty)
 }

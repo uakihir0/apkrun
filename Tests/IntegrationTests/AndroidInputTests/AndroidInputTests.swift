@@ -63,6 +63,35 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
+    /// One click must reach HelloText through the AppKit event queue, NSWindow dispatch, and the ordinary view handler.
+    func testOneAppKitQueuedClickReachesHelloText() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .appKitEventQueue
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            _ = try await run.adb.shell("logcat -c")
+            try await run.prepareForAppKitPointerDispatch()
+            let countersBeforeClick = await run.inputCounters()
+            let pointer = try run.pointer()
+            try await pointer.click(at: target)
+            let lines = try await run.fixtureLog(
+                until: { lines in lines.contains { $0.contains(Self.clickPrefix) } },
+                settleFor: .seconds(2)
+            )
+            XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), [1])
+
+            let fence = try await run.acknowledgementFence()
+            let receipt = try await run.waitForAcknowledgement(fence)
+            XCTAssertGreaterThanOrEqual(receipt.counters.eventsSent - countersBeforeClick.eventsSent, 2)
+            XCTAssertEqual(receipt.counters.droppedRate, 0)
+            XCTAssertEqual(receipt.counters.droppedNotRunning, 0)
+            XCTAssertEqual(receipt.counters.droppedInvalid, 0)
+            XCTAssertEqual(receipt.counters.droppedChannel, 0)
+            XCTAssertEqual(receipt.counters.coalesced, 0)
+        }
+    }
+
     /// Diagnostic only: checks route counters, then checks persistence after all 100 ordered click logs are present.
     func testOneHundredCommittedClicksSurviveForceStopAndRelaunch() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")

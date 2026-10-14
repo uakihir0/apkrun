@@ -17,8 +17,15 @@ enum AndroidInputRunFailure: Error, Equatable {
     /// The launch started no process of the package, so the view could not appear (IR-1286).
     case appDidNotStart(String)
     case inputRouteUnbound
+    case appKitActivationFailed
+    case appKitWindowNotKey
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
+}
+
+enum InputPointerDelivery: Sendable, Equatable {
+    case directView
+    case appKitEventQueue
 }
 
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
@@ -36,6 +43,8 @@ final class AndroidInputRun {
     private let home: URL
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route: DevInputRoute
+    private let pointerDelivery: InputPointerDelivery
+    private let previousActivationPolicy: NSApplication.ActivationPolicy?
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
     private var frames: DisplayFrames?
@@ -44,9 +53,14 @@ final class AndroidInputRun {
     private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient, acknowledgeEveryBatch: Bool) {
+    private init(home: URL, adb: AdbClient, acknowledgeEveryBatch: Bool, pointerDelivery: InputPointerDelivery) {
         self.home = home
         self.adb = adb
+        self.pointerDelivery = pointerDelivery
+        previousActivationPolicy =
+            pointerDelivery == .appKitEventQueue
+            ? NSApplication.shared.activationPolicy()
+            : nil
         route = DevInputRoute(acknowledgeEveryBatch: acknowledgeEveryBatch)
     }
 
@@ -55,6 +69,7 @@ final class AndroidInputRun {
         apk: URL,
         package: String,
         acknowledgeEveryBatch: Bool = false,
+        pointerDelivery: InputPointerDelivery = .directView,
         _ body: (AndroidInputRun) async throws -> Void
     ) async throws {
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
@@ -74,8 +89,15 @@ final class AndroidInputRun {
         let run = AndroidInputRun(
             home: home,
             adb: AdbClient(executable: adbExecutable),
-            acknowledgeEveryBatch: acknowledgeEveryBatch
+            acknowledgeEveryBatch: acknowledgeEveryBatch,
+            pointerDelivery: pointerDelivery
         )
+        if pointerDelivery == .appKitEventQueue {
+            guard NSApplication.shared.setActivationPolicy(.accessory) else {
+                await run.finish()
+                throw AndroidInputRunFailure.appKitActivationFailed
+            }
+        }
         run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
         do {
             try await run.prepare(apk: apk, package: package)
@@ -93,7 +115,26 @@ final class AndroidInputRun {
         let size = view.bounds.size
         let mapper = DisplayGeometry.coordinateMapper(
             contentSize: size, in: size, pixelWidth: Self.width, pixelHeight: Self.height, generation: 1)
-        return InputPointer(window: window, view: view, mapper: mapper)
+        return InputPointer(window: window, view: view, mapper: mapper, delivery: pointerDelivery)
+    }
+
+    /// Makes the T2 display eligible for normal AppKit mouse dispatch and fails rather than bypassing the event queue.
+    func prepareForAppKitPointerDispatch() async throws {
+        guard pointerDelivery == .appKitEventQueue else {
+            throw AndroidInputRunFailure.appKitWindowNotKey
+        }
+        let (window, view) = try windowAndView()
+        let deadline = ContinuousClock.now + .seconds(5)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        while ContinuousClock.now < deadline {
+            if NSApplication.shared.isActive, window.isKeyWindow {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw AndroidInputRunFailure.appKitWindowNotKey
     }
 
     /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
@@ -253,6 +294,13 @@ final class AndroidInputRun {
         stop.continuation.yield(())
         await boot?.value
         VMRunResources.removeHomeOrReport(home)
+        if let previousActivationPolicy {
+            let restored = NSApplication.shared.setActivationPolicy(previousActivationPolicy)
+            XCTAssertTrue(
+                restored && NSApplication.shared.activationPolicy() == previousActivationPolicy,
+                "The test host did not restore its previous activation policy."
+            )
+        }
     }
 
     private func startBoot(guestAgentDirectory: URL) {
@@ -355,38 +403,40 @@ final class AndroidInputRun {
     }
 }
 
-/// Posts AppKit pointer events into the window's content view, which receives them as the window delivers them.
+/// Sends synthetic AppKit pointer events through the selected test delivery path.
 ///
-/// The view's mouse methods are called directly. A window that is not key does not deliver a click, because the view
-/// refuses the first mouse (`acceptsFirstMouse`), and the test host is never key.
+/// `.directView` invokes the view handler, while `.appKitEventQueue` posts through `NSApplication` so the running event
+/// loop dispatches through the window. The queued path requires an active app and key window because the view refuses
+/// the first mouse.
 @MainActor
 struct InputPointer {
     let window: NSWindow
     let view: IOSurfaceLayerView
     let mapper: CoordinateMapper
+    let delivery: InputPointerDelivery
 
     func click(at pixel: InputPixel) async throws {
-        deliver(.leftMouseDown, at: pixel)
+        try deliver(.leftMouseDown, at: pixel)
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.leftMouseUp, at: pixel)
+        try deliver(.leftMouseUp, at: pixel)
     }
 
     func rightClick(at pixel: InputPixel) async throws {
-        deliver(.rightMouseDown, at: pixel)
+        try deliver(.rightMouseDown, at: pixel)
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.rightMouseUp, at: pixel)
+        try deliver(.rightMouseUp, at: pixel)
     }
 
     /// A left-button drag: down at `start`, `steps` moves along the straight path, and up at `end`.
     func drag(from start: InputPixel, to end: InputPixel, steps: Int) async throws {
-        deliver(.leftMouseDown, at: start)
+        try deliver(.leftMouseDown, at: start)
         try await Task.sleep(for: .milliseconds(50))
         for step in 1...steps {
             let t = Double(step) / Double(steps)
-            deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
+            try deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
             try await Task.sleep(for: .milliseconds(20))
         }
-        deliver(.leftMouseUp, at: end)
+        try deliver(.leftMouseUp, at: end)
     }
 
     /// A scroll of `deltaY` at `pixel`: points for a trackpad (`precise`), lines for a wheel. The CGEvent is made as the
@@ -412,13 +462,23 @@ struct InputPointer {
         }
     }
 
-    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) {
+    private static var nextEventNumber = 1
+
+    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) throws {
         let location = view.convert(windowPoint(pixel), to: nil)
         guard
             let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                windowNumber: window.windowNumber, context: nil, eventNumber: Self.takeEventNumber(), clickCount: 1,
+                pressure: 1)
         else {
+            return
+        }
+        if delivery == .appKitEventQueue {
+            guard window.isKeyWindow, NSApplication.shared.isActive else {
+                throw AndroidInputRunFailure.appKitWindowNotKey
+            }
+            NSApplication.shared.postEvent(event, atStart: false)
             return
         }
         switch type {
@@ -429,6 +489,11 @@ struct InputPointer {
         case .rightMouseUp: view.rightMouseUp(with: event)
         default: break
         }
+    }
+
+    private static func takeEventNumber() -> Int {
+        defer { nextEventNumber += 1 }
+        return nextEventNumber
     }
 
     /// The window point of a display pixel: the inverse of the window's mapping.

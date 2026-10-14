@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import InputCore
 import RuntimeCore
 import XCTest
 
@@ -67,7 +68,7 @@ final class AndroidInputTests: XCTestCase {
     func testOneAppKitQueuedClickReachesHelloText() async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(
-            apk: apk, package: Self.helloText, pointerDelivery: .appKitEventQueue
+            apk: apk, package: Self.helloText, pointerDelivery: .appKitEventQueue, recordPointerTrace: true
         ) { run in
             let target = try await run.centre(of: Self.buttonID)
             _ = try await run.adb.shell("logcat -c")
@@ -83,12 +84,137 @@ final class AndroidInputTests: XCTestCase {
 
             let fence = try await run.acknowledgementFence()
             let receipt = try await run.waitForAcknowledgement(fence)
+            let pointerTrace = run.pointerEventTrace()
+            let touchEvents = pointerTrace.entries.compactMap {
+                entry -> (
+                    sequence: UInt64,
+                    receivedAtHostUptimeNanos: UInt64,
+                    phase: InputCore.TouchEvent.Phase
+                )? in
+                guard case .touch(let touch) = entry.event, touch.pointerID == 0 else {
+                    return nil
+                }
+                return (entry.sequence, entry.receivedAtHostUptimeNanos, touch.phase)
+            }
+            XCTAssertEqual(pointerTrace.droppedEntryCount, 0, "the bounded test input trace overflowed")
+            XCTAssertEqual(
+                touchEvents.map(\.phase), [.down, .up],
+                "the AppKit queued click did not reach the test WireSink as one ordered touch gesture: \(pointerTrace)"
+            )
+            if touchEvents.count == 2 {
+                XCTAssertLessThan(touchEvents[0].sequence, touchEvents[1].sequence)
+                XCTAssertLessThan(
+                    touchEvents[0].receivedAtHostUptimeNanos, touchEvents[1].receivedAtHostUptimeNanos,
+                    "the WireSink host receive timestamps did not increase from down to up"
+                )
+            }
             XCTAssertGreaterThanOrEqual(receipt.counters.eventsSent - countersBeforeClick.eventsSent, 2)
             XCTAssertEqual(receipt.counters.droppedRate, 0)
             XCTAssertEqual(receipt.counters.droppedNotRunning, 0)
             XCTAssertEqual(receipt.counters.droppedInvalid, 0)
             XCTAssertEqual(receipt.counters.droppedChannel, 0)
             XCTAssertEqual(receipt.counters.coalesced, 0)
+        }
+    }
+
+    /// Captures the Button's UI state around two 100-click AppKit batches, comparing queued and synchronous fixture writes.
+    /// This is diagnostic evidence only: AppKit posts synthetic application events, not WindowServer or hardware input.
+    func testHundredAppKitClicksCaptureGuestButtonStateForBothWriteModes() async throws {
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(
+            apk: apk,
+            package: Self.helloText,
+            acknowledgeEveryBatch: true,
+            pointerDelivery: .appKitEventQueue,
+            recordPointerTrace: true
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForAppKitPointerDispatch()
+            let baselineFence = try await run.acknowledgementFence()
+            _ = try await run.waitForAcknowledgement(baselineFence)
+            let pointer = try run.pointer()
+
+            for mode in ["queue", "synchronous"] {
+                let countersBeforeMode = await run.inputCounters()
+                _ = try await run.adb.shell("logcat -c")
+                let start = try await run.adb.shell(
+                    "am broadcast -a io.apkrun.fixture.hellotext.debug.TRACE_START "
+                        + "--es mode \(mode) -p \(Self.helloText)")
+                XCTAssertFalse(start.output.contains("Permission Denial"), start.output)
+                XCTAssertTrue(start.output.contains("Broadcast completed"), start.output)
+                let startLines = try await run.fixtureLog(
+                    until: { $0.contains { $0.contains("debug trace started") } })
+                guard startLines.contains(where: { $0.contains("debug trace started") }) else {
+                    XCTFail("the \(mode) guest trace did not start: \(startLines)")
+                    return
+                }
+
+                for _ in 0..<100 {
+                    try await pointer.click(at: target)
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+
+                let clickLines = try await run.fixtureLog(
+                    until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 })
+                let clickNumbers = AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix)
+                let expectedClickNumbers = mode == "queue" ? Array(1...100) : Array(101...200)
+                XCTAssertEqual(clickNumbers, expectedClickNumbers, "the \(mode) batch click logs were \(clickNumbers)")
+
+                let fence = try await run.acknowledgementFence()
+                let receipt = try await run.waitForAcknowledgement(fence)
+                XCTAssertGreaterThanOrEqual(receipt.counters.eventsSent - countersBeforeMode.eventsSent, 200)
+                let sentBatchCount = receipt.counters.batchesSent - countersBeforeMode.batchesSent
+                let acknowledgedBatchCount =
+                    receipt.counters.acknowledgementsReceived - countersBeforeMode.acknowledgementsReceived
+                XCTAssertGreaterThan(sentBatchCount, 0)
+                XCTAssertEqual(acknowledgedBatchCount, sentBatchCount)
+                XCTAssertEqual(receipt.counters.droppedRate, 0)
+                XCTAssertEqual(receipt.counters.droppedNotRunning, 0)
+                XCTAssertEqual(receipt.counters.droppedInvalid, 0)
+                XCTAssertEqual(receipt.counters.droppedChannel, 0)
+                XCTAssertEqual(receipt.counters.coalesced, 0)
+
+                let read = try await run.adb.shell(
+                    "am broadcast -a io.apkrun.fixture.hellotext.debug.TRACE_READ -p \(Self.helloText)")
+                XCTAssertFalse(read.output.contains("Permission Denial"), read.output)
+                let traceLines = try await run.fixtureLog(until: { Self.reassembledGuestTrace(in: $0) != nil })
+                let traceJSON = try XCTUnwrap(
+                    Self.reassembledGuestTrace(in: traceLines),
+                    "the \(mode) guest trace was missing or had a dropped chunk: \(traceLines)")
+                let attachment = XCTAttachment(string: traceJSON)
+                attachment.name = "hellotext-\(mode)-button-trace.json"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+
+                let trace = try XCTUnwrap(
+                    try JSONSerialization.jsonObject(with: Data(traceJSON.utf8)) as? [String: Any])
+                XCTAssertEqual(trace["mode"] as? String, mode)
+                XCTAssertEqual((trace["dropped_events"] as? NSNumber)?.intValue, 0)
+                let events = try XCTUnwrap(trace["events"] as? [[String: Any]])
+                XCTAssertEqual(
+                    events.filter { $0["kind"] as? String == "touch" && $0["action"] as? String == "down" }.count,
+                    100)
+                XCTAssertEqual(
+                    events.filter { $0["kind"] as? String == "touch" && $0["action"] as? String == "up" }.count,
+                    100)
+                XCTAssertEqual(events.filter { $0["kind"] as? String == "click_callback" }.count, 100)
+                XCTAssertEqual(events.filter { $0["kind"] as? String == "counter_write" }.count, 100)
+                XCTAssertEqual(
+                    events.compactMap { ($0["seq"] as? NSNumber)?.intValue },
+                    Array(1..<(events.count + 1)),
+                    "the \(mode) guest trace sequence was incomplete or out of order")
+
+                let pointerTrace = run.pointerEventTrace()
+                XCTAssertEqual(pointerTrace.droppedEntryCount, 0)
+                let expectedTouchEventCount = mode == "queue" ? 200 : 400
+                XCTAssertEqual(
+                    pointerTrace.entries.filter {
+                        if case .touch = $0.event { return true }
+                        return false
+                    }.count,
+                    expectedTouchEventCount,
+                    "the host-side pointer trace did not retain both 100-click batches: \(pointerTrace)")
+            }
         }
     }
 
@@ -388,6 +514,41 @@ final class AndroidInputTests: XCTestCase {
     private static let editorActionLine = "APKRUN-FIXTURE: editor action 6"
     private static let mainScreenLine = "APKRUN-FIXTURE: screen main"
     private static let detailsScreenLine = "APKRUN-FIXTURE: screen details"
+
+    /// Reassembles numbered guest logcat chunks only when every piece is present exactly once.
+    private static func reassembledGuestTrace(in lines: [String]) -> String? {
+        let prefix = "debug trace chunk "
+        var total: Int?
+        var chunks: [Int: String] = [:]
+        for line in lines {
+            guard let range = line.range(of: prefix) else {
+                continue
+            }
+            let suffix = line[range.upperBound...]
+            guard let separator = suffix.firstIndex(of: " ") else {
+                return nil
+            }
+            let indexAndTotal = suffix[..<separator].split(separator: "/")
+            guard
+                indexAndTotal.count == 2,
+                let index = Int(indexAndTotal[0]),
+                let lineTotal = Int(indexAndTotal[1]),
+                index > 0,
+                lineTotal > 0,
+                index <= lineTotal,
+                total == nil || total == lineTotal,
+                chunks[index] == nil
+            else {
+                return nil
+            }
+            total = lineTotal
+            chunks[index] = String(suffix[suffix.index(after: separator)...])
+        }
+        guard let total, chunks.count == total else {
+            return nil
+        }
+        return (1...total).compactMap { chunks[$0] }.joined()
+    }
 
     /// Moves the focus to HelloText's field with Tab, and reads the focus from a uiautomator dump before each Tab. A dump
     /// that fails is retried without a Tab, so a Tab never moves the focus twice.

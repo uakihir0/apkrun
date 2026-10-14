@@ -5,10 +5,13 @@
     <application>
         <receiver
             android:name=".DebugCounterReceiver"
+            android:permission="android.permission.DUMP"
             android:exported="true">
             <intent-filter>
                 <action android:name="io.apkrun.fixture.hellotext.debug.INCREMENT" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.READ" />
+                <action android:name="io.apkrun.fixture.hellotext.debug.TRACE_START" />
+                <action android:name="io.apkrun.fixture.hellotext.debug.TRACE_READ" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.TEXT" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.DETAILS" />
             </intent-filter>

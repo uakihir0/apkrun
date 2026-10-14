@@ -325,7 +325,7 @@ This avoids stuck keys and half-open gestures in Android.
 | agent read → `injectInputEvent` returned | 4 ms | agent timing |
 | Margin | 6 ms | |
 
-- **Measurement:** every 32nd batch carries `ack_requested`. The agent answers `InputAck{ batch_seq, receive_to_inject_micros }`, and the host combines it with its own timestamps and the stream round-trip time for #070. There is no clock synchronization between host and guest. Only durations measured on one side are used.
+- **Measurement:** every 32nd batch carries `ack_requested` in normal routing. The agent answers `InputAck{ batch_seq, receive_to_inject_micros }`, and the host combines it with its own timestamps and the stream round-trip time for #070. There is no clock synchronization between host and guest. Only durations measured on one side are used. Diagnostic T2 runs may request an ack for every batch and append an empty acknowledged `InputBatch` as a FIFO fence; its ack follows the earlier batches after their `injectInputEvent(..., ASYNC)` calls return. An ack confirms guest validation and injection-queue acceptance, not Android dispatch or app handling.
 
 ---
 
@@ -364,6 +364,7 @@ This is the list #025 asks for ("Document unsupported IME behavior").
 - The `input.dropped.*` counters count what the injector sees refused, which for an ASYNC injection (§8) is a refusal at the queue. An event that the framework queues and then does not deliver, or that the app does not act on, is not counted, because the call returns before delivery. The click losses traced for #024 (IR-1296) are not counted, and the counters were zero in the session of IR-1299 that lost three clicks.
 - Logging: `io.apkrun.input`, categories `translate` (wrapper), `route` (apkrund), and `ime` (both). Guest: logcat tag `ApkRunInput`.
 - **Status after #024.** The router adds the counter `input.dropped.channel` (events the input stream could not carry). The `input.route` signpost wraps `InputRouter.route`. The `input.translate` signpost is not added: the window path is synchronous, and `Perf.interval` is asynchronous, so a synchronous variant needs an entry in [diagnostics.md](diagnostics.md) (IR-1244). The counters are kept by `InputRouter` and read by `DevInputRoute.counters()`. `apkrun dev boot` prints them when it stops (`input counters: …`), and prints the agent's `adb shell` count when the input binds and when it stops (`adb shell commands so far: …`). The input path starts no shell command, so the two counts of one run are equal (IR-1248). No diagnostics snapshot exports the counters yet (IR-1238). `input.ime.unmappedCommand` waits for the IME (#071), and the health warning `agent.input.disconnected` is not implemented in #024 (IR-1249). The guest's input lines use the logcat tag `ApkRunGuest`, the Guest Agent's tag ([guest-components.md](guest-components.md) §9), not `ApkRunInput` (IR-1236).
+- **#103 diagnostic experiment.** The `experiment/103-click-ack-fence` branch adds per-batch acknowledgements, an empty-batch fence, and a bounded sequence history to the development input route. The history is retained only after this diagnostic opts in. This is not part of the product input path. Its T2 result and limits are recorded in IR-1308; an ack confirms guest validation and async injection-queue acceptance, not Android dispatch or app handling.
 
 ---
 

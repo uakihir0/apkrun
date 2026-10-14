@@ -20,6 +20,7 @@ enum AndroidInputRunFailure: Error, Equatable {
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
     case inputRouteUnbound
+    case inputAckTraceNotNegotiated
     case windowNotActive
     case ambiguousDisplay
     case cannotCreateSystemEvent
@@ -52,6 +53,7 @@ final class AndroidInputRun {
     private var framesSeen = 0
     private var window: DisplayWindow?
     private var inputSink: WireSink?
+    private var inputTraceRecorder: InputTraceRecorder?
     private var boot: Task<Void, Never>?
 
     private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
@@ -168,6 +170,50 @@ final class AndroidInputRun {
         return await route.acknowledgementHistory()
     }
 
+    /// Starts the opt-in per-event trace after checking that this guest can return its event-time bridge.
+    func startPerEventInputTraceCapture() async throws -> InputCounters {
+        guard let inputSink, inputTraceRecorder == nil else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        guard await route.supportsAcknowledgementEventTimeTrace() else {
+            throw AndroidInputRunFailure.inputAckTraceNotNegotiated
+        }
+        guard let counters = await route.startAcknowledgementHistoryCapture(everyBatch: true) else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+
+        let recorder = InputTraceRecorder()
+        inputTraceRecorder = recorder
+        inputSink.setTraceRecorder(recorder)
+        let (_, view) = try windowAndView()
+        view.inputEventReceiptObserver = { [weak recorder] eventType, hostTimeNanos in
+            recorder?.recordRawReceipt(eventType: eventType, hostTimeNanos: hostTimeNanos)
+        }
+        return counters
+    }
+
+    /// Stops the per-event capture after the ordered sink drains, and returns every bounded trace layer.
+    func stopPerEventInputTraceCapture() async throws -> (
+        host: InputTraceHostSnapshot,
+        routed: InputSentEventHistory,
+        acknowledgements: InputAcknowledgementHistory,
+        counters: InputCounters,
+        missingAcknowledgementSequences: [UInt64]
+    ) {
+        guard let recorder = inputTraceRecorder else {
+            throw AndroidInputRunFailure.inputRouteUnbound
+        }
+        try await drainInput()
+        let missingAcknowledgementSequences = await waitForPerEventAcknowledgements()
+        let acknowledgements = await route.stopAcknowledgementHistoryCapture()
+        let routed = await route.sentEventHistory()
+        let counters = await route.counters()
+        let host = recorder.snapshot()
+        clearInputTraceCapture()
+        return (host, routed, acknowledgements, counters, missingAcknowledgementSequences)
+    }
+
     /// Waits for the ACK that covers `batchSequence`, and returns the complete bounded ACK history.
     func waitForAcknowledgement(through batchSequence: UInt64) async throws -> InputAcknowledgementHistory {
         let deadline = ContinuousClock.now + .seconds(15)
@@ -185,6 +231,31 @@ final class AndroidInputRun {
         let history = try await acknowledgementHistory()
         throw AndroidInputRunFailure.timedOut(
             "input ACK \(batchSequence); received \(history.records.map(\.batchSequence))")
+    }
+
+    /// Keeps ACK capture open until every sent trace batch is acknowledged, or the diagnostic deadline expires.
+    ///
+    /// An incomplete result is returned rather than thrown so the caller can attach the partial trace as test evidence.
+    private func waitForPerEventAcknowledgements() async -> [UInt64] {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while true {
+            let sent = await route.sentEventHistory()
+            let acknowledgements = await route.acknowledgementHistory()
+            let expected = Set(sent.records.map(\.batchSequence))
+            let received = Set(acknowledgements.records.map(\.batchSequence))
+            let missing = expected.subtracting(received).sorted()
+            if missing.isEmpty || sent.discardedRecords > 0 || acknowledgements.discardedRecords > 0 {
+                return missing
+            }
+            guard ContinuousClock.now < deadline else {
+                return missing
+            }
+            do {
+                try await Task.sleep(for: min(.milliseconds(25), deadline - .now))
+            } catch {
+                return missing
+            }
+        }
     }
 
     /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
@@ -288,11 +359,22 @@ final class AndroidInputRun {
 
     /// Ends the input and the window, stops Android, and removes the home, in that order.
     func finish() async {
+        clearInputTraceCapture()
         _ = await route.stopAcknowledgementHistoryCapture()
         window?.close()
         stop.continuation.yield(())
         await boot?.value
         VMRunResources.removeHomeOrReport(home)
+    }
+
+    private func clearInputTraceCapture() {
+        if let view = NSApplication.shared.windows
+            .first(where: { $0.title == Self.windowTitle })?.contentView as? IOSurfaceLayerView
+        {
+            view.inputEventReceiptObserver = nil
+        }
+        inputSink?.setTraceRecorder(nil)
+        inputTraceRecorder = nil
     }
 
     private func startBoot(guestAgentDirectory: URL) {
@@ -599,6 +681,8 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     }
 
     private let queue: AsyncStream<Command>.Continuation
+    // `IOSurfaceLayerView` calls `deliver` on the main thread, and the test changes this only on MainActor before input.
+    private var traceRecorder: InputTraceRecorder?
 
     init(route: DevInputRoute) {
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
@@ -621,7 +705,12 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     }
 
     func deliver(_ events: [InputCore.InputEvent]) {
+        traceRecorder?.recordTranslated(events)
         queue.yield(.events(events))
+    }
+
+    func setTraceRecorder(_ recorder: InputTraceRecorder?) {
+        traceRecorder = recorder
     }
 
     /// Completes after every earlier event list has finished routing.

@@ -192,6 +192,166 @@ final class AndroidInputTests: XCTestCase {
         }
     }
 
+    /// Captures one diagnostic batch across AppKit, the route, guest injection, View dispatch, and the click callback.
+    ///
+    /// The per-event ACK mode and debug touch listener perturb timing, so this is separate from the product-cadence test.
+    /// Run only on a dedicated lab GUI session with `APKRUN_INPUT_TRACE_T2=1`.
+    func testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixture() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_TRACE_T2"] == "1" else {
+            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_TRACE_T2=1.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try Self.attachEnvironmentIdentity(fixture: apk)
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForWindowServerPointerDispatch()
+            guard let before = try await Self.persistedClickCount(run) else {
+                throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+            }
+            XCTAssertEqual(before, 0, "a new guest should start with an empty HelloText counter")
+            _ = try await run.adb.shell("logcat -c")
+            let captureStart = try await run.startPerEventInputTraceCapture()
+            _ = try await run.adb.shell(
+                "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceStartAction)")
+
+            var clickFailure: String?
+            do {
+                let pointer = try run.pointer()
+                for _ in 0..<100 {
+                    try await pointer.click(at: target, interClickGap: .milliseconds(50))
+                }
+                try await run.drainInput()
+            } catch {
+                clickFailure = String(describing: error)
+            }
+
+            let expectedCount = before + 100
+            let after = try? await Self.waitForPersistedClickCountPreservingTrace(
+                run, atLeast: expectedCount, timeout: .seconds(30))
+            try await Task.sleep(for: .milliseconds(60))
+            let trace = try await run.stopPerEventInputTraceCapture()
+            _ = try await run.adb.shell(
+                "am broadcast -n \(Self.helloText)/.DebugCounterReceiver -a \(Self.touchTraceDrainAction)")
+            let fixtureLines = try await run.fixtureLog { lines in
+                guard let recordCount = Self.touchTraceRecordCount(in: lines) else {
+                    return false
+                }
+                return lines.filter { $0.contains("touch-trace ") }.count >= recordCount
+            }
+            let summary = Self.touchTraceSummary(in: fixtureLines)
+            let unattributedFixtureClickRecords = fixtureLines.filter {
+                $0.contains("touch-trace kind=click ") && Self.keyValues(in: $0)["correlation"] == "ambiguous"
+            }
+            let routed = trace.routed.records.map(InputTraceRoutedEvent.init)
+            let acknowledgements = trace.acknowledgements.records.map(InputTraceAcknowledgement.init)
+            let joins = Self.joinTrace(
+                host: trace.host,
+                routedEvents: trace.routed.records,
+                acknowledgements: trace.acknowledgements.records,
+                fixtureLines: fixtureLines
+            )
+            let evidence = InputTraceEvidence(
+                schemaVersion: 1,
+                path: "WindowServer → AppKit → IOSurfaceLayerView → InputRouter → Guest Agent → HelloText",
+                captureMode: "one event per input batch; ACK requested for every batch",
+                clockDomains: [
+                    "hostTimeNanos": "NSEvent.timestamp and InputCore use Mac mach continuous time",
+                    "lastEventTimeMillis": "Guest MotionEvent.eventTime in Android uptime milliseconds",
+                    "fixtureEventTimeMs": "HelloText MotionEvent.eventTime; match only to the guest ACK timestamp",
+                    "receiveToInjectMicros":
+                        "Guest monotonic interval from batch receipt to input injection completion",
+                ],
+                limitations: [
+                    "The debug touch listener and per-event ACK cadence can change timing; compare with the separate product-cadence test.",
+                    "Host and guest clock values have different epochs and are never subtracted.",
+                    "The route is M3 DevBoot/DevInputRoute and does not exercise the future wrapper-to-apkrund XPC path.",
+                    "A click is linked to an UP only when the fixture reports a unique UP; ambiguous callbacks remain unattached in the global evidence.",
+                ],
+                captureStartCounters: String(describing: captureStart),
+                finalCounters: String(describing: trace.counters),
+                host: trace.host,
+                routedEvents: routed,
+                discardedRoutedEvents: trace.routed.discardedRecords,
+                acknowledgements: acknowledgements,
+                discardedAcknowledgements: trace.acknowledgements.discardedRecords,
+                missingAcknowledgementSequences: trace.missingAcknowledgementSequences,
+                joins: joins,
+                unattributedFixtureClickRecords: unattributedFixtureClickRecords,
+                fixtureTraceLines: fixtureLines.filter {
+                    $0.contains("touch-trace ") || $0.contains("debug touch trace drain")
+                },
+                fixtureTraceRecords: summary?.records,
+                fixtureTraceDiscarded: summary?.discarded,
+                persistedCounterBefore: before,
+                persistedCounterAfter: after,
+                persistedCounterDelta: after.map { $0 - before }
+            )
+            try Self.attachTraceEvidence(evidence, failure: clickFailure)
+
+            XCTAssertNil(clickFailure, "the WindowServer click batch failed")
+            XCTAssertEqual(after, expectedCount, "persisted counter after the diagnostic click batch")
+            XCTAssertEqual(after.map { $0 - before }, 100)
+            XCTAssertEqual(trace.host.discardedRawReceipts, 0)
+            XCTAssertEqual(trace.host.discardedTranslatedEvents, 0)
+            XCTAssertEqual(trace.routed.discardedRecords, 0)
+            XCTAssertEqual(trace.acknowledgements.discardedRecords, 0)
+            XCTAssertEqual(summary?.discarded, 0, "the fixture touch trace overflowed")
+
+            let hostTouchEvents = trace.host.translatedEvents.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let routeTouchEvents = trace.routed.records.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let touchJoins = joins.filter { $0.kindAndPhase.hasPrefix("touch.") }
+            let touchUpJoins = touchJoins.filter { $0.kindAndPhase == "touch.up" }
+            let incompleteTouchJoins = touchJoins.filter {
+                $0.rawReceiptOrdinals.count != 1
+                    || $0.translatedEventOrdinals.count != 1
+                    || $0.acknowledgement == nil
+                    || ($0.acknowledgement?.lastEventTimeMillis ?? 0) == 0
+                    || $0.fixtureTouchRecords.count != 1
+                    || $0.fixtureDispatch != "matched-view-touch"
+            }
+            XCTAssertEqual(hostTouchEvents.count, 200, "each click should produce a translated DOWN and UP")
+            XCTAssertEqual(
+                hostTouchEvents.map { "\($0.hostTimeNanos):\($0.kindAndPhase)" },
+                routeTouchEvents.map { "\($0.hostTimeNanos):\($0.kindAndPhase)" },
+                "the routed touch sequence should preserve the translated host events")
+            XCTAssertEqual(
+                trace.acknowledgements.records.map(\.batchSequence),
+                trace.routed.records.map(\.batchSequence),
+                "every per-event input batch should have a guest ACK")
+            XCTAssertTrue(
+                trace.missingAcknowledgementSequences.isEmpty,
+                "ACK capture timed out for routed batches \(trace.missingAcknowledgementSequences)")
+            XCTAssertTrue(trace.acknowledgements.records.allSatisfy { $0.rejectedEvents == 0 })
+            XCTAssertEqual(touchJoins.count, 200, "all routed touch events should have a join record")
+            XCTAssertTrue(
+                incompleteTouchJoins.isEmpty,
+                "touch events missing a unique host, guest ACK, or fixture match: "
+                    + incompleteTouchJoins.map {
+                        "\($0.batchSequence):\($0.kindAndPhase) ack=\($0.acknowledgement?.lastEventTimeMillis ?? 0) "
+                            + "raw=\($0.rawReceiptOrdinals.count) translated=\($0.translatedEventOrdinals.count) "
+                            + "fixture=\($0.fixtureTouchRecords.count) dispatch=\($0.fixtureDispatch)"
+                    }.joined(separator: ", "))
+            XCTAssertEqual(touchUpJoins.count, 100, "each click should produce one traced fixture UP")
+            XCTAssertTrue(
+                touchUpJoins.allSatisfy {
+                    $0.clickOutcome == "unique-up" && $0.fixtureClickRecords.count == 1
+                },
+                "each fixture UP should have one unique click callback; ambiguous callbacks remain unattached "
+                    + "and are recorded separately")
+            let uniqueClickRecords = touchUpJoins.flatMap(\.fixtureClickRecords)
+            XCTAssertEqual(uniqueClickRecords.count, 100)
+            XCTAssertEqual(Set(uniqueClickRecords).count, 100, "a click callback must not be linked to two UP events")
+            XCTAssertEqual(trace.counters.droppedRate - captureStart.droppedRate, 0)
+            XCTAssertEqual(trace.counters.droppedNotRunning - captureStart.droppedNotRunning, 0)
+            XCTAssertEqual(trace.counters.droppedInvalid - captureStart.droppedInvalid, 0)
+            XCTAssertEqual(trace.counters.droppedChannel - captureStart.droppedChannel, 0)
+            XCTAssertEqual(trace.counters.coalesced - captureStart.coalesced, 0)
+            XCTAssertEqual(summary?.records, fixtureLines.filter { $0.contains("touch-trace ") }.count)
+        }
+    }
+
     /// Dragging scrolls HelloCompose's list, and trackpad and wheel scrolling move it the way macOS reports them (#024).
     /// The content moves up for a negative delta, and then the first visible row index grows.
     func testDragAndScrollMoveTheHelloComposeList() async throws {
@@ -336,6 +496,8 @@ final class AndroidInputTests: XCTestCase {
     private static let textPrefix = "APKRUN-FIXTURE: text "
     private static let persistedCounterPrefix = "APKRUN-FIXTURE: debug read "
     private static let counterReadAction = "io.apkrun.fixture.hellotext.debug.READ"
+    private static let touchTraceStartAction = "io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_START"
+    private static let touchTraceDrainAction = "io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_DRAIN"
     private static let editorActionLine = "APKRUN-FIXTURE: editor action 6"
     private static let mainScreenLine = "APKRUN-FIXTURE: screen main"
     private static let detailsScreenLine = "APKRUN-FIXTURE: screen details"
@@ -371,6 +533,174 @@ final class AndroidInputTests: XCTestCase {
             }
         }
         return nil
+    }
+
+    /// Reads the fixture's persisted counter without clearing the diagnostic touch records from logcat.
+    private static func waitForPersistedClickCountPreservingTrace(
+        _ run: AndroidInputRun,
+        atLeast expected: Int,
+        timeout: Duration
+    ) async throws -> Int? {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            _ = try await run.adb.shell("am broadcast -a \(counterReadAction) -p \(helloText)")
+            let lines = try await run.fixtureLog { lines in
+                lines.contains { $0.contains(persistedCounterPrefix) }
+            }
+            if let count = AndroidInputRun.numbers(in: lines, after: persistedCounterPrefix).last,
+                count >= expected
+            {
+                return count
+            }
+            try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+        }
+        let lines = try await run.fixtureLog { $0.contains { $0.contains(persistedCounterPrefix) } }
+        return AndroidInputRun.numbers(in: lines, after: persistedCounterPrefix).last
+    }
+
+    private struct TouchTraceSummary {
+        let records: Int
+        let discarded: Int
+    }
+
+    private static func touchTraceSummary(in lines: [String]) -> TouchTraceSummary? {
+        guard let line = lines.first(where: { $0.contains("debug touch trace drain ") }) else {
+            return nil
+        }
+        let values = keyValues(in: line)
+        guard let records = values["records"].flatMap(Int.init),
+            let discarded = values["dropped"].flatMap(Int.init)
+        else {
+            return nil
+        }
+        return TouchTraceSummary(records: records, discarded: discarded)
+    }
+
+    private static func touchTraceRecordCount(in lines: [String]) -> Int? {
+        touchTraceSummary(in: lines)?.records
+    }
+
+    private static func joinTrace(
+        host: InputTraceHostSnapshot,
+        routedEvents: [InputSentEventHistory.Record],
+        acknowledgements: [InputAcknowledgementHistory.Record],
+        fixtureLines: [String]
+    ) -> [InputTraceLink] {
+        let traceLines = fixtureLines.filter { $0.contains("touch-trace ") }
+        let touchLines = traceLines.filter { keyValues(in: $0)["kind"] == "touch" }
+        let clickLines = traceLines.filter { keyValues(in: $0)["kind"] == "click" }
+        let acksBySequence = Dictionary(uniqueKeysWithValues: acknowledgements.map { ($0.batchSequence, $0) })
+
+        return routedEvents.map { routed in
+            let eventType: Int?
+            let fixtureAction: String?
+            switch routed.kindAndPhase {
+            case "touch.down":
+                eventType = Int(NSEvent.EventType.leftMouseDown.rawValue)
+                fixtureAction = "DOWN"
+            case "touch.up":
+                eventType = Int(NSEvent.EventType.leftMouseUp.rawValue)
+                fixtureAction = "UP"
+            default:
+                eventType = nil
+                fixtureAction = nil
+            }
+            let rawReceipts = host.rawReceipts.filter {
+                $0.hostTimeNanos == routed.hostTimeNanos && $0.eventType == eventType
+            }
+            let translated = host.translatedEvents.filter {
+                $0.hostTimeNanos == routed.hostTimeNanos && $0.kindAndPhase == routed.kindAndPhase
+            }
+            let acknowledgement = acksBySequence[routed.batchSequence]
+            let guestTime = acknowledgement?.lastEventTimeMillis ?? 0
+            let fixtureTouches = touchLines.filter { line in
+                let fields = keyValues(in: line)
+                return fields["action"] == fixtureAction
+                    && fields["eventTimeMs"].flatMap(UInt64.init) == (guestTime == 0 ? nil : guestTime)
+            }
+            let guestSequences = Set(fixtureTouches.compactMap { keyValues(in: $0)["sequence"] })
+            let uniquelyCorrelatedClicks = clickLines.filter {
+                guard let sequence = keyValues(in: $0)["correlatedUpSequence"] else {
+                    return false
+                }
+                return guestSequences.contains(sequence)
+            }
+            let clickRecords: [String]
+            let clickOutcome: String
+            if routed.kindAndPhase != "touch.up" {
+                clickRecords = []
+                clickOutcome = "not-an-up"
+            } else if !uniquelyCorrelatedClicks.isEmpty {
+                clickRecords = uniquelyCorrelatedClicks
+                clickOutcome = "unique-up"
+            } else if fixtureTouches.isEmpty {
+                clickRecords = []
+                clickOutcome = "no-matching-up"
+            } else {
+                clickRecords = []
+                clickOutcome = "no-unique-up-correlation"
+            }
+            let dispatchOutcome: String
+            if acknowledgement == nil {
+                dispatchOutcome = "no-ack"
+            } else if guestTime == 0 {
+                dispatchOutcome = "ack-without-accepted-motion-event"
+            } else if fixtureTouches.isEmpty {
+                dispatchOutcome = "no-matching-view-touch"
+            } else if fixtureTouches.count == 1 {
+                dispatchOutcome = "matched-view-touch"
+            } else {
+                dispatchOutcome = "multiple-view-touch-matches"
+            }
+            return InputTraceLink(
+                batchSequence: routed.batchSequence,
+                eventIndex: routed.eventIndex,
+                kindAndPhase: routed.kindAndPhase,
+                hostTimeNanos: routed.hostTimeNanos,
+                rawReceiptOrdinals: rawReceipts.map(\.ordinal),
+                translatedEventOrdinals: translated.map(\.ordinal),
+                acknowledgement: acknowledgement.map(InputTraceAcknowledgement.init),
+                fixtureTouchRecords: fixtureTouches,
+                fixtureClickRecords: clickRecords,
+                fixtureDispatch: dispatchOutcome,
+                clickOutcome: clickOutcome
+            )
+        }
+    }
+
+    private static func keyValues(in line: String) -> [String: String] {
+        let content: Substring
+        if let marker = line.range(of: "touch-trace ") {
+            content = line[marker.upperBound...]
+        } else if let marker = line.range(of: "debug touch trace drain ") {
+            content = line[marker.upperBound...]
+        } else {
+            content = line[...]
+        }
+        return Dictionary(
+            content.split(whereSeparator: \.isWhitespace).compactMap { field in
+                let pair = field.split(separator: "=", maxSplits: 1)
+                guard pair.count == 2 else {
+                    return nil
+                }
+                return (String(pair[0]), String(pair[1]))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    private static func attachTraceEvidence(_ evidence: InputTraceEvidence, failure: String?) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var object = try JSONSerialization.jsonObject(with: encoder.encode(evidence)) as? [String: Any] ?? [:]
+        object["captureFailure"] = failure
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        XCTContext.runActivity(named: "Joined input trace evidence") { activity in
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "input-trace-evidence.json"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
     }
 
     private static func boundedShell(

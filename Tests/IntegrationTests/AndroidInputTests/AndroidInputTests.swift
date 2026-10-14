@@ -1,13 +1,17 @@
 import AppKit
+import CryptoKit
 import Foundation
+import RuntimeCore
 import XCTest
 
 /// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.
 ///
 /// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
-/// window, and posts the pointer events into the window's content view as `NSEvent`s. The suite needs no Accessibility
-/// permission. Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the
-/// centres of their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
+/// window, and posts the pointer events into the window's content view. The existing tests synthesize `NSEvent`s
+/// directly and need no Accessibility permission. The #103 interactive test opts into WindowServer `CGEvent`s and
+/// requires permission only on its dedicated lab GUI session. Points are display pixels of display 0, mapped to the
+/// window by `CoordinateMapper`. The targets are the centres of their `uiautomator` bounds, except the drag, which uses
+/// fixed points inside HelloCompose's list.
 ///
 /// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
 /// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
@@ -58,6 +62,133 @@ final class AndroidInputTests: XCTestCase {
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
             XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
+        }
+    }
+
+    /// Three product-cadence click batches through WindowServer must each change the persisted counter by 100.
+    ///
+    /// This test activates the APKRun window and moves the system pointer. Run it only in a dedicated lab GUI session
+    /// with `APKRUN_INPUT_INTERACTIVE_T2=1`; it is skipped by default and never requests Accessibility permission.
+    func testThreeConsecutiveHundredClickBatchesThroughWindowServer() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_INTERACTIVE_T2"] == "1" else {
+            throw XCTSkip("Run only on a dedicated lab GUI session with APKRUN_INPUT_INTERACTIVE_T2=1.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try Self.attachEnvironmentIdentity(fixture: apk)
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .windowServer
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForWindowServerPointerDispatch()
+            let captureStartCounters = try await run.startAcknowledgementHistoryCapture()
+            let firstAcknowledgedSequenceAfterCaptureStart =
+                UInt64(captureStartCounters.batchesSent / 32 + 1) * 32
+            try await Self.assertNoShellInputDuring {
+                guard var previousCount = try await Self.persistedClickCount(run) else {
+                    throw AndroidInputRunFailure.timedOut("the fixture's initial persisted click counter")
+                }
+                XCTAssertEqual(previousCount, 0, "a new guest should start with an empty HelloText counter")
+                var previousCounters = captureStartCounters
+                let clickDeltas = [100, 100, 100]
+                for (index, clickDelta) in clickDeltas.enumerated() {
+                    var persistedCount: Int?
+                    var counters: InputCounters?
+                    var acknowledgements: InputAcknowledgementHistory?
+                    do {
+                        _ = try await run.adb.shell("logcat -c")
+                        let pointer = try run.pointer()
+                        for _ in 0..<clickDelta {
+                            try await pointer.click(at: target, interClickGap: .milliseconds(50))
+                        }
+
+                        let expectedCount = previousCount + clickDelta
+                        let reachedCount = try await Self.waitForPersistedClickCount(
+                            run, atLeast: expectedCount)
+                        persistedCount = reachedCount
+                        XCTAssertEqual(
+                            reachedCount, expectedCount,
+                            "batch \(index + 1) persisted \(reachedCount - previousCount) of \(clickDelta) clicks")
+
+                        let sentCounters = try await run.inputCounters()
+                        let lastAcknowledgedSequence = UInt64(sentCounters.batchesSent / 32 * 32)
+                        if lastAcknowledgedSequence == 0 {
+                            acknowledgements = try await run.acknowledgementHistory()
+                        } else {
+                            acknowledgements = try await run.waitForAcknowledgement(
+                                through: lastAcknowledgedSequence)
+                        }
+                        let finalCounters = try await run.inputCounters()
+                        counters = finalCounters
+                        XCTAssertGreaterThanOrEqual(
+                            finalCounters.eventsSent - previousCounters.eventsSent,
+                            clickDelta * 2,
+                            "batch \(index + 1) did not send both touch edges for every click")
+                        XCTAssertEqual(finalCounters.droppedRate, 0, "batch \(index + 1)")
+                        XCTAssertEqual(finalCounters.droppedNotRunning, 0, "batch \(index + 1)")
+                        XCTAssertEqual(
+                            finalCounters.droppedInvalid, 0,
+                            "batch \(index + 1); this aggregate includes invalid host input and guest rejections in received ACKs"
+                        )
+                        XCTAssertEqual(finalCounters.droppedChannel, 0, "batch \(index + 1)")
+                        XCTAssertEqual(finalCounters.coalesced, 0, "batch \(index + 1)")
+
+                        let expectedSequences: [UInt64]
+                        if firstAcknowledgedSequenceAfterCaptureStart <= lastAcknowledgedSequence {
+                            expectedSequences = stride(
+                                from: Int(firstAcknowledgedSequenceAfterCaptureStart),
+                                through: Int(lastAcknowledgedSequence),
+                                by: 32
+                            ).map(UInt64.init)
+                        } else {
+                            expectedSequences = []
+                        }
+                        let capturedSequences = acknowledgements?.records
+                            .map(\.batchSequence)
+                            .filter {
+                                $0 >= firstAcknowledgedSequenceAfterCaptureStart
+                                    && $0 <= lastAcknowledgedSequence
+                            }
+                        XCTAssertEqual(acknowledgements?.discardedRecords, 0, "the bounded ACK history overflowed")
+                        XCTAssertEqual(
+                            capturedSequences, expectedSequences,
+                            "the normal ACK coverage did not match the 32-batch cadence")
+                        XCTAssertTrue(
+                            acknowledgements?.records.allSatisfy { $0.rejectedEvents == 0 } == true,
+                            "a normal periodic ACK reported rejected guest input")
+                        Self.attachBatchEvidence(
+                            batch: index + 1,
+                            before: previousCount,
+                            after: reachedCount,
+                            counters: finalCounters,
+                            acknowledgements: acknowledgements,
+                            failure: nil
+                        )
+                        previousCount = reachedCount
+                        previousCounters = finalCounters
+                    } catch {
+                        if let currentCount = try? await Self.persistedClickCount(
+                            run, timeout: .seconds(1))
+                        {
+                            persistedCount = currentCount
+                        }
+                        if let currentCounters = try? await run.inputCounters() {
+                            counters = currentCounters
+                        }
+                        if let currentAcknowledgements = try? await run.acknowledgementHistory() {
+                            acknowledgements = currentAcknowledgements
+                        }
+                        Self.attachBatchEvidence(
+                            batch: index + 1,
+                            before: previousCount,
+                            after: persistedCount,
+                            counters: counters,
+                            acknowledgements: acknowledgements,
+                            failure: String(describing: error)
+                        )
+                        throw error
+                    }
+                }
+            }
         }
     }
 
@@ -203,9 +334,157 @@ final class AndroidInputTests: XCTestCase {
     private static let detailsID = "io.apkrun.fixture.hellotext:id/details_button"
     private static let textAction = "io.apkrun.fixture.hellotext.debug.TEXT"
     private static let textPrefix = "APKRUN-FIXTURE: text "
+    private static let persistedCounterPrefix = "APKRUN-FIXTURE: debug read "
+    private static let counterReadAction = "io.apkrun.fixture.hellotext.debug.READ"
     private static let editorActionLine = "APKRUN-FIXTURE: editor action 6"
     private static let mainScreenLine = "APKRUN-FIXTURE: screen main"
     private static let detailsScreenLine = "APKRUN-FIXTURE: screen details"
+
+    private static func persistedClickCount(
+        _ run: AndroidInputRun,
+        timeout: Duration = .seconds(30)
+    ) async throws -> Int? {
+        let deadline = ContinuousClock.now + timeout
+        guard try await boundedShell(run, command: "logcat -c", until: deadline) != nil,
+            try await boundedShell(
+                run,
+                command: "am broadcast -a \(counterReadAction) -p \(helloText)",
+                until: deadline
+            ) != nil
+        else {
+            return nil
+        }
+        while ContinuousClock.now < deadline {
+            guard
+                let reply = try await boundedShell(
+                    run, command: "logcat -d -s APKRUN-FIXTURE", until: deadline)
+            else {
+                return nil
+            }
+            if let count = AndroidInputRun.numbers(
+                in: reply.output.components(separatedBy: "\n"), after: persistedCounterPrefix
+            ).last {
+                return count
+            }
+            if ContinuousClock.now < deadline {
+                try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+            }
+        }
+        return nil
+    }
+
+    private static func boundedShell(
+        _ run: AndroidInputRun,
+        command: String,
+        until deadline: ContinuousClock.Instant
+    ) async throws -> AdbShellReply? {
+        let remaining = deadline - .now
+        guard remaining > .zero else {
+            return nil
+        }
+        do {
+            return try await run.adb.shell(command, timeout: min(.seconds(10), remaining))
+        } catch let failure {
+            if case .commandTimedOut = failure {
+                return nil
+            }
+            throw failure
+        }
+    }
+
+    private static func waitForPersistedClickCount(_ run: AndroidInputRun, atLeast expected: Int) async throws -> Int {
+        let deadline = ContinuousClock.now + .seconds(10)
+        var lastCount = 0
+        while ContinuousClock.now < deadline {
+            let remaining = deadline - .now
+            if let count = try await persistedClickCount(run, timeout: remaining) {
+                lastCount = count
+                if count >= expected {
+                    return count
+                }
+            }
+            if ContinuousClock.now < deadline {
+                try await Task.sleep(for: min(.milliseconds(100), deadline - .now))
+            }
+        }
+        throw AndroidInputRunFailure.timedOut(
+            "the fixture's persisted click count to reach \(expected); last value was \(lastCount)")
+    }
+
+    private static func assertNoShellInputDuring(_ operation: () async throws -> Void) async throws {
+        let sampler = ShellInputSampler()
+        sampler.start()
+        do {
+            try await operation()
+        } catch {
+            _ = await sampler.stop()
+            throw error
+        }
+        let shellInput = await sampler.stop()
+        XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+    }
+
+    private static func attachEnvironmentIdentity(fixture: URL) throws {
+        let bundle = try AndroidBootSession.bundleDirectory()
+        guard let guestPath = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guestPath.isEmpty else {
+            throw XCTSkip("APKRUN_GUEST_DIR is not set.")
+        }
+        let guestBundle = URL(fileURLWithPath: guestPath, isDirectory: true)
+        let imageManifest = bundle.appendingPathComponent("manifest.json")
+        let guestManifest = guestBundle.appendingPathComponent("apkrun-guest.json")
+        let guestAPK = guestBundle.appendingPathComponent("apkrun-guest.apk")
+        let identity: [String: Any] = [
+            "delivery": "CGEvent.post(tap: .cghidEventTap)",
+            "image_bundle": bundle.path,
+            "image_manifest_sha256": try sha256(of: imageManifest),
+            "image_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: imageManifest)),
+            "guest_bundle": guestBundle.path,
+            "guest_manifest_sha256": try sha256(of: guestManifest),
+            "guest_manifest": try JSONSerialization.jsonObject(with: Data(contentsOf: guestManifest)),
+            "guest_apk_sha256": try sha256(of: guestAPK),
+            "fixture_apk": fixture.path,
+            "fixture_apk_sha256": try sha256(of: fixture),
+        ]
+        let data = try JSONSerialization.data(withJSONObject: identity, options: [.prettyPrinted, .sortedKeys])
+        XCTContext.runActivity(named: "Input test environment identity") { activity in
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "input-test-environment.json"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
+
+    private static func sha256(of file: URL) throws -> String {
+        let hash = SHA256.hash(data: try Data(contentsOf: file))
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func attachBatchEvidence(
+        batch: Int,
+        before: Int,
+        after: Int?,
+        counters: InputCounters?,
+        acknowledgements: InputAcknowledgementHistory?,
+        failure: String?
+    ) {
+        let ackRows = acknowledgements?.records.map { "\($0.batchSequence):\($0.rejectedEvents)" } ?? []
+        let text = """
+            batch=\(batch)
+            persisted_before=\(before)
+            persisted_after=\(after.map(String.init) ?? "unavailable")
+            persisted_delta=\(after.map { String($0 - before) } ?? "unavailable")
+            host_input_counters=\(counters.map { String(describing: $0) } ?? "unavailable")
+            normal_ack_sequence_and_rejections=\(ackRows)
+            ack_history_discarded=\(acknowledgements.map { String($0.discardedRecords) } ?? "unavailable")
+            failure=\(failure ?? "none")
+            """
+        XCTContext.runActivity(named: "Input batch \(batch) evidence") { activity in
+            let attachment = XCTAttachment(data: Data(text.utf8), uniformTypeIdentifier: "public.utf8-plain-text")
+            attachment.name = "input-batch-\(batch).txt"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
 
     /// Moves the focus to HelloText's field with Tab, and reads the focus from a uiautomator dump before each Tab. A dump
     /// that fails is retried without a Tab, so a Tab never moves the focus twice.

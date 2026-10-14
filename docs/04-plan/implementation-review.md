@@ -18636,6 +18636,8 @@ against the known-good odm7 bundle at
 The test plan's fixture path was temporarily pointed at the instrumented
 HelloText build and restored byte-for-byte after execution (restored plan
 SHA-256 `e2bd324e8712d3de0e36b76910c6384f833e17a00d45137658d4b53152c2dc6e`).
+The instrumented HelloText APK has SHA-256
+`b6c2e9adfabe3848d10dc5c5a52d0cab08f136c9ce78a1ac72aacb3b407c8669`.
 Because the documented test-signing variables were unset, the run used the
 available local Apple Development identity to determine whether the guest
 could boot and reach the fixture. The exact lab signer was not used.

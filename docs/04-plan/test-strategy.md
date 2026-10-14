@@ -611,6 +611,8 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #029 | — | — | HelloText on a secondary display; HelloCompose, HelloGL, and HelloWebView results recorded | — |
 | #030 | `InputRouter` ownership | — | two sessions; routing to the focused window | G5 check; v0.2 checklist |
 
+For #103, both GUI configurations apply to the full `IntegrationTests` target. Use the exact method-level `-only-testing` commands in [build-system.md](../05-development/build-system.md) §12.4 so each lab run executes only its intended case.
+
 ### 6.5 M4 Daemon and guest protocol
 
 | Task | T0 | T1 | T2 | T3 and manual |

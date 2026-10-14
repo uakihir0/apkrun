@@ -46,6 +46,28 @@ public struct InputCounters: Equatable, Sendable {
     }
 }
 
+/// The bounded history of guest input acknowledgements (input.md §8).
+public struct InputAcknowledgementHistory: Equatable, Sendable {
+    /// The most recent acknowledgements, in receive order.
+    public let records: [Record]
+    /// Records evicted because the bounded history reached its limit.
+    public let discardedRecords: Int
+
+    /// One guest acknowledgement received by the router.
+    public struct Record: Equatable, Sendable {
+        /// The sequence of the guest input batch.
+        public let batchSequence: UInt64
+        /// Events the guest rejected in that batch.
+        public let rejectedEvents: UInt32
+    }
+
+    /// Creates a history snapshot.
+    public init(records: [Record], discardedRecords: Int) {
+        self.records = records
+        self.discardedRecords = discardedRecords
+    }
+}
+
 extension InputCounters: CustomStringConvertible {
     /// The counts on one line for the development command's output: the sends first, then the drop and merge counts of
     /// input.md §11 under their names.
@@ -68,6 +90,8 @@ public actor InputRouter {
     public static let coalescingBacklogBytes = 64 * 1024
     /// The length of the rate window.
     private static let windowNanoseconds: UInt64 = 1_000_000_000
+    /// The most recent guest acknowledgements retained for diagnostics.
+    public static let acknowledgementHistoryLimit = 256
 
     /// Returns the time in nanoseconds of a monotonic clock. The rate window and the cancel timestamps use it.
     public typealias Clock = @Sendable () -> UInt64
@@ -127,6 +151,31 @@ public actor InputRouter {
 
     /// What the router dropped, merged, and sent so far.
     public private(set) var counters = InputCounters()
+    private var acknowledgementRecords: [InputAcknowledgementHistory.Record] = []
+    private var discardedAcknowledgementRecords = 0
+    private var capturesAcknowledgementHistory = false
+
+    /// A bounded record of ACKs captured from the current input channel.
+    public var acknowledgementHistory: InputAcknowledgementHistory {
+        InputAcknowledgementHistory(
+            records: acknowledgementRecords,
+            discardedRecords: discardedAcknowledgementRecords
+        )
+    }
+
+    /// Starts bounded ACK capture for an explicitly enabled diagnostic run.
+    public func startAcknowledgementHistoryCapture() -> InputCounters {
+        acknowledgementRecords.removeAll(keepingCapacity: true)
+        discardedAcknowledgementRecords = 0
+        capturesAcknowledgementHistory = true
+        return counters
+    }
+
+    /// Stops bounded ACK capture and returns its final snapshot.
+    public func stopAcknowledgementHistoryCapture() -> InputAcknowledgementHistory {
+        capturesAcknowledgementHistory = false
+        return acknowledgementHistory
+    }
 
     /// Creates a router over `channel`. The acks of the channel are read for the rejected counts (input.md §8).
     public init(
@@ -329,6 +378,18 @@ public actor InputRouter {
 
     /// Adds the events that the guest rejected to the invalid count.
     private func recordAck(_ ack: GPInputAck) {
+        if capturesAcknowledgementHistory {
+            acknowledgementRecords.append(
+                InputAcknowledgementHistory.Record(
+                    batchSequence: ack.batchSeq,
+                    rejectedEvents: ack.rejectedEvents
+                )
+            )
+            if acknowledgementRecords.count > Self.acknowledgementHistoryLimit {
+                acknowledgementRecords.removeFirst()
+                discardedAcknowledgementRecords += 1
+            }
+        }
         guard ack.rejectedEvents > 0 else {
             return
         }

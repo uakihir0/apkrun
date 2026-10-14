@@ -71,4 +71,30 @@ public actor DevInputRoute {
         }
         return total
     }
+
+    /// Starts bounded ACK history capture on the bound router.
+    public func startAcknowledgementHistoryCapture() async -> InputCounters? {
+        guard let router else {
+            return nil
+        }
+        var total = localCounters
+        total.add(await router.startAcknowledgementHistoryCapture())
+        return total
+    }
+
+    /// Stops bounded ACK history capture and returns its final snapshot.
+    public func stopAcknowledgementHistoryCapture() async -> InputAcknowledgementHistory {
+        guard let router else {
+            return InputAcknowledgementHistory(records: [], discardedRecords: 0)
+        }
+        return await router.stopAcknowledgementHistoryCapture()
+    }
+
+    /// The bounded ACK history of the currently bound router, for development diagnostics.
+    public func acknowledgementHistory() async -> InputAcknowledgementHistory {
+        guard let router else {
+            return InputAcknowledgementHistory(records: [], discardedRecords: 0)
+        }
+        return await router.acknowledgementHistory
+    }
 }

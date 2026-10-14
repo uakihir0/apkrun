@@ -455,3 +455,57 @@ func rejectedEventsInAnAckAreCountedAsInvalid() async throws {
     try await eventually { await router.counters.droppedInvalid == 3 }
     #expect(await router.counters.droppedInvalid == 3)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryRetainsSequenceAndRejectionCounts() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    _ = await router.startAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 32, rejected: 0)
+    channel.deliverAck(batchSeq: 64, rejected: 2)
+    try await eventually { await router.acknowledgementHistory.records.count == 2 }
+    #expect(
+        await router.acknowledgementHistory.records
+            == [
+                InputAcknowledgementHistory.Record(batchSequence: 32, rejectedEvents: 0),
+                InputAcknowledgementHistory.Record(batchSequence: 64, rejectedEvents: 2),
+            ])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryCaptureIsOptInAndCanBeStopped() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    channel.deliverAck(batchSeq: 31, rejected: 1)
+    try await eventually { await router.counters.droppedInvalid == 1 }
+    #expect(await router.acknowledgementHistory.records.isEmpty)
+
+    _ = await router.startAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 32, rejected: 0)
+    try await eventually { await router.acknowledgementHistory.records.count == 1 }
+    let captured = await router.stopAcknowledgementHistoryCapture()
+    channel.deliverAck(batchSeq: 33, rejected: 1)
+    try await eventually { await router.counters.droppedInvalid == 2 }
+
+    #expect(captured.records.map(\.batchSequence) == [32])
+    #expect(await router.acknowledgementHistory.records.map(\.batchSequence) == [32])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func acknowledgementHistoryDiscardsOldRecordsAtItsBound() async throws {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel, clock: { 0 })
+    _ = await router.startAcknowledgementHistoryCapture()
+    for sequence in 1...300 {
+        channel.deliverAck(batchSeq: UInt64(sequence), rejected: 0)
+    }
+    try await eventually {
+        let history = await router.acknowledgementHistory
+        return history.records.count == InputRouter.acknowledgementHistoryLimit
+            && history.discardedRecords == 300 - InputRouter.acknowledgementHistoryLimit
+    }
+    let history = await router.acknowledgementHistory
+    #expect(history.records.map(\.batchSequence) == Array(45...300).map(UInt64.init))
+    #expect(history.records.allSatisfy { $0.rejectedEvents == 0 })
+    #expect(history.discardedRecords == 44)
+}

@@ -32,6 +32,34 @@ actor CollectingInputChannel: InputChannel {
     }
 }
 
+actor AcknowledgingInputChannel: InputChannel {
+    nonisolated let acks: AsyncStream<GPInputAck>
+    private nonisolated let continuation: AsyncStream<GPInputAck>.Continuation
+
+    init() {
+        let stream = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .unbounded)
+        acks = stream.stream
+        continuation = stream.continuation
+    }
+
+    func send(_ batch: GPInputBatch) async throws {}
+
+    var pendingBytes: Int {
+        0
+    }
+
+    nonisolated func deliverAck(batchSequence: UInt64, rejectedEvents: UInt32) {
+        var ack = GPInputAck()
+        ack.batchSeq = batchSequence
+        ack.rejectedEvents = rejectedEvents
+        continuation.yield(ack)
+    }
+
+    nonisolated func finish() {
+        continuation.finish()
+    }
+}
+
 private let wireTime = RuntimeAPI.InputTimestamp(hostNanos: 77)
 private let wirePoint = RuntimeAPI.DisplayPoint(x: 12.5, y: 3)
 private let corePoint = InputCore.DisplayPoint(x: 12.5, y: 3)
@@ -154,6 +182,32 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
     #expect(batches.first?.displayID == 0)
     #expect(batches.first?.events.first?.touch.phase == .down)
     #expect(await route.counters().eventsSent == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
+    let channel = AcknowledgingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: channel))
+    await route.send(
+        RuntimeAPI.InputBatch(events: [
+            .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime))
+        ]))
+    let captureBaseline = await route.startAcknowledgementHistoryCapture()
+    #expect(captureBaseline?.batchesSent == 1)
+    #expect(captureBaseline?.eventsSent == 1)
+    channel.deliverAck(batchSequence: 32, rejectedEvents: 0)
+    channel.deliverAck(batchSequence: 64, rejectedEvents: 1)
+
+    var history = await route.acknowledgementHistory()
+    for _ in 0..<100 where history.records.count < 2 {
+        try await Task.sleep(for: .milliseconds(5))
+        history = await route.acknowledgementHistory()
+    }
+    #expect(history.records.map(\.batchSequence) == [32, 64])
+    #expect(history.records.map(\.rejectedEvents) == [0, 1])
+    channel.finish()
+    await route.unbind()
 }
 
 @Test(.timeLimit(.minutes(1)))

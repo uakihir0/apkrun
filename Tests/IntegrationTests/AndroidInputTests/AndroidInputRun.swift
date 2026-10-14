@@ -227,6 +227,11 @@ final class AndroidInputRun {
         await route.acknowledgementHistory()
     }
 
+    /// Highest guest input batch sequence acknowledged on the currently bound connection.
+    func lastAcknowledgedBatchSequence() async -> UInt64? {
+        await route.lastAcknowledgedBatchSequence()
+    }
+
     /// The integers that follow `prefix` on the lines that carry it, in order: `click 7` gives 7.
     static func numbers(in lines: [String], after prefix: String) -> [Int] {
         lines.compactMap { line in

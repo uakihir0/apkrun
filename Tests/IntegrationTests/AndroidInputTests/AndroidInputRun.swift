@@ -28,6 +28,20 @@ enum InputPointerDelivery: Sendable, Equatable {
     case appKitEventQueue
 }
 
+/// One pointer event received by the test window's sink, before its asynchronous wire conversion.
+struct WireInputTraceEntry: Sendable, Equatable {
+    let sequence: UInt64
+    /// `DispatchTime` uptime nanoseconds: monotonic host receive time.
+    let receivedAtHostUptimeNanos: UInt64
+    let event: InputCore.InputEvent
+}
+
+/// A bounded, ordered snapshot of pointer events received by the test sink.
+struct WireInputTraceSnapshot: Sendable, Equatable {
+    let entries: [WireInputTraceEntry]
+    let droppedEntryCount: UInt64
+}
+
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
 ///
 /// The boot is `DevBoot` with a developer display and a development input route. The window's adapters (the CLI's
@@ -44,6 +58,7 @@ final class AndroidInputRun {
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route: DevInputRoute
     private let pointerDelivery: InputPointerDelivery
+    private let recordPointerTrace: Bool
     private let previousActivationPolicy: NSApplication.ActivationPolicy?
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
@@ -53,10 +68,17 @@ final class AndroidInputRun {
     private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient, acknowledgeEveryBatch: Bool, pointerDelivery: InputPointerDelivery) {
+    private init(
+        home: URL,
+        adb: AdbClient,
+        acknowledgeEveryBatch: Bool,
+        pointerDelivery: InputPointerDelivery,
+        recordPointerTrace: Bool
+    ) {
         self.home = home
         self.adb = adb
         self.pointerDelivery = pointerDelivery
+        self.recordPointerTrace = recordPointerTrace
         previousActivationPolicy =
             pointerDelivery == .appKitEventQueue
             ? NSApplication.shared.activationPolicy()
@@ -70,6 +92,7 @@ final class AndroidInputRun {
         package: String,
         acknowledgeEveryBatch: Bool = false,
         pointerDelivery: InputPointerDelivery = .directView,
+        recordPointerTrace: Bool = false,
         _ body: (AndroidInputRun) async throws -> Void
     ) async throws {
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
@@ -90,7 +113,8 @@ final class AndroidInputRun {
             home: home,
             adb: AdbClient(executable: adbExecutable),
             acknowledgeEveryBatch: acknowledgeEveryBatch,
-            pointerDelivery: pointerDelivery
+            pointerDelivery: pointerDelivery,
+            recordPointerTrace: recordPointerTrace
         )
         if pointerDelivery == .appKitEventQueue {
             guard NSApplication.shared.setActivationPolicy(.accessory) else {
@@ -240,6 +264,11 @@ final class AndroidInputRun {
         await route.counters()
     }
 
+    /// The ordered pointer events accepted by this run's test sink, with monotonic host receive timestamps.
+    func pointerEventTrace() -> WireInputTraceSnapshot {
+        inputSink?.pointerEventTrace() ?? WireInputTraceSnapshot(entries: [], droppedEntryCount: 0)
+    }
+
     /// Queues an empty guest acknowledgement fence after every event already yielded by the window input sink.
     func acknowledgementFence() async throws -> UInt64 {
         guard let inputSink else {
@@ -339,7 +368,7 @@ final class AndroidInputRun {
         case .attached(let surfaces):
             let source = DisplayFrames(surfaces: surfaces, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
-            let inputSink = WireSink(route: route)
+            let inputSink = WireSink(route: route, recordPointerTrace: recordPointerTrace)
             let window = DisplayWindow(
                 source: source, title: Self.windowTitle, backingScale: scale, inputSink: inputSink)
             window.show()
@@ -536,14 +565,27 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
 /// The window's events, routed in order (the CLI's `EmbeddedInputSink`, decision D10). One task converts each queued
 /// list to the wire types of runtime-api.md §7.2 and routes it, so no batch overtakes another.
 private final class WireSink: PointerInputSink, @unchecked Sendable {
+    private static let maximumPointerTraceEntries = 4096
+
     private enum WorkItem {
         case events([InputCore.InputEvent])
         case acknowledgementFence(CheckedContinuation<UInt64, Error>)
     }
 
     private let queue: AsyncStream<WorkItem>.Continuation
+    private let traceLock: NSLock?
+    private var traceStorage: [WireInputTraceEntry?]
+    private var traceCount = 0
+    private var traceWriteIndex = 0
+    private var nextTraceSequence: UInt64 = 1
+    private var droppedTraceEntryCount: UInt64 = 0
 
-    init(route: DevInputRoute) {
+    init(route: DevInputRoute, recordPointerTrace: Bool = false) {
+        traceLock = recordPointerTrace ? NSLock() : nil
+        traceStorage =
+            recordPointerTrace
+            ? [WireInputTraceEntry?](repeating: nil, count: Self.maximumPointerTraceEntries)
+            : []
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
         let made = AsyncStream.makeStream(of: WorkItem.self, bufferingPolicy: .unbounded)
         queue = made.continuation
@@ -572,12 +614,58 @@ private final class WireSink: PointerInputSink, @unchecked Sendable {
     }
 
     func deliver(_ events: [InputCore.InputEvent]) {
+        guard let traceLock else {
+            queue.yield(.events(events))
+            return
+        }
+
+        traceLock.lock()
+        for event in events where Self.isPointerEvent(event) {
+            let entry = WireInputTraceEntry(
+                sequence: nextTraceSequence,
+                receivedAtHostUptimeNanos: DispatchTime.now().uptimeNanoseconds,
+                event: event
+            )
+            nextTraceSequence += 1
+            traceStorage[traceWriteIndex] = entry
+            traceWriteIndex = (traceWriteIndex + 1) % Self.maximumPointerTraceEntries
+            if traceCount < Self.maximumPointerTraceEntries {
+                traceCount += 1
+            } else {
+                droppedTraceEntryCount += 1
+            }
+        }
+        // Serialize admission with trace sequence assignment so a concurrent caller cannot reorder the trace and queue.
         queue.yield(.events(events))
+        traceLock.unlock()
+    }
+
+    func pointerEventTrace() -> WireInputTraceSnapshot {
+        guard let traceLock else {
+            return WireInputTraceSnapshot(entries: [], droppedEntryCount: 0)
+        }
+        traceLock.lock()
+        defer { traceLock.unlock() }
+
+        let startIndex = traceCount == Self.maximumPointerTraceEntries ? traceWriteIndex : 0
+        let entries = (0..<traceCount).compactMap { offset in
+            traceStorage[(startIndex + offset) % Self.maximumPointerTraceEntries]
+        }
+        return WireInputTraceSnapshot(entries: entries, droppedEntryCount: droppedTraceEntryCount)
     }
 
     func acknowledgementFence() async throws -> UInt64 {
         try await withCheckedThrowingContinuation { continuation in
             queue.yield(.acknowledgementFence(continuation))
+        }
+    }
+
+    private static func isPointerEvent(_ event: InputCore.InputEvent) -> Bool {
+        switch event {
+        case .touch, .mouse, .scroll, .longPress, .cancelAll:
+            true
+        case .key:
+            false
         }
     }
 

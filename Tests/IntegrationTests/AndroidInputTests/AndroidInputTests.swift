@@ -78,7 +78,7 @@ final class AndroidInputTests: XCTestCase {
             try await pointer.click(at: target)
             let lines = try await run.fixtureLog(
                 until: { lines in lines.contains { $0.contains(Self.clickPrefix) } },
-                settleFor: .seconds(2)
+                stopAfterQuiet: .seconds(2)
             )
             XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), [1])
 
@@ -120,16 +120,32 @@ final class AndroidInputTests: XCTestCase {
     /// Captures the Button's UI state around two 100-click AppKit batches, comparing queued and synchronous fixture writes.
     /// This is diagnostic evidence only: AppKit posts synthetic application events, not WindowServer or hardware input.
     func testHundredAppKitClicksCaptureGuestButtonStateForBothWriteModes() async throws {
+        try await captureGuestButtonState(pointerDelivery: .appKitEventQueue)
+    }
+
+    /// Captures guest button state through direct view dispatch when an active AppKit session is unavailable.
+    /// This does not exercise NSApplication dispatch, WindowServer, or physical input.
+    func testHundredDirectViewClicksCaptureGuestButtonStateForBothWriteModes() async throws {
+        try await captureGuestButtonState(pointerDelivery: .directView)
+    }
+
+    /// Captures touch, pressed-state, callback, and persistence timing for each fixture-write mode.
+    private func captureGuestButtonState(pointerDelivery: InputPointerDelivery) async throws {
         let apk = try Self.fixture("APKRUN_FIXTURE_APK")
         try await AndroidInputRun.with(
             apk: apk,
             package: Self.helloText,
-            acknowledgeEveryBatch: true,
-            pointerDelivery: .appKitEventQueue,
+            acknowledgeEveryBatch: false,
+            pointerDelivery: pointerDelivery,
             recordPointerTrace: true
         ) { run in
             let target = try await run.centre(of: Self.buttonID)
-            try await run.prepareForAppKitPointerDispatch()
+            if pointerDelivery == .appKitEventQueue {
+                try await run.prepareForAppKitPointerDispatch()
+            }
+            var clearLatencyByMode: [String: [UInt64]] = [:]
+            var downWhilePressedByMode: [String: Int] = [:]
+            var writesBeforeClearByMode: [String: Int] = [:]
             let baselineFence = try await run.acknowledgementFence()
             _ = try await run.waitForAcknowledgement(baselineFence)
             let pointer = try run.pointer()
@@ -149,25 +165,28 @@ final class AndroidInputTests: XCTestCase {
                     return
                 }
 
-                for _ in 0..<100 {
-                    try await pointer.click(at: target)
+                for clickIndex in 0..<100 {
+                    try await pointer.click(at: target, moveWhilePressed: clickIndex == 99)
                     try await Task.sleep(for: .milliseconds(100))
                 }
 
                 let clickLines = try await run.fixtureLog(
-                    until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 })
+                    until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 },
+                    stopAfterQuiet: .seconds(2))
                 let clickNumbers = AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix)
                 let expectedClickNumbers = mode == "queue" ? Array(1...100) : Array(101...200)
                 XCTAssertEqual(clickNumbers, expectedClickNumbers, "the \(mode) batch click logs were \(clickNumbers)")
 
                 let fence = try await run.acknowledgementFence()
                 let receipt = try await run.waitForAcknowledgement(fence)
-                XCTAssertGreaterThanOrEqual(receipt.counters.eventsSent - countersBeforeMode.eventsSent, 200)
+                XCTAssertGreaterThanOrEqual(receipt.counters.eventsSent - countersBeforeMode.eventsSent, 201)
                 let sentBatchCount = receipt.counters.batchesSent - countersBeforeMode.batchesSent
                 let acknowledgedBatchCount =
                     receipt.counters.acknowledgementsReceived - countersBeforeMode.acknowledgementsReceived
                 XCTAssertGreaterThan(sentBatchCount, 0)
-                XCTAssertEqual(acknowledgedBatchCount, sentBatchCount)
+                XCTAssertGreaterThan(acknowledgedBatchCount, 0)
+                XCTAssertGreaterThanOrEqual(receipt.lastAcknowledgedBatchSequence, fence)
+                // Host route counters are local; droppedInvalid also includes guest rejections from received ACKs only.
                 XCTAssertEqual(receipt.counters.droppedRate, 0)
                 XCTAssertEqual(receipt.counters.droppedNotRunning, 0)
                 XCTAssertEqual(receipt.counters.droppedInvalid, 0)
@@ -191,14 +210,152 @@ final class AndroidInputTests: XCTestCase {
                 XCTAssertEqual(trace["mode"] as? String, mode)
                 XCTAssertEqual((trace["dropped_events"] as? NSNumber)?.intValue, 0)
                 let events = try XCTUnwrap(trace["events"] as? [[String: Any]])
+                let expectedTouchActions =
+                    Array(repeating: ["down", "up"], count: 99).flatMap { $0 }
+                    + ["down", "move", "up"]
+                let touchActions = events.compactMap { event -> String? in
+                    guard event["kind"] as? String == "touch" else {
+                        return nil
+                    }
+                    return event["action"] as? String
+                }
+                XCTAssertEqual(touchActions, expectedTouchActions)
+                let pressedStates = events.compactMap { event -> Bool? in
+                    guard event["kind"] as? String == "pressed" else {
+                        return nil
+                    }
+                    return (event["pressed"] as? NSNumber)?.boolValue
+                }
+                XCTAssertEqual(pressedStates.filter { $0 }.count, 100)
+                XCTAssertEqual(pressedStates.filter { !$0 }.count, 100)
                 XCTAssertEqual(
                     events.filter { $0["kind"] as? String == "touch" && $0["action"] as? String == "down" }.count,
                     100)
                 XCTAssertEqual(
                     events.filter { $0["kind"] as? String == "touch" && $0["action"] as? String == "up" }.count,
                     100)
+                XCTAssertEqual(
+                    events.filter { $0["kind"] as? String == "touch" && $0["action"] as? String == "move" }.count,
+                    1)
+                let downEvents = events.filter {
+                    $0["kind"] as? String == "touch" && $0["action"] as? String == "down"
+                }
+                downWhilePressedByMode[mode] =
+                    downEvents.filter {
+                        ($0["pressed"] as? NSNumber)?.boolValue == true
+                    }.count
                 XCTAssertEqual(events.filter { $0["kind"] as? String == "click_callback" }.count, 100)
                 XCTAssertEqual(events.filter { $0["kind"] as? String == "counter_write" }.count, 100)
+                XCTAssertEqual(events.filter { $0["kind"] as? String == "pressed_state_wait_elapsed" }.count, 1)
+                XCTAssertEqual(events.last?["kind"] as? String, "pressed_state_wait_elapsed")
+                let downSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "touch", event["action"] as? String == "down" else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let upSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "touch", event["action"] as? String == "up" else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let moveSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "touch", event["action"] as? String == "move" else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let pressedTrueSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "pressed",
+                        (event["pressed"] as? NSNumber)?.boolValue == true
+                    else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let pressedFalseSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "pressed",
+                        (event["pressed"] as? NSNumber)?.boolValue == false
+                    else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let clickSequences = events.compactMap { event -> Int? in
+                    guard event["kind"] as? String == "click_callback" else {
+                        return nil
+                    }
+                    return (event["seq"] as? NSNumber)?.intValue
+                }
+                let writeEvents = events.filter { $0["kind"] as? String == "counter_write" }
+                XCTAssertEqual(
+                    writeEvents.compactMap { ($0["requested"] as? NSNumber)?.intValue },
+                    expectedClickNumbers,
+                    "the \(mode) guest trace did not retain the values written by all callbacks")
+                let writeSequences = writeEvents.compactMap { ($0["seq"] as? NSNumber)?.intValue }
+                let elapsedBySequence = Dictionary(
+                    uniqueKeysWithValues: events.compactMap { event -> (Int, UInt64)? in
+                        guard let sequence = (event["seq"] as? NSNumber)?.intValue,
+                            let elapsed = (event["elapsed_ns"] as? NSNumber)?.uint64Value
+                        else {
+                            return nil
+                        }
+                        return (sequence, elapsed)
+                    })
+                let orderedClickCount =
+                    [
+                        downSequences.count,
+                        pressedTrueSequences.count,
+                        upSequences.count,
+                        clickSequences.count,
+                        pressedFalseSequences.count,
+                        writeSequences.count,
+                    ].min() ?? 0
+                for index in 0..<orderedClickCount {
+                    XCTAssertLessThan(downSequences[index], pressedTrueSequences[index])
+                    XCTAssertLessThan(pressedTrueSequences[index], upSequences[index])
+                    XCTAssertLessThan(upSequences[index], clickSequences[index])
+                    XCTAssertLessThan(clickSequences[index], pressedFalseSequences[index])
+                    XCTAssertLessThan(clickSequences[index], writeSequences[index])
+                    if mode == "synchronous" {
+                        XCTAssertLessThan(
+                            writeSequences[index],
+                            pressedFalseSequences[index],
+                            "synchronous persistence did not finish before the pressed-state clear")
+                    }
+                }
+                writesBeforeClearByMode[mode] =
+                    zip(writeSequences, pressedFalseSequences).filter {
+                        $0.0 < $0.1
+                    }.count
+                clearLatencyByMode[mode] = zip(clickSequences, pressedFalseSequences).compactMap {
+                    callback, pressedClear in
+                    guard let callbackAt = elapsedBySequence[callback],
+                        let pressedClearAt = elapsedBySequence[pressedClear],
+                        pressedClearAt >= callbackAt
+                    else {
+                        return nil
+                    }
+                    return pressedClearAt - callbackAt
+                }
+                XCTAssertEqual(moveSequences.count, 1, "the \(mode) trace is missing its final UI dispatch marker")
+                if let lastMove = moveSequences.first,
+                    let finalDown = downSequences.last,
+                    let finalUp = upSequences.last
+                {
+                    XCTAssertLessThan(finalDown, lastMove)
+                    XCTAssertLessThan(lastMove, finalUp)
+                }
+                let moveEvent = events.first { $0["kind"] as? String == "touch" && $0["action"] as? String == "move" }
+                XCTAssertEqual(
+                    (moveEvent?["pressed"] as? NSNumber)?.boolValue,
+                    true,
+                    "the final UI dispatch marker was not inside the active press")
+                let pressedStateWaitSequence = (events.last?["seq"] as? NSNumber)?.intValue
+                if let pressedStateWaitSequence, let lastPressedClear = pressedFalseSequences.last {
+                    XCTAssertLessThan(lastPressedClear, pressedStateWaitSequence)
+                }
                 XCTAssertEqual(
                     events.compactMap { ($0["seq"] as? NSNumber)?.intValue },
                     Array(1..<(events.count + 1)),
@@ -206,7 +363,7 @@ final class AndroidInputTests: XCTestCase {
 
                 let pointerTrace = run.pointerEventTrace()
                 XCTAssertEqual(pointerTrace.droppedEntryCount, 0)
-                let expectedTouchEventCount = mode == "queue" ? 200 : 400
+                let expectedTouchEventCount = mode == "queue" ? 201 : 402
                 XCTAssertEqual(
                     pointerTrace.entries.filter {
                         if case .touch = $0.event { return true }
@@ -214,6 +371,30 @@ final class AndroidInputTests: XCTestCase {
                     }.count,
                     expectedTouchEventCount,
                     "the host-side pointer trace did not retain both 100-click batches: \(pointerTrace)")
+            }
+
+            let queueClearLatencies = (clearLatencyByMode["queue"] ?? []).sorted()
+            let synchronousClearLatencies = (clearLatencyByMode["synchronous"] ?? []).sorted()
+            XCTAssertEqual(queueClearLatencies.count, 100)
+            XCTAssertEqual(synchronousClearLatencies.count, 100)
+            if queueClearLatencies.count == 100, synchronousClearLatencies.count == 100 {
+                let queueMedian = queueClearLatencies[50]
+                let synchronousMedian = synchronousClearLatencies[50]
+                let summary = """
+                    pressed-clear delay after callback (upper median of 100 samples):
+                    queue: \(queueMedian) ns
+                    synchronous: \(synchronousMedian) ns
+                    DOWN events received while already pressed:
+                    queue: \(downWhilePressedByMode["queue"] ?? 0) of 100
+                    synchronous: \(downWhilePressedByMode["synchronous"] ?? 0) of 100
+                    writes completed before pressed clear:
+                    queue: \(writesBeforeClearByMode["queue"] ?? 0) of 100
+                    synchronous: \(writesBeforeClearByMode["synchronous"] ?? 0) of 100
+                    """
+                let attachment = XCTAttachment(string: summary)
+                attachment.name = "hellotext-pressed-clear-comparison.txt"
+                attachment.lifetime = .keepAlways
+                add(attachment)
             }
         }
     }
@@ -299,7 +480,7 @@ final class AndroidInputTests: XCTestCase {
                 """
             let clickLines = try await run.fixtureLog(
                 until: { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 },
-                settleFor: .seconds(2))
+                stopAfterQuiet: .seconds(2))
             let clickNumbers = AndroidInputRun.numbers(in: clickLines, after: Self.clickPrefix)
             observation += "\nordered click callbacks before force-stop: \(clickNumbers)\n"
             XCTAssertEqual(receipt.lastAcknowledgedBatchSequence, fenceSequence)

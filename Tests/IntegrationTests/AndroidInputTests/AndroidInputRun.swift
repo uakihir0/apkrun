@@ -230,9 +230,9 @@ final class AndroidInputRun {
         return unique.isEmpty ? "no nodes in the dump" : unique.joined(separator: ", ")
     }
 
-    /// The fixture's log lines, polled until `enough` holds or 30 s have passed. When `settleFor` is set, return sooner
-    /// after the log output stops changing, which keeps a missing-event diagnostic from waiting out the full timeout.
-    func fixtureLog(until enough: ([String]) -> Bool, settleFor: Duration? = nil) async throws -> [String] {
+    /// The fixture's log lines, polled until `enough` holds or 30 s have passed. `stopAfterQuiet` ends a failed wait
+    /// sooner when the log stops changing; it does not delay a successful match.
+    func fixtureLog(until enough: ([String]) -> Bool, stopAfterQuiet: Duration? = nil) async throws -> [String] {
         let clock = ContinuousClock()
         var lines: [String] = []
         var previousLines: [String]?
@@ -244,9 +244,9 @@ final class AndroidInputRun {
             if enough(lines) {
                 break
             }
-            if let settleFor {
+            if let stopAfterQuiet {
                 if lines == previousLines {
-                    if clock.now - unchangedSince >= settleFor {
+                    if clock.now - unchangedSince >= stopAfterQuiet {
                         break
                     }
                 } else {
@@ -444,9 +444,13 @@ struct InputPointer {
     let mapper: CoordinateMapper
     let delivery: InputPointerDelivery
 
-    func click(at pixel: InputPixel) async throws {
+    func click(at pixel: InputPixel, moveWhilePressed: Bool = false) async throws {
         try deliver(.leftMouseDown, at: pixel)
         try await Task.sleep(for: .milliseconds(50))
+        if moveWhilePressed {
+            try deliver(.leftMouseDragged, at: pixel)
+            try await Task.sleep(for: .milliseconds(20))
+        }
         try deliver(.leftMouseUp, at: pixel)
     }
 

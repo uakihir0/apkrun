@@ -18674,3 +18674,76 @@ box 3 and #103 remain open.
 **Adversarial review.** A read-only subagent independently reviewed the
 failure location and system logs, confirmed the test never sent a click, and
 recommended no code change until an isolated active-session reproduction.
+
+## IR-1312: Bound the pressed-state trace wait and retain diagnostic-only results
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [input.md](../02-design/input.md) §11; IR-1311 |
+
+**Choice.** Preserve the separate AppKit-only delivery path and its active-app
+and key-window guard while adding a direct-view diagnostic that can run when
+the shared desktop cannot keep the test host active. Add one same-coordinate
+MOVE inside the last DOWN/UP pair as a guest-dispatch watermark. Delay
+`TRACE_READ` on Android's main handler for
+`ViewConfiguration.getPressedStateDuration() + 50 ms`, then submit the read
+behind the fixture's serial counter queue. Name the marker
+`pressed_state_wait_elapsed`: the delay is a bounded wait for the expected
+pressed-state clear, not proof that the main looper, InputChannel, or all UI
+work is idle. Record cross-click overlap and write-before-clear counts as
+measurements instead of requiring a particular ordering between separate taps.
+
+**Reason.** IR-1311 could not submit AppKit clicks because this shared desktop
+lost activation before dispatch. The separate path allows further measurement
+without changing product input or silently falling back from the AppKit test.
+An intermediate direct-view run logged 100 callbacks and writes per mode but
+failed assertions that every pressed state must alternate and clear before the
+next DOWN. Its trace showed one of 100 queue-mode DOWNs arriving while the
+button was already pressed, versus zero in synchronous mode. That observation
+is diagnostic and may vary by run, so the test now reports the overlap rather
+than treating it as an acceptance condition. The marker name and description
+were narrowed after adversarial review identified that a delayed handler callback
+does not prove global UI quiescence.
+
+**Verification.** The final filtered T2 case
+`AndroidInputTests.testHundredDirectViewClicksCaptureGuestButtonStateForBothWriteModes`
+passed on 2026-10-14 against the odm7 bundle with manifest SHA-256
+`113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d` and the
+instrumented debug APK with SHA-256
+`bf4272425df383c4aae2dbfd3dc084f4c58e19fa0c0a9a8584041b134530438b`. The
+result is `/tmp/apkrun-103-ui-state-trace-direct-pressed-wait-t2.xcresult`.
+Each mode produced 602 ordered events: 100 DOWN, 100 pressed=true, 100 UP,
+100 pressed=false, one MOVE, 100 click callbacks, 100 writes, one
+`pressed_state_wait_elapsed` marker, and zero trace drops. The queue and
+synchronous upper-median callback-to-pressed-clear
+latencies were 299,000 ns and 6,609,541 ns; writes preceded pressed clear in
+1/100 and 100/100 clicks respectively. Both modes had zero DOWN events
+observed while already pressed in this run. These are observations, not
+thresholds. `:HelloText:testReleaseUnitTest` passed 27/27,
+`:HelloText:assembleDebug` succeeded, filtered
+`xcodebuild build-for-testing` succeeded, and `aapt dump xmltree` confirmed
+the `android.permission.DUMP` receiver gate. The xctestplan was restored
+byte-for-byte (SHA-256
+`e2bd324e8712d3de0e36b76910c6384f833e17a00d45137658d4b53152c2dc6e`). The run
+used a local Apple Development identity, not the documented lab certificate.
+
+**Risk.** This T2 uses direct-view synthetic delivery and does not test the
+AppKit event queue, WindowServer, physical input, or the unmodified product
+path. The delayed marker covers the Android 17 fixture's expected pressed-state
+interval but does not guarantee that later UI work cannot arrive. When the
+callback wait is incomplete, the test keeps a partial trace for diagnosis; a
+failed or partial trace remains provisional because an accepted asynchronous
+injection could be dispatched after the bounded wait. The measured timing
+difference does not prove the cause of the product click loss. The test emitted
+an existing RenderThread QoS inversion runtime warning; this task makes no
+graphics change. Lab-signed AppKit T2 and #103's three consecutive product
+click batches remain outstanding, so #024 box 3 and #103 stay open.
+
+**Adversarial review.** Reviewers confirmed that the same-coordinate MOVE and
+complete callback/touch traces provide app-level evidence for the passing
+direct-view run, while ACKs remain queue-acceptance signals only. They flagged
+the original `ui_quiescence` name as too broad; it was renamed to
+`pressed_state_wait_elapsed`. They also required these design and verification
+notes. No product acceptance overclaim remains.

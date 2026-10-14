@@ -19,18 +19,28 @@ public actor DevInputRoute {
 
     private var router: InputRouter?
     private var session: SessionID?
+    /// Whether routers bound to this route request an acknowledgement for every batch.
+    public nonisolated let acknowledgeEveryBatch: Bool
+    /// Whether routers bound to this route retain recent acknowledgement results.
+    public nonisolated let traceAcknowledgements: Bool
+    /// Increases each time this route is bound to an input channel.
+    public private(set) var bindingGeneration: UInt64 = 0
     /// The drops that happen before the router sees the events: the events of an unbound route, and the events cut
     /// from a long batch.
     private var localCounters = InputCounters()
 
-    /// Creates an unbound route.
-    public init() {}
+    /// Creates an unbound route. Per-batch acknowledgements and trace retention are for opt-in development diagnostics.
+    public init(acknowledgeEveryBatch: Bool = false, traceAcknowledgements: Bool = false) {
+        self.acknowledgeEveryBatch = acknowledgeEveryBatch
+        self.traceAcknowledgements = traceAcknowledgements
+    }
 
     /// Binds the route to `router` for `session`, which is registered on display 0 in the running state. A route that
     /// was bound before is unbound first.
     public func bind(router: InputRouter, session: SessionID = DevInputRoute.developmentSession) async {
         await unbind()
         await router.register(session: session, displayID: Self.displayID, state: .running)
+        bindingGeneration += 1
         self.router = router
         self.session = session
     }
@@ -70,5 +80,13 @@ public actor DevInputRoute {
             total.add(await router.counters)
         }
         return total
+    }
+
+    /// Recent guest acknowledgements for the current binding, when tracing is enabled; empty when unbound.
+    public func acknowledgementTrace() async -> [InputAckTraceRecord] {
+        guard traceAcknowledgements, let router else {
+            return []
+        }
+        return await router.acknowledgementTrace
     }
 }

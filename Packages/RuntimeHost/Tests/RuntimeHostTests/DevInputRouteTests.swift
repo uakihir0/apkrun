@@ -16,11 +16,15 @@ actor CollectingInputChannel: InputChannel {
     private(set) var batches: [GPInputBatch] = []
     /// The acks of this channel: none, so the stream is finished from the start.
     nonisolated let acks: AsyncStream<GPInputAck>
+    private nonisolated let ackContinuation: AsyncStream<GPInputAck>.Continuation
 
-    init() {
-        let stream = AsyncStream.makeStream(of: GPInputAck.self)
-        stream.continuation.finish()
+    init(keepAcksOpen: Bool = false) {
+        let stream = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .unbounded)
+        if !keepAcksOpen {
+            stream.continuation.finish()
+        }
         acks = stream.stream
+        ackContinuation = stream.continuation
     }
 
     func send(_ batch: GPInputBatch) async throws {
@@ -30,12 +34,33 @@ actor CollectingInputChannel: InputChannel {
     var pendingBytes: Int {
         0
     }
+
+    nonisolated func deliverAck(batchSeq: UInt64, rejected: UInt32) {
+        var ack = GPInputAck()
+        ack.batchSeq = batchSeq
+        ack.rejectedEvents = rejected
+        ackContinuation.yield(ack)
+    }
+
+    nonisolated func finishAcks() {
+        ackContinuation.finish()
+    }
 }
 
 private let wireTime = RuntimeAPI.InputTimestamp(hostNanos: 77)
 private let wirePoint = RuntimeAPI.DisplayPoint(x: 12.5, y: 3)
 private let corePoint = InputCore.DisplayPoint(x: 12.5, y: 3)
 private let coreTime = InputCore.InputTimestamp(hostNanos: 77)
+
+private func eventually(within seconds: Double = 5, _ condition: () async -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(seconds)
+    while ContinuousClock.now < deadline {
+        if await condition() {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+}
 
 @Test func everyWireCaseConvertsToItsInputCoreValue() {
     let touch = RuntimeAPI.WireInputEvent.touch(
@@ -145,6 +170,7 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
+    #expect(await route.bindingGeneration == 1)
     await route.send(
         RuntimeAPI.InputBatch(events: [
             .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime))
@@ -154,6 +180,66 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
     #expect(batches.first?.displayID == 0)
     #expect(batches.first?.events.first?.touch.phase == .down)
     #expect(await route.counters().eventsSent == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aDiagnosticRouteRequestsAndRetainsEveryGuestAck() async throws {
+    let channel = CollectingInputChannel(keepAcksOpen: true)
+    let route = DevInputRoute(acknowledgeEveryBatch: true, traceAcknowledgements: true)
+    let router = InputRouter(
+        channel: channel,
+        acknowledgeEveryBatch: route.acknowledgeEveryBatch,
+        traceAcknowledgements: route.traceAcknowledgements
+    )
+    await route.bind(router: router)
+    await route.send(
+        RuntimeAPI.InputBatch(events: [
+            .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime))
+        ]))
+    #expect(await channel.batches.map(\.ackRequested) == [true])
+
+    channel.deliverAck(batchSeq: 1, rejected: 0)
+    try await eventually { await route.acknowledgementTrace().count == 1 }
+    #expect(
+        await route.acknowledgementTrace()
+            == [InputAckTraceRecord(batchSequence: 1, rejectedEvents: 0)])
+
+    await route.unbind()
+    #expect(await route.acknowledgementTrace().isEmpty)
+    channel.finishAcks()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aReboundDiagnosticRouteExposesOnlyTheCurrentBindingTrace() async throws {
+    let firstChannel = CollectingInputChannel(keepAcksOpen: true)
+    let secondChannel = CollectingInputChannel(keepAcksOpen: true)
+    let route = DevInputRoute(acknowledgeEveryBatch: true, traceAcknowledgements: true)
+    let firstRouter = InputRouter(
+        channel: firstChannel,
+        acknowledgeEveryBatch: route.acknowledgeEveryBatch,
+        traceAcknowledgements: route.traceAcknowledgements
+    )
+    let secondRouter = InputRouter(
+        channel: secondChannel,
+        acknowledgeEveryBatch: route.acknowledgeEveryBatch,
+        traceAcknowledgements: route.traceAcknowledgements
+    )
+    await route.bind(router: firstRouter)
+    firstChannel.deliverAck(batchSeq: 1, rejected: 0)
+    try await eventually { await route.acknowledgementTrace().count == 1 }
+
+    await route.bind(router: secondRouter)
+    #expect(await route.bindingGeneration == 2)
+    #expect(await route.acknowledgementTrace().isEmpty)
+    secondChannel.deliverAck(batchSeq: 1, rejected: 1)
+    try await eventually { await route.acknowledgementTrace().count == 1 }
+    #expect(
+        await route.acknowledgementTrace()
+            == [InputAckTraceRecord(batchSequence: 1, rejectedEvents: 1)])
+
+    await route.unbind()
+    firstChannel.finishAcks()
+    secondChannel.finishAcks()
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -200,6 +286,7 @@ func aRebindMovesTheSessionToTheNewChannelAndCancelsTheOld() async {
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: oldChannel))
     await route.bind(router: InputRouter(channel: newChannel))
+    #expect(await route.bindingGeneration == 2)
     await route.send(RuntimeAPI.InputBatch(events: [.cancelAll(wireTime)]))
     // The old session ends with a cancelAll on the old channel, and the event goes to the new channel only.
     #expect(await oldChannel.batches.count == 1)

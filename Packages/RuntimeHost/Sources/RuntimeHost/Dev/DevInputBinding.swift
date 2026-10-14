@@ -31,7 +31,12 @@ struct DevInputBinding: Sendable {
                 if token != boundToken || !usable {
                     do {
                         let next = try await agent.inputChannel()
-                        await route.bind(router: InputRouter(channel: next, logSink: logSink))
+                        await route.bind(
+                            router: InputRouter(
+                                channel: next,
+                                acknowledgeEveryBatch: route.acknowledgeEveryBatch,
+                                traceAcknowledgements: route.traceAcknowledgements,
+                                logSink: logSink))
                         channel = next
                         boundToken = token
                         reportedFailure = false

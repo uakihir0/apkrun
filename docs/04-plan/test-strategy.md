@@ -610,6 +610,16 @@ Each task's Tests section in its milestone file contains at least the cells belo
 | #029 | — | — | HelloText on a secondary display; HelloCompose, HelloGL, and HelloWebView results recorded | — |
 | #030 | `InputRouter` ownership | — | two sessions; routing to the focused window | G5 check; v0.2 checklist |
 
+The `AndroidInputAckDiagnostic` test-plan configuration sets
+`APKRUN_INPUT_ACK_T2=1`; only
+`testOneHundredClicksWithGuestAcknowledgementsAreLogged` opts its route into
+per-batch Guest Agent ACKs. Other input tests keep the default cadence. Run the
+diagnostic with an explicit
+`-only-testing:IntegrationTests/AndroidInputTests/testOneHundredClicksWithGuestAcknowledgementsAreLogged`
+filter to avoid running the full target. These ACKs report asynchronous
+injection-call completion; they do not prove Android UI dispatch or app
+callbacks, and the extra traffic can change click timing.
+
 ### 6.5 M4 Daemon and guest protocol
 
 | Task | T0 | T1 | T2 | T3 and manual |

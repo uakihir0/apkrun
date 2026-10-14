@@ -18551,3 +18551,89 @@ the AppKit case is now opt-in and attempts to restore the previous foreground
 app. Reviewers confirmed that the official T2 closeout requires the lab
 signing identity and an isolated active reference environment; local-identity
 runs remain diagnostic.
+
+## IR-1314: ACK-complete runs can still miss HelloText app callbacks
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §15; [test-strategy.md](test-strategy.md) §6.4; IR-1313 |
+
+**Choice.** Keep #024 box 3 and #103 open. Add default-off per-batch
+acknowledgement requests and a bounded ACK trace for the focused T2 diagnostic.
+Do not change the normal acknowledgement cadence or production input behavior.
+
+**T2 evidence.** On 2026-10-14, a filtered run of
+`AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` passed once on
+the arm64 MacBook Pro running macOS 27.0.1 build 26A434, against the odm7
+bundle. `/tmp/apkrun-024-click-ack-diagnostic-final.xcresult` took 37.651 s.
+Its retained attachment records 200 host batches and events, ACK sequences
+1–200 with zero guest rejections, route generation 1 before and after, ordered
+click callbacks 1–100, and the live HelloText SharedPreferences counter
+changing from 0 to 100. Host rate, not-running, invalid, channel, and
+coalescing counters were all zero.
+
+After making ACK mode explicit to the separately named diagnostic test, its
+filtered run failed:
+`/tmp/apkrun-024-click-ack-diagnostic-isolated-final.xcresult` (70.100 s).
+The retained attachment records 200 host batches and events, ACK sequences
+1–200 with zero guest rejections, route generation 1 before and after, ordered
+callbacks 1–98, and the same-process counter changing from 0 to 98. Host rate,
+not-running, invalid, channel, and coalescing counters were again zero, and no
+`adb shell input` process ran. Thus two app effects were missing in this
+sample despite every asynchronous injection call completing without a guest
+rejection. This places the observed loss after those calls, but does not
+identify where Android dispatch or view handling missed the effects. Renderer
+operation errors also appeared during this run and have occurred in passing
+runs; they do not establish a graphics cause. Neither counter read involved a
+force-stop or relaunch.
+
+The ACK means that the Guest Agent's asynchronous injection call completed
+without reporting rejected events. It does not prove Android UI dispatch or
+an app callback.
+
+The default-cadence test was also run with the strengthened counter assertion
+in a three-iteration series,
+`/tmp/apkrun-024-click-product-until-failure-3.xcresult`. Iteration 1 passed;
+iteration 2 stopped the series after logging callbacks 1–99 and reading a
+counter delta of 99, with 200 host events and zero route drops or coalescing.
+Iteration 3 did not run. The ordinary failure and the ACK-complete 98-of-100
+sample confirm that app effects can be missed in either cadence. ACK traffic
+changes timing, so the first ACK-mode pass cannot establish reliability.
+
+**Verification.** The targeted RuntimeHost diagnostic-route T0 tests passed
+(2 tests), including the new rebind case. Strict `swift-format` lint passed
+for every changed Swift file; the test-plan JSON parsed successfully, and
+`git diff --check` passed. The repository-wide `scripts/check-format.sh`
+still reports three `LineLength` findings in the unchanged
+`Tests/IntegrationTests/RunResources/VMRunResourcesTests.swift` at lines 143,
+144, and 181.
+
+**Reason.** The optional ACK trace distinguishes guest injection-call
+completion from the host's send counters, and the same-process persistent
+counter distinguishes a missing callback from a logcat-only gap. The
+default-cadence failure still shows a missed app effect. Neither sample
+identifies whether Android dispatch, view handling, or another UI-path event
+caused the loss, so no product fix is supported.
+
+**Risk.** The ACK mode requests an acknowledgement for every batch and can
+change timing. The test-plan variable is visible to the whole target, but only
+the separately named diagnostic test explicitly opts its `AndroidInputRun`
+into all-batch ACKs; the ordinary click test and other input tests keep the
+default cadence. Filter to the diagnostic case to avoid running the full
+target unnecessarily. The evidence uses synthetic direct-view events and
+local signing, not WindowServer or hardware delivery and not the lab signing
+identity. Keep the ACK semantics and limitations explicit in future reports.
+
+**Adversarial review.** The first final review found that route-level ACK
+history could omit late responses after unbind and make per-binding sequence
+numbers ambiguous. The route API now exposes only its current binding's trace
+and returns an empty trace after unbind; a T0 test covers rebinds where batch
+sequences restart at 1. Review also found that target-wide test-plan
+configuration could accidentally opt unrelated cases into ACK traffic. ACK
+mode is now passed explicitly by the separately named diagnostic test, and
+other tests retain the default. A follow-up read-only review confirmed these
+fixes with no remaining findings. Earlier reviewers confirmed that the
+same-process counter read is not a force-stop persistence check and that ACKs
+do not prove app dispatch.

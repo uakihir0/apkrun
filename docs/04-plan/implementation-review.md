@@ -18447,3 +18447,41 @@ test skips force-stop when the ordered 100-click logs or host send threshold
 are incomplete; a reviewer confirmed that guard prevents the test from
 interrupting the known queued counter work. The final guarded series is
 recorded above.
+
+## IR-1308: ACK-fenced fixture runs pass, but do not establish the cause or product reliability
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §15; IR-1305 to IR-1307 |
+
+**Choice.** Record the diagnostic result and keep #024 box 3 and #103
+acceptance open. The tested changes are isolated on
+`experiment/103-click-ack-fence` at `941a9e0`; they are not product changes.
+
+**T2 evidence.** The final rerun bundle
+`/tmp/apkrun-103-click-ack-fence-08.xcresult` contains one test repeated three
+times; it passed 3, failed 0, and skipped 0 on an arm64 MacBook Pro running
+macOS 27.0.1 build 26A434. Repetitions took 36.6, 35.6, and 37.6 seconds.
+Each attachment confirms a 201-batch fence, 200 click events sent, 201
+batches, all 201 matching ACKs, no history truncation, zero guest rejections,
+host drops, or coalesced events, ordered HelloText click values 1 through 100,
+and persisted value `[100]` after force-stop and relaunch.
+
+These runs use direct view-handler calls, a 50 ms press and 100 ms gap, and
+extra ACK traffic that may change event timing. The ACKs establish acceptance
+by the Android input framework's asynchronous injection queue; they do not
+prove later Android dispatch or explain click handling. The callbacks and
+reopened value are positive evidence for this instrumented fixture path, not
+a cause or general reliability claim.
+
+**Reason.** Per-batch acknowledgements and the post-relaunch value make this
+diagnostic stronger than host send counters alone. However, it changes fixture
+timing and does not exercise normal AppKit event dispatch. The unmodified
+product still has recorded losses, so this experiment does not meet either
+task's acceptance criterion.
+
+**Risk.** The extra ACKs and instrumented fixture can affect the timing under
+investigation. Three repetitions are a limited sample; no product behavior
+change or general reliability claim is justified by these runs.

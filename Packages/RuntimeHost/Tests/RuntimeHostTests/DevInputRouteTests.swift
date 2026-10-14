@@ -35,11 +35,13 @@ actor CollectingInputChannel: InputChannel {
 actor AcknowledgingInputChannel: InputChannel {
     nonisolated let acks: AsyncStream<GPInputAck>
     private nonisolated let continuation: AsyncStream<GPInputAck>.Continuation
+    nonisolated let negotiatedCapabilities: Set<String>?
 
-    init() {
+    init(negotiatedCapabilities: Set<String>? = nil) {
         let stream = AsyncStream.makeStream(of: GPInputAck.self, bufferingPolicy: .unbounded)
         acks = stream.stream
         continuation = stream.continuation
+        self.negotiatedCapabilities = negotiatedCapabilities
     }
 
     func send(_ batch: GPInputBatch) async throws {}
@@ -48,10 +50,17 @@ actor AcknowledgingInputChannel: InputChannel {
         0
     }
 
-    nonisolated func deliverAck(batchSequence: UInt64, rejectedEvents: UInt32) {
+    nonisolated func deliverAck(
+        batchSequence: UInt64,
+        rejectedEvents: UInt32,
+        receiveToInjectMicros: UInt32 = 0,
+        lastEventTimeMillis: UInt64 = 0
+    ) {
         var ack = GPInputAck()
         ack.batchSeq = batchSequence
         ack.rejectedEvents = rejectedEvents
+        ack.receiveToInjectMicros = receiveToInjectMicros
+        ack.lastEventTimeMillis = lastEventTimeMillis
         continuation.yield(ack)
     }
 
@@ -182,6 +191,7 @@ func aBoundRouteSendsItsEventsOnDisplayZero() async {
     #expect(batches.first?.displayID == 0)
     #expect(batches.first?.events.first?.touch.phase == .down)
     #expect(await route.counters().eventsSent == 1)
+    #expect(await route.sentEventHistory().records.isEmpty)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -196,8 +206,18 @@ func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let captureBaseline = await route.startAcknowledgementHistoryCapture()
     #expect(captureBaseline?.batchesSent == 1)
     #expect(captureBaseline?.eventsSent == 1)
-    channel.deliverAck(batchSequence: 32, rejectedEvents: 0)
-    channel.deliverAck(batchSequence: 64, rejectedEvents: 1)
+    channel.deliverAck(
+        batchSequence: 32,
+        rejectedEvents: 0,
+        receiveToInjectMicros: 250,
+        lastEventTimeMillis: 44_001
+    )
+    channel.deliverAck(
+        batchSequence: 64,
+        rejectedEvents: 1,
+        receiveToInjectMicros: 800,
+        lastEventTimeMillis: 44_245
+    )
 
     var history = await route.acknowledgementHistory()
     for _ in 0..<100 where history.records.count < 2 {
@@ -206,7 +226,48 @@ func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     }
     #expect(history.records.map(\.batchSequence) == [32, 64])
     #expect(history.records.map(\.rejectedEvents) == [0, 1])
+    #expect(history.records.map(\.receiveToInjectMicros) == [250, 800])
+    #expect(history.records.map(\.lastEventTimeMillis) == [44_001, 44_245])
     channel.finish()
+    await route.unbind()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aBoundRouteReportsWhetherGuestAckEventTimesWereNegotiated() async {
+    let supported = DevInputRoute()
+    await supported.bind(
+        router: InputRouter(channel: AcknowledgingInputChannel(negotiatedCapabilities: ["input.ack_trace.v1"])))
+    #expect(await supported.supportsAcknowledgementEventTimeTrace())
+
+    let legacy = DevInputRoute()
+    await legacy.bind(router: InputRouter(channel: AcknowledgingInputChannel()))
+    #expect(!(await legacy.supportsAcknowledgementEventTimeTrace()))
+    #expect(!(await DevInputRoute().supportsAcknowledgementEventTimeTrace()))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func anOptInPerEventCaptureUsesSingleEventBatches() async {
+    let channel = CollectingInputChannel()
+    let route = DevInputRoute()
+    await route.bind(router: InputRouter(channel: channel))
+    let baseline = await route.startAcknowledgementHistoryCapture(everyBatch: true)
+    #expect(baseline?.batchesSent == 0)
+    await route.send(
+        RuntimeAPI.InputBatch(events: [
+            .touch(RuntimeAPI.WireTouchEvent(phase: .down, pointerID: 0, position: wirePoint, time: wireTime)),
+            .touch(RuntimeAPI.WireTouchEvent(phase: .move, pointerID: 0, position: wirePoint, time: wireTime)),
+            .touch(RuntimeAPI.WireTouchEvent(phase: .up, pointerID: 0, position: wirePoint, time: wireTime)),
+        ]))
+
+    let batches = await channel.batches
+    let history = await route.sentEventHistory()
+    #expect(batches.map(\.batchSeq) == [1, 2, 3])
+    #expect(batches.map { $0.events.count } == [1, 1, 1])
+    #expect(batches.allSatisfy { $0.ackRequested })
+    #expect(history.records.map(\.batchSequence) == [1, 2, 3])
+    #expect(history.records.map(\.eventIndex) == [0, 0, 0])
+    #expect(history.records.map(\.kindAndPhase) == ["touch.down", "touch.move", "touch.up"])
+    _ = await route.stopAcknowledgementHistoryCapture()
     await route.unbind()
 }
 

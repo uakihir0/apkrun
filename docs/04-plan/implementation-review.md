@@ -18205,10 +18205,60 @@ Kept, and why:
 **Choice.**
 1. #103 depends on #023 and #072, not on #024. The issue index defines dependencies as hard acceptance gates. Since #103 is needed to resolve #024's open click criterion, a hard dependency on #024 would make the work circular. The window and Guest Agent provide the prerequisites for the existing input path.
 2. The plan no longer states the pressed-state explanation as a confirmed cause or uses it in the task title. The prior trace runs used a debug listener that can alter timing, did not trace the product-mode losses directly, and did not verify the exact `View` source revision for the tested image (IR-1295 to IR-1298). The latest ACK diagnostic shows queue acceptance followed by only 98 app-side clicks; it does not locate the loss inside Android.
-3. #103's test plan uses one guest for three consecutive 100-click batches, checks the fixture's persisted counter and host/guest rejection counters, and requires normal AppKit event delivery on a dedicated lab Mac GUI session. ACKs and fixture log lines alone are not accepted as proof of a click. The shared desktop is not used for a test that brings the APKRun window to the front.
+3. #103's test plan uses one guest for three consecutive 100-click batches, checks the fixture's persisted counter and all observable host counters, and posts real `CGEvent`s through the WindowServer on a dedicated lab Mac GUI session. It records guest rejection counts from normal periodic ACKs and the batch sequences those ACKs cover; full guest counters are not exposed until #059. ACKs and fixture log lines alone are not accepted as proof of a click. The shared desktop is not used for a test that brings the APKRun window to the front.
 4. A product change is conditional on evidence locating a guest-controlled cause. If the trace and exact image implementation show no safe product correction, #103 records that limit and #024 box 3 stays open for maintainer review. The box is checked only after the three T2 batches pass.
 5. #103 retains NFR-PERF-03 as a constraint. If a product correction changes event timing, its test plan also requires the existing #070 `input-latency` scenario and the p95 limit; click-count T2 results alone do not claim to verify the latency requirement.
 
 **Reason.** The older task entry required #024 as a hard dependency even though its own acceptance depended on #103. It also treated a diagnostic-run hypothesis as stronger than the evidence allowed, and its 100/100 requirement had no no-fix outcome despite the scope explicitly allowing that outcome. These updates make the task executable without weakening the product acceptance bar.
 
-**Risk.** No root cause or product fix is established yet. The T2 harness needs a dedicated GUI session because its window must become key; the local shared desktop is not a safe place to run it. The odm7 bundle manifest (`/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json`, SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`) records the Android 17 build ID, target, source archive hash, and branch, but does not identify an AOSP source commit. The exact framework source still needs to be mapped to the pinned image, or the inspected framework bytecode must be hashed and its provenance limit recorded.
+**Risk.** No root cause or product fix is established yet. The T2 harness needs a dedicated GUI session because its window must become key; the local shared desktop is not a safe place to run it. The odm7 bundle manifest (`/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json`, SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`) records the Android 17 build ID, target, source archive hash, and branch, but does not itself identify an AOSP source commit. The source manifest and exact framework commits have since been mapped and checked against this image (IR-1307); that establishes provenance, not the cause.
+
+## IR-1305: #103 records normal ACK coverage instead of adding the future guest health API
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; IR-1304 |
+
+**Choice.**
+1. The guest `InputService` has an internal `counters()` method, but the current daemon has no control request that returns it. The protocol defines `GetHealth` and `Health.input`, while the implementation plan assigns the live health operation to #059. Normal input ACKs are requested every 32 batches (`GuestInputEncoding.ackInterval`) and return the rejection count for that acknowledged batch only. `InputCounters.droppedInvalid` aggregates host-side invalid-session drops with guest rejections received in ACKs.
+2. #103 will not implement a new health request or pull #059 forward. ACK-history capture is disabled by default and explicitly enabled only for the T2 diagnostic run. T2 reports the persisted counter delta for each 100-click batch, all host routing counters after the awaited ACK, and zero guest rejection counts in every normal ACK it receives, together with the ACK sequence coverage. It will not present these observations as a complete guest counter snapshot.
+
+**Reason.** A persisted counter delta is the end-to-end click result. Adding live guest health here would expand #103 into the diagnostics API and duplicate the later task. The existing periodic ACK data and host counters provide the rejection evidence currently available without changing the normal ACK cadence. Keeping history capture opt-in avoids retaining diagnostic data on the normal input path.
+
+**Risk.** A guest rejection in a batch without a requested ACK is not directly included in the host's `droppedInvalid` count. The per-batch persisted click deltas still detect missing app actions; a complete guest rejection total remains deferred to #059. A maintainer may choose to move the narrow health query earlier if this limitation is unacceptable. The implemented ACK-coverage harness does not yet provide the task's joined per-event trace, establish the cause, inspect the exact framework implementation, or pass a dedicated lab GUI T2 run; #103 and #024 box 3 remain open.
+
+## IR-1306: The M3 WindowServer test stages input coverage before the wrapper XPC path exists
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) §12.4 |
+
+**Choice.** Keep the interactive M3 test on the existing `DevBoot`/`DevInputRoute` path and label its scope explicitly. It posts real WindowServer events through AppKit, the current input sink, `InputRouter`, and the Guest Agent. It does not claim to cover the later wrapper-to-apkrund XPC route.
+
+**Reason.** M3's G4 is defined by `apkrun dev launch` ([roadmap.md](roadmap.md) §2), while the wrapper-owned window over XPC arrives in #068. Adding #068 as a hard dependency to #103 would create a cycle: #068 follows #030, and #030 requires #024's click criterion that #103 investigates. The staging test still gives useful end-to-end evidence for the M3 path without moving later architecture into this task.
+
+**Risk.** The future wrapper and daemon route may differ from the embedded development route. #103 and #024 acceptance remain open until the bounded per-event diagnosis is complete and the applicable product path is verified; when #068 provides the wrapper XPC route, repeat the click scenario there before treating it as covered.
+
+## IR-1307: Pin the Android framework used by the odm7 click-loss runs
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; IR-1304 |
+
+**Choice.** Record the exact AOSP project revisions for the stock system image used by the odm7 click-loss runs, and inspect the relevant `View` source at that revision rather than infer behavior from a different Android tag.
+
+**Evidence.**
+- The retained image manifest at `/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json` has SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`. It identifies build 16373615, target `aosp_cf_arm64_only_phone-userdebug`, Android 17/API 37, branch `aosp-android-latest-release`, and source archive `aosp_cf_arm64_only_phone-img-16373615.zip` with SHA-256 `051caf8072ba9fb417e05999de2984752e44e13ce70b6c49c669f0a73db85c18`.
+- The CI build manifest at [manifest_16373615.xml](https://ci.android.com/builds/submitted/16373615/aosp_cf_arm64_only_phone-userdebug/latest/raw/manifest_16373615.xml) has SHA-256 `c9eaff434f26ee3769e1c47dbf92c157759c70e0d8bae12fd581e6cd575845f0`. It pins `platform/frameworks/base` to `94b4c163b7dfe5ce3607f7bb8456f9573f7de57d` and `platform/frameworks/native` to `ae266dcb706d083868578cfedce381ef44488a07`.
+- The retained odm7 variant receipt has SHA-256 `31ca03cb4ad3b8676d3c29ee40c7698bb73f10b02204b5d5b7ec65e4e35f6335`; it replaces only `odm_a` (replacement SHA-256 `6ea24cf7d1d3aaf7a80449afe4343b5fc31e759e72cd94ffff49e2ac671fa3d5`). The system framework therefore remains from the pinned stock build.
+- In [`View.java` at the pinned revision](https://android.googlesource.com/platform/frameworks/base/+/94b4c163b7dfe5ce3607f7bb8456f9573f7de57/core/java/android/view/View.java), `onTouchEvent(ACTION_UP)` posts `mPerformClick`, then posts or runs `mUnsetPressedState` (lines 18523–18533); `UnsetPressedState.run()` clears the pressed state with `setPressed(false)` (line 32515 onward).
+
+**Reason.** The previous work had only the build ID, branch, and source archive hash, which were insufficient to select `View` source conclusively. The raw source manifest supplies the exact project revisions, and the variant receipt confirms that odm7 did not replace the system partition.
+
+**Risk.** The source explains the framework's scheduling operations but does not reveal why the product run lost a click. The prior listeners did not join a product-mode failure across the host, guest, view, and callback; no cause or safe correction is established. The per-event trace and dedicated lab test remain necessary.

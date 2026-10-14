@@ -18193,3 +18193,22 @@ Kept, and why:
 **Reason.** The disk was near its limit, and the removed items can be rebuilt from the scripts or are superseded. The removed image copies are clones of bundles that stay, so their space is returned only when the source is removed too. The logs and the experiment bundles that the records name stay, so that the review can follow the evidence.
 
 **Risk.** An IR entry that names a removed path cannot be reproduced from that path. The entry text still records the outcome. A rebuild from the scripts takes time and needs the stock zip.
+
+## IR-1304: #103 can start before #024 acceptance and must distinguish queue acceptance from app delivery
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 (follow-up of #024) |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [README.md](issues/README.md) §1, §3; [roadmap.md](roadmap.md) §1.2–§1.4; [test-strategy.md](test-strategy.md) §6.4; [traceability.md](traceability.md) §2.4, §2.12 |
+
+**Choice.**
+1. #103 depends on #023 and #072, not on #024. The issue index defines dependencies as hard acceptance gates. Since #103 is needed to resolve #024's open click criterion, a hard dependency on #024 would make the work circular. The window and Guest Agent provide the prerequisites for the existing input path.
+2. The plan no longer states the pressed-state explanation as a confirmed cause or uses it in the task title. The prior trace runs used a debug listener that can alter timing, did not trace the product-mode losses directly, and did not verify the exact `View` source revision for the tested image (IR-1295 to IR-1298). The latest ACK diagnostic shows queue acceptance followed by only 98 app-side clicks; it does not locate the loss inside Android.
+3. #103's test plan uses one guest for three consecutive 100-click batches, checks the fixture's persisted counter and host/guest rejection counters, and requires normal AppKit event delivery on a dedicated lab Mac GUI session. ACKs and fixture log lines alone are not accepted as proof of a click. The shared desktop is not used for a test that brings the APKRun window to the front.
+4. A product change is conditional on evidence locating a guest-controlled cause. If the trace and exact image implementation show no safe product correction, #103 records that limit and #024 box 3 stays open for maintainer review. The box is checked only after the three T2 batches pass.
+5. #103 retains NFR-PERF-03 as a constraint. If a product correction changes event timing, its test plan also requires the existing #070 `input-latency` scenario and the p95 limit; click-count T2 results alone do not claim to verify the latency requirement.
+
+**Reason.** The older task entry required #024 as a hard dependency even though its own acceptance depended on #103. It also treated a diagnostic-run hypothesis as stronger than the evidence allowed, and its 100/100 requirement had no no-fix outcome despite the scope explicitly allowing that outcome. These updates make the task executable without weakening the product acceptance bar.
+
+**Risk.** No root cause or product fix is established yet. The T2 harness needs a dedicated GUI session because its window must become key; the local shared desktop is not a safe place to run it. The odm7 bundle manifest (`/tmp/apkrun-odmr/odm7/bundle/android-bundle/manifest.json`, SHA-256 `113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`) records the Android 17 build ID, target, source archive hash, and branch, but does not identify an AOSP source commit. The exact framework source still needs to be mapped to the pinned image, or the inspected framework bytecode must be hashed and its provenance limit recorded.

@@ -68,7 +68,7 @@ The requirement text, priority, and target version are in [../00-product/require
 
 | ID | Tasks | Design | Verified by |
 |---|---|---|---|
-| FR-IN-01 | #024 | [input.md](../02-design/input.md) §3–§4 | T0 `EventTranslator`; T2 HelloText clicks |
+| FR-IN-01 | #024, #103 | [input.md](../02-design/input.md) §3–§4, §8 | T0 `EventTranslator`; T2 HelloText click delivery and persisted counter |
 | FR-IN-02 | #024 | [input.md](../02-design/input.md) §4.4 | T0 scroll conversion; T2 HelloCompose scroll |
 | FR-IN-03 | #025 | [input.md](../02-design/input.md) §5.2 | T0 key map; T2 typing |
 | FR-IN-04 | #025 | [input.md](../02-design/input.md) §6 | T2 back navigation |
@@ -184,7 +184,7 @@ The requirement text, priority, and target version are in [../00-product/require
 |---|---|---|---|
 | NFR-PERF-01 | #031, #047, #070 | [display-and-windowing.md](../02-design/display-and-windowing.md) §9; [diagnostics.md](../02-design/diagnostics.md) §9 | perf harness on the reference Mac (OQ-02) |
 | NFR-PERF-02 | #047, #070 | [runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 | perf harness (R-07) |
-| NFR-PERF-03 | #024, #070 | [input.md](../02-design/input.md) §8 | signposts in the perf harness |
+| NFR-PERF-03 | #024, #070, #103 | [input.md](../02-design/input.md) §8 | #070 `input-latency` scenario and signposts (p95 ≤ 16 ms); #103 T2 separately checks click delivery and reruns the latency scenario if a correction changes event timing |
 | NFR-PERF-04 | #023, #070; later: #096 (post-v1) | [graphics.md](../02-design/graphics.md) §7 | perf harness with HelloGL (R-03) |
 | NFR-PERF-05 | #023; later: #070 | [graphics.md](../02-design/graphics.md) §7 | readback counter in T2 and the perf harness |
 | NFR-PERF-06 | #069, #070 | [runtime-daemon.md](../02-design/runtime-daemon.md) §5.6 | perf harness idle scenario |

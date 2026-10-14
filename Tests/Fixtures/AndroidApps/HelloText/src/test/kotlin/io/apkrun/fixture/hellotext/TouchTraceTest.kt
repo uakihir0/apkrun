@@ -9,6 +9,24 @@ import org.junit.Test
 /** The bounded opt-in input trace state machine on the JVM; no Android runtime is needed. */
 class TouchTraceTest {
     @Test
+    fun debugSessionObserverTracksWhenCaptureAttachesAndDetachesTheTouchListener() {
+        DebugTouchTraceSession.stopAndDrain()
+        val states = mutableListOf<Boolean>()
+        try {
+            DebugTouchTraceSession.setCaptureStateObserver { states.add(it) }
+
+            assertEquals(listOf(false), states)
+            DebugTouchTraceSession.start()
+            assertEquals(listOf(false, true), states)
+            DebugTouchTraceSession.stopAndDrain()
+            assertEquals(listOf(false, true, false), states)
+        } finally {
+            DebugTouchTraceSession.stopAndDrain()
+            DebugTouchTraceSession.setCaptureStateObserver(null)
+        }
+    }
+
+    @Test
     fun captureIsOffByDefaultAndIgnoresInputSamplesAndClicks() {
         val trace = TouchTrace(capacity = 4)
 

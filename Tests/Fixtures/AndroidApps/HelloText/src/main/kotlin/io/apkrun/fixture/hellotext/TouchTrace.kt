@@ -307,11 +307,21 @@ internal constructor(
 /** The shared session controlled by debug broadcasts and observed by the debug Activity hook. */
 object DebugTouchTraceSession {
     private val trace = TouchTrace()
+    private var captureStateObserver: ((Boolean) -> Unit)? = null
 
     val isCapturing: Boolean
         get() = trace.isCapturing
 
-    fun start(): Int = trace.start()
+    fun setCaptureStateObserver(observer: ((Boolean) -> Unit)?) {
+        captureStateObserver = observer
+        observer?.invoke(isCapturing)
+    }
+
+    fun start(): Int {
+        val capacity = trace.start()
+        captureStateObserver?.invoke(true)
+        return capacity
+    }
 
     fun recordTouch(
         eventTimeMillis: Long,
@@ -343,7 +353,11 @@ object DebugTouchTraceSession {
     fun recordClick(storedCounter: Int?, saveSucceeded: Boolean) =
         trace.recordClick(storedCounter, saveSucceeded)
 
-    fun stopAndDrain(): TouchTraceDrain = trace.stopAndDrain()
+    fun stopAndDrain(): TouchTraceDrain {
+        val drain = trace.stopAndDrain()
+        captureStateObserver?.invoke(false)
+        return drain
+    }
 }
 
 /** Intent actions accepted by the debug-only broadcast receiver. */

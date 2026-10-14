@@ -26,7 +26,41 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore
     private lateinit var counterText: TextView
+    private lateinit var incrementButton: Button
     private var traceDebugBuild = false
+
+    private val touchTraceListener =
+        View.OnTouchListener { view, event ->
+            if (TouchTraceAction.fromMaskedValue(event.actionMasked) == null) {
+                return@OnTouchListener false
+            }
+            val inside =
+                event.x >= 0f &&
+                    event.y >= 0f &&
+                    event.x < view.width.toFloat() &&
+                    event.y < view.height.toFloat()
+            val inputSequence =
+                DebugTouchTraceSession.recordTouch(
+                    eventTimeMillis = event.eventTime,
+                    downTimeMillis = event.downTime,
+                    action = event.actionMasked,
+                    pressedBefore = view.isPressed,
+                    enabled = view.isEnabled,
+                    focused = view.hasFocus(),
+                    inside = inside,
+                    shown = view.isShown,
+                )
+            if (inputSequence != null) {
+                view.postOnAnimation {
+                    DebugTouchTraceSession.recordPostDispatchPressed(
+                        inputSequence,
+                        sampledAtUptimeMillis = SystemClock.uptimeMillis(),
+                        pressed = view.isPressed,
+                    )
+                }
+            }
+            false
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,41 +69,10 @@ class MainActivity : Activity() {
         counter = openCounter(this)
         counterText = findViewById(R.id.counter_text)
         showCount(counter.current())
-        val incrementButton = findViewById<Button>(R.id.increment_button)
+        incrementButton = findViewById(R.id.increment_button)
         if (traceDebugBuild) {
-            incrementButton.setOnTouchListener { view, event ->
-                if (
-                    !DebugTouchTraceSession.isCapturing ||
-                        TouchTraceAction.fromMaskedValue(event.actionMasked) == null
-                ) {
-                    return@setOnTouchListener false
-                }
-                val inside =
-                    event.x >= 0f &&
-                        event.y >= 0f &&
-                        event.x < view.width.toFloat() &&
-                        event.y < view.height.toFloat()
-                val inputSequence =
-                    DebugTouchTraceSession.recordTouch(
-                        eventTimeMillis = event.eventTime,
-                        downTimeMillis = event.downTime,
-                        action = event.actionMasked,
-                        pressedBefore = view.isPressed,
-                        enabled = view.isEnabled,
-                        focused = view.hasFocus(),
-                        inside = inside,
-                        shown = view.isShown,
-                    )
-                if (inputSequence != null) {
-                    view.postOnAnimation {
-                        DebugTouchTraceSession.recordPostDispatchPressed(
-                            inputSequence,
-                            sampledAtUptimeMillis = SystemClock.uptimeMillis(),
-                            pressed = view.isPressed,
-                        )
-                    }
-                }
-                false
+            DebugTouchTraceSession.setCaptureStateObserver { capturing ->
+                incrementButton.setOnTouchListener(if (capturing) touchTraceListener else null)
             }
         }
         incrementButton.setOnClickListener { click() }
@@ -93,6 +96,14 @@ class MainActivity : Activity() {
             false
         }
         registerForContextMenu(findViewById<TextView>(R.id.context_target))
+    }
+
+    override fun onDestroy() {
+        if (traceDebugBuild) {
+            incrementButton.setOnTouchListener(null)
+            DebugTouchTraceSession.setCaptureStateObserver(null)
+        }
+        super.onDestroy()
     }
 
     override fun onResume() {

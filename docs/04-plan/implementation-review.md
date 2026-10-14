@@ -18618,3 +18618,57 @@ sequence handling, cumulative route-counter deltas, full-deadline log waits,
 and an initial ACK fence for startup hover traffic. Final reviewers found no
 remaining actionable source issue. Neither review executed signed T2 or
 established runtime success.
+
+## IR-1311: The shared desktop lost the AppKit test host before click submission
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [input.md](../02-design/input.md) §11; IR-1310 |
+
+**Choice.** Run the filtered signed test
+`AndroidInputTests.testHundredAppKitClicksCaptureGuestButtonStateForBothWriteModes`
+against the known-good odm7 bundle at
+`/tmp/apkrun-odmr/odm7/bundle/android-bundle`
+(manifest SHA-256
+`113e3d9868c6d5073d9fd6c572c8b91c2e2ba7e5eb5c31ee81b33912fd844c3d`).
+The test plan's fixture path was temporarily pointed at the instrumented
+HelloText build and restored byte-for-byte after execution (restored plan
+SHA-256 `e2bd324e8712d3de0e36b76910c6384f833e17a00d45137658d4b53152c2dc6e`).
+Because the documented test-signing variables were unset, the run used the
+available local Apple Development identity to determine whether the guest
+could boot and reach the fixture. The exact lab signer was not used.
+
+**Evidence.** The VM booted, ADB connected, HelloText launched, and the test
+found the button through `uiautomator`. The test then timed out in
+`prepareForAppKitPointerDispatch` before sending a click. WindowServer briefly
+put `APKRunTestHost` in front while LaunchServices recorded `foreground=0`;
+about 1.3 seconds later, Device Hub came to the front and LaunchServices
+recorded `foreground=1`. Physical trackpad events were logged in the same
+interval, but the logs do not establish that they caused the app switch. The
+test requires both `NSApplication.isActive` and `window.isKeyWindow`, so it
+never entered either 100-click batch. `xcodebuild` exited 65 and wrote
+`/tmp/apkrun-103-ui-state-trace-t2-odm7.xcresult`. No host click trace or
+guest state trace was produced.
+
+**Reason.** IR-1310 requires this synthetic AppKit test to run in an isolated
+active UI session. This run used the correct Android image and reached the
+fixture, but the shared session did not keep the test host active and its window
+key. The result therefore neither validates nor falsifies click delivery or
+guest button behavior.
+
+**Decision for review.** Make no source change based on this run. An
+independent adversarial review reached the same conclusion and found no
+evidence of an input-path failure: the failure occurs before event submission,
+and changing activation policy without an isolated reproduction could add
+desktop side effects while leaving focus theft possible. Rerun with the
+documented signing pair in an isolated active UI session. Only if activation
+still fails there should the harness collect `isActive`, `isKeyWindow`,
+`isVisible`, and frontmost-process state before changing its activation policy.
+The local-identity attempt is diagnostic only, not a lab-signed pass. #024
+box 3 and #103 remain open.
+
+**Adversarial review.** A read-only subagent independently reviewed the
+failure location and system logs, confirmed the test never sent a click, and
+recommended no code change until an isolated active-session reproduction.

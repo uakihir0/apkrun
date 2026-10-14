@@ -57,6 +57,18 @@ private func bodyKind(of envelope: GPEnvelope) -> String? {
     #expect(covered.isSuperset(of: requiredBodyKinds), "missing: \(requiredBodyKinds.subtracting(covered))")
 }
 
+@Test func goldenInputBatchRequestsGuestEventTimeExplicitly() throws {
+    let frame = try GoldenFrames.frame(named: "valid-input-batch")
+    let envelope = try FrameCodec.decode(frame)
+    guard case .inputBatch(let batch) = envelope.body else {
+        Issue.record("the golden input batch frame decoded as another body")
+        return
+    }
+    #expect(batch.ackRequested)
+    #expect(batch.traceEventTime)
+    #expect(try FrameCodec.encode(envelope) == frame)
+}
+
 @Test func invalidGoldenFramesFailWithTheirTypedError() throws {
     let names = try GoldenFrames.invalidNames()
     #expect(Set(names) == Set(expectedFailures.keys), "every invalid frame needs an expected failure")

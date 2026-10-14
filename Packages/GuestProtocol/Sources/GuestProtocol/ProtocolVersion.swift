@@ -20,7 +20,7 @@ public struct ProtocolVersion: Equatable, Hashable, Comparable, Sendable, Custom
     }
 
     /// The version that this build of APKRun speaks.
-    public static let host = ProtocolVersion(major: 1, minor: 0)
+    public static let host = ProtocolVersion(major: 1, minor: 1)
 
     /// The majors that this build of APKRun speaks. Major 1 is the only one in v1 (§5.2).
     public static let supportedMajors: ClosedRange<UInt32> = 1...1

@@ -22,13 +22,13 @@ import Testing
     let twoZero = ProtocolVersion(major: 2, minor: 0)
     #expect(oneZero < oneOne)
     #expect(oneOne < twoZero)
-    #expect(ProtocolVersion.host == oneZero)
+    #expect(ProtocolVersion.host == oneOne)
     #expect(oneOne.description == "1.1")
 }
 
 /// The capability strings of guest-protocol.md §5.3, in table order.
 private let designCapabilities: Set<String> = [
-    "core.v1", "display.v1", "launch.v1", "input.v1", "ime.v1", "packages.v1", "health.v1",
+    "core.v1", "display.v1", "launch.v1", "input.v1", "input.ack_trace.v1", "ime.v1", "packages.v1", "health.v1",
     "system.v1", "clipboard.text.v1", "clipboard.image.v1", "notifications.v1", "url.v1",
     "files.v1", "files.shared.v1", "locale.v1", "audio.v1", "diagnostics.v1", "bulk.v1",
     "store.install.v1", "store.metadata.v1", "store.icon.v1", "store.rollback.v1",
@@ -44,7 +44,7 @@ private let designCapabilities: Set<String> = [
 @Test func everyCapabilityHasTheAreaFeatureVersionForm() {
     for capability in GuestCapability.allCases {
         #expect(
-            capability.rawValue.wholeMatch(of: /[a-z]+(\.[a-z]+)*\.v[0-9]+/) != nil,
+            capability.rawValue.wholeMatch(of: /[a-z][a-z_]*(\.[a-z][a-z_]*)*\.v[0-9]+/) != nil,
             "\(capability.rawValue) is not <area>.<feature>.v<n>")
     }
 }

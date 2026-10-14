@@ -8,6 +8,7 @@ public enum GuestCapability: String, CaseIterable, Sendable {
     case display = "display.v1"
     case launch = "launch.v1"
     case input = "input.v1"
+    case inputAckTrace = "input.ack_trace.v1"
     case ime = "ime.v1"
     case packages = "packages.v1"
     case health = "health.v1"

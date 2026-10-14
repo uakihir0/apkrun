@@ -15,7 +15,7 @@ data class ProtocolVersion(val major: Long, val minor: Long) : Comparable<Protoc
 
     companion object {
         /** The version that this build of the agent speaks. */
-        val HOST = ProtocolVersion(1L, 0L)
+        val HOST = ProtocolVersion(1L, 1L)
 
         /** The majors that this build of the agent speaks. Major 1 is the only one in v1 (§5.2). */
         val SUPPORTED_MAJORS: LongRange = 1L..1L

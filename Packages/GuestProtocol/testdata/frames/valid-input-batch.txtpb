@@ -4,6 +4,7 @@ input_batch {
   display_id: 2
   host_send_nanos: 123456789
   ack_requested: true
+  trace_event_time: true
   events {
     host_time_nanos: 1000
     touch { phase: TOUCH_PHASE_DOWN pointer_id: 0 x: 100.5 y: 200.25 }

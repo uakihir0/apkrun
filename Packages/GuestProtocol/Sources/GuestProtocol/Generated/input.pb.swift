@@ -219,6 +219,9 @@ public nonisolated struct GPInputBatch: Sendable {
 
   public var events: [GPInputEvent] = []
 
+  /// Requests last_event_time_millis in this batch's acknowledgement; requires input.ack_trace.v1.
+  public var traceEventTime: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -413,9 +416,22 @@ public nonisolated struct GPInputAck: Sendable {
   /// Events in the batch that failed validation and were dropped.
   public var rejectedEvents: UInt32 = 0
 
+  /// Android uptime eventTime of the last accepted MotionEvent; present only when negotiated,
+  /// requested by the batch, and when the batch injected a MotionEvent.
+  public var lastEventTimeMillis: UInt64 {
+    get {_lastEventTimeMillis ?? 0}
+    set {_lastEventTimeMillis = newValue}
+  }
+  /// Returns true if `lastEventTimeMillis` has been explicitly set.
+  public var hasLastEventTimeMillis: Bool {self._lastEventTimeMillis != nil}
+  /// Clears the value of `lastEventTimeMillis`. Subsequent reads from it will return its default value.
+  public mutating func clearLastEventTimeMillis() {self._lastEventTimeMillis = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _lastEventTimeMillis: UInt64? = nil
 }
 
 /// ImeCommand is sent from the host to the development IME (guest-protocol.md §9).
@@ -588,7 +604,7 @@ nonisolated extension GPContextMenuAction: SwiftProtobuf._ProtoNameProviding {
 
 nonisolated extension GPInputBatch: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".InputBatch"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}batch_seq\0\u{3}display_id\0\u{3}host_send_nanos\0\u{3}ack_requested\0\u{1}events\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}batch_seq\0\u{3}display_id\0\u{3}host_send_nanos\0\u{3}ack_requested\0\u{1}events\0\u{3}trace_event_time\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -601,6 +617,7 @@ nonisolated extension GPInputBatch: SwiftProtobuf.Message, SwiftProtobuf._Messag
       case 3: try { try decoder.decodeSingularUInt64Field(value: &self.hostSendNanos) }()
       case 4: try { try decoder.decodeSingularBoolField(value: &self.ackRequested) }()
       case 5: try { try decoder.decodeRepeatedMessageField(value: &self.events) }()
+      case 6: try { try decoder.decodeSingularBoolField(value: &self.traceEventTime) }()
       default: break
       }
     }
@@ -622,6 +639,9 @@ nonisolated extension GPInputBatch: SwiftProtobuf.Message, SwiftProtobuf._Messag
     if !self.events.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.events, fieldNumber: 5)
     }
+    if self.traceEventTime != false {
+      try visitor.visitSingularBoolField(value: self.traceEventTime, fieldNumber: 6)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -631,6 +651,7 @@ nonisolated extension GPInputBatch: SwiftProtobuf.Message, SwiftProtobuf._Messag
     if lhs.hostSendNanos != rhs.hostSendNanos {return false}
     if lhs.ackRequested != rhs.ackRequested {return false}
     if lhs.events != rhs.events {return false}
+    if lhs.traceEventTime != rhs.traceEventTime {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1017,7 +1038,7 @@ nonisolated extension GPCancelAll: SwiftProtobuf.Message, SwiftProtobuf._Message
 
 nonisolated extension GPInputAck: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".InputAck"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}batch_seq\0\u{3}receive_to_inject_micros\0\u{3}rejected_events\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}batch_seq\0\u{3}receive_to_inject_micros\0\u{3}rejected_events\0\u{3}last_event_time_millis\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1028,12 +1049,17 @@ nonisolated extension GPInputAck: SwiftProtobuf.Message, SwiftProtobuf._MessageI
       case 1: try { try decoder.decodeSingularUInt64Field(value: &self.batchSeq) }()
       case 2: try { try decoder.decodeSingularUInt32Field(value: &self.receiveToInjectMicros) }()
       case 3: try { try decoder.decodeSingularUInt32Field(value: &self.rejectedEvents) }()
+      case 4: try { try decoder.decodeSingularUInt64Field(value: &self._lastEventTimeMillis) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.batchSeq != 0 {
       try visitor.visitSingularUInt64Field(value: self.batchSeq, fieldNumber: 1)
     }
@@ -1043,6 +1069,9 @@ nonisolated extension GPInputAck: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     if self.rejectedEvents != 0 {
       try visitor.visitSingularUInt32Field(value: self.rejectedEvents, fieldNumber: 3)
     }
+    try { if let v = self._lastEventTimeMillis {
+      try visitor.visitSingularUInt64Field(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1050,6 +1079,7 @@ nonisolated extension GPInputAck: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     if lhs.batchSeq != rhs.batchSeq {return false}
     if lhs.receiveToInjectMicros != rhs.receiveToInjectMicros {return false}
     if lhs.rejectedEvents != rhs.rejectedEvents {return false}
+    if lhs._lastEventTimeMillis != rhs._lastEventTimeMillis {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

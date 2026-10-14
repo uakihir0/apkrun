@@ -1,10 +1,12 @@
 package io.apkrun.guest.protocol
 
 import io.apkrun.guest.protocol.v1.Envelope
+import io.apkrun.guest.protocol.v1.InputAck
 import java.io.File
 import kotlin.reflect.KClass
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,6 +77,49 @@ class FrameCodecTest {
                 FrameCodec.encode(envelope),
             )
         }
+    }
+
+    @Test
+    fun `input ack preserves the guest motion event time in its golden wire frame`() {
+        val envelope = FrameCodec.decode(GoldenFrames.frame("valid-input-ack"))
+
+        assertEquals(123_456_789L, envelope.inputAck.lastEventTimeMillis)
+        assertTrue(envelope.inputAck.hasLastEventTimeMillis())
+        assertArrayEquals(
+            GoldenFrames.frame("valid-input-ack"),
+            FrameCodec.encode(
+                Envelope.newBuilder()
+                    .setId(envelope.id)
+                    .setInputAck(
+                        InputAck.newBuilder()
+                            .setBatchSeq(envelope.inputAck.batchSeq)
+                            .setReceiveToInjectMicros(envelope.inputAck.receiveToInjectMicros)
+                            .setRejectedEvents(envelope.inputAck.rejectedEvents)
+                            .setLastEventTimeMillis(envelope.inputAck.lastEventTimeMillis)
+                    )
+                    .build()
+            ),
+        )
+    }
+
+    @Test
+    fun `golden input batch requests guest event time explicitly`() {
+        val frame = GoldenFrames.frame("valid-input-batch")
+        val envelope = FrameCodec.decode(frame)
+
+        assertTrue(envelope.inputBatch.ackRequested)
+        assertTrue(envelope.inputBatch.traceEventTime)
+        assertArrayEquals(frame, FrameCodec.encode(envelope))
+    }
+
+    @Test
+    fun `optional input ack time distinguishes absent from present zero`() {
+        val absent = InputAck.getDefaultInstance()
+        val presentZero = InputAck.newBuilder().setLastEventTimeMillis(0).build()
+
+        assertFalse(absent.hasLastEventTimeMillis())
+        assertTrue(presentZero.hasLastEventTimeMillis())
+        assertTrue(InputAck.parseFrom(presentZero.toByteArray()).hasLastEventTimeMillis())
     }
 
     @Test

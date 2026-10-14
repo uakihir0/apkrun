@@ -67,6 +67,19 @@ class AgentHandshakeTest {
     }
 
     @Test
+    fun `ack trace is enabled only when the host negotiated its capability`() {
+        val enabled =
+            AgentHandshake.evaluate(
+                acceptedAck(minor = 1, capabilities = listOf("input.ack_trace.v1"))
+            )
+        val omitted =
+            AgentHandshake.evaluate(acceptedAck(minor = 0, capabilities = listOf("core.v1")))
+
+        assertEquals(listOf("input.ack_trace.v1"), enabled.enabledCapabilities)
+        assertTrue("input.ack_trace.v1" !in omitted.enabledCapabilities)
+    }
+
+    @Test
     fun `a host with a different major version is an incompatible version`() {
         val failure =
             assertFailsWith(GuestProtocolFailure.IncompatibleVersion::class) {

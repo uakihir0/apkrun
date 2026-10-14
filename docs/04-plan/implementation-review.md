@@ -18309,15 +18309,15 @@ Kept, and why:
 |---|---|
 | Status | Needs maintainer review |
 | Task | #103 |
-| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) §12.4 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4; [build-system.md](../05-development/build-system.md) §12.4; HelloText fixture |
 
 **Choice.**
-1. Attach HelloText's debug `OnTouchListener` only while `DebugTouchTraceSession` is actively capturing. The session notifies the Activity synchronously at capture start and stop, and clears the callback when the Activity is destroyed.
+1. Attach HelloText's debug `OnTouchListener` only while `DebugTouchTraceSession` is actively capturing. Each Activity registers with an identity token, receives the current state immediately, and removes only its own subscription when destroyed. This supports overlapping Activity lifetimes without leaving another Activity's listener attached.
 2. Give the product-cadence `AndroidInputInteractive` run the exact test-method filter. Give the trace run its own method-level command too; the shared test plan config selects the full test target.
 3. Clarify that M3's “10 tasks” refers to the original milestone tasks; follow-ups #101–#103 are tracked separately.
 
-**Reason.** The earlier fixture installed the listener for every debug APK launch and paid a synchronous callback on every touch even with capture off. That undermined the product-cadence comparison because the diagnostic listener can affect event timing. Method-level filters keep the lab-only interactive run from accidentally running the rest of `AndroidInputTests`, and the explicit task count prevents the follow-ups from silently expanding M3's exit criteria.
+**Reason.** The earlier fixture installed the listener for every debug APK launch and paid a synchronous callback on every touch even with capture off. That undermined the product-cadence comparison because the diagnostic listener can affect event timing. An initial single-observer callback could also be cleared by a different Activity's destruction, so each Activity now owns an independent subscription. Method-level filters keep the lab-only interactive run from accidentally running the rest of `AndroidInputTests`, and the explicit task count prevents the follow-ups from silently expanding M3's exit criteria.
 
-**Verification.** The HelloText fixture JVM test covers the observer's off → on → off capture transitions. Kotlin fixture tests and formatting, exact xcodebuild test-plan parsing, and `git diff --check` are run for this revision. Dedicated GUI execution remains subject to the #103 lab requirement.
+**Verification (2026-10-15).** The HelloText fixture JVM test covers two simultaneous observers and confirms removing the older Activity's subscription leaves the surviving observer notified through capture stop. `:HelloText:testReleaseUnitTest`, `:HelloText:assembleDebug`, the pinned ktfmt dry run, and `git diff --check` pass. The exact xcodebuild test-plan parsing and method-level filters were verified in the preceding revision and are unchanged. Dedicated GUI execution remains subject to the #103 lab requirement.
 
-**Risk.** The fixture still contains debug trace code in the APK, but no touch listener is attached during the untraced product-cadence run. Its results remain scoped to M3's embedded `DevBoot`/`DevInputRoute` path.
+**Risk.** The fixture still contains debug trace code in the APK, but no touch listener is attached during the untraced product-cadence run. Observer callbacks run synchronously with capture transitions and remain limited to toggling each Activity's listener. Results remain scoped to M3's embedded `DevBoot`/`DevInputRoute` path.

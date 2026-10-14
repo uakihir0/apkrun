@@ -297,6 +297,9 @@ sealed class TouchTraceRecord {
 /** One fully drained capture. */
 data class TouchTraceDrain(val records: List<TouchTraceRecord>, val droppedRecordCount: Long)
 
+/** Identity token returned when subscribing to the shared capture state. */
+class TouchTraceObserverToken internal constructor()
+
 /** Capture-scoped handle that prevents a delayed sample from leaking into a later capture. */
 class TouchTraceInputToken
 internal constructor(
@@ -307,21 +310,38 @@ internal constructor(
 /** The shared session controlled by debug broadcasts and observed by the debug Activity hook. */
 object DebugTouchTraceSession {
     private val trace = TouchTrace()
-    private var captureStateObserver: ((Boolean) -> Unit)? = null
+    private val observerLock = Any()
+    private val captureStateObservers = linkedMapOf<TouchTraceObserverToken, (Boolean) -> Unit>()
 
     val isCapturing: Boolean
-        get() = trace.isCapturing
+        get() = synchronized(observerLock) { trace.isCapturing }
 
-    fun setCaptureStateObserver(observer: ((Boolean) -> Unit)?) {
-        captureStateObserver = observer
-        observer?.invoke(isCapturing)
+    /**
+     * Subscribes to capture transitions and immediately reports the current state.
+     *
+     * The returned token identifies only this subscription, so destroying one Activity cannot
+     * unregister another Activity's observer.
+     */
+    fun observeCaptureState(observer: (Boolean) -> Unit): TouchTraceObserverToken =
+        synchronized(observerLock) {
+            val token = TouchTraceObserverToken()
+            captureStateObservers[token] = observer
+            observer(trace.isCapturing)
+            token
+        }
+
+    fun removeCaptureStateObserver(token: TouchTraceObserverToken) {
+        synchronized(observerLock) {
+            captureStateObservers.remove(token)
+        }
     }
 
-    fun start(): Int {
-        val capacity = trace.start()
-        captureStateObserver?.invoke(true)
-        return capacity
-    }
+    fun start(): Int =
+        synchronized(observerLock) {
+            val capacity = trace.start()
+            notifyCaptureStateObservers(capturing = true)
+            capacity
+        }
 
     fun recordTouch(
         eventTimeMillis: Long,
@@ -353,10 +373,15 @@ object DebugTouchTraceSession {
     fun recordClick(storedCounter: Int?, saveSucceeded: Boolean) =
         trace.recordClick(storedCounter, saveSucceeded)
 
-    fun stopAndDrain(): TouchTraceDrain {
-        val drain = trace.stopAndDrain()
-        captureStateObserver?.invoke(false)
-        return drain
+    fun stopAndDrain(): TouchTraceDrain =
+        synchronized(observerLock) {
+            val drain = trace.stopAndDrain()
+            notifyCaptureStateObservers(capturing = false)
+            drain
+        }
+
+    private fun notifyCaptureStateObservers(capturing: Boolean) {
+        captureStateObservers.values.toList().forEach { it(capturing) }
     }
 }
 

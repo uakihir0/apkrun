@@ -9,20 +9,34 @@ import org.junit.Test
 /** The bounded opt-in input trace state machine on the JVM; no Android runtime is needed. */
 class TouchTraceTest {
     @Test
-    fun debugSessionObserverTracksWhenCaptureAttachesAndDetachesTheTouchListener() {
+    fun captureObserversRemainIndependentWhenOlderActivityUnregisters() {
         DebugTouchTraceSession.stopAndDrain()
-        val states = mutableListOf<Boolean>()
+        val firstObserverStates = mutableListOf<Boolean>()
+        val secondObserverStates = mutableListOf<Boolean>()
+        var firstObserver: TouchTraceObserverToken? = null
+        var secondObserver: TouchTraceObserverToken? = null
         try {
-            DebugTouchTraceSession.setCaptureStateObserver { states.add(it) }
+            firstObserver = DebugTouchTraceSession.observeCaptureState {
+                firstObserverStates.add(it)
+            }
+            secondObserver = DebugTouchTraceSession.observeCaptureState {
+                secondObserverStates.add(it)
+            }
 
-            assertEquals(listOf(false), states)
+            assertEquals(listOf(false), firstObserverStates)
+            assertEquals(listOf(false), secondObserverStates)
             DebugTouchTraceSession.start()
-            assertEquals(listOf(false, true), states)
+            assertEquals(listOf(false, true), firstObserverStates)
+            assertEquals(listOf(false, true), secondObserverStates)
+            DebugTouchTraceSession.removeCaptureStateObserver(requireNotNull(firstObserver))
+            firstObserver = null
             DebugTouchTraceSession.stopAndDrain()
-            assertEquals(listOf(false, true, false), states)
+            assertEquals(listOf(false, true), firstObserverStates)
+            assertEquals(listOf(false, true, false), secondObserverStates)
         } finally {
             DebugTouchTraceSession.stopAndDrain()
-            DebugTouchTraceSession.setCaptureStateObserver(null)
+            firstObserver?.let(DebugTouchTraceSession::removeCaptureStateObserver)
+            secondObserver?.let(DebugTouchTraceSession::removeCaptureStateObserver)
         }
     }
 

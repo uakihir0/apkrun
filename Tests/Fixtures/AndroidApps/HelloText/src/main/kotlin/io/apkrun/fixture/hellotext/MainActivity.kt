@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var counterText: TextView
     private lateinit var incrementButton: Button
     private var traceDebugBuild = false
+    private var touchTraceObserver: TouchTraceObserverToken? = null
 
     private val touchTraceListener = View.OnTouchListener { view, event ->
         if (TouchTraceAction.fromMaskedValue(event.actionMasked) == null) {
@@ -70,7 +71,7 @@ class MainActivity : Activity() {
         showCount(counter.current())
         incrementButton = findViewById(R.id.increment_button)
         if (traceDebugBuild) {
-            DebugTouchTraceSession.setCaptureStateObserver { capturing ->
+            touchTraceObserver = DebugTouchTraceSession.observeCaptureState { capturing ->
                 incrementButton.setOnTouchListener(if (capturing) touchTraceListener else null)
             }
         }
@@ -112,7 +113,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         if (traceDebugBuild) {
             incrementButton.setOnTouchListener(null)
-            DebugTouchTraceSession.setCaptureStateObserver(null)
+            touchTraceObserver?.let(DebugTouchTraceSession::removeCaptureStateObserver)
+            touchTraceObserver = null
         }
         super.onDestroy()
     }

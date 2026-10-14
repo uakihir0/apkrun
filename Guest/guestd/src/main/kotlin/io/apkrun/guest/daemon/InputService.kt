@@ -93,7 +93,12 @@ class InputService(
      * injection. It returns without waiting for the injection. When the host asked for an ack, it
      * is passed to [sendAck] after the batch has been injected (guest-protocol.md §9).
      */
-    fun submit(stream: Any, batch: InputBatch, sendAck: (InputAck) -> Unit) {
+    fun submit(
+        stream: Any,
+        batch: InputBatch,
+        ackTraceEnabled: Boolean = false,
+        sendAck: (InputAck) -> Unit,
+    ) {
         val received = nanoTime()
         val events = batch.eventsList
         val bounds = boundsOf(batch.displayId)
@@ -104,6 +109,7 @@ class InputService(
                 events.filter { InputValidator.isValid(it, bounds) }
             }
         val invalid = events.size - valid.size
+        val captureMotionEventTime = ackTraceEnabled && batch.ackRequested && batch.traceEventTime
         if (claim(stream, invalid)) {
             // The previous connection's gestures are cancelled before this batch is injected.
             post { record(injectOrDrop(0) { injector.cancelAll() }) }
@@ -112,18 +118,25 @@ class InputService(
         post {
             val outcome =
                 injectOrDrop(valid.size) {
-                    injector.injectBatch(batch.displayId, firstHostTimeNanos, valid)
+                    injector.injectBatch(
+                        batch.displayId,
+                        firstHostTimeNanos,
+                        valid,
+                        captureMotionEventTime = captureMotionEventTime,
+                    )
                 }
             record(outcome)
             if (batch.ackRequested) {
                 val micros = ((nanoTime() - received) / 1_000L).coerceIn(0L, MAXIMUM_MICROS)
-                sendAck(
+                val ack =
                     InputAck.newBuilder()
                         .setBatchSeq(batch.batchSeq)
                         .setReceiveToInjectMicros(micros.toInt())
                         .setRejectedEvents(invalid + outcome.dropped)
-                        .build()
-                )
+                if (captureMotionEventTime) {
+                    outcome.lastEventTimeMillis?.let(ack::setLastEventTimeMillis)
+                }
+                sendAck(ack.build())
             }
         }
     }

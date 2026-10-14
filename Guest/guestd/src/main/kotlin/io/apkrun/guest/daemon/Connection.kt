@@ -98,7 +98,7 @@ class Connection(
         }
         daemon.sessions.track(socket)
         try {
-            secondaryLoop()
+            secondaryLoop(negotiated.enabled)
         } finally {
             daemon.sessions.untrack(socket)
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
@@ -175,7 +175,7 @@ class Connection(
      * Input and bulk connections. The input stream has no request and response pairs
      * (guest-protocol.md §9).
      */
-    private fun secondaryLoop() {
+    private fun secondaryLoop(enabled: Set<GuestCapability>) {
         while (true) {
             val envelope = reader.next()
             when (channel) {
@@ -185,7 +185,11 @@ class Connection(
                         // stream stays open (guest-protocol.md §9). Only a frame that breaks the
                         // protocol closes it. The ack is sent later, from the injector thread.
                         try {
-                            daemon.input.submit(this, envelope.inputBatch) { ack ->
+                            daemon.input.submit(
+                                this,
+                                envelope.inputBatch,
+                                ackTraceEnabled = GuestCapability.INPUT_ACK_TRACE in enabled,
+                            ) { ack ->
                                 sendInputAck(ack)
                             }
                         } catch (error: Exception) {
@@ -254,6 +258,7 @@ class Connection(
                 GuestCapability.DISPLAY,
                 GuestCapability.LAUNCH,
                 GuestCapability.INPUT,
+                GuestCapability.INPUT_ACK_TRACE,
             )
     }
 }

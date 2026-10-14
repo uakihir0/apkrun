@@ -15,6 +15,7 @@ import io.apkrun.guest.protocol.v1.ScrollEvent
 import io.apkrun.guest.protocol.v1.TouchEvent
 import io.apkrun.guest.protocol.v1.TouchPhase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -187,9 +188,54 @@ private fun cancelAllEvent(hostNanos: Long = 0L): InputEvent =
         .setCancelAll(CancelAll.getDefaultInstance())
         .build()
 
+private fun assertOutcome(expectedInjected: Int, expectedDropped: Int, actual: BatchOutcome) {
+    assertEquals(expectedInjected, actual.injected)
+    assertEquals(expectedDropped, actual.dropped)
+}
+
 class InputInjectorTest {
     private val touchscreen = InputDevice.SOURCE_TOUCHSCREEN
     private val mouse = InputDevice.SOURCE_MOUSE
+
+    @Test
+    fun batchOutcomeReportsOnlyTheLastMotionEventAcceptedByInputManager() {
+        val harness = Harness()
+        harness.sink.refuse = { it.action == MotionEvent.ACTION_MOVE }
+        val firstHostTime = 7_000_000_000L
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                firstHostTime,
+                listOf(
+                    touchEvent(TouchPhase.TOUCH_PHASE_DOWN, hostNanos = firstHostTime),
+                    touchEvent(
+                        TouchPhase.TOUCH_PHASE_MOVE,
+                        hostNanos = firstHostTime + 16_000_000L,
+                    ),
+                    keyEvent(hostNanos = firstHostTime + 24_000_000L),
+                ),
+                captureMotionEventTime = true,
+            )
+
+        assertOutcome(2, 1, outcome)
+        assertEquals(1_000L, outcome.lastEventTimeMillis)
+    }
+
+    @Test
+    fun batchOutcomeUsesZeroWhenNoMotionEventWasAccepted() {
+        val harness = Harness()
+        harness.sink.refuse = { true }
+        val outcome =
+            harness.injector.injectBatch(
+                0,
+                0L,
+                listOf(touchEvent(TouchPhase.TOUCH_PHASE_DOWN)),
+                captureMotionEventTime = true,
+            )
+
+        assertOutcome(0, 1, outcome)
+        assertEquals(null, outcome.lastEventTimeMillis)
+    }
 
     @Test
     fun aTouchGestureIsDownMoveAndUpOnTheTouchscreen() {
@@ -205,7 +251,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(3, 0), outcome)
+        assertOutcome(3, 0, outcome)
         assertEquals(
             listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP),
             harness.actions,
@@ -273,7 +319,7 @@ class InputInjectorTest {
         harness.clock = 1_200L
         val outcome = harness.injector.cancelAll()
 
-        assertEquals(BatchOutcome(1, 0), outcome)
+        assertOutcome(1, 0, outcome)
         assertEquals(MotionEvent.ACTION_CANCEL, harness.actions.last())
         val cancel = harness.specs.last()
         assertEquals(120f, cancel.x)
@@ -282,7 +328,7 @@ class InputInjectorTest {
         assertEquals(1_200L, cancel.eventTime)
 
         // The gesture is closed, so a second cancel injects nothing.
-        assertEquals(BatchOutcome(0, 0), harness.injector.cancelAll())
+        assertOutcome(0, 0, harness.injector.cancelAll())
     }
 
     @Test
@@ -301,7 +347,7 @@ class InputInjectorTest {
 
         // The first DOWN is injected. The second DOWN cancels the open gesture and is dropped.
         // The MOVE has no open gesture, so it is dropped too.
-        assertEquals(BatchOutcome(2, 2), outcome)
+        assertOutcome(2, 2, outcome)
         assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL), harness.actions)
         assertEquals(10f, harness.specs.last().x)
     }
@@ -320,7 +366,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 3), outcome)
+        assertOutcome(0, 3, outcome)
         assertTrue(harness.specs.isEmpty())
     }
 
@@ -338,7 +384,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(3, 0), outcome)
+        assertOutcome(3, 0, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_HOVER_ENTER,
@@ -370,7 +416,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(4, 0), outcome)
+        assertOutcome(4, 0, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_DOWN,
@@ -410,7 +456,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(6, 0), outcome)
+        assertOutcome(6, 0, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_DOWN,
@@ -450,7 +496,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 2), outcome)
+        assertOutcome(2, 2, outcome)
     }
 
     @Test
@@ -467,7 +513,7 @@ class InputInjectorTest {
         harness.clock = 1_100L
         val outcome = harness.injector.cancelAll()
 
-        assertEquals(BatchOutcome(3, 0), outcome)
+        assertOutcome(3, 0, outcome)
         val released = harness.specs.takeLast(3)
         assertEquals(
             listOf(
@@ -523,7 +569,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 1), outcome)
+        assertOutcome(2, 1, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_HOVER_ENTER,
@@ -551,7 +597,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(4, 1), outcome)
+        assertOutcome(4, 1, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_DOWN,
@@ -579,7 +625,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(4, 1), outcome)
+        assertOutcome(4, 1, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_HOVER_ENTER,
@@ -604,7 +650,7 @@ class InputInjectorTest {
                 listOf(mouseEvent(MouseAction.MOUSE_ACTION_HOVER_MOVE, x = 31f, y = 41f)),
             )
 
-        assertEquals(BatchOutcome(1, 0), outcome)
+        assertOutcome(1, 0, outcome)
         assertEquals(MotionEvent.ACTION_HOVER_MOVE, harness.actions.last())
     }
 
@@ -623,13 +669,13 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 2), outcome)
+        assertOutcome(2, 2, outcome)
         assertEquals(
             listOf(MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_EXIT),
             harness.actions,
         )
         // Nothing is open, so the cancel has no hover to exit.
-        assertEquals(BatchOutcome(0, 0), harness.injector.cancelAll())
+        assertOutcome(0, 0, harness.injector.cancelAll())
     }
 
     @Test
@@ -645,7 +691,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(1, 1), outcome)
+        assertOutcome(1, 1, outcome)
         assertEquals(listOf(MotionEvent.ACTION_HOVER_ENTER), harness.actions)
     }
 
@@ -662,7 +708,7 @@ class InputInjectorTest {
         )
         val outcome = harness.injector.cancelAll()
 
-        assertEquals(BatchOutcome(2, 0), outcome)
+        assertOutcome(2, 0, outcome)
         assertEquals(
             listOf(
                 MotionEvent.ACTION_HOVER_ENTER,
@@ -680,7 +726,7 @@ class InputInjectorTest {
         val outcome =
             harness.injector.injectBatch(0, 0L, listOf(scrollEvent(vscroll = 1.5f, hscroll = -2f)))
 
-        assertEquals(BatchOutcome(1, 0), outcome)
+        assertOutcome(1, 0, outcome)
         val spec = harness.specs.single()
         assertEquals(MotionEvent.ACTION_SCROLL, spec.action)
         assertEquals(mouse, spec.source)
@@ -706,7 +752,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(1, 1), outcome)
+        assertOutcome(1, 1, outcome)
         assertEquals(listOf(MotionEvent.ACTION_DOWN), harness.actions)
     }
 
@@ -744,7 +790,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 3), outcome)
+        assertOutcome(0, 3, outcome)
         assertTrue(harness.sink.injected.isEmpty())
     }
 
@@ -763,7 +809,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 1), outcome)
+        assertOutcome(2, 1, outcome)
         assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), harness.actions)
     }
 
@@ -782,7 +828,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 1), outcome)
+        assertOutcome(2, 1, outcome)
         assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), harness.actions)
     }
 
@@ -801,7 +847,7 @@ class InputInjectorTest {
 
         // The DOWN was refused, so the MOVE has no gesture to belong to and nothing is cancelled.
         assertTrue(harness.specs.isEmpty())
-        assertEquals(BatchOutcome(0, 0), harness.injector.cancelAll())
+        assertOutcome(0, 0, harness.injector.cancelAll())
     }
 
     @Test
@@ -818,7 +864,7 @@ class InputInjectorTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 2), outcome)
+        assertOutcome(0, 2, outcome)
         assertTrue(harness.sink.injected.isEmpty())
     }
 
@@ -828,18 +874,19 @@ class InputInjectorTest {
         harness.injector.injectBatch(0, 0L, listOf(touchEvent(TouchPhase.TOUCH_PHASE_DOWN)))
         val outcome = harness.injector.displayRemoved(0)
 
-        assertEquals(BatchOutcome(1, 0), outcome)
+        assertOutcome(1, 0, outcome)
         assertEquals(MotionEvent.ACTION_CANCEL, harness.actions.last())
         // The display is forgotten, so a later event on it has no gesture.
-        assertEquals(
-            BatchOutcome(0, 1),
+        assertOutcome(
+            0,
+            1,
             harness.injector.injectBatch(
                 0,
                 0L,
                 listOf(touchEvent(TouchPhase.TOUCH_PHASE_UP)),
             ),
         )
-        assertEquals(BatchOutcome(0, 0), harness.injector.displayRemoved(7))
+        assertOutcome(0, 0, harness.injector.displayRemoved(7))
     }
 
     @Test
@@ -857,7 +904,7 @@ class InputInjectorTest {
         val outcome = harness.injector.injectBatch(0, 0L, listOf(cancelAllEvent()))
 
         // Display 0 has a touch and a mouse press, display 1 has a touch: four releases.
-        assertEquals(BatchOutcome(4, 0), outcome)
+        assertOutcome(4, 0, outcome)
         assertEquals(
             listOf(MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_CANCEL),
             harness.actions.filter { it == MotionEvent.ACTION_CANCEL },
@@ -883,6 +930,7 @@ class InputInjectorTest {
                 .setBatchSeq(5)
                 .setDisplayId(0)
                 .setAckRequested(true)
+                .setTraceEventTime(true)
                 .addAllEvents(
                     listOf(
                         touchEvent(TouchPhase.TOUCH_PHASE_DOWN, 10f, 10f),
@@ -891,7 +939,7 @@ class InputInjectorTest {
                     )
                 )
                 .build()
-        service.submit(this, batch) { sent += it }
+        service.submit(this, batch, ackTraceEnabled = true) { sent += it }
 
         // The batch is only queued: nothing is injected and no ack is sent yet.
         assertTrue(sent.isEmpty())
@@ -903,6 +951,8 @@ class InputInjectorTest {
         val ack = sent.single()
         assertEquals(5L, ack.batchSeq)
         assertEquals(250, ack.receiveToInjectMicros)
+        assertEquals(1_000L, ack.lastEventTimeMillis)
+        assertTrue(ack.hasLastEventTimeMillis())
         // The MOVE is outside the display. The DOWN of the key is valid, and it is injected as a
         // key.
         assertEquals(1, ack.rejectedEvents)
@@ -929,12 +979,92 @@ class InputInjectorTest {
                 .setBatchSeq(9)
                 .setDisplayId(3)
                 .setAckRequested(true)
+                .setTraceEventTime(true)
                 .addEvents(cancelAllEvent())
                 .build()
-        service.submit(this, batch) { sent += it }
+        service.submit(this, batch, ackTraceEnabled = true) { sent += it }
 
         assertEquals(1, sent.single().rejectedEvents)
+        assertFalse(sent.single().hasLastEventTimeMillis())
         assertTrue(harness.sink.injected.isEmpty())
+    }
+
+    @Test
+    fun inputAckOmitsTheTraceFieldWhenItsCapabilityWasNotNegotiated() {
+        val harness = Harness()
+        val sent = mutableListOf<InputAck>()
+        val service =
+            InputService(
+                boundsOf = { DisplayBounds(100, 100) },
+                injector = harness.injector,
+                post = { it() },
+            )
+        val batch =
+            InputBatch.newBuilder()
+                .setDisplayId(0)
+                .setAckRequested(true)
+                .setTraceEventTime(true)
+                .addEvents(touchEvent(TouchPhase.TOUCH_PHASE_DOWN))
+                .build()
+
+        service.submit(this, batch) { sent += it }
+
+        assertTrue(harness.sink.injected.isNotEmpty())
+        assertFalse(sent.single().hasLastEventTimeMillis())
+    }
+
+    @Test
+    fun inputAckOmitsGuestEventTimeWhenTheBatchDoesNotRequestIt() {
+        val harness = Harness()
+        val sent = mutableListOf<InputAck>()
+        val service =
+            InputService(
+                boundsOf = { DisplayBounds(100, 100) },
+                injector = harness.injector,
+                post = { it() },
+            )
+        val batch =
+            InputBatch.newBuilder()
+                .setDisplayId(0)
+                .setAckRequested(true)
+                .setTraceEventTime(false)
+                .addEvents(touchEvent(TouchPhase.TOUCH_PHASE_DOWN))
+                .build()
+
+        service.submit(this, batch, ackTraceEnabled = true) { sent += it }
+
+        assertTrue(harness.sink.injected.isNotEmpty())
+        assertFalse(sent.single().hasLastEventTimeMillis())
+    }
+
+    @Test
+    fun batchWithoutAnAckDoesNotReturnGuestEventTimeEvenWhenItRequestsIt() {
+        val harness = Harness()
+        val sent = mutableListOf<InputAck>()
+        val service =
+            InputService(
+                boundsOf = { DisplayBounds(100, 100) },
+                injector = harness.injector,
+                post = { it() },
+            )
+        val batch =
+            InputBatch.newBuilder()
+                .setDisplayId(0)
+                .setTraceEventTime(true)
+                .addEvents(touchEvent(TouchPhase.TOUCH_PHASE_DOWN))
+                .build()
+
+        service.submit(this, batch, ackTraceEnabled = true) { sent += it }
+
+        assertTrue(harness.sink.injected.isNotEmpty())
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun guestConnectionAdvertisesTheAckTraceCapabilityOnItsHelloChannels() {
+        assertTrue(
+            io.apkrun.guest.protocol.GuestCapability.INPUT_ACK_TRACE in Connection.IMPLEMENTED
+        )
     }
 
     @Test
@@ -1045,7 +1175,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(2, 0), outcome)
+        assertOutcome(2, 0, outcome)
         assertEquals(
             listOf(
                 KeySpec(androidDown, base, base, 29, 0, 1),
@@ -1100,7 +1230,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(4, 0), outcome)
+        assertOutcome(4, 0, outcome)
         assertEquals(
             listOf(androidDown, androidUp, androidDown, androidUp),
             harness.keySpecs.map { it.action },
@@ -1123,7 +1253,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(1, 2), outcome)
+        assertOutcome(1, 2, outcome)
         assertEquals(listOf(androidDown), harness.keySpecs.map { it.action })
     }
 
@@ -1140,7 +1270,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 2), outcome)
+        assertOutcome(0, 2, outcome)
         assertTrue(harness.keySpecs.isEmpty())
     }
 
@@ -1158,7 +1288,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 2), outcome)
+        assertOutcome(0, 2, outcome)
         assertTrue(harness.keySpecs.isEmpty())
     }
 
@@ -1175,10 +1305,10 @@ class InputInjectorKeyTest {
                     keyEvent(hostNanos = 1L, action = KeyAction.KEY_ACTION_UP, keyCode = 29),
                 ),
             )
-        assertEquals(BatchOutcome(1, 1), batch)
+        assertOutcome(1, 1, batch)
 
         harness.sink.keyRefuse = { false }
-        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertOutcome(1, 0, harness.injector.cancelAll())
         assertEquals(listOf(androidDown, androidUp), harness.keySpecs.map { it.action })
     }
 
@@ -1192,7 +1322,7 @@ class InputInjectorKeyTest {
         )
         harness.clock += 5L
 
-        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertOutcome(1, 0, harness.injector.cancelAll())
         assertEquals(
             KeySpec(androidUp, base, base + 5, 29, 0, 1),
             harness.keySpecs.last(),
@@ -1205,14 +1335,14 @@ class InputInjectorKeyTest {
         harness.injector.injectBatch(0, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 29)))
         harness.injector.injectBatch(1, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 30)))
 
-        assertEquals(BatchOutcome(1, 0), harness.injector.displayRemoved(0))
+        assertOutcome(1, 0, harness.injector.displayRemoved(0))
         assertEquals(
             listOf(Pair(29, androidDown), Pair(30, androidDown), Pair(29, androidUp)),
             harness.keySpecs.map { Pair(it.keyCode, it.action) },
         )
         assertEquals(0, harness.sink.injectedKeys.last().displayId)
 
-        assertEquals(BatchOutcome(1, 0), harness.injector.cancelAll())
+        assertOutcome(1, 0, harness.injector.cancelAll())
         assertEquals(
             Pair(30, androidUp),
             harness.keySpecs.last().let { Pair(it.keyCode, it.action) },
@@ -1255,7 +1385,7 @@ class InputInjectorKeyTest {
                 ),
             )
 
-        assertEquals(BatchOutcome(0, 1), outcome)
+        assertOutcome(0, 1, outcome)
         assertTrue(harness.keySpecs.isEmpty())
     }
 
@@ -1266,7 +1396,7 @@ class InputInjectorKeyTest {
         val outcome =
             harness.injector.injectBatch(0, 0L, listOf(keyEvent(hostNanos = 0L, keyCode = 29)))
 
-        assertEquals(BatchOutcome(0, 1), outcome)
+        assertOutcome(0, 1, outcome)
         assertTrue(harness.sink.injectedKeys.isEmpty())
     }
 }

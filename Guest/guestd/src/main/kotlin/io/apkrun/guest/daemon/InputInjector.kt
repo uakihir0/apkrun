@@ -37,8 +37,15 @@ enum class InputFailureCode {
 class InputFailure(val code: InputFailureCode, cause: Throwable? = null) :
     RuntimeException(code.name, cause)
 
-/** What one batch did: the events the framework accepted, and the events that did not reach it. */
-data class BatchOutcome(val injected: Int, val dropped: Int)
+/**
+ * What one batch did: the events the framework accepted, the events that did not reach it, and the
+ * Android uptime eventTime of its last accepted MotionEvent (null when it accepted none).
+ */
+data class BatchOutcome(
+    val injected: Int,
+    val dropped: Int,
+    val lastEventTimeMillis: Long? = null,
+)
 
 /** The open touch gesture of one display: its pointer, its DOWN time, and its last position. */
 private class TouchGesture(val pointerId: Int, val downTime: Long, var x: Float, var y: Float)
@@ -73,9 +80,10 @@ private class DisplayGestures {
 private class KeyPress(val downTime: Long, var metaState: Int)
 
 /** The counts of one batch, filled while it is planned and injected. */
-private class Tally {
+private class Tally(val captureMotionEventTime: Boolean = false) {
     var injected = 0
     var dropped = 0
+    var lastEventTimeMillis: Long? = null
 
     /** The hover events that were dropped by [InputInjector.hostHover] (they are in [dropped]). */
     var hoverSkipped = 0
@@ -132,11 +140,12 @@ class InputInjector(
         displayId: Int,
         firstHostTimeNanos: Long,
         events: List<InputEvent>,
+        captureMotionEventTime: Boolean = false,
     ): BatchOutcome {
         if (events.isEmpty()) {
             return BatchOutcome(0, 0)
         }
-        val tally = Tally()
+        val tally = Tally(captureMotionEventTime)
         val base = uptimeMillis()
         val gestures = displays.getOrPut(displayId) { DisplayGestures() }
         var unsupported = 0
@@ -178,7 +187,7 @@ class InputInjector(
                 "input: dropped ${tally.hoverSkipped} hover events (a gesture was open, or the hover enter and exit were not balanced)"
             )
         }
-        return BatchOutcome(tally.injected, tally.dropped)
+        return BatchOutcome(tally.injected, tally.dropped, tally.lastEventTimeMillis)
     }
 
     /** Releases the open gesture of every display: CANCEL, button releases, and UP (§7.3). */
@@ -194,7 +203,7 @@ class InputInjector(
         if (tally.injected > 0) {
             AgentLog.info("input: released the open gestures with ${tally.injected} events")
         }
-        return BatchOutcome(tally.injected, tally.dropped)
+        return BatchOutcome(tally.injected, tally.dropped, tally.lastEventTimeMillis)
     }
 
     /**
@@ -211,7 +220,7 @@ class InputInjector(
                 "input: the gestures of a removed display were not all released: domain=InputFailure code=${failure.code.name}"
             )
         }
-        return BatchOutcome(tally.injected, tally.dropped)
+        return BatchOutcome(tally.injected, tally.dropped, tally.lastEventTimeMillis)
     }
 
     private fun touch(
@@ -714,7 +723,7 @@ class InputInjector(
      * `setDisplayId` throws [InputFailure], because the framework cannot take the events at all.
      */
     private fun send(displayId: Int, spec: MotionSpec, tally: Tally): Boolean =
-        sendEvent(displayId, build(spec), tally)
+        sendEvent(displayId, build(spec), tally, spec.eventTime)
 
     private fun sendKey(displayId: Int, spec: KeySpec, tally: Tally): Boolean =
         sendEvent(displayId, buildKey(spec), tally)
@@ -722,7 +731,12 @@ class InputInjector(
     /**
      * Sets the display of [event], injects it, and recycles it. The event is built by the caller.
      */
-    private fun sendEvent(displayId: Int, event: Any, tally: Tally): Boolean {
+    private fun sendEvent(
+        displayId: Int,
+        event: Any,
+        tally: Tally,
+        acceptedMotionEventTimeMillis: Long? = null,
+    ): Boolean {
         try {
             sink.setDisplayId(event, displayId)
             val accepted =
@@ -736,6 +750,9 @@ class InputInjector(
                 }
             if (accepted) {
                 tally.injected += 1
+                if (tally.captureMotionEventTime && acceptedMotionEventTimeMillis != null) {
+                    tally.lastEventTimeMillis = acceptedMotionEventTimeMillis
+                }
                 return true
             }
             tally.dropped += 1

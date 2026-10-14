@@ -59,6 +59,8 @@ M3 delivers these items of the Definition of Done ([../roadmap.md](../roadmap.md
 8. #029 App on a secondary Android display.
 9. #030 Two APKs in two native windows. This task closes G5.
 
+Follow-up #103 can start once #023 and #072 are done, while #024's click criterion is still open. It investigates and, if possible, closes that criterion. The other follow-ups, #101 and #102, keep their listed dependencies.
+
 Outside M3: apkrund (#031), the XPC CLI (#032), the full Guest Agent with the vsock transport (#034), the XPC frame path (#068), and the IME (#071) are M4 tasks.
 
 Conventions used by every task in this file:
@@ -408,7 +410,7 @@ See [../test-strategy.md](../test-strategy.md) §6.4.
 - **Pitfall:** trackpads and wheel mice give different scroll deltas and signs. Check both with HelloCompose's list (§14).
 - **Pitfall:** the window of #023 has a fixed size with aspect fit. The mapper must use the content rectangle, not the window bounds.
 - **T2 verification (2026-10-13 UTC, odm7, IR-1285 to IR-1290).** `AndroidInputTests` passed 7 of 7 on the odm7 bundle (run `full7`, after `full6`). The drag case moves HelloCompose's list for a drag, a precise scroll, and a wheel scroll, and the first visible row grows for a negative delta, as §4.4 of the design says. In the six full runs from `full4` to `full9` the click case logged 100 of 100 five times and 99 once (IR-1294). Box 3 stays open: six consecutive CLI batches of 100 clicks logged 590 of 600 (IR-1290), and the batch verdicts cannot show three consecutive 100-of-100 batches. Box 4 stays open because C01-2 (natural scrolling on a real trackpad) is a manual check, and the test sends fixed signs.
-- **Click-loss diagnosis (2026-10-12 to 2026-10-13 UTC, odm7, IR-1295 to IR-1301).** Box 3 stays `[ ]`. Three consecutive batches of 100 clicks on the unchanged product build logged 100, 99, and 100, and every drop counter was 0 (IR-1299). In the traced losses the Mac view, the translator, the guest injection, and the fixture's DOWN and UP all happened, and the click did not run. The traces place the loss in the Button's press handling after delivery, which the AOSP `View` source explains (not checked on this image; IR-1296). The translator, injector, and router are not shown to be the cause, and no product change is made (IR-1298). WAIT_FOR_RESULT did not prevent the loss in its one batch that lost clicks, and its timing differs from the product's (IR-1297). The residual loss is a maintainer decision.
+- **Click-loss diagnosis (2026-10-12 to 2026-10-13 UTC, odm7, IR-1295 to IR-1301).** Box 3 stays `[ ]`. Three consecutive batches of 100 clicks on the unchanged product build logged 100, 99, and 100, and every drop counter was 0 (IR-1299). In the traced losses the Mac view, the translator, the guest injection, and the fixture's DOWN and UP all happened, and the click did not run. Those traced runs suggest loss in the Button's press handling after delivery, but they used a debug listener and did not establish that the product-mode losses had the same cause or verify the AOSP `View` source against this image (IR-1295 to IR-1298). The translator, injector, and router are not shown to be the cause, and no product change is made (IR-1298). WAIT_FOR_RESULT did not prevent the loss in its one batch that lost clicks, and its timing differs from the product's (IR-1297). The residual loss is tracked in #103; box 3 stays open until its evidence meets the criterion or a maintainer reviews the no-fix finding.
 - The window here is the #023 development window. #026 replaces it with `SessionWindowController`.
 - The embedded CLI and RuntimeHost import InputCore for `EmbeddedInputSink` and the conversion back from wire types ([../../01-architecture/modules.md](../../01-architecture/modules.md) §3).
 
@@ -1076,33 +1078,58 @@ A click from the Mac window on a text field focuses the field, and the next key 
 
 ---
 
-## #103 A click is lost when two presses land inside the app's UI lag
+## #103 Trace intermittent click loss during repeated presses
 
 | Field | Value |
 |---|---|
 | Milestone | M3 (v0.1), follow-up of #024 |
-| Depends on | #024 |
+| Depends on | #023, #072 |
 | Requirements | FR-IN-01 (a press reaches the app as a tap). Constraints: NFR-PERF-03 |
-| Design | [../../02-design/input.md](../../02-design/input.md) §8, §11 |
-| Modules / paths | Guest display and UI path (outside #024); RuntimeHost input path for the trace |
+| Design | [../../02-design/input.md](../../02-design/input.md) §4, §8, §11, §15 |
+| Modules / paths | `Guest/guestd/`; `Tests/Fixtures/AndroidApps/HelloText/src/debug/`; `Tests/IntegrationTests/AndroidInputTests/`; [../../02-design/input.md](../../02-design/input.md) §15 |
 | Risks / questions | IR-1296 to IR-1299 |
 
 ### Goal
 
-A press sequence from the Mac window produces a click in every attempt. Today about 3 of 1300 product presses lose their click (IR-1299). The Button's press state is cleared before the UP posts the click (IR-1296).
+A Mac-window press sequence is either delivered as a click or its loss is explained at the exact stage where it occurs. The current evidence includes 3 missing clicks in 1,300 product presses and 98 app-side clicks after 200 guest injection acknowledgements (IR-1299 and the #024 ACK diagnostic). These observations establish a delivery gap, not its cause.
 
 ### Scope
 
-- Find what delays the clear of the previous press state: the frame timing, the main-thread lag, or the UI work that runs between two presses.
-- Remove that cause in the guest, or show with evidence that no product change can remove it.
-- Out of scope: a retry on the Mac side (rejected by IR-1298).
+- Trace one product-mode failure across host event receipt, translation, guest injection, Android view dispatch, and the click callback. Separate observations from hypotheses; debug-only touch listeners can perturb timing.
+- Identify the exact framework source and build provenance for the tested Android image before attributing the loss to `View` or `InputDispatcher`.
+- If product-mode evidence identifies a safe guest-side correction, implement the smallest correction and add a focused regression test. If the source and delivery evidence show that no safe product change can prevent the loss, record that conclusion and leave #024 box 3 open for maintainer review.
+- Out of scope: a host-side retry or an ACK that claims app delivery when it only proves queue acceptance (IR-1298).
+
+### Deliverables
+
+- A bounded, opt-in diagnostic that joins a failed click across the host, guest, Android view, and fixture callback without changing the default product path.
+- A test that can run three consecutive 100-click batches in one guest session at the product cadence, checks each persisted counter delta and all host drop/coalescing counters, and captures the Android image identity.
+- The exact framework source revision or, if source provenance cannot be established, a clearly labeled inspection of the framework bytecode in the tested image.
+- An implementation-review entry with the diagnosis, any product change and regression evidence, remaining uncertainty, and a maintainer-review status.
+
+### Implementation steps
+
+1. **Reproduce and pin the environment.** Run the ordinary product-mode input path without debug tracing. Record the image bundle and variant digests, guest build identity, fixture APK hash, click deltas, and host/guest rejection counters. Keep all three batches in one guest session. Check: a batch result is independently verifiable from the fixture's persisted counter, not only an ACK or log line.
+2. **Locate one failure.** Add bounded diagnostics to the debug fixture and T2 harness for the host event, guest event and injection result, fixture DOWN/UP dispatch, pressed state, click callback, and persisted count. Compare an uninstrumented reproduction with the traced run. Check: each event is joined by a stable sequence or timestamp, and the trace reports overflow.
+3. **Check the framework implementation.** Resolve the image's build provenance and inspect the matching `View` and input-dispatch implementation. If the build cannot be mapped to a source revision, inspect the image's framework bytecode and state that limit. Check: the proposed cause matches the observed event order and does not rely on a different Android build.
+4. **Apply an evidence-backed correction.** Change guest input behavior only if the product-mode trace identifies a guest-controlled cause; do not retry input on the Mac. Add the smallest T0/T1 regression test that fails for the identified ordering or timing condition. If no safe correction is supported, make no speculative product change and record the evidence instead.
+5. **Verify the product path.** On the dedicated lab Mac GUI session, run only the click T2 test with the pinned image. Exercise normal AppKit event delivery, execute three consecutive 100-click batches in one VM, and assert each persisted delta is 100 with zero host drop/coalescing and guest rejection counters. If the correction changes event timing, also run the `input-latency` scenario of #070 and check the NFR-PERF-03 p95 limit. Check: the saved result bundle contains the environment identity and per-batch outcomes.
+
+### Tests
+
+- **T0/T1**, when guest code changes: test the exact event-ordering or timing rule in `Guest/guestd/src/test/`; add an Android instrumentation case only if the cause depends on framework dispatch that a JVM test cannot model.
+- **T2** (`AndroidInputTests`): use normal AppKit event delivery in one VM for three consecutive 100-click batches at product cadence. Assert each persisted counter delta is 100 and host drop/coalescing and guest rejection counters are zero. If the correction changes event timing, also run #070's `input-latency` scenario (1,000 clicks and 1,000 keys at 20 Hz; p95 ≤ 16 ms). Preserve the image identity and `.xcresult`.
+- **T3:** no additional manual check.
 
 ### Acceptance
 
-- [ ] Three consecutive batches of 100 product clicks are 100 of 100, with the drop counters at zero (the counters of #024).
-- [ ] The cause is recorded in an IR entry, with the framework code of the image that was checked.
-- [ ] #024 box 3 is ticked from that evidence.
+- [ ] The cause is recorded in an IR entry with the exact framework source revision for the tested image, or with a bytecode inspection and an explicit provenance limit.
+- [ ] If a safe product correction is identified, the correction has a T0/T1 regression test and three consecutive product-mode T2 batches of 100 clicks pass with persisted deltas of 100 and zero drop/rejection counters.
+- [ ] If the correction changes event timing, #070's `input-latency` scenario confirms NFR-PERF-03 (p95 ≤ 16 ms).
+- [ ] If no safe product correction is supported, the evidence and limits are recorded without a speculative change; #024 box 3 remains open and is marked for maintainer review.
+- [ ] #024 box 3 is ticked only after the three consecutive product-mode batches pass.
 
 ### Notes
 
-- **Origin:** IR-1298, the decision not to change the product code in #024.
+- **Origin:** IR-1298 and IR-1302. #103 depends on the working display and Guest Agent (#023 and #072), not on #024 reaching full acceptance; #103 is the follow-up that resolves #024's open click criterion. The task-index dependency list is hard, so depending on #024 here would form a cycle.
+- **Evidence limit:** ASYNC injection acknowledgements prove that the guest queued an event, not that Android dispatched it or the app performed a click. The diagnostic listener and any tracing can alter timing; the ordinary acceptance batches must run without it.

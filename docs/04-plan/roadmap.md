@@ -25,7 +25,7 @@ This roadmap sets the order of work, the gates that prove each technical step, a
 | M0 | Repository and VM foundation | v0.1 | #001–#007, #061–#063 | G1 |
 | M1 | Android bring-up | v0.1 | #008–#017, #064, #065, #095 | G2 |
 | M2 | Graphics | v0.1 | #018–#023 | G3 |
-| M3 | Input and basic runtime | v0.1 (#033, #072, #024–#027, #067), v0.2 (#028–#030) | #024–#030, #033, #067, #072 | G4, G5 |
+| M3 | Input and basic runtime | v0.1 (#033, #072, #024–#027, #067), v0.2 (#028–#030) | #024–#030, #033, #067, #072; follow-ups #101–#103 | G4, G5 |
 | M4 | Daemon and guest protocol | v0.2 | #031, #032, #034, #053, #066, #068–#071 | G6 |
 | M5 | Custom Android runtime image | v0.3 | #035, #036 | |
 | M6 | Update system | v0.3 | #037–#043, #050, #073, #074 | G7 |
@@ -48,7 +48,8 @@ The longest dependency chain runs through Android bring-up, graphics, multi-wind
 #001 → #008 ──┬→ #009 ─┐                                  ├→ #011 → #012 → #013 → #095 → #014 (G2)
               └→ #064 ─┴→ #010 ───────────────────────────┘
 #014 + #019 → #021 → #022 → #023 (G3)                 (#019 needs #018, #003, #063; #022 needs #020)
-#023 + #072 → #024 → #025 → #026 (G4) → #027 → #028 → #029 → #030 (G5) → #031 (G6)
+#023 + #072 ┬→ #024 ───┐
+            └→ #103 ───┴→ #025 → #026 (G4) → #027 → #028 → #029 → #030 (G5) → #031 (G6)
 
 wrapper branch:  #031 → #032 → #068 → #044 → #045 → #046 → #047 (G8) → #048 ─┐
 update branch:   #027 + #033 → #034 → #035 → #036 → #037 → #038 → #039 → #040 (G7)
@@ -71,6 +72,7 @@ Tasks that do not depend on each other can be worked on at the same time, by dif
 | #018 is done | #020 (and #019 once #003 and #063 are done) |
 | #014 is done (G2) | #015, #021, #065 |
 | #015 and #033 are done | #072 |
+| #023 and #072 are done | #103 can investigate the open #024 click criterion without waiting for #024 acceptance |
 | #026 is done (G4) | #027, #067 |
 | #031 is done (G6 headless form) | #032, #069; then #068 and #070 |
 | #034 is done | #035, #053, #071 (with #068) |

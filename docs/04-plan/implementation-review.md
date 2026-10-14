@@ -18485,3 +18485,69 @@ task's acceptance criterion.
 **Risk.** The extra ACKs and instrumented fixture can affect the timing under
 investigation. Three repetitions are a limited sample; no product behavior
 change or general reliability claim is justified by these runs.
+
+## IR-1313: One of three unchanged-code click batches loses its final callback
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [issues/README.md](issues/README.md) #024 summary; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 Notes; [input.md](../02-design/input.md) §15; [AndroidInputTests.swift](../../Tests/IntegrationTests/AndroidInputTests/AndroidInputTests.swift); [AndroidInputRun.swift](../../Tests/IntegrationTests/AndroidInputTests/AndroidInputRun.swift) |
+
+**Choice.** Keep #024 box 3 and #103 open. Add a separate AppKit-queued T2
+case and a FIFO drain in the test sink so the test can check `DevInputRoute`
+counters after its click events have been routed. Keep the existing
+direct-view case as a separately identified diagnostic; it does not verify
+AppKit dispatch. Do not change production input behavior from this result.
+
+**Evidence.** On 2026-10-14 UTC, run
+`AndroidInputTests.testOneHundredClicksOnTheButtonAreLogged` three times with
+`-test-iterations 3` against the odm7 bundle. The product code was unchanged
+at `313cca070e641ccc06ccf97da12315175bf9890f`; the result bundle is
+`/tmp/apkrun-024-click-acceptance-3-iterations.xcresult`. On the arm64 MacBook
+Pro running macOS 27.0.1 build 26A434, repetition 1 logged values 1–99 and
+failed the ordered 1–100 assertion. Repetitions 2 and 3 passed with all 100
+ordered values. Their durations were 70.8, 36.8, and 36.5 seconds. All three
+reported runs used the local Apple Development identity because the lab
+signing values were unavailable, and the existing test did not export route
+counters. It found no `adb shell input` process in the click sequences.
+
+After adding the test-sink FIFO drain, the same three-repetition run passed
+the first two batches and failed the third at 99 of 100 callbacks. The failure
+attachment records `sent=200 batches=200` and zero rate, not-running, invalid,
+channel, and coalescing counts after the sink drained. Its result bundle is
+`/tmp/apkrun-024-click-route-counters-3.xcresult`; it also found no
+`adb shell input` process. The counters show the host route sent all 200
+events, but do not include an acknowledgement fence or prove Android
+dispatch.
+
+**Reason.** This is positive evidence that the unchanged test path can deliver
+100 clicks, and negative evidence that it is not yet reliable: both three-run
+series lost one callback. The second series narrows the loss to after the host
+route sent its 200 events, but without guest ACKs it cannot identify whether
+the miss is in guest injection or Android dispatch. The direct-handler path
+does not exercise the normal AppKit event queue or key-window behavior.
+
+**Risk.** The added AppKit case posts synthetic `NSEvent`s to
+`NSApplication`; it tests app-queue and window dispatch, but not WindowServer
+or hardware delivery, and no click batch has completed yet. The test skips
+unless `APKRUN_INPUT_APPKIT_T2=1` is set. Its host requests activation and
+key-window status once, restores the previous activation policy, and attempts
+to reactivate the previously frontmost app during teardown. This does not
+restore a particular window or guarantee the previous app is still available.
+A prior opt-in diagnostic on the shared desktop timed out before sending
+clicks after the test host lost active/key-window status; its result bundle is
+`/tmp/apkrun-103-ui-state-trace-t2-odm7.xcresult`. That attempt does not
+validate or falsify input delivery. Run the new case only in an isolated
+active UI session; do not treat a pre-event focus failure as click-delivery
+evidence.
+
+**Adversarial review.** Read-only reviewers agreed that no production fix is
+supported by the 99-of-100 run. They recommended preserving the direct-view
+test, adding an AppKit-queued case with no fallback, and recording counters
+only after the asynchronous test sink is drained. They found no FIFO ordering
+issue in the drain barrier. Review also identified activation side effects;
+the AppKit case is now opt-in and attempts to restore the previous foreground
+app. Reviewers confirmed that the official T2 closeout requires the lab
+signing identity and an isolated active reference environment; local-identity
+runs remain diagnostic.

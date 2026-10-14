@@ -199,6 +199,7 @@ Capabilities are strings `<area>.<feature>.v<n>`. The agent lists what it implem
 | `display.v1` | Guest | `SetDisplayPolicy`, `ClearDisplay`, display events | #072, #028 |
 | `launch.v1` | Guest | `LaunchApplication`, `StopApplication`, `MoveTaskToDisplay`, `ListTasks`, task events | #072, #026, #029, #034 |
 | `input.v1` | Guest | input stream, `FocusDisplay` | #072, #024, #025, #030 |
+| `input.ack_trace.v1` | Guest | Optional Android uptime time when a batch explicitly requests it in its `InputAck` | #103 |
 | `ime.v1` | Guest, IME | `ImeCommand`, `ImeState` | #071 |
 | `packages.v1` | Guest | `QueryPackage`, `ListPackages`, `PackageChanged` | #027, #034 |
 | `health.v1` | Guest | `GetHealth`, `HealthWarning`, `AppProcessEvent` | #034, #059 |
@@ -438,8 +439,9 @@ message InputBatch {
   uint64 batch_seq = 1;
   int32 display_id = 2;           // stamped by InputRouter, never by the wrapper
   uint64 host_send_nanos = 3;     // for host-side latency accounting only
-  bool ack_requested = 4;         // every 32nd batch (input.md §8)
+  bool ack_requested = 4;         // every 32nd batch; diagnostic mode requests each batch
   repeated InputEvent events = 5; // at most 256 per batch
+  bool trace_event_time = 6;      // request guest MotionEvent.eventTime in this ACK; capability-gated
 }
 
 message InputEvent {
@@ -454,7 +456,12 @@ message InputEvent {
   }
 }
 
-message InputAck { uint64 batch_seq = 1; uint32 receive_to_inject_micros = 2; uint32 rejected_events = 3; }
+message InputAck {
+  uint64 batch_seq = 1;
+  uint32 receive_to_inject_micros = 2;
+  uint32 rejected_events = 3;
+  optional uint64 last_event_time_millis = 4; // Android uptime eventTime; input.ack_trace.v1 only
+}
 
 message ImeCommand {
   uint64 seq = 1;
@@ -484,6 +491,7 @@ message ImeState {                                 // guest → host; never cont
 ```
 
 - The input stream carries no request/response pairs. Validation failures in a batch drop the offending event and are reported as a count in the next `InputAck` and in `Health.input`. They do not close the stream (§12.2 lists what does).
+- The guest sets `last_event_time_millis` only when `input.ack_trace.v1` was negotiated, `trace_event_time` and `ack_requested` are true for that batch, and the batch has an accepted `MotionEvent`. This optional protocol 1.1 field exists for the bounded #103 diagnostic; ordinary periodic ACKs do not request or carry it. An ACK still proves queue injection acceptance, not Android view dispatch or app action.
 - `ImeState` updates are coalesced by the IME to at most one per 16 ms, except that a change of `editor_focused` is sent immediately.
 
 ---

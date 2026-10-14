@@ -18262,3 +18262,43 @@ Kept, and why:
 **Reason.** The previous work had only the build ID, branch, and source archive hash, which were insufficient to select `View` source conclusively. The raw source manifest supplies the exact project revisions, and the variant receipt confirms that odm7 did not replace the system partition.
 
 **Risk.** The source explains the framework's scheduling operations but does not reveal why the product run lost a click. The prior listeners did not join a product-mode failure across the host, guest, view, and callback; no cause or safe correction is established. The per-event trace and dedicated lab test remain necessary.
+
+## IR-1308: Add a capability-gated guest event-time bridge to the opt-in click trace
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [guest-protocol.md](../02-design/guest-protocol.md) §§5.3, 9; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.**
+1. Bump the guest protocol minor version from 1.0 to 1.1 and add optional `InputAck.last_event_time_millis` behind the negotiated `input.ack_trace.v1` capability. Add the explicit per-batch `InputBatch.trace_event_time` opt-in, so the guest sets the field only when the capability was negotiated, that batch requests an ACK and timestamp, and it contains an accepted `MotionEvent`. Ordinary periodic ACKs remain unchanged; an ACK continues to mean queue injection acceptance, not view dispatch or app action.
+2. Keep tracing disabled by default. The `AndroidInputTrace` test-plan configuration opts into one-event batches and an ACK for each batch. It records bounded raw AppKit receipts (2,048), translated host events (2,048), successfully sent route events (256), ACKs (256), and debug-fixture records (4,096), each with overflow reporting.
+3. Join guest uptime only to Android `MotionEvent.eventTime`; retain host monotonic time in its own clock domain. The trace does not subtract the two clocks.
+4. Keep the product-cadence three-batch check in the separate `AndroidInputInteractive` configuration, with its normal batch and ACK cadence.
+
+**Reason.** The prior host and fixture traces had no stable cross-clock bridge. The ACK field lets the diagnostic match one accepted guest motion event to the fixture's `MotionEvent` without claiming delivery from the ACK. A dedicated capability, optional field, and explicit per-batch request follow the protocol evolution rules; the two opt-ins avoid adding guest timestamp work or changing ordinary ACK payloads.
+
+**Verification.** Swift `GuestProtocolTests`, the filtered `RuntimeCore` per-event capture test, and the selected Kotlin protocol/input tests pass. The Swift and Kotlin protocol suites both decode and re-encode the shared `trace_event_time: true` golden frame. Host tests cover both negotiated and absent capabilities; guest tests cover accepted timestamps and their omission when the capability, batch request, ACK request, or accepted motion event is absent. The dedicated WindowServer run is still pending; this entry does not claim a click-loss cause.
+
+**Risk.** Per-event ACKs and the fixture's debug touch listener perturb timing. The trace is evidence from a diagnostic run and cannot replace the uninstrumented product-cadence test or establish a product fix.
+
+## IR-1309: Make the cross-layer click trace reject incomplete or ambiguous joins
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #103 |
+| Affected documents | [input.md](../02-design/input.md) §11; [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #103; [test-strategy.md](test-strategy.md) §6.4 |
+
+**Choice.**
+1. ACK capture records only sequences at or after the capture-start sequence, so a delayed ACK from an earlier batch cannot consume trace capacity.
+2. Before stopping capture, the diagnostic waits up to 10 seconds for ACKs covering the sent trace batches. If coverage is still incomplete, it preserves the partial evidence and lists missing sequences.
+3. The diagnostic asserts a unique raw receipt, translated event, ACK with a nonzero guest event time, and fixture touch record for each routed touch. Every UP must also match one unique click callback. Incomplete joins fail the test after the JSON evidence has been attached.
+4. Ambiguous click callbacks remain in a separate global evidence list and are never copied onto unrelated UP records as though they were correlated.
+
+**Reason.** An attached trace that can pass while its event-time bridge or fixture matching is absent would not satisfy #103's join requirement. The bounded ACK wait also distinguishes a missing ACK from a sender-queue drain, and the ambiguous callback rule preserves uncertainty instead of manufacturing an event association.
+
+**Verification.** Adversarial review identified the missing join assertions, ambiguous callback attribution, fixed-delay ACK race, and a host request that could set the guest timestamp bit without the capability. The implementation now asserts all joins, leaves ambiguous clicks unattached, waits up to 10 seconds for ACK coverage, and gates the timestamp request on the negotiated capability. Targeted Swift and Kotlin tests, format and protocol checks, and `xcodebuild build-for-testing` for the diagnostic test pass. The dedicated GUI T2 remains required before #103 or #024 box 3 can close.
+
+**Risk.** A genuine missing or ambiguous event association now makes the diagnostic test fail, while retaining the evidence needed to locate the gap. The timeout bounds the wait and does not change normal product input.

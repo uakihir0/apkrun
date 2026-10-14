@@ -4,10 +4,11 @@ import XCTest
 
 /// The pointer checks of #024 on a real Android guest (T2, test-strategy §6.4), through the path of `apkrun dev launch`.
 ///
-/// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`), shows the development
-/// window, and posts the pointer events into the window's content view as `NSEvent`s. The suite needs no Accessibility
-/// permission. Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the
-/// centres of their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
+/// Each test boots the test image with the embedded runtime (`DevBoot` and `DevInputRoute`) and shows the development
+/// window. Pointer tests synthesize NSEvents; most call the view handlers directly, while the AppKit click case queues
+/// events through `NSApplication`. Neither path uses WindowServer input. The suite needs no Accessibility permission.
+/// Points are display pixels of display 0, mapped to the window by `CoordinateMapper`. The targets are the centres of
+/// their `uiautomator` bounds, except the drag, which uses fixed points inside HelloCompose's list.
 ///
 /// The suite runs in the Xcode test host (IR-438). Its boot needs a working guest renderer, which the odm7 overlay gives
 /// (IR-1278), and the host dismisses the keyguard before it launches the app (IR-1285). The device checks of the
@@ -49,6 +50,7 @@ final class AndroidInputTests: XCTestCase {
             let sampler = ShellInputSampler()
             sampler.start()
             _ = try await run.adb.shell("logcat -c")
+            let countersBefore = await run.inputCountersAfterDraining()
             let pointer = try run.pointer()
             for _ in 0..<100 {
                 try await pointer.click(at: target)
@@ -57,7 +59,60 @@ final class AndroidInputTests: XCTestCase {
             let shellInput = await sampler.stop()
             XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
             let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
-            XCTAssertEqual(AndroidInputRun.numbers(in: lines, after: Self.clickPrefix), Array(1...100))
+            let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
+            let countersAfter = await run.inputCountersAfterDraining()
+            XCTAssertEqual(
+                clickNumbers, Array(1...100),
+                "the direct-view click batch missed or reordered a callback; route counters: \(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedInvalid - countersBefore.droppedInvalid, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0, "\(countersAfter)")
+            XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0, "\(countersAfter)")
+        }
+    }
+
+    /// Repeats the click acceptance check through AppKit's queue and the window's normal mouse dispatch.
+    func testOneHundredAppKitQueuedClicksAreLogged() async throws {
+        guard ProcessInfo.processInfo.environment["APKRUN_INPUT_APPKIT_T2"] == "1" else {
+            throw XCTSkip(
+                "Set APKRUN_INPUT_APPKIT_T2=1 only in an isolated active UI session that will remain untouched; "
+                    + "the test activates its window.")
+        }
+        let apk = try Self.fixture("APKRUN_FIXTURE_APK")
+        try await AndroidInputRun.with(
+            apk: apk, package: Self.helloText, pointerDelivery: .appKitEventQueue
+        ) { run in
+            let target = try await run.centre(of: Self.buttonID)
+            try await run.prepareForAppKitPointerDispatch()
+            _ = try await run.adb.shell("logcat -c")
+            let countersBefore = await run.inputCountersAfterDraining()
+            let pointer = try run.pointer()
+            let sampler = ShellInputSampler()
+            sampler.start()
+            do {
+                for _ in 0..<100 {
+                    try await pointer.click(at: target)
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch {
+                _ = await sampler.stop()
+                throw error
+            }
+            let shellInput = await sampler.stop()
+            let lines = try await run.fixtureLog { $0.filter { $0.contains(Self.clickPrefix) }.count >= 100 }
+            let clickNumbers = AndroidInputRun.numbers(in: lines, after: Self.clickPrefix)
+            let countersAfter = await run.inputCountersAfterDraining()
+            let sentDelta = countersAfter.eventsSent - countersBefore.eventsSent
+
+            XCTAssertEqual(shellInput, [], "adb shell input processes ran during the sequence")
+            XCTAssertEqual(clickNumbers, Array(1...100), "the AppKit queued click batch did not produce all callbacks")
+            XCTAssertEqual(sentDelta, 200, "the host input route did not send exactly 200 click events")
+            XCTAssertEqual(countersAfter.droppedRate - countersBefore.droppedRate, 0)
+            XCTAssertEqual(countersAfter.droppedNotRunning - countersBefore.droppedNotRunning, 0)
+            XCTAssertEqual(countersAfter.droppedInvalid - countersBefore.droppedInvalid, 0)
+            XCTAssertEqual(countersAfter.droppedChannel - countersBefore.droppedChannel, 0)
+            XCTAssertEqual(countersAfter.coalesced - countersBefore.coalesced, 0)
         }
     }
 

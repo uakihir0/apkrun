@@ -16,8 +16,15 @@ enum AndroidInputRunFailure: Error, Equatable {
     case viewNotFound(String)
     /// The launch started no process of the package, so the view could not appear (IR-1286).
     case appDidNotStart(String)
+    case appKitActivationFailed
+    case appKitWindowNotKey
     /// The boot ended before the condition held, so waiting longer cannot help (IR-1256).
     case bootEnded(String)
+}
+
+enum InputPointerDelivery: Sendable, Equatable {
+    case directView
+    case appKitEventQueue
 }
 
 /// One development boot with the window and input, as `apkrun dev launch` runs it (#024, decision D13).
@@ -35,20 +42,38 @@ final class AndroidInputRun {
     private let home: URL
     private let display = DeveloperDisplay(pixelWidth: AndroidInputRun.width, pixelHeight: AndroidInputRun.height)
     private let route = DevInputRoute()
+    private let pointerDelivery: InputPointerDelivery
+    private let previousActivationPolicy: NSApplication.ActivationPolicy?
+    private let previousFrontmostApplication: NSRunningApplication?
     private let stop = AsyncStream.makeStream(of: Void.self)
     private let bootLog = BootLog()
     private var frames: DisplayFrames?
     private var framesSeen = 0
     private var window: DisplayWindow?
+    private var inputSink: WireSink?
     private var boot: Task<Void, Never>?
 
-    private init(home: URL, adb: AdbClient) {
+    private init(home: URL, adb: AdbClient, pointerDelivery: InputPointerDelivery) {
         self.home = home
         self.adb = adb
+        self.pointerDelivery = pointerDelivery
+        previousActivationPolicy =
+            pointerDelivery == .appKitEventQueue
+            ? NSApplication.shared.activationPolicy()
+            : nil
+        previousFrontmostApplication =
+            pointerDelivery == .appKitEventQueue
+            ? NSWorkspace.shared.frontmostApplication
+            : nil
     }
 
     /// Runs `body` on a boot with the window and input, after `apk` is installed and `package` is started on display 0.
-    static func with(apk: URL, package: String, _ body: (AndroidInputRun) async throws -> Void) async throws {
+    static func with(
+        apk: URL,
+        package: String,
+        pointerDelivery: InputPointerDelivery = .directView,
+        _ body: (AndroidInputRun) async throws -> Void
+    ) async throws {
         guard let guest = ProcessInfo.processInfo.environment["APKRUN_GUEST_DIR"], !guest.isEmpty else {
             throw XCTSkip(
                 "APKRUN_GUEST_DIR is not set. Build the Guest Agent bundle with scripts/build-guest.sh --out.")
@@ -63,7 +88,17 @@ final class AndroidInputRun {
         }
         let home = try AndroidBootFixture.makeHome()
         _ = try await AndroidBootFixture(home: home, bundle: bundle)
-        let run = AndroidInputRun(home: home, adb: AdbClient(executable: adbExecutable))
+        let run = AndroidInputRun(
+            home: home,
+            adb: AdbClient(executable: adbExecutable),
+            pointerDelivery: pointerDelivery
+        )
+        if pointerDelivery == .appKitEventQueue {
+            guard NSApplication.shared.setActivationPolicy(.accessory) else {
+                await run.finish()
+                throw AndroidInputRunFailure.appKitActivationFailed
+            }
+        }
         run.startBoot(guestAgentDirectory: URL(fileURLWithPath: guest, isDirectory: true))
         do {
             try await run.prepare(apk: apk, package: package)
@@ -81,7 +116,34 @@ final class AndroidInputRun {
         let size = view.bounds.size
         let mapper = DisplayGeometry.coordinateMapper(
             contentSize: size, in: size, pixelWidth: Self.width, pixelHeight: Self.height, generation: 1)
-        return InputPointer(window: window, view: view, mapper: mapper)
+        return InputPointer(window: window, view: view, mapper: mapper, delivery: pointerDelivery)
+    }
+
+    /// Makes the display eligible for AppKit mouse dispatch. The test fails rather than falling back to direct calls.
+    func prepareForAppKitPointerDispatch() async throws {
+        guard pointerDelivery == .appKitEventQueue else {
+            throw AndroidInputRunFailure.appKitWindowNotKey
+        }
+        let (window, view) = try windowAndView()
+        let deadline = ContinuousClock.now + .seconds(5)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        while ContinuousClock.now < deadline {
+            if NSApplication.shared.isActive, window.isKeyWindow {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw AndroidInputRunFailure.appKitWindowNotKey
+    }
+
+    /// Drains earlier test-window events before reading the same route's counters.
+    func inputCountersAfterDraining() async -> InputCounters {
+        if let inputSink {
+            await inputSink.drain()
+        }
+        return await route.counters()
     }
 
     /// The keyboard of the window: the same view, which takes the key events as AppKit delivers them (#025).
@@ -188,6 +250,16 @@ final class AndroidInputRun {
         stop.continuation.yield(())
         await boot?.value
         VMRunResources.removeHomeOrReport(home)
+        if let previousActivationPolicy {
+            let restored = NSApplication.shared.setActivationPolicy(previousActivationPolicy)
+            XCTAssertTrue(
+                restored && NSApplication.shared.activationPolicy() == previousActivationPolicy,
+                "The test host did not restore its previous activation policy."
+            )
+        }
+        if let previousFrontmostApplication, !previousFrontmostApplication.isTerminated {
+            _ = previousFrontmostApplication.activate(options: [])
+        }
     }
 
     private func startBoot(guestAgentDirectory: URL) {
@@ -226,10 +298,12 @@ final class AndroidInputRun {
         case .attached(let surfaces):
             let source = DisplayFrames(surfaces: surfaces, display: display)
             let scale = NSScreen.main?.backingScaleFactor ?? 1
+            let inputSink = WireSink(route: route)
             let window = DisplayWindow(
-                source: source, title: Self.windowTitle, backingScale: scale, inputSink: WireSink(route: route))
+                source: source, title: Self.windowTitle, backingScale: scale, inputSink: inputSink)
             window.show()
             frames = source
+            self.inputSink = inputSink
             self.window = window
         case .frameReady(let generation, let bufferIndex, let sequence):
             framesSeen += 1
@@ -288,38 +362,38 @@ final class AndroidInputRun {
     }
 }
 
-/// Posts AppKit pointer events into the window's content view, which receives them as the window delivers them.
+/// Sends synthetic pointer events either directly to the view or through the AppKit event queue.
 ///
-/// The view's mouse methods are called directly. A window that is not key does not deliver a click, because the view
-/// refuses the first mouse (`acceptsFirstMouse`), and the test host is never key.
+/// `.appKitEventQueue` requires an active application and key window because the view refuses the first mouse.
 @MainActor
 struct InputPointer {
     let window: NSWindow
     let view: IOSurfaceLayerView
     let mapper: CoordinateMapper
+    let delivery: InputPointerDelivery
 
     func click(at pixel: InputPixel) async throws {
-        deliver(.leftMouseDown, at: pixel)
+        try deliver(.leftMouseDown, at: pixel)
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.leftMouseUp, at: pixel)
+        try deliver(.leftMouseUp, at: pixel)
     }
 
     func rightClick(at pixel: InputPixel) async throws {
-        deliver(.rightMouseDown, at: pixel)
+        try deliver(.rightMouseDown, at: pixel)
         try await Task.sleep(for: .milliseconds(50))
-        deliver(.rightMouseUp, at: pixel)
+        try deliver(.rightMouseUp, at: pixel)
     }
 
     /// A left-button drag: down at `start`, `steps` moves along the straight path, and up at `end`.
     func drag(from start: InputPixel, to end: InputPixel, steps: Int) async throws {
-        deliver(.leftMouseDown, at: start)
+        try deliver(.leftMouseDown, at: start)
         try await Task.sleep(for: .milliseconds(50))
         for step in 1...steps {
             let t = Double(step) / Double(steps)
-            deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
+            try deliver(.leftMouseDragged, at: (start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t))
             try await Task.sleep(for: .milliseconds(20))
         }
-        deliver(.leftMouseUp, at: end)
+        try deliver(.leftMouseUp, at: end)
     }
 
     /// A scroll of `deltaY` at `pixel`: points for a trackpad (`precise`), lines for a wheel. The CGEvent is made as the
@@ -345,13 +419,23 @@ struct InputPointer {
         }
     }
 
-    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) {
+    private static var nextEventNumber = 1
+
+    private func deliver(_ type: NSEvent.EventType, at pixel: InputPixel) throws {
         let location = view.convert(windowPoint(pixel), to: nil)
         guard
             let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                windowNumber: window.windowNumber, context: nil, eventNumber: Self.takeEventNumber(), clickCount: 1,
+                pressure: 1)
         else {
+            return
+        }
+        if delivery == .appKitEventQueue {
+            guard window.isKeyWindow, NSApplication.shared.isActive else {
+                throw AndroidInputRunFailure.appKitWindowNotKey
+            }
+            NSApplication.shared.postEvent(event, atStart: false)
             return
         }
         switch type {
@@ -362,6 +446,11 @@ struct InputPointer {
         case .rightMouseUp: view.rightMouseUp(with: event)
         default: break
         }
+    }
+
+    private static func takeEventNumber() -> Int {
+        defer { nextEventNumber += 1 }
+        return nextEventNumber
     }
 
     /// The window point of a display pixel: the inverse of the window's mapping.
@@ -404,25 +493,41 @@ private final class DisplayFrames: FrameSource, @unchecked Sendable {
 /// The window's events, routed in order (the CLI's `EmbeddedInputSink`, decision D10). One task converts each queued
 /// list to the wire types of runtime-api.md §7.2 and routes it, so no batch overtakes another.
 private final class WireSink: PointerInputSink, @unchecked Sendable {
-    private let queue: AsyncStream<[InputCore.InputEvent]>.Continuation
+    private enum WorkItem: Sendable {
+        case events([InputCore.InputEvent])
+        case drain(CheckedContinuation<Void, Never>)
+    }
+
+    private let queue: AsyncStream<WorkItem>.Continuation
 
     init(route: DevInputRoute) {
         // Unbounded: a dropped press or release would leave a gesture open on the guest.
-        let made = AsyncStream.makeStream(of: [InputCore.InputEvent].self, bufferingPolicy: .unbounded)
+        let made = AsyncStream.makeStream(of: WorkItem.self, bufferingPolicy: .unbounded)
         queue = made.continuation
         Task {
-            for await events in made.stream {
-                // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
-                for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
-                    let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
-                    await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+            for await item in made.stream {
+                switch item {
+                case .events(let events):
+                    // A list longer than the route takes in one batch is cut, as `EmbeddedInputSink` cuts it.
+                    for start in stride(from: 0, to: events.count, by: DevInputRoute.maximumEventsPerBatch) {
+                        let end = min(start + DevInputRoute.maximumEventsPerBatch, events.count)
+                        await route.send(RuntimeAPI.InputBatch(events: events[start..<end].compactMap(WireSink.wire)))
+                    }
+                case .drain(let continuation):
+                    continuation.resume()
                 }
             }
         }
     }
 
     func deliver(_ events: [InputCore.InputEvent]) {
-        queue.yield(events)
+        queue.yield(.events(events))
+    }
+
+    func drain() async {
+        await withCheckedContinuation { continuation in
+            queue.yield(.drain(continuation))
+        }
     }
 
     /// The wire form of `event`. A long press is not sent (decision D6), and the key events are converted as the CLI's

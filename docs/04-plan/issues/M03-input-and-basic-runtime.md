@@ -1087,7 +1087,7 @@ A click from the Mac window on a text field focuses the field, and the next key 
 | Requirements | FR-IN-01 (a press reaches the app as a tap). Constraints: NFR-PERF-03 |
 | Design | [../../02-design/input.md](../../02-design/input.md) §8, §11 |
 | Modules / paths | Guest display and UI path (outside #024); RuntimeHost input path for the trace |
-| Risks / questions | IR-1296 to IR-1299, IR-1306, IR-1307 |
+| Risks / questions | IR-1296 to IR-1299, IR-1306 to IR-1308 |
 
 ### Goal
 
@@ -1109,3 +1109,4 @@ A press sequence from the Mac window produces a click in every attempt. IR-1299'
 
 - **Origin:** IR-1298, the decision not to change the product code in #024.
 - **Verification (2026-10-14 UTC, IR-1307).** The isolated HelloText counter-queue experiment's first four T2 runs logged 100, 99, 100, and 100 callbacks; run 03's result did not preserve its actual reopened READ value. After the diagnostic test was changed to skip force-stop when click logs are incomplete, three consecutive odm7 T2 runs passed with all 100 ordered click values, zero host drop/coalescing counters, and a reopened value of 100. This is evidence for the instrumented fixture path only: it does not establish the product-loss cause or meet #103's product acceptance criterion. Box 3 remains open.
+- **Verification (2026-10-14 UTC, IR-1308).** The ACK-fenced diagnostic test passed three repetitions on `experiment/103-click-ack-fence` at tested source `941a9e0`. Each repetition sent 200 click events in 201 batches and received all 201 ACKs with zero guest rejections, host drops, or coalescing; it logged ordered callbacks 1–100 and read persisted value 100 after force-stop and relaunch. Result: `/tmp/apkrun-103-click-ack-fence-08.xcresult`. Direct view-handler calls, a 50 ms press/100 ms gap, and extra ACK traffic limit this evidence; ACK confirms asynchronous injection-queue acceptance only. The cause and product reliability remain unproven, so #024 box 3 and #103 stay open.

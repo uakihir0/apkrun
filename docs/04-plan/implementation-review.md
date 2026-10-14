@@ -18468,6 +18468,9 @@ Each attachment confirms a 201-batch fence, 200 click events sent, 201
 batches, all 201 matching ACKs, no history truncation, zero guest rejections,
 host drops, or coalesced events, ordered HelloText click values 1 through 100,
 and persisted value `[100]` after force-stop and relaunch.
+The result metadata identifies the Mac host but does not record the guest
+image manifest or hash, so the artifact cannot independently establish image
+provenance; retain that identity with future runs.
 
 These runs use direct view-handler calls, a 50 ms press and 100 ms gap, and
 extra ACK traffic that may change event timing. The ACKs establish acceptance
@@ -18485,3 +18488,12 @@ task's acceptance criterion.
 **Risk.** The extra ACKs and instrumented fixture can affect the timing under
 investigation. Three repetitions are a limited sample; no product behavior
 change or general reliability claim is justified by these runs.
+
+**Adversarial review.** Two read-only reviewers confirmed the three result
+attachments and found no ordering or failure-artifact blocker. They stressed
+that the ACK establishes only asynchronous injection-queue acceptance and
+that the test bypasses normal AppKit dispatch. The next useful diagnostic
+should preserve the product event cadence and default ACK rate, then record
+correlated View pressed-state transitions and click callbacks through the
+normal window event path. Neither review found evidence for a product change
+or for closing #024 box 3 or #103.

@@ -9,6 +9,8 @@
             <intent-filter>
                 <action android:name="io.apkrun.fixture.hellotext.debug.INCREMENT" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.READ" />
+                <action android:name="io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_START" />
+                <action android:name="io.apkrun.fixture.hellotext.debug.TOUCH_TRACE_DRAIN" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.TEXT" />
                 <action android:name="io.apkrun.fixture.hellotext.debug.DETAILS" />
             </intent-filter>

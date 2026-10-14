@@ -3,7 +3,9 @@ package io.apkrun.fixture.hellotext
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -24,14 +26,53 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var counter: CounterStore
     private lateinit var counterText: TextView
+    private var traceDebugBuild = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        traceDebugBuild = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         counter = openCounter(this)
         counterText = findViewById(R.id.counter_text)
         showCount(counter.current())
-        findViewById<Button>(R.id.increment_button).setOnClickListener { click() }
+        val incrementButton = findViewById<Button>(R.id.increment_button)
+        if (traceDebugBuild) {
+            incrementButton.setOnTouchListener { view, event ->
+                if (
+                    !DebugTouchTraceSession.isCapturing ||
+                        TouchTraceAction.fromMaskedValue(event.actionMasked) == null
+                ) {
+                    return@setOnTouchListener false
+                }
+                val inside =
+                    event.x >= 0f &&
+                        event.y >= 0f &&
+                        event.x < view.width.toFloat() &&
+                        event.y < view.height.toFloat()
+                val inputSequence =
+                    DebugTouchTraceSession.recordTouch(
+                        eventTimeMillis = event.eventTime,
+                        downTimeMillis = event.downTime,
+                        action = event.actionMasked,
+                        pressedBefore = view.isPressed,
+                        enabled = view.isEnabled,
+                        focused = view.hasFocus(),
+                        inside = inside,
+                        shown = view.isShown,
+                    )
+                if (inputSequence != null) {
+                    view.postOnAnimation {
+                        DebugTouchTraceSession.recordPostDispatchPressed(
+                            inputSequence,
+                            sampledAtUptimeMillis = SystemClock.uptimeMillis(),
+                            pressed = view.isPressed,
+                        )
+                    }
+                }
+                false
+            }
+        }
+        incrementButton.setOnClickListener { click() }
         findViewById<Button>(R.id.details_button).setOnClickListener {
             startActivity(Intent(this, DetailsActivity::class.java))
         }
@@ -63,9 +104,15 @@ class MainActivity : Activity() {
     private fun click() {
         try {
             val value = counter.increment()
+            if (traceDebugBuild) {
+                DebugTouchTraceSession.recordClick(storedCounter = value, saveSucceeded = true)
+            }
             Log.i(LOG_TAG, "click $value")
             showCount(value)
         } catch (failure: IllegalStateException) {
+            if (traceDebugBuild) {
+                DebugTouchTraceSession.recordClick(storedCounter = null, saveSucceeded = false)
+            }
             Log.e(LOG_TAG, "click not saved: ${failure.message}")
         }
     }

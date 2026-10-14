@@ -18497,3 +18497,59 @@ should preserve the product event cadence and default ACK rate, then record
 correlated View pressed-state transitions and click callbacks through the
 normal window event path. Neither review found evidence for a product change
 or for closing #024 box 3 or #103.
+
+## IR-1309: AppKit-queued click smoke test compiles; signed T2 remains pending
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 (box 3), #103 |
+| Affected documents | [M03-input-and-basic-runtime.md](issues/M03-input-and-basic-runtime.md) #024 and #103; [input.md](../02-design/input.md) §15; IR-1308 |
+
+**Choice.** Add an opt-in `.appKitEventQueue` mode to the Android input T2
+helper. The test host normally starts with activation policy `.prohibited`,
+and the display view refuses the first mouse. The diagnostic temporarily
+switches the host to `.accessory`, requests activation and key-window status
+once, and fails after five seconds if the app or window is not active. It
+restores and asserts the previous activation policy during teardown. It never
+falls back to direct view-handler calls. The smoke test clears HelloText logs,
+posts one synthetic click through `NSApplication.postEvent`, requires callback
+1 and an input acknowledgement fence, checks a post-focus counter delta of at
+least two events, and asserts all drop and coalescing counters remain zero.
+
+**Reason.** IR-1308's evidence bypasses AppKit's queue, window dispatch, and
+first-mouse behavior. This test exercises those layers before adding more
+guest-side timing instrumentation. A post-focus baseline excludes hover events
+that can arrive as the test window becomes key. Activation is requested once
+so an unsuccessful focus attempt cannot repeatedly take focus from other
+apps. These changes are test-only and do not alter product input behavior.
+
+**Verification.** `xcrun swift-format lint --strict --configuration
+.swift-format-tests` and `git diff --check` passed. An unsigned,
+test-target-only `xcodebuild build-for-testing` passed for
+`AndroidInputTests.testOneAppKitQueuedClickReachesHelloText`, with
+`CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`; it compiled the test but
+did not execute it. T2 was not attempted: the local
+`APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` variables
+are unset. [build-system.md](../05-development/build-system.md) §12.4 requires
+the signed `APKRunTestHost` for any test that starts a `VZVirtualMachine`, so
+the unsigned build cannot validate the event path.
+
+The required signing values identify the lab test host and its certificate.
+They are not guessed from other local Apple Development identities because
+the repository requires that specific certificate for the virtualization
+entitlement. This is an environment prerequisite, not a test pass.
+
+**Risk.** The test uses synthetic NSEvents in the application's queue; it
+does not exercise WindowServer delivery, CGEvents, or hardware input. One
+successful click validates the AppKit route but neither reproduces the
+intermittent loss nor meets #103's three-batch product acceptance criteria.
+The previous result remains authoritative until signed T2 runs on the lab
+configuration.
+
+**Adversarial review.** Two read-only reviewers examined the path and lifecycle.
+Their findings led to a post-focus event-count baseline, complete drop and
+coalescing assertions, a two-second settled wait for the missing callback,
+explicit activation-policy restoration checks, and a single activation request
+before key-window polling. Both confirmed that the final diff has no remaining
+actionable findings. The T2 execution limitation remains.

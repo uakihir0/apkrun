@@ -179,7 +179,11 @@ final class AndroidInputRun {
         guard await route.supportsAcknowledgementEventTimeTrace() else {
             throw AndroidInputRunFailure.inputAckTraceNotNegotiated
         }
-        guard let counters = await route.startAcknowledgementHistoryCapture(everyBatch: true) else {
+        guard
+            let counters = await route.startAcknowledgementHistoryCapture(
+                everyBatch: true, captureSentEventHistory: true
+            )
+        else {
             throw AndroidInputRunFailure.inputRouteUnbound
         }
 

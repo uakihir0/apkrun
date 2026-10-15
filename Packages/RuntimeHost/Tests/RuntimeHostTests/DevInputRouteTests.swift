@@ -206,6 +206,11 @@ func aBoundRouteExposesTheAcknowledgementCoverageItReceives() async throws {
     let captureBaseline = await route.startAcknowledgementHistoryCapture()
     #expect(captureBaseline?.batchesSent == 1)
     #expect(captureBaseline?.eventsSent == 1)
+    await route.send(
+        RuntimeAPI.InputBatch(events: [
+            .touch(RuntimeAPI.WireTouchEvent(phase: .move, pointerID: 0, position: wirePoint, time: wireTime))
+        ]))
+    #expect(await route.sentEventHistory().records.isEmpty)
     channel.deliverAck(
         batchSequence: 32,
         rejectedEvents: 0,
@@ -250,7 +255,8 @@ func anOptInPerEventCaptureUsesSingleEventBatches() async {
     let channel = CollectingInputChannel()
     let route = DevInputRoute()
     await route.bind(router: InputRouter(channel: channel))
-    let baseline = await route.startAcknowledgementHistoryCapture(everyBatch: true)
+    let baseline = await route.startAcknowledgementHistoryCapture(
+        everyBatch: true, captureSentEventHistory: true)
     #expect(baseline?.batchesSent == 0)
     await route.send(
         RuntimeAPI.InputBatch(events: [

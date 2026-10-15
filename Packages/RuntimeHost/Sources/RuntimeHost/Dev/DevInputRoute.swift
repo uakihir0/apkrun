@@ -72,16 +72,25 @@ public actor DevInputRoute {
         return total
     }
 
-    /// Starts bounded input and ACK history capture on the bound router.
+    /// Starts bounded ACK capture on the bound router, with optional sent-event tracing.
     ///
     /// When `everyBatch` is true, each accepted event is sent in its own protobuf batch and that batch requests an ACK.
-    /// When false, the normal batching and every-32nd-batch ACK cadence are preserved.
-    public func startAcknowledgementHistoryCapture(everyBatch: Bool = false) async -> InputCounters? {
+    /// When false, the normal batching and every-32nd-batch ACK cadence are preserved. Sent-event history has its own
+    /// opt-in because it formats and retains each routed event.
+    public func startAcknowledgementHistoryCapture(
+        everyBatch: Bool = false,
+        captureSentEventHistory: Bool = false
+    ) async -> InputCounters? {
         guard let router else {
             return nil
         }
         var total = localCounters
-        total.add(await router.startAcknowledgementHistoryCapture(everyBatch: everyBatch))
+        total.add(
+            await router.startAcknowledgementHistoryCapture(
+                everyBatch: everyBatch,
+                captureSentEventHistory: captureSentEventHistory
+            )
+        )
         return total
     }
 

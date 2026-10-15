@@ -546,7 +546,7 @@ func sentEventHistoryCapturesBatchSequenceIndexTimeAndPhase() async {
     let channel = RecordingInputChannel()
     let session = SessionID.app(UUID())
     let router = await makeRouter(channel, clock: TestClock(), session: session)
-    _ = await router.startAcknowledgementHistoryCapture()
+    _ = await router.startAcknowledgementHistoryCapture(captureSentEventHistory: true)
     await router.route(
         [
             .touch(TouchEvent(phase: .down, pointerID: 7, position: point(10), time: InputTimestamp(hostNanos: 123))),
@@ -576,11 +576,16 @@ func sentEventHistoryIsOptInAndStopsCapturing() async {
 
     _ = await router.startAcknowledgementHistoryCapture()
     await router.route([touch(.move, 2)], from: session)
+    #expect(await router.sentEventHistory.records.isEmpty)
+
+    _ = await router.stopAcknowledgementHistoryCapture()
+    _ = await router.startAcknowledgementHistoryCapture(captureSentEventHistory: true)
+    await router.route([touch(.move, 3)], from: session)
     let captured = await router.sentEventHistory
     #expect(captured.records.map(\.kindAndPhase) == ["touch.move"])
 
     _ = await router.stopAcknowledgementHistoryCapture()
-    await router.route([touch(.up, 3)], from: session)
+    await router.route([touch(.up, 4)], from: session)
     #expect(await router.sentEventHistory.records == captured.records)
 }
 
@@ -589,7 +594,8 @@ func perEventCaptureUsesSingleEventBatchesAndRequestsEachAck() async {
     let channel = RecordingInputChannel()
     let session = SessionID.app(UUID())
     let router = await makeRouter(channel, clock: TestClock(), session: session)
-    _ = await router.startAcknowledgementHistoryCapture(everyBatch: true)
+    _ = await router.startAcknowledgementHistoryCapture(
+        everyBatch: true, captureSentEventHistory: true)
     await router.route([touch(.down, 1), touch(.move, 2), touch(.up, 3)], from: session)
 
     let batches = await channel.batches
@@ -623,7 +629,8 @@ func sentEventHistoryMakesOverflowExplicit() async {
     let channel = RecordingInputChannel()
     let session = SessionID.app(UUID())
     let router = await makeRouter(channel, clock: TestClock(), session: session)
-    _ = await router.startAcknowledgementHistoryCapture()
+    _ = await router.startAcknowledgementHistoryCapture(
+        everyBatch: true, captureSentEventHistory: true)
     let events = (0..<300).map { index in
         InputEvent.touch(
             TouchEvent(

@@ -247,8 +247,12 @@ public actor InputRouter {
     ///
     /// When `everyBatch` is true, the router places each accepted event in its own batch and requests an ACK for every
     /// batch. It requests guest event times only when the peer negotiated `input.ack_trace.v1`. The default preserves
-    /// the normal batching and every-32nd-batch ACK cadence.
-    public func startAcknowledgementHistoryCapture(everyBatch: Bool = false) async -> InputCounters {
+    /// the normal batching and every-32nd-batch ACK cadence. Sent-event history is a separate, more expensive opt-in
+    /// because it formats and retains every event while the capture is active.
+    public func startAcknowledgementHistoryCapture(
+        everyBatch: Bool = false,
+        captureSentEventHistory: Bool = false
+    ) async -> InputCounters {
         await takeTurn()
         defer { releaseTurn() }
         acknowledgementRecords.removeAll(keepingCapacity: true)
@@ -257,7 +261,7 @@ public actor InputRouter {
         sentEventRecords.removeAll(keepingCapacity: true)
         discardedSentEventRecords = 0
         capturesAcknowledgementHistory = true
-        capturesSentEventHistory = true
+        capturesSentEventHistory = captureSentEventHistory
         capturesOneEventPerBatch = everyBatch
         let capabilityWasNegotiated =
             await channel.negotiatedCapabilities?.contains(GuestCapability.inputAckTrace.rawValue) == true

@@ -140,11 +140,12 @@ unless check_step&.dig("env", "APKRUN_SKIP_CI_TESTS") == "${{ steps.test-deferra
   abort("FAIL workflow test deferral: repository checks do not receive the resolved scope")
 end
 
-def resolve_test_deferral(script, event_name:, head_ref:, head_repo:, repository:)
+def resolve_test_deferral(script, event_name:, ref:, head_ref:, head_repo:, repository:)
   Tempfile.create("apkrun-test-deferral") do |output|
     environment = {
       "GITHUB_OUTPUT" => output.path,
       "GITHUB_EVENT_NAME" => event_name,
+      "GITHUB_REF" => ref,
       "GITHUB_REPOSITORY" => repository,
       "APKRUN_PULL_REQUEST_HEAD_REF" => head_ref,
       "APKRUN_PULL_REQUEST_HEAD_REPO" => head_repo
@@ -161,22 +162,48 @@ unless File.executable?(resolver)
   abort("FAIL workflow test deferral: resolver is not executable")
 end
 scenarios = {
-  "same-repository task PR" => ["pull_request", "task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=true"],
-  "case-variant branch" => ["pull_request", "Task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=false"],
-  "fork PR" => ["pull_request", "task/103-click-loss", "contributor/apkrun", "uakihir0/apkrun", "skip=false"],
-  "main push" => ["push", "task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=false"]
+  "same-repository task PR" => {
+    event_name: "pull_request", ref: "refs/pull/103/merge", head_ref: "task/103-click-loss",
+    head_repo: "uakihir0/apkrun", repository: "uakihir0/apkrun", expected: "skip=true"
+  },
+  "case-variant task PR" => {
+    event_name: "pull_request", ref: "refs/pull/103/merge", head_ref: "Task/103-click-loss",
+    head_repo: "uakihir0/apkrun", repository: "uakihir0/apkrun", expected: "skip=false"
+  },
+  "fork task PR" => {
+    event_name: "pull_request", ref: "refs/pull/103/merge", head_ref: "task/103-click-loss",
+    head_repo: "contributor/apkrun", repository: "uakihir0/apkrun", expected: "skip=false"
+  },
+  "main push" => {
+    event_name: "push", ref: "refs/heads/main", head_ref: "", head_repo: "",
+    repository: "uakihir0/apkrun", expected: "skip=true"
+  },
+  "case-variant main ref" => {
+    event_name: "push", ref: "refs/heads/Main", head_ref: "", head_repo: "",
+    repository: "uakihir0/apkrun", expected: "skip=false"
+  },
+  "other branch push" => {
+    event_name: "push", ref: "refs/heads/task/024-click-input-reliability", head_ref: "", head_repo: "",
+    repository: "uakihir0/apkrun", expected: "skip=false"
+  },
+  "main PR" => {
+    event_name: "pull_request", ref: "refs/pull/1/merge", head_ref: "main",
+    head_repo: "uakihir0/apkrun", repository: "uakihir0/apkrun", expected: "skip=false"
+  }
 }
-scenarios.each do |name, (event_name, head_ref, head_repo, repository, expected)|
+scenarios.each do |name, scenario|
   actual = resolve_test_deferral(
     resolver,
-    event_name: event_name,
-    head_ref: head_ref,
-    head_repo: head_repo,
-    repository: repository
+    event_name: scenario.fetch(:event_name),
+    ref: scenario.fetch(:ref),
+    head_ref: scenario.fetch(:head_ref),
+    head_repo: scenario.fetch(:head_repo),
+    repository: scenario.fetch(:repository)
   )
+  expected = scenario.fetch(:expected)
   abort("FAIL workflow test deferral #{name}: expected #{expected}, got #{actual}") unless actual == expected
 end
-puts("PASS workflow test deferral is exact to the same-repository #103 pull request")
+puts("PASS workflow test deferral is exact to main pushes and the same-repository #103 pull request")
 
 def expect_rejected(name, pattern, document)
   errors = workflow_errors("fixture.yml", document)

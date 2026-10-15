@@ -18338,7 +18338,7 @@ Kept, and why:
 
 **Risk.** The experimental SwiftPM option may change in a later toolchain; the workflow runner is Xcode 27 and the option was verified there. If a later capped run starves tests, collect its timings before changing the width or test deadlines.
 
-## IR-1312: Defer Actions test suites on the #103 pull request branch
+## IR-1312: Defer Actions test suites during the #103 investigation
 
 | Field | Value |
 |---|---|
@@ -18346,36 +18346,38 @@ Kept, and why:
 | Task | #103 |
 | Affected documents | [ci.yml](../../.github/workflows/ci.yml); [run-checks.sh](../../scripts/ci/run-checks.sh) |
 
-**Choice.** On same-repository pull requests whose head branch is
-`task/103-click-loss`, skip the repository test harness in the lint job and
-the Swift, graphics, and image test steps. Keep the required jobs, image
-manifest validation, other CI checks, and build jobs enabled. The normal
-Actions test suites continue to run for other pull request branches and
-pushes to `main`.
+**Choice.** Skip the repository test harness in the lint job and the Swift,
+graphics, and image test steps on exact pushes to `refs/heads/main`, and on
+same-repository pull requests whose head branch is `task/103-click-loss`.
+Keep the required jobs, image manifest validation, other CI checks, and build
+jobs enabled. Other pull request branches and branch pushes keep the normal
+test path.
 
 **Reason.** The user asked to defer the current GitHub Actions tests while
-continuing the implementation. Keeping the exception scoped to this branch
-avoids weakening CI for unrelated changes. GitHub Actions string comparisons
-are case-insensitive, so the workflow passes the pull request context to a
-small Bash resolver that compares the literal branch and repository names
-case-sensitively. The same result controls the repository harness and the
-Swift, graphics, and image test steps. The head repository check prevents an
-unrelated fork branch with the same name from receiving the exception.
+continuing the implementation and authorized direct commits to `main`.
+Main pushes must therefore defer those tests too, while unrelated pull
+requests and branch pushes remain unaffected. GitHub Actions string
+comparisons are case-insensitive, so the workflow passes the pull request
+context to a small Bash resolver that compares literal refs and repository
+names case-sensitively. The same result controls the repository harness and
+the Swift, graphics, and image test steps. The head repository check prevents
+an unrelated fork branch with the same name from receiving the exception.
 
 **Verification (2026-10-16).** The workflow runner check
 (`ruby scripts/tests/test_workflow_runners.rb "$PWD"`) passes, including
-scenario checks for the exact same-repository PR, a case-variant branch, a
-fork PR, and a `main` push. The check runner also passes with
+scenario checks for exact `main` pushes, a case-variant main ref, another
+branch push, the same-repository #103 PR, its case variant, a fork PR, and a
+`main` PR. The check runner also passes with
 `APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh`, confirming the
 repository test harness is skipped while all six remaining checks pass.
 `git diff --check` passes. The dedicated GUI T2 runs required by #103 are
 separate and remain outstanding; this CI exception does not satisfy them.
 
-**Risk.** The branch-scoped exception remains active until removed from the
-workflow. The test steps show as skipped while their jobs can still succeed,
-so reviewers must inspect step results rather than treat a green job as proof
-that its suite ran. A maintainer should remove this exception after the
-deferred validation window.
+**Risk.** The main-push exception remains active until removed from the
+workflow. Test steps show as skipped while their jobs can still succeed, so
+reviewers must inspect step results rather than treat a green job as proof
+that its suite ran. A maintainer should restore mainline test execution after
+the current implementation work reaches a suitable validation point.
 
 ## IR-1313: Keep click-loss ACK capture lean and attach the exact image variant
 

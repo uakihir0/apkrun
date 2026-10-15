@@ -123,6 +123,46 @@ unless required_errors.empty?
 end
 puts("PASS workflow required jobs run for every pull request and push to main")
 
+expected_test_skip_condition =
+  "${{ github.event_name == 'pull_request' && " \
+  "github.event.pull_request.head.repo.full_name == github.repository && " \
+  "github.event.pull_request.head.ref == 'task/024-click-input-reliability' }}"
+unless ci.dig("env", "APKRUN_SKIP_CI_TESTS") == expected_test_skip_condition
+  abort("FAIL workflow test deferral: skip must remain limited to the same-repository #024 pull request")
+end
+
+test_skip_guard = "env.APKRUN_SKIP_CI_TESTS != 'true'"
+{
+  "test-swift" => [
+    "Prepare result directory",
+    "Install pinned repository tools",
+    "Compute verified build cache key",
+    "Restore verified graphics libraries",
+    "Verify graphics libraries and public headers",
+    "Run Swift T0 tests",
+  ],
+  "test-graphics" => [
+    "Install pinned repository tools",
+    "Compute verified build cache key",
+    "Restore verified graphics libraries",
+    "Verify graphics libraries and public headers",
+    "Require a Metal-capable runner",
+    "Run Metal and VirGL T1 tests",
+    "Run Metal and VirGL T1 tests with Address Sanitizer",
+    "Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer",
+  ],
+  "test-images" => ["Run image tooling tests"],
+}.each do |job_name, step_names|
+  steps = ci.dig("jobs", job_name, "steps")
+  step_names.each do |step_name|
+    step = steps.find { |candidate| candidate["name"] == step_name }
+    unless step && step["if"] == test_skip_guard
+      abort("FAIL workflow test deferral: #{job_name}/#{step_name} must use the CI test skip guard")
+    end
+  end
+end
+puts("PASS workflow test suites and Swift/graphics setup honor the branch-scoped deferral")
+
 mutated = copy(ci)
 mutated["jobs"]["build"]["if"] = "github.event_name == 'push'"
 unless required_job_errors(mutated).any? { |error| error.include?("build must run unconditionally") }

@@ -18656,3 +18656,45 @@ do not prove app dispatch.
 **Risk.** #024 remains open, and tasks with a hard dependency on #024 remain gated. This status change does not claim that the implementation is incorrect; it records that the documented device evidence is incomplete.
 
 **Verification.** The focused T0 test `aDragThatLeavesTheContentIsClampedAndTheUpIsAtTheEdge` passed (1 test) in an isolated SwiftPM package built from copies of the repository `DiagnosticsCore` and `InputCore` sources and tests. The monorepo `swift test --filter` attempt stopped before running tests because this worktree lacks the local VirGL headers (`EGL/egl.h`). `git diff --check` and the #024 status consistency check pass. The isolated run verifies the test logic but does not verify monorepo integration or device delivery.
+
+## IR-1316: Defer Actions suites while #024 click-loss lab checks are pending
+
+| Field | Value |
+|---|---|
+| Status | Needs maintainer review |
+| Task | #024 |
+| Affected documents | [ci.yml](../../.github/workflows/ci.yml); [run-checks.sh](../../scripts/ci/run-checks.sh); [test_workflow_runners.rb](../../scripts/tests/test_workflow_runners.rb) |
+
+**Choice.** Extend the Actions test-suite deferral to same-repository pull
+requests from `task/024-click-input-reliability`. On that branch, skip the
+repository test harness, Swift T0, graphics T1, and image tooling test
+commands. Also skip test-only dependency setup and runner capability checks
+in the Swift and graphics jobs. Keep `lint`, `codegen`, `third-party`, and
+`build` active, along with image manifest and style checks. The exception
+does not apply to fork pull requests, other branches, or pushes to `main`.
+
+**Reason.** The user asked to temporarily bypass these GitHub Actions tests
+and continue the project. #024 still needs dedicated GUI/device evidence for
+click delivery, so reporting an unrun suite as proof would be misleading.
+Keeping the workflow jobs and non-test checks active preserves the required
+check names and useful source/build validation while the lab evidence is
+pending.
+
+**Verification (2026-10-15).** The workflow runner check verifies that the
+exception names only the same-repository #024 pull request branch,
+and that each suite command and the Swift/graphics test setup uses the skip
+guard. `APKRUN_SKIP_CI_TESTS=true scripts/ci/run-checks.sh` verifies the
+repository test harness is bypassed while the non-test checks still run.
+The runner check and `git diff --check` pass. The broader local
+`run-checks.sh` smoke check exits because this worktree has not been
+bootstrapped (pinned XcodeGen and `buf` are missing) and the repository-wide
+format check reports three existing long lines in
+`VMRunResourcesTests.swift` (lines 143, 144, and 181). The Actions suites
+remain deferred; this record does not satisfy #024's T0 or dedicated lab
+acceptance criteria.
+
+**Risk.** Required test job conclusions can be successful even though their
+suite steps are skipped, so review must check the step-level conclusions. The
+temporary branch exception needs removal after the deferred click-loss lab
+validation is complete. These protected CI paths will require a non-author
+maintainer review and the `ci-policy-approved` label on the eventual PR.

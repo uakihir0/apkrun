@@ -79,6 +79,9 @@ RiftVM's repository source is MIT-licensed and is reviewed as a technical refere
   ([build-system.md](build-system.md) §6.4). Each keeps its upstream license
   header, and the upstream license file is recorded in
   `ThirdParty/ThirdParty.lock.json`.
+- `Tests/Fixtures/signing/aosp-avb-testkey-rsa4096.pem` is the pinned AOSP
+  AVB test key used only to sign the development image variant in #099
+  (IR-1321). It is public test material, not a production credential.
 - The apksig test vectors keep the upstream `NOTICE` and license file in their resource directory.
 - A vendored file is never edited ([build-system.md](build-system.md) §6.4), so its license never changes.
 
@@ -195,7 +198,7 @@ evaluated against a redistribution allow-list.
 | RiftVM | reference | MIT | source-only analysis input; excluded from app notices unless later copied or adapted (§3.1) |
 | `libc`, `log`, `android_logger`, and their `Cargo.lock` dependencies | image | MIT OR Apache-2.0 | `apkrun_vsockd`; the product build uses AOSP `external/rust/crates`, which carry their own AOSP metadata |
 | AOSP, including the prebuilt kernel | image | many; kernel GPL-2.0-only | not lock entries (§4.3); notices and source offer in §7 |
-| `avbtool.py` | tooling, committed | MIT | vendored (§3.3). `platform/external/avb` is MIT; #093 confirms the header of the pinned copy |
+| `avbtool.py` and AOSP AVB test key fixture | tooling, committed | MIT | vendored and test-only (§3.3); the test key is used only for the development image variant in #099 (IR-1321) |
 | `mkbootimg.py`, `unpack_bootimg.py` | tooling, committed | Apache-2.0 | vendored (§3.3) |
 | apksig test vectors | tooling, committed | Apache-2.0 | §3.3 |
 | AndroidX, Compose, Kotlin in the fixture apps | tooling, committed | Apache-2.0 | inside the committed APKs of `Tests/Fixtures/apks/`; locked in `Tests/Fixtures/AndroidApps/<module>/gradle.lockfile` |

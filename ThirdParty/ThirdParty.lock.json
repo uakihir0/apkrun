@@ -773,6 +773,10 @@
         {
           "path": "Images/tools/vendor/avb/avbtool.py",
           "sha256": "1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781"
+        },
+        {
+          "path": "Tests/Fixtures/signing/aosp-avb-testkey-rsa4096.pem",
+          "sha256": "6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121"
         }
       ]
     },

@@ -10,6 +10,8 @@
 # Negative fixtures mutate in-memory copies of real workflows and require each
 # rule to reject the mutation, so a rule cannot pass by never running.
 require "yaml"
+require "open3"
+require "tempfile"
 
 HOSTED_LABELS = %w[xcode-27 ubuntu-latest].freeze
 PULL_REQUEST_EVENTS = %w[pull_request pull_request_target].freeze
@@ -91,6 +93,90 @@ puts("PASS workflow runners and pins: #{documents.length} files use hosted runne
 ci = documents.to_h.fetch("ci.yml")
 policy = documents.to_h.fetch("ci-policy.yml")
 integration = documents.to_h.fetch("integration.yml")
+
+expected_deferral_context = {
+  "APKRUN_PULL_REQUEST_HEAD_REF" => "${{ github.event.pull_request.head.ref }}",
+  "APKRUN_PULL_REQUEST_HEAD_REPO" => "${{ github.event.pull_request.head.repo.full_name }}"
+}
+unless ci.fetch("env", {}).slice(*expected_deferral_context.keys) == expected_deferral_context
+  abort("FAIL workflow test deferral: missing pull request ref/repository context")
+end
+if ci.fetch("env", {}).key?("APKRUN_SKIP_CI_TESTS")
+  abort("FAIL workflow test deferral: do not evaluate the case-sensitive ref in a GitHub expression")
+end
+
+ci_steps = ci.fetch("jobs").flat_map do |job_name, job|
+  Array(job["steps"]).map { |step| [job_name, step] }
+end
+test_steps = ci_steps.select do |_job_name, step|
+  step.fetch("run", "").match?(/\b(?:swift\s+test|pytest|xcodebuild\s+test|gradle(?:w)?\s+.*\btest\w*)\b/)
+end
+expected_test_steps = [
+  "test-swift/Run Swift T0 tests",
+  "test-graphics/Run Metal and VirGL T1 tests",
+  "test-graphics/Run Metal and VirGL T1 tests with Address Sanitizer",
+  "test-graphics/Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer",
+  "test-images/Run image tooling tests"
+]
+actual_test_steps = test_steps.map { |job_name, step| "#{job_name}/#{step["name"]}" }
+unless actual_test_steps.sort == expected_test_steps.sort
+  abort("FAIL workflow test deferral: test command inventory changed: #{actual_test_steps.inspect}")
+end
+unless test_steps.all? { |_job_name, step| step["if"] == "steps.test-deferral.outputs.skip != 'true'" }
+  abort("FAIL workflow test deferral: a CI test step is not guarded by the resolved scope")
+end
+
+%w[lint test-swift test-graphics test-images].each do |job_name|
+  job_steps = Array(ci.fetch("jobs").fetch(job_name)["steps"])
+  resolver = job_steps.index { |step| step["id"] == "test-deferral" && step["run"] == "scripts/ci/resolve-test-deferral.sh" }
+  first_test = test_steps.select { |candidate_job, _step| candidate_job == job_name }.map { |_candidate_job, step| job_steps.index(step) }.min
+  if resolver.nil? || (first_test && resolver >= first_test)
+    abort("FAIL workflow test deferral: #{job_name} does not resolve scope before its tests")
+  end
+end
+
+check_step = ci_steps.find { |job_name, step| job_name == "lint" && step["name"] == "Run repository checks" }&.last
+unless check_step&.dig("env", "APKRUN_SKIP_CI_TESTS") == "${{ steps.test-deferral.outputs.skip }}"
+  abort("FAIL workflow test deferral: repository checks do not receive the resolved scope")
+end
+
+def resolve_test_deferral(script, event_name:, head_ref:, head_repo:, repository:)
+  Tempfile.create("apkrun-test-deferral") do |output|
+    environment = {
+      "GITHUB_OUTPUT" => output.path,
+      "GITHUB_EVENT_NAME" => event_name,
+      "GITHUB_REPOSITORY" => repository,
+      "APKRUN_PULL_REQUEST_HEAD_REF" => head_ref,
+      "APKRUN_PULL_REQUEST_HEAD_REPO" => head_repo
+    }
+    _stdout, status = Open3.capture2e(environment, script)
+    abort("FAIL workflow test deferral: resolver exited with #{status.exitstatus}") unless status.success?
+
+    File.read(output.path).strip
+  end
+end
+
+resolver = File.join(root, "scripts/ci/resolve-test-deferral.sh")
+unless File.executable?(resolver)
+  abort("FAIL workflow test deferral: resolver is not executable")
+end
+scenarios = {
+  "same-repository task PR" => ["pull_request", "task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=true"],
+  "case-variant branch" => ["pull_request", "Task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=false"],
+  "fork PR" => ["pull_request", "task/103-click-loss", "contributor/apkrun", "uakihir0/apkrun", "skip=false"],
+  "main push" => ["push", "task/103-click-loss", "uakihir0/apkrun", "uakihir0/apkrun", "skip=false"]
+}
+scenarios.each do |name, (event_name, head_ref, head_repo, repository, expected)|
+  actual = resolve_test_deferral(
+    resolver,
+    event_name: event_name,
+    head_ref: head_ref,
+    head_repo: head_repo,
+    repository: repository
+  )
+  abort("FAIL workflow test deferral #{name}: expected #{expected}, got #{actual}") unless actual == expected
+end
+puts("PASS workflow test deferral is exact to the same-repository #103 pull request")
 
 def expect_rejected(name, pattern, document)
   errors = workflow_errors("fixture.yml", document)
